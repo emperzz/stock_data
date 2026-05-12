@@ -81,9 +81,9 @@ class BaostockFetcher(BaseFetcher):
 
             logger.debug(f"[BaostockFetcher] Calling query_history_k_data for {bs_code}")
 
-            rs = bs.query_history_k_data(
+            rs = bs.query_history_k_data_plus(
                 bs_code,
-                "date,open,high,low,close,volume,amount,pct_chg",
+                "date,open,high,low,close,volume,amount,pctChg",
                 start_date=start_date,
                 end_date=end_date,
                 frequency="d",
@@ -113,7 +113,9 @@ class BaostockFetcher(BaseFetcher):
         """Normalize Baostock data to standard columns."""
         df = df.copy()
 
-        # Baostock columns: date, open, high, low, close, volume, amount, pct_chg (already standard-ish)
+        # Baostock uses pctChg, we want pct_chg
+        if "pctChg" in df.columns:
+            df = df.rename(columns={"pctChg": "pct_chg"})
 
         # Convert numeric columns
         numeric_cols = ["open", "high", "low", "close", "volume", "amount", "pct_chg"]
@@ -135,45 +137,10 @@ class BaostockFetcher(BaseFetcher):
         return df
 
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
-        """Get realtime quote from Baostock."""
-        self._ensure_initialized()
-        if not self._initialized:
-            return None
+        """Get realtime quote from Baostock.
 
-        try:
-            import baostock as bs
-
-            bs_code, code = self._convert_code(stock_code)
-            rs = bs.query_realtime_quotes(bs_code)
-
-            if rs.error_code != "0":
-                logger.warning(f"[BaostockFetcher] Realtime quote failed: {rs.error_msg}")
-                return None
-
-            data_list = []
-            while rs.next():
-                data_list.append(rs.get_row_data())
-
-            if not data_list:
-                return None
-
-            row = pd.Series(data_list[0], index=rs.fields)
-
-            return UnifiedRealtimeQuote(
-                code=code,
-                name=str(row.get("name", "")),
-                source=RealtimeSource.FALLBACK,
-                price=safe_float(row.get("close")),
-                change_pct=safe_float(row.get("pct_chg")),
-                change_amount=safe_float(row.get("chg")),
-                volume=safe_int(row.get("volume")),
-                amount=safe_float(row.get("amount")),
-                open_price=safe_float(row.get("open")),
-                high=safe_float(row.get("high")),
-                low=safe_float(row.get("low")),
-                pre_close=safe_float(row.get("preclose")),
-            )
-
-        except Exception as e:
-            logger.warning(f"[BaostockFetcher] Realtime quote failed: {e}")
-            return None
+        Note: Baostock does NOT support realtime quotes - it only provides historical data.
+        This method always returns None.
+        """
+        # Baostock has no realtime quotes API, only historical K-line data
+        return None

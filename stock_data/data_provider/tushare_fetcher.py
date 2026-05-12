@@ -77,13 +77,13 @@ class TushareFetcher(BaseFetcher):
             start = start_date.replace("-", "")
             end = end_date.replace("-", "")
 
-            logger.debug(f"[TushareFetcher] Calling pro_bar for {ts_code}")
+            logger.debug(f"[TushareFetcher] Calling daily for {ts_code}")
 
-            df = ts.pro_bar(
+            df = self._api.query(
+                "daily",
                 ts_code=ts_code,
                 start_date=start,
                 end_date=end,
-                adj="qfq",  # Forward-adjusted price
             )
 
             if df is None or df.empty:
@@ -103,7 +103,7 @@ class TushareFetcher(BaseFetcher):
         # Tushare columns: trade_date, open, high, low, close, vol, amount, pct_chg
         column_mapping = {
             "trade_date": "date",
-            "vol": "volume",
+            "vol": "_vol_hand",  # temp name to avoid conflict
         }
 
         df = df.rename(columns=column_mapping)
@@ -114,6 +114,15 @@ class TushareFetcher(BaseFetcher):
         # Convert date format if needed
         if "date" in df.columns and df["date"].dtype == object:
             df["date"] = pd.to_datetime(df["date"])
+
+        # Tushare vol is in "手" (100 shares per hand), convert to shares
+        if "_vol_hand" in df.columns:
+            df["volume"] = pd.to_numeric(df["_vol_hand"], errors="coerce") * 100
+            df.drop(columns=["_vol_hand"], inplace=True)
+
+        # Convert Tushare amount from 千 yuan to yuan
+        if "amount" in df.columns:
+            df["amount"] = pd.to_numeric(df["amount"], errors="coerce") * 1000
 
         # Add code if missing
         if "code" not in df.columns:
@@ -144,7 +153,7 @@ class TushareFetcher(BaseFetcher):
             else:
                 ts_code = f"{code}.SZ"
 
-            # Try to get realtime tick
+            # Try to get realtime tick via tushare directly
             df = ts.realtime_quote(ts_code=ts_code)
             if df is None or df.empty:
                 return None
