@@ -14,6 +14,8 @@ from typing import Any, List, Optional, Tuple
 
 import pandas as pd
 
+from .realtime_types import get_realtime_circuit_breaker
+
 logger = logging.getLogger(__name__)
 
 # Standard columns for normalized K-line data
@@ -351,14 +353,21 @@ class DataFetcherManager:
         stock_code = normalize_stock_code(stock_code)
         market = market_tag(stock_code)
 
+        cb = get_realtime_circuit_breaker()
         fetchers = self._filter_by_market(market)
 
         for fetcher in fetchers:
+            if not cb.is_available(fetcher.name):
+                logger.debug(f"[Manager] {fetcher.name} circuit open, skipping")
+                continue
             try:
                 quote = fetcher.get_realtime_quote(stock_code)
                 if quote is not None:
+                    cb.record_success(fetcher.name)
                     return quote
+                cb.record_failure(fetcher.name)
             except Exception as e:
+                cb.record_failure(fetcher.name)
                 logger.warning(f"[Manager] {fetcher.name} realtime quote failed: {e}")
                 continue
 

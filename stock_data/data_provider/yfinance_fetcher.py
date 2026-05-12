@@ -90,6 +90,14 @@ class YfinanceFetcher(BaseFetcher):
         # Default to Shenzhen
         return f"{code}.SZ"
 
+    def is_available(self) -> bool:
+        """Check if yfinance is available."""
+        try:
+            import yfinance as yf
+            return True
+        except ImportError:
+            return False
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=30),

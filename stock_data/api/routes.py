@@ -54,8 +54,11 @@ def get_manager() -> DataFetcherManager:
         logger.info("AkshareFetcher added")
 
         yfinance = YfinanceFetcher()
-        _manager.add_fetcher(yfinance)
-        logger.info("YfinanceFetcher added")
+        if yfinance.is_available():
+            _manager.add_fetcher(yfinance)
+            logger.info("YfinanceFetcher added")
+        else:
+            logger.info("YfinanceFetcher skipped (yfinance not installed)")
 
     return _manager
 

@@ -78,7 +78,6 @@ class TushareFetcher(BaseFetcher):
             end = end_date.replace("-", "")
 
             logger.debug(f"[TushareFetcher] Calling pro_bar for {ts_code}")
-            import tushare as ts
 
             df = ts.pro_bar(
                 ts_code=ts_code,

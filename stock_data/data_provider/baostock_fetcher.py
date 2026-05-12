@@ -12,7 +12,7 @@ from typing import Optional
 
 import pandas as pd
 
-from .base import BaseFetcher, DataFetchError, normalize_stock_code
+from .base import BaseFetcher, DataFetchError, normalize_stock_code, STANDARD_COLUMNS
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
@@ -177,7 +177,3 @@ class BaostockFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[BaostockFetcher] Realtime quote failed: {e}")
             return None
-
-
-# Import STANDARD_COLUMNS at module level for use in _normalize_data
-from .base import STANDARD_COLUMNS
