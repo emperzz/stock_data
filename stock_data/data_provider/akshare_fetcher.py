@@ -166,6 +166,7 @@ class AkshareFetcher(BaseFetcher):
 
             code = self._convert_to_akshare_code(stock_code)
             is_hk = is_hk_market(stock_code)
+            is_index = is_index_code(stock_code)
 
             if is_hk:
                 df = ak.stock_hk_spot_em()
@@ -174,6 +175,19 @@ class AkshareFetcher(BaseFetcher):
                 if row.empty:
                     return None
                 row = row.iloc[0]
+            elif is_index:
+                # CSI/HK indices - use index_zh_a_spot_em for CSI, skip HK (EM symbols unpredictable)
+                index_type = get_index_type(stock_code)
+                if index_type == "csi":
+                    df = ak.index_zh_a_spot_em(symbol=code)
+                    row = df[df["代码"] == code]
+                    if row.empty:
+                        return None
+                    row = row.iloc[0]
+                else:
+                    # HK indices need EM-format symbols that require runtime lookup
+                    logger.warning(f"[AkshareFetcher] HK index {stock_code} realtime quote not supported (EM symbol lookup needed)")
+                    return None
             else:
                 df = ak.stock_zh_a_spot_em()
                 row = df[df["代码"] == code]
