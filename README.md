@@ -73,6 +73,24 @@ sudo systemctl status stock-data
 sudo journalctl -u stock-data -f
 ```
 
+### Alternative: nohup (Simple Background Run)
+
+```bash
+# Create virtual environment and install
+python3 -m venv venv
+source venv/bin/activate
+pip install -e ".[dev]"
+
+# Run in background
+nohup python -m stock_data.server > server.log 2>&1 &
+
+# Check process
+ps aux | grep stock_data
+
+# Stop server
+pkill -f "python -m stock_data.server"
+```
+
 ### Alternative: Gunicorn (Higher Performance)
 
 ```bash
