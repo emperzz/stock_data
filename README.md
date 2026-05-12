@@ -27,6 +27,59 @@ python -m stock_data.server
 uvicorn stock_data.server:app --host 0.0.0.0 --port 8888
 ```
 
+## Linux Production Deployment
+
+### 1. Create Virtual Environment
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -e ".[dev]"
+```
+
+### 2. Create Systemd Service
+
+Create `/etc/systemd/system/stock-data.service`:
+
+```ini
+[Unit]
+Description=Stock Data API Server
+After=network.target
+
+[Service]
+WorkingDirectory=/path/to/stock_data
+Environment="PATH=/path/to/stock_data/venv/bin"
+EnvironmentFile=/path/to/stock_data/.env
+ExecStart=/path/to/stock_data/venv/bin/python -m stock_data.server
+Restart=always
+User=your_username
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 3. Enable and Start
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable stock-data
+sudo systemctl start stock-data
+sudo systemctl status stock-data
+```
+
+### 4. View Logs
+
+```bash
+sudo journalctl -u stock-data -f
+```
+
+### Alternative: Gunicorn (Higher Performance)
+
+```bash
+pip install gunicorn
+gunicorn stock_data.server:app --workers 2 --bind 0.0.0.0:8888 --daemon
+```
+
 ## API Endpoints
 
 ### Health Check
