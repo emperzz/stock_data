@@ -12,8 +12,9 @@ from typing import Optional
 
 import pandas as pd
 
-from .base import BaseFetcher, DataFetchError, is_hk_market, normalize_stock_code, STANDARD_COLUMNS
+from .base import BaseFetcher, DataFetchError, is_hk_market, normalize_stock_code, STANDARD_COLUMNS, is_index_code, get_index_type
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
+from .index_symbols import CSI_INDEX_MAP, HK_INDEX_MAP, US_INDEX_AKSHARE_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +35,22 @@ class AkshareFetcher(BaseFetcher):
         HK:
             HK00700 -> 00700.hk
             00700 -> 00700.hk
+        CSI index:
+            000300 -> 000300
+        US index:
+            SPX -> .INX (Sina format via index_us_stock_sina)
         """
         code = normalize_stock_code(stock_code)
+
+        # Check if it's an index
+        if is_index_code(code):
+            index_type = get_index_type(code)
+            if index_type == "us":
+                return US_INDEX_AKSHARE_MAP.get(code, code)
+            elif index_type == "hk":
+                return code  # HK indices need special EM handling in _fetch_raw_data
+            # CSI indices use same 6-digit format as A-share stocks
+            return code
 
         if is_hk_market(code):
             if code.startswith("HK"):
@@ -47,12 +62,14 @@ class AkshareFetcher(BaseFetcher):
     def _fetch_raw_data(
         self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
     ) -> pd.DataFrame:
-        """Fetch daily K-line data from Akshare (supports d/w/m)."""
+        """Fetch daily K-line data from Akshare (supports d/w/m for stocks and indices)."""
         try:
             import akshare as ak
 
             code = self._convert_to_akshare_code(stock_code)
             is_hk = is_hk_market(stock_code)
+            is_index = is_index_code(stock_code)
+            index_type = get_index_type(stock_code) if is_index else None
 
             logger.debug(f"[AkshareFetcher] Fetching {code} ({frequency})")
 
@@ -60,13 +77,32 @@ class AkshareFetcher(BaseFetcher):
             period_map = {"d": "daily", "w": "weekly", "m": "monthly"}
             period = period_map.get(frequency, "daily")
 
-            if is_hk:
+            # Minute frequencies not supported
+            if frequency in ("5", "15", "30", "60"):
+                raise DataFetchError(f"Akshare does not support minute frequency for indices")
+
+            if is_index and index_type == "us":
+                # US indices via index_us_stock_sina (.IXIC, .INX, .DJI, etc.)
+                df = ak.index_us_stock_sina(symbol=code)
+            elif is_index and index_type == "hk":
+                # HK indices require EM-format symbols that need runtime lookup
+                # Not easily predictable, let failover handle
+                raise DataFetchError(f"Akshare does not support HK index {code} (EM symbol lookup needed)")
+            elif is_hk:
                 df = ak.stock_hk_hist(
                     symbol=code.replace(".hk", ""),
                     period=period,
                     start_date=start_date.replace("-", ""),
                     end_date=end_date.replace("-", ""),
                     adjust="qfq"
+                )
+            elif is_index and index_type == "csi":
+                # CSI indices use index_zh_a_hist
+                df = ak.index_zh_a_hist(
+                    symbol=code,
+                    period=period,
+                    start_date=start_date.replace("-", ""),
+                    end_date=end_date.replace("-", ""),
                 )
             else:
                 df = ak.stock_zh_a_hist(

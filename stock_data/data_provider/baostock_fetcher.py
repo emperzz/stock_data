@@ -12,8 +12,9 @@ from typing import Optional
 
 import pandas as pd
 
-from .base import BaseFetcher, DataFetchError, normalize_stock_code, STANDARD_COLUMNS
+from .base import BaseFetcher, DataFetchError, normalize_stock_code, STANDARD_COLUMNS, is_index_code, get_index_type
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
+from .index_symbols import CSI_INDEX_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,28 @@ class BaostockFetcher(BaseFetcher):
         Returns (bs_code, yw_code):
             600519 -> (sh.600519, 600519)
             000001 -> (sz.000001, 000001)
+            000300 -> (sh.000300, 000300)  CSI 300 index
+            HSI -> raises DataFetchError (not supported by Baostock)
         """
         code = normalize_stock_code(stock_code)
+
+        # Check if it's a CSI index
+        if is_index_code(code):
+            index_type = get_index_type(code)
+            if index_type == "csi":
+                # CSI indices use same sh./sz. format as stocks
+                if code in CSI_INDEX_MAP:
+                    bs_symbol = CSI_INDEX_MAP[code]
+                    return bs_symbol, code
+                # Fallback: CSI indices starting with 00 are Shanghai, 39 are Shenzhen
+                if code.startswith("00"):
+                    return f"sh.{code}", code
+                else:
+                    return f"sz.{code}", code
+            else:
+                # HK and US indices not supported by Baostock
+                raise DataFetchError(f"Baostock does not support {index_type} index {code}")
+
         if code.startswith(("6", "5")):
             return f"sh.{code}", code
         else:
@@ -71,10 +92,16 @@ class BaostockFetcher(BaseFetcher):
     def _fetch_raw_data(
         self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
     ) -> pd.DataFrame:
-        """Fetch K-line data from Baostock (supports d/w/m/5/15/30/60)."""
+        """Fetch K-line data from Baostock (supports d/w/m/5/15/30/60 for stocks, d/w/m for indices)."""
         self._ensure_initialized()
         if not self._initialized:
             raise DataFetchError("Baostock not available")
+
+        # Check if requesting minute frequency for an index (indices don't support minute data)
+        if frequency in ("5", "15", "30", "60"):
+            code = normalize_stock_code(stock_code)
+            if is_index_code(code) and get_index_type(code) == "csi":
+                raise DataFetchError(f"Baostock does not support minute frequency for indices")
 
         try:
             import baostock as bs

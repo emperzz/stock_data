@@ -24,20 +24,11 @@ from tenacity import (
     before_sleep_log,
 )
 
-from .base import BaseFetcher, DataFetchError, is_us_market, normalize_stock_code
+from .base import BaseFetcher, DataFetchError, is_us_market, normalize_stock_code, is_index_code, get_index_type
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
+from .index_symbols import US_INDEX_MAP, CSI_INDEX_MAP, HK_INDEX_MAP
 
 logger = logging.getLogger(__name__)
-
-# US index mapping to yfinance symbols
-US_INDEX_MAP = {
-    "SPX": "^GSPC",
-    "SPY": "^GSPC",
-    "DJI": "^DJI",
-    "IXIC": "^IXIC",
-    "NASDAQ": "^IXIC",
-    "VIX": "^VIX",
-}
 
 
 class YfinanceFetcher(BaseFetcher):
@@ -59,12 +50,21 @@ class YfinanceFetcher(BaseFetcher):
             AAPL -> AAPL (unchanged)
         Indices:
             SPX -> ^GSPC
+            000300 -> 000300.SS (CSI 300)
+            HSI -> ^HSI (Hang Seng)
         """
         code = stock_code.strip().upper()
 
-        # Check for US index
-        if code in US_INDEX_MAP:
-            return US_INDEX_MAP[code]
+        # Check if it's an index code
+        if is_index_code(code):
+            index_type = get_index_type(code)
+            if index_type == "us" and code in US_INDEX_MAP:
+                return US_INDEX_MAP[code]
+            elif index_type == "csi":
+                # CSI index: 000300 -> 000300.SS
+                return f"{code}.SS"
+            elif index_type == "hk" and code in HK_INDEX_MAP:
+                return HK_INDEX_MAP[code]
 
         # Already in yfinance format
         if code.endswith((".SS", ".SZ", ".HK", ".BJ")):

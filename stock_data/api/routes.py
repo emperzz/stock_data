@@ -148,11 +148,11 @@ def get_history(
     try:
         manager = get_manager()
 
-        # Weekly/monthly not yet implemented, fall back to daily
-        if period != "daily":
-            logger.warning(f"Period {period} not implemented, using daily")
+        # Map period to frequency
+        period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
+        frequency = period_map.get(period, "d")
 
-        df, source = manager.get_daily_data(stock_code, days=days)
+        df, source = manager.get_daily_data(stock_code, days=days, frequency=frequency)
 
         # Get stock name if available
         stock_name = ""

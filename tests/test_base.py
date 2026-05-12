@@ -13,7 +13,16 @@ from stock_data.data_provider.base import (
     is_etf_code,
     is_bse_code,
     market_tag,
+    index_market_tag,
     STANDARD_COLUMNS,
+)
+from stock_data.data_provider.index_symbols import (
+    is_index_code,
+    get_index_type,
+    normalize_index_symbol,
+    CSI_INDEX_MAP,
+    US_INDEX_MAP,
+    HK_INDEX_MAP,
 )
 
 
@@ -90,3 +99,82 @@ class TestStandardColumns:
         required = ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]
         for col in required:
             assert col in STANDARD_COLUMNS
+
+
+class TestIndexSymbols:
+    """Tests for index symbol detection and normalization."""
+
+    def test_is_index_code_us(self):
+        assert is_index_code("SPX")
+        assert is_index_code("DJI")
+        assert is_index_code("IXIC")
+        assert is_index_code("VIX")
+
+    def test_is_index_code_csi(self):
+        assert is_index_code("000300")  # 沪深300
+        assert is_index_code("000001")  # 上证指数
+        assert is_index_code("399001")  # 深证成指
+
+    def test_is_index_code_hk(self):
+        assert is_index_code("HSI")
+        assert is_index_code("HSCE")
+
+    def test_is_not_index_code_stock(self):
+        assert not is_index_code("600519")  # A-share stock
+        assert not is_index_code("AAPL")    # US stock
+        assert not is_index_code("HK00700")  # HK stock
+
+    def test_get_index_type_us(self):
+        assert get_index_type("SPX") == "us"
+        assert get_index_type("DJI") == "us"
+
+    def test_get_index_type_csi(self):
+        assert get_index_type("000300") == "csi"
+        assert get_index_type("000001") == "csi"
+
+    def test_get_index_type_hk(self):
+        assert get_index_type("HSI") == "hk"
+        assert get_index_type("HSCE") == "hk"
+
+    def test_normalize_index_symbol(self):
+        assert normalize_index_symbol("SPX") == "SPX"
+        assert normalize_index_symbol("^GSPC") == "SPX"  # reverse lookup
+        assert normalize_index_symbol("000300") == "000300"
+        assert normalize_index_symbol("sh.000300") == "000300"  # baostock format
+        assert normalize_index_symbol("HSI") == "HSI"
+        assert normalize_index_symbol("^HSI") == "HSI"  # yfinance format
+
+    def test_csi_index_map(self):
+        """Test CSI index mappings are correct."""
+        assert CSI_INDEX_MAP.get("000300") == "sh.000300"
+        assert CSI_INDEX_MAP.get("000001") == "sh.000001"
+        assert CSI_INDEX_MAP.get("399001") == "sz.399001"
+
+    def test_us_index_map(self):
+        """Test US index mappings are correct."""
+        assert US_INDEX_MAP.get("SPX") == "^GSPC"
+        assert US_INDEX_MAP.get("DJI") == "^DJI"
+
+    def test_hk_index_map(self):
+        """Test HK index mappings are correct."""
+        assert HK_INDEX_MAP.get("HSI") == "^HSI"
+
+
+class TestIndexMarketTag:
+    """Tests for index_market_tag function."""
+
+    def test_us_index(self):
+        assert index_market_tag("SPX") == "us"
+        assert index_market_tag("DJI") == "us"
+
+    def test_csi_index(self):
+        assert index_market_tag("000300") == "csi"
+        assert index_market_tag("000001") == "csi"
+
+    def test_hk_index(self):
+        assert index_market_tag("HSI") == "hk"
+
+    def test_stock_returns_none(self):
+        assert index_market_tag("600519") is None
+        assert index_market_tag("AAPL") is None
+        assert index_market_tag("HK00700") is None

@@ -15,6 +15,7 @@ import pandas as pd
 
 from .base import BaseFetcher, DataFetchError, normalize_stock_code
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
+from .index_symbols import CSI_INDEX_MAP, is_index_code, get_index_type
 
 logger = logging.getLogger(__name__)
 
@@ -57,20 +58,35 @@ class TushareFetcher(BaseFetcher):
     def _fetch_raw_data(
         self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
     ) -> pd.DataFrame:
-        """Fetch K-line data from Tushare (supports d/w/m)."""
+        """Fetch K-line data from Tushare (supports d/w/m for stocks and CSI indices)."""
         self._ensure_api()
         if self._api is None:
             raise DataFetchError("Tushare API not available (no token)")
 
         try:
             code = normalize_stock_code(stock_code)
-            if not code.startswith(("6", "5", "4", "3", "0", "1", "2")):
-                raise DataFetchError(f"TushareFetcher does not support {stock_code}")
+            is_index = is_index_code(code) and get_index_type(code) == "csi"
 
-            if code.startswith(("6", "5")):
-                ts_code = f"{code}.SH"
+            if is_index:
+                # CSI index: use index_daily API
+                # Format: 000300.SH for Shanghai indices
+                if code in CSI_INDEX_MAP:
+                    bs_symbol = CSI_INDEX_MAP[code]
+                    # bs_symbol is like "sh.000300", convert to "000300.SH"
+                    market_prefix = bs_symbol.split(".")[0].upper()  # "sh" -> "SH"
+                    numeric_code = bs_symbol.split(".")[1]  # "000300"
+                    ts_code = f"{numeric_code}.{market_prefix.replace('SH', 'SH').replace('SZ', 'SZ')}"
+                else:
+                    # Fallback: assume Shanghai format for CSI indices starting with 00
+                    ts_code = f"{code}.SH"
             else:
-                ts_code = f"{code}.SZ"
+                # Regular stock
+                if code.startswith(("6", "5")):
+                    ts_code = f"{code}.SH"
+                elif code.startswith(("4", "3", "0", "1", "2")):
+                    ts_code = f"{code}.SZ"
+                else:
+                    raise DataFetchError(f"TushareFetcher does not support {stock_code}")
 
             start = start_date.replace("-", "")
             end = end_date.replace("-", "")

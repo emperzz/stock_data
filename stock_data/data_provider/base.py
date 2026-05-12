@@ -15,6 +15,7 @@ from typing import Any, List, Optional, Tuple
 import pandas as pd
 
 from .realtime_types import get_realtime_circuit_breaker
+from .index_symbols import is_index_code, get_index_type
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,16 @@ def market_tag(code: str) -> str:
     if is_hk_market(code):
         return "hk"
     return "cn"
+
+
+def index_market_tag(code: str) -> str | None:
+    """
+    Return market tag for index codes: 'csi'/'hk'/'us' or None if not an index.
+
+    Unlike market_tag() which returns 'cn'/'hk'/'us' for stocks,
+    this returns the specific index market type for routing purposes.
+    """
+    return get_index_type(code)
 
 
 class BaseFetcher(ABC):
@@ -283,11 +294,12 @@ class DataFetcherManager:
     """
 
     # Market support per fetcher
+    # cn/hk/us = stocks, csi = A-share indices, hk_index = HK indices, us_index = US indices
     _MARKET_SUPPORT = {
-        "TushareFetcher": {"cn", "hk"},
-        "BaostockFetcher": {"cn"},
-        "AkshareFetcher": {"cn", "hk"},
-        "YfinanceFetcher": {"cn", "hk", "us"},
+        "TushareFetcher": {"cn", "csi"},
+        "BaostockFetcher": {"cn", "csi"},
+        "AkshareFetcher": {"cn", "hk", "csi"},
+        "YfinanceFetcher": {"cn", "hk", "us", "csi"},
     }
 
     def __init__(self, fetchers: Optional[List[BaseFetcher]] = None):
@@ -348,9 +360,19 @@ class DataFetcherManager:
             DataFetchError: When all fetchers fail
         """
         stock_code = normalize_stock_code(stock_code)
-        market = market_tag(stock_code)
 
-        fetchers = self._filter_by_market(market)
+        # Check if it's an index code for routing
+        index_tag = index_market_tag(stock_code)
+        if index_tag:
+            # Route indices to appropriate fetchers based on index type
+            fetchers = self._filter_by_market(index_tag)
+            if not fetchers:
+                # Fall back to stock market routing if no index-specific fetcher
+                fetchers = self._filter_by_market(market_tag(stock_code))
+        else:
+            market = market_tag(stock_code)
+            fetchers = self._filter_by_market(market)
+
         errors = []
 
         for fetcher in fetchers:

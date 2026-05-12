@@ -298,6 +298,135 @@ class TestTushareFetcher:
             assert isinstance(name, str)
             assert len(name) > 0
 
+    def test_fetch_csi_index(self, fetcher):
+        """Test _fetch_raw_data for CSI 300 index."""
+        if not fetcher.is_available():
+            pytest.skip("TUSHARE_TOKEN not set or invalid")
+
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+        df = fetcher._fetch_raw_data("000300", start_date, end_date)
+        assert df is not None
+        assert len(df) > 0
+
+    def test_get_daily_data_csi_index(self, fetcher):
+        """Test get_daily_data for CSI 300 index."""
+        if not fetcher.is_available():
+            pytest.skip("TUSHARE_TOKEN not set or invalid")
+
+        df = fetcher.get_daily_data("000300", days=10)
+        assert df is not None
+        assert len(df) > 0
+
+
+class TestIndexSupport:
+    """Tests for index historical data fetching."""
+
+    @pytest.fixture
+    def yfinance_fetcher(self):
+        from stock_data.data_provider.yfinance_fetcher import YfinanceFetcher
+        return YfinanceFetcher()
+
+    @pytest.fixture
+    def baostock_fetcher(self):
+        from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+        return BaostockFetcher()
+
+    @pytest.fixture
+    def akshare_fetcher(self):
+        from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+        return AkshareFetcher()
+
+    def test_yfinance_us_index_daily(self, yfinance_fetcher):
+        """Test YfinanceFetcher for US index daily data."""
+        if not yfinance_fetcher.is_available():
+            pytest.skip("yfinance not installed")
+
+        df = yfinance_fetcher.get_daily_data("SPX", days=10)
+        assert df is not None
+        assert len(df) > 0
+        assert "close" in df.columns
+
+    def test_yfinance_us_index_weekly(self, yfinance_fetcher):
+        """Test YfinanceFetcher for US index weekly data."""
+        if not yfinance_fetcher.is_available():
+            pytest.skip("yfinance not installed")
+
+        df = yfinance_fetcher.get_daily_data("SPX", days=30, frequency="w")
+        assert df is not None
+        assert len(df) > 0
+
+    def test_yfinance_us_index_monthly(self, yfinance_fetcher):
+        """Test YfinanceFetcher for US index monthly data."""
+        if not yfinance_fetcher.is_available():
+            pytest.skip("yfinance not installed")
+
+        df = yfinance_fetcher.get_daily_data("SPX", days=365, frequency="m")
+        assert df is not None
+        assert len(df) > 0
+
+    def test_yfinance_hk_index(self, yfinance_fetcher):
+        """Test YfinanceFetcher for HK index."""
+        if not yfinance_fetcher.is_available():
+            pytest.skip("yfinance not installed")
+
+        df = yfinance_fetcher.get_daily_data("HSI", days=10)
+        assert df is not None
+        assert len(df) > 0
+
+    def test_yfinance_csi_index(self, yfinance_fetcher):
+        """Test YfinanceFetcher for CSI index via .SS suffix."""
+        if not yfinance_fetcher.is_available():
+            pytest.skip("yfinance not installed")
+
+        df = yfinance_fetcher.get_daily_data("000300", days=10)
+        assert df is not None
+        assert len(df) > 0
+
+    def test_baostock_csi_index(self, baostock_fetcher):
+        """Test BaostockFetcher for CSI 300 index."""
+        if not baostock_fetcher.is_available():
+            pytest.skip("baostock not available")
+
+        df = baostock_fetcher.get_daily_data("000300", days=10)
+        assert df is not None
+        assert len(df) > 0
+        assert "close" in df.columns
+
+    def test_baostock_csi_index_daily(self, baostock_fetcher):
+        """Test BaostockFetcher for CSI 300 index daily."""
+        if not baostock_fetcher.is_available():
+            pytest.skip("baostock not available")
+
+        df = baostock_fetcher.get_daily_data("000300", days=10, frequency="d")
+        assert df is not None
+        assert len(df) > 0
+
+    def test_baostock_csi_index_weekly(self, baostock_fetcher):
+        """Test BaostockFetcher for CSI 300 index weekly."""
+        if not baostock_fetcher.is_available():
+            pytest.skip("baostock not available")
+
+        df = baostock_fetcher.get_daily_data("000300", days=60, frequency="w")
+        assert df is not None
+        assert len(df) > 0
+
+    def test_baostock_csi_index_monthly(self, baostock_fetcher):
+        """Test BaostockFetcher for CSI 300 index monthly."""
+        if not baostock_fetcher.is_available():
+            pytest.skip("baostock not available")
+
+        df = baostock_fetcher.get_daily_data("000300", days=365, frequency="m")
+        assert df is not None
+        assert len(df) > 0
+
+    def test_akshare_csi_index(self, akshare_fetcher):
+        """Test AkshareFetcher for CSI index via index_zh_a_hist."""
+        df = akshare_fetcher.get_daily_data("000300", days=10)
+        assert df is not None
+        assert len(df) > 0
+
 
 class TestDataFetcherManager:
     """Tests for DataFetcherManager - integration tests."""
@@ -353,3 +482,24 @@ class TestDataFetcherManager:
         result = manager.get_realtime_quote("AAPL")
         assert result is not None
         assert result.price is not None
+
+    def test_get_daily_data_csi_index_via_manager(self, manager):
+        """Test manager routes CSI index to appropriate fetcher."""
+        df, source = manager.get_daily_data("000300", days=10)
+        assert df is not None
+        assert len(df) > 0
+        # Should be fetched by Baostock or Yfinance
+        assert source in ["BaostockFetcher", "YfinanceFetcher"]
+
+    def test_get_daily_data_us_index_via_manager(self, manager):
+        """Test manager routes US index to YfinanceFetcher."""
+        df, source = manager.get_daily_data("SPX", days=10)
+        assert df is not None
+        assert len(df) > 0
+        assert source == "YfinanceFetcher"
+
+    def test_get_daily_data_hk_index_via_manager(self, manager):
+        """Test manager routes HK index to appropriate fetcher."""
+        df, source = manager.get_daily_data("HSI", days=10)
+        assert df is not None
+        assert len(df) > 0
