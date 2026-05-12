@@ -154,8 +154,17 @@ class BaseFetcher(ABC):
     priority: int = 99  # Lower is higher priority
 
     @abstractmethod
-    def _fetch_raw_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """Fetch raw data from the source. Returns DataFrame with source-specific columns."""
+    def _fetch_raw_data(
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+    ) -> pd.DataFrame:
+        """Fetch raw data from the source. Returns DataFrame with source-specific columns.
+
+        Args:
+            stock_code: Stock code
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
+        """
         pass
 
     @abstractmethod
@@ -169,6 +178,7 @@ class BaseFetcher(ABC):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         days: int = 30,
+        frequency: str = "d",
     ) -> pd.DataFrame:
         """
         Get daily K-line data.
@@ -178,6 +188,7 @@ class BaseFetcher(ABC):
             start_date: Start date (YYYY-MM-DD), defaults to days ago
             end_date: End date (YYYY-MM-DD), defaults to today
             days: Number of days when start_date not provided
+            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
 
         Returns:
             DataFrame with standard columns and technical indicators
@@ -191,10 +202,10 @@ class BaseFetcher(ABC):
             start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days * 2)
             start_date = start_dt.strftime("%Y-%m-%d")
 
-        logger.info(f"[{self.name}] Fetching {stock_code} daily data: {start_date} ~ {end_date}")
+        logger.info(f"[{self.name}] Fetching {stock_code} {frequency} data: {start_date} ~ {end_date}")
 
         try:
-            raw_df = self._fetch_raw_data(stock_code, start_date, end_date)
+            raw_df = self._fetch_raw_data(stock_code, start_date, end_date, frequency)
             if raw_df is None or raw_df.empty:
                 raise DataFetchError(f"[{self.name}] No data for {stock_code}")
 
@@ -318,9 +329,17 @@ class DataFetcherManager:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         days: int = 30,
+        frequency: str = "d",
     ) -> Tuple[pd.DataFrame, str]:
         """
         Get daily data with automatic failover.
+
+        Args:
+            stock_code: Stock code
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            days: Number of days when start_date not provided
+            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
 
         Returns:
             Tuple of (DataFrame, source_name)
@@ -336,8 +355,8 @@ class DataFetcherManager:
 
         for fetcher in fetchers:
             try:
-                logger.info(f"[Manager] Trying {fetcher.name} for {stock_code}")
-                df = fetcher.get_daily_data(stock_code, start_date, end_date, days)
+                logger.info(f"[Manager] Trying {fetcher.name} for {stock_code} ({frequency})")
+                df = fetcher.get_daily_data(stock_code, start_date, end_date, days, frequency)
                 if df is not None and not df.empty:
                     logger.info(f"[Manager] {fetcher.name} succeeded for {stock_code}")
                     return df, fetcher.name

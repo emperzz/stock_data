@@ -68,8 +68,10 @@ class BaostockFetcher(BaseFetcher):
         else:
             return f"sz.{code}", code
 
-    def _fetch_raw_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """Fetch daily K-line data from Baostock."""
+    def _fetch_raw_data(
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+    ) -> pd.DataFrame:
+        """Fetch K-line data from Baostock (supports d/w/m/5/15/30/60)."""
         self._ensure_initialized()
         if not self._initialized:
             raise DataFetchError("Baostock not available")
@@ -79,14 +81,14 @@ class BaostockFetcher(BaseFetcher):
 
             bs_code, _ = self._convert_code(stock_code)
 
-            logger.debug(f"[BaostockFetcher] Calling query_history_k_data for {bs_code}")
+            logger.debug(f"[BaostockFetcher] Calling query_history_k_data_plus for {bs_code} ({frequency})")
 
             rs = bs.query_history_k_data_plus(
                 bs_code,
                 "date,open,high,low,close,volume,amount,pctChg",
                 start_date=start_date,
                 end_date=end_date,
-                frequency="d",
+                frequency=frequency,
                 adjustflag="2",  # Forward-adjusted
             )
 

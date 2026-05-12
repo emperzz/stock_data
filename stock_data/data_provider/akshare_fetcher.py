@@ -44,20 +44,26 @@ class AkshareFetcher(BaseFetcher):
 
         return code
 
-    def _fetch_raw_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """Fetch daily K-line data from Akshare."""
+    def _fetch_raw_data(
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+    ) -> pd.DataFrame:
+        """Fetch daily K-line data from Akshare (supports d/w/m)."""
         try:
             import akshare as ak
 
             code = self._convert_to_akshare_code(stock_code)
             is_hk = is_hk_market(stock_code)
 
-            logger.debug(f"[AkshareFetcher] Fetching {code}")
+            logger.debug(f"[AkshareFetcher] Fetching {code} ({frequency})")
+
+            # Akshare period mapping
+            period_map = {"d": "daily", "w": "weekly", "m": "monthly"}
+            period = period_map.get(frequency, "daily")
 
             if is_hk:
                 df = ak.stock_hk_hist(
                     symbol=code.replace(".hk", ""),
-                    period="daily",
+                    period=period,
                     start_date=start_date.replace("-", ""),
                     end_date=end_date.replace("-", ""),
                     adjust="qfq"
@@ -65,7 +71,7 @@ class AkshareFetcher(BaseFetcher):
             else:
                 df = ak.stock_zh_a_hist(
                     symbol=code,
-                    period="daily",
+                    period=period,
                     start_date=start_date,
                     end_date=end_date,
                     adjust="qfq"

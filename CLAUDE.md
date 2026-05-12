@@ -61,6 +61,83 @@ volume, amount, volume_ratio, turnover_rate, amplitude,
 open_price, high, low, pre_close, pe_ratio, pb_ratio, total_mv, circ_mv
 ```
 
+## Provider API Documentation
+
+### BaostockFetcher (Priority 1, A股 only, Free)
+
+**API**: `bs.query_history_k_data_plus(code, fields, start_date, end_date, frequency, adjustflag)`
+
+**Frequency**: `d`=日线, `w`=周线, `m`=月线, `5/15/30/60`=分钟线（不适用指数）
+
+**Fields (日线)**:
+```
+date, open, high, low, close, preclose, volume, amount, adjustflag, turn, tradestatus, pctChg, isST
+```
+
+**Note**: Baostock has **NO realtime quotes API** - only historical data.
+
+**Links**: https://baostock.com/mainContent?file=stockKData.md
+
+---
+
+### AkshareFetcher (Priority 2, A股+HK, Free)
+
+**A-share API**: `ak.stock_zh_a_hist(symbol, period, start_date, end_date, adjust)`
+- `period`: `'daily'`, `'weekly'`, `'monthly'`
+- `adjust`: `''`=不复权, `'qfq'`=前复权, `'hfq'`=后复权
+
+**HK API**: `ak.stock_hk_hist(symbol, period, start_date, end_date, adjust)`
+- Same parameters as A-share
+
+**Output columns (中文)**:
+```
+日期, 股票代码, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+```
+
+**Links**: https://akshare.akfamily.xyz/data/stock/stock.html
+
+---
+
+### TushareFetcher (Priority 0, A股, Requires Token)
+
+**API**: `api.query('daily', ts_code, start_date, end_date)`
+
+**Note**: Tushare returns **未复权行情** via this interface. For 复权数据, use the 复权因子接口 separately.
+
+**Output columns**:
+```
+ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, amount
+```
+
+**Units**:
+- `vol`: 手 (1手=100股) → convert to shares
+- `amount`: 千元 → convert to yuan
+
+**Links**: https://tushare.pro/document/2?doc_id=27
+
+---
+
+### YfinanceFetcher (Priority 3, US+A股+HK, Free)
+
+**API**: `yf.download(tickers, start, end, auto_adjust=True)`
+
+**Supports**: US stocks, US indices (via `US_INDEX_MAP`), A-share (.SS/.SZ), HK (.HK)
+
+**Frequency**: Only daily (intervals via `interval` param: `'1d'`, `'1wk'`, `'1mo'`, `'5m'`, etc.)
+
+---
+
+## Provider Frequency Support
+
+| Provider | d | w | m | 5m | 15m | 30m | 60m |
+|----------|---|---|---|----|----|-----|-----|
+| BaostockFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| AkshareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| TushareFetcher | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| YfinanceFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+**Fallback**: Server queries providers in priority order. If provider doesn't support the requested frequency, it raises `DataFetchError` and the next provider is tried.
+
 ## Symbol Conventions
 
 | Market | Format | Examples |

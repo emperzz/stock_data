@@ -54,8 +54,13 @@ class TushareFetcher(BaseFetcher):
         self._ensure_api()
         return self._api is not None
 
-    def _fetch_raw_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """Fetch daily K-line data from Tushare."""
+    def _fetch_raw_data(
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+    ) -> pd.DataFrame:
+        """Fetch daily K-line data from Tushare (supports d only)."""
+        if frequency != "d":
+            raise DataFetchError(f"TushareFetcher only supports daily ('d'), got '{frequency}'")
+
         self._ensure_api()
         if self._api is None:
             raise DataFetchError("Tushare API not available (no token)")

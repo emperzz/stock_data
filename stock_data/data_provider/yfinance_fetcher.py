@@ -104,13 +104,27 @@ class YfinanceFetcher(BaseFetcher):
         retry=retry_if_exception_type((ConnectionError, TimeoutError)),
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
-    def _fetch_raw_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """Fetch daily K-line data from yfinance."""
+    def _fetch_raw_data(
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+    ) -> pd.DataFrame:
+        """Fetch K-line data from yfinance (supports d/w/m/5/15/30/60)."""
         try:
             import yfinance as yf
 
             code = self._convert_code(stock_code)
-            logger.debug(f"[YfinanceFetcher] Fetching {code}")
+            logger.debug(f"[YfinanceFetcher] Fetching {code} ({frequency})")
+
+            # yfinance interval mapping
+            interval_map = {
+                "d": "1d",
+                "w": "1wk",
+                "m": "1mo",
+                "5": "5m",
+                "15": "15m",
+                "30": "30m",
+                "60": "60m",
+            }
+            interval = interval_map.get(frequency, "1d")
 
             df = yf.download(
                 tickers=code,
@@ -119,6 +133,7 @@ class YfinanceFetcher(BaseFetcher):
                 progress=False,
                 auto_adjust=True,
                 multi_level_index=True,
+                interval=interval,
             )
 
             if df is None or df.empty:
