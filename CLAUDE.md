@@ -100,11 +100,9 @@ date, open, high, low, close, preclose, volume, amount, adjustflag, turn, trades
 
 ### TushareFetcher (Priority 0, A股, Requires Token)
 
-**API**: `api.query('daily', ts_code, start_date, end_date)`
+**APIs**: `api.query('daily', ...)`, `api.query('weekly', ...)`, `api.query('monthly', ...)`
 
-**Note**: Tushare returns **未复权行情** via this interface. For 复权数据, use the 复权因子接口 separately.
-
-**Output columns**:
+**Output columns** (same for daily/weekly/monthly):
 ```
 ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, amount
 ```
@@ -113,7 +111,9 @@ ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, am
 - `vol`: 手 (1手=100股) → convert to shares
 - `amount`: 千元 → convert to yuan
 
-**Links**: https://tushare.pro/document/2?doc_id=27
+**Note**: All three interfaces return **未复权行情**. For 复权数据, use the 复权因子接口 separately.
+
+**Links**: https://tushare.pro/document/2?doc_id=27 (daily), doc_id=144 (weekly), doc_id=145 (monthly)
 
 ---
 
@@ -133,7 +133,7 @@ ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, am
 |----------|---|---|---|----|----|-----|-----|
 | BaostockFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | AkshareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| TushareFetcher | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| TushareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | YfinanceFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 **Fallback**: Server queries providers in priority order. If provider doesn't support the requested frequency, it raises `DataFetchError` and the next provider is tried.

@@ -57,35 +57,34 @@ class TushareFetcher(BaseFetcher):
     def _fetch_raw_data(
         self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
     ) -> pd.DataFrame:
-        """Fetch daily K-line data from Tushare (supports d only)."""
-        if frequency != "d":
-            raise DataFetchError(f"TushareFetcher only supports daily ('d'), got '{frequency}'")
-
+        """Fetch K-line data from Tushare (supports d/w/m)."""
         self._ensure_api()
         if self._api is None:
             raise DataFetchError("Tushare API not available (no token)")
 
-        # Tushare trade calendar API
         try:
-            # Convert to Tushare format: 600519.SS -> 600519
             code = normalize_stock_code(stock_code)
             if not code.startswith(("6", "5", "4", "3", "0", "1", "2")):
                 raise DataFetchError(f"TushareFetcher does not support {stock_code}")
 
-            # Append exchange suffix for Tushare
             if code.startswith(("6", "5")):
                 ts_code = f"{code}.SH"
             else:
                 ts_code = f"{code}.SZ"
 
-            # Remove date hyphens for Tushare
             start = start_date.replace("-", "")
             end = end_date.replace("-", "")
 
-            logger.debug(f"[TushareFetcher] Calling daily for {ts_code}")
+            # Map frequency to Tushare API
+            api_map = {"d": "daily", "w": "weekly", "m": "monthly"}
+            api_name = api_map.get(frequency)
+            if not api_name:
+                raise DataFetchError(f"TushareFetcher only supports d/w/m, got '{frequency}'")
+
+            logger.debug(f"[TushareFetcher] Calling {api_name} for {ts_code}")
 
             df = self._api.query(
-                "daily",
+                api_name,
                 ts_code=ts_code,
                 start_date=start,
                 end_date=end,
