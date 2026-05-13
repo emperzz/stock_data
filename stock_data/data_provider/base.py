@@ -303,6 +303,7 @@ class DataFetcherManager:
         "BaostockFetcher": {"cn", "csi"},
         "AkshareFetcher": {"cn", "hk", "csi"},
         "YfinanceFetcher": {"cn", "hk", "us", "csi"},
+        "ZhituFetcher": {"cn"},
     }
 
     def __init__(self, fetchers: Optional[List[BaseFetcher]] = None):

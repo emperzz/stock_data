@@ -127,6 +127,29 @@ ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, am
 
 ---
 
+### ZhituFetcher (Priority 4, A股 realtime only, Requires Token)
+
+**API**: `https://api.zhituapi.com/hs/real/ssjy/{stock_code}?token={token}`
+
+**Supports**: A股 realtime quotes only (no historical K-line data)
+
+**Token**: Set via `ZHITU_TOKEN` environment variable
+
+**Output fields**:
+```
+p (price), pc (change_pct), ud (change_amount), v (volume),
+cje (amount), o (open), h (high), l (low), yc (pre_close),
+zf (amplitude), lb (volume_ratio), hs (turnover_rate), pe (pe_ratio),
+sjl (pb_ratio), sz (total_mv), lt (circ_mv)
+```
+
+**Note**: Zhitu API returns rich realtime data but **does not support historical K-line data**.
+It is used as a fallback for realtime quotes only.
+
+**Links**: https://www.zhituapi.com/hsstockapi.html
+
+---
+
 ## Provider Frequency Support
 
 | Provider | d | w | m | 5m | 15m | 30m | 60m |

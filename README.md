@@ -4,7 +4,7 @@ A local stock data aggregation server that integrates multiple upstream APIs int
 
 ## Features
 
-- **Multi-source aggregation**: Tushare, Baostock, Akshare, Yahoo Finance
+- **Multi-source aggregation**: Tushare, Baostock, Akshare, Yfinance, Zhitu
 - **Automatic failover**: Priority-based source selection with fallback
 - **Circuit breaker**: Prevents cascading failures from unavailable sources
 - **Unified data format**: Consistent schema across all sources
@@ -39,7 +39,7 @@ Response:
 ```json
 {
   "status": "ok",
-  "available_sources": ["TushareFetcher", "BaostockFetcher", "AkshareFetcher", "YfinanceFetcher"]
+  "available_sources": ["TushareFetcher", "BaostockFetcher", "AkshareFetcher", "YfinanceFetcher", "ZhituFetcher"]
 }
 ```
 
@@ -299,6 +299,8 @@ The server automatically routes requests to the appropriate data source based on
 | 0 | Tushare | Requires API token |
 | 1 | Baostock | Free, no token |
 | 2 | Akshare | Fallback |
+| 3 | Yfinance | Fallback |
+| 4 | Zhitu | Realtime only, requires token |
 
 ### A-share Indices (CSI)
 
@@ -361,6 +363,8 @@ The server automatically routes requests to the appropriate data source based on
 | `BAOSTOCK_PRIORITY` | Override Baostock priority | 1 |
 | `AKSHARE_PRIORITY` | Override Akshare priority | 2 |
 | `YFINANCE_PRIORITY` | Override Yfinance priority | 3 |
+| `ZHITU_TOKEN` | Zhitu API token (for realtime quotes) | - |
+| `ZHITU_PRIORITY` | Override Zhitu priority | 4 |
 | `SERVER_PORT` | Server port | 8888 |
 | `SERVER_HOST` | Server host | 0.0.0.0 |
 

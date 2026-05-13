@@ -12,6 +12,7 @@ from ..data_provider.baostock_fetcher import BaostockFetcher
 from ..data_provider.index_symbols import get_all_indices
 from ..data_provider.tushare_fetcher import TushareFetcher
 from ..data_provider.yfinance_fetcher import YfinanceFetcher
+from ..data_provider.zhitu_fetcher import ZhituFetcher
 from .cache import (
     get_history_cache,
     get_quote_cache,
@@ -67,6 +68,13 @@ def get_manager() -> DataFetcherManager:
             logger.info("YfinanceFetcher added")
         else:
             logger.info("YfinanceFetcher skipped (yfinance not installed)")
+
+        zhitu = ZhituFetcher()
+        if zhitu.is_available():
+            _manager.add_fetcher(zhitu)
+            logger.info("ZhituFetcher added")
+        else:
+            logger.info("ZhituFetcher skipped (ZHITU_TOKEN not configured)")
 
     return _manager
 
