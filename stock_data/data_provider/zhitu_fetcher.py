@@ -7,6 +7,7 @@ Token configured via ZHITU_TOKEN environment variable.
 
 import logging
 import os
+from datetime import date
 
 import pandas as pd
 import requests
@@ -182,7 +183,6 @@ class ZhituFetcher(BaseFetcher):
             from ..stock_cache import get_latest_cached_trade_date
             latest_date = get_latest_cached_trade_date()
             if not latest_date:
-                from datetime import date
                 latest_date = date.today().strftime("%Y%m%d")
             else:
                 latest_date = latest_date.replace("-", "")
