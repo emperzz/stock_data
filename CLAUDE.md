@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A Python-based local stock data aggregation server that:
-- Integrates multiple upstream stock data APIs (Yahoo Finance, Alpha Vantage, East Money, etc.)
+- Integrates multiple upstream stock data APIs (Tushare, Baostock, Akshare, Yfinance, Zhitu)
 - Normalizes data into a unified format
 - Provides a stable REST API for consumption by AI agents like OpenClaw
 
@@ -23,7 +23,7 @@ A Python-based local stock data aggregation server that:
 │    Priority-based failover, circuit breaker, caching       │
 ├─────────────────────────────────────────────────────────┤
 │                   Source Adapters                         │
-│  EfinanceFetcher  AkshareFetcher  YfinanceFetcher ...    │
+│  TushareFetcher  BaostockFetcher  AkshareFetcher  YfinanceFetcher ...    │
 ├─────────────────────────────────────────────────────────┤
 │              Upstream Stock Data APIs                    │
 ```
@@ -35,7 +35,7 @@ A Python-based local stock data aggregation server that:
 - `DataFetcherManager`: Orchestrates fetchers with priority-based failover, circuit breakers, and market-aware routing
 
 ### `data_provider/{source}_fetcher.py`
-- Each source has its own fetcher: `efinance_fetcher.py`, `akshare_fetcher.py`, `yfinance_fetcher.py`
+- Each source has its own fetcher: `baostock_fetcher.py`, `akshare_fetcher.py`, `yfinance_fetcher.py`
 - Each fetcher handles:
   - Source-specific API calls
   - Rate limiting (random jitter, User-Agent rotation)
@@ -185,9 +185,9 @@ Per-source circuit breakers prevent cascading failures:
 
 ### Market-Aware Routing
 Manager routes requests based on stock code:
-- US/HK stocks → specialized fetchers (YfinanceFetcher, LongbridgeFetcher)
-- A-shares → EfinanceFetcher (primary), AkshareFetcher (fallback)
-- Each fetcher declares supported markets via `_DAILY_MARKET_FETCHER_SUPPORT`
+- US stocks → YfinanceFetcher (primary), Stooq fallback
+- A-shares → BaostockFetcher (primary), AkshareFetcher (fallback)
+- Each fetcher declares supported markets via `_MARKET_SUPPORT` dict
 
 ### Code Normalization
 `normalize_stock_code()` handles various input formats:
@@ -219,11 +219,12 @@ ruff format .
 
 Environment variables (see `.env.example`):
 - `TUSHARE_TOKEN` - Tushare Pro API token
-- `LONGBRIDGE_APP_KEY/SECRET/TOKEN` - Longbridge credentials
-- `EFINANCE_PRIORITY` - Override efinance fetcher priority (default: 0)
-- `YFINANCE_PRIORITY` - Override yfinance fetcher priority (default: 4)
-- `ENABLE_REALTIME_QUOTE` - Toggle realtime quote feature
-- `REALTIME_SOURCE_PRIORITY` - Comma-separated source priority for realtime
+- `BAOSTOCK_PRIORITY` - Override Baostock fetcher priority (default: 1)
+- `AKSHARE_PRIORITY` - Override Akshare fetcher priority (default: 2)
+- `YFINANCE_PRIORITY` - Override Yfinance fetcher priority (default: 3)
+- `ZHITU_TOKEN` - Zhitu API token for realtime quotes
+- `ZHITU_PRIORITY` - Override Zhitu fetcher priority (default: 4)
+- `ENABLE_API_CACHE` - Enable/disable API response caching (default: true)
 
 ## Anti-Patterns to Avoid
 
