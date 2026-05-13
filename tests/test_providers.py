@@ -503,3 +503,79 @@ class TestDataFetcherManager:
         df, source = manager.get_daily_data("HSI", days=10)
         assert df is not None
         assert len(df) > 0
+
+
+class TestAkshareFetcherIntraday:
+    """Tests for AkshareFetcher.get_intraday_data()."""
+
+    @pytest.fixture
+    def fetcher(self):
+        from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+        return AkshareFetcher()
+
+    def test_get_intraday_5m(self, fetcher):
+        """Test get_intraday_data for 5-minute period."""
+        df = fetcher.get_intraday_data("000001", period="5", adjust="")
+        assert df is not None
+        assert len(df) > 0
+        assert "time" in df.columns
+        assert "close" in df.columns
+        assert "volume" in df.columns
+
+    def test_get_intraday_5m_with_adjust(self, fetcher):
+        """Test get_intraday_data for 5-minute period with qfq."""
+        df = fetcher.get_intraday_data("000001", period="5", adjust="qfq")
+        assert df is not None
+        assert len(df) > 0
+
+    def test_get_intraday_60m(self, fetcher):
+        """Test get_intraday_data for 60-minute period."""
+        df = fetcher.get_intraday_data("600519", period="60", adjust="")
+        assert df is not None
+        assert len(df) > 0
+
+    def test_get_intraday_normalized_columns(self, fetcher):
+        """Test normalized columns: time, open, high, low, close, volume, amount."""
+        df = fetcher.get_intraday_data("000001", period="5", adjust="")
+        expected_cols = {"time", "open", "high", "low", "close", "volume", "amount"}
+        assert set(df.columns) == expected_cols
+
+    def test_get_intraday_returns_none_for_unsupported_market(self, fetcher):
+        """Test get_intraday_data returns None for US stock."""
+        df = fetcher.get_intraday_data("AAPL", period="5", adjust="")
+        assert df is None
+
+
+class TestZhituFetcherIntraday:
+    """Tests for ZhituFetcher.get_intraday_data()."""
+
+    @pytest.fixture
+    def fetcher(self):
+        from stock_data.data_provider.zhitu_fetcher import ZhituFetcher
+        return ZhituFetcher()
+
+    def test_get_intraday_5m(self, fetcher):
+        """Test get_intraday_data for 5-minute period."""
+        if not fetcher.is_available():
+            pytest.skip("ZHITU_TOKEN not configured")
+        df = fetcher.get_intraday_data("000001", period="5", adjust="")
+        assert df is not None
+        assert len(df) > 0
+        assert "time" in df.columns
+        assert "close" in df.columns
+
+    def test_get_intraday_rejects_period_1(self, fetcher):
+        """Test that period=1 raises DataFetchError."""
+        if not fetcher.is_available():
+            pytest.skip("ZHITU_TOKEN not configured")
+        from stock_data.data_provider.base import DataFetchError
+        with pytest.raises(DataFetchError):
+            fetcher.get_intraday_data("000001", period="1", adjust="")
+
+    def test_get_intraday_normalized_columns(self, fetcher):
+        """Test normalized columns match expected."""
+        if not fetcher.is_available():
+            pytest.skip("ZHITU_TOKEN not configured")
+        df = fetcher.get_intraday_data("000001", period="5", adjust="")
+        expected_cols = {"time", "open", "high", "low", "close", "volume", "amount"}
+        assert set(df.columns) == expected_cols
