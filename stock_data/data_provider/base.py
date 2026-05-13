@@ -286,6 +286,25 @@ class BaseFetcher(ABC):
         """Get stock name. Override in subclass if supported."""
         return None
 
+    def get_intraday_data(
+        self,
+        stock_code: str,
+        period: str = "5",
+        adjust: str = ""
+    ) -> pd.DataFrame | None:
+        """Get intraday minute-level data for a stock.
+
+        Args:
+            stock_code: Stock code (e.g., 600519, 000001)
+            period: Minute period - "1", "5", "15", "30", "60"
+            adjust: Adjustment type - ""=不复权, "qfq"=前复权, "hfq"=后复权
+
+        Returns:
+            DataFrame with columns: time, open, high, low, close, volume, amount
+            or None if not supported.
+        """
+        return None
+
 
 class DataFetcherManager:
     """
@@ -419,6 +438,44 @@ class DataFetcherManager:
                 continue
 
         return None
+
+    def get_intraday_data(
+        self,
+        stock_code: str,
+        period: str = "5",
+        adjust: str = ""
+    ) -> Tuple[pd.DataFrame, str]:
+        """Get intraday minute-level data with automatic failover.
+
+        Args:
+            stock_code: Stock code
+            period: Minute period - "1", "5", "15", "30", "60"
+            adjust: Adjustment type - ""=不复权, "qfq"=前复权, "hfq"=后复权
+
+        Returns:
+            Tuple of (DataFrame, source_name)
+
+        Raises:
+            DataFetchError: When all fetchers fail
+        """
+        stock_code = normalize_stock_code(stock_code)
+        market = market_tag(stock_code)
+        fetchers = self._filter_by_market(market)
+
+        errors = []
+        for fetcher in fetchers:
+            try:
+                logger.info(f"[Manager] Trying {fetcher.name} for {stock_code} intraday ({period})")
+                df = fetcher.get_intraday_data(stock_code, period, adjust)
+                if df is not None and not df.empty:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {stock_code} intraday")
+                    return df, fetcher.name
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} intraday failed: {e}")
+                continue
+
+        raise DataFetchError(f"All fetchers failed for {stock_code} intraday:\n" + "\n".join(errors))
 
     @property
     def available_fetchers(self) -> List[str]:
