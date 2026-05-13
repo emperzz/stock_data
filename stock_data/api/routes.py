@@ -3,6 +3,8 @@ API routes for stock data server.
 """
 
 import logging
+import subprocess
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -28,6 +30,7 @@ from .schemas import (
     StockHistoryResponse,
     StockInfo,
     StockQuote,
+    TradeCalendarResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -330,3 +333,122 @@ def list_stocks(
         logger.info(f"[list_stocks] Cached {len(result)} stocks for market={market}")
 
     return [StockInfo(code=s["code"], name=s["name"], market=market) for s in result]
+
+
+@router.get(
+    "/calendar",
+    response_model=TradeCalendarResponse,
+    responses={
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["calendar"],
+)
+def get_trade_calendar(
+    refresh: bool = Query(False, description="Force fetch latest from upstream"),
+) -> TradeCalendarResponse:
+    """
+    Get A-share trade calendar.
+
+    Returns all available trade dates sorted ascending. Data is cached in SQLite
+    and refreshed from upstream when:
+    - refresh=True is requested
+    - Cache is empty
+    - Cached latest date is before today (data may be stale)
+
+    Uses akshare tool_trade_date_hist_sina API.
+    """
+    from ..data_provider.stock_cache import (
+        get_cached_calendar,
+        get_latest_cached_trade_date,
+        update_cached_calendar,
+    )
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # Check if refresh is needed
+    should_refresh = refresh
+    if not should_refresh:
+        cached_dates = get_cached_calendar()
+        if not cached_dates:
+            should_refresh = True
+        else:
+            latest_cached = get_latest_cached_trade_date()
+            if latest_cached is None or latest_cached < today:
+                should_refresh = True
+
+    if should_refresh:
+        logger.info(f"[calendar] Fetching fresh data from upstream, refresh={refresh}")
+        try:
+            # Try akshare first
+            try:
+                import akshare as ak
+
+                df = ak.tool_trade_date_hist_sina()
+                dates = df["trade_date"].astype(str).tolist()
+                dates.sort()
+                if dates:
+                    update_cached_calendar(dates)
+                    logger.info(f"[calendar] Updated {len(dates)} dates from akshare")
+            except Exception as e:
+                logger.warning(f"[calendar] akshare failed, trying curl: {e}")
+                # Fallback to curl
+                result = subprocess.run(
+                    [
+                        "curl",
+                        "-s",
+                        "https://api.akshare.akfamily.xyz/tool/trade_date_hist_sina",
+                        "-H",
+                        "Accept: application/json",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if result.returncode == 0 and result.stdout:
+                    import json
+
+                    data = json.loads(result.stdout)
+                    dates = data.get("data", []) if isinstance(data, dict) else []
+                    dates.sort()
+                    if dates:
+                        update_cached_calendar(dates)
+                        logger.info(f"[calendar] Updated {len(dates)} dates from curl")
+                    else:
+                        # Use cached data if available
+                        cached_dates = get_cached_calendar()
+                        if not cached_dates:
+                            raise HTTPException(
+                                status_code=500,
+                                detail={
+                                    "error": "fetch_failed",
+                                    "message": f"Failed to fetch calendar: {e}",
+                                },
+                            )
+                else:
+                    # Use cached data if available
+                    cached_dates = get_cached_calendar()
+                    if not cached_dates:
+                        raise HTTPException(
+                            status_code=500,
+                            detail={
+                                "error": "fetch_failed",
+                                "message": f"Failed to fetch calendar: {result.stderr or e}",
+                            },
+                        )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"[calendar] Error: {e}", exc_info=True)
+            # Use cached data as fallback
+            cached_dates = get_cached_calendar()
+            if not cached_dates:
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": "internal_error", "message": str(e)},
+                )
+
+    # Get dates from cache
+    dates = get_cached_calendar()
+    latest = get_latest_cached_trade_date() if dates else None
+
+    return TradeCalendarResponse(trade_dates=dates, latest_date=latest, total=len(dates))

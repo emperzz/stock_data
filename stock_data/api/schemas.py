@@ -78,3 +78,11 @@ class StockInfo(BaseModel):
     code: str = Field(description="Stock code (e.g., 600519, AAPL, HK00700)")
     name: str = Field(description="Stock name")
     market: str = Field(description="Market type: cn/hk/us")
+
+
+class TradeCalendarResponse(BaseModel):
+    """Trade calendar response."""
+
+    trade_dates: list[str] = Field(description="List of trade dates (YYYY-MM-DD), sorted ascending")
+    latest_date: str | None = Field(description="Latest trade date in the calendar")
+    total: int = Field(description="Total number of trade dates")
