@@ -25,6 +25,8 @@ from .cache import (
 from .schemas import (
     ErrorResponse,
     HealthResponse,
+    IntradayData,
+    IntradayResponse,
     IndexInfo,
     KLineData,
     StockHistoryResponse,
@@ -264,6 +266,103 @@ def get_history(
 
     except Exception as e:
         logger.error(f"History error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/intraday",
+    response_model=IntradayResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid period or unsupported market"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["stocks"],
+)
+def get_intraday(
+    stock_code: str,
+    period: str = Query(
+        default="5",
+        pattern="^(1|5|15|30|60)$",
+        description="Minute period: 1, 5, 15, 30, 60",
+    ),
+    adjust: str = Query(
+        default="",
+        pattern="^(qfq|hfq)?$",
+        description="Adjustment type: empty=不复权, qfq=前复权, hfq=后复权",
+    ),
+) -> IntradayResponse:
+    """
+    Get intraday minute-level data for a stock.
+
+    Args:
+        stock_code: Stock code (e.g., 600519, 000001)
+        period: Minute period - 1, 5, 15, 30, 60
+        adjust: Adjustment type - empty=不复权, qfq=前复权, hfq=后复权
+
+    Note:
+        - period=1 is only supported by Akshare (Zhitu does not support 1-minute data)
+        - Intraday data is only available for A-share stocks
+    """
+    try:
+        # Only A-share supported for intraday
+        from ..data_provider.base import is_us_market, is_hk_market
+        code = normalize_stock_code(stock_code)
+        if is_us_market(code) or is_hk_market(code):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "unsupported_market", "message": "Intraday data is only available for A-share stocks"},
+            )
+
+        manager = get_manager()
+        df, source = manager.get_intraday_data(stock_code, period=period, adjust=adjust)
+
+        # Get stock name
+        stock_name = ""
+        for fetcher in manager.fetchers:
+            if hasattr(fetcher, "get_stock_name"):
+                try:
+                    name = fetcher.get_stock_name(stock_code)
+                    if name:
+                        stock_name = name
+                        break
+                except Exception:
+                    pass
+
+        # Determine trade date from data
+        trade_date = ""
+        if "time" in df.columns and len(df) > 0:
+            first_time = str(df.iloc[0].get("time", ""))
+            if len(first_time) >= 10:
+                trade_date = first_time[:10]
+
+        records = df.to_dict("records")
+        data = [
+            IntradayData(
+                time=str(row.get("time", "")),
+                open=float(row.get("open", 0)),
+                high=float(row.get("high", 0)),
+                low=float(row.get("low", 0)),
+                close=float(row.get("close", 0)),
+                volume=int(row.get("volume", 0)),
+                amount=float(row.get("amount")) if row.get("amount") is not None else None,
+            )
+            for row in records
+        ]
+
+        period_label = f"{period}m"
+        return IntradayResponse(
+            stock_code=stock_code,
+            stock_name=stock_name,
+            period=period_label,
+            adjust=adjust,
+            date=trade_date,
+            data=data,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Intraday error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
 
 
