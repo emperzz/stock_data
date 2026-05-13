@@ -158,30 +158,40 @@ def get_history(
         default="daily", pattern="^(daily|weekly|monthly)$", description="K-line period"
     ),
     days: int = Query(default=30, ge=1, le=365, description="Number of days"),
+    start_date: str | None = Query(default=None, description="Start date (YYYY-MM-DD), overrides days"),
+    end_date: str | None = Query(default=None, description="End date (YYYY-MM-DD), defaults to today"),
 ) -> StockHistoryResponse:
     """
-    Get historical K-line data for a stock.
+    Get historical K-line data for a stock or index.
 
     Args:
-        stock_code: Stock code
+        stock_code: Stock or index code
         period: K-line period (daily/weekly/monthly)
-        days: Number of days to retrieve
+        days: Number of days when start_date not provided
+        start_date: Start date (YYYY-MM-DD), overrides days parameter
+        end_date: End date (YYYY-MM-DD), defaults to today
     """
     try:
         period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
         frequency = period_map.get(period, "d")
 
-        # Cache check
+        # Cache key includes all params
         if is_cache_enabled():
             cache = get_history_cache(frequency)
-            key = make_history_cache_key(stock_code, frequency, days)
+            key = make_history_cache_key(stock_code, frequency, days, start_date, end_date)
             if key in cache:
                 logger.info(f"[APICache] history hit: {key}")
                 return cache[key]
 
         manager = get_manager()
 
-        df, source = manager.get_daily_data(stock_code, days=days, frequency=frequency)
+        df, source = manager.get_daily_data(
+            stock_code,
+            start_date=start_date,
+            end_date=end_date,
+            days=days,
+            frequency=frequency,
+        )
 
         # Get stock name if available
         stock_name = ""

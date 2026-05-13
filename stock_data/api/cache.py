@@ -42,7 +42,11 @@ def make_quote_cache_key(stock_code: str) -> str:
     return stock_code
 
 
-def make_history_cache_key(stock_code: str, frequency: str, days: int) -> str:
+def make_history_cache_key(
+    stock_code: str, frequency: str, days: int, start_date: str | None = None, end_date: str | None = None
+) -> str:
+    if start_date or end_date:
+        return f"{stock_code}:{frequency}:{days}:{start_date or ''}:{end_date or ''}"
     return f"{stock_code}:{frequency}:{days}"
 
 

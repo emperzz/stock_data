@@ -55,7 +55,9 @@ GET /api/v1/stocks/{code}/history?period=daily&days=30
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `period` | string | `daily` | K-line period: `daily`, `weekly`, `monthly` |
-| `days` | int | 30 | Number of days to retrieve (1-365) |
+| `days` | int | 30 | Number of days to retrieve (1-365, ignored when `start_date` provided) |
+| `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` parameter |
+| `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
 
 **Response:**
 ```json
