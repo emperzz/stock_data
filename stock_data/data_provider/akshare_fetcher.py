@@ -304,3 +304,136 @@ class AkshareFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[AkshareFetcher] get_all_stocks failed: {e}")
             return []
+
+    def get_intraday_data(
+        self,
+        stock_code: str,
+        period: str = "5",
+        adjust: str = ""
+    ) -> pd.DataFrame | None:
+        """Get intraday minute-level data.
+
+        Strategy:
+        1. Try stock_zh_a_hist_min_em (Eastmoney, supports period+adjust+date range)
+        2. Fallback to stock_zh_a_minute (Sina, supports period+adjust)
+
+        Args:
+            stock_code: Stock code (e.g., 600519, 000001)
+            period: Minute period - "1", "5", "15", "30", "60"
+            adjust: Adjustment type - ""=不复权, "qfq"=前复权, "hfq"=后复权
+
+        Returns:
+            DataFrame with columns: time, open, high, low, close, volume, amount
+            or None if not supported.
+        """
+        try:
+            import akshare as ak
+
+            # Convert code: 600519 -> 600519 (A-share), normalize for index
+            code = normalize_stock_code(stock_code)
+            is_index = is_index_code(stock_code)
+            if is_index:
+                index_type = get_index_type(stock_code)
+                if index_type != "csi":
+                    return None  # Only CSI indices supported for intraday
+
+            # Map adjust: API format
+            adj_map = {"": "", "qfq": "qfq", "hfq": "hfq"}
+            adj_value = adj_map.get(adjust, "")
+
+            # Try EM first (stock_zh_a_hist_min_em)
+            df = self._fetch_intraday_em(code, period, adj_value)
+            if df is not None and not df.empty:
+                return df
+
+            # Fallback to Sina (stock_zh_a_minute)
+            df = self._fetch_intraday_sina(code, period, adj_value)
+            return df
+
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_intraday_data failed: {e}")
+            return None
+
+    def _fetch_intraday_em(self, code: str, period: str, adjust: str) -> pd.DataFrame | None:
+        """Fetch via stock_zh_a_hist_min_em."""
+        try:
+            import akshare as ak
+            from datetime import date
+
+            today = date.today().strftime("%Y-%m-%d")
+            start = f"{today} 09:30:00"
+            end = f"{today} 15:00:00"
+
+            df = ak.stock_zh_a_hist_min_em(
+                symbol=code,
+                start_date=start,
+                end_date=end,
+                period=period,
+                adjust=adjust
+            )
+            if df is None or df.empty:
+                return None
+            return self._normalize_intraday_em(df)
+        except Exception as e:
+            logger.debug(f"[AkshareFetcher] EM intraday failed: {e}")
+            return None
+
+    def _fetch_intraday_sina(self, code: str, period: str, adjust: str) -> pd.DataFrame | None:
+        """Fetch via stock_zh_a_minute."""
+        try:
+            import akshare as ak
+
+            # Sina format: sh600519 or sz000001
+            symbol = f"sh{code}" if code.startswith(("6", "5")) else f"sz{code}"
+            df = ak.stock_zh_a_minute(symbol=symbol, period=period, adjust=adjust)
+            if df is None or df.empty:
+                return None
+            return self._normalize_intraday_sina(df)
+        except Exception as e:
+            logger.debug(f"[AkshareFetcher] Sina intraday failed: {e}")
+            return None
+
+    def _normalize_intraday_em(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize stock_zh_a_hist_min_em output."""
+        df = df.copy()
+        column_mapping = {
+            "时间": "time",
+            "开盘": "open",
+            "收盘": "close",
+            "最高": "high",
+            "最低": "low",
+            "成交量": "volume",
+            "成交额": "amount",
+        }
+        df = df.rename(columns=column_mapping)
+        if "time" in df.columns:
+            df["time"] = df["time"].astype(str).str[-8:]  # Extract HH:MM:SS
+        numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
+        df = df[[c for c in keep_cols if c in df.columns]]
+        return df
+
+    def _normalize_intraday_sina(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize stock_zh_a_minute output."""
+        df = df.copy()
+        df = df.rename(columns={
+            "day": "time",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "volume": "volume",
+            "amount": "amount",
+        })
+        if "time" in df.columns:
+            df["time"] = df["time"].astype(str).str[-8:]  # Extract HH:MM:SS
+        numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
+        df = df[[c for c in keep_cols if c in df.columns]]
+        return df
