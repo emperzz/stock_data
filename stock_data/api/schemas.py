@@ -86,3 +86,26 @@ class TradeCalendarResponse(BaseModel):
     trade_dates: list[str] = Field(description="List of trade dates (YYYY-MM-DD), sorted ascending")
     latest_date: str | None = Field(description="Latest trade date in the calendar")
     total: int = Field(description="Total number of trade dates")
+
+
+class IntradayData(BaseModel):
+    """Single intraday minute-level data point."""
+
+    time: str = Field(description="Time (HH:MM:SS)")
+    open: float = Field(description="Opening price")
+    high: float = Field(description="Highest price")
+    low: float = Field(description="Lowest price")
+    close: float = Field(description="Closing price")
+    volume: int = Field(description="Volume")
+    amount: float | None = Field(default=None, description="Amount")
+
+
+class IntradayResponse(BaseModel):
+    """Intraday minute-level data response."""
+
+    stock_code: str = Field(description="Stock code")
+    stock_name: str = Field(default="", description="Stock name")
+    period: str = Field(description="Minute period (1m/5m/15m/30m/60m)")
+    adjust: str = Field(default="", description="Adjustment type")
+    date: str = Field(description="Trade date (YYYY-MM-DD)")
+    data: list[IntradayData] = Field(default_factory=list, description="Minute-level data points")
