@@ -12,6 +12,13 @@ from ..data_provider.baostock_fetcher import BaostockFetcher
 from ..data_provider.index_symbols import get_all_indices
 from ..data_provider.tushare_fetcher import TushareFetcher
 from ..data_provider.yfinance_fetcher import YfinanceFetcher
+from .cache import (
+    get_history_cache,
+    get_quote_cache,
+    is_cache_enabled,
+    make_history_cache_key,
+    make_quote_cache_key,
+)
 from .schemas import (
     ErrorResponse,
     HealthResponse,
@@ -92,6 +99,14 @@ def get_quote(stock_code: str) -> StockQuote:
         stock_code: Stock code (e.g., 600519, AAPL, HK00700)
     """
     try:
+        # Cache check
+        if is_cache_enabled():
+            cache = get_quote_cache()
+            key = make_quote_cache_key(stock_code)
+            if key in cache:
+                logger.info(f"[APICache] quote hit: {stock_code}")
+                return cache[key]
+
         manager = get_manager()
         quote = manager.get_realtime_quote(stock_code)
 
@@ -101,7 +116,7 @@ def get_quote(stock_code: str) -> StockQuote:
                 detail={"error": "not_found", "message": f"Quote not available for {stock_code}"},
             )
 
-        return StockQuote(
+        result = StockQuote(
             stock_code=quote.code,
             stock_name=quote.name,
             source=quote.source.value,
@@ -115,6 +130,12 @@ def get_quote(stock_code: str) -> StockQuote:
             volume=quote.volume,
             amount=quote.amount,
         )
+
+        # Cache the result
+        if is_cache_enabled():
+            cache[key] = result
+
+        return result
 
     except HTTPException:
         raise
@@ -147,11 +168,18 @@ def get_history(
         days: Number of days to retrieve
     """
     try:
-        manager = get_manager()
-
-        # Map period to frequency
         period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
         frequency = period_map.get(period, "d")
+
+        # Cache check
+        if is_cache_enabled():
+            cache = get_history_cache(frequency)
+            key = make_history_cache_key(stock_code, frequency, days)
+            if key in cache:
+                logger.info(f"[APICache] history hit: {key}")
+                return cache[key]
+
+        manager = get_manager()
 
         df, source = manager.get_daily_data(stock_code, days=days, frequency=frequency)
 
@@ -189,9 +217,15 @@ def get_history(
             )
             data.append(kline)
 
-        return StockHistoryResponse(
+        result = StockHistoryResponse(
             stock_code=stock_code, stock_name=stock_name, period=period, data=data
         )
+
+        # Cache the result
+        if is_cache_enabled():
+            cache[key] = result
+
+        return result
 
     except Exception as e:
         logger.error(f"History error: {e}", exc_info=True)

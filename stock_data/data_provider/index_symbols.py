@@ -13,12 +13,12 @@ This module provides:
 # US Indices → yfinance symbols
 # =============================================================================
 US_INDEX_MAP = {
-    "SPX": {"source": "^GSPC", "name": "S&P 500"},
-    "SPY": {"source": "^GSPC", "name": "S&P 500 ETF"},
-    "DJI": {"source": "^DJI", "name": "Dow Jones Industrial Average"},
-    "IXIC": {"source": "^IXIC", "name": "Nasdaq Composite"},
-    "NASDAQ": {"source": "^IXIC", "name": "Nasdaq Composite"},
-    "VIX": {"source": "^VIX", "name": "CBOE Volatility Index"},
+    "SPX": "^GSPC",
+    "SPY": "^GSPC",
+    "DJI": "^DJI",
+    "IXIC": "^IXIC",
+    "NASDAQ": "^IXIC",
+    "VIX": "^VIX",
 }
 
 # =============================================================================
@@ -26,20 +26,20 @@ US_INDEX_MAP = {
 # Note: Baostock uses sh.XXXXXX for Shanghai indices, sz.XXXXXX for Shenzhen
 # =============================================================================
 CSI_INDEX_MAP = {
-    "000300": {"source": "sh.000300", "name": "沪深300"},
-    "000001": {"source": "sh.000001", "name": "上证指数"},
-    "000016": {"source": "sh.000016", "name": "上证50"},
-    "000688": {"source": "sh.000688", "name": "科创50"},
-    "000905": {"source": "sh.000905", "name": "中证500"},
-    "000906": {"source": "sh.000906", "name": "中证800"},
-    "000010": {"source": "sh.000010", "name": "上证180"},
-    "399001": {"source": "sz.399001", "name": "深证成指"},
-    "399006": {"source": "sz.399006", "name": "创业板指"},
-    "399005": {"source": "sz.399005", "name": "中小板指"},
-    "399004": {"source": "sz.399004", "name": "深证100"},
-    "399106": {"source": "sz.399106", "name": "深证综指"},
-    "399107": {"source": "sz.399107", "name": "中小板综"},
-    "399108": {"source": "sz.399108", "name": "创业板综"},
+    "000300": "sh.000300",
+    "000001": "sh.000001",
+    "000016": "sh.000016",
+    "000688": "sh.000688",
+    "000905": "sh.000905",
+    "000906": "sh.000906",
+    "000010": "sh.000010",
+    "399001": "sz.399001",
+    "399006": "sz.399006",
+    "399005": "sz.399005",
+    "399004": "sz.399004",
+    "399106": "sz.399106",
+    "399107": "sz.399107",
+    "399108": "sz.399108",
 }
 
 # =============================================================================
@@ -47,8 +47,8 @@ CSI_INDEX_MAP = {
 # Note: Kept separate from akshare EM format mapping
 # =============================================================================
 HK_INDEX_MAP = {
-    "HSI": {"source": "^HSI", "name": "恒生指数"},
-    "HSCE": {"source": "^HSCE", "name": "恒生中国企业指数"},
+    "HSI": "^HSI",
+    "HSCE": "^HSCE",
 }
 
 # =============================================================================
@@ -64,24 +64,52 @@ HK_INDEX_AKSHARE_MAP = {}  # Populated at runtime via _lookup_hk_index_symbol()
 # Note: Akshare uses index_us_stock_sina with Sina-format symbols (.IXIC, .INX, .DJI, .NDX, .VIX)
 # =============================================================================
 US_INDEX_AKSHARE_MAP = {
-    "SPX": {"source": ".INX", "name": "S&P 500"},
-    "SPY": {"source": ".INX", "name": "S&P 500 ETF"},
-    "DJI": {"source": ".DJI", "name": "Dow Jones Industrial Average"},
-    "IXIC": {"source": ".IXIC", "name": "Nasdaq Composite"},
-    "NASDAQ": {"source": ".IXIC", "name": "Nasdaq Composite"},
-    "VIX": {"source": ".VIX", "name": "CBOE Volatility Index"},
-    "NDX": {"source": ".NDX", "name": "Nasdaq 100"},
+    "SPX": ".INX",
+    "SPY": ".INX",
+    "DJI": ".DJI",
+    "IXIC": ".IXIC",
+    "NASDAQ": ".IXIC",
+    "VIX": ".VIX",
+    "NDX": ".NDX",
+}
+
+# =============================================================================
+# Index names (canonical code → display name)
+# =============================================================================
+_INDEX_NAMES = {
+    # CSI
+    "000300": "沪深300",
+    "000001": "上证指数",
+    "000016": "上证50",
+    "000688": "科创50",
+    "000905": "中证500",
+    "000906": "中证800",
+    "000010": "上证180",
+    "399001": "深证成指",
+    "399006": "创业板指",
+    "399005": "中小板指",
+    "399004": "深证100",
+    "399106": "深证综指",
+    "399107": "中小板综",
+    "399108": "创业板综",
+    # HK
+    "HSI": "恒生指数",
+    "HSCE": "恒生中国企业指数",
+    # US
+    "SPX": "S&P 500",
+    "SPY": "S&P 500 ETF",
+    "DJI": "Dow Jones Industrial Average",
+    "IXIC": "Nasdaq Composite",
+    "NASDAQ": "Nasdaq Composite",
+    "VIX": "CBOE Volatility Index",
 }
 
 # =============================================================================
 # Combined lookup: canonical symbol → source symbol
 # =============================================================================
-# Build a flat dict: canonical -> source symbol string (for reverse lookup)
-_CANONICAL_TO_SOURCE = {
-    **{k: v["source"] for k, v in CSI_INDEX_MAP.items()},
-    **{k: v["source"] for k, v in HK_INDEX_MAP.items()},
-    **{k: v["source"] for k, v in US_INDEX_MAP.items()},
-}
+_CANONICAL_TO_SOURCE = dict(CSI_INDEX_MAP)
+_CANONICAL_TO_SOURCE.update(HK_INDEX_MAP)
+_CANONICAL_TO_SOURCE.update(US_INDEX_MAP)
 
 # Reverse lookup: source symbol → canonical symbol
 # Handle duplicate values (e.g., SPX and SPY both map to ^GSPC)
@@ -89,14 +117,6 @@ _SOURCE_TO_CANONICAL: dict = {}
 for canonical, source in _CANONICAL_TO_SOURCE.items():
     if source not in _SOURCE_TO_CANONICAL:
         _SOURCE_TO_CANONICAL[source] = canonical
-
-
-def _get_source(csi_dict: dict) -> str:
-    return csi_dict["source"]
-
-
-def _get_name(csi_dict: dict) -> str:
-    return csi_dict["name"]
 
 
 def normalize_index_symbol(code: str) -> str:
@@ -117,8 +137,8 @@ def normalize_index_symbol(code: str) -> str:
     # Direct lookup in all maps (case-insensitive)
     code_upper = code.upper()
     for all_map in [CSI_INDEX_MAP, HK_INDEX_MAP, US_INDEX_MAP]:
-        for canonical, info in all_map.items():
-            if canonical.upper() == code_upper or info["source"].upper() == code_upper:
+        for canonical, source in all_map.items():
+            if canonical.upper() == code_upper or source.upper() == code_upper:
                 return canonical
 
     # Reverse lookup (source format -> canonical, case-insensitive)
@@ -165,8 +185,8 @@ def get_index_type(code: str) -> str | None:
             return "us"
 
     # Check US_INDEX_AKSHARE_MAP (e.g., ".INX")
-    for _canonical, info in US_INDEX_AKSHARE_MAP.items():
-        if code == info["source"].upper():
+    for _canonical, src in US_INDEX_AKSHARE_MAP.items():
+        if code == src.upper():
             return "us"
 
     # Check HK_INDEX_AKSHARE_MAP (e.g., "HSTECF2L")
@@ -179,7 +199,7 @@ def get_index_type(code: str) -> str | None:
         code.isdigit()
         and len(code) == 6
         and code.startswith("0")
-        and (code in CSI_INDEX_MAP or code in {v["source"].split(".")[1] for v in CSI_INDEX_MAP.values()})
+        and (code in CSI_INDEX_MAP or code in {v.split(".")[1] for v in CSI_INDEX_MAP.values()})
     ):
         return "csi"
 
@@ -223,24 +243,23 @@ def get_source_symbol(code: str, source: str = "baostock") -> str:
 
     if source == "baostock":
         if index_type == "csi":
-            return CSI_INDEX_MAP.get(code, {}).get("source", code)
+            return CSI_INDEX_MAP.get(code, code)
         # HK/US indices not supported by baostock
         return code
 
     elif source == "yfinance":
         if index_type == "us":
-            return US_INDEX_MAP.get(code, {}).get("source", code)
+            return US_INDEX_MAP.get(code, code)
         elif index_type == "csi":
             # yfinance uses .SS/.SZ suffix for A-share indices
-            csi_info = CSI_INDEX_MAP.get(code, {})
-            bs_source = csi_info.get("source", "")
+            bs_source = CSI_INDEX_MAP.get(code, "")
             if bs_source.startswith("sh."):
                 return f"{code}.SS"
             elif bs_source.startswith("sz."):
                 return f"{code}.SZ"
             return f"{code}.SS"
         elif index_type == "hk":
-            return HK_INDEX_MAP.get(code, {}).get("source", code)
+            return HK_INDEX_MAP.get(code, code)
         return code
 
     elif source == "akshare":
@@ -251,7 +270,7 @@ def get_source_symbol(code: str, source: str = "baostock") -> str:
             # The EM symbol cannot be determined without runtime lookup
             return code
         elif index_type == "us":
-            return US_INDEX_AKSHARE_MAP.get(code, {}).get("source", code)
+            return US_INDEX_AKSHARE_MAP.get(code, code)
         return code
 
     else:
@@ -284,15 +303,28 @@ def get_all_indices() -> list:
     result = []
 
     # CSI indices
-    for code, info in CSI_INDEX_MAP.items():
-        result.append({"code": code, "name": info["name"], "market": "csi"})
+    for code in CSI_INDEX_MAP:
+        result.append({"code": code, "name": _INDEX_NAMES.get(code, code), "market": "csi"})
 
     # HK indices
-    for code, info in HK_INDEX_MAP.items():
-        result.append({"code": code, "name": info["name"], "market": "hk"})
+    for code in HK_INDEX_MAP:
+        result.append({"code": code, "name": _INDEX_NAMES.get(code, code), "market": "hk"})
 
     # US indices
-    for code, info in US_INDEX_MAP.items():
-        result.append({"code": code, "name": info["name"], "market": "us"})
+    for code in US_INDEX_MAP:
+        result.append({"code": code, "name": _INDEX_NAMES.get(code, code), "market": "us"})
 
     return result
+
+
+def get_index_name(code: str) -> str | None:
+    """
+    Get the display name for an index code.
+
+    Args:
+        code: Canonical index symbol (e.g., "000300", "SPX", "HSI")
+
+    Returns:
+        Display name (e.g., "沪深300", "S&P 500") or None if not found
+    """
+    return _INDEX_NAMES.get(code.upper().strip())

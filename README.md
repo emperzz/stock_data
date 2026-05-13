@@ -164,6 +164,33 @@ GET /api/v1/stocks?market=cn&refresh=true
 
 ---
 
+## API Response Caching
+
+The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to avoid repeated upstream API calls when multiple users request the same data within a short window.
+
+| Endpoint | Cache Key | Default TTL |
+|----------|-----------|-------------|
+| `GET /stocks/{code}/quote` | `stock_code` | 60s |
+| `GET /stocks/{code}/history` (daily) | `code:d:days` | 300s |
+| `GET /stocks/{code}/history` (weekly) | `code:w:days` | 3600s |
+| `GET /stocks/{code}/history` (monthly) | `code:m:days` | 7200s |
+
+**Cache behavior:**
+- First request fetches from upstream (subject to rate limiting)
+- Subsequent identical requests within TTL return cached data instantly
+- Cache is per-process (not shared across workers)
+
+**Configuration (environment variables):**
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ENABLE_API_CACHE` | Enable/disable API response cache | `true` |
+| `CACHE_TTL_QUOTE` | TTL for realtime quotes (seconds) | `60` |
+| `CACHE_TTL_HISTORY_DAILY` | TTL for daily K-line (seconds) | `300` |
+| `CACHE_TTL_HISTORY_WEEKLY` | TTL for weekly K-line (seconds) | `3600` |
+| `CACHE_TTL_HISTORY_MONTHLY` | TTL for monthly K-line (seconds) | `7200` |
+
+---
+
 ## Symbol Conventions
 
 ### A-share Stocks (China)
