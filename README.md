@@ -109,6 +109,61 @@ GET /api/v1/stocks/{code}/quote
 
 ---
 
+### List All Available Indices
+
+```bash
+GET /api/v1/indices
+```
+
+**Response:**
+```json
+[
+  {"code": "000300", "name": "沪深300", "market": "csi"},
+  {"code": "000001", "name": "上证指数", "market": "csi"},
+  {"code": "399001", "name": "深证成指", "market": "csi"},
+  {"code": "HSI", "name": "恒生指数", "market": "hk"},
+  {"code": "HSCE", "name": "恒生中国企业指数", "market": "hk"},
+  {"code": "SPX", "name": "S&P 500", "market": "us"},
+  {"code": "DJI", "name": "Dow Jones Industrial Average", "market": "us"},
+  {"code": "IXIC", "name": "Nasdaq Composite", "market": "us"}
+]
+```
+
+**Market values:** `csi` (A股指数), `hk` (港股指数), `us` (美股指数)
+
+---
+
+### List All Stocks (with local cache)
+
+```bash
+GET /api/v1/stocks?market=cn
+GET /api/v1/stocks?market=cn&refresh=true
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `market` | string | Required | Market: `cn` (A股), `hk` (港股), `us` (美股) |
+| `refresh` | bool | `false` | If `true`, fetch latest from upstream and update cache |
+
+**Response:**
+```json
+[
+  {"code": "000001", "name": "平安银行", "market": "cn"},
+  {"code": "000002", "name": "万科A", "market": "cn"},
+  {"code": "600519", "name": "贵州茅台", "market": "cn"}
+]
+```
+
+**Caching behavior:**
+- First call fetches from upstream (Baostock for A-share, ~10-20 seconds)
+- Subsequent calls return cached data (~50ms)
+- Use `refresh=true` to force update from upstream
+
+**Cached data location:** `stock_data/stock_cache.db` (SQLite)
+
+---
+
 ## Symbol Conventions
 
 ### A-share Stocks (China)

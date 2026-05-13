@@ -1,32 +1,33 @@
-# -*- coding: utf-8 -*-
 """
 API routes for stock data server.
 """
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ..data_provider import DataFetcherManager, stock_cache
+from ..data_provider.akshare_fetcher import AkshareFetcher
+from ..data_provider.baostock_fetcher import BaostockFetcher
+from ..data_provider.index_symbols import get_all_indices
+from ..data_provider.tushare_fetcher import TushareFetcher
+from ..data_provider.yfinance_fetcher import YfinanceFetcher
 from .schemas import (
     ErrorResponse,
     HealthResponse,
+    IndexInfo,
     KLineData,
     StockHistoryResponse,
+    StockInfo,
     StockQuote,
 )
-from ..data_provider import DataFetcherManager
-from ..data_provider.tushare_fetcher import TushareFetcher
-from ..data_provider.baostock_fetcher import BaostockFetcher
-from ..data_provider.akshare_fetcher import AkshareFetcher
-from ..data_provider.yfinance_fetcher import YfinanceFetcher
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 # Global manager instance
-_manager: Optional[DataFetcherManager] = None
+_manager: DataFetcherManager | None = None
 
 
 def get_manager() -> DataFetcherManager:
@@ -119,7 +120,7 @@ def get_quote(stock_code: str) -> StockQuote:
         raise
     except Exception as e:
         logger.error(f"Quote error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)})
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
 
 
 @router.get(
@@ -194,4 +195,72 @@ def get_history(
 
     except Exception as e:
         logger.error(f"History error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)})
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/indices",
+    response_model=list[IndexInfo],
+    tags=["indices"],
+)
+def list_indices() -> list[IndexInfo]:
+    """
+    List all available indices with code, name, and market type.
+
+    Returns indices from CSI (A股), HK (港股), and US (美股) markets.
+    """
+    indices = get_all_indices()
+    return [IndexInfo(code=i["code"], name=i["name"], market=i["market"]) for i in indices]
+
+
+@router.get(
+    "/stocks",
+    response_model=list[StockInfo],
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid market parameter"},
+    },
+    tags=["stocks"],
+)
+def list_stocks(
+    market: str = Query(..., pattern="^(cn|hk|us)$", description="Market: cn/hk/us"),
+    refresh: bool = Query(False, description="Force fetch latest from upstream"),
+) -> list[StockInfo]:
+    """
+    List all available stocks for a specified market.
+
+    Args:
+        market: Market type - cn (A股), hk (港股), us (美股)
+        refresh: If True, fetch latest from upstream and update cache.
+
+    Returns:
+        List of stock codes and names for the specified market.
+    """
+    # Try cache first unless refresh is requested
+    if not refresh:
+        cached = stock_cache.get_cached_stocks(market)
+        if cached:
+            logger.info(f"[list_stocks] Using cached data for market={market} ({len(cached)} stocks)")
+            return [StockInfo(code=s["code"], name=s["name"], market=market) for s in cached]
+
+    # Fetch from upstream
+    logger.info(f"[list_stocks] Fetching fresh data for market={market}, refresh={refresh}")
+    manager = get_manager()
+
+    result = []
+    for fetcher in manager._fetchers:
+        if hasattr(fetcher, "get_all_stocks"):
+            try:
+                stocks = fetcher.get_all_stocks(market)
+                if stocks:
+                    result = stocks
+                    break
+            except Exception as e:
+                logger.warning(f"[list_stocks] {fetcher.name} failed: {e}")
+                continue
+
+    # Update cache if we got data
+    if result:
+        stock_cache.update_cached_stocks(market, result)
+        logger.info(f"[list_stocks] Cached {len(result)} stocks for market={market}")
+
+    return [StockInfo(code=s["code"], name=s["name"], market=market) for s in result]

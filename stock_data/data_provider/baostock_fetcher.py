@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Baostock fetcher for A-share stock data (Priority 1).
 
@@ -7,14 +6,19 @@ Free data source, no API token required.
 
 import logging
 import os
-from datetime import datetime
-from typing import Optional
 
 import pandas as pd
 
-from .base import BaseFetcher, DataFetchError, normalize_stock_code, STANDARD_COLUMNS, is_index_code, get_index_type
-from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
+from .base import (
+    STANDARD_COLUMNS,
+    BaseFetcher,
+    DataFetchError,
+    get_index_type,
+    is_index_code,
+    normalize_stock_code,
+)
 from .index_symbols import CSI_INDEX_MAP
+from .realtime_types import UnifiedRealtimeQuote
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +105,16 @@ class BaostockFetcher(BaseFetcher):
         if frequency in ("5", "15", "30", "60"):
             code = normalize_stock_code(stock_code)
             if is_index_code(code) and get_index_type(code) == "csi":
-                raise DataFetchError(f"Baostock does not support minute frequency for indices")
+                raise DataFetchError("Baostock does not support minute frequency for indices")
 
         try:
             import baostock as bs
 
             bs_code, _ = self._convert_code(stock_code)
 
-            logger.debug(f"[BaostockFetcher] Calling query_history_k_data_plus for {bs_code} ({frequency})")
+            logger.debug(
+                f"[BaostockFetcher] Calling query_history_k_data_plus for {bs_code} ({frequency})"
+            )
 
             rs = bs.query_history_k_data_plus(
                 bs_code,
@@ -165,7 +171,7 @@ class BaostockFetcher(BaseFetcher):
 
         return df
 
-    def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Baostock.
 
         Note: Baostock does NOT support realtime quotes - it only provides historical data.
@@ -173,3 +179,48 @@ class BaostockFetcher(BaseFetcher):
         """
         # Baostock has no realtime quotes API, only historical K-line data
         return None
+
+    def get_all_stocks(self, market: str = "cn") -> list:
+        """
+        Get all available stocks for a market.
+
+        Args:
+            market: Market type - cn (A-share), hk, us
+
+        Returns:
+            List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
+        """
+        if market != "cn":
+            # Baostock only supports A-share
+            return []
+
+        self._ensure_initialized()
+        if not self._initialized:
+            return []
+
+        try:
+            import baostock as bs
+
+            result = []
+            # Query all A-share stocks (both sh and sz)
+            rs = bs.query_all_stock()
+            if rs.error_code != "0":
+                logger.warning(f"[BaostockFetcher] query_all_stock failed: {rs.error_msg}")
+                return []
+
+            while rs.next():
+                row = rs.get_row_data()
+                if len(row) >= 2:
+                    code = row[0]
+                    name = row[1] if len(row) > 1 else ""
+                    if code and code.startswith(("sh.", "sz.")):
+                        # Normalize: sh.600519 -> 600519, sz.000001 -> 000001
+                        code = code[3:]
+                    if code:
+                        result.append({"code": code, "name": name})
+
+            return result
+
+        except Exception as e:
+            logger.warning(f"[BaostockFetcher] get_all_stocks failed: {e}")
+            return []

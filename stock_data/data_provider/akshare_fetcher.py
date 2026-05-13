@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Akshare fetcher for A-share and HK stock data (Priority 2).
 
@@ -7,14 +6,20 @@ Support for both A-shares and Hong Kong stocks.
 
 import logging
 import os
-from datetime import datetime
-from typing import Optional
 
 import pandas as pd
 
-from .base import BaseFetcher, DataFetchError, is_hk_market, normalize_stock_code, STANDARD_COLUMNS, is_index_code, get_index_type
-from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
-from .index_symbols import CSI_INDEX_MAP, HK_INDEX_MAP, US_INDEX_AKSHARE_MAP
+from .base import (
+    STANDARD_COLUMNS,
+    BaseFetcher,
+    DataFetchError,
+    get_index_type,
+    is_hk_market,
+    is_index_code,
+    normalize_stock_code,
+)
+from .index_symbols import US_INDEX_AKSHARE_MAP
+from .realtime_types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +84,7 @@ class AkshareFetcher(BaseFetcher):
 
             # Minute frequencies not supported
             if frequency in ("5", "15", "30", "60"):
-                raise DataFetchError(f"Akshare does not support minute frequency for indices")
+                raise DataFetchError("Akshare does not support minute frequency for indices")
 
             if is_index and index_type == "us":
                 # US indices via index_us_stock_sina (.IXIC, .INX, .DJI, etc.)
@@ -87,14 +92,16 @@ class AkshareFetcher(BaseFetcher):
             elif is_index and index_type == "hk":
                 # HK indices require EM-format symbols that need runtime lookup
                 # Not easily predictable, let failover handle
-                raise DataFetchError(f"Akshare does not support HK index {code} (EM symbol lookup needed)")
+                raise DataFetchError(
+                    f"Akshare does not support HK index {code} (EM symbol lookup needed)"
+                )
             elif is_hk:
                 df = ak.stock_hk_hist(
                     symbol=code.replace(".hk", ""),
                     period=period,
                     start_date=start_date.replace("-", ""),
                     end_date=end_date.replace("-", ""),
-                    adjust="qfq"
+                    adjust="qfq",
                 )
             elif is_index and index_type == "csi":
                 # CSI indices use index_zh_a_hist
@@ -110,7 +117,7 @@ class AkshareFetcher(BaseFetcher):
                     period=period,
                     start_date=start_date,
                     end_date=end_date,
-                    adjust="qfq"
+                    adjust="qfq",
                 )
 
             if df is None or df.empty:
@@ -121,7 +128,7 @@ class AkshareFetcher(BaseFetcher):
         except DataFetchError:
             raise
         except ImportError:
-            raise DataFetchError("akshare not installed")
+            raise DataFetchError("akshare not installed") from None
         except Exception as e:
             raise DataFetchError(f"AkshareFetcher fetch failed: {e}") from e
 
@@ -159,7 +166,7 @@ class AkshareFetcher(BaseFetcher):
 
         return df
 
-    def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Akshare."""
         try:
             import akshare as ak
@@ -186,7 +193,9 @@ class AkshareFetcher(BaseFetcher):
                     row = row.iloc[0]
                 else:
                     # HK indices need EM-format symbols that require runtime lookup
-                    logger.warning(f"[AkshareFetcher] HK index {stock_code} realtime quote not supported (EM symbol lookup needed)")
+                    logger.warning(
+                        f"[AkshareFetcher] HK index {stock_code} realtime quote not supported (EM symbol lookup needed)"
+                    )
                     return None
             else:
                 df = ak.stock_zh_a_spot_em()
@@ -218,3 +227,60 @@ class AkshareFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[AkshareFetcher] Realtime quote failed: {e}")
             return None
+
+    def get_all_stocks(self, market: str = "cn") -> list:
+        """
+        Get all available stocks for a market.
+
+        Args:
+            market: Market type - cn (A-share), hk, us
+
+        Returns:
+            List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
+        """
+        try:
+            import akshare as ak
+
+            result = []
+
+            if market == "cn":
+                # A-share stocks via stock_info_a_code_name
+                df = ak.stock_info_a_code_name()
+                if df is not None and not df.empty:
+                    for _, row in df.iterrows():
+                        code = str(row.get("code", "")).strip()
+                        name = str(row.get("name", "")).strip()
+                        if code:
+                            result.append({"code": code, "name": name})
+
+            elif market == "hk":
+                # HK stocks via stock_hk_spot_em
+                df = ak.stock_hk_spot_em()
+                if df is not None and not df.empty:
+                    for _, row in df.iterrows():
+                        code = str(row.get("代码", "")).strip()
+                        name = str(row.get("名称", "")).strip()
+                        if code:
+                            # Normalize to HK prefix: 00700 -> HK00700
+                            code = f"HK{int(code):05d}" if code.isdigit() else code
+                            result.append({"code": code, "name": name})
+
+            elif market == "us":
+                # US stocks via major indices components (simplified)
+                # Get S&P 500 components as a representative sample
+                try:
+                    df = ak.index_cons_sina(symbol="SPX")
+                    if df is not None and not df.empty:
+                        for _, row in df.iterrows():
+                            code = str(row.get("symbol", "")).strip()
+                            name = str(row.get("name", "")).strip()
+                            if code:
+                                result.append({"code": code, "name": name})
+                except Exception as e:
+                    logger.warning(f"[AkshareFetcher] US stocks fetch failed: {e}")
+
+            return result
+
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_all_stocks failed: {e}")
+            return []
