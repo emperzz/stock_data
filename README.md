@@ -58,6 +58,7 @@ GET /api/v1/stocks/{code}/history?period=daily&days=30
 | `days` | int | 30 | Number of days to retrieve (1-365, ignored when `start_date` provided) |
 | `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` parameter |
 | `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
+| `adjust` | string | `` | Adjustment type: empty=不复权, `qfq`=前复权, `hfq`=后复权 |
 
 **Response:**
 ```json
@@ -162,7 +163,7 @@ GET /api/v1/stocks?market=cn&refresh=true
 - Subsequent calls return cached data (~50ms)
 - Use `refresh=true` to force update from upstream
 
-**Cached data location:** `stock_data/stock_cache.db` (SQLite)
+**Cached data location:** `stock_data/stock_cache.db` (SQLite). Override via `STOCK_CACHE_DB_PATH` environment variable.
 
 ---
 
@@ -312,27 +313,27 @@ The server automatically routes requests to the appropriate data source based on
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 0 | Yfinance | Primary source |
-| 1 | Stooq | Fallback |
+| 0 | Yfinance | Primary source, falls back to Stooq |
 
 ### US Indices
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 0 | Akshare | Uses `index_us_stock_sina(.INX)` |
-| 1 | Yfinance | Uses `^GSPC`, `^DJI` etc. |
+| 0 | Yfinance | Uses `^GSPC`, `^DJI` etc. |
 
 ### HK Stocks
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 0 | Akshare | Uses `stock_hk_hist` API |
+| 0 | Akshare | Primary, uses `stock_hk_hist` API |
+| 1 | Yfinance | Fallback, uses `.HK` suffix |
 
 ### HK Indices
 
 | Priority | Source | Note |
 |----------|--------|------|
 | 0 | Yfinance | Uses `^HSI`, `^HSCE` format |
+| 1 | Akshare | Fallback |
 
 ---
 
@@ -359,7 +360,7 @@ The server automatically routes requests to the appropriate data source based on
 | `TUSHARE_PRIORITY` | Override Tushare priority | 0 |
 | `BAOSTOCK_PRIORITY` | Override Baostock priority | 1 |
 | `AKSHARE_PRIORITY` | Override Akshare priority | 2 |
-| `YFINANCE_PRIORITY` | Override Yfinance priority | 4 |
+| `YFINANCE_PRIORITY` | Override Yfinance priority | 3 |
 | `SERVER_PORT` | Server port | 8888 |
 | `SERVER_HOST` | Server host | 0.0.0.0 |
 

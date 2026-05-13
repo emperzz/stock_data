@@ -61,7 +61,8 @@ class AkshareFetcher(BaseFetcher):
         if is_hk_market(code):
             if code.startswith("HK"):
                 code = code[2:]
-            return f"{code.lstrip('0')}.hk"
+            # Keep leading zeros: normalize_stock_code ensures HK codes are zero-padded to 5 digits
+            return f"{code}.hk"
 
         return code
 

@@ -205,7 +205,7 @@ def get_history(
 
         # Get stock name if available
         stock_name = ""
-        for fetcher in manager._fetchers:
+        for fetcher in manager.fetchers:
             if hasattr(fetcher, "get_stock_name"):
                 try:
                     name = fetcher.get_stock_name(stock_code)
@@ -216,26 +216,30 @@ def get_history(
                     pass
 
         # Convert to response model
-        data = []
-        for _, row in df.iterrows():
-            kline = KLineData(
-                date=row.get("date", "").strftime("%Y-%m-%d")
-                if hasattr(row.get("date"), "strftime")
-                else str(row.get("date", "")),
+        def format_date(val):
+            if val is None:
+                return ""
+            if hasattr(val, "strftime"):
+                return val.strftime("%Y-%m-%d")
+            return str(val)
+
+        records = df.to_dict("records")
+        data = [
+            KLineData(
+                date=format_date(row.get("date")),
                 open=float(row.get("open", 0)),
                 high=float(row.get("high", 0)),
                 low=float(row.get("low", 0)),
                 close=float(row.get("close", 0)),
                 volume=int(row.get("volume", 0)),
-                amount=float(row.get("amount", 0)) if row.get("amount") is not None else None,
-                change_percent=float(row.get("pct_chg", 0))
-                if row.get("pct_chg") is not None
-                else None,
+                amount=float(row.get("amount")) if row.get("amount") is not None else None,
+                change_percent=float(row.get("pct_chg")) if row.get("pct_chg") is not None else None,
                 ma5=float(row.get("ma5")) if row.get("ma5") is not None else None,
                 ma10=float(row.get("ma10")) if row.get("ma10") is not None else None,
                 ma20=float(row.get("ma20")) if row.get("ma20") is not None else None,
             )
-            data.append(kline)
+            for row in records
+        ]
 
         result = StockHistoryResponse(
             stock_code=stock_code, stock_name=stock_name, period=period, data=data
@@ -301,7 +305,7 @@ def list_stocks(
     manager = get_manager()
 
     result = []
-    for fetcher in manager._fetchers:
+    for fetcher in manager.fetchers:
         if hasattr(fetcher, "get_all_stocks"):
             try:
                 stocks = fetcher.get_all_stocks(market)

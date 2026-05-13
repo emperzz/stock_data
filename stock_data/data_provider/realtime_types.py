@@ -4,6 +4,7 @@ Realtime types and utilities for stock data providers.
 """
 
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -22,8 +23,6 @@ def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
             val = val.strip()
             if val in ("", "-", "--", "nan", "None"):
                 return default
-        import math
-
         if math.isnan(float(val)):
             return default
         return float(val)

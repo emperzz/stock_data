@@ -6,19 +6,34 @@ upstream API calls which are slow and may fail.
 """
 
 import logging
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Database file location
-_DB_PATH = Path(__file__).parent.parent / "stock_cache.db"
+# Database file location - lazy evaluation to handle working directory changes
+_db_path: Optional[Path] = None
+
+
+def _get_db_path() -> Path:
+    """Get database path, lazily evaluated."""
+    global _db_path
+    if _db_path is None:
+        # Allow override via environment variable
+        env_path = os.getenv("STOCK_CACHE_DB_PATH")
+        if env_path:
+            _db_path = Path(env_path)
+        else:
+            _db_path = Path(__file__).parent.parent / "stock_cache.db"
+    return _db_path
 
 
 def _get_connection() -> sqlite3.Connection:
     """Get a database connection with row factory."""
-    conn = sqlite3.connect(_DB_PATH, timeout=30)
+    conn = sqlite3.connect(_get_db_path(), timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -42,7 +57,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_market ON stock_list(market)
         """)
         conn.commit()
-        logger.info(f"[StockCache] Database initialized at {_DB_PATH}")
+        logger.info(f"[StockCache] Database initialized at {_get_db_path()}")
     finally:
         conn.close()
 
@@ -57,8 +72,8 @@ def get_cached_stocks(market: str) -> list:
     Returns:
         List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
     """
-    if not _DB_PATH.exists():
-        return []
+    # Ensure database is initialized before querying
+    init_db()
 
     conn = _get_connection()
     try:
@@ -94,21 +109,20 @@ def update_cached_stocks(market: str, stocks: list) -> int:
 
     conn = _get_connection()
     try:
-        cursor = conn.cursor()
-        # Use INSERT OR REPLACE to handle duplicates
-        cursor.execute("BEGIN TRANSACTION")
-        cursor.execute("DELETE FROM stock_list WHERE market = ?", (market,))
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for stock in stocks:
-            cursor.execute(
-                "INSERT INTO stock_list (market, code, name, updated_at) VALUES (?, ?, ?, ?)",
-                (market, stock["code"], stock["name"], now),
-            )
-        cursor.execute("COMMIT")
-        logger.info(f"[StockCache] Updated {len(stocks)} stocks for market={market}")
-        return len(stocks)
+        with conn:
+            cursor = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            cursor.execute("DELETE FROM stock_list WHERE market = ?", (market,))
+            for stock in stocks:
+                cursor.execute(
+                    "INSERT INTO stock_list (market, code, name, updated_at) VALUES (?, ?, ?, ?)",
+                    (market, stock["code"], stock["name"], now),
+                )
+
+            logger.info(f"[StockCache] Updated {len(stocks)} stocks for market={market}")
+            return len(stocks)
     except Exception as e:
-        cursor.execute("ROLLBACK")
         logger.error(f"[StockCache] Update failed: {e}")
         raise
     finally:
@@ -117,9 +131,10 @@ def update_cached_stocks(market: str, stocks: list) -> int:
 
 def has_cached_data(market: str) -> bool:
     """Check if there's cached data for a market."""
-    if not _DB_PATH.exists():
+    if not _get_db_path().exists():
         return False
 
+    init_db()  # Ensure table exists before querying
     conn = _get_connection()
     try:
         cursor = conn.cursor()
@@ -131,9 +146,10 @@ def has_cached_data(market: str) -> bool:
 
 def get_cache_info() -> dict:
     """Get cache statistics."""
-    if not _DB_PATH.exists():
+    if not _get_db_path().exists():
         return {"total_stocks": 0, "markets": {}}
 
+    init_db()  # Ensure table exists before querying
     conn = _get_connection()
     try:
         cursor = conn.cursor()

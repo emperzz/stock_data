@@ -76,8 +76,9 @@ class YfinanceFetcher(BaseFetcher):
 
         # HK stock
         if code.startswith("HK"):
-            digits = code[2:].lstrip("0") or "0"
-            return f"{digits.zfill(4)}.HK"
+            # Keep leading zeros: normalize_stock_code ensures HK codes are zero-padded to 5 digits
+            digits = code[2:]
+            return f"{digits}.HK"
 
         # A-share Shanghai
         if code.startswith(("6", "5", "7")):

@@ -423,3 +423,8 @@ class DataFetcherManager:
     def available_fetchers(self) -> List[str]:
         """List available fetcher names."""
         return [f.name for f in self._fetchers]
+
+    @property
+    def fetchers(self) -> List["BaseFetcher"]:  # type: ignore[misc]
+        """List all fetchers. Prefer get_fetcher() for single fetcher lookup."""
+        return list(self._fetchers)
