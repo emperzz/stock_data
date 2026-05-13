@@ -43,11 +43,19 @@ def make_quote_cache_key(stock_code: str) -> str:
 
 
 def make_history_cache_key(
-    stock_code: str, frequency: str, days: int, start_date: str | None = None, end_date: str | None = None
+    stock_code: str,
+    frequency: str,
+    days: int,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    adjust: str | None = None,
 ) -> str:
+    parts = [stock_code, frequency, str(days)]
     if start_date or end_date:
-        return f"{stock_code}:{frequency}:{days}:{start_date or ''}:{end_date or ''}"
-    return f"{stock_code}:{frequency}:{days}"
+        parts.extend([start_date or "", end_date or ""])
+    if adjust:
+        parts.append(adjust)
+    return ":".join(parts)
 
 
 def is_cache_enabled() -> bool:

@@ -6,6 +6,7 @@ Free data source, no API token required.
 
 import logging
 import os
+from typing import Optional
 
 import pandas as pd
 
@@ -94,9 +95,18 @@ class BaostockFetcher(BaseFetcher):
             return f"sz.{code}", code
 
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
     ) -> pd.DataFrame:
-        """Fetch K-line data from Baostock (supports d/w/m/5/15/30/60 for stocks, d/w/m for indices)."""
+        """Fetch K-line data from Baostock (supports d/w/m/5/15/30/60 for stocks, d/w/m for indices).
+
+        Args:
+            stock_code: Stock code
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
+            adjust: Adjustment type - None/3=不复权, '2'=前复权, '1'=后复权.
+                   Defaults to '2' (前复权) if not specified.
+        """
         self._ensure_initialized()
         if not self._initialized:
             raise DataFetchError("Baostock not available")
@@ -112,8 +122,19 @@ class BaostockFetcher(BaseFetcher):
 
             bs_code, _ = self._convert_code(stock_code)
 
+            # Map adjust parameter to baostock adjustflag
+            # None/3 -> 3 (不复权), '2' or 'qfq' -> 2 (前复权), '1' or 'hfq' -> 1 (后复权)
+            if adjust is None:
+                adjflag = "2"  # Default to forward-adjusted
+            elif adjust in ("2", "qfq"):
+                adjflag = "2"  # Forward-adjusted
+            elif adjust in ("1", "hfq"):
+                adjflag = "1"  # Backward-adjusted
+            else:
+                adjflag = "3"  # No adjustment
+
             logger.debug(
-                f"[BaostockFetcher] Calling query_history_k_data_plus for {bs_code} ({frequency})"
+                f"[BaostockFetcher] Calling query_history_k_data_plus for {bs_code} ({frequency}, adjustflag={adjflag})"
             )
 
             rs = bs.query_history_k_data_plus(
@@ -122,7 +143,7 @@ class BaostockFetcher(BaseFetcher):
                 start_date=start_date,
                 end_date=end_date,
                 frequency=frequency,
-                adjustflag="2",  # Forward-adjusted
+                adjustflag=adjflag,
             )
 
             if rs.error_code != "0":

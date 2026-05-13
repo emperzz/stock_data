@@ -105,9 +105,18 @@ class YfinanceFetcher(BaseFetcher):
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
     ) -> pd.DataFrame:
-        """Fetch K-line data from yfinance (supports d/w/m/5/15/30/60)."""
+        """Fetch K-line data from yfinance (supports d/w/m/5/15/30/60).
+
+        Args:
+            stock_code: Stock code
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
+            adjust: Adjustment type - None/True=调整后(前复权), False=未调整.
+                   Defaults to True (前复权) if not specified.
+        """
         try:
             import yfinance as yf
 
@@ -126,12 +135,19 @@ class YfinanceFetcher(BaseFetcher):
             }
             interval = interval_map.get(frequency, "1d")
 
+            # Map adjust parameter to auto_adjust
+            # None/empty -> auto_adjust=False (不复权), qfq/hfq -> auto_adjust=True (前复权)
+            if adjust in ("qfq", "hfq"):
+                auto_adjust = True  # Forward-adjusted
+            else:
+                auto_adjust = False  # No adjustment (不复权)
+
             df = yf.download(
                 tickers=code,
                 start=start_date,
                 end=end_date,
                 progress=False,
-                auto_adjust=True,
+                auto_adjust=auto_adjust,
                 multi_level_index=True,
                 interval=interval,
             )

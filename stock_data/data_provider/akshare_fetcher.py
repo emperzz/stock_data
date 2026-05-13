@@ -6,6 +6,7 @@ Support for both A-shares and Hong Kong stocks.
 
 import logging
 import os
+from typing import Optional
 
 import pandas as pd
 
@@ -65,9 +66,17 @@ class AkshareFetcher(BaseFetcher):
         return code
 
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
     ) -> pd.DataFrame:
-        """Fetch daily K-line data from Akshare (supports d/w/m for stocks and indices)."""
+        """Fetch daily K-line data from Akshare (supports d/w/m for stocks and indices).
+
+        Args:
+            stock_code: Stock code
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线
+            adjust: Adjustment type - None/''=不复权, 'qfq'=前复权, 'hfq'=后复权.
+        """
         try:
             import akshare as ak
 
@@ -86,6 +95,16 @@ class AkshareFetcher(BaseFetcher):
             if frequency in ("5", "15", "30", "60"):
                 raise DataFetchError("Akshare does not support minute frequency for indices")
 
+            # Map adjust parameter to akshare adjust value
+            # None or empty string means no adjustment (use '' for不复权)
+            # 'qfq' for forward-adjusted, 'hfq' for backward-adjusted
+            if adjust in ("qfq", "2"):
+                adj_value = "qfq"  # Forward-adjusted
+            elif adjust in ("hfq", "1"):
+                adj_value = "hfq"  # Backward-adjusted
+            else:
+                adj_value = ""  # No adjustment (不复权)
+
             if is_index and index_type == "us":
                 # US indices via index_us_stock_sina (.IXIC, .INX, .DJI, etc.)
                 df = ak.index_us_stock_sina(symbol=code)
@@ -101,10 +120,10 @@ class AkshareFetcher(BaseFetcher):
                     period=period,
                     start_date=start_date.replace("-", ""),
                     end_date=end_date.replace("-", ""),
-                    adjust="qfq",
+                    adjust=adj_value,
                 )
             elif is_index and index_type == "csi":
-                # CSI indices use index_zh_a_hist
+                # CSI indices use index_zh_a_hist (no adjustment support)
                 df = ak.index_zh_a_hist(
                     symbol=code,
                     period=period,
@@ -117,7 +136,7 @@ class AkshareFetcher(BaseFetcher):
                     period=period,
                     start_date=start_date,
                     end_date=end_date,
-                    adjust="qfq",
+                    adjust=adj_value,
                 )
 
             if df is None or df.empty:

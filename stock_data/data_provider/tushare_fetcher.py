@@ -56,9 +56,18 @@ class TushareFetcher(BaseFetcher):
         return self._api is not None
 
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
     ) -> pd.DataFrame:
-        """Fetch K-line data from Tushare (supports d/w/m for stocks and CSI indices)."""
+        """Fetch K-line data from Tushare (supports d/w/m for stocks and CSI indices).
+
+        Args:
+            stock_code: Stock code
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线
+            adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权.
+                   Only effective for stocks with 'd' frequency. Indices ignore this parameter.
+        """
         self._ensure_api()
         if self._api is None:
             raise DataFetchError("Tushare API not available (no token)")
@@ -68,16 +77,13 @@ class TushareFetcher(BaseFetcher):
             is_index = is_index_code(code) and get_index_type(code) == "csi"
 
             if is_index:
-                # CSI index: use index_daily API
-                # Format: 000300.SH for Shanghai indices
+                # CSI index: use index_daily API (no adjustment support)
                 if code in CSI_INDEX_MAP:
                     bs_symbol = CSI_INDEX_MAP[code]
-                    # bs_symbol is like "sh.000300", convert to "000300.SH"
-                    market_prefix = bs_symbol.split(".")[0].upper()  # "sh" -> "SH"
-                    numeric_code = bs_symbol.split(".")[1]  # "000300"
+                    market_prefix = bs_symbol.split(".")[0].upper()
+                    numeric_code = bs_symbol.split(".")[1]
                     ts_code = f"{numeric_code}.{market_prefix.replace('SH', 'SH').replace('SZ', 'SZ')}"
                 else:
-                    # Fallback: assume Shanghai format for CSI indices starting with 00
                     ts_code = f"{code}.SH"
             else:
                 # Regular stock
@@ -91,13 +97,36 @@ class TushareFetcher(BaseFetcher):
             start = start_date.replace("-", "")
             end = end_date.replace("-", "")
 
-            # Map frequency to Tushare API
+            # Map frequency to pro_bar freq
+            freq_map = {"d": "D", "w": "W", "m": "M"}
+            freq = freq_map.get(frequency, "D")
+
+            # For stock daily data, determine adjustment handling
+            # adjust=None means no adjustment (use api.query)
+            # adjust='qfq' or 'hfq' means use pro_bar with adjustment
+            if not is_index and frequency == "d" and adjust in ("qfq", "hfq"):
+                import tushare as ts
+
+                logger.debug(f"[TushareFetcher] Calling pro_bar for {ts_code} (adj={adjust})")
+
+                df = ts.pro_bar(
+                    ts_code=ts_code,
+                    start_date=start,
+                    end_date=end,
+                    freq=freq,
+                    adj=adjust,
+                )
+                if df is None or df.empty:
+                    raise DataFetchError(f"Tushare returned no data for {stock_code}")
+                return df
+
+            # For no adjustment (adjust=None) or weekly/monthly/indices, use api.query
             api_map = {"d": "daily", "w": "weekly", "m": "monthly"}
             api_name = api_map.get(frequency)
             if not api_name:
                 raise DataFetchError(f"TushareFetcher only supports d/w/m, got '{frequency}'")
 
-            logger.debug(f"[TushareFetcher] Calling {api_name} for {ts_code}")
+            logger.debug(f"[TushareFetcher] Calling {api_name} for {ts_code} (no adjustment)")
 
             df = self._api.query(
                 api_name,

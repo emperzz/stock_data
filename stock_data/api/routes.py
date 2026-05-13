@@ -160,6 +160,11 @@ def get_history(
     days: int = Query(default=30, ge=1, le=365, description="Number of days"),
     start_date: str | None = Query(default=None, description="Start date (YYYY-MM-DD), overrides days"),
     end_date: str | None = Query(default=None, description="End date (YYYY-MM-DD), defaults to today"),
+    adjust: str = Query(
+        default="",
+        pattern="^(qfq|hfq)?$",
+        description="Adjustment type: empty=不复权, qfq=前复权, hfq=后复权",
+    ),
 ) -> StockHistoryResponse:
     """
     Get historical K-line data for a stock or index.
@@ -170,15 +175,19 @@ def get_history(
         days: Number of days when start_date not provided
         start_date: Start date (YYYY-MM-DD), overrides days parameter
         end_date: End date (YYYY-MM-DD), defaults to today
+        adjust: Adjustment type - empty=不复权, qfq=前复权, hfq=后复权
     """
     try:
         period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
         frequency = period_map.get(period, "d")
 
-        # Cache key includes all params
+        # Parse adjust parameter: empty string means no adjustment (None)
+        adj_value = adjust if adjust in ("qfq", "hfq") else None
+
+        # Cache key includes all params including adjust
         if is_cache_enabled():
             cache = get_history_cache(frequency)
-            key = make_history_cache_key(stock_code, frequency, days, start_date, end_date)
+            key = make_history_cache_key(stock_code, frequency, days, start_date, end_date, adj_value)
             if key in cache:
                 logger.info(f"[APICache] history hit: {key}")
                 return cache[key]
@@ -191,6 +200,7 @@ def get_history(
             end_date=end_date,
             days=days,
             frequency=frequency,
+            adjust=adj_value,
         )
 
         # Get stock name if available

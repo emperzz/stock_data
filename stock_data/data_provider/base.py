@@ -166,7 +166,7 @@ class BaseFetcher(ABC):
 
     @abstractmethod
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d"
+        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
     ) -> pd.DataFrame:
         """Fetch raw data from the source. Returns DataFrame with source-specific columns.
 
@@ -175,6 +175,7 @@ class BaseFetcher(ABC):
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
+            adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权 (provider-specific)
         """
         pass
 
@@ -190,6 +191,7 @@ class BaseFetcher(ABC):
         end_date: Optional[str] = None,
         days: int = 30,
         frequency: str = "d",
+        adjust: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Get daily K-line data.
@@ -200,6 +202,7 @@ class BaseFetcher(ABC):
             end_date: End date (YYYY-MM-DD), defaults to today
             days: Number of days when start_date not provided
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
+            adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权 (provider-specific)
 
         Returns:
             DataFrame with standard columns and technical indicators
@@ -216,7 +219,7 @@ class BaseFetcher(ABC):
         logger.info(f"[{self.name}] Fetching {stock_code} {frequency} data: {start_date} ~ {end_date}")
 
         try:
-            raw_df = self._fetch_raw_data(stock_code, start_date, end_date, frequency)
+            raw_df = self._fetch_raw_data(stock_code, start_date, end_date, frequency, adjust)
             if raw_df is None or raw_df.empty:
                 raise DataFetchError(f"[{self.name}] No data for {stock_code}")
 
@@ -342,6 +345,7 @@ class DataFetcherManager:
         end_date: Optional[str] = None,
         days: int = 30,
         frequency: str = "d",
+        adjust: Optional[str] = None,
     ) -> Tuple[pd.DataFrame, str]:
         """
         Get daily data with automatic failover.
@@ -352,6 +356,7 @@ class DataFetcherManager:
             end_date: End date (YYYY-MM-DD)
             days: Number of days when start_date not provided
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
+            adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权 (provider-specific)
 
         Returns:
             Tuple of (DataFrame, source_name)
@@ -378,7 +383,7 @@ class DataFetcherManager:
         for fetcher in fetchers:
             try:
                 logger.info(f"[Manager] Trying {fetcher.name} for {stock_code} ({frequency})")
-                df = fetcher.get_daily_data(stock_code, start_date, end_date, days, frequency)
+                df = fetcher.get_daily_data(stock_code, start_date, end_date, days, frequency, adjust)
                 if df is not None and not df.empty:
                     logger.info(f"[Manager] {fetcher.name} succeeded for {stock_code}")
                     return df, fetcher.name
