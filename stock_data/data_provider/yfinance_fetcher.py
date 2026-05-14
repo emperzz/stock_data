@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Yfinance fetcher for US stocks and indices (Priority 3).
 
@@ -9,24 +8,27 @@ Stooq is used as fallback for US stocks.
 import csv
 import logging
 import os
-from datetime import datetime
 from io import StringIO
-from typing import Any, Optional
-from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import pandas as pd
 from tenacity import (
+    before_sleep_log,
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
 )
 
-from .base import BaseFetcher, DataFetchError, is_us_market, normalize_stock_code, is_index_code, get_index_type
-from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
-from .index_symbols import US_INDEX_MAP, CSI_INDEX_MAP, HK_INDEX_MAP
+from .base import (
+    BaseFetcher,
+    DataFetchError,
+    get_index_type,
+    is_us_market,
+    normalize_stock_code,
+)
+from .index_symbols import HK_INDEX_MAP, US_INDEX_MAP, is_index_code
+from .realtime_types import RealtimeSource, UnifiedRealtimeQuote
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,15 @@ class YfinanceFetcher(BaseFetcher):
 
     name = "YfinanceFetcher"
     priority = int(os.getenv("YFINANCE_PRIORITY", "3"))
+    supported_markets: set[str] = {"csi", "hk", "us"}
+    supports_historical = True
+    supports_realtime = True
+
+    def _map_adjust(self, adjust: str) -> str | None:
+        """Map unified adjust to yfinance auto_adjust flag."""
+        if not adjust:
+            return None  # 不复权 (auto_adjust=False)
+        return "qfq"  # yfinance only has one adjustment flavor, map both to it
 
     def _convert_code(self, stock_code: str) -> str:
         """
@@ -58,13 +69,16 @@ class YfinanceFetcher(BaseFetcher):
         # Check if it's an index code
         if is_index_code(code):
             index_type = get_index_type(code)
-            if index_type == "us" and code in US_INDEX_MAP:
-                return US_INDEX_MAP[code]
+            if index_type == "us":
+                entry = US_INDEX_MAP.get(code)
+                if entry is not None:
+                    return entry[0]
             elif index_type == "csi":
-                # CSI index: 000300 -> 000300.SS
                 return f"{code}.SS"
-            elif index_type == "hk" and code in HK_INDEX_MAP:
-                return HK_INDEX_MAP[code]
+            elif index_type == "hk":
+                entry = HK_INDEX_MAP.get(code)
+                if entry is not None:
+                    return entry[0]
 
         # Already in yfinance format
         if code.endswith((".SS", ".SZ", ".HK", ".BJ")):
@@ -94,8 +108,9 @@ class YfinanceFetcher(BaseFetcher):
     def is_available(self) -> bool:
         """Check if yfinance is available."""
         try:
-            import yfinance as yf
-            return True
+            import importlib.util
+
+            return importlib.util.find_spec("yfinance") is not None
         except ImportError:
             return False
 
@@ -106,7 +121,12 @@ class YfinanceFetcher(BaseFetcher):
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
+        self,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
+        frequency: str = "d",
+        adjust: str | None = None,
     ) -> pd.DataFrame:
         """Fetch K-line data from yfinance (supports d/w/m/5/15/30/60).
 
@@ -136,12 +156,8 @@ class YfinanceFetcher(BaseFetcher):
             }
             interval = interval_map.get(frequency, "1d")
 
-            # Map adjust parameter to auto_adjust
-            # None/empty -> auto_adjust=False (不复权), qfq/hfq -> auto_adjust=True (前复权)
-            if adjust in ("qfq", "hfq"):
-                auto_adjust = True  # Forward-adjusted
-            else:
-                auto_adjust = False  # No adjustment (不复权)
+            # adjust already mapped by _map_adjust: None=不复权, "qfq"=前复权
+            auto_adjust = adjust is not None
 
             df = yf.download(
                 tickers=code,
@@ -165,52 +181,40 @@ class YfinanceFetcher(BaseFetcher):
         except DataFetchError:
             raise
         except ImportError:
-            raise DataFetchError("yfinance not installed")
+            raise DataFetchError("yfinance not installed") from None
         except Exception as e:
             raise DataFetchError(f"YfinanceFetcher fetch failed: {e}") from e
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """Normalize yfinance data to standard columns."""
-        df = df.copy()
+        df = df.copy().reset_index()
 
-        # Reset index to get date as column
-        df = df.reset_index()
+        # Use common normalization
+        df = self._normalize_dataframe(
+            df,
+            stock_code,
+            {
+                "Date": "date",
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+            },
+        )
 
-        # yfinance columns: Date, Open, High, Low, Close, Volume
-        column_mapping = {
-            "Date": "date",
-            "Open": "open",
-            "High": "high",
-            "Low": "low",
-            "Close": "close",
-            "Volume": "volume",
-        }
-
-        df = df.rename(columns=column_mapping)
-
-        # Convert date
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"])
-
-        # Calculate pct_chg if not present
+        # Calculate pct_chg from close
         if "pct_chg" not in df.columns and "close" in df.columns:
             df["pct_chg"] = df["close"].pct_change() * 100
             df["pct_chg"] = df["pct_chg"].fillna(0).round(2)
 
-        # Calculate amount if not present
+        # Calculate amount from volume * close
         if "amount" not in df.columns and "close" in df.columns and "volume" in df.columns:
             df["amount"] = df["volume"] * df["close"]
 
-        # Add code
-        if "code" not in df.columns:
-            df["code"] = normalize_stock_code(stock_code)
-
-        keep_cols = ["code"] + [c for c in STANDARD_COLUMNS if c in df.columns]
-        df = df[[c for c in keep_cols if c in df.columns]]
-
         return df
 
-    def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from yfinance."""
         try:
             import yfinance as yf
@@ -277,14 +281,15 @@ class YfinanceFetcher(BaseFetcher):
                 amplitude=round(amplitude, 2) if amplitude is not None else None,
             )
 
-        except Exception as e:
-            logger.warning(f"[YfinanceFetcher] Realtime quote failed: {e}")
-            # Try Stooq fallback for US stocks
+        except Exception:
+            logger.warning(
+                f"[YfinanceFetcher] Realtime quote failed for {stock_code}", exc_info=True
+            )
             if is_us_market(stock_code):
                 return self._get_from_stooq(stock_code)
             return None
 
-    def _get_from_stooq(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+    def _get_from_stooq(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get US stock quote from Stooq as fallback."""
         symbol = stock_code.strip().upper()
         stooq_symbol = f"{symbol.lower()}.us"
@@ -348,7 +353,3 @@ class YfinanceFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[YfinanceFetcher] Stooq fallback failed: {e}")
             return None
-
-
-# Import STANDARD_COLUMNS at module level
-from .base import STANDARD_COLUMNS

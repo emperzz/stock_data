@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tests for individual provider fetchers - directly testing each provider's internal APIs.
 
@@ -10,9 +9,10 @@ Due to rate limiting, some tests may fail intermittently. Use --lf (last-failed)
 failed tests after a cooldown period.
 """
 
-import pytest
 import time
 from datetime import datetime, timedelta
+
+import pytest
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +28,7 @@ class TestBaostockFetcher:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+
         return BaostockFetcher()
 
     def test_is_available(self, fetcher):
@@ -59,9 +60,9 @@ class TestBaostockFetcher:
         assert "volume" in df.columns
         assert "pct_chg" in df.columns
 
-    def test_get_daily_data(self, fetcher):
+    def test_get_kline_data(self, fetcher):
         """Test get_daily_data returns DataFrame with indicators."""
-        df = fetcher.get_daily_data("600519", days=10)
+        df = fetcher.get_kline_data("600519", days=10)
         assert df is not None
         assert len(df) > 0
         assert "ma5" in df.columns
@@ -90,6 +91,7 @@ class TestAkshareFetcher:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+
         return AkshareFetcher()
 
     def test_fetch_a_share_daily(self, fetcher):
@@ -148,9 +150,9 @@ class TestAkshareFetcher:
         assert result.price is not None
         assert result.price > 0
 
-    def test_get_daily_data(self, fetcher):
+    def test_get_kline_data(self, fetcher):
         """Test get_daily_data with indicators."""
-        df = fetcher.get_daily_data("600519", days=10)
+        df = fetcher.get_kline_data("600519", days=10)
         assert df is not None
         assert len(df) > 0
         assert "ma5" in df.columns
@@ -162,6 +164,7 @@ class TestYfinanceFetcher:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.yfinance_fetcher import YfinanceFetcher
+
         return YfinanceFetcher()
 
     def test_is_available(self, fetcher):
@@ -212,9 +215,9 @@ class TestYfinanceFetcher:
         assert result is not None
         assert result.price is not None
 
-    def test_get_daily_data(self, fetcher):
+    def test_get_kline_data(self, fetcher):
         """Test get_daily_data with indicators."""
-        df = fetcher.get_daily_data("AAPL", days=10)
+        df = fetcher.get_kline_data("AAPL", days=10)
         assert df is not None
         assert len(df) > 0
         assert "ma5" in df.columns
@@ -226,11 +229,13 @@ class TestTushareFetcher:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.tushare_fetcher import TushareFetcher
+
         return TushareFetcher()
 
     def test_token_configured(self, fetcher):
         """Test Tushare token is configured."""
         import os
+
         token = os.getenv("TUSHARE_TOKEN", "")
         if not token:
             pytest.skip("TUSHARE_TOKEN not set")
@@ -268,12 +273,12 @@ class TestTushareFetcher:
         assert "close" in df.columns
         assert "volume" in df.columns
 
-    def test_get_daily_data(self, fetcher):
+    def test_get_kline_data(self, fetcher):
         """Test get_daily_data returns DataFrame with indicators."""
         if not fetcher.is_available():
             pytest.skip("TUSHARE_TOKEN not set or invalid")
 
-        df = fetcher.get_daily_data("600519", days=10)
+        df = fetcher.get_kline_data("600519", days=10)
         assert df is not None
         assert len(df) > 0
         assert "ma5" in df.columns
@@ -315,7 +320,7 @@ class TestTushareFetcher:
         if not fetcher.is_available():
             pytest.skip("TUSHARE_TOKEN not set or invalid")
 
-        df = fetcher.get_daily_data("000300", days=10)
+        df = fetcher.get_kline_data("000300", days=10)
         assert df is not None
         assert len(df) > 0
 
@@ -326,16 +331,19 @@ class TestIndexSupport:
     @pytest.fixture
     def yfinance_fetcher(self):
         from stock_data.data_provider.yfinance_fetcher import YfinanceFetcher
+
         return YfinanceFetcher()
 
     @pytest.fixture
     def baostock_fetcher(self):
         from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+
         return BaostockFetcher()
 
     @pytest.fixture
     def akshare_fetcher(self):
         from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+
         return AkshareFetcher()
 
     def test_yfinance_us_index_daily(self, yfinance_fetcher):
@@ -343,7 +351,7 @@ class TestIndexSupport:
         if not yfinance_fetcher.is_available():
             pytest.skip("yfinance not installed")
 
-        df = yfinance_fetcher.get_daily_data("SPX", days=10)
+        df = yfinance_fetcher.get_kline_data("SPX", days=10)
         assert df is not None
         assert len(df) > 0
         assert "close" in df.columns
@@ -353,7 +361,7 @@ class TestIndexSupport:
         if not yfinance_fetcher.is_available():
             pytest.skip("yfinance not installed")
 
-        df = yfinance_fetcher.get_daily_data("SPX", days=30, frequency="w")
+        df = yfinance_fetcher.get_kline_data("SPX", days=30, frequency="w")
         assert df is not None
         assert len(df) > 0
 
@@ -362,7 +370,7 @@ class TestIndexSupport:
         if not yfinance_fetcher.is_available():
             pytest.skip("yfinance not installed")
 
-        df = yfinance_fetcher.get_daily_data("SPX", days=365, frequency="m")
+        df = yfinance_fetcher.get_kline_data("SPX", days=365, frequency="m")
         assert df is not None
         assert len(df) > 0
 
@@ -371,7 +379,7 @@ class TestIndexSupport:
         if not yfinance_fetcher.is_available():
             pytest.skip("yfinance not installed")
 
-        df = yfinance_fetcher.get_daily_data("HSI", days=10)
+        df = yfinance_fetcher.get_kline_data("HSI", days=10)
         assert df is not None
         assert len(df) > 0
 
@@ -380,7 +388,7 @@ class TestIndexSupport:
         if not yfinance_fetcher.is_available():
             pytest.skip("yfinance not installed")
 
-        df = yfinance_fetcher.get_daily_data("000300", days=10)
+        df = yfinance_fetcher.get_kline_data("000300", days=10)
         assert df is not None
         assert len(df) > 0
 
@@ -389,7 +397,7 @@ class TestIndexSupport:
         if not baostock_fetcher.is_available():
             pytest.skip("baostock not available")
 
-        df = baostock_fetcher.get_daily_data("000300", days=10)
+        df = baostock_fetcher.get_kline_data("000300", days=10)
         assert df is not None
         assert len(df) > 0
         assert "close" in df.columns
@@ -399,7 +407,7 @@ class TestIndexSupport:
         if not baostock_fetcher.is_available():
             pytest.skip("baostock not available")
 
-        df = baostock_fetcher.get_daily_data("000300", days=10, frequency="d")
+        df = baostock_fetcher.get_kline_data("000300", days=10, frequency="d")
         assert df is not None
         assert len(df) > 0
 
@@ -408,7 +416,7 @@ class TestIndexSupport:
         if not baostock_fetcher.is_available():
             pytest.skip("baostock not available")
 
-        df = baostock_fetcher.get_daily_data("000300", days=60, frequency="w")
+        df = baostock_fetcher.get_kline_data("000300", days=60, frequency="w")
         assert df is not None
         assert len(df) > 0
 
@@ -417,13 +425,13 @@ class TestIndexSupport:
         if not baostock_fetcher.is_available():
             pytest.skip("baostock not available")
 
-        df = baostock_fetcher.get_daily_data("000300", days=365, frequency="m")
+        df = baostock_fetcher.get_kline_data("000300", days=365, frequency="m")
         assert df is not None
         assert len(df) > 0
 
     def test_akshare_csi_index(self, akshare_fetcher):
         """Test AkshareFetcher for CSI index via index_zh_a_hist."""
-        df = akshare_fetcher.get_daily_data("000300", days=10)
+        df = akshare_fetcher.get_kline_data("000300", days=10)
         assert df is not None
         assert len(df) > 0
 
@@ -433,34 +441,36 @@ class TestDataFetcherManager:
 
     @pytest.fixture
     def manager(self):
-        from stock_data.data_provider.base import DataFetcherManager
-        from stock_data.data_provider.baostock_fetcher import BaostockFetcher
         from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+        from stock_data.data_provider.base import DataFetcherManager
         from stock_data.data_provider.yfinance_fetcher import YfinanceFetcher
 
-        return DataFetcherManager([
-            BaostockFetcher(),
-            AkshareFetcher(),
-            YfinanceFetcher(),
-        ])
+        return DataFetcherManager(
+            [
+                BaostockFetcher(),
+                AkshareFetcher(),
+                YfinanceFetcher(),
+            ]
+        )
 
     def test_get_daily_data_a_share(self, manager):
         """Test manager fetches A-share daily data."""
-        df, source = manager.get_daily_data("600519", days=10)
+        df, source = manager.get_kline_data("600519", days=10)
         assert df is not None
         assert len(df) > 0
         assert source in ["BaostockFetcher", "AkshareFetcher"]
 
     def test_get_daily_data_hk(self, manager):
         """Test manager fetches HK stock daily data."""
-        df, source = manager.get_daily_data("HK00700", days=10)
+        df, source = manager.get_kline_data("HK00700", days=10)
         assert df is not None
         assert len(df) > 0
         assert source == "AkshareFetcher"
 
     def test_get_daily_data_us(self, manager):
         """Test manager fetches US stock daily data."""
-        df, source = manager.get_daily_data("AAPL", days=10)
+        df, source = manager.get_kline_data("AAPL", days=10)
         assert df is not None
         assert len(df) > 0
         assert source == "YfinanceFetcher"
@@ -485,7 +495,7 @@ class TestDataFetcherManager:
 
     def test_get_daily_data_csi_index_via_manager(self, manager):
         """Test manager routes CSI index to appropriate fetcher."""
-        df, source = manager.get_daily_data("000300", days=10)
+        df, source = manager.get_kline_data("000300", days=10)
         assert df is not None
         assert len(df) > 0
         # Should be fetched by Baostock or Yfinance
@@ -493,14 +503,14 @@ class TestDataFetcherManager:
 
     def test_get_daily_data_us_index_via_manager(self, manager):
         """Test manager routes US index to YfinanceFetcher."""
-        df, source = manager.get_daily_data("SPX", days=10)
+        df, source = manager.get_kline_data("SPX", days=10)
         assert df is not None
         assert len(df) > 0
         assert source == "YfinanceFetcher"
 
     def test_get_daily_data_hk_index_via_manager(self, manager):
         """Test manager routes HK index to appropriate fetcher."""
-        df, source = manager.get_daily_data("HSI", days=10)
+        df, source = manager.get_kline_data("HSI", days=10)
         assert df is not None
         assert len(df) > 0
 
@@ -511,6 +521,7 @@ class TestAkshareFetcherIntraday:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+
         return AkshareFetcher()
 
     def test_get_intraday_5m(self, fetcher):
@@ -552,6 +563,7 @@ class TestZhituFetcherIntraday:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.zhitu_fetcher import ZhituFetcher
+
         return ZhituFetcher()
 
     def test_get_intraday_5m(self, fetcher):
@@ -569,6 +581,7 @@ class TestZhituFetcherIntraday:
         if not fetcher.is_available():
             pytest.skip("ZHITU_TOKEN not configured")
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError):
             fetcher.get_intraday_data("000001", period="1", adjust="")
 

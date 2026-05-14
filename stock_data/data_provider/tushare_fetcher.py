@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tushare fetcher for A-share stock data (Priority 0).
 
@@ -8,14 +7,12 @@ Gracefully falls back when token is not configured.
 
 import logging
 import os
-from datetime import datetime
-from typing import Any, Optional
 
 import pandas as pd
 
 from .base import BaseFetcher, DataFetchError, normalize_stock_code
-from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, safe_float, safe_int
-from .index_symbols import CSI_INDEX_MAP, is_index_code, get_index_type
+from .index_symbols import CSI_INDEX_MAP, get_index_type, is_index_code
+from .realtime_types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +22,15 @@ class TushareFetcher(BaseFetcher):
 
     name = "TushareFetcher"
     priority = int(os.getenv("TUSHARE_PRIORITY", "0"))
+    supported_markets: set[str] = {"csi"}
+    supports_historical = True
+    supports_realtime = True
+
+    def _map_adjust(self, adjust: str) -> str | None:
+        """Map unified adjust to Tushare value."""
+        if not adjust:
+            return None  # 不复权
+        return adjust  # "qfq" or "hfq"
 
     def __init__(self):
         self._token = os.getenv("TUSHARE_TOKEN", "").strip()
@@ -56,7 +62,12 @@ class TushareFetcher(BaseFetcher):
         return self._api is not None
 
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
+        self,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
+        frequency: str = "d",
+        adjust: str | None = None,
     ) -> pd.DataFrame:
         """Fetch K-line data from Tushare (supports d/w/m for stocks and CSI indices).
 
@@ -78,11 +89,12 @@ class TushareFetcher(BaseFetcher):
 
             if is_index:
                 # CSI index: use index_daily API (no adjustment support)
-                if code in CSI_INDEX_MAP:
-                    bs_symbol = CSI_INDEX_MAP[code]
+                entry = CSI_INDEX_MAP.get(code)
+                if entry is not None:
+                    bs_symbol = entry[0]
                     market_prefix = bs_symbol.split(".")[0].upper()
                     numeric_code = bs_symbol.split(".")[1]
-                    ts_code = f"{numeric_code}.{market_prefix.replace('SH', 'SH').replace('SZ', 'SZ')}"
+                    ts_code = f"{numeric_code}.{market_prefix}"
                 else:
                     ts_code = f"{code}.SH"
             else:
@@ -149,20 +161,8 @@ class TushareFetcher(BaseFetcher):
         """Normalize Tushare data to standard columns."""
         df = df.copy()
 
-        # Tushare columns: trade_date, open, high, low, close, vol, amount, pct_chg
-        column_mapping = {
-            "trade_date": "date",
-            "vol": "_vol_hand",  # temp name to avoid conflict
-        }
-
-        df = df.rename(columns=column_mapping)
-
-        if "date" not in df.columns and "trade_date" in df.columns:
-            df["date"] = df["trade_date"]
-
-        # Convert date format if needed
-        if "date" in df.columns and df["date"].dtype == object:
-            df["date"] = pd.to_datetime(df["date"])
+        # Rename columns
+        df = df.rename(columns={"trade_date": "date", "vol": "_vol_hand"})
 
         # Tushare vol is in "手" (100 shares per hand), convert to shares
         if "_vol_hand" in df.columns:
@@ -173,21 +173,10 @@ class TushareFetcher(BaseFetcher):
         if "amount" in df.columns:
             df["amount"] = pd.to_numeric(df["amount"], errors="coerce") * 1000
 
-        # Add code if missing
-        if "code" not in df.columns:
-            df["code"] = normalize_stock_code(stock_code)
+        # Use common normalization for the rest
+        return self._normalize_dataframe(df, stock_code, {})
 
-        # Ensure standard columns exist
-        keep_cols = ["code"] + [
-            c
-            for c in ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]
-            if c in df.columns
-        ]
-        df = df[[c for c in keep_cols if c in df.columns]]
-
-        return df
-
-    def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Tushare (requires tick data permission)."""
         self._ensure_api()
         if self._api is None:
@@ -197,10 +186,7 @@ class TushareFetcher(BaseFetcher):
             import tushare as ts
 
             code = normalize_stock_code(stock_code)
-            if code.startswith(("6", "5")):
-                ts_code = f"{code}.SH"
-            else:
-                ts_code = f"{code}.SZ"
+            ts_code = f"{code}.SH" if code.startswith(("6", "5")) else f"{code}.SZ"
 
             # Try to get realtime tick via tushare directly
             df = ts.realtime_quote(ts_code=ts_code)
@@ -231,11 +217,13 @@ class TushareFetcher(BaseFetcher):
                 pre_close=safe_float(row.get("pre_close")),
             )
 
-        except Exception as e:
-            logger.warning(f"[TushareFetcher] Realtime quote failed: {e}")
+        except Exception:
+            logger.warning(
+                f"[TushareFetcher] Realtime quote failed for {stock_code}", exc_info=True
+            )
             return None
 
-    def get_stock_name(self, stock_code: str) -> Optional[str]:
+    def get_stock_name(self, stock_code: str) -> str | None:
         """Get stock name from Tushare basic info."""
         self._ensure_api()
         if self._api is None:
@@ -243,10 +231,7 @@ class TushareFetcher(BaseFetcher):
 
         try:
             code = normalize_stock_code(stock_code)
-            if code.startswith(("6", "5")):
-                ts_code = f"{code}.SH"
-            else:
-                ts_code = f"{code}.SZ"
+            ts_code = f"{code}.SH" if code.startswith(("6", "5")) else f"{code}.SZ"
 
             df = self._api.stock_basic(ts_code=ts_code, list_status="L")
             if df is not None and not df.empty:

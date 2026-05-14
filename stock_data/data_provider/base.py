@@ -1,21 +1,19 @@
-# -*- coding: utf-8 -*-
 """
 Base classes and manager for stock data fetchers.
 """
 
 import logging
-import os
 import random
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
 from threading import RLock
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 
+from .index_symbols import get_index_type
 from .realtime_types import get_realtime_circuit_breaker
-from .index_symbols import is_index_code, get_index_type
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +112,7 @@ def is_hk_market(code: str) -> bool:
     if code.endswith(".HK"):
         base = code[:-3]
         return base.isdigit() and 1 <= len(base) <= 5
-    if code.isdigit() and len(code) == 5:
-        return True
-    return False
+    return bool(code.isdigit() and len(code) == 5)
 
 
 def is_etf_code(code: str) -> bool:
@@ -134,12 +130,12 @@ def is_bse_code(code: str) -> bool:
 
 
 def market_tag(code: str) -> str:
-    """Return market tag: cn/us/hk."""
+    """Return market tag: csi/us/hk."""
     if is_us_market(code):
         return "us"
     if is_hk_market(code):
         return "hk"
-    return "cn"
+    return "csi"
 
 
 def index_market_tag(code: str) -> str | None:
@@ -164,9 +160,33 @@ class BaseFetcher(ABC):
     name: str = "BaseFetcher"
     priority: int = 99  # Lower is higher priority
 
+    # Markets supported by this fetcher: {"csi", "hk", "us"}
+    supported_markets: set[str] = set()
+    # Capability flags: whether this fetcher provides historical/realtime data
+    supports_historical: bool = True
+    supports_realtime: bool = False
+
+    def _map_adjust(self, adjust: str) -> str | None:
+        """Map unified adjust parameter to provider-specific value.
+
+        Unified values (from API layer):
+            "" = 不复权, "qfq" = 前复权, "hfq" = 后复权
+
+        Override in subclasses for source-specific mappings.
+        Returns the provider-specific adjust value, or None.
+        """
+        if not adjust:
+            return None
+        return adjust
+
     @abstractmethod
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
+        self,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
+        frequency: str = "d",
+        adjust: str | None = None,
     ) -> pd.DataFrame:
         """Fetch raw data from the source. Returns DataFrame with source-specific columns.
 
@@ -175,7 +195,7 @@ class BaseFetcher(ABC):
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
-            adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权 (provider-specific)
+            adjust: Provider-specific adjustment value (already mapped by _map_adjust)
         """
         pass
 
@@ -184,17 +204,46 @@ class BaseFetcher(ABC):
         """Normalize data to standard columns: date, open, high, low, close, volume, amount, pct_chg."""
         pass
 
-    def get_daily_data(
+    def _normalize_dataframe(
+        self,
+        df: pd.DataFrame,
+        stock_code: str,
+        column_mapping: dict[str, str],
+    ) -> pd.DataFrame:
+        """Generic dataframe normalization using a column mapping dict.
+
+        Handles rename, date conversion, numeric coercion, and standard column selection.
+        Subclasses can call this from _normalize_data to reduce boilerplate.
+        """
+        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+
+        numeric_cols = ["open", "high", "low", "close", "volume", "amount", "pct_chg"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        if "code" not in df.columns:
+            df["code"] = normalize_stock_code(stock_code)
+
+        keep_cols = ["code"] + [c for c in STANDARD_COLUMNS if c in df.columns]
+        df = df[[c for c in keep_cols if c in df.columns]]
+
+        return df
+
+    def get_kline_data(
         self,
         stock_code: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         days: int = 30,
         frequency: str = "d",
-        adjust: Optional[str] = None,
+        adjust: str | None = None,
     ) -> pd.DataFrame:
         """
-        Get daily K-line data.
+        Get K-line data (daily, weekly, monthly, or minute).
 
         Args:
             stock_code: Stock code
@@ -202,7 +251,7 @@ class BaseFetcher(ABC):
             end_date: End date (YYYY-MM-DD), defaults to today
             days: Number of days when start_date not provided
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
-            adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权 (provider-specific)
+            adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权 (unified, mapped per-provider)
 
         Returns:
             DataFrame with standard columns and technical indicators
@@ -216,14 +265,22 @@ class BaseFetcher(ABC):
             start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days * 2)
             start_date = start_dt.strftime("%Y-%m-%d")
 
-        logger.info(f"[{self.name}] Fetching {stock_code} {frequency} data: {start_date} ~ {end_date}")
+        # Map unified adjust to provider-specific value
+        provider_adjust = self._map_adjust(adjust or "")
+
+        logger.info(
+            f"[{self.name}] Fetching {stock_code} {frequency} data: {start_date} ~ {end_date}"
+        )
 
         try:
-            raw_df = self._fetch_raw_data(stock_code, start_date, end_date, frequency, adjust)
+            raw_df = self._fetch_raw_data(
+                stock_code, start_date, end_date, frequency, provider_adjust
+            )
             if raw_df is None or raw_df.empty:
                 raise DataFetchError(f"[{self.name}] No data for {stock_code}")
 
             df = self._normalize_data(raw_df, stock_code)
+            # Single copy at entry point
             df = self._clean_data(df)
             df = self._calculate_indicators(df)
 
@@ -235,9 +292,7 @@ class BaseFetcher(ABC):
             raise DataFetchError(f"[{self.name}] {stock_code}: {e}") from e
 
     def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean and validate data."""
-        df = df.copy()
-
+        """Clean and validate data (operates in-place on caller's copy)."""
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"])
 
@@ -246,23 +301,28 @@ class BaseFetcher(ABC):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
+        before = len(df)
         df = df.dropna(subset=["close", "volume"])
+        dropped = before - len(df)
+        if dropped > 0:
+            logger.debug(f"[{self.name}] Dropped {dropped} rows with NaN close/volume")
+
         df = df.sort_values("date", ascending=True).reset_index(drop=True)
         return df
 
     def _calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate technical indicators."""
-        df = df.copy()
-
+        """Calculate technical indicators (operates in-place on caller's copy)."""
         # Moving averages
         df["ma5"] = df["close"].rolling(window=5, min_periods=1).mean()
         df["ma10"] = df["close"].rolling(window=10, min_periods=1).mean()
         df["ma20"] = df["close"].rolling(window=20, min_periods=1).mean()
 
-        # Volume ratio
+        # Volume ratio (guard against div-by-zero producing inf)
         avg_vol = df["volume"].rolling(window=5, min_periods=1).mean()
         df["volume_ratio"] = df["volume"] / avg_vol.shift(1)
-        df["volume_ratio"] = df["volume_ratio"].fillna(1.0)
+        df["volume_ratio"] = (
+            df["volume_ratio"].replace([float("inf"), float("-inf")], 1.0).fillna(1.0)
+        )
 
         # Round to 2 decimals
         for col in ["ma5", "ma10", "ma20", "volume_ratio"]:
@@ -278,19 +338,20 @@ class BaseFetcher(ABC):
         logger.debug(f"[{__name__}] Sleep {sleep_time:.2f}s")
         time.sleep(sleep_time)
 
-    def get_realtime_quote(self, stock_code: str) -> Optional[Any]:
+    def get_realtime_quote(self, stock_code: str) -> Any | None:
         """Get realtime quote. Override in subclass if supported."""
         return None
 
-    def get_stock_name(self, stock_code: str) -> Optional[str]:
+    def get_stock_name(self, stock_code: str) -> str | None:
         """Get stock name. Override in subclass if supported."""
         return None
 
+    def get_all_stocks(self, market: str = "csi") -> list:
+        """Get all available stocks for a market. Override in subclass if supported."""
+        return []
+
     def get_intraday_data(
-        self,
-        stock_code: str,
-        period: str = "5",
-        adjust: str = ""
+        self, stock_code: str, period: str = "5", adjust: str = ""
     ) -> pd.DataFrame | None:
         """Get intraday minute-level data for a stock.
 
@@ -310,29 +371,28 @@ class DataFetcherManager:
     """
     Manager for multiple data fetchers with priority-based failover.
 
+    Market routing is driven by each fetcher's supported_markets class attribute
+    combined with supports_historical / supports_realtime capability flags.
+
     Usage:
         manager = DataFetcherManager()
-        df, source = manager.get_daily_data("600519")
+        df, source = manager.get_kline_data("600519")
     """
 
-    # Market support per fetcher
-    # cn/hk/us = stocks, csi = A-share indices, hk_index = HK indices, us_index = US indices
-    _MARKET_SUPPORT = {
-        "TushareFetcher": {"cn", "csi"},
-        "BaostockFetcher": {"cn", "csi"},
-        "AkshareFetcher": {"cn", "hk", "csi"},
-        "YfinanceFetcher": {"cn", "hk", "us", "csi"},
-        "ZhituFetcher": {"cn"},
-    }
-
-    def __init__(self, fetchers: Optional[List[BaseFetcher]] = None):
-        self._fetchers: List[BaseFetcher] = []
+    def __init__(self, fetchers: list[BaseFetcher] | None = None):
+        self._fetchers: list[BaseFetcher] = []
         self._fetchers_by_name: dict = {}
         self._lock = RLock()
 
         if fetchers:
             self._fetchers = sorted(fetchers, key=lambda f: f.priority)
             self._refresh_index()
+
+    def reset(self) -> None:
+        """Clear all fetchers, allowing re-registration (e.g., after config changes)."""
+        with self._lock:
+            self._fetchers.clear()
+            self._fetchers_by_name.clear()
 
     def _refresh_index(self) -> None:
         """Refresh fetcher name index."""
@@ -345,30 +405,42 @@ class DataFetcherManager:
             self._fetchers.sort(key=lambda f: f.priority)
             self._refresh_index()
 
-    def get_fetcher(self, name: str) -> Optional[BaseFetcher]:
+    def get_fetcher(self, name: str) -> BaseFetcher | None:
         """Get fetcher by name."""
         return self._fetchers_by_name.get(name)
 
-    def _filter_by_market(self, market: str) -> List[BaseFetcher]:
-        """Filter fetchers by market support."""
+    def _filter_by_market(self, market: str, for_historical: bool = True) -> list[BaseFetcher]:
+        """Filter fetchers by market support and capability.
+
+        Args:
+            market: Market tag (csi/hk/us)
+            for_historical: If True, require supports_historical; if False, require supports_realtime
+
+        Returns:
+            Filtered list of fetchers sorted by priority.
+        """
         result = []
         for f in self._fetchers:
-            supported = self._MARKET_SUPPORT.get(f.name)
-            if supported is None or market in supported:
-                result.append(f)
+            if market not in f.supported_markets:
+                continue
+            if for_historical and not f.supports_historical:
+                continue
+            if not for_historical and not f.supports_realtime:
+                continue
+            result.append(f)
         return result
 
-    def get_daily_data(
+    def get_kline_data(
         self,
         stock_code: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         days: int = 30,
         frequency: str = "d",
-        adjust: Optional[str] = None,
-    ) -> Tuple[pd.DataFrame, str]:
+        adjust: str | None = None,
+    ) -> tuple[pd.DataFrame, str]:
         """
-        Get daily data with automatic failover.
+        Get K-line data with automatic failover.
 
         Args:
             stock_code: Stock code
@@ -376,7 +448,7 @@ class DataFetcherManager:
             end_date: End date (YYYY-MM-DD)
             days: Number of days when start_date not provided
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
-            adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权 (provider-specific)
+            adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权
 
         Returns:
             Tuple of (DataFrame, source_name)
@@ -389,21 +461,21 @@ class DataFetcherManager:
         # Check if it's an index code for routing
         index_tag = index_market_tag(stock_code)
         if index_tag:
-            # Route indices to appropriate fetchers based on index type
-            fetchers = self._filter_by_market(index_tag)
+            fetchers = self._filter_by_market(index_tag, for_historical=True)
             if not fetchers:
-                # Fall back to stock market routing if no index-specific fetcher
-                fetchers = self._filter_by_market(market_tag(stock_code))
+                fetchers = self._filter_by_market(market_tag(stock_code), for_historical=True)
         else:
             market = market_tag(stock_code)
-            fetchers = self._filter_by_market(market)
+            fetchers = self._filter_by_market(market, for_historical=True)
 
         errors = []
 
         for fetcher in fetchers:
             try:
                 logger.info(f"[Manager] Trying {fetcher.name} for {stock_code} ({frequency})")
-                df = fetcher.get_daily_data(stock_code, start_date, end_date, days, frequency, adjust)
+                df = fetcher.get_kline_data(
+                    stock_code, start_date, end_date, days, frequency, adjust
+                )
                 if df is not None and not df.empty:
                     logger.info(f"[Manager] {fetcher.name} succeeded for {stock_code}")
                     return df, fetcher.name
@@ -414,13 +486,13 @@ class DataFetcherManager:
 
         raise DataFetchError(f"All fetchers failed for {stock_code}:\n" + "\n".join(errors))
 
-    def get_realtime_quote(self, stock_code: str) -> Optional[Any]:
-        """Get realtime quote with automatic failover."""
+    def get_realtime_quote(self, stock_code: str) -> Any | None:
+        """Get realtime quote with automatic failover and circuit breaker."""
         stock_code = normalize_stock_code(stock_code)
         market = market_tag(stock_code)
 
         cb = get_realtime_circuit_breaker()
-        fetchers = self._filter_by_market(market)
+        fetchers = self._filter_by_market(market, for_historical=False)
 
         for fetcher in fetchers:
             if not cb.is_available(fetcher.name):
@@ -439,12 +511,20 @@ class DataFetcherManager:
 
         return None
 
+    def get_stock_name(self, stock_code: str) -> str:
+        """Get stock name from any available fetcher."""
+        for fetcher in self._fetchers:
+            try:
+                name = fetcher.get_stock_name(stock_code)
+                if name:
+                    return name
+            except Exception:
+                pass
+        return ""
+
     def get_intraday_data(
-        self,
-        stock_code: str,
-        period: str = "5",
-        adjust: str = ""
-    ) -> Tuple[pd.DataFrame, str]:
+        self, stock_code: str, period: str = "5", adjust: str = ""
+    ) -> tuple[pd.DataFrame, str]:
         """Get intraday minute-level data with automatic failover.
 
         Args:
@@ -460,7 +540,7 @@ class DataFetcherManager:
         """
         stock_code = normalize_stock_code(stock_code)
         market = market_tag(stock_code)
-        fetchers = self._filter_by_market(market)
+        fetchers = self._filter_by_market(market, for_historical=False)
 
         errors = []
         for fetcher in fetchers:
@@ -475,14 +555,16 @@ class DataFetcherManager:
                 logger.warning(f"[Manager] {fetcher.name} intraday failed: {e}")
                 continue
 
-        raise DataFetchError(f"All fetchers failed for {stock_code} intraday:\n" + "\n".join(errors))
+        raise DataFetchError(
+            f"All fetchers failed for {stock_code} intraday:\n" + "\n".join(errors)
+        )
 
     @property
-    def available_fetchers(self) -> List[str]:
+    def available_fetchers(self) -> list[str]:
         """List available fetcher names."""
         return [f.name for f in self._fetchers]
 
     @property
-    def fetchers(self) -> List["BaseFetcher"]:  # type: ignore[misc]
+    def fetchers(self) -> list["BaseFetcher"]:  # type: ignore[misc]
         """List all fetchers. Prefer get_fetcher() for single fetcher lookup."""
         return list(self._fetchers)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Realtime types and utilities for stock data providers.
 """
@@ -6,15 +5,15 @@ Realtime types and utilities for stock data providers.
 import logging
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
+def safe_float(val: Any, default: float | None = None) -> float | None:
     """Safely convert value to float, handling None, NaN, and string cases."""
     if val is None:
         return default
@@ -30,7 +29,7 @@ def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
         return default
 
 
-def safe_int(val: Any, default: Optional[int] = None) -> Optional[int]:
+def safe_int(val: Any, default: int | None = None) -> int | None:
     """Safely convert value to int via float."""
     f_val = safe_float(val, None)
     if f_val is not None:
@@ -64,28 +63,28 @@ class UnifiedRealtimeQuote:
     source: RealtimeSource = RealtimeSource.FALLBACK
 
     # Core price data
-    price: Optional[float] = None
-    change_pct: Optional[float] = None
-    change_amount: Optional[float] = None
+    price: float | None = None
+    change_pct: float | None = None
+    change_amount: float | None = None
 
     # Volume indicators
-    volume: Optional[int] = None
-    amount: Optional[float] = None
-    volume_ratio: Optional[float] = None
-    turnover_rate: Optional[float] = None
-    amplitude: Optional[float] = None
+    volume: int | None = None
+    amount: float | None = None
+    volume_ratio: float | None = None
+    turnover_rate: float | None = None
+    amplitude: float | None = None
 
     # Price range
-    open_price: Optional[float] = None
-    high: Optional[float] = None
-    low: Optional[float] = None
-    pre_close: Optional[float] = None
+    open_price: float | None = None
+    high: float | None = None
+    low: float | None = None
+    pre_close: float | None = None
 
     # Valuation
-    pe_ratio: Optional[float] = None
-    pb_ratio: Optional[float] = None
-    total_mv: Optional[float] = None
-    circ_mv: Optional[float] = None
+    pe_ratio: float | None = None
+    pb_ratio: float | None = None
+    total_mv: float | None = None
+    circ_mv: float | None = None
 
     def has_basic_data(self) -> bool:
         """Check if basic price data is available."""
@@ -200,7 +199,7 @@ class CircuitBreaker:
             state["failures"] = 0
             state["half_open_calls"] = 0
 
-    def record_failure(self, source: str, error: Optional[str] = None) -> None:
+    def record_failure(self, source: str, error: str | None = None) -> None:
         """Record failed call."""
         with self._lock:
             state = self._get_state(source)

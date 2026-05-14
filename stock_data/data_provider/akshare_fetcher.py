@@ -6,20 +6,17 @@ Support for both A-shares and Hong Kong stocks.
 
 import logging
 import os
-from typing import Optional
 
 import pandas as pd
 
 from .base import (
-    STANDARD_COLUMNS,
     BaseFetcher,
     DataFetchError,
     get_index_type,
     is_hk_market,
-    is_index_code,
     normalize_stock_code,
 )
-from .index_symbols import US_INDEX_AKSHARE_MAP
+from .index_symbols import US_INDEX_AKSHARE_MAP, is_index_code
 from .realtime_types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
@@ -30,6 +27,16 @@ class AkshareFetcher(BaseFetcher):
 
     name = "AkshareFetcher"
     priority = int(os.getenv("AKSHARE_PRIORITY", "2"))
+    supported_markets: set[str] = {"csi", "hk"}
+    supports_historical = True
+    supports_realtime = True
+
+    def _map_adjust(self, adjust: str) -> str | None:
+        """Map unified adjust to Akshare adjust value."""
+        if not adjust:
+            return ""  # 不复权
+        mapping = {"qfq": "qfq", "hfq": "hfq"}
+        return mapping.get(adjust, "")
 
     def _convert_to_akshare_code(self, stock_code: str) -> str:
         """
@@ -52,7 +59,8 @@ class AkshareFetcher(BaseFetcher):
         if is_index_code(code):
             index_type = get_index_type(code)
             if index_type == "us":
-                return US_INDEX_AKSHARE_MAP.get(code, code)
+                entry = US_INDEX_AKSHARE_MAP.get(code)
+                return entry[0] if entry is not None else code
             elif index_type == "hk":
                 return code  # HK indices need special EM handling in _fetch_raw_data
             # CSI indices use same 6-digit format as A-share stocks
@@ -67,7 +75,12 @@ class AkshareFetcher(BaseFetcher):
         return code
 
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
+        self,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
+        frequency: str = "d",
+        adjust: str | None = None,
     ) -> pd.DataFrame:
         """Fetch daily K-line data from Akshare (supports d/w/m for stocks and indices).
 
@@ -96,15 +109,8 @@ class AkshareFetcher(BaseFetcher):
             if frequency in ("5", "15", "30", "60"):
                 raise DataFetchError("Akshare does not support minute frequency for indices")
 
-            # Map adjust parameter to akshare adjust value
-            # None or empty string means no adjustment (use '' for不复权)
-            # 'qfq' for forward-adjusted, 'hfq' for backward-adjusted
-            if adjust in ("qfq", "2"):
-                adj_value = "qfq"  # Forward-adjusted
-            elif adjust in ("hfq", "1"):
-                adj_value = "hfq"  # Backward-adjusted
-            else:
-                adj_value = ""  # No adjustment (不复权)
+            # adjust is already mapped by _map_adjust
+            adj_value = adjust or ""
 
             if is_index and index_type == "us":
                 # US indices via index_us_stock_sina (.IXIC, .INX, .DJI, etc.)
@@ -154,37 +160,21 @@ class AkshareFetcher(BaseFetcher):
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """Normalize Akshare data to standard columns."""
-        df = df.copy()
-
-        column_mapping = {
-            "日期": "date",
-            "开盘": "open",
-            "收盘": "close",
-            "最高": "high",
-            "最低": "low",
-            "成交量": "volume",
-            "成交额": "amount",
-            "涨跌幅": "pct_chg",
-            "股票代码": "code",
-        }
-
-        df = df.rename(columns=column_mapping)
-
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"])
-
-        numeric_cols = ["open", "high", "low", "close", "volume", "amount", "pct_chg"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        if "code" not in df.columns:
-            df["code"] = normalize_stock_code(stock_code)
-
-        keep_cols = ["code"] + [c for c in STANDARD_COLUMNS if c in df.columns]
-        df = df[[c for c in keep_cols if c in df.columns]]
-
-        return df
+        return self._normalize_dataframe(
+            df,
+            stock_code,
+            {
+                "日期": "date",
+                "开盘": "open",
+                "收盘": "close",
+                "最高": "high",
+                "最低": "low",
+                "成交量": "volume",
+                "成交额": "amount",
+                "涨跌幅": "pct_chg",
+                "股票代码": "code",
+            },
+        )
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Akshare."""
@@ -244,8 +234,10 @@ class AkshareFetcher(BaseFetcher):
                 pb_ratio=safe_float(row.get("市净率")),
             )
 
-        except Exception as e:
-            logger.warning(f"[AkshareFetcher] Realtime quote failed: {e}")
+        except Exception:
+            logger.warning(
+                f"[AkshareFetcher] Realtime quote failed for {stock_code}", exc_info=True
+            )
             return None
 
     def get_all_stocks(self, market: str = "cn") -> list:
@@ -306,10 +298,7 @@ class AkshareFetcher(BaseFetcher):
             return []
 
     def get_intraday_data(
-        self,
-        stock_code: str,
-        period: str = "5",
-        adjust: str = ""
+        self, stock_code: str, period: str = "5", adjust: str = ""
     ) -> pd.DataFrame | None:
         """Get intraday minute-level data.
 
@@ -327,8 +316,6 @@ class AkshareFetcher(BaseFetcher):
             or None if not supported.
         """
         try:
-            import akshare as ak
-
             # Convert code: 600519 -> 600519 (A-share), normalize for index
             code = normalize_stock_code(stock_code)
             is_index = is_index_code(stock_code)
@@ -357,23 +344,20 @@ class AkshareFetcher(BaseFetcher):
     def _fetch_intraday_em(self, code: str, period: str, adjust: str) -> pd.DataFrame | None:
         """Fetch via stock_zh_a_hist_min_em."""
         try:
-            import akshare as ak
             from datetime import date
+
+            import akshare as ak
 
             today = date.today().strftime("%Y-%m-%d")
             start = f"{today} 09:30:00"
             end = f"{today} 15:00:00"
 
             df = ak.stock_zh_a_hist_min_em(
-                symbol=code,
-                start_date=start,
-                end_date=end,
-                period=period,
-                adjust=adjust
+                symbol=code, start_date=start, end_date=end, period=period, adjust=adjust
             )
             if df is None or df.empty:
                 return None
-            return self._normalize_intraday_em(df)
+            return self._normalize_intraday(df, time_col="时间")
         except Exception as e:
             logger.debug(f"[AkshareFetcher] EM intraday failed: {e}")
             return None
@@ -388,16 +372,16 @@ class AkshareFetcher(BaseFetcher):
             df = ak.stock_zh_a_minute(symbol=symbol, period=period, adjust=adjust)
             if df is None or df.empty:
                 return None
-            return self._normalize_intraday_sina(df)
+            return self._normalize_intraday(df, time_col="day")
         except Exception as e:
             logger.debug(f"[AkshareFetcher] Sina intraday failed: {e}")
             return None
 
-    def _normalize_intraday_em(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Normalize stock_zh_a_hist_min_em output."""
+    def _normalize_intraday(self, df: pd.DataFrame, time_col: str = "时间") -> pd.DataFrame:
+        """Normalize intraday data from EM or Sina source."""
         df = df.copy()
         column_mapping = {
-            "时间": "time",
+            time_col: "time",
             "开盘": "open",
             "收盘": "close",
             "最高": "high",
@@ -405,29 +389,7 @@ class AkshareFetcher(BaseFetcher):
             "成交量": "volume",
             "成交额": "amount",
         }
-        df = df.rename(columns=column_mapping)
-        if "time" in df.columns:
-            df["time"] = df["time"].astype(str).str[-8:]  # Extract HH:MM:SS
-        numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
-        df = df[[c for c in keep_cols if c in df.columns]]
-        return df
-
-    def _normalize_intraday_sina(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Normalize stock_zh_a_minute output."""
-        df = df.copy()
-        df = df.rename(columns={
-            "day": "time",
-            "open": "open",
-            "high": "high",
-            "low": "low",
-            "close": "close",
-            "volume": "volume",
-            "amount": "amount",
-        })
+        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
         if "time" in df.columns:
             df["time"] = df["time"].astype(str).str[-8:]  # Extract HH:MM:SS
         numeric_cols = ["open", "high", "low", "close", "volume", "amount"]

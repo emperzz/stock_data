@@ -1,16 +1,13 @@
-# -*- coding: utf-8 -*-
 """
 Tests for realtime types and utilities.
 """
 
-import pytest
-
 from stock_data.data_provider.realtime_types import (
-    safe_float,
-    safe_int,
-    UnifiedRealtimeQuote,
     CircuitBreaker,
     RealtimeSource,
+    UnifiedRealtimeQuote,
+    safe_float,
+    safe_int,
 )
 
 

@@ -1,28 +1,23 @@
-# -*- coding: utf-8 -*-
 """
 Tests for base classes and utilities.
 """
 
-import pytest
-
 from stock_data.data_provider.base import (
-    normalize_stock_code,
-    canonical_stock_code,
-    is_us_market,
-    is_hk_market,
-    is_etf_code,
-    is_bse_code,
-    market_tag,
-    index_market_tag,
     STANDARD_COLUMNS,
+    index_market_tag,
+    is_etf_code,
+    is_hk_market,
+    is_us_market,
+    market_tag,
+    normalize_stock_code,
 )
 from stock_data.data_provider.index_symbols import (
-    is_index_code,
-    get_index_type,
-    normalize_index_symbol,
     CSI_INDEX_MAP,
-    US_INDEX_MAP,
     HK_INDEX_MAP,
+    US_INDEX_MAP,
+    get_index_type,
+    is_index_code,
+    normalize_index_symbol,
 )
 
 
@@ -87,9 +82,9 @@ class TestMarketTag:
     def test_hk(self):
         assert market_tag("HK00700") == "hk"
 
-    def test_cn_default(self):
-        assert market_tag("600519") == "cn"
-        assert market_tag("000001") == "cn"
+    def test_csi_default(self):
+        assert market_tag("600519") == "csi"
+        assert market_tag("000001") == "csi"
 
 
 class TestStandardColumns:
@@ -121,7 +116,7 @@ class TestIndexSymbols:
 
     def test_is_not_index_code_stock(self):
         assert not is_index_code("600519")  # A-share stock
-        assert not is_index_code("AAPL")    # US stock
+        assert not is_index_code("AAPL")  # US stock
         assert not is_index_code("HK00700")  # HK stock
 
     def test_get_index_type_us(self):
@@ -146,18 +141,18 @@ class TestIndexSymbols:
 
     def test_csi_index_map(self):
         """Test CSI index mappings are correct."""
-        assert CSI_INDEX_MAP.get("000300") == "sh.000300"
-        assert CSI_INDEX_MAP.get("000001") == "sh.000001"
-        assert CSI_INDEX_MAP.get("399001") == "sz.399001"
+        assert CSI_INDEX_MAP.get("000300") == ("sh.000300", "沪深300")
+        assert CSI_INDEX_MAP.get("000001") == ("sh.000001", "上证指数")
+        assert CSI_INDEX_MAP.get("399001") == ("sz.399001", "深证成指")
 
     def test_us_index_map(self):
         """Test US index mappings are correct."""
-        assert US_INDEX_MAP.get("SPX") == "^GSPC"
-        assert US_INDEX_MAP.get("DJI") == "^DJI"
+        assert US_INDEX_MAP.get("SPX") == ("^GSPC", "S&P 500")
+        assert US_INDEX_MAP.get("DJI") == ("^DJI", "Dow Jones Industrial Average")
 
     def test_hk_index_map(self):
         """Test HK index mappings are correct."""
-        assert HK_INDEX_MAP.get("HSI") == "^HSI"
+        assert HK_INDEX_MAP.get("HSI") == ("^HSI", "恒生指数")
 
 
 class TestIndexMarketTag:

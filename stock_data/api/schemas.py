@@ -2,14 +2,13 @@
 Pydantic schemas for API request/response models.
 """
 
-
 from pydantic import BaseModel, Field
 
 
 class StockQuote(BaseModel):
     """Stock realtime quote response."""
 
-    stock_code: str = Field(description="Stock code")
+    code: str = Field(description="Stock code")
     stock_name: str = Field(default="", description="Stock name")
     source: str = Field(default="", description="Data source")
     current_price: float = Field(default=0.0, description="Current price")
@@ -43,7 +42,7 @@ class KLineData(BaseModel):
 class StockHistoryResponse(BaseModel):
     """Stock historical K-line response."""
 
-    stock_code: str = Field(description="Stock code")
+    code: str = Field(description="Stock code")
     stock_name: str = Field(default="", description="Stock name")
     period: str = Field(default="daily", description="K-line period")
     data: list[KLineData] = Field(default_factory=list, description="K-line data points")
@@ -103,7 +102,7 @@ class IntradayData(BaseModel):
 class IntradayResponse(BaseModel):
     """Intraday minute-level data response."""
 
-    stock_code: str = Field(description="Stock code")
+    code: str = Field(description="Stock code")
     stock_name: str = Field(default="", description="Stock name")
     period: str = Field(description="Minute period (1m/5m/15m/30m/60m)")
     adjust: str = Field(default="", description="Adjustment type")

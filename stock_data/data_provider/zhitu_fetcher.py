@@ -22,10 +22,13 @@ ZHITU_API_BASE = "https://api.zhituapi.com"
 
 
 class ZhituFetcher(BaseFetcher):
-    """Zhitu API fetcher for A-share realtime quotes."""
+    """Zhitu API fetcher for A-share realtime quotes (no historical data)."""
 
     name = "ZhituFetcher"
-    priority = int(os.getenv("ZHITU_PRIORITY", "4"))  # After YfinanceFetcher
+    priority = int(os.getenv("ZHITU_PRIORITY", "4"))
+    supported_markets: set[str] = {"csi"}
+    supports_historical = False
+    supports_realtime = True
 
     def __init__(self):
         self._token = os.getenv("ZHITU_TOKEN", "").strip()
@@ -47,10 +50,17 @@ class ZhituFetcher(BaseFetcher):
         return code
 
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: str | None = None
+        self,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
+        frequency: str = "d",
+        adjust: str | None = None,
     ) -> pd.DataFrame:
         """Zhitu does not support historical data, only realtime quotes."""
-        raise DataFetchError("ZhituFetcher does not support historical K-line data, only realtime quotes")
+        raise DataFetchError(
+            "ZhituFetcher does not support historical K-line data, only realtime quotes"
+        )
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """Zhitu does not support historical data normalization."""
@@ -90,7 +100,9 @@ class ZhituFetcher(BaseFetcher):
 
             # Zhitu returns a dict directly (not a list)
             if not isinstance(data, dict):
-                logger.warning(f"[ZhituFetcher] Unexpected response type for {stock_code}: {type(data)}")
+                logger.warning(
+                    f"[ZhituFetcher] Unexpected response type for {stock_code}: {type(data)}"
+                )
                 return None
 
             if not data:
@@ -124,11 +136,11 @@ class ZhituFetcher(BaseFetcher):
         except requests.exceptions.Timeout:
             logger.warning(f"[ZhituFetcher] Timeout for {stock_code}")
             return None
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"[ZhituFetcher] Request failed: {e}")
+        except requests.exceptions.RequestException:
+            logger.warning(f"[ZhituFetcher] Request failed for {stock_code}", exc_info=True)
             return None
-        except Exception as e:
-            logger.warning(f"[ZhituFetcher] Error: {e}")
+        except Exception:
+            logger.warning(f"[ZhituFetcher] Error for {stock_code}", exc_info=True)
             return None
 
     def _market_suffix(self, stock_code: str) -> str:
@@ -144,10 +156,7 @@ class ZhituFetcher(BaseFetcher):
         return ".SZ"
 
     def get_intraday_data(
-        self,
-        stock_code: str,
-        period: str = "5",
-        adjust: str = ""
+        self, stock_code: str, period: str = "5", adjust: str = ""
     ) -> pd.DataFrame | None:
         """Get intraday minute-level data from Zhitu history API.
 
@@ -180,7 +189,8 @@ class ZhituFetcher(BaseFetcher):
             adj_value = adj_map.get(adjust, "n")
 
             # Get latest trade date
-            from ..stock_cache import get_latest_cached_trade_date
+            from .stock_cache import get_latest_cached_trade_date
+
             latest_date = get_latest_cached_trade_date()
             if not latest_date:
                 latest_date = date.today().strftime("%Y%m%d")
@@ -217,25 +227,27 @@ class ZhituFetcher(BaseFetcher):
         except requests.exceptions.Timeout:
             logger.warning(f"[ZhituFetcher] Timeout for {stock_code}")
             return None
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"[ZhituFetcher] Request failed: {e}")
+        except requests.exceptions.RequestException:
+            logger.warning(f"[ZhituFetcher] Request failed for {stock_code}", exc_info=True)
             return None
-        except Exception as e:
-            logger.warning(f"[ZhituFetcher] Error: {e}")
+        except Exception:
+            logger.warning(f"[ZhituFetcher] Error for {stock_code}", exc_info=True)
             return None
 
     def _normalize_intraday_zhitu(self, df: pd.DataFrame) -> pd.DataFrame:
         """Normalize Zhitu history API output."""
         df = df.copy()
-        df = df.rename(columns={
-            "t": "time",
-            "o": "open",
-            "h": "high",
-            "l": "low",
-            "c": "close",
-            "v": "volume",
-            "a": "amount",
-        })
+        df = df.rename(
+            columns={
+                "t": "time",
+                "o": "open",
+                "h": "high",
+                "l": "low",
+                "c": "close",
+                "v": "volume",
+                "a": "amount",
+            }
+        )
         if "time" in df.columns:
             # Zhitu returns ISO format with T, extract HH:MM:SS
             df["time"] = df["time"].astype(str).str[-8:]

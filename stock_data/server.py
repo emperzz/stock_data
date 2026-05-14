@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Stock Data Server - FastAPI entry point.
 
@@ -17,11 +16,11 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import __version__
+from .api.routes import router
+
 # Load environment variables
 load_dotenv()
-
-from .api.routes import router
-from . import __version__
 
 # Configure logging
 logging.basicConfig(
@@ -50,11 +49,16 @@ app = FastAPI(
     openapi_url=None,
 )
 
-# Configure CORS
+# Configure CORS - restrict to localhost only
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[
+        "http://localhost",
+        "http://localhost:*",
+        "http://127.0.0.1",
+        "http://127.0.0.1:*",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

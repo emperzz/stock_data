@@ -3,15 +3,14 @@ API routes for stock data server.
 """
 
 import logging
-import subprocess
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Path, Query
 
-from ..data_provider.base import is_hk_market, is_us_market, normalize_stock_code
 from ..data_provider import DataFetcherManager, stock_cache
 from ..data_provider.akshare_fetcher import AkshareFetcher
 from ..data_provider.baostock_fetcher import BaostockFetcher
+from ..data_provider.base import is_hk_market, is_us_market, normalize_stock_code
 from ..data_provider.index_symbols import get_all_indices
 from ..data_provider.tushare_fetcher import TushareFetcher
 from ..data_provider.yfinance_fetcher import YfinanceFetcher
@@ -26,9 +25,9 @@ from .cache import (
 from .schemas import (
     ErrorResponse,
     HealthResponse,
+    IndexInfo,
     IntradayData,
     IntradayResponse,
-    IndexInfo,
     KLineData,
     StockHistoryResponse,
     StockInfo,
@@ -85,6 +84,13 @@ def get_manager() -> DataFetcherManager:
     return _manager
 
 
+def reset_manager() -> None:
+    """Reset the global manager, forcing re-initialization on next get_manager()."""
+    global _manager
+    _manager = None
+    logger.info("Manager reset")
+
+
 @router.get(
     "/health",
     response_model=HealthResponse,
@@ -105,7 +111,7 @@ def health_check() -> HealthResponse:
     },
     tags=["stocks"],
 )
-def get_quote(stock_code: str) -> StockQuote:
+def get_quote(stock_code: str = Path(max_length=20, description="Stock code")) -> StockQuote:
     """
     Get realtime quote for a stock.
 
@@ -131,8 +137,8 @@ def get_quote(stock_code: str) -> StockQuote:
             )
 
         result = StockQuote(
-            stock_code=quote.code,
-            stock_name=quote.name,
+            code=quote.code,
+            stock_name=quote.name or manager.get_stock_name(stock_code),
             source=quote.source.value,
             current_price=quote.price or 0.0,
             change=quote.change_amount,
@@ -155,7 +161,9 @@ def get_quote(stock_code: str) -> StockQuote:
         raise
     except Exception as e:
         logger.error(f"Quote error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -167,13 +175,17 @@ def get_quote(stock_code: str) -> StockQuote:
     tags=["stocks"],
 )
 def get_history(
-    stock_code: str,
+    stock_code: str = Path(max_length=20, description="Stock code"),
     period: str = Query(
         default="daily", pattern="^(daily|weekly|monthly)$", description="K-line period"
     ),
     days: int = Query(default=30, ge=1, le=365, description="Number of days"),
-    start_date: str | None = Query(default=None, description="Start date (YYYY-MM-DD), overrides days"),
-    end_date: str | None = Query(default=None, description="End date (YYYY-MM-DD), defaults to today"),
+    start_date: str | None = Query(
+        default=None, description="Start date (YYYY-MM-DD), overrides days"
+    ),
+    end_date: str | None = Query(
+        default=None, description="End date (YYYY-MM-DD), defaults to today"
+    ),
     adjust: str = Query(
         default="",
         pattern="^(qfq|hfq)?$",
@@ -195,20 +207,22 @@ def get_history(
         period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
         frequency = period_map.get(period, "d")
 
-        # Parse adjust parameter: empty string means no adjustment (None)
-        adj_value = adjust if adjust in ("qfq", "hfq") else None
+        # adjust is passed as-is to manager, which maps it per-provider
+        adj_value = adjust or None
 
         # Cache key includes all params including adjust
         if is_cache_enabled():
             cache = get_history_cache(frequency)
-            key = make_history_cache_key(stock_code, frequency, days, start_date, end_date, adj_value)
+            key = make_history_cache_key(
+                stock_code, frequency, days, start_date, end_date, adj_value
+            )
             if key in cache:
                 logger.info(f"[APICache] history hit: {key}")
                 return cache[key]
 
         manager = get_manager()
 
-        df, source = manager.get_daily_data(
+        df, source = manager.get_kline_data(
             stock_code,
             start_date=start_date,
             end_date=end_date,
@@ -217,17 +231,7 @@ def get_history(
             adjust=adj_value,
         )
 
-        # Get stock name if available
-        stock_name = ""
-        for fetcher in manager.fetchers:
-            if hasattr(fetcher, "get_stock_name"):
-                try:
-                    name = fetcher.get_stock_name(stock_code)
-                    if name:
-                        stock_name = name
-                        break
-                except Exception:
-                    pass
+        stock_name = manager.get_stock_name(stock_code)
 
         # Convert to response model
         def format_date(val):
@@ -247,7 +251,9 @@ def get_history(
                 close=float(row.get("close", 0)),
                 volume=int(row.get("volume", 0)),
                 amount=float(row.get("amount")) if row.get("amount") is not None else None,
-                change_percent=float(row.get("pct_chg")) if row.get("pct_chg") is not None else None,
+                change_percent=float(row.get("pct_chg"))
+                if row.get("pct_chg") is not None
+                else None,
                 ma5=float(row.get("ma5")) if row.get("ma5") is not None else None,
                 ma10=float(row.get("ma10")) if row.get("ma10") is not None else None,
                 ma20=float(row.get("ma20")) if row.get("ma20") is not None else None,
@@ -256,7 +262,7 @@ def get_history(
         ]
 
         result = StockHistoryResponse(
-            stock_code=stock_code, stock_name=stock_name, period=period, data=data
+            code=stock_code, stock_name=stock_name, period=period, data=data
         )
 
         # Cache the result
@@ -267,7 +273,9 @@ def get_history(
 
     except Exception as e:
         logger.error(f"History error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -280,7 +288,7 @@ def get_history(
     tags=["stocks"],
 )
 def get_intraday(
-    stock_code: str,
+    stock_code: str = Path(max_length=20, description="Stock code"),
     period: str = Query(
         default="5",
         pattern="^(1|5|15|30|60)$",
@@ -310,23 +318,15 @@ def get_intraday(
         if is_us_market(code) or is_hk_market(code):
             raise HTTPException(
                 status_code=400,
-                detail={"error": "unsupported_market", "message": "Intraday data is only available for A-share stocks"},
+                detail={
+                    "error": "unsupported_market",
+                    "message": "Intraday data is only available for A-share stocks",
+                },
             )
 
         manager = get_manager()
         df, source = manager.get_intraday_data(stock_code, period=period, adjust=adjust)
-
-        # Get stock name
-        stock_name = ""
-        for fetcher in manager.fetchers:
-            if hasattr(fetcher, "get_stock_name"):
-                try:
-                    name = fetcher.get_stock_name(stock_code)
-                    if name:
-                        stock_name = name
-                        break
-                except Exception:
-                    pass
+        stock_name = manager.get_stock_name(stock_code)
 
         # Determine trade date from data
         trade_date = ""
@@ -351,7 +351,7 @@ def get_intraday(
 
         period_label = f"{period}m"
         return IntradayResponse(
-            stock_code=stock_code,
+            code=stock_code,
             stock_name=stock_name,
             period=period_label,
             adjust=adjust,
@@ -363,7 +363,9 @@ def get_intraday(
         raise
     except Exception as e:
         logger.error(f"Intraday error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -390,25 +392,35 @@ def list_indices() -> list[IndexInfo]:
     tags=["stocks"],
 )
 def list_stocks(
-    market: str = Query(..., pattern="^(cn|hk|us)$", description="Market: cn/hk/us"),
+    market: str = Query(..., pattern="^(csi|cn|hk|us)$", description="Market: csi/cn/hk/us"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    limit: int = Query(100, ge=1, le=1000, description="Pagination limit"),
 ) -> list[StockInfo]:
     """
     List all available stocks for a specified market.
 
     Args:
-        market: Market type - cn (A股), hk (港股), us (美股)
+        market: Market type - csi (A股), hk (港股), us (美股)
         refresh: If True, fetch latest from upstream and update cache.
+        offset: Pagination offset (default 0).
+        limit: Pagination limit (default 100, max 1000).
 
     Returns:
         List of stock codes and names for the specified market.
     """
+    if market == "cn":
+        market = "csi"  # Backward compat
+
     # Try cache first unless refresh is requested
     if not refresh:
         cached = stock_cache.get_cached_stocks(market)
         if cached:
-            logger.info(f"[list_stocks] Using cached data for market={market} ({len(cached)} stocks)")
-            return [StockInfo(code=s["code"], name=s["name"], market=market) for s in cached]
+            logger.info(
+                f"[list_stocks] Using cached data for market={market} ({len(cached)} stocks)"
+            )
+            page = cached[offset : offset + limit]
+            return [StockInfo(code=s["code"], name=s["name"], market=market) for s in page]
 
     # Fetch from upstream
     logger.info(f"[list_stocks] Fetching fresh data for market={market}, refresh={refresh}")
@@ -416,22 +428,22 @@ def list_stocks(
 
     result = []
     for fetcher in manager.fetchers:
-        if hasattr(fetcher, "get_all_stocks"):
-            try:
-                stocks = fetcher.get_all_stocks(market)
-                if stocks:
-                    result = stocks
-                    break
-            except Exception as e:
-                logger.warning(f"[list_stocks] {fetcher.name} failed: {e}")
-                continue
+        try:
+            stocks = fetcher.get_all_stocks(market)
+            if stocks:
+                result = stocks
+                break
+        except Exception as e:
+            logger.warning(f"[list_stocks] {fetcher.name} failed: {e}")
+            continue
 
     # Update cache if we got data
     if result:
         stock_cache.update_cached_stocks(market, result)
         logger.info(f"[list_stocks] Cached {len(result)} stocks for market={market}")
 
-    return [StockInfo(code=s["code"], name=s["name"], market=market) for s in result]
+    page = result[offset : offset + limit]
+    return [StockInfo(code=s["code"], name=s["name"], market=market) for s in page]
 
 
 @router.get(
@@ -489,51 +501,17 @@ def get_trade_calendar(
                     update_cached_calendar(dates)
                     logger.info(f"[calendar] Updated {len(dates)} dates from akshare")
             except Exception as e:
-                logger.warning(f"[calendar] akshare failed, trying curl: {e}")
-                # Fallback to curl
-                result = subprocess.run(
-                    [
-                        "curl",
-                        "-s",
-                        "https://api.akshare.akfamily.xyz/tool/trade_date_hist_sina",
-                        "-H",
-                        "Accept: application/json",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if result.returncode == 0 and result.stdout:
-                    import json
-
-                    data = json.loads(result.stdout)
-                    dates = data.get("data", []) if isinstance(data, dict) else []
-                    dates.sort()
-                    if dates:
-                        update_cached_calendar(dates)
-                        logger.info(f"[calendar] Updated {len(dates)} dates from curl")
-                    else:
-                        # Use cached data if available
-                        cached_dates = get_cached_calendar()
-                        if not cached_dates:
-                            raise HTTPException(
-                                status_code=500,
-                                detail={
-                                    "error": "fetch_failed",
-                                    "message": f"Failed to fetch calendar: {e}",
-                                },
-                            )
-                else:
-                    # Use cached data if available
-                    cached_dates = get_cached_calendar()
-                    if not cached_dates:
-                        raise HTTPException(
-                            status_code=500,
-                            detail={
-                                "error": "fetch_failed",
-                                "message": f"Failed to fetch calendar: {result.stderr or e}",
-                            },
-                        )
+                logger.warning(f"[calendar] akshare failed: {e}")
+                # Use cached data as fallback
+                cached_dates = get_cached_calendar()
+                if not cached_dates:
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "error": "fetch_failed",
+                            "message": "Failed to fetch calendar and no cached data available",
+                        },
+                    ) from e
         except HTTPException:
             raise
         except Exception as e:
@@ -544,7 +522,7 @@ def get_trade_calendar(
                 raise HTTPException(
                     status_code=500,
                     detail={"error": "internal_error", "message": str(e)},
-                )
+                ) from e
 
     # Get dates from cache
     dates = get_cached_calendar()

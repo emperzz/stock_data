@@ -6,19 +6,16 @@ Free data source, no API token required.
 
 import logging
 import os
-from typing import Optional
 
 import pandas as pd
 
 from .base import (
-    STANDARD_COLUMNS,
     BaseFetcher,
     DataFetchError,
     get_index_type,
-    is_index_code,
     normalize_stock_code,
 )
-from .index_symbols import CSI_INDEX_MAP
+from .index_symbols import CSI_INDEX_MAP, is_index_code
 from .realtime_types import UnifiedRealtimeQuote
 
 logger = logging.getLogger(__name__)
@@ -29,6 +26,16 @@ class BaostockFetcher(BaseFetcher):
 
     name = "BaostockFetcher"
     priority = int(os.getenv("BAOSTOCK_PRIORITY", "1"))
+    supported_markets: set[str] = {"csi"}
+    supports_historical = True
+    supports_realtime = False
+
+    def _map_adjust(self, adjust: str) -> str | None:
+        """Map unified adjust to Baostock adjustflag."""
+        if not adjust:
+            return "3"  # 不复权
+        mapping = {"qfq": "2", "hfq": "1"}
+        return mapping.get(adjust, "3")
 
     def __init__(self):
         self._initialized = False
@@ -77,9 +84,9 @@ class BaostockFetcher(BaseFetcher):
             index_type = get_index_type(code)
             if index_type == "csi":
                 # CSI indices use same sh./sz. format as stocks
-                if code in CSI_INDEX_MAP:
-                    bs_symbol = CSI_INDEX_MAP[code]
-                    return bs_symbol, code
+                entry = CSI_INDEX_MAP.get(code)
+                if entry is not None:
+                    return entry[0], code
                 # Fallback: CSI indices starting with 00 are Shanghai, 39 are Shenzhen
                 if code.startswith("00"):
                     return f"sh.{code}", code
@@ -95,7 +102,12 @@ class BaostockFetcher(BaseFetcher):
             return f"sz.{code}", code
 
     def _fetch_raw_data(
-        self, stock_code: str, start_date: str, end_date: str, frequency: str = "d", adjust: Optional[str] = None
+        self,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
+        frequency: str = "d",
+        adjust: str | None = None,
     ) -> pd.DataFrame:
         """Fetch K-line data from Baostock (supports d/w/m/5/15/30/60 for stocks, d/w/m for indices).
 
@@ -122,16 +134,8 @@ class BaostockFetcher(BaseFetcher):
 
             bs_code, _ = self._convert_code(stock_code)
 
-            # Map adjust parameter to baostock adjustflag
-            # None/3 -> 3 (不复权), '2' or 'qfq' -> 2 (前复权), '1' or 'hfq' -> 1 (后复权)
-            if adjust is None:
-                adjflag = "2"  # Default to forward-adjusted
-            elif adjust in ("2", "qfq"):
-                adjflag = "2"  # Forward-adjusted
-            elif adjust in ("1", "hfq"):
-                adjflag = "1"  # Backward-adjusted
-            else:
-                adjflag = "3"  # No adjustment
+            # adjust is already mapped by _map_adjust
+            adjflag = adjust or "3"
 
             logger.debug(
                 f"[BaostockFetcher] Calling query_history_k_data_plus for {bs_code} ({frequency}, adjustflag={adjflag})"
@@ -167,30 +171,7 @@ class BaostockFetcher(BaseFetcher):
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """Normalize Baostock data to standard columns."""
-        df = df.copy()
-
-        # Baostock uses pctChg, we want pct_chg
-        if "pctChg" in df.columns:
-            df = df.rename(columns={"pctChg": "pct_chg"})
-
-        # Convert numeric columns
-        numeric_cols = ["open", "high", "low", "close", "volume", "amount", "pct_chg"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        # Convert date
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"])
-
-        # Add code
-        if "code" not in df.columns:
-            df["code"] = normalize_stock_code(stock_code)
-
-        keep_cols = ["code"] + [c for c in STANDARD_COLUMNS if c in df.columns]
-        df = df[[c for c in keep_cols if c in df.columns]]
-
-        return df
+        return self._normalize_dataframe(df, stock_code, {"pctChg": "pct_chg"})
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Baostock.
