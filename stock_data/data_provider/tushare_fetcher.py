@@ -209,6 +209,13 @@ class TushareFetcher(BaseFetcher):
 
             row = df.iloc[0]
 
+            # Check if data is valid (not all nulls/empty)
+            # Tushare returns null fields when token lacks permission
+            price = safe_float(row.get("price"))
+            if price is None:
+                logger.warning(f"[TushareFetcher] Realtime quote returned null data for {code}")
+                return None
+
             return UnifiedRealtimeQuote(
                 code=code,
                 name=str(row.get("name", "")),

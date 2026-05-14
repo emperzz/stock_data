@@ -8,6 +8,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ..data_provider.base import is_hk_market, is_us_market, normalize_stock_code
 from ..data_provider import DataFetcherManager, stock_cache
 from ..data_provider.akshare_fetcher import AkshareFetcher
 from ..data_provider.baostock_fetcher import BaostockFetcher
@@ -305,7 +306,6 @@ def get_intraday(
     """
     try:
         # Only A-share supported for intraday
-        from ..data_provider.base import is_us_market, is_hk_market
         code = normalize_stock_code(stock_code)
         if is_us_market(code) or is_hk_market(code):
             raise HTTPException(
