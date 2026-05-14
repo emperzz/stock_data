@@ -512,7 +512,7 @@ class DataFetcherManager:
         return None
 
     def get_stock_name(self, stock_code: str) -> str:
-        """Get stock name from any available fetcher."""
+        """Get stock name from any available fetcher, falling back to stock list cache."""
         for fetcher in self._fetchers:
             try:
                 name = fetcher.get_stock_name(stock_code)
@@ -520,6 +520,17 @@ class DataFetcherManager:
                     return name
             except Exception:
                 pass
+
+        # Fallback: look up from stock list cache
+        from .stock_list_cache import get_cached_stocks
+
+        market = market_tag(stock_code)
+        stocks = get_cached_stocks(market)
+        normalized = normalize_stock_code(stock_code)
+        for s in stocks:
+            if s["code"] == normalized:
+                return s["name"]
+
         return ""
 
     def get_intraday_data(

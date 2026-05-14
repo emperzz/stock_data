@@ -196,7 +196,7 @@ class AkshareFetcher(BaseFetcher):
                 # CSI/HK indices - use index_zh_a_spot_em for CSI, skip HK (EM symbols unpredictable)
                 index_type = get_index_type(stock_code)
                 if index_type == "csi":
-                    df = ak.index_zh_a_spot_em(symbol=code)
+                    df = ak.stock_zh_index_spot_em(symbol=code)
                     row = df[df["代码"] == code]
                     if row.empty:
                         return None
