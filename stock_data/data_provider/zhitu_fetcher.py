@@ -12,7 +12,7 @@ from datetime import date
 import pandas as pd
 import requests
 
-from .base import BaseFetcher, DataFetchError, normalize_stock_code
+from .base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from .realtime_types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,7 @@ class ZhituFetcher(BaseFetcher):
     name = "ZhituFetcher"
     priority = int(os.getenv("ZHITU_PRIORITY", "4"))
     supported_markets: set[str] = {"csi"}
-    supports_historical = False
-    supports_realtime = True
+    supported_data_types = DataCapability.REALTIME_QUOTE
 
     def __init__(self):
         self._token = os.getenv("ZHITU_TOKEN", "").strip()

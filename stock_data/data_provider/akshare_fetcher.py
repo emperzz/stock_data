@@ -11,6 +11,7 @@ import pandas as pd
 
 from .base import (
     BaseFetcher,
+    DataCapability,
     DataFetchError,
     get_index_type,
     is_hk_market,
@@ -28,8 +29,13 @@ class AkshareFetcher(BaseFetcher):
     name = "AkshareFetcher"
     priority = int(os.getenv("AKSHARE_PRIORITY", "2"))
     supported_markets: set[str] = {"csi", "hk"}
-    supports_historical = True
-    supports_realtime = True
+    supported_data_types = (
+        DataCapability.HISTORICAL_DWM
+        | DataCapability.REALTIME_QUOTE
+        | DataCapability.STOCK_LIST
+        | DataCapability.STOCK_NAME
+        | DataCapability.TRADE_CALENDAR
+    )
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Akshare adjust value."""
@@ -325,6 +331,19 @@ class AkshareFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[AkshareFetcher] get_all_stocks failed: {e}")
             return []
+
+    def get_trade_calendar(self) -> list[str] | None:
+        """Get A-share trade calendar from Akshare."""
+        try:
+            import akshare as ak
+
+            df = ak.tool_trade_date_hist_sina()
+            dates = df["trade_date"].astype(str).tolist()
+            if dates:
+                return sorted(dates)
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_trade_calendar failed: {e}")
+        return None
 
     def get_intraday_data(
         self, stock_code: str, period: str = "5", adjust: str = ""

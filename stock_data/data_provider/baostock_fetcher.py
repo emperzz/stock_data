@@ -11,6 +11,7 @@ import pandas as pd
 
 from .base import (
     BaseFetcher,
+    DataCapability,
     DataFetchError,
     get_index_type,
     normalize_stock_code,
@@ -27,8 +28,7 @@ class BaostockFetcher(BaseFetcher):
     name = "BaostockFetcher"
     priority = int(os.getenv("BAOSTOCK_PRIORITY", "1"))
     supported_markets: set[str] = {"csi"}
-    supports_historical = True
-    supports_realtime = False
+    supported_data_types = DataCapability.HISTORICAL_DWM | DataCapability.HISTORICAL_MIN | DataCapability.TRADE_CALENDAR
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Baostock adjustflag."""
@@ -277,3 +277,20 @@ class BaostockFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[BaostockFetcher] get_all_stocks failed: {e}")
             return []
+
+    def get_trade_calendar(self) -> list[str] | None:
+        """Get A-share trade calendar from Baostock."""
+        import baostock as bs
+
+        try:
+            rs = bs.query_trade_dates()
+            dates = []
+            while rs.error_code == "0" and rs.next():
+                row = rs.get_row_data()
+                if row[1] == "1":  # is_trading_day == "1"
+                    dates.append(row[0])
+            if dates:
+                return sorted(dates)
+        except Exception as e:
+            logger.warning(f"[BaostockFetcher] get_trade_calendar failed: {e}")
+        return None

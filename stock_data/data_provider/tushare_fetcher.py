@@ -10,7 +10,7 @@ import os
 
 import pandas as pd
 
-from .base import BaseFetcher, DataFetchError, normalize_stock_code
+from .base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from .index_symbols import CSI_INDEX_MAP, get_index_type, is_index_code
 from .realtime_types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 
@@ -23,8 +23,7 @@ class TushareFetcher(BaseFetcher):
     name = "TushareFetcher"
     priority = int(os.getenv("TUSHARE_PRIORITY", "0"))
     supported_markets: set[str] = {"csi"}
-    supports_historical = True
-    supports_realtime = True
+    supported_data_types = DataCapability.HISTORICAL_DWM | DataCapability.REALTIME_QUOTE | DataCapability.STOCK_LIST | DataCapability.STOCK_NAME
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Tushare value."""

@@ -22,6 +22,7 @@ from tenacity import (
 
 from .base import (
     BaseFetcher,
+    DataCapability,
     DataFetchError,
     get_index_type,
     is_us_market,
@@ -39,8 +40,11 @@ class YfinanceFetcher(BaseFetcher):
     name = "YfinanceFetcher"
     priority = int(os.getenv("YFINANCE_PRIORITY", "3"))
     supported_markets: set[str] = {"csi", "hk", "us"}
-    supports_historical = True
-    supports_realtime = True
+    supported_data_types = (
+        DataCapability.HISTORICAL_DWM
+        | DataCapability.HISTORICAL_MIN
+        | DataCapability.REALTIME_QUOTE
+    )
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to yfinance auto_adjust flag."""
