@@ -426,8 +426,11 @@ def list_stocks(
     logger.info(f"[list_stocks] Fetching fresh data for market={market}, refresh={refresh}")
     manager = get_manager()
 
+    from ..data_provider.base import DataCapability
+
     result = []
-    for fetcher in manager.fetchers:
+    fetchers = manager._filter_by_capability(market, DataCapability.STOCK_LIST)
+    for fetcher in fetchers:
         try:
             stocks = fetcher.get_all_stocks(market)
             if stocks:
@@ -490,39 +493,19 @@ def get_trade_calendar(
     if should_refresh:
         logger.info(f"[calendar] Fetching fresh data from upstream, refresh={refresh}")
         try:
-            # Try akshare first
-            try:
-                import akshare as ak
-
-                df = ak.tool_trade_date_hist_sina()
-                dates = df["trade_date"].astype(str).tolist()
-                dates.sort()
-                if dates:
-                    update_cached_calendar(dates)
-                    logger.info(f"[calendar] Updated {len(dates)} dates from akshare")
-            except Exception as e:
-                logger.warning(f"[calendar] akshare failed: {e}")
-                # Use cached data as fallback
-                cached_dates = get_cached_calendar()
-                if not cached_dates:
-                    raise HTTPException(
-                        status_code=500,
-                        detail={
-                            "error": "fetch_failed",
-                            "message": "Failed to fetch calendar and no cached data available",
-                        },
-                    ) from e
-        except HTTPException:
-            raise
+            manager = get_manager()
+            dates = manager.get_trade_calendar()
+            if dates:
+                logger.info(f"[calendar] Updated {len(dates)} dates from manager")
         except Exception as e:
-            logger.error(f"[calendar] Error: {e}", exc_info=True)
-            # Use cached data as fallback
+            logger.error(f"[calendar] Manager calendar failed: {e}")
             cached_dates = get_cached_calendar()
             if not cached_dates:
                 raise HTTPException(
                     status_code=500,
-                    detail={"error": "internal_error", "message": str(e)},
+                    detail={"error": "fetch_failed", "message": str(e)},
                 ) from e
+            # Fall through to use cached data
 
     # Get dates from cache
     dates = get_cached_calendar()
