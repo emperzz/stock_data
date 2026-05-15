@@ -244,12 +244,26 @@ class BaostockFetcher(BaseFetcher):
                     df = rs.get_data()
                     if df is not None and not df.empty:
                         query_day = d
+                        import re
                         for _, row in df.iterrows():
                             code = str(row.get("code", "")).strip()
                             name = str(row.get("code_name", "")).strip()
+                            # Exclude indices: sh.000xxx are all indices (e.g., sh.000001 = 上证指数)
+                            # Keep sz.000xxx which are real stocks (e.g., sz.000001 = 平安银行)
+                            if code.startswith("sh.000") or code.startswith("sz.000"):
+                                # Keep only if it's sz.000xxx (real stock), skip sh.000xxx (index)
+                                if code.startswith("sz.000"):
+                                    code = code[3:]  # sz.000001 -> 000001
+                                    result.append({"code": code, "name": name})
+                                continue
                             if code and code.startswith(("sh.", "sz.")):
                                 code = code[3:]
-                            if code:
+                            # Filter: only actual stocks (not ETFs or indices)
+                            # Shanghai: 600, 601, 603, 605, 689 prefix
+                            # Shenzhen: 001, 002, 003, 300 prefix (000 already handled above)
+                            # Beijing: 8, 4 prefix
+                            stock_pattern = re.compile(r"^(600|601|603|605|689|001|002|003|300|8|4)\d{3}$")
+                            if code and stock_pattern.match(code):
                                 result.append({"code": code, "name": name})
                         break
 
