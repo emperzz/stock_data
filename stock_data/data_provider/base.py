@@ -99,9 +99,6 @@ def normalize_stock_code(code: str) -> str:
     return code
 
 
-def canonical_stock_code(code: str) -> str:
-    """Return uppercase canonical form."""
-    return code.strip().upper()
 
 
 def is_us_market(code: str) -> bool:
@@ -127,18 +124,6 @@ def is_hk_market(code: str) -> bool:
     return bool(code.isdigit() and len(code) == 5)
 
 
-def is_etf_code(code: str) -> bool:
-    """Check if code is A-share ETF."""
-    normalized = normalize_stock_code(code)
-    return normalized.isdigit() and len(normalized) == 6 and normalized.startswith(ETF_PREFIXES)
-
-
-def is_bse_code(code: str) -> bool:
-    """Check if code is Beijing Stock Exchange."""
-    c = (code or "").strip().split(".")[0]
-    if len(c) != 6 or not c.isdigit():
-        return False
-    return c.startswith(BSE_CODES)
 
 
 def market_tag(code: str) -> str:
@@ -540,7 +525,7 @@ class DataFetcherManager:
         return None
 
     def get_stock_name(self, stock_code: str) -> str:
-        """Get stock name from fetcher's get_stock_name, falling back to stock list cache.
+        """Get stock name from stock list cache.
 
         If cache is empty, fetch from upstream to populate it first.
         """
@@ -549,37 +534,28 @@ class DataFetcherManager:
         normalized = normalize_stock_code(stock_code)
         market = market_tag(stock_code)
 
-        # Try each fetcher's get_stock_name first
-        for fetcher in self._filter_by_capability(market, DataCapability.STOCK_NAME):
-            try:
-                name = fetcher.get_stock_name(stock_code)
-                if name:
-                    return name
-            except Exception:
-                pass
-
-        # Fallback: look up from stock list cache
+        # Try cache first
         stocks = get_cached_stocks(market)
-        for s in stocks:
-            if s["code"] == normalized:
-                return s["name"]
+        if stocks:
+            for s in stocks:
+                if s["code"] == normalized:
+                    return s["name"]
 
         # Cache miss: fetch from upstream to populate cache
-        for fetcher in self._filter_by_capability(market, DataCapability.STOCK_LIST):
+        fetchers = self._filter_by_capability(market, DataCapability.STOCK_LIST)
+        for fetcher in fetchers:
             try:
                 stocks = fetcher.get_all_stocks(market)
                 if stocks:
                     update_cached_stocks(market, stocks)
                     logger.info(f"[Manager] Populated {len(stocks)} stocks for market={market}")
+                    # Look up after population
+                    for s in stocks:
+                        if s["code"] == normalized:
+                            return s["name"]
                     break
             except Exception:
                 pass
-
-        # Look up again after cache population
-        stocks = get_cached_stocks(market)
-        for s in stocks:
-            if s["code"] == normalized:
-                return s["name"]
 
         return ""
 

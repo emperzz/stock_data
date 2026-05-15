@@ -142,18 +142,6 @@ class ZhituFetcher(BaseFetcher):
             logger.warning(f"[ZhituFetcher] Error for {stock_code}", exc_info=True)
             return None
 
-    def _market_suffix(self, stock_code: str) -> str:
-        """Return .SZ or .SH for Zhitu API."""
-        code = normalize_stock_code(stock_code)
-        # Beijing Stock Exchange
-        if len(code) == 6 and code.startswith(("83", "87", "43", "82", "88", "92", "81")):
-            return ".BJ"
-        # Shanghai
-        if code.startswith(("6", "5")):
-            return ".SH"
-        # Shenzhen
-        return ".SZ"
-
     def get_intraday_data(
         self, stock_code: str, period: str = "5", adjust: str = ""
     ) -> pd.DataFrame | None:

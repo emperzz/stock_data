@@ -44,7 +44,6 @@ class RealtimeSource(Enum):
     AKSHARE = "akshare"
     YFINANCE = "yfinance"
     STOOQ = "stooq"
-    LONGBRIDGE = "longbridge"
     ZHITU = "zhitu"
     FALLBACK = "fallback"
 

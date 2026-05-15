@@ -5,7 +5,6 @@ Tests for base classes and utilities.
 from stock_data.data_provider.base import (
     STANDARD_COLUMNS,
     index_market_tag,
-    is_etf_code,
     is_hk_market,
     is_us_market,
     market_tag,
@@ -17,7 +16,6 @@ from stock_data.data_provider.index_symbols import (
     US_INDEX_MAP,
     get_index_type,
     is_index_code,
-    normalize_index_symbol,
 )
 
 
@@ -63,14 +61,6 @@ class TestMarketDetection:
     def test_hk_stock(self):
         assert is_hk_market("HK00700")
         assert is_hk_market("00700.HK")
-
-    def test_etf(self):
-        assert is_etf_code("512000")  # Shanghai ETF
-        assert is_etf_code("159919")  # Shenzhen ETF
-
-    def test_not_etf(self):
-        assert not is_etf_code("600519")  # Regular stock
-        assert not is_etf_code("AAPL")  # US stock
 
 
 class TestMarketTag:
@@ -130,14 +120,6 @@ class TestIndexSymbols:
     def test_get_index_type_hk(self):
         assert get_index_type("HSI") == "hk"
         assert get_index_type("HSCE") == "hk"
-
-    def test_normalize_index_symbol(self):
-        assert normalize_index_symbol("SPX") == "SPX"
-        assert normalize_index_symbol("^GSPC") == "SPX"  # reverse lookup
-        assert normalize_index_symbol("000300") == "000300"
-        assert normalize_index_symbol("sh.000300") == "000300"  # baostock format
-        assert normalize_index_symbol("HSI") == "HSI"
-        assert normalize_index_symbol("^HSI") == "HSI"  # yfinance format
 
     def test_csi_index_map(self):
         """Test CSI index mappings are correct."""

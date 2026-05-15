@@ -54,15 +54,6 @@ HK_INDEX_MAP = {
 }
 
 # =============================================================================
-# HK Indices → akshare EM format
-# Note: Akshare uses stock_hk_index_daily_em with EM-format symbols
-# EM symbols (like "HSTECF2L") are internal codes, not predictable from canonical names
-# A static mapping would be guesswork - better to do runtime lookup via stock_hk_index_spot_em()
-# Values: (source_symbol, display_name)
-# =============================================================================
-HK_INDEX_AKSHARE_MAP = {}  # Populated at runtime via _lookup_hk_index_symbol()
-
-# =============================================================================
 # US Indices → akshare Sina format
 # Note: Akshare uses index_us_stock_sina with Sina-format symbols (.IXIC, .INX, .DJI, .NDX, .VIX)
 # Values: (source_symbol, display_name)
@@ -163,11 +154,6 @@ def get_index_type(code: str) -> str | None:
         if code == src.upper():
             return "us"
 
-    # Check HK_INDEX_AKSHARE_MAP (e.g., "HSTECF2L")
-    for _canonical, (em_sym, _name) in HK_INDEX_AKSHARE_MAP.items():
-        if code == em_sym.upper():
-            return "hk"
-
     # Check if numeric 6-digit code starting with 0 is a CSI index
     if (
         code.isdigit()
@@ -193,81 +179,6 @@ def is_index_code(code: str) -> bool:
     return get_index_type(code) is not None
 
 
-def _get_map_source(map_dict: dict, code: str, default: str) -> str:
-    """Extract source symbol from a mapping dict whose values are (source, name) tuples."""
-    entry = map_dict.get(code)
-    return entry[0] if entry is not None else default
-
-
-def get_source_symbol(code: str, source: str = "baostock") -> str:
-    """
-    Convert a canonical index symbol to source-specific format.
-
-    Args:
-        code: Canonical index symbol (e.g., "000300", "SPX", "HSI")
-        source: Target source ("baostock", "yfinance", "akshare")
-
-    Returns:
-        Source-specific symbol string, or original code if not an index
-
-    Raises:
-        ValueError: If source is not recognized
-    """
-    code = code.strip().upper()
-
-    # Validate it's an index
-    if not is_index_code(code):
-        return code
-
-    index_type = get_index_type(code)
-
-    if source == "baostock":
-        if index_type == "csi":
-            return _get_map_source(CSI_INDEX_MAP, code, code)
-        return code
-
-    elif source == "yfinance":
-        if index_type == "us":
-            return _get_map_source(US_INDEX_MAP, code, code)
-        elif index_type == "csi":
-            bs_source = _get_map_source(CSI_INDEX_MAP, code, "")
-            if bs_source.startswith("sh."):
-                return f"{code}.SS"
-            elif bs_source.startswith("sz."):
-                return f"{code}.SZ"
-            return f"{code}.SS"
-        elif index_type == "hk":
-            return _get_map_source(HK_INDEX_MAP, code, code)
-        return code
-
-    elif source == "akshare":
-        if index_type == "csi":
-            return code  # Akshare uses 6-digit codes directly for CSI indices
-        elif index_type == "hk":
-            return code  # HK indices need EM format symbols
-        elif index_type == "us":
-            return _get_map_source(US_INDEX_AKSHARE_MAP, code, code)
-        return code
-
-    else:
-        raise ValueError(f"Unknown source: {source}")
-
-
-def get_akshare_hk_symbol(code: str) -> str | None:
-    """
-    Get the akshare EM-format symbol for an HK index by doing a runtime lookup.
-
-    Args:
-        code: Canonical HK index symbol (e.g., "HSI", "HSCE")
-
-    Returns:
-        EM-format symbol (e.g., "HSTECF2L") or None if not found
-    """
-    code = code.strip().upper()
-    entry = HK_INDEX_AKSHARE_MAP.get(code)
-    return entry[0] if entry is not None else None
-
-
 def get_all_indices() -> list:
     """
     Get all available indices with code, name, and market type.
@@ -290,21 +201,3 @@ def get_all_indices() -> list:
         result.append({"code": code, "name": name or code, "market": "us"})
 
     return result
-
-
-def get_index_name(code: str) -> str | None:
-    """
-    Get the display name for an index code.
-
-    Args:
-        code: Canonical index symbol (e.g., "000300", "SPX", "HSI")
-
-    Returns:
-        Display name (e.g., "沪深300", "S&P 500") or None if not found
-    """
-    code = code.upper().strip()
-    for _map in [CSI_INDEX_MAP, HK_INDEX_MAP, US_INDEX_MAP]:
-        entry = _map.get(code)
-        if entry is not None:
-            return entry[1] or None
-    return None

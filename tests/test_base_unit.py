@@ -104,8 +104,10 @@ class TestDataFetcherManagerUnit:
         assert quote.price == 101.0
 
     def test_get_stock_name(self, manager):
+        # get_stock_name now uses stock list cache as source of truth
+        # MockFetcher.get_all_stocks returns [{"code": "000001", "name": "Test"}]
         name = manager.get_stock_name("000001")
-        assert name == "Test Stock"
+        assert name == "Test"
 
     def test_market_filtering_historical(self, manager):
         """Test that historical-only fetchers are excluded from realtime queries."""
