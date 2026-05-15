@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from threading import RLock
 from typing import Any
+from enum import Flag, auto
 
 import pandas as pd
 
@@ -19,6 +20,17 @@ logger = logging.getLogger(__name__)
 
 # Standard columns for normalized K-line data
 STANDARD_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]
+
+
+class DataCapability(Flag):
+    """Flag enum for fetcher data capabilities."""
+
+    HISTORICAL_DWM = auto()   # 日/周/月 K线 (d/w/m)
+    HISTORICAL_MIN = auto()   # 分钟 K线 (1/5/15/30/60m)
+    REALTIME_QUOTE = auto()   # 实时报价
+    STOCK_LIST = auto()       # 股票列表 (get_all_stocks)
+    STOCK_NAME = auto()       # 股票名称 (get_stock_name)
+    TRADE_CALENDAR = auto()   # 交易日历
 
 
 class DataFetchError(Exception):
@@ -162,9 +174,8 @@ class BaseFetcher(ABC):
 
     # Markets supported by this fetcher: {"csi", "hk", "us"}
     supported_markets: set[str] = set()
-    # Capability flags: whether this fetcher provides historical/realtime data
-    supports_historical: bool = True
-    supports_realtime: bool = False
+    # Data capabilities via Flag enum
+    supported_data_types: DataCapability = DataCapability(0)  # empty by default
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust parameter to provider-specific value.
@@ -349,6 +360,15 @@ class BaseFetcher(ABC):
     def get_all_stocks(self, market: str = "csi") -> list:
         """Get all available stocks for a market. Override in subclass if supported."""
         return []
+
+    def get_trade_calendar(self) -> list[str] | None:
+        """Get trade calendar dates. Override in subclass if supported.
+
+        Returns:
+            List of trade dates as YYYY-MM-DD strings, sorted ascending,
+            or None if not supported by this fetcher.
+        """
+        return None
 
     def get_intraday_data(
         self, stock_code: str, period: str = "5", adjust: str = ""
