@@ -429,12 +429,15 @@ class DataFetcherManager:
         """Get fetcher by name."""
         return self._fetchers_by_name.get(name)
 
-    def _filter_by_market(self, market: str, for_historical: bool = True) -> list[BaseFetcher]:
-        """Filter fetchers by market support and capability.
+    def _filter_by_capability(
+        self, market: str, capability: DataCapability, for_historical: bool | None = None
+    ) -> list[BaseFetcher]:
+        """Filter fetchers by market support and data capability.
 
         Args:
             market: Market tag (csi/hk/us)
-            for_historical: If True, require supports_historical; if False, require supports_realtime
+            capability: Required DataCapability flag
+            for_historical: Deprecated, unused. Kept for backward compat during transition.
 
         Returns:
             Filtered list of fetchers sorted by priority.
@@ -443,9 +446,7 @@ class DataFetcherManager:
         for f in self._fetchers:
             if market not in f.supported_markets:
                 continue
-            if for_historical and not f.supports_historical:
-                continue
-            if not for_historical and not f.supports_realtime:
+            if capability not in f.supported_data_types:
                 continue
             result.append(f)
         return result
@@ -480,13 +481,20 @@ class DataFetcherManager:
 
         # Check if it's an index code for routing
         index_tag = index_market_tag(stock_code)
+
+        # Determine capability based on frequency
+        if frequency in ("5", "15", "30", "60"):
+            cap = DataCapability.HISTORICAL_MIN
+        else:
+            cap = DataCapability.HISTORICAL_DWM
+
         if index_tag:
-            fetchers = self._filter_by_market(index_tag, for_historical=True)
+            fetchers = self._filter_by_capability(index_tag, cap)
             if not fetchers:
-                fetchers = self._filter_by_market(market_tag(stock_code), for_historical=True)
+                fetchers = self._filter_by_capability(market_tag(stock_code), cap)
         else:
             market = market_tag(stock_code)
-            fetchers = self._filter_by_market(market, for_historical=True)
+            fetchers = self._filter_by_capability(market, cap)
 
         errors = []
 
@@ -512,7 +520,7 @@ class DataFetcherManager:
         market = market_tag(stock_code)
 
         cb = get_realtime_circuit_breaker()
-        fetchers = self._filter_by_market(market, for_historical=False)
+        fetchers = self._filter_by_capability(market, DataCapability.REALTIME_QUOTE)
 
         for fetcher in fetchers:
             if not cb.is_available(fetcher.name):
@@ -542,7 +550,7 @@ class DataFetcherManager:
         market = market_tag(stock_code)
 
         # Try each fetcher's get_stock_name first
-        for fetcher in self._fetchers:
+        for fetcher in self._filter_by_capability(market, DataCapability.STOCK_NAME):
             try:
                 name = fetcher.get_stock_name(stock_code)
                 if name:
@@ -557,7 +565,7 @@ class DataFetcherManager:
                 return s["name"]
 
         # Cache miss: fetch from upstream to populate cache
-        for fetcher in self._fetchers:
+        for fetcher in self._filter_by_capability(market, DataCapability.STOCK_LIST):
             try:
                 stocks = fetcher.get_all_stocks(market)
                 if stocks:
@@ -593,7 +601,7 @@ class DataFetcherManager:
         """
         stock_code = normalize_stock_code(stock_code)
         market = market_tag(stock_code)
-        fetchers = self._filter_by_market(market, for_historical=False)
+        fetchers = self._filter_by_capability(market, DataCapability.HISTORICAL_MIN)
 
         errors = []
         for fetcher in fetchers:
@@ -611,6 +619,43 @@ class DataFetcherManager:
         raise DataFetchError(
             f"All fetchers failed for {stock_code} intraday:\n" + "\n".join(errors)
         )
+
+    def get_trade_calendar(self) -> list[str]:
+        """Get A-share trade calendar with automatic failover.
+
+        Tries each fetcher's get_trade_calendar() in priority order.
+        Akshare is primary; Baostock is fallback.
+
+        Returns:
+            List of trade dates as YYYY-MM-DD strings, sorted ascending.
+
+        Raises:
+            DataFetchError: When all fetchers fail.
+        """
+        from .trade_calendar_cache import get_cached_calendar, update_cached_calendar
+
+        fetchers = self._filter_by_capability("csi", DataCapability.TRADE_CALENDAR)
+
+        errors = []
+        for fetcher in fetchers:
+            try:
+                dates = fetcher.get_trade_calendar()
+                if dates:
+                    update_cached_calendar(dates)
+                    logger.info(f"[Manager] {fetcher.name} returned {len(dates)} calendar dates")
+                    return sorted(dates)
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} calendar failed: {e}")
+                continue
+
+        # Fallback: return cached data if upstream fails
+        cached = get_cached_calendar()
+        if cached:
+            logger.warning(f"[Manager] All fetchers failed calendar, using {len(cached)} cached dates")
+            return cached
+
+        raise DataFetchError(f"All fetchers failed for trade calendar:\n" + "\n".join(errors))
 
     @property
     def available_fetchers(self) -> list[str]:
