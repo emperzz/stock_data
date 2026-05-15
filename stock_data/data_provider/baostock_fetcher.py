@@ -182,6 +182,29 @@ class BaostockFetcher(BaseFetcher):
         # Baostock has no realtime quotes API, only historical K-line data
         return None
 
+    def get_stock_name(self, stock_code: str) -> str | None:
+        """Get stock name from Baostock query_stock_basic."""
+        self._ensure_initialized()
+        if not self._initialized:
+            return None
+
+        try:
+            import baostock as bs
+
+            bs_code, _ = self._convert_code(stock_code)
+            rs = bs.query_stock_basic(code=bs_code)
+            if rs.error_code != "0":
+                return None
+
+            while rs.next():
+                row = rs.get_row_data()
+                if len(row) >= 2:
+                    return row[1]  # code_name
+        except Exception:
+            pass
+
+        return None
+
     def get_all_stocks(self, market: str = "cn") -> list:
         """
         Get all available stocks for a market.
@@ -192,7 +215,7 @@ class BaostockFetcher(BaseFetcher):
         Returns:
             List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
         """
-        if market != "cn":
+        if market not in ("cn", "csi"):
             # Baostock only supports A-share
             return []
 
@@ -204,22 +227,34 @@ class BaostockFetcher(BaseFetcher):
             import baostock as bs
 
             result = []
-            # Query all A-share stocks (both sh and sz)
-            rs = bs.query_all_stock()
-            if rs.error_code != "0":
-                logger.warning(f"[BaostockFetcher] query_all_stock failed: {rs.error_msg}")
-                return []
+            # Query all A-share stocks, must pass trading day parameter for non-empty results
+            # Use cached trade calendar to find valid trading dates
+            from .trade_calendar_cache import get_cached_calendar
+            from datetime import date
 
-            while rs.next():
-                row = rs.get_row_data()
-                if len(row) >= 2:
-                    code = row[0]
-                    name = row[1] if len(row) > 1 else ""
-                    if code and code.startswith(("sh.", "sz.")):
-                        # Normalize: sh.600519 -> 600519, sz.000001 -> 000001
-                        code = code[3:]
-                    if code:
-                        result.append({"code": code, "name": name})
+            today_str = date.today().strftime("%Y-%m-%d")
+            calendar = get_cached_calendar()
+            # Find most recent date <= today, iterate in reverse to get latest first
+            valid_dates = [d for d in reversed(calendar) if d <= today_str]
+
+            query_day = None
+            for d in valid_dates:
+                rs = bs.query_all_stock(day=d)
+                if rs.error_code == "0":
+                    df = rs.get_data()
+                    if df is not None and not df.empty:
+                        query_day = d
+                        for _, row in df.iterrows():
+                            code = str(row.get("code", "")).strip()
+                            name = str(row.get("code_name", "")).strip()
+                            if code and code.startswith(("sh.", "sz.")):
+                                code = code[3:]
+                            if code:
+                                result.append({"code": code, "name": name})
+                        break
+
+            if not query_day:
+                logger.warning("[BaostockFetcher] query_all_stock returned no data for any cached trading day")
 
             return result
 

@@ -512,7 +512,16 @@ class DataFetcherManager:
         return None
 
     def get_stock_name(self, stock_code: str) -> str:
-        """Get stock name from any available fetcher, falling back to stock list cache."""
+        """Get stock name from fetcher's get_stock_name, falling back to stock list cache.
+
+        If cache is empty, fetch from upstream to populate it first.
+        """
+        from .stock_list_cache import get_cached_stocks, update_cached_stocks
+
+        normalized = normalize_stock_code(stock_code)
+        market = market_tag(stock_code)
+
+        # Try each fetcher's get_stock_name first
         for fetcher in self._fetchers:
             try:
                 name = fetcher.get_stock_name(stock_code)
@@ -522,11 +531,24 @@ class DataFetcherManager:
                 pass
 
         # Fallback: look up from stock list cache
-        from .stock_list_cache import get_cached_stocks
-
-        market = market_tag(stock_code)
         stocks = get_cached_stocks(market)
-        normalized = normalize_stock_code(stock_code)
+        for s in stocks:
+            if s["code"] == normalized:
+                return s["name"]
+
+        # Cache miss: fetch from upstream to populate cache
+        for fetcher in self._fetchers:
+            try:
+                stocks = fetcher.get_all_stocks(market)
+                if stocks:
+                    update_cached_stocks(market, stocks)
+                    logger.info(f"[Manager] Populated {len(stocks)} stocks for market={market}")
+                    break
+            except Exception:
+                pass
+
+        # Look up again after cache population
+        stocks = get_cached_stocks(market)
         for s in stocks:
             if s["code"] == normalized:
                 return s["name"]

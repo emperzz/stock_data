@@ -240,6 +240,35 @@ class AkshareFetcher(BaseFetcher):
             )
             return None
 
+    def get_stock_name(self, stock_code: str) -> str | None:
+        """Get stock name from Akshare stock info."""
+        try:
+            import akshare as ak
+
+            code = normalize_stock_code(stock_code)
+
+            # A-share: use stock_info_a_code_name
+            if code.startswith(("6", "5", "0", "3")):
+                df = ak.stock_info_a_code_name()
+                if df is not None and not df.empty:
+                    match = df[df["code"] == code]
+                    if not match.empty:
+                        return str(match.iloc[0].get("name", "")).strip()
+
+            # HK: use stock_hk_spot_em
+            if is_hk_market(stock_code):
+                df = ak.stock_hk_spot_em()
+                if df is not None and not df.empty:
+                    symbol = code.replace("HK", "").lstrip("0")
+                    match = df[df["代码"] == symbol]
+                    if not match.empty:
+                        return str(match.iloc[0].get("名称", "")).strip()
+
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_stock_name failed: {e}")
+
+        return None
+
     def get_all_stocks(self, market: str = "cn") -> list:
         """
         Get all available stocks for a market.
