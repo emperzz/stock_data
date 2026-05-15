@@ -259,10 +259,12 @@ class BaostockFetcher(BaseFetcher):
                             if code and code.startswith(("sh.", "sz.")):
                                 code = code[3:]
                             # Filter: only actual stocks (not ETFs or indices)
-                            # Shanghai: 600, 601, 603, 605, 689 prefix
-                            # Shenzhen: 001, 002, 003, 300 prefix (000 already handled above)
-                            # Beijing: 8, 4 prefix
-                            stock_pattern = re.compile(r"^(600|601|603|605|689|001|002|003|300|8|4)\d{3}$")
+                            # Shanghai main: 600, 601, 603, 605, 689
+                            # Shanghai STAR (科创板): 688
+                            # Shenzhen main: 001, 002, 003 (000 handled above)
+                            # ChiNext (创业板): 300, 301, 302 (300=2009, 301=2020, 302=2024改革)
+                            # Beijing (北交所): 8, 4, 920
+                            stock_pattern = re.compile(r"^(600|601|603|605|689|688|001|002|003|300|301|302|8|4|920)\d{3}$")
                             if code and stock_pattern.match(code):
                                 result.append({"code": code, "name": name})
                         break
