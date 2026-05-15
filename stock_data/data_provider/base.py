@@ -527,35 +527,17 @@ class DataFetcherManager:
     def get_stock_name(self, stock_code: str) -> str:
         """Get stock name from stock list cache.
 
-        If cache is empty, fetch from upstream to populate it first.
+        Cache layer handles automatic refresh on first call of the day.
         """
-        from .stock_list_cache import get_cached_stocks, update_cached_stocks
+        from .stock_list_cache import get_stock_list
 
         normalized = normalize_stock_code(stock_code)
         market = market_tag(stock_code)
 
-        # Try cache first
-        stocks = get_cached_stocks(market)
-        if stocks:
-            for s in stocks:
-                if s["code"] == normalized:
-                    return s["name"]
-
-        # Cache miss: fetch from upstream to populate cache
-        fetchers = self._filter_by_capability(market, DataCapability.STOCK_LIST)
-        for fetcher in fetchers:
-            try:
-                stocks = fetcher.get_all_stocks(market)
-                if stocks:
-                    update_cached_stocks(market, stocks)
-                    logger.info(f"[Manager] Populated {len(stocks)} stocks for market={market}")
-                    # Look up after population
-                    for s in stocks:
-                        if s["code"] == normalized:
-                            return s["name"]
-                    break
-            except Exception:
-                pass
+        stocks = get_stock_list(market, manager=self)
+        for s in stocks:
+            if s["code"] == normalized:
+                return s["name"]
 
         return ""
 

@@ -412,40 +412,13 @@ def list_stocks(
     if market == "cn":
         market = "csi"  # Backward compat
 
-    # Try cache first unless refresh is requested
-    if not refresh:
-        cached = stock_cache.get_cached_stocks(market)
-        if cached:
-            logger.info(
-                f"[list_stocks] Using cached data for market={market} ({len(cached)} stocks)"
-            )
-            page = cached[offset : offset + limit]
-            return [StockInfo(code=s["code"], name=s["name"], market=market) for s in page]
-
-    # Fetch from upstream
-    logger.info(f"[list_stocks] Fetching fresh data for market={market}, refresh={refresh}")
+    # Get stock list with automatic refresh (cache layer handles daily refresh logic)
     manager = get_manager()
-
-    from ..data_provider.base import DataCapability
-
-    result = []
-    fetchers = manager._filter_by_capability(market, DataCapability.STOCK_LIST)
-    for fetcher in fetchers:
-        try:
-            stocks = fetcher.get_all_stocks(market)
-            if stocks:
-                result = stocks
-                break
-        except Exception as e:
-            logger.warning(f"[list_stocks] {fetcher.name} failed: {e}")
-            continue
-
-    # Update cache if we got data
-    if result:
-        stock_cache.update_cached_stocks(market, result)
-        logger.info(f"[list_stocks] Cached {len(result)} stocks for market={market}")
-
-    page = result[offset : offset + limit]
+    stocks = stock_cache.get_stock_list(market, refresh=refresh, manager=manager)
+    logger.info(
+        f"[list_stocks] Returned {len(stocks)} stocks for market={market}"
+    )
+    page = stocks[offset : offset + limit]
     return [StockInfo(code=s["code"], name=s["name"], market=market) for s in page]
 
 

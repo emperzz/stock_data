@@ -11,6 +11,7 @@ This module re-exports all public functions for backward compatibility.
 from .stock_list_cache import (
     get_cache_info,
     get_cached_stocks,
+    get_stock_list,
     has_cached_data,
     init_db,
     update_cached_stocks,
@@ -27,6 +28,7 @@ __all__ = [
     "get_cached_calendar",
     "get_cached_stocks",
     "get_latest_cached_trade_date",
+    "get_stock_list",
     "has_cached_data",
     "init_calendar_db",
     "init_db",

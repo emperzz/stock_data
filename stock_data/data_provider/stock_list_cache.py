@@ -14,6 +14,16 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _db_path: Path | None = None
+_last_refresh_date: dict[str, str] = {}  # market -> "YYYY-MM-DD"
+
+
+def _is_first_call_of_day(market: str) -> bool:
+    """Check if this is the first call of the day for the market, and update the tracker."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _last_refresh_date.get(market) != today:
+        _last_refresh_date[market] = today
+        return True
+    return False
 
 
 def _get_db_path() -> Path:
@@ -56,15 +66,90 @@ def init_db() -> None:
         conn.close()
 
 
-def get_cached_stocks(market: str) -> list:
+def _fetch_from_upstream(market: str, manager) -> list:
+    """Fetch stock list from upstream fetchers."""
+    from .base import DataCapability
+
+    fetchers = manager._filter_by_capability(market, DataCapability.STOCK_LIST)
+
+    for fetcher in fetchers:
+        try:
+            stocks = fetcher.get_all_stocks(market)
+            if stocks:
+                return stocks
+        except Exception as e:
+            logger.warning(f"[StockCache] {fetcher.name} failed to fetch {market}: {e}")
+            continue
+
+    logger.warning(f"[StockCache] No fetcher available for market={market}")
+    return []
+
+
+def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     """
-    Get cached stocks for a market.
+    Get stock list with automatic refresh.
+
+    - No local cache -> fetch from upstream and cache
+    - First call of the day -> force refresh
+    - refresh=True -> force refresh
+    - Otherwise -> return cached data
 
     Args:
         market: Market type (csi/hk/us)
+        refresh: If True, force refresh from upstream
+        manager: DataFetcherManager instance. If None, creates one lazily.
 
     Returns:
-        List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
+        List of stock dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
+    """
+    init_db()
+
+    needs_refresh = refresh or _is_first_call_of_day(market)
+
+    if not needs_refresh:
+        cached = _read_from_db(market)
+        if cached:
+            return cached
+
+    # Need refresh: fetch from upstream and update cache
+    # Lazy import to avoid circular dependency
+    if manager is None:
+        from .base import DataFetcherManager
+
+        manager = DataFetcherManager()
+
+    stocks = _fetch_from_upstream(market, manager)
+    if stocks:
+        update_cached_stocks(market, stocks)
+        logger.info(f"[StockCache] Refreshed {len(stocks)} stocks for market={market}")
+
+    return stocks
+
+
+def _read_from_db(market: str) -> list:
+    """Read stock list from database."""
+    conn = _get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT code, name, updated_at FROM stock_list WHERE market = ? ORDER BY code",
+            (market,),
+        )
+        rows = cursor.fetchall()
+        return [
+            {"code": row["code"], "name": row["name"], "updated_at": row["updated_at"]}
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_cached_stocks(market: str) -> list:
+    """
+    Get cached stocks for a market (backward compatible).
+
+    Returns cached data without daily-refresh logic.
+    Use get_stock_list() for daily-refresh aware fetching.
     """
     init_db()
 
