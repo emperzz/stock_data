@@ -7,6 +7,7 @@ import pytest
 
 from stock_data.data_provider.base import (
     BaseFetcher,
+    DataCapability,
     DataFetcherManager,
     DataFetchError,
 )
@@ -19,8 +20,13 @@ class MockFetcher(BaseFetcher):
     name = "MockFetcher"
     priority = 10
     supported_markets = {"csi", "hk"}
-    supports_historical = True
-    supports_realtime = True
+    supported_data_types = (
+        DataCapability.HISTORICAL_DWM
+        | DataCapability.HISTORICAL_MIN
+        | DataCapability.REALTIME_QUOTE
+        | DataCapability.STOCK_LIST
+        | DataCapability.STOCK_NAME
+    )
 
     def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
         dates = pd.date_range(start_date, end_date, freq="B")
@@ -61,8 +67,7 @@ class MockFetcherNoRealtime(BaseFetcher):
     name = "MockNoRealtime"
     priority = 5
     supported_markets = {"csi"}
-    supports_historical = True
-    supports_realtime = False
+    supported_data_types = DataCapability.HISTORICAL_DWM | DataCapability.STOCK_LIST | DataCapability.STOCK_NAME
 
     def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
         raise DataFetchError("Not available")
@@ -106,11 +111,11 @@ class TestDataFetcherManagerUnit:
         """Test that historical-only fetchers are excluded from realtime queries."""
         manager.add_fetcher(MockFetcherNoRealtime())
         # Historical should include both
-        for f in manager._filter_by_market("csi", for_historical=True):
-            assert f.supports_historical
+        for f in manager._filter_by_capability("csi", DataCapability.HISTORICAL_DWM):
+            assert DataCapability.HISTORICAL_DWM in f.supported_data_types
         # Realtime should exclude MockNoRealtime
-        for f in manager._filter_by_market("csi", for_historical=False):
-            assert f.supports_realtime
+        for f in manager._filter_by_capability("csi", DataCapability.REALTIME_QUOTE):
+            assert DataCapability.REALTIME_QUOTE in f.supported_data_types
 
     def test_reset(self, manager):
         manager.reset()
