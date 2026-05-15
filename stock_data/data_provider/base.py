@@ -392,7 +392,7 @@ class DataFetcherManager:
     Manager for multiple data fetchers with priority-based failover.
 
     Market routing is driven by each fetcher's supported_markets class attribute
-    combined with supports_historical / supports_realtime capability flags.
+    combined with the DataCapability supported_data_types flags.
 
     Usage:
         manager = DataFetcherManager()

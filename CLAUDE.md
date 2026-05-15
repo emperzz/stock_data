@@ -32,7 +32,8 @@ A Python-based local stock data aggregation server that:
 
 ### `data_provider/base.py`
 - `BaseFetcher`: Abstract base defining `_fetch_raw_data()`, `_normalize_data()`, `get_daily_data()`, `get_realtime_quote()`
-- `DataFetcherManager`: Orchestrates fetchers with priority-based failover, circuit breakers, and market-aware routing
+- `DataFetcherManager`: Orchestrates fetchers with priority-based failover, circuit breakers, and capability-based routing
+- `DataCapability`: Flag enum for fetcher capability declarations (see below)
 
 ### `data_provider/{source}_fetcher.py`
 - Each source has its own fetcher: `baostock_fetcher.py`, `akshare_fetcher.py`, `yfinance_fetcher.py`
@@ -161,6 +162,44 @@ It is used as a fallback for realtime quotes only.
 
 **Fallback**: Server queries providers in priority order. If provider doesn't support the requested frequency, it raises `DataFetchError` and the next provider is tried.
 
+## Capability-Based Routing
+
+Every fetcher declares its capabilities via `supported_data_types: DataCapability`, a `Flag` enum in `base.py`:
+
+```python
+class DataCapability(Flag):
+    HISTORICAL_DWM   # 日/周/月 K线 (d/w/m)
+    HISTORICAL_MIN   # 分钟 K线 (1/5/15/30/60m)
+    REALTIME_QUOTE   # 实时报价
+    STOCK_LIST       # 股票列表 (get_all_stocks)
+    STOCK_NAME       # 股票名称 (get_stock_name)
+    TRADE_CALENDAR   # 交易日历
+```
+
+`DataFetcherManager._filter_by_capability(market, capability)` filters fetchers by market AND capability flag. Each data method routes through this filter:
+
+| API Method | Capability Used |
+|------------|----------------|
+| `get_kline_data` (d/w/m) | `HISTORICAL_DWM` |
+| `get_kline_data` (5/15/30/60) | `HISTORICAL_MIN` |
+| `get_realtime_quote` | `REALTIME_QUOTE` |
+| `get_intraday_data` | `HISTORICAL_MIN` |
+| `get_stock_name` | `STOCK_NAME` |
+| `list_stocks` (via `_filter_by_capability`) | `STOCK_LIST` |
+| `get_trade_calendar` | `TRADE_CALENDAR` |
+
+**Fetcher capability declarations:**
+
+| Fetcher | Capabilities |
+|---------|-------------|
+| BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR` |
+| AkshareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| TRADE_CALENDAR` |
+| TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME` |
+| YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE` |
+| ZhituFetcher | `REALTIME_QUOTE` |
+
+**Anti-pattern**: Do NOT use `supports_historical` or `supports_realtime` — these are deprecated. Use `supported_data_types` with `DataCapability` flags.
+
 ## Symbol Conventions
 
 | Market | Format | Examples |
@@ -184,10 +223,10 @@ Per-source circuit breakers prevent cascading failures:
 - Exponential backoff retry on failure
 
 ### Market-Aware Routing
-Manager routes requests based on stock code:
+Manager routes requests based on stock code and capability:
 - US stocks → YfinanceFetcher (primary), Stooq fallback
 - A-shares → BaostockFetcher (primary), AkshareFetcher (fallback)
-- Each fetcher declares supported markets via `_MARKET_SUPPORT` dict
+- Each fetcher declares supported markets via `supported_markets` and capabilities via `supported_data_types: DataCapability`
 
 ### Code Normalization
 `normalize_stock_code()` handles various input formats:
