@@ -114,9 +114,11 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     # Need refresh: fetch from upstream and update cache
     # Lazy import to avoid circular dependency
     if manager is None:
+        from .akshare_fetcher import AkshareFetcher
         from .base import DataFetcherManager
 
         manager = DataFetcherManager()
+        manager.add_fetcher(AkshareFetcher())
 
     stocks = _fetch_from_upstream(market, manager)
     if stocks:
@@ -124,6 +126,31 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
         logger.info(f"[StockCache] Refreshed {len(stocks)} stocks for market={market}")
 
     return stocks
+
+
+def get_stock_name(code: str, market: str | None = None, manager=None) -> str:
+    """
+    Get stock name from cache by code.
+
+    Args:
+        code: Stock code (e.g., 600519, AAPL, HK00700)
+        market: Market tag (csi/hk/us). If None, inferred from code.
+        manager: DataFetcherManager instance. If None and cache miss, returns "".
+
+    Returns:
+        Stock name or empty string if not found.
+    """
+    from .base import market_tag, normalize_stock_code
+
+    normalized = normalize_stock_code(code)
+    if market is None:
+        market = market_tag(normalized)
+
+    stocks = get_stock_list(market, refresh=False, manager=manager)
+    for s in stocks:
+        if s["code"] == normalized:
+            return s["name"]
+    return ""
 
 
 def _read_from_db(market: str) -> list:

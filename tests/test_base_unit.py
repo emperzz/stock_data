@@ -104,9 +104,10 @@ class TestDataFetcherManagerUnit:
         assert quote.price == 101.0
 
     def test_get_stock_name(self, manager):
-        # get_stock_name now uses stock list cache as source of truth
-        # MockFetcher.get_all_stocks returns [{"code": "000001", "name": "Test"}]
-        name = manager.get_stock_name("000001")
+        # get_stock_name now lives in stock_cache, not manager
+        from stock_data.data_provider import stock_cache
+
+        name = stock_cache.get_stock_name("000001", manager=manager)
         assert name == "Test"
 
     def test_market_filtering_historical(self, manager):

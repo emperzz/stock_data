@@ -138,7 +138,7 @@ def get_quote(stock_code: str = Path(max_length=20, description="Stock code")) -
 
         result = StockQuote(
             code=quote.code,
-            stock_name=quote.name or manager.get_stock_name(stock_code),
+            stock_name=quote.name or stock_cache.get_stock_name(stock_code, manager=manager),
             source=quote.source.value,
             current_price=quote.price or 0.0,
             change=quote.change_amount,
@@ -231,7 +231,7 @@ def get_history(
             adjust=adj_value,
         )
 
-        stock_name = manager.get_stock_name(stock_code)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
 
         # Convert to response model
         def format_date(val):
@@ -326,7 +326,7 @@ def get_intraday(
 
         manager = get_manager()
         df, source = manager.get_intraday_data(stock_code, period=period, adjust=adjust)
-        stock_name = manager.get_stock_name(stock_code)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
 
         # Determine trade date from data
         trade_date = ""
@@ -447,7 +447,6 @@ def get_trade_calendar(
     from ..data_provider.stock_cache import (
         get_cached_calendar,
         get_latest_cached_trade_date,
-        update_cached_calendar,
     )
 
     today = datetime.now().strftime("%Y-%m-%d")

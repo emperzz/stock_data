@@ -7,9 +7,9 @@ import random
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
+from enum import Flag, auto
 from threading import RLock
 from typing import Any
-from enum import Flag, auto
 
 import pandas as pd
 
@@ -25,12 +25,12 @@ STANDARD_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount", 
 class DataCapability(Flag):
     """Flag enum for fetcher data capabilities."""
 
-    HISTORICAL_DWM = auto()   # 日/周/月 K线 (d/w/m)
-    HISTORICAL_MIN = auto()   # 分钟 K线 (1/5/15/30/60m)
-    REALTIME_QUOTE = auto()   # 实时报价
-    STOCK_LIST = auto()       # 股票列表 (get_all_stocks)
-    STOCK_NAME = auto()       # 股票名称 (get_stock_name)
-    TRADE_CALENDAR = auto()   # 交易日历
+    HISTORICAL_DWM = auto()  # 日/周/月 K线 (d/w/m)
+    HISTORICAL_MIN = auto()  # 分钟 K线 (1/5/15/30/60m)
+    REALTIME_QUOTE = auto()  # 实时报价
+    STOCK_LIST = auto()  # 股票列表 (get_all_stocks)
+    STOCK_NAME = auto()  # 股票名称 (get_stock_name)
+    TRADE_CALENDAR = auto()  # 交易日历
 
 
 class DataFetchError(Exception):
@@ -99,8 +99,6 @@ def normalize_stock_code(code: str) -> str:
     return code
 
 
-
-
 def is_us_market(code: str) -> bool:
     """Check if code is US stock/index."""
     code = (code or "").strip().upper()
@@ -122,8 +120,6 @@ def is_hk_market(code: str) -> bool:
         base = code[:-3]
         return base.isdigit() and 1 <= len(base) <= 5
     return bool(code.isdigit() and len(code) == 5)
-
-
 
 
 def market_tag(code: str) -> str:
@@ -414,15 +410,12 @@ class DataFetcherManager:
         """Get fetcher by name."""
         return self._fetchers_by_name.get(name)
 
-    def _filter_by_capability(
-        self, market: str, capability: DataCapability, for_historical: bool | None = None
-    ) -> list[BaseFetcher]:
+    def _filter_by_capability(self, market: str, capability: DataCapability) -> list[BaseFetcher]:
         """Filter fetchers by market support and data capability.
 
         Args:
             market: Market tag (csi/hk/us)
             capability: Required DataCapability flag
-            for_historical: Deprecated, unused. Kept for backward compat during transition.
 
         Returns:
             Filtered list of fetchers sorted by priority.
@@ -524,23 +517,6 @@ class DataFetcherManager:
 
         return None
 
-    def get_stock_name(self, stock_code: str) -> str:
-        """Get stock name from stock list cache.
-
-        Cache layer handles automatic refresh on first call of the day.
-        """
-        from .stock_list_cache import get_stock_list
-
-        normalized = normalize_stock_code(stock_code)
-        market = market_tag(stock_code)
-
-        stocks = get_stock_list(market, manager=self)
-        for s in stocks:
-            if s["code"] == normalized:
-                return s["name"]
-
-        return ""
-
     def get_intraday_data(
         self, stock_code: str, period: str = "5", adjust: str = ""
     ) -> tuple[pd.DataFrame, str]:
@@ -610,10 +586,12 @@ class DataFetcherManager:
         # Fallback: return cached data if upstream fails
         cached = get_cached_calendar()
         if cached:
-            logger.warning(f"[Manager] All fetchers failed calendar, using {len(cached)} cached dates")
+            logger.warning(
+                f"[Manager] All fetchers failed calendar, using {len(cached)} cached dates"
+            )
             return cached
 
-        raise DataFetchError(f"All fetchers failed for trade calendar:\n" + "\n".join(errors))
+        raise DataFetchError("All fetchers failed for trade calendar:\n" + "\n".join(errors))
 
     @property
     def available_fetchers(self) -> list[str]:
