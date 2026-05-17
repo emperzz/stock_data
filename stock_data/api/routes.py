@@ -7,14 +7,15 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
-from ..data_provider import DataFetcherManager, stock_cache
-from ..data_provider.akshare_fetcher import AkshareFetcher
-from ..data_provider.baostock_fetcher import BaostockFetcher
-from ..data_provider.base import is_hk_market, is_us_market, normalize_stock_code
+from ..data_provider import DataFetcherManager
+from ..data_provider.cache import api_cache as stock_cache
+from ..data_provider.fetchers.akshare_fetcher import AkshareFetcher
+from ..data_provider.fetchers.baostock_fetcher import BaostockFetcher
+from ..data_provider.fetchers.tushare_fetcher import TushareFetcher
+from ..data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
+from ..data_provider.fetchers.zhitu_fetcher import ZhituFetcher
+from ..data_provider.utils.normalize import is_hk_market, is_us_market, normalize_stock_code
 from ..data_provider.index_symbols import get_all_indices
-from ..data_provider.tushare_fetcher import TushareFetcher
-from ..data_provider.yfinance_fetcher import YfinanceFetcher
-from ..data_provider.zhitu_fetcher import ZhituFetcher
 from .cache import (
     get_history_cache,
     get_quote_cache,
@@ -444,7 +445,7 @@ def get_trade_calendar(
 
     Uses akshare tool_trade_date_hist_sina API.
     """
-    from ..data_provider.stock_cache import (
+    from ..data_provider.cache.api_cache import (
         get_cached_calendar,
         get_latest_cached_trade_date,
     )

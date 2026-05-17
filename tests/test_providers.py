@@ -27,7 +27,7 @@ class TestBaostockFetcher:
 
     @pytest.fixture
     def fetcher(self):
-        from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+        from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
 
         return BaostockFetcher()
 
@@ -90,7 +90,7 @@ class TestAkshareFetcher:
 
     @pytest.fixture
     def fetcher(self):
-        from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
 
         return AkshareFetcher()
 
@@ -163,7 +163,7 @@ class TestYfinanceFetcher:
 
     @pytest.fixture
     def fetcher(self):
-        from stock_data.data_provider.yfinance_fetcher import YfinanceFetcher
+        from stock_data.data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
 
         return YfinanceFetcher()
 
@@ -228,7 +228,7 @@ class TestTushareFetcher:
 
     @pytest.fixture
     def fetcher(self):
-        from stock_data.data_provider.tushare_fetcher import TushareFetcher
+        from stock_data.data_provider.fetchers.tushare_fetcher import TushareFetcher
 
         return TushareFetcher()
 
@@ -330,19 +330,19 @@ class TestIndexSupport:
 
     @pytest.fixture
     def yfinance_fetcher(self):
-        from stock_data.data_provider.yfinance_fetcher import YfinanceFetcher
+        from stock_data.data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
 
         return YfinanceFetcher()
 
     @pytest.fixture
     def baostock_fetcher(self):
-        from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+        from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
 
         return BaostockFetcher()
 
     @pytest.fixture
     def akshare_fetcher(self):
-        from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
 
         return AkshareFetcher()
 
@@ -441,10 +441,10 @@ class TestDataFetcherManager:
 
     @pytest.fixture
     def manager(self):
-        from stock_data.data_provider.akshare_fetcher import AkshareFetcher
-        from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
         from stock_data.data_provider.base import DataFetcherManager
-        from stock_data.data_provider.yfinance_fetcher import YfinanceFetcher
+        from stock_data.data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
 
         return DataFetcherManager(
             [
@@ -520,7 +520,7 @@ class TestAkshareFetcherIntraday:
 
     @pytest.fixture
     def fetcher(self):
-        from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
 
         return AkshareFetcher()
 
@@ -562,7 +562,7 @@ class TestZhituFetcherIntraday:
 
     @pytest.fixture
     def fetcher(self):
-        from stock_data.data_provider.zhitu_fetcher import ZhituFetcher
+        from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
 
         return ZhituFetcher()
 

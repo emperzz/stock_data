@@ -11,7 +11,14 @@ from stock_data.data_provider.base import (
     DataFetcherManager,
     DataFetchError,
 )
-from stock_data.data_provider.realtime_types import RealtimeSource, UnifiedRealtimeQuote
+from stock_data.data_provider import (
+    BaostockFetcher,
+    AkshareFetcher,
+    YfinanceFetcher,
+    TushareFetcher,
+    stock_cache,
+)
+from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
 
 
 class MockFetcher(BaseFetcher):
@@ -134,7 +141,7 @@ class TestKlineDataProcessing:
     """Unit tests for kline data cleaning and indicator calculation."""
 
     def test_clean_data_drops_nan_close(self):
-        from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+        from stock_data.data_provider import BaostockFetcher
 
         df = pd.DataFrame(
             {
@@ -158,7 +165,7 @@ class TestKlineDataProcessing:
     def test_calculate_indicators_no_inf(self):
         """Test that volume_ratio doesn't produce inf values."""
 
-        from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+        from stock_data.data_provider import BaostockFetcher
 
         df = pd.DataFrame(
             {
@@ -182,7 +189,7 @@ class TestAdjustMapping:
     """Tests for unified adjust parameter mapping."""
 
     def test_baostock_adjust_mapping(self):
-        from stock_data.data_provider.baostock_fetcher import BaostockFetcher
+        from stock_data.data_provider import BaostockFetcher
 
         f = BaostockFetcher()
         assert f._map_adjust("") == "3"  # 不复权
@@ -190,7 +197,7 @@ class TestAdjustMapping:
         assert f._map_adjust("hfq") == "1"  # 后复权
 
     def test_akshare_adjust_mapping(self):
-        from stock_data.data_provider.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider import AkshareFetcher
 
         f = AkshareFetcher()
         assert f._map_adjust("") == ""  # 不复权
@@ -198,7 +205,7 @@ class TestAdjustMapping:
         assert f._map_adjust("hfq") == "hfq"  # 后复权
 
     def test_yfinance_adjust_mapping(self):
-        from stock_data.data_provider.yfinance_fetcher import YfinanceFetcher
+        from stock_data.data_provider import YfinanceFetcher
 
         f = YfinanceFetcher()
         assert f._map_adjust("") is None  # 不复权
@@ -206,7 +213,7 @@ class TestAdjustMapping:
         assert f._map_adjust("hfq") == "qfq"  # 后复权→前复权 (yfinance only has one)
 
     def test_tushare_adjust_mapping(self):
-        from stock_data.data_provider.tushare_fetcher import TushareFetcher
+        from stock_data.data_provider import TushareFetcher
 
         f = TushareFetcher()
         assert f._map_adjust("") is None  # 不复权

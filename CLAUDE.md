@@ -28,6 +28,42 @@ A Python-based local stock data aggregation server that:
 │              Upstream Stock Data APIs                    │
 ```
 
+## Directory Structure
+
+```
+stock_data/
+├── __init__.py
+├── server.py
+├── api/
+│   ├── __init__.py
+│   ├── routes.py
+│   ├── schemas.py
+│   └── cache.py
+└── data_provider/
+    ├── __init__.py                  # Public API re-exports
+    ├── base.py                      # BaseFetcher, DataFetcherManager, DataCapability
+    ├── index_symbols.py             # Index mappings (CSI/HK/US)
+    ├── core/
+    │   ├── __init__.py
+    │   └── types.py                # UnifiedRealtimeQuote, CircuitBreaker, safe_float/int
+    ├── fetchers/
+    │   ├── __init__.py
+    │   ├── index_symbols.py        # Index mappings (local copy for fetcher imports)
+    │   ├── akshare_fetcher.py
+    │   ├── baostock_fetcher.py
+    │   ├── tushare_fetcher.py
+    │   ├── yfinance_fetcher.py
+    │   └── zhitu_fetcher.py
+    ├── cache/
+    │   ├── __init__.py
+    │   ├── api_cache.py            # Compatibility re-export module
+    │   ├── stock_list_cache.py
+    │   └── trade_calendar_cache.py
+    └── utils/
+        ├── __init__.py
+        └── normalize.py            # normalize_stock_code, market_tag, etc.
+```
+
 ## Core Components
 
 ### `data_provider/base.py`
@@ -35,18 +71,23 @@ A Python-based local stock data aggregation server that:
 - `DataFetcherManager`: Orchestrates fetchers with priority-based failover, circuit breakers, and capability-based routing
 - `DataCapability`: Flag enum for fetcher capability declarations (see below)
 
-### `data_provider/{source}_fetcher.py`
-- Each source has its own fetcher: `baostock_fetcher.py`, `akshare_fetcher.py`, `yfinance_fetcher.py`
+### `data_provider/fetchers/`
+- Each source has its own fetcher: `baostock_fetcher.py`, `akshare_fetcher.py`, `yfinance_fetcher.py`, `tushare_fetcher.py`, `zhitu_fetcher.py`
 - Each fetcher handles:
   - Source-specific API calls
   - Rate limiting (random jitter, User-Agent rotation)
   - Data normalization to standard format
   - Retry with exponential backoff (using `tenacity`)
 
-### `data_provider/realtime_types.py`
+### `data_provider/core/types.py`
 - `UnifiedRealtimeQuote`: Dataclass for normalized realtime quotes
 - `CircuitBreaker`: Thread-safe circuit breaker implementation
 - `safe_float()`, `safe_int()`: Type-safe conversion utilities
+
+### `data_provider/utils/normalize.py`
+- `normalize_stock_code()`: Handles various input formats (SH600519 → 600519, etc.)
+- `market_tag()`: Returns market tag (csi/us/hk)
+- `is_us_market()`, `is_hk_market()`: Market detection utilities
 
 ## Standardized Data Schema
 
