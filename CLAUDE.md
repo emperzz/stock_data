@@ -214,6 +214,7 @@ class DataCapability(Flag):
     STOCK_LIST       # 股票列表 (get_all_stocks)
     STOCK_NAME       # 股票名称 (get_stock_name)
     TRADE_CALENDAR   # 交易日历
+    STOCK_BOARD      # 板块数据（概念/行业板块列表）
 ```
 
 `DataFetcherManager._filter_by_capability(market, capability)` filters fetchers by market AND capability flag. Each data method routes through this filter:
@@ -227,13 +228,15 @@ class DataCapability(Flag):
 | `get_stock_name` | `STOCK_NAME` |
 | `list_stocks` (via `_filter_by_capability`) | `STOCK_LIST` |
 | `get_trade_calendar` | `TRADE_CALENDAR` |
+| `get_all_concept_boards` / `get_all_industry_boards` | `STOCK_BOARD` |
+| `get_concept_board_stocks` / `get_industry_board_stocks` | `STOCK_BOARD` |
 
 **Fetcher capability declarations:**
 
 | Fetcher | Capabilities |
 |---------|-------------|
 | BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR` |
-| AkshareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| TRADE_CALENDAR` |
+| AkshareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| TRADE_CALENDAR \| STOCK_BOARD` |
 | TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME` |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE` |
 | ZhituFetcher | `REALTIME_QUOTE` |

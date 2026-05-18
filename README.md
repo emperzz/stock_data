@@ -167,6 +167,70 @@ GET /api/v1/stocks?market=cn&refresh=true
 
 ---
 
+### Board Data (Concept / Industry)
+
+```bash
+GET /api/v1/boards?type=concept
+GET /api/v1/boards?type=industry&include_quote=true
+GET /api/v1/boards/BK1048/stocks
+GET /api/v1/boards/BK1048/stocks?include_quote=true
+```
+
+**Parameters for `GET /boards`:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | string | Required | Board type: `concept` (概念板块) or `industry` (行业板块) |
+| `include_quote` | bool | `false` | If `true`, include realtime price/change/market data |
+| `source` | string | `eastmoney` | Data source |
+| `refresh` | bool | `false` | Force fetch latest from upstream |
+
+**Response (with `include_quote=false`, default):**
+```json
+{
+  "data": [
+    {"code": "BK1048", "name": "互联网服务"},
+    {"code": "BK0891", "name": "云计算"}
+  ]
+}
+```
+
+**Response (with `include_quote=true`):**
+```json
+{
+  "data": [
+    {
+      "code": "BK1048",
+      "name": "互联网服务",
+      "price": 1850.5,
+      "change_pct": 2.35,
+      "change_amount": 42.3,
+      "volume": 52000000,
+      "amount": 95800000000.0,
+      "turnover_rate": 3.58,
+      "total_mv": 2345000000000.0,
+      "up_count": 45,
+      "down_count": 12,
+      "leading_stock": "科大讯飞",
+      "leading_stock_pct": 8.5
+    }
+  ]
+}
+```
+
+**Parameters for `GET /boards/{board_code}/stocks`:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `include_quote` | bool | `false` | If `true`, include realtime price/change/volume data for each stock |
+| `source` | string | `eastmoney` | Data source |
+| `refresh` | bool | `false` | Force fetch latest from upstream |
+
+**Caching behavior for board endpoints:**
+- Results are cached in `stock_data/stock_cache.db` (SQLite)
+- `include_quote=true` skips cache and fetches fresh data from upstream
+- First call of each day triggers a refresh from upstream
+
+---
+
 ## API Response Caching
 
 The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to avoid repeated upstream API calls when multiple users request the same data within a short window.
