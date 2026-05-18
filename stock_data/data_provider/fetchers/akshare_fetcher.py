@@ -474,15 +474,20 @@ class AkshareFetcher(BaseFetcher):
             logger.warning(f"[AkshareFetcher] get_all_concept_boards failed: {e}")
             return []
 
-    def get_concept_board_stocks(self, board_code: str, source: str = "eastmoney") -> list[dict]:
+    def get_concept_board_stocks(
+        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
         """Get stocks within a concept board.
 
         Args:
             board_code: Board code like "BK1048"
             source: Data source - "eastmoney" (default)
+            include_quote: If True, fetch realtime quote for each stock
 
         Returns:
-            List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
+            List of dicts: [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
+            When include_quote=True, also includes: price, change_pct, change_amount,
+            volume, amount, turnover_rate, pe_ratio, pb_ratio, high, low, open, pre_close
         """
         try:
             import akshare as ak
@@ -494,10 +499,28 @@ class AkshareFetcher(BaseFetcher):
                     code = str(row.get("代码", "")).strip()
                     name = str(row.get("名称", "")).strip()
                     if code:
-                        result.append({"code": code, "name": name})
+                        stock = {"stock_code": code, "stock_name": name}
+                        if include_quote:
+                            stock.update({
+                                "price": row.get("最新价"),
+                                "change_pct": row.get("涨跌幅"),
+                                "change_amount": row.get("涨跌额"),
+                                "volume": row.get("成交量"),
+                                "amount": row.get("成交额"),
+                                "turnover_rate": row.get("换手率"),
+                                "pe_ratio": row.get("市盈率-动态"),
+                                "pb_ratio": row.get("市净率"),
+                                "high": row.get("最高"),
+                                "low": row.get("最低"),
+                                "open": row.get("今开"),
+                                "pre_close": row.get("昨收"),
+                            })
+                        result.append(stock)
             return result
         except Exception as e:
             logger.warning(f"[AkshareFetcher] get_concept_board_stocks({board_code}) failed: {e}")
+            if include_quote:
+                return self._get_board_stocks_with_fallback(board_code, source, "concept")
             return []
 
     def get_all_industry_boards(self, source: str = "eastmoney") -> list[dict]:
@@ -525,15 +548,20 @@ class AkshareFetcher(BaseFetcher):
             logger.warning(f"[AkshareFetcher] get_all_industry_boards failed: {e}")
             return []
 
-    def get_industry_board_stocks(self, board_code: str, source: str = "eastmoney") -> list[dict]:
+    def get_industry_board_stocks(
+        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
         """Get stocks within an industry board.
 
         Args:
             board_code: Board code like "BK0418"
             source: Data source - "eastmoney" (default)
+            include_quote: If True, fetch realtime quote for each stock
 
         Returns:
-            List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
+            List of dicts: [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
+            When include_quote=True, also includes: price, change_pct, change_amount,
+            volume, amount, turnover_rate, pe_ratio, pb_ratio, high, low, open, pre_close
         """
         try:
             import akshare as ak
@@ -545,8 +573,56 @@ class AkshareFetcher(BaseFetcher):
                     code = str(row.get("代码", "")).strip()
                     name = str(row.get("名称", "")).strip()
                     if code:
-                        result.append({"code": code, "name": name})
+                        stock = {"stock_code": code, "stock_name": name}
+                        if include_quote:
+                            stock.update({
+                                "price": row.get("最新价"),
+                                "change_pct": row.get("涨跌幅"),
+                                "change_amount": row.get("涨跌额"),
+                                "volume": row.get("成交量"),
+                                "amount": row.get("成交额"),
+                                "turnover_rate": row.get("换手率"),
+                                "pe_ratio": row.get("市盈率-动态"),
+                                "pb_ratio": row.get("市净率"),
+                                "high": row.get("最高"),
+                                "low": row.get("最低"),
+                                "open": row.get("今开"),
+                                "pre_close": row.get("昨收"),
+                            })
+                        result.append(stock)
             return result
         except Exception as e:
             logger.warning(f"[AkshareFetcher] get_industry_board_stocks({board_code}) failed: {e}")
+            if include_quote:
+                return self._get_board_stocks_with_fallback(board_code, source, "industry")
             return []
+
+    def _get_board_stocks_with_fallback(
+        self, board_code: str, source: str, board_type: str
+    ) -> list[dict]:
+        """Fallback: get board stocks without realtime data, then enrich with get_realtime_quote."""
+        if board_type == "concept":
+            stocks = self.get_concept_board_stocks(board_code, source=source, include_quote=False)
+        else:
+            stocks = self.get_industry_board_stocks(board_code, source=source, include_quote=False)
+
+        if not stocks:
+            return []
+
+        # Fallback to get_realtime_quote for each stock
+        for stock in stocks:
+            quote = self.get_realtime_quote(stock["stock_code"])
+            if quote:
+                stock["price"] = quote.price
+                stock["change_pct"] = quote.change_pct
+                stock["change_amount"] = quote.change_amount
+                stock["volume"] = quote.volume
+                stock["amount"] = quote.amount
+                stock["turnover_rate"] = quote.turnover_rate
+                stock["pe_ratio"] = quote.pe_ratio
+                stock["pb_ratio"] = quote.pb_ratio
+                stock["high"] = quote.high
+                stock["low"] = quote.low
+                stock["open"] = quote.open_price
+                stock["pre_close"] = quote.pre_close
+        return stocks

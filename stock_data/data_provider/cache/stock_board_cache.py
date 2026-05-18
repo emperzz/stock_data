@@ -10,21 +10,24 @@ import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 
 logger = logging.getLogger(__name__)
 
 _db_path: Path | None = None
 _last_refresh_date: dict[str, str] = {}  # key: "board_type:source" -> "YYYY-MM-DD"
+_lock = Lock()
 
 
 def _is_first_call_of_day(board_type: str, source: str) -> bool:
     """Check if this is the first call of the day for the board_type+source, and update the tracker."""
     today = datetime.now().strftime("%Y-%m-%d")
     key = f"{board_type}:{source}"
-    if _last_refresh_date.get(key) != today:
-        _last_refresh_date[key] = today
-        return True
-    return False
+    with _lock:
+        if _last_refresh_date.get(key) != today:
+            _last_refresh_date[key] = today
+            return True
+        return False
 
 
 def _get_db_path() -> Path:
@@ -74,6 +77,18 @@ def init_db() -> None:
                 source TEXT NOT NULL,
                 stock_code TEXT NOT NULL,
                 stock_name TEXT NOT NULL,
+                price REAL,
+                change_pct REAL,
+                change_amount REAL,
+                volume INTEGER,
+                amount REAL,
+                turnover_rate REAL,
+                pe_ratio REAL,
+                pb_ratio REAL,
+                high REAL,
+                low REAL,
+                open_price REAL,
+                pre_close REAL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(board_code, source, stock_code)
             )
@@ -100,7 +115,7 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, manager=
         board_type: "concept" or "industry"
         source: Data source (e.g., "eastmoney")
         refresh: If True, force refresh from upstream
-        manager: DataFetcherManager instance. If None, creates one lazily.
+        manager: DataFetcherManager instance. Required for fetching from upstream.
 
     Returns:
         List of board dicts: [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}, ...]
@@ -116,11 +131,7 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, manager=
 
     # Need refresh: fetch from upstream and update cache
     if manager is None:
-        from ..fetchers.akshare_fetcher import AkshareFetcher
-        from ..base import DataFetcherManager
-
-        manager = DataFetcherManager()
-        manager.add_fetcher(AkshareFetcher())
+        raise ValueError("manager is required when refresh=True or cache miss")
 
     # Fetch based on board_type
     if board_type == "concept":
@@ -137,7 +148,13 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, manager=
     return boards
 
 
-def get_board_stocks(board_code: str, source: str, refresh: bool = False, manager=None) -> list:
+def get_board_stocks(
+    board_code: str,
+    source: str,
+    refresh: bool = False,
+    include_quote: bool = False,
+    manager=None,
+) -> list:
     """
     Get stocks belonging to a board with automatic refresh.
 
@@ -145,15 +162,20 @@ def get_board_stocks(board_code: str, source: str, refresh: bool = False, manage
         board_code: Board code (e.g., "BK1048")
         source: Data source (e.g., "eastmoney")
         refresh: If True, force refresh from upstream
-        manager: DataFetcherManager instance. If None, creates one lazily.
+        include_quote: If True, always fetch fresh realtime data from upstream
+        manager: DataFetcherManager instance. Required for fetching from upstream.
 
     Returns:
         List of stock dicts: [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
+            May include quote fields when include_quote=True.
     """
     init_db()
 
-    key = f"{board_code}:{source}"
-    needs_refresh = refresh or _is_first_call_of_day(board_code, source)
+    # include_quote=True means always fetch fresh data, skip cache
+    if include_quote:
+        needs_refresh = True
+    else:
+        needs_refresh = refresh or _is_first_call_of_day(board_code, source)
 
     if not needs_refresh:
         cached = _read_board_stocks_from_db(board_code, source)
@@ -162,20 +184,16 @@ def get_board_stocks(board_code: str, source: str, refresh: bool = False, manage
 
     # Need refresh: fetch from upstream and update cache
     if manager is None:
-        from ..fetchers.akshare_fetcher import AkshareFetcher
-        from ..base import DataFetcherManager
-
-        manager = DataFetcherManager()
-        manager.add_fetcher(AkshareFetcher())
+        raise ValueError("manager is required when refresh=True or cache miss")
 
     # Determine board_type from board_code prefix pattern
     # For eastmoney: concept boards start with "BK", industry boards are numeric
     # We need to check which type this board_code belongs to
     board_type = _get_board_type(board_code, source, manager)
     if board_type == "concept":
-        stocks = manager.get_concept_board_stocks(board_code, source=source)
+        stocks = manager.get_concept_board_stocks(board_code, source=source, include_quote=include_quote)
     elif board_type == "industry":
-        stocks = manager.get_industry_board_stocks(board_code, source=source)
+        stocks = manager.get_industry_board_stocks(board_code, source=source, include_quote=include_quote)
     else:
         stocks = []
 
@@ -226,12 +244,30 @@ def _read_board_stocks_from_db(board_code: str, source: str) -> list:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT stock_code, stock_name, updated_at FROM stock_board_stock WHERE board_code = ? AND source = ? ORDER BY stock_code",
+            """SELECT stock_code, stock_name, price, change_pct, change_amount, volume,
+               amount, turnover_rate, pe_ratio, pb_ratio, high, low, open_price, pre_close, updated_at
+               FROM stock_board_stock WHERE board_code = ? AND source = ? ORDER BY stock_code""",
             (board_code, source),
         )
         rows = cursor.fetchall()
         return [
-            {"stock_code": row["stock_code"], "stock_name": row["stock_name"], "updated_at": row["updated_at"]}
+            {
+                "stock_code": row["stock_code"],
+                "stock_name": row["stock_name"],
+                "price": row["price"],
+                "change_pct": row["change_pct"],
+                "change_amount": row["change_amount"],
+                "volume": row["volume"],
+                "amount": row["amount"],
+                "turnover_rate": row["turnover_rate"],
+                "pe_ratio": row["pe_ratio"],
+                "pb_ratio": row["pb_ratio"],
+                "high": row["high"],
+                "low": row["low"],
+                "open": row["open_price"],
+                "pre_close": row["pre_close"],
+                "updated_at": row["updated_at"],
+            }
             for row in rows
         ]
     finally:
@@ -283,6 +319,8 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
         board_code: Board code
         source: Data source
         stocks: List of dicts [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
+            May include quote fields: price, change_pct, change_amount, volume, amount,
+            turnover_rate, pe_ratio, pb_ratio, high, low, open, pre_close
 
     Returns:
         Number of stocks inserted/updated
@@ -299,8 +337,20 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             cursor.executemany(
-                "INSERT OR REPLACE INTO stock_board_stock (board_code, source, stock_code, stock_name, updated_at) VALUES (?, ?, ?, ?, ?)",
-                [(board_code, source, s["stock_code"], s["stock_name"], now) for s in stocks],
+                """INSERT OR REPLACE INTO stock_board_stock
+                (board_code, source, stock_code, stock_name, price, change_pct, change_amount,
+                 volume, amount, turnover_rate, pe_ratio, pb_ratio, high, low, open_price, pre_close, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        board_code, source, s["stock_code"], s["stock_name"],
+                        s.get("price"), s.get("change_pct"), s.get("change_amount"),
+                        s.get("volume"), s.get("amount"), s.get("turnover_rate"),
+                        s.get("pe_ratio"), s.get("pb_ratio"), s.get("high"),
+                        s.get("low"), s.get("open"), s.get("pre_close"), now,
+                    )
+                    for s in stocks
+                ],
             )
 
             logger.info(f"[BoardCache] Updated {len(stocks)} stocks for board {board_code}/{source}")

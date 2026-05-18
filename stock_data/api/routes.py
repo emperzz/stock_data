@@ -526,6 +526,7 @@ def list_boards(
         Board list with code and name
     """
     try:
+        cache = None
         if is_cache_enabled() and not refresh:
             cache = get_board_list_cache()
             key = make_board_cache_key(type, source)
@@ -540,7 +541,7 @@ def list_boards(
             data=[BoardInfo(code=b["code"], name=b["name"]) for b in boards]
         )
 
-        if is_cache_enabled():
+        if is_cache_enabled() and cache is not None:
             cache[key] = result
 
         return result
@@ -580,7 +581,8 @@ def get_board_stocks(
         Board info and list of stocks, optionally with quote data
     """
     try:
-        if is_cache_enabled() and not refresh:
+        cache = None
+        if is_cache_enabled() and not refresh and not include_quote:
             cache = get_board_stocks_cache()
             key = make_board_stocks_cache_key(board_code, source, include_quote)
             if key in cache:
@@ -588,7 +590,9 @@ def get_board_stocks(
                 return cache[key]
 
         manager = get_manager()
-        stocks = stock_board_cache.get_board_stocks(board_code, source, refresh=refresh, manager=manager)
+        stocks = stock_board_cache.get_board_stocks(
+            board_code, source, refresh=refresh, include_quote=include_quote, manager=manager
+        )
 
         if not stocks:
             raise HTTPException(
@@ -597,8 +601,9 @@ def get_board_stocks(
             )
 
         # Get board name
+        board_type = "concept" if board_code.startswith("BK") else "industry"
         boards = stock_board_cache.get_board_list(
-            "concept" if board_code.startswith("BK") else "industry",
+            board_type,
             source,
             refresh=False,
             manager=manager,
@@ -606,33 +611,16 @@ def get_board_stocks(
         board_name = next((b["name"] for b in boards if b["code"] == board_code), board_code)
 
         # Build stock list
-        if include_quote:
-            # Fetch realtime quotes for all stocks
-            stock_codes = [s["stock_code"] for s in stocks]
-            quotes = {}
-            for code in stock_codes:
-                try:
-                    quote = manager.get_realtime_quote(code)
-                    if quote:
-                        quotes[code] = quote
-                except Exception as e:
-                    logger.warning(f"Failed to get quote for {code}: {e}")
-
-            stock_list = [
-                BoardStockInfo(
-                    code=s["stock_code"],
-                    name=s["stock_name"],
-                    price=quotes.get(s["stock_code"]).price if s["stock_code"] in quotes else None,
-                    change_pct=quotes.get(s["stock_code"]).change_pct if s["stock_code"] in quotes else None,
-                    volume=quotes.get(s["stock_code"]).volume if s["stock_code"] in quotes else None,
-                )
-                for s in stocks
-            ]
-        else:
-            stock_list = [
-                BoardStockInfo(code=s["stock_code"], name=s["stock_name"])
-                for s in stocks
-            ]
+        stock_list = [
+            BoardStockInfo(
+                code=s["stock_code"],
+                name=s["stock_name"],
+                price=s.get("price"),
+                change_pct=s.get("change_pct"),
+                volume=s.get("volume"),
+            )
+            for s in stocks
+        ]
 
         result = BoardStocksResponse(
             board=BoardInfo(code=board_code, name=board_name),
@@ -640,7 +628,7 @@ def get_board_stocks(
             source=source,
         )
 
-        if is_cache_enabled():
+        if is_cache_enabled() and cache is not None:
             cache[key] = result
 
         return result

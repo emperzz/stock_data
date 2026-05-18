@@ -568,21 +568,26 @@ class DataFetcherManager:
                 continue
         raise DataFetchError(f"All fetchers failed for industry boards:\n" + "\n".join(errors))
 
-    def get_concept_board_stocks(self, board_code: str, source: str = "eastmoney") -> list[dict]:
+    def get_concept_board_stocks(
+        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
         """Get stocks belonging to a concept board.
 
         Args:
             board_code: Board code (e.g., "BK1048")
             source: Data source (e.g., "eastmoney")
+            include_quote: If True, include realtime price/change data
 
         Returns:
             List of stock dicts [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
+            When include_quote=True, also includes: price, change_pct, change_amount,
+            volume, amount, turnover_rate, pe_ratio, pb_ratio, high, low, open, pre_close
         """
         fetchers = self._filter_by_capability("csi", DataCapability.STOCK_BOARD)
         errors = []
         for fetcher in fetchers:
             try:
-                stocks = fetcher.get_concept_board_stocks(board_code, source=source)
+                stocks = fetcher.get_concept_board_stocks(board_code, source=source, include_quote=include_quote)
                 if stocks is not None:
                     logger.info(f"[Manager] {fetcher.name} returned {len(stocks)} stocks for concept board {board_code}")
                     return stocks
@@ -592,21 +597,26 @@ class DataFetcherManager:
                 continue
         raise DataFetchError(f"All fetchers failed for concept board stocks {board_code}:\n" + "\n".join(errors))
 
-    def get_industry_board_stocks(self, board_code: str, source: str = "eastmoney") -> list[dict]:
+    def get_industry_board_stocks(
+        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
         """Get stocks belonging to an industry board.
 
         Args:
             board_code: Board code
             source: Data source (e.g., "eastmoney")
+            include_quote: If True, include realtime price/change data
 
         Returns:
             List of stock dicts [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
+            When include_quote=True, also includes: price, change_pct, change_amount,
+            volume, amount, turnover_rate, pe_ratio, pb_ratio, high, low, open, pre_close
         """
         fetchers = self._filter_by_capability("csi", DataCapability.STOCK_BOARD)
         errors = []
         for fetcher in fetchers:
             try:
-                stocks = fetcher.get_industry_board_stocks(board_code, source=source)
+                stocks = fetcher.get_industry_board_stocks(board_code, source=source, include_quote=include_quote)
                 if stocks is not None:
                     logger.info(f"[Manager] {fetcher.name} returned {len(stocks)} stocks for industry board {board_code}")
                     return stocks
