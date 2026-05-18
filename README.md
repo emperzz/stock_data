@@ -110,6 +110,62 @@ GET /api/v1/stocks/{code}/quote
 }
 ```
 
+**Note:** Index codes are not supported via `/stocks/{code}/quote`. Use `/indices/{code}/quote` instead.
+
+---
+
+### Index APIs
+
+Index data is served via dedicated `/indices/` endpoints (separate from stocks).
+
+#### Index Realtime Quote
+
+```bash
+GET /api/v1/indices/{index_code}/quote
+```
+
+**Response:**
+```json
+{
+  "code": "000300",
+  "name": "沪深300",
+  "source": "akshare",
+  "current_price": 4833.52,
+  "change": -26.07,
+  "change_percent": -0.536,
+  "open": 4836.33,
+  "high": 4868.60,
+  "low": 4806.15,
+  "prev_close": 4859.59,
+  "volume": 239077587,
+  "amount": 733452822624.0
+}
+```
+
+#### Index Historical K-line
+
+```bash
+GET /api/v1/indices/{index_code}/history?period=daily&days=30
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | string | `daily` | K-line period: `daily`, `weekly`, `monthly` |
+| `days` | int | 30 | Number of days (1-365, ignored when `start_date` provided) |
+| `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` |
+| `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
+
+#### Index Intradaday (Minute-Level)
+
+```bash
+GET /api/v1/indices/{index_code}/intraday?period=5
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | string | `5` | Minute period: `1`, `5`, `15`, `30`, `60` |
+
 ---
 
 ### List All Available Indices
@@ -241,6 +297,9 @@ The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to 
 | `GET /stocks/{code}/history` (daily) | `code:d:days` | 300s |
 | `GET /stocks/{code}/history` (weekly) | `code:w:days` | 3600s |
 | `GET /stocks/{code}/history` (monthly) | `code:m:days` | 7200s |
+| `GET /indices/{code}/quote` | `idx_quote:{code}` | 60s |
+| `GET /indices/{code}/history` | `{code}:{freq}:{days}` | 300/3600/7200s |
+| `GET /indices/{code}/intraday` | `idx_intraday:{code}:{period}` | 30s |
 
 **Cache behavior:**
 - First request fetches from upstream (subject to rate limiting)
@@ -255,6 +314,8 @@ The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to 
 | `CACHE_TTL_HISTORY_DAILY` | TTL for daily K-line (seconds) | `300` |
 | `CACHE_TTL_HISTORY_WEEKLY` | TTL for weekly K-line (seconds) | `3600` |
 | `CACHE_TTL_HISTORY_MONTHLY` | TTL for monthly K-line (seconds) | `7200` |
+| `CACHE_TTL_INDEX_QUOTE` | TTL for index realtime quotes (seconds) | `60` |
+| `CACHE_TTL_INDEX_INTRADAY` | TTL for index intraday (seconds) | `30` |
 
 ---
 
@@ -287,13 +348,34 @@ GET /api/v1/stocks/SZ000001/quote     # prefix stripped
 | 中证500 | `000905` | CSI 500 |
 | 科创50 | `000688` | STAR 50 |
 
-**Examples:**
+**Index realtime quote:**
 ```bash
-GET /api/v1/stocks/000300/history     # 沪深300 日线
-GET /api/v1/stocks/000300/history?period=weekly   # 沪深300 周线
-GET /api/v1/stocks/399001/history     # 深证成指
-GET /api/v1/stocks/000001/history?period=monthly  # 上证指数 月线
+GET /api/v1/indices/000300/quote      # 沪深300 realtime
+GET /api/v1/indices/399006/quote      # 创业板指 realtime
 ```
+
+**Index historical K-line:**
+```bash
+GET /api/v1/indices/000300/history     # 沪深300 日线
+GET /api/v1/indices/000300/history?period=weekly   # 沪深300 周线
+GET /api/v1/indices/399001/history     # 深证成指
+GET /api/v1/indices/000001/history?period=monthly  # 上证指数 月线
+```
+
+**Index intraday (minute-level):**
+```bash
+GET /api/v1/indices/399006/intraday?period=5   # 创业板指 5-minute
+GET /api/v1/indices/000300/intraday?period=15  # 沪深300 15-minute
+```
+
+### Hong Kong Indices
+
+| Index | Code | Full Name |
+|-------|------|----------|
+| 恒生指数 | `HSI` | Hang Seng Index |
+| 国企指数 | `HSCE` | HSCEI |
+
+**Note:** HK index intraday is not yet supported.
 
 ### Hong Kong Stocks
 

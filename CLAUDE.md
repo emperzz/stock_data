@@ -15,6 +15,7 @@ A Python-based local stock data aggregation server that:
 ┌─────────────────────────────────────────────────────────┐
 │                    API Layer (FastAPI)                   │
 │   GET /stocks/{code}/quote   GET /stocks/{code}/history  │
+│   GET /indices/{code}/quote  GET /indices/{code}/history │
 ├─────────────────────────────────────────────────────────┤
 │                    StockService                          │
 │         Unified interface for data access                 │
@@ -230,6 +231,9 @@ class DataCapability(Flag):
 | `get_trade_calendar` | `TRADE_CALENDAR` |
 | `get_all_concept_boards` / `get_all_industry_boards` | `STOCK_BOARD` |
 | `get_concept_board_stocks` / `get_industry_board_stocks` | `STOCK_BOARD` |
+| `get_index_realtime_quote` | AkshareFetcher-only (no capability routing) |
+| `get_index_historical` | AkshareFetcher-only (no capability routing) |
+| `get_index_intraday` | AkshareFetcher-only (no capability routing) |
 
 **Fetcher capability declarations:**
 

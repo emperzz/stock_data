@@ -522,6 +522,74 @@ class DataFetcherManager:
 
         raise DataFetchError("All fetchers failed for trade calendar:\n" + "\n".join(errors))
 
+    def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
+        """Get realtime quote for a CSI index via AkshareFetcher.
+
+        Args:
+            index_code: Index code (e.g., 000300, 399006)
+
+        Returns:
+            UnifiedRealtimeQuote or None if not available.
+        """
+        from .fetchers.akshare_fetcher import AkshareFetcher
+
+        fetcher = AkshareFetcher()
+        return fetcher.get_index_realtime_quote(index_code)
+
+    def get_index_historical(
+        self,
+        index_code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        days: int = 30,
+        frequency: str = "d",
+    ) -> tuple[pd.DataFrame, str]:
+        """Get historical K-line data for a CSI index.
+
+        Args:
+            index_code: Index code (e.g., 000300, 399006)
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            days: Number of days when start_date not provided
+            frequency: K-line period - 'd'=daily, 'w'=weekly, 'm'=monthly
+
+        Returns:
+            Tuple of (DataFrame, source_name)
+        """
+        from datetime import datetime, timedelta
+
+        # Compute start_date from days if not provided
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        from .fetchers.akshare_fetcher import AkshareFetcher
+
+        fetcher = AkshareFetcher()
+        df = fetcher.get_index_historical(index_code, start_date, end_date, frequency)
+        if df is not None and not df.empty:
+            return df, fetcher.name
+        raise DataFetchError(f"AkshareFetcher failed for {index_code} historical")
+
+    def get_index_intraday(
+        self, index_code: str, period: str = "5"
+    ) -> tuple[pd.DataFrame, str]:
+        """Get intraday minute-level data for a CSI index.
+
+        Args:
+            index_code: Index code (e.g., 000300, 399006)
+            period: Minute period - "1", "5", "15", "30", "60"
+
+        Returns:
+            Tuple of (DataFrame, source_name)
+        """
+        from .fetchers.akshare_fetcher import AkshareFetcher
+
+        fetcher = AkshareFetcher()
+        df = fetcher.get_index_intraday(index_code, period)
+        if df is not None and not df.empty:
+            return df, fetcher.name
+        raise DataFetchError(f"AkshareFetcher failed for {index_code} intraday")
+
     def get_all_concept_boards(self, source: str = "eastmoney", include_quote: bool = False) -> list[dict]:
         """Get all concept boards from fetchers that support STOCK_BOARD capability.
 

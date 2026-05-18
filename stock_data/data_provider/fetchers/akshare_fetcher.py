@@ -668,3 +668,306 @@ class AkshareFetcher(BaseFetcher):
                 stock["open"] = quote.open_price
                 stock["pre_close"] = quote.pre_close
         return stocks
+
+    def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
+        """Get realtime quote for a CSI index.
+
+        Args:
+            index_code: Index code (e.g., 000300, 399006)
+
+        Returns:
+            UnifiedRealtimeQuote or None if not available.
+        """
+        try:
+            import akshare as ak
+
+            code = normalize_stock_code(index_code)
+
+            # Try EM first (stock_zh_index_spot_em)
+            try:
+                df = ak.stock_zh_index_spot_em(symbol="上证系列指数")
+                if df is not None and not df.empty:
+                    row = df[df["代码"] == code]
+                    if row.empty:
+                        # Try other index series
+                        for symbol in ["沪深重要指数", "深证系列指数", "中证系列指数"]:
+                            df = ak.stock_zh_index_spot_em(symbol=symbol)
+                            if df is not None and not df.empty:
+                                row = df[df["代码"] == code]
+                                if not row.empty:
+                                    break
+                    if not row.empty:
+                        row = row.iloc[0]
+                        return UnifiedRealtimeQuote(
+                            code=code,
+                            name=str(row.get("名称", "")),
+                            source=RealtimeSource.AKSHARE,
+                            price=safe_float(row.get("最新价")),
+                            change_pct=safe_float(row.get("涨跌幅")),
+                            change_amount=safe_float(row.get("涨跌额")),
+                            volume=safe_int(row.get("成交量")),
+                            amount=safe_float(row.get("成交额")),
+                            open_price=safe_float(row.get("今开")),
+                            high=safe_float(row.get("最高")),
+                            low=safe_float(row.get("最低")),
+                            pre_close=safe_float(row.get("昨收")),
+                        )
+            except Exception as e:
+                logger.debug(f"[AkshareFetcher] stock_zh_index_spot_em failed: {e}")
+
+            # Fallback to Sina (stock_zh_index_spot_sina)
+            try:
+                df = ak.stock_zh_index_spot_sina()
+                if df is not None and not df.empty:
+                    # Sina returns codes like "sh000001", "sz399006"
+                    prefix = "sh" if code.startswith(("6", "5", "0")) else "sz"
+                    sina_code = f"{prefix}{code}"
+                    row = df[df["代码"] == sina_code]
+                    if row.empty:
+                        # Try without prefix
+                        row = df[df["代码"].str.contains(code, na=False)]
+                    if not row.empty:
+                        row = row.iloc[0]
+                        return UnifiedRealtimeQuote(
+                            code=code,
+                            name=str(row.get("名称", "")),
+                            source=RealtimeSource.AKSHARE,
+                            price=safe_float(row.get("最新价")),
+                            change_pct=safe_float(row.get("涨跌幅")),
+                            change_amount=safe_float(row.get("涨跌额")),
+                            volume=safe_int(row.get("成交量")),
+                            amount=safe_float(row.get("成交额")),
+                            open_price=safe_float(row.get("今开")),
+                            high=safe_float(row.get("最高")),
+                            low=safe_float(row.get("最低")),
+                            pre_close=safe_float(row.get("昨收")),
+                        )
+            except Exception as e:
+                logger.debug(f"[AkshareFetcher] stock_zh_index_spot_sina failed: {e}")
+
+            return None
+
+        except Exception:
+            logger.warning(
+                f"[AkshareFetcher] get_index_realtime_quote failed for {index_code}",
+                exc_info=True,
+            )
+            return None
+
+    def get_index_historical(
+        self,
+        index_code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        period: str = "d",
+    ) -> pd.DataFrame | None:
+        """Get historical K-line data for a CSI index.
+
+        Tries in order: stock_zh_index_daily (Sina) -> stock_zh_index_daily_tx (Tencent) ->
+        stock_zh_index_daily_em (EM).
+
+        Args:
+            index_code: Index code (e.g., 000300, 399006)
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            period: K-line period - 'd'=daily, 'w'=weekly, 'm'=monthly
+
+        Returns:
+            DataFrame with columns: date, open, high, low, close, volume, amount, pct_chg
+            or None if not available.
+        """
+        try:
+            import akshare as ak
+
+            code = normalize_stock_code(index_code)
+            period_map = {"d": "daily", "w": "weekly", "m": "monthly"}
+            period_value = period_map.get(period, "daily")
+
+            # Determine Sina/Tencent prefix
+            prefix = "sh" if code.startswith(("6", "5", "0")) else "sz"
+            sina_symbol = f"{prefix}{code}"
+
+            # Try stock_zh_index_daily (Sina)
+            try:
+                df = ak.stock_zh_index_daily(symbol=sina_symbol)
+                if df is not None and not df.empty:
+                    df = self._normalize_index_daily(df, code)
+                    if start_date or end_date:
+                        df = self._filter_by_date(df, start_date, end_date)
+                    return df
+            except Exception as e:
+                logger.debug(f"[AkshareFetcher] stock_zh_index_daily failed: {e}")
+
+            # Try stock_zh_index_daily_tx (Tencent)
+            try:
+                df = ak.stock_zh_index_daily_tx(
+                    symbol=sina_symbol,
+                    start_date=(start_date or "").replace("-", ""),
+                    end_date=(end_date or "").replace("-", ""),
+                )
+                if df is not None and not df.empty:
+                    df = self._normalize_index_daily_tx(df, code)
+                    return df
+            except Exception as e:
+                logger.debug(f"[AkshareFetcher] stock_zh_index_daily_tx failed: {e}")
+
+            # Try stock_zh_index_daily_em (EM)
+            try:
+                df = ak.stock_zh_index_daily_em(
+                    symbol=code,
+                    start_date=start_date.replace("-", "") if start_date else "19900101",
+                    end_date=end_date.replace("-", "") if end_date else "20500101",
+                )
+                if df is not None and not df.empty:
+                    df = self._normalize_index_daily_em(df, code)
+                    return df
+            except Exception as e:
+                logger.debug(f"[AkshareFetcher] stock_zh_index_daily_em failed: {e}")
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_index_historical failed: {e}")
+            return None
+
+    def _normalize_index_daily(self, df: pd.DataFrame, code: str) -> pd.DataFrame:
+        """Normalize stock_zh_index_daily (Sina) DataFrame."""
+        column_mapping = {
+            "date": "date",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "volume": "volume",
+        }
+        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        numeric_cols = ["open", "high", "low", "close", "volume"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "code" not in df.columns:
+            df["code"] = code
+        keep_cols = ["code", "date", "open", "high", "low", "close", "volume"]
+        df = df[[c for c in keep_cols if c in df.columns]]
+        return df
+
+    def _normalize_index_daily_tx(self, df: pd.DataFrame, code: str) -> pd.DataFrame:
+        """Normalize stock_zh_index_daily_tx (Tencent) DataFrame."""
+        column_mapping = {
+            "date": "date",
+            "open": "open",
+            "close": "close",
+            "high": "high",
+            "low": "low",
+            "amount": "volume",
+        }
+        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        numeric_cols = ["open", "high", "low", "close", "volume"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "code" not in df.columns:
+            df["code"] = code
+        keep_cols = ["code", "date", "open", "high", "low", "close", "volume"]
+        df = df[[c for c in keep_cols if c in df.columns]]
+        return df
+
+    def _normalize_index_daily_em(self, df: pd.DataFrame, code: str) -> pd.DataFrame:
+        """Normalize stock_zh_index_daily_em (EM) DataFrame."""
+        column_mapping = {
+            "date": "date",
+            "open": "open",
+            "close": "close",
+            "high": "high",
+            "low": "low",
+            "volume": "volume",
+            "amount": "amount",
+        }
+        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "code" not in df.columns:
+            df["code"] = code
+        keep_cols = ["code", "date", "open", "high", "low", "close", "volume", "amount"]
+        df = df[[c for c in keep_cols if c in df.columns]]
+        return df
+
+    def _filter_by_date(
+        self, df: pd.DataFrame, start_date: str | None, end_date: str | None
+    ) -> pd.DataFrame:
+        """Filter DataFrame by date range."""
+        if "date" not in df.columns:
+            return df
+        if start_date:
+            df = df[df["date"] >= pd.to_datetime(start_date, errors="coerce")]
+        if end_date:
+            df = df[df["date"] <= pd.to_datetime(end_date, errors="coerce")]
+        return df
+
+    def get_index_intraday(
+        self, index_code: str, period: str = "5"
+    ) -> pd.DataFrame | None:
+        """Get intraday minute-level data for a CSI index.
+
+        Args:
+            index_code: Index code (e.g., 000300, 399006)
+            period: Minute period - "1", "5", "15", "30", "60"
+
+        Returns:
+            DataFrame with columns: time, open, high, low, close, volume, amount
+            or None if not available.
+        """
+        try:
+            import akshare as ak
+            from datetime import date, datetime, timedelta
+
+            code = normalize_stock_code(index_code)
+
+            today = date.today()
+            start_dt = datetime.combine(today, datetime.min.time().replace(hour=9, minute=30))
+            end_dt = datetime.combine(today, datetime.min.time().replace(hour=15, minute=0))
+
+            start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+            end_str = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            df = ak.index_zh_a_hist_min_em(
+                symbol=code,
+                period=period,
+                start_date=start_str,
+                end_date=end_str,
+            )
+            if df is None or df.empty:
+                return None
+
+            df = df.rename(
+                columns={
+                    "时间": "time",
+                    "开盘": "open",
+                    "收盘": "close",
+                    "最高": "high",
+                    "最低": "low",
+                    "成交量": "volume",
+                    "成交额": "amount",
+                }
+            )
+            if "time" in df.columns:
+                df["time"] = df["time"].astype(str).str[-8:]
+            numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
+            df = df[[c for c in keep_cols if c in df.columns]]
+            return df
+
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_index_intraday failed: {e}")
+            return None

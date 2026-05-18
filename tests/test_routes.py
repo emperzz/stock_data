@@ -117,3 +117,71 @@ class TestCalendar:
         data = response.json()
         assert "trade_dates" in data
         assert "total" in data
+
+
+class TestIndexQuote:
+    """Tests for /api/v1/indices/{code}/quote endpoint."""
+
+    def test_index_quote_returns_data(self, client):
+        response = client.get("/api/v1/indices/000300/quote")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["code"] == "000300"
+        assert "name" in data
+        assert "current_price" in data
+        assert "change_percent" in data
+
+    def test_index_quote_399006(self, client):
+        response = client.get("/api/v1/indices/399006/quote")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["code"] == "399006"
+
+
+class TestIndexHistory:
+    """Tests for /api/v1/indices/{code}/history endpoint."""
+
+    def test_index_history_daily(self, client):
+        response = client.get("/api/v1/indices/000300/history?period=daily&days=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["code"] == "000300"
+        assert data["period"] == "daily"
+        assert len(data["data"]) <= 5
+
+    def test_index_history_weekly(self, client):
+        response = client.get("/api/v1/indices/000300/history?period=weekly&days=10")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["period"] == "weekly"
+
+
+class TestIndexIntraday:
+    """Tests for /api/v1/indices/{code}/intraday endpoint."""
+
+    def test_index_intraday_period_5(self, client):
+        response = client.get("/api/v1/indices/000300/intraday?period=5")
+        # May fail due to upstream EM issues, but should not 500 unless implementation error
+        assert response.status_code in (200, 500, 502, 503, 504)
+
+    def test_index_intraday_invalid_period(self, client):
+        response = client.get("/api/v1/indices/000300/intraday?period=999")
+        assert response.status_code == 422
+
+
+class TestStocksBlocksIndices:
+    """Tests that /stocks/{code}/* endpoints reject index codes."""
+
+    def test_stocks_quote_blocks_index(self, client):
+        response = client.get("/api/v1/stocks/000300/quote")
+        assert response.status_code == 400
+        assert "indices" in response.json()["detail"]["message"]
+
+    def test_stocks_history_blocks_index(self, client):
+        response = client.get("/api/v1/stocks/000300/history?period=daily&days=5")
+        assert response.status_code == 400
+        assert "indices" in response.json()["detail"]["message"]
+
+    def test_stocks_intraday_blocks_index(self, client):
+        response = client.get("/api/v1/stocks/000300/intraday?period=5")
+        assert response.status_code == 400

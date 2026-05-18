@@ -150,3 +150,40 @@ class BoardStocksResponse(BaseModel):
     board: BoardInfo = Field(description="Board info")
     stocks: list[BoardStockInfo] = Field(default_factory=list, description="Stocks in the board")
     source: str = Field(default="", description="Data source")
+
+
+class IndexQuote(BaseModel):
+    """Index realtime quote response."""
+
+    code: str = Field(description="Index code")
+    name: str = Field(default="", description="Index name")
+    source: str = Field(default="", description="Data source")
+    current_price: float = Field(default=0.0, description="Current price")
+    change: float | None = Field(default=None, description="Price change amount")
+    change_percent: float | None = Field(default=None, description="Price change percent")
+    open: float | None = Field(default=None, description="Opening price")
+    high: float | None = Field(default=None, description="Highest price")
+    low: float | None = Field(default=None, description="Lowest price")
+    prev_close: float | None = Field(default=None, description="Previous close price")
+    volume: int | None = Field(default=None, description="Trading volume")
+    amount: float | None = Field(default=None, description="Trading amount")
+    update_time: str | None = Field(default=None, description="Update timestamp")
+
+
+class IndexHistoryResponse(BaseModel):
+    """Index historical K-line response."""
+
+    code: str = Field(description="Index code")
+    name: str = Field(default="", description="Index name")
+    period: str = Field(default="daily", description="K-line period: daily/weekly/monthly")
+    data: list[KLineData] = Field(default_factory=list, description="K-line data points")
+
+
+class IndexIntradayResponse(BaseModel):
+    """Index intraday minute-level data response."""
+
+    code: str = Field(description="Index code")
+    name: str = Field(default="", description="Index name")
+    period: str = Field(description="Minute period (1m/5m/15m/30m/60m)")
+    date: str = Field(description="Trade date (YYYY-MM-DD)")
+    data: list[IntradayData] = Field(default_factory=list, description="Minute-level data points")

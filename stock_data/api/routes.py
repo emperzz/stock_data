@@ -15,17 +15,22 @@ from ..data_provider.fetchers.baostock_fetcher import BaostockFetcher
 from ..data_provider.fetchers.tushare_fetcher import TushareFetcher
 from ..data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
 from ..data_provider.fetchers.zhitu_fetcher import ZhituFetcher
-from ..data_provider.utils.normalize import is_hk_market, is_us_market, normalize_stock_code
+from ..data_provider.utils.normalize import is_hk_market, is_index_code, is_us_market, normalize_stock_code
 from ..data_provider.fetchers.index_symbols import get_all_indices
 from .cache import (
     get_board_list_cache,
     get_board_stocks_cache,
     get_history_cache,
+    get_index_intraday_cache,
+    get_index_quote_cache,
     get_quote_cache,
     is_cache_enabled,
     make_board_cache_key,
     make_board_stocks_cache_key,
     make_history_cache_key,
+    make_index_history_cache_key,
+    make_index_intraday_cache_key,
+    make_index_quote_cache_key,
     make_quote_cache_key,
 )
 from .schemas import (
@@ -35,7 +40,10 @@ from .schemas import (
     BoardStocksResponse,
     ErrorResponse,
     HealthResponse,
+    IndexHistoryResponse,
     IndexInfo,
+    IndexIntradayResponse,
+    IndexQuote,
     IntradayData,
     IntradayResponse,
     KLineData,
@@ -127,8 +135,18 @@ def get_quote(stock_code: str = Path(max_length=20, description="Stock code")) -
 
     Args:
         stock_code: Stock code (e.g., 600519, AAPL, HK00700)
+
+    Note:
+        Index codes are not supported. Use /indices/{index_code}/quote instead.
     """
     try:
+        # Reject index codes
+        if is_index_code(stock_code):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_request", "message": f"Index {stock_code} is not supported via this endpoint. Use /indices/{stock_code}/quote instead."},
+            )
+
         # Cache check
         if is_cache_enabled():
             cache = get_quote_cache()
@@ -203,17 +221,26 @@ def get_history(
     ),
 ) -> StockHistoryResponse:
     """
-    Get historical K-line data for a stock or index.
+    Get historical K-line data for a stock.
 
     Args:
-        stock_code: Stock or index code
+        stock_code: Stock code
         period: K-line period (daily/weekly/monthly)
         days: Number of days when start_date not provided
         start_date: Start date (YYYY-MM-DD), overrides days parameter
         end_date: End date (YYYY-MM-DD), defaults to today
         adjust: Adjustment type - empty=不复权, qfq=前复权, hfq=后复权
+
+    Note:
+        Index codes are not supported. Use /indices/{index_code}/history instead.
     """
     try:
+        if is_index_code(stock_code):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_request", "message": f"Index {stock_code} is not supported via this endpoint. Use /indices/{stock_code}/history instead."},
+            )
+
         period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
         frequency = period_map.get(period, "d")
 
@@ -281,6 +308,8 @@ def get_history(
 
         return result
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"History error: {e}", exc_info=True)
         raise HTTPException(
@@ -323,14 +352,14 @@ def get_intraday(
         - Intraday data is only available for A-share stocks
     """
     try:
-        # Only A-share supported for intraday
+        # Only A-share stocks supported for intraday (indices not allowed)
         code = normalize_stock_code(stock_code)
-        if is_us_market(code) or is_hk_market(code):
+        if is_us_market(code) or is_hk_market(code) or is_index_code(code):
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": "unsupported_market",
-                    "message": "Intraday data is only available for A-share stocks",
+                    "message": "Intraday data is only available for A-share stocks. Use /indices/{index_code}/intraday for indices.",
                 },
             )
 
@@ -391,6 +420,251 @@ def list_indices() -> list[IndexInfo]:
     """
     indices = get_all_indices()
     return [IndexInfo(code=i["code"], name=i["name"], market=i["market"]) for i in indices]
+
+
+@router.get(
+    "/indices/{index_code}/quote",
+    response_model=IndexQuote,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid index code"},
+        404: {"model": ErrorResponse, "description": "Index not found"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["indices"],
+)
+def get_index_quote(index_code: str = Path(max_length=20, description="Index code")) -> IndexQuote:
+    """
+    Get realtime quote for an index.
+
+    Args:
+        index_code: Index code (e.g., 000300, 399006, HSI, SPX)
+    """
+    try:
+        if is_cache_enabled():
+            cache = get_index_quote_cache()
+            key = make_index_quote_cache_key(index_code)
+            if key in cache:
+                logger.info(f"[APICache] index_quote hit: {index_code}")
+                return cache[key]
+
+        manager = get_manager()
+        quote = manager.get_index_realtime_quote(index_code)
+
+        if quote is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": f"Quote not available for {index_code}"},
+            )
+
+        result = IndexQuote(
+            code=quote.code,
+            name=quote.name or "",
+            source=quote.source.value,
+            current_price=quote.price or 0.0,
+            change=quote.change_amount,
+            change_percent=quote.change_pct,
+            open=quote.open_price,
+            high=quote.high,
+            low=quote.low,
+            prev_close=quote.pre_close,
+            volume=quote.volume,
+            amount=quote.amount,
+        )
+
+        if is_cache_enabled():
+            cache[key] = result
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Index quote error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
+
+
+@router.get(
+    "/indices/{index_code}/history",
+    response_model=IndexHistoryResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid index code"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["indices"],
+)
+def get_index_history(
+    index_code: str = Path(max_length=20, description="Index code"),
+    period: str = Query(
+        default="daily", pattern="^(daily|weekly|monthly)$", description="K-line period"
+    ),
+    days: int = Query(default=30, ge=1, le=365, description="Number of days"),
+    start_date: str | None = Query(
+        default=None, description="Start date (YYYY-MM-DD), overrides days"
+    ),
+    end_date: str | None = Query(
+        default=None, description="End date (YYYY-MM-DD), defaults to today"
+    ),
+) -> IndexHistoryResponse:
+    """
+    Get historical K-line data for an index.
+
+    Args:
+        index_code: Index code (e.g., 000300, 399006)
+        period: K-line period (daily/weekly/monthly)
+        days: Number of days when start_date not provided
+        start_date: Start date (YYYY-MM-DD), overrides days parameter
+        end_date: End date (YYYY-MM-DD), defaults to today
+    """
+    try:
+        period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
+        frequency = period_map.get(period, "d")
+
+        if is_cache_enabled():
+            cache = get_history_cache(frequency)
+            key = make_index_history_cache_key(
+                index_code, frequency, days, start_date, end_date
+            )
+            if key in cache:
+                logger.info(f"[APICache] index_history hit: {key}")
+                return cache[key]
+
+        manager = get_manager()
+        df, source = manager.get_index_historical(
+            index_code,
+            start_date=start_date,
+            end_date=end_date,
+            days=days,
+            frequency=frequency,
+        )
+
+        # Get index name from index list
+        all_indices = get_all_indices()
+        index_name = next((i["name"] for i in all_indices if i["code"] == index_code), index_code)
+
+        def format_date(val):
+            if val is None:
+                return ""
+            if hasattr(val, "strftime"):
+                return val.strftime("%Y-%m-%d")
+            return str(val)
+
+        records = df.to_dict("records")
+        data = [
+            KLineData(
+                date=format_date(row.get("date")),
+                open=float(row.get("open", 0)),
+                high=float(row.get("high", 0)),
+                low=float(row.get("low", 0)),
+                close=float(row.get("close", 0)),
+                volume=int(row.get("volume", 0)),
+                amount=float(row.get("amount")) if row.get("amount") is not None else None,
+                change_percent=float(row.get("pct_chg"))
+                if row.get("pct_chg") is not None
+                else None,
+                ma5=float(row.get("ma5")) if row.get("ma5") is not None else None,
+                ma10=float(row.get("ma10")) if row.get("ma10") is not None else None,
+                ma20=float(row.get("ma20")) if row.get("ma20") is not None else None,
+            )
+            for row in records
+        ]
+
+        result = IndexHistoryResponse(
+            code=index_code, name=index_name, period=period, data=data
+        )
+
+        if is_cache_enabled():
+            cache[key] = result
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Index history error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
+
+
+@router.get(
+    "/indices/{index_code}/intraday",
+    response_model=IndexIntradayResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid period or unsupported"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["indices"],
+)
+def get_index_intraday(
+    index_code: str = Path(max_length=20, description="Index code"),
+    period: str = Query(
+        default="5",
+        pattern="^(1|5|15|30|60)$",
+        description="Minute period: 1, 5, 15, 30, 60",
+    ),
+) -> IndexIntradayResponse:
+    """
+    Get intraday minute-level data for an index.
+
+    Args:
+        index_code: Index code (e.g., 000300, 399006)
+        period: Minute period - 1, 5, 15, 30, 60
+    """
+    try:
+        if is_cache_enabled():
+            cache = get_index_intraday_cache()
+            key = make_index_intraday_cache_key(index_code, period)
+            if key in cache:
+                logger.info(f"[APICache] index_intraday hit: {key}")
+                return cache[key]
+
+        manager = get_manager()
+        df, source = manager.get_index_intraday(index_code, period=period)
+
+        # Get index name
+        all_indices = get_all_indices()
+        index_name = next((i["name"] for i in all_indices if i["code"] == index_code), index_code)
+
+        # Determine trade date from data
+        trade_date = ""
+        if "time" in df.columns and len(df) > 0:
+            first_time = str(df.iloc[0].get("time", ""))
+            if len(first_time) >= 10:
+                trade_date = first_time[:10]
+
+        records = df.to_dict("records")
+        data = [
+            IntradayData(
+                time=str(row.get("time", "")),
+                open=float(row.get("open", 0)),
+                high=float(row.get("high", 0)),
+                low=float(row.get("low", 0)),
+                close=float(row.get("close", 0)),
+                volume=int(row.get("volume", 0)),
+                amount=float(row.get("amount")) if row.get("amount") is not None else None,
+            )
+            for row in records
+        ]
+
+        period_label = f"{period}m"
+        result = IndexIntradayResponse(
+            code=index_code,
+            name=index_name,
+            period=period_label,
+            date=trade_date,
+            data=data,
+        )
+
+        if is_cache_enabled():
+            cache[key] = result
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Index intraday error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
