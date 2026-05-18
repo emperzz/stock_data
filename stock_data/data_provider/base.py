@@ -38,6 +38,7 @@ class DataCapability(Flag):
     STOCK_LIST = auto()  # 股票列表 (get_all_stocks)
     STOCK_NAME = auto()  # 股票名称 (get_stock_name)
     TRADE_CALENDAR = auto()  # 交易日历
+    STOCK_BOARD = auto()  # 板块数据（概念/行业板块列表）
 
 
 class DataFetchError(Exception):
