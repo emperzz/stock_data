@@ -115,6 +115,17 @@ class BoardInfo(BaseModel):
 
     code: str = Field(description="Board code (e.g., BK1048)")
     name: str = Field(description="Board name (e.g., 互联网服务)")
+    price: float | None = Field(default=None, description="Latest price (requires include_quote=True)")
+    change_pct: float | None = Field(default=None, description="Change percent (requires include_quote=True)")
+    change_amount: float | None = Field(default=None, description="Change amount (requires include_quote=True)")
+    volume: int | None = Field(default=None, description="Volume (requires include_quote=True)")
+    amount: float | None = Field(default=None, description="Amount (requires include_quote=True)")
+    turnover_rate: float | None = Field(default=None, description="Turnover rate (requires include_quote=True)")
+    total_mv: float | None = Field(default=None, description="Total market value (requires include_quote=True)")
+    up_count: int | None = Field(default=None, description="Number of rising stocks (requires include_quote=True)")
+    down_count: int | None = Field(default=None, description="Number of falling stocks (requires include_quote=True)")
+    leading_stock: str | None = Field(default=None, description="Leading stock name (requires include_quote=True)")
+    leading_stock_pct: float | None = Field(default=None, description="Leading stock change percent (requires include_quote=True)")
 
 
 class BoardStockInfo(BaseModel):

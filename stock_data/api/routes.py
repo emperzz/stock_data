@@ -512,6 +512,7 @@ def list_boards(
         description="Board type: concept or industry",
     ),
     source: str = Query(default="eastmoney", description="Data source"),
+    include_quote: bool = Query(False, description="Include realtime quote data"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
 ) -> BoardListResponse:
     """
@@ -520,14 +521,15 @@ def list_boards(
     Args:
         type: Board type - "concept" (概念板块) or "industry" (行业板块)
         source: Data source (default: "eastmoney")
+        include_quote: If True, include realtime price/change/market data for each board
         refresh: If True, force refresh from upstream and update cache
 
     Returns:
-        Board list with code and name
+        Board list with code and name, optionally with realtime data
     """
     try:
         cache = None
-        if is_cache_enabled() and not refresh:
+        if is_cache_enabled() and not refresh and not include_quote:
             cache = get_board_list_cache()
             key = make_board_cache_key(type, source)
             if key in cache:
@@ -535,10 +537,27 @@ def list_boards(
                 return cache[key]
 
         manager = get_manager()
-        boards = stock_board_cache.get_board_list(type, source, refresh=refresh, manager=manager)
+        boards = stock_board_cache.get_board_list(type, source, refresh=refresh, include_quote=include_quote, manager=manager)
 
         result = BoardListResponse(
-            data=[BoardInfo(code=b["code"], name=b["name"]) for b in boards]
+            data=[
+                BoardInfo(
+                    code=b["code"],
+                    name=b["name"],
+                    price=b.get("price"),
+                    change_pct=b.get("change_pct"),
+                    change_amount=b.get("change_amount"),
+                    volume=b.get("volume"),
+                    amount=b.get("amount"),
+                    turnover_rate=b.get("turnover_rate"),
+                    total_mv=b.get("total_mv"),
+                    up_count=b.get("up_count"),
+                    down_count=b.get("down_count"),
+                    leading_stock=b.get("leading_stock"),
+                    leading_stock_pct=b.get("leading_stock_pct"),
+                )
+                for b in boards
+            ]
         )
 
         if is_cache_enabled() and cache is not None:

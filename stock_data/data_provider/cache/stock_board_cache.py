@@ -59,6 +59,17 @@ def init_db() -> None:
                 name TEXT NOT NULL,
                 board_type TEXT NOT NULL,
                 source TEXT NOT NULL,
+                price REAL,
+                change_pct REAL,
+                change_amount REAL,
+                volume INTEGER,
+                amount REAL,
+                turnover_rate REAL,
+                total_mv REAL,
+                up_count INTEGER,
+                down_count INTEGER,
+                leading_stock TEXT,
+                leading_stock_pct REAL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(code, source)
             )
@@ -69,6 +80,25 @@ def init_db() -> None:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_stock_board_source ON stock_board(source)
         """)
+        # Migration: add quote columns if they don't exist (for existing databases)
+        for col, col_type in [
+            ("price", "REAL"),
+            ("change_pct", "REAL"),
+            ("change_amount", "REAL"),
+            ("volume", "INTEGER"),
+            ("amount", "REAL"),
+            ("turnover_rate", "REAL"),
+            ("total_mv", "REAL"),
+            ("up_count", "INTEGER"),
+            ("down_count", "INTEGER"),
+            ("leading_stock", "TEXT"),
+            ("leading_stock_pct", "REAL"),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE stock_board ADD COLUMN {col} {col_type}")
+                logger.info(f"[BoardCache] Migrated: added column {col}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         # Board-stock relation table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS stock_board_stock (
@@ -102,27 +132,30 @@ def init_db() -> None:
         conn.close()
 
 
-def get_board_list(board_type: str, source: str, refresh: bool = False, manager=None) -> list:
+def get_board_list(board_type: str, source: str, refresh: bool = False, include_quote: bool = False, manager=None) -> list:
     """
     Get board list with automatic refresh.
 
     - No local cache -> fetch from upstream and cache
     - First call of the day -> force refresh
     - refresh=True -> force refresh
+    - include_quote=True -> always fetch fresh data from upstream
     - Otherwise -> return cached data
 
     Args:
         board_type: "concept" or "industry"
         source: Data source (e.g., "eastmoney")
         refresh: If True, force refresh from upstream
+        include_quote: If True, include realtime price/change/market data and skip cache
         manager: DataFetcherManager instance. Required for fetching from upstream.
 
     Returns:
         List of board dicts: [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}, ...]
+            May include quote fields when include_quote=True.
     """
     init_db()
 
-    needs_refresh = refresh or _is_first_call_of_day(board_type, source)
+    needs_refresh = refresh or include_quote or _is_first_call_of_day(board_type, source)
 
     if not needs_refresh:
         cached = _read_boards_from_db(board_type, source)
@@ -135,13 +168,14 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, manager=
 
     # Fetch based on board_type
     if board_type == "concept":
-        boards = manager.get_all_concept_boards(source=source)
+        boards = manager.get_all_concept_boards(source=source, include_quote=include_quote)
     elif board_type == "industry":
-        boards = manager.get_all_industry_boards(source=source)
+        boards = manager.get_all_industry_boards(source=source, include_quote=include_quote)
     else:
         boards = []
 
     if boards:
+        # Always cache the base board data (without quote if include_quote=False)
         update_cached_boards(board_type, source, boards)
         logger.info(f"[BoardCache] Refreshed {len(boards)} boards for {board_type}/{source}")
 
@@ -226,12 +260,32 @@ def _read_boards_from_db(board_type: str, source: str) -> list:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT code, name, board_type, source, updated_at FROM stock_board WHERE board_type = ? AND source = ? ORDER BY name",
+            """SELECT code, name, board_type, source, price, change_pct, change_amount,
+               volume, amount, turnover_rate, total_mv, up_count, down_count,
+               leading_stock, leading_stock_pct, updated_at
+               FROM stock_board WHERE board_type = ? AND source = ? ORDER BY name""",
             (board_type, source),
         )
         rows = cursor.fetchall()
         return [
-            {"code": row["code"], "name": row["name"], "board_type": row["board_type"], "source": row["source"], "updated_at": row["updated_at"]}
+            {
+                "code": row["code"],
+                "name": row["name"],
+                "board_type": row["board_type"],
+                "source": row["source"],
+                "price": row["price"],
+                "change_pct": row["change_pct"],
+                "change_amount": row["change_amount"],
+                "volume": row["volume"],
+                "amount": row["amount"],
+                "turnover_rate": row["turnover_rate"],
+                "total_mv": row["total_mv"],
+                "up_count": row["up_count"],
+                "down_count": row["down_count"],
+                "leading_stock": row["leading_stock"],
+                "leading_stock_pct": row["leading_stock_pct"],
+                "updated_at": row["updated_at"],
+            }
             for row in rows
         ]
     finally:
@@ -282,6 +336,9 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
         board_type: "concept" or "industry"
         source: Data source
         boards: List of dicts [{"code": "BK1048", "name": "互联网服务"}, ...]
+            May include quote fields: price, change_pct, change_amount, volume,
+            amount, turnover_rate, total_mv, up_count, down_count,
+            leading_stock, leading_stock_pct
 
     Returns:
         Number of boards inserted/updated
@@ -298,8 +355,21 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             cursor.executemany(
-                "INSERT OR REPLACE INTO stock_board (code, name, board_type, source, updated_at) VALUES (?, ?, ?, ?, ?)",
-                [(b["code"], b["name"], board_type, source, now) for b in boards],
+                """INSERT OR REPLACE INTO stock_board
+                (code, name, board_type, source, price, change_pct, change_amount,
+                 volume, amount, turnover_rate, total_mv, up_count, down_count,
+                 leading_stock, leading_stock_pct, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        b["code"], b["name"], board_type, source,
+                        b.get("price"), b.get("change_pct"), b.get("change_amount"),
+                        b.get("volume"), b.get("amount"), b.get("turnover_rate"),
+                        b.get("total_mv"), b.get("up_count"), b.get("down_count"),
+                        b.get("leading_stock"), b.get("leading_stock_pct"), now,
+                    )
+                    for b in boards
+                ],
             )
 
             logger.info(f"[BoardCache] Updated {len(boards)} boards for {board_type}/{source}")

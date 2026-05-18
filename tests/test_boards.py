@@ -129,6 +129,58 @@ class TestBoardAPIRoutes:
             # source is passed as positional arg (2nd arg)
             assert args[1] == "tonghuashun"
 
+    def test_get_boards_with_include_quote(self, client):
+        """Test GET /api/v1/boards?include_quote=true passes include_quote to cache layer."""
+        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+            mock_get.return_value = [
+                {
+                    "code": "BK1048",
+                    "name": "互联网服务",
+                    "board_type": "concept",
+                    "source": "eastmoney",
+                    "price": 1850.5,
+                    "change_pct": 2.35,
+                    "change_amount": 42.3,
+                    "volume": 52000000,
+                    "amount": 95800000000.0,
+                    "turnover_rate": 3.58,
+                    "total_mv": 2345000000000.0,
+                    "up_count": 45,
+                    "down_count": 12,
+                    "leading_stock": "科大讯飞",
+                    "leading_stock_pct": 8.5,
+                },
+            ]
+            response = client.get("/api/v1/boards?type=concept&include_quote=true")
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["data"]) == 1
+            board = data["data"][0]
+            assert board["code"] == "BK1048"
+            assert board["price"] == 1850.5
+            assert board["change_pct"] == 2.35
+            assert board["change_amount"] == 42.3
+            assert board["volume"] == 52000000
+            assert board["up_count"] == 45
+            assert board["down_count"] == 12
+            assert board["leading_stock"] == "科大讯飞"
+            assert board["leading_stock_pct"] == 8.5
+            # Verify include_quote was passed to cache layer
+            mock_get.assert_called_once()
+            _, kwargs = mock_get.call_args
+            assert kwargs.get("include_quote") is True
+
+    def test_get_boards_include_quote_skips_memory_cache(self, client):
+        """Test GET /api/v1/boards?include_quote=true skips in-memory cache."""
+        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+            with patch("stock_data.api.cache.is_cache_enabled", return_value=True):
+                mock_get.return_value = [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}]
+                response = client.get("/api/v1/boards?type=concept&include_quote=true")
+                assert response.status_code == 200
+                mock_get.assert_called_once()
+                _, kwargs = mock_get.call_args
+                assert kwargs.get("include_quote") is True
+
 
 class TestBoardCache:
     """Tests for stock_board_cache module."""
@@ -186,6 +238,24 @@ class TestAkshareFetcherBoards:
         fetcher = AkshareFetcher()
         assert hasattr(fetcher, "get_industry_board_stocks")
 
+    def test_get_all_concept_boards_include_quote_parameter(self):
+        """Test get_all_concept_boards accepts include_quote parameter."""
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        import inspect
+
+        fetcher = AkshareFetcher()
+        sig = inspect.signature(fetcher.get_all_concept_boards)
+        assert "include_quote" in sig.parameters
+
+    def test_get_all_industry_boards_include_quote_parameter(self):
+        """Test get_all_industry_boards accepts include_quote parameter."""
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        import inspect
+
+        fetcher = AkshareFetcher()
+        sig = inspect.signature(fetcher.get_all_industry_boards)
+        assert "include_quote" in sig.parameters
+
     def test_board_capability_declared(self):
         """Test AkshareFetcher has STOCK_BOARD capability."""
         from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
@@ -219,6 +289,45 @@ class TestBoardSchemas:
         board = BoardInfo(code="BK1048", name="互联网服务")
         assert board.code == "BK1048"
         assert board.name == "互联网服务"
+
+    def test_board_info_schema_with_quote_fields(self):
+        """Test BoardInfo schema with all quote fields."""
+        from stock_data.api.schemas import BoardInfo
+
+        board = BoardInfo(
+            code="BK1048",
+            name="互联网服务",
+            price=1850.5,
+            change_pct=2.35,
+            change_amount=42.3,
+            volume=52000000,
+            amount=95800000000.0,
+            turnover_rate=3.58,
+            total_mv=2345000000000.0,
+            up_count=45,
+            down_count=12,
+            leading_stock="科大讯飞",
+            leading_stock_pct=8.5,
+        )
+        assert board.code == "BK1048"
+        assert board.price == 1850.5
+        assert board.change_pct == 2.35
+        assert board.volume == 52000000
+        assert board.up_count == 45
+        assert board.down_count == 12
+        assert board.leading_stock == "科大讯飞"
+        assert board.leading_stock_pct == 8.5
+
+    def test_board_info_schema_quote_fields_optional(self):
+        """Test BoardInfo quote fields default to None."""
+        from stock_data.api.schemas import BoardInfo
+
+        board = BoardInfo(code="BK1048", name="互联网服务")
+        assert board.price is None
+        assert board.change_pct is None
+        assert board.volume is None
+        assert board.up_count is None
+        assert board.leading_stock is None
 
     def test_board_list_response_schema(self):
         """Test BoardListResponse schema."""

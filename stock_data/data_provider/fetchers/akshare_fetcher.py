@@ -449,14 +449,20 @@ class AkshareFetcher(BaseFetcher):
         df = df[[c for c in keep_cols if c in df.columns]]
         return df
 
-    def get_all_concept_boards(self, source: str = "eastmoney") -> list[dict]:
+    def get_all_concept_boards(
+        self, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
         """Get all concept boards from Akshare.
 
         Args:
             source: Data source - "eastmoney" (default)
+            include_quote: If True, include realtime price/change/market data
 
         Returns:
             List of dicts: [{"code": "BK1048", "name": "互联网服务"}, ...]
+            When include_quote=True, also includes: price, change_pct, change_amount,
+            volume, amount, turnover_rate, total_mv, up_count, down_count,
+            leading_stock, leading_stock_pct
         """
         try:
             import akshare as ak
@@ -468,7 +474,22 @@ class AkshareFetcher(BaseFetcher):
                     code = str(row.get("板块代码", "")).strip()
                     name = str(row.get("板块名称", "")).strip()
                     if code:
-                        result.append({"code": code, "name": name})
+                        board = {"code": code, "name": name}
+                        if include_quote:
+                            board.update({
+                                "price": row.get("最新价"),
+                                "change_pct": row.get("涨跌幅"),
+                                "change_amount": row.get("涨跌额"),
+                                "volume": row.get("成交量"),
+                                "amount": row.get("成交额"),
+                                "turnover_rate": row.get("换手率"),
+                                "total_mv": row.get("总市值"),
+                                "up_count": row.get("上涨家数"),
+                                "down_count": row.get("下跌家数"),
+                                "leading_stock": row.get("领涨股票"),
+                                "leading_stock_pct": row.get("领涨股票-涨跌幅"),
+                            })
+                        result.append(board)
             return result
         except Exception as e:
             logger.warning(f"[AkshareFetcher] get_all_concept_boards failed: {e}")
@@ -523,14 +544,20 @@ class AkshareFetcher(BaseFetcher):
                 return self._get_board_stocks_with_fallback(board_code, source, "concept")
             return []
 
-    def get_all_industry_boards(self, source: str = "eastmoney") -> list[dict]:
+    def get_all_industry_boards(
+        self, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
         """Get all industry boards from Akshare.
 
         Args:
             source: Data source - "eastmoney" (default)
+            include_quote: If True, include realtime price/change/market data
 
         Returns:
             List of dicts: [{"code": "BK0418", "name": "银行"}, ...]
+            When include_quote=True, also includes: price, change_pct, change_amount,
+            volume, amount, turnover_rate, total_mv, up_count, down_count,
+            leading_stock, leading_stock_pct
         """
         try:
             import akshare as ak
@@ -542,7 +569,22 @@ class AkshareFetcher(BaseFetcher):
                     code = str(row.get("板块代码", "")).strip()
                     name = str(row.get("板块名称", "")).strip()
                     if code:
-                        result.append({"code": code, "name": name})
+                        board = {"code": code, "name": name}
+                        if include_quote:
+                            board.update({
+                                "price": row.get("最新价"),
+                                "change_pct": row.get("涨跌幅"),
+                                "change_amount": row.get("涨跌额"),
+                                "volume": row.get("成交量"),
+                                "amount": row.get("成交额"),
+                                "turnover_rate": row.get("换手率"),
+                                "total_mv": row.get("总市值"),
+                                "up_count": row.get("上涨家数"),
+                                "down_count": row.get("下跌家数"),
+                                "leading_stock": row.get("领涨股票"),
+                                "leading_stock_pct": row.get("领涨股票-涨跌幅"),
+                            })
+                        result.append(board)
             return result
         except Exception as e:
             logger.warning(f"[AkshareFetcher] get_all_industry_boards failed: {e}")
