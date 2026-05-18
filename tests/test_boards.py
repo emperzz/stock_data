@@ -1,0 +1,249 @@
+"""
+Tests for stock board (concept/industry) API and cache.
+"""
+
+import pytest
+from unittest.mock import MagicMock, patch
+
+from stock_data.api.routes import reset_manager
+from stock_data.server import app
+
+
+@pytest.fixture(autouse=True)
+def reset_before_test():
+    """Reset manager state before each test."""
+    reset_manager()
+    yield
+
+
+@pytest.fixture
+def client():
+    from fastapi.testclient import TestClient
+    return TestClient(app)
+
+
+class TestBoardAPIRoutes:
+    """Tests for board API routes."""
+
+    def test_get_concept_boards(self, client):
+        """Test GET /api/v1/boards with type=concept."""
+        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+            mock_get.return_value = [
+                {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
+                {"code": "BK1049", "name": "云计算", "board_type": "concept", "source": "eastmoney"},
+            ]
+            response = client.get("/api/v1/boards?type=concept")
+            assert response.status_code == 200
+            data = response.json()
+            assert "data" in data
+            assert len(data["data"]) == 2
+            assert data["data"][0]["code"] == "BK1048"
+
+    def test_get_industry_boards(self, client):
+        """Test GET /api/v1/boards with type=industry."""
+        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+            mock_get.return_value = [
+                {"code": "BK0816", "name": "银行", "board_type": "industry", "source": "eastmoney"},
+            ]
+            response = client.get("/api/v1/boards?type=industry")
+            assert response.status_code == 200
+            data = response.json()
+            assert "data" in data
+            assert len(data["data"]) == 1
+            # BoardInfo only has code and name, not board_type
+            assert data["data"][0]["code"] == "BK0816"
+            assert data["data"][0]["name"] == "银行"
+
+    def test_get_boards_missing_type(self, client):
+        """Test GET /api/v1/boards without type parameter returns 422."""
+        response = client.get("/api/v1/boards")
+        assert response.status_code == 422
+
+    def test_get_boards_invalid_type(self, client):
+        """Test GET /api/v1/boards with invalid type parameter returns 422."""
+        response = client.get("/api/v1/boards?type=invalid")
+        # FastAPI validation error returns 422
+        assert response.status_code == 422
+
+    def test_get_board_stocks(self, client):
+        """Test GET /api/v1/boards/{board_code}/stocks."""
+        with patch("stock_data.api.routes.stock_board_cache.get_board_stocks") as mock_get_stocks:
+            with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get_boards:
+                mock_get_stocks.return_value = [
+                    {"stock_code": "600519", "stock_name": "贵州茅台"},
+                    {"stock_code": "000001", "stock_name": "平安银行"},
+                ]
+                mock_get_boards.return_value = [
+                    {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
+                ]
+                response = client.get("/api/v1/boards/BK1048/stocks")
+                assert response.status_code == 200
+                data = response.json()
+                assert "board" in data
+                assert "stocks" in data
+                assert data["board"]["code"] == "BK1048"
+                assert len(data["stocks"]) == 2
+
+    def test_get_board_stocks_with_quote(self, client):
+        """Test GET /api/v1/boards/{board_code}/stocks?include_quote=true."""
+        with patch("stock_data.api.routes.stock_board_cache.get_board_stocks") as mock_get:
+            mock_get.return_value = [
+                {"stock_code": "600519", "stock_name": "贵州茅台"},
+            ]
+            with patch("stock_data.api.routes.get_manager") as mock_manager:
+                mock_mgr = MagicMock()
+                mock_quote = MagicMock()
+                mock_quote.code = "600519"
+                mock_quote.name = "贵州茅台"
+                mock_quote.price = 1800.0
+                mock_quote.change_pct = 2.5
+                mock_quote.volume = 1000000
+                mock_mgr.get_realtime_quote.return_value = mock_quote
+                mock_manager.return_value = mock_mgr
+
+                response = client.get("/api/v1/boards/BK1048/stocks?include_quote=true")
+                assert response.status_code == 200
+                data = response.json()
+                assert "stocks" in data
+                assert len(data["stocks"]) == 1
+                assert "price" in data["stocks"][0]
+
+    def test_get_boards_with_refresh(self, client):
+        """Test GET /api/v1/boards?refresh=true forces refresh."""
+        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+            mock_get.return_value = [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}]
+            response = client.get("/api/v1/boards?type=concept&refresh=true")
+            assert response.status_code == 200
+            mock_get.assert_called_once()
+            _, kwargs = mock_get.call_args
+            assert kwargs.get("refresh") is True
+
+    def test_get_boards_with_source(self, client):
+        """Test GET /api/v1/boards?source=tonghuashun."""
+        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+            mock_get.return_value = []
+            response = client.get("/api/v1/boards?type=concept&source=tonghuashun")
+            assert response.status_code == 200
+            mock_get.assert_called_once()
+            args, kwargs = mock_get.call_args
+            # source is passed as positional arg (2nd arg)
+            assert args[1] == "tonghuashun"
+
+
+class TestBoardCache:
+    """Tests for stock_board_cache module."""
+
+    def test_cache_key_functions(self):
+        """Test make_board_cache_key and make_board_stocks_cache_key."""
+        from stock_data.api.cache import make_board_cache_key, make_board_stocks_cache_key
+
+        key = make_board_cache_key("concept", "eastmoney")
+        assert key == "board:concept:eastmoney"
+
+        key_no_quote = make_board_stocks_cache_key("BK1048", "eastmoney", False)
+        assert key_no_quote == "board_stocks:BK1048:eastmoney"
+
+        key_with_quote = make_board_stocks_cache_key("BK1048", "eastmoney", True)
+        assert key_with_quote == "board_stocks:BK1048:eastmoney:quote"
+
+    def test_board_stocks_cache_ttl(self):
+        """Test board stocks cache uses appropriate TTL."""
+        from stock_data.api.cache import get_board_stocks_cache, is_cache_enabled
+
+        with patch("stock_data.api.cache.is_cache_enabled", return_value=True):
+            cache = get_board_stocks_cache()
+            assert cache.maxsize == 512
+
+
+class TestAkshareFetcherBoards:
+    """Tests for AkshareFetcher board methods."""
+
+    def test_get_all_concept_boards(self):
+        """Test get_all_concept_boards returns list of dicts."""
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+
+        fetcher = AkshareFetcher()
+        assert hasattr(fetcher, "get_all_concept_boards")
+
+    def test_get_all_industry_boards(self):
+        """Test get_all_industry_boards returns list of dicts."""
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+
+        fetcher = AkshareFetcher()
+        assert hasattr(fetcher, "get_all_industry_boards")
+
+    def test_get_concept_board_stocks(self):
+        """Test get_concept_board_stocks method exists."""
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+
+        fetcher = AkshareFetcher()
+        assert hasattr(fetcher, "get_concept_board_stocks")
+
+    def test_get_industry_board_stocks(self):
+        """Test get_industry_board_stocks method exists."""
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+
+        fetcher = AkshareFetcher()
+        assert hasattr(fetcher, "get_industry_board_stocks")
+
+    def test_board_capability_declared(self):
+        """Test AkshareFetcher has STOCK_BOARD capability."""
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.base import DataCapability
+
+        fetcher = AkshareFetcher()
+        assert DataCapability.STOCK_BOARD in fetcher.supported_data_types
+
+
+class TestDataFetcherManagerBoards:
+    """Tests for DataFetcherManager board methods."""
+
+    def test_manager_has_board_methods(self):
+        """Test DataFetcherManager has board methods."""
+        from stock_data.data_provider.base import DataFetcherManager
+
+        manager = DataFetcherManager()
+        assert hasattr(manager, "get_all_concept_boards")
+        assert hasattr(manager, "get_all_industry_boards")
+        assert hasattr(manager, "get_concept_board_stocks")
+        assert hasattr(manager, "get_industry_board_stocks")
+
+
+class TestBoardSchemas:
+    """Tests for board Pydantic schemas."""
+
+    def test_board_info_schema(self):
+        """Test BoardInfo schema."""
+        from stock_data.api.schemas import BoardInfo
+
+        board = BoardInfo(code="BK1048", name="互联网服务")
+        assert board.code == "BK1048"
+        assert board.name == "互联网服务"
+
+    def test_board_list_response_schema(self):
+        """Test BoardListResponse schema."""
+        from stock_data.api.schemas import BoardListResponse, BoardInfo
+
+        boards = [BoardInfo(code="BK1048", name="互联网服务")]
+        response = BoardListResponse(data=boards)
+        assert len(response.data) == 1
+
+    def test_board_stocks_response_schema(self):
+        """Test BoardStocksResponse schema."""
+        from stock_data.api.schemas import BoardStocksResponse, BoardInfo, BoardStockInfo
+
+        board = BoardInfo(code="BK1048", name="互联网服务")
+        stocks = [BoardStockInfo(code="600519", name="贵州茅台")]
+        response = BoardStocksResponse(board=board, stocks=stocks, source="akshare")
+        assert response.board.code == "BK1048"
+        assert len(response.stocks) == 1
+        assert response.source == "akshare"
+
+    def test_board_stock_info_with_quote(self):
+        """Test BoardStockInfo with quote data."""
+        from stock_data.api.schemas import BoardStockInfo
+
+        stock = BoardStockInfo(code="600519", name="贵州茅台", price=1800.0, change_pct=2.5, volume=1000000)
+        assert stock.price == 1800.0
+        assert stock.change_pct == 2.5
+        assert stock.volume == 1000000
