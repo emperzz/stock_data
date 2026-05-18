@@ -108,3 +108,34 @@ class IntradayResponse(BaseModel):
     adjust: str = Field(default="", description="Adjustment type")
     date: str = Field(description="Trade date (YYYY-MM-DD)")
     data: list[IntradayData] = Field(default_factory=list, description="Minute-level data points")
+
+
+class BoardInfo(BaseModel):
+    """Board information."""
+
+    code: str = Field(description="Board code (e.g., BK1048)")
+    name: str = Field(description="Board name (e.g., 互联网服务)")
+
+
+class BoardStockInfo(BaseModel):
+    """Stock in a board, optionally with quote data."""
+
+    code: str = Field(description="Stock code")
+    name: str = Field(default="", description="Stock name")
+    price: float | None = Field(default=None, description="Current price")
+    change_pct: float | None = Field(default=None, description="Change percent")
+    volume: int | None = Field(default=None, description="Volume")
+
+
+class BoardListResponse(BaseModel):
+    """Response for board list endpoint."""
+
+    data: list[BoardInfo] = Field(default_factory=list, description="List of boards")
+
+
+class BoardStocksResponse(BaseModel):
+    """Response for board stocks endpoint."""
+
+    board: BoardInfo = Field(description="Board info")
+    stocks: list[BoardStockInfo] = Field(default_factory=list, description="Stocks in the board")
+    source: str = Field(default="", description="Data source")

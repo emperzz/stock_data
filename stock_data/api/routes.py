@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Path, Query
 
 from ..data_provider import DataFetcherManager
 from ..data_provider.cache import api_cache as stock_cache
+from ..data_provider.cache import stock_board_cache
 from ..data_provider.fetchers.akshare_fetcher import AkshareFetcher
 from ..data_provider.fetchers.baostock_fetcher import BaostockFetcher
 from ..data_provider.fetchers.tushare_fetcher import TushareFetcher
@@ -17,13 +18,21 @@ from ..data_provider.fetchers.zhitu_fetcher import ZhituFetcher
 from ..data_provider.utils.normalize import is_hk_market, is_us_market, normalize_stock_code
 from ..data_provider.fetchers.index_symbols import get_all_indices
 from .cache import (
+    get_board_list_cache,
+    get_board_stocks_cache,
     get_history_cache,
     get_quote_cache,
     is_cache_enabled,
+    make_board_cache_key,
+    make_board_stocks_cache_key,
     make_history_cache_key,
     make_quote_cache_key,
 )
 from .schemas import (
+    BoardInfo,
+    BoardListResponse,
+    BoardStockInfo,
+    BoardStocksResponse,
     ErrorResponse,
     HealthResponse,
     IndexInfo,
@@ -485,3 +494,161 @@ def get_trade_calendar(
     latest = get_latest_cached_trade_date() if dates else None
 
     return TradeCalendarResponse(trade_dates=dates, latest_date=latest, total=len(dates))
+
+
+@router.get(
+    "/boards",
+    response_model=BoardListResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid board type"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["boards"],
+)
+def list_boards(
+    type: str = Query(
+        ...,
+        pattern="^(concept|industry)$",
+        description="Board type: concept or industry",
+    ),
+    source: str = Query(default="eastmoney", description="Data source"),
+    refresh: bool = Query(False, description="Force fetch latest from upstream"),
+) -> BoardListResponse:
+    """
+    Get list of concept or industry boards.
+
+    Args:
+        type: Board type - "concept" (概念板块) or "industry" (行业板块)
+        source: Data source (default: "eastmoney")
+        refresh: If True, force refresh from upstream and update cache
+
+    Returns:
+        Board list with code and name
+    """
+    try:
+        if is_cache_enabled() and not refresh:
+            cache = get_board_list_cache()
+            key = make_board_cache_key(type, source)
+            if key in cache:
+                logger.info(f"[APICache] board list hit: {key}")
+                return cache[key]
+
+        manager = get_manager()
+        boards = stock_board_cache.get_board_list(type, source, refresh=refresh, manager=manager)
+
+        result = BoardListResponse(
+            data=[BoardInfo(code=b["code"], name=b["name"]) for b in boards]
+        )
+
+        if is_cache_enabled():
+            cache[key] = result
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Boards error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
+
+
+@router.get(
+    "/boards/{board_code}/stocks",
+    response_model=BoardStocksResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Board not found"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["boards"],
+)
+def get_board_stocks(
+    board_code: str = Path(max_length=20, description="Board code (e.g., BK1048)"),
+    source: str = Query(default="eastmoney", description="Data source"),
+    include_quote: bool = Query(False, description="Include realtime quote data"),
+    refresh: bool = Query(False, description="Force fetch latest from upstream"),
+) -> BoardStocksResponse:
+    """
+    Get stocks belonging to a board.
+
+    Args:
+        board_code: Board code (e.g., BK1048)
+        source: Data source (default: "eastmoney")
+        include_quote: If True, include realtime price/change data for each stock
+        refresh: If True, force refresh from upstream and update cache
+
+    Returns:
+        Board info and list of stocks, optionally with quote data
+    """
+    try:
+        if is_cache_enabled() and not refresh:
+            cache = get_board_stocks_cache()
+            key = make_board_stocks_cache_key(board_code, source, include_quote)
+            if key in cache:
+                logger.info(f"[APICache] board stocks hit: {key}")
+                return cache[key]
+
+        manager = get_manager()
+        stocks = stock_board_cache.get_board_stocks(board_code, source, refresh=refresh, manager=manager)
+
+        if not stocks:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": f"No stocks found for board {board_code}"},
+            )
+
+        # Get board name
+        boards = stock_board_cache.get_board_list(
+            "concept" if board_code.startswith("BK") else "industry",
+            source,
+            refresh=False,
+            manager=manager,
+        )
+        board_name = next((b["name"] for b in boards if b["code"] == board_code), board_code)
+
+        # Build stock list
+        if include_quote:
+            # Fetch realtime quotes for all stocks
+            stock_codes = [s["stock_code"] for s in stocks]
+            quotes = {}
+            for code in stock_codes:
+                try:
+                    quote = manager.get_realtime_quote(code)
+                    if quote:
+                        quotes[code] = quote
+                except Exception as e:
+                    logger.warning(f"Failed to get quote for {code}: {e}")
+
+            stock_list = [
+                BoardStockInfo(
+                    code=s["stock_code"],
+                    name=s["stock_name"],
+                    price=quotes.get(s["stock_code"]).price if s["stock_code"] in quotes else None,
+                    change_pct=quotes.get(s["stock_code"]).change_pct if s["stock_code"] in quotes else None,
+                    volume=quotes.get(s["stock_code"]).volume if s["stock_code"] in quotes else None,
+                )
+                for s in stocks
+            ]
+        else:
+            stock_list = [
+                BoardStockInfo(code=s["stock_code"], name=s["stock_name"])
+                for s in stocks
+            ]
+
+        result = BoardStocksResponse(
+            board=BoardInfo(code=board_code, name=board_name),
+            stocks=stock_list,
+            source=source,
+        )
+
+        if is_cache_enabled():
+            cache[key] = result
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Board stocks error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e

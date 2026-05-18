@@ -15,6 +15,8 @@ _TTL_QUOTE = int(os.getenv("CACHE_TTL_QUOTE", 60))
 _TTL_HISTORY_DAILY = int(os.getenv("CACHE_TTL_HISTORY_DAILY", 300))
 _TTL_HISTORY_WEEKLY = int(os.getenv("CACHE_TTL_HISTORY_WEEKLY", 3600))
 _TTL_HISTORY_MONTHLY = int(os.getenv("CACHE_TTL_HISTORY_MONTHLY", 7200))
+_TTL_BOARD_LIST = int(os.getenv("CACHE_TTL_BOARD_LIST", 300))
+_TTL_BOARD_STOCKS = int(os.getenv("CACHE_TTL_BOARD_STOCKS", 300))
 _ENABLE_CACHE = os.getenv("ENABLE_API_CACHE", "true").lower() == "true"
 
 # Global per-frequency history cache instances
@@ -23,10 +25,20 @@ _history_cache_w: TTLCache = TTLCache(maxsize=512, ttl=_TTL_HISTORY_WEEKLY)
 _history_cache_m: TTLCache = TTLCache(maxsize=512, ttl=_TTL_HISTORY_MONTHLY)
 
 _quote_cache: TTLCache = TTLCache(maxsize=1024, ttl=_TTL_QUOTE)
+_board_list_cache: TTLCache = TTLCache(maxsize=64, ttl=_TTL_BOARD_LIST)
+_board_stocks_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_BOARD_STOCKS)
 
 
 def get_quote_cache() -> TTLCache:
     return _quote_cache
+
+
+def get_board_list_cache() -> TTLCache:
+    return _board_list_cache
+
+
+def get_board_stocks_cache() -> TTLCache:
+    return _board_stocks_cache
 
 
 def get_history_cache(frequency: str) -> TTLCache:

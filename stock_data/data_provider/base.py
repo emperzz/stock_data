@@ -522,6 +522,100 @@ class DataFetcherManager:
 
         raise DataFetchError("All fetchers failed for trade calendar:\n" + "\n".join(errors))
 
+    def get_all_concept_boards(self, source: str = "eastmoney") -> list[dict]:
+        """Get all concept boards from fetchers that support STOCK_BOARD capability.
+
+        Args:
+            source: Data source (e.g., "eastmoney")
+
+        Returns:
+            List of board dicts [{"code": "BK1048", "name": "互联网服务"}, ...]
+        """
+        fetchers = self._filter_by_capability("csi", DataCapability.STOCK_BOARD)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                boards = fetcher.get_all_concept_boards(source=source)
+                if boards:
+                    logger.info(f"[Manager] {fetcher.name} returned {len(boards)} concept boards")
+                    return boards
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} get_all_concept_boards failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for concept boards:\n" + "\n".join(errors))
+
+    def get_all_industry_boards(self, source: str = "eastmoney") -> list[dict]:
+        """Get all industry boards from fetchers that support STOCK_BOARD capability.
+
+        Args:
+            source: Data source (e.g., "eastmoney")
+
+        Returns:
+            List of board dicts [{"code": "BK1048", "name": "互联网服务"}, ...]
+        """
+        fetchers = self._filter_by_capability("csi", DataCapability.STOCK_BOARD)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                boards = fetcher.get_all_industry_boards(source=source)
+                if boards:
+                    logger.info(f"[Manager] {fetcher.name} returned {len(boards)} industry boards")
+                    return boards
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} get_all_industry_boards failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for industry boards:\n" + "\n".join(errors))
+
+    def get_concept_board_stocks(self, board_code: str, source: str = "eastmoney") -> list[dict]:
+        """Get stocks belonging to a concept board.
+
+        Args:
+            board_code: Board code (e.g., "BK1048")
+            source: Data source (e.g., "eastmoney")
+
+        Returns:
+            List of stock dicts [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
+        """
+        fetchers = self._filter_by_capability("csi", DataCapability.STOCK_BOARD)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                stocks = fetcher.get_concept_board_stocks(board_code, source=source)
+                if stocks is not None:
+                    logger.info(f"[Manager] {fetcher.name} returned {len(stocks)} stocks for concept board {board_code}")
+                    return stocks
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} get_concept_board_stocks({board_code}) failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for concept board stocks {board_code}:\n" + "\n".join(errors))
+
+    def get_industry_board_stocks(self, board_code: str, source: str = "eastmoney") -> list[dict]:
+        """Get stocks belonging to an industry board.
+
+        Args:
+            board_code: Board code
+            source: Data source (e.g., "eastmoney")
+
+        Returns:
+            List of stock dicts [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
+        """
+        fetchers = self._filter_by_capability("csi", DataCapability.STOCK_BOARD)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                stocks = fetcher.get_industry_board_stocks(board_code, source=source)
+                if stocks is not None:
+                    logger.info(f"[Manager] {fetcher.name} returned {len(stocks)} stocks for industry board {board_code}")
+                    return stocks
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} get_industry_board_stocks({board_code}) failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for industry board stocks {board_code}:\n" + "\n".join(errors))
+
     @property
     def available_fetchers(self) -> list[str]:
         """List available fetcher names."""
