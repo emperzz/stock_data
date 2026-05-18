@@ -35,6 +35,7 @@ class AkshareFetcher(BaseFetcher):
         | DataCapability.STOCK_LIST
         | DataCapability.STOCK_NAME
         | DataCapability.TRADE_CALENDAR
+        | DataCapability.STOCK_BOARD
     )
 
     def _map_adjust(self, adjust: str) -> str | None:
@@ -447,3 +448,105 @@ class AkshareFetcher(BaseFetcher):
         keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
         df = df[[c for c in keep_cols if c in df.columns]]
         return df
+
+    def get_all_concept_boards(self, source: str = "eastmoney") -> list[dict]:
+        """Get all concept boards from Akshare.
+
+        Args:
+            source: Data source - "eastmoney" (default)
+
+        Returns:
+            List of dicts: [{"code": "BK1048", "name": "互联网服务"}, ...]
+        """
+        try:
+            import akshare as ak
+
+            df = ak.stock_board_concept_name_em()
+            result = []
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    code = str(row.get("板块代码", "")).strip()
+                    name = str(row.get("板块名称", "")).strip()
+                    if code:
+                        result.append({"code": code, "name": name})
+            return result
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_all_concept_boards failed: {e}")
+            return []
+
+    def get_concept_board_stocks(self, board_code: str, source: str = "eastmoney") -> list[dict]:
+        """Get stocks within a concept board.
+
+        Args:
+            board_code: Board code like "BK1048"
+            source: Data source - "eastmoney" (default)
+
+        Returns:
+            List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
+        """
+        try:
+            import akshare as ak
+
+            df = ak.stock_board_concept_cons_em(symbol=board_code)
+            result = []
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    code = str(row.get("代码", "")).strip()
+                    name = str(row.get("名称", "")).strip()
+                    if code:
+                        result.append({"code": code, "name": name})
+            return result
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_concept_board_stocks({board_code}) failed: {e}")
+            return []
+
+    def get_all_industry_boards(self, source: str = "eastmoney") -> list[dict]:
+        """Get all industry boards from Akshare.
+
+        Args:
+            source: Data source - "eastmoney" (default)
+
+        Returns:
+            List of dicts: [{"code": "BK0418", "name": "银行"}, ...]
+        """
+        try:
+            import akshare as ak
+
+            df = ak.stock_board_industry_name_em()
+            result = []
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    code = str(row.get("板块代码", "")).strip()
+                    name = str(row.get("板块名称", "")).strip()
+                    if code:
+                        result.append({"code": code, "name": name})
+            return result
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_all_industry_boards failed: {e}")
+            return []
+
+    def get_industry_board_stocks(self, board_code: str, source: str = "eastmoney") -> list[dict]:
+        """Get stocks within an industry board.
+
+        Args:
+            board_code: Board code like "BK0418"
+            source: Data source - "eastmoney" (default)
+
+        Returns:
+            List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
+        """
+        try:
+            import akshare as ak
+
+            df = ak.stock_board_industry_cons_em(symbol=board_code)
+            result = []
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    code = str(row.get("代码", "")).strip()
+                    name = str(row.get("名称", "")).strip()
+                    if code:
+                        result.append({"code": code, "name": name})
+            return result
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_industry_board_stocks({board_code}) failed: {e}")
+            return []
