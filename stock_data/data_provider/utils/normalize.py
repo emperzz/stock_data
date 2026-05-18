@@ -2,7 +2,7 @@
 Stock code normalization and market detection utilities.
 """
 
-from ..index_symbols import get_index_type, is_index_code
+from ..fetchers.index_symbols import get_index_type, is_index_code
 
 # Market tag constants
 ETF_PREFIXES = ("51", "52", "56", "58", "15", "16", "18")

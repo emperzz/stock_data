@@ -77,7 +77,8 @@ for _map in [CSI_INDEX_MAP, HK_INDEX_MAP, US_INDEX_MAP]:
         _CANONICAL_TO_SOURCE[canonical] = source
 
 # Reverse lookup: source symbol → canonical symbol
-# Handle duplicate values (e.g., SPX and SPY both map to ^GSPC)
+# When multiple canonicals map to the same source (e.g., SPX/SPY→^GSPC),
+# only the first canonical encountered is stored - both represent the same index
 _SOURCE_TO_CANONICAL: dict = {}
 for canonical, source in _CANONICAL_TO_SOURCE.items():
     if source not in _SOURCE_TO_CANONICAL:

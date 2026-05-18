@@ -10,7 +10,7 @@ from stock_data.data_provider.base import (
     market_tag,
     normalize_stock_code,
 )
-from stock_data.data_provider.index_symbols import (
+from stock_data.data_provider.fetchers.index_symbols import (
     CSI_INDEX_MAP,
     HK_INDEX_MAP,
     US_INDEX_MAP,

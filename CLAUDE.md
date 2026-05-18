@@ -42,13 +42,12 @@ stock_data/
 └── data_provider/
     ├── __init__.py                  # Public API re-exports
     ├── base.py                      # BaseFetcher, DataFetcherManager, DataCapability
-    ├── index_symbols.py             # Index mappings (CSI/HK/US)
     ├── core/
     │   ├── __init__.py
     │   └── types.py                # UnifiedRealtimeQuote, CircuitBreaker, safe_float/int
     ├── fetchers/
     │   ├── __init__.py
-    │   ├── index_symbols.py        # Index mappings (local copy for fetcher imports)
+    │   ├── index_symbols.py        # Index mappings (CSI/HK/US)
     │   ├── akshare_fetcher.py
     │   ├── baostock_fetcher.py
     │   ├── tushare_fetcher.py
