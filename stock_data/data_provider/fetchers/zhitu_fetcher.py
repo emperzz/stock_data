@@ -101,9 +101,9 @@ class ZhituFetcher(BaseFetcher):
             if isinstance(data, dict) and "detail" in data:
                 error_msg = data.get("detail", "Unknown error")
                 if "Licence证书" in str(error_msg) or "不存在" in str(error_msg):
-                    logger.warning(f"[ZhituFetcher] Invalid token: {error_msg}")
+                    logger.warning(f"[ZhituFetcher] Invalid token: token rejected by upstream")
                 else:
-                    logger.warning(f"[ZhituFetcher] API error: {error_msg}")
+                    logger.warning(f"[ZhituFetcher] API error: {error_msg[:50]}...")
                 return None
 
             # Zhitu returns a dict directly (not a list)

@@ -9,11 +9,10 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Flag, auto
 from threading import RLock
-from typing import Any
 
 import pandas as pd
 
-from .core.types import get_realtime_circuit_breaker
+from .core.types import UnifiedRealtimeQuote, get_realtime_circuit_breaker
 from .utils.normalize import (
     ETF_PREFIXES,
     BSE_CODES,
@@ -259,7 +258,7 @@ class BaseFetcher(ABC):
         logger.debug(f"[{__name__}] Sleep {sleep_time:.2f}s")
         time.sleep(sleep_time)
 
-    def get_realtime_quote(self, stock_code: str) -> Any | None:
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote. Override in subclass if supported."""
         return None
 
@@ -421,7 +420,7 @@ class DataFetcherManager:
 
         raise DataFetchError(f"All fetchers failed for {stock_code}:\n" + "\n".join(errors))
 
-    def get_realtime_quote(self, stock_code: str) -> Any | None:
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote with automatic failover and circuit breaker."""
         stock_code = normalize_stock_code(stock_code)
         market = market_tag(stock_code)

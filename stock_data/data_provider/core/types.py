@@ -4,6 +4,7 @@ Realtime types and utilities for stock data providers.
 
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -127,6 +128,11 @@ class CircuitBreaker:
     - CLOSED: Normal operation
     - OPEN: Failing, skip requests
     - HALF_OPEN: Probe after cooldown, allow limited requests
+
+    Configuration via environment variables:
+    - CB_FAILURE_THRESHOLD: failures before opening (default: 3)
+    - CB_COOLDOWN_SECONDS: time before probing (default: 300)
+    - CB_HALF_OPEN_MAX_CALLS: max calls in half-open (default: 1)
     """
 
     CLOSED = "closed"
@@ -135,13 +141,13 @@ class CircuitBreaker:
 
     def __init__(
         self,
-        failure_threshold: int = 3,
-        cooldown_seconds: float = 300.0,
-        half_open_max_calls: int = 1,
+        failure_threshold: int | None = None,
+        cooldown_seconds: float | None = None,
+        half_open_max_calls: int | None = None,
     ):
-        self.failure_threshold = failure_threshold
-        self.cooldown_seconds = cooldown_seconds
-        self.half_open_max_calls = half_open_max_calls
+        self.failure_threshold = int(os.getenv("CB_FAILURE_THRESHOLD", str(failure_threshold or 3)))
+        self.cooldown_seconds = float(os.getenv("CB_COOLDOWN_SECONDS", str(cooldown_seconds or 300.0)))
+        self.half_open_max_calls = int(os.getenv("CB_HALF_OPEN_MAX_CALLS", str(half_open_max_calls or 1)))
         self._states: dict = {}
         self._lock = RLock()
 

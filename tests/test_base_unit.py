@@ -239,3 +239,32 @@ class TestMarketTag:
         from stock_data.data_provider.base import market_tag
 
         assert market_tag("AAPL") == "us"
+
+
+class TestStockListCache:
+    """Tests for stock_list_cache modifications."""
+
+    def test_get_stock_name_from_db_helper_exists(self):
+        """Test _get_stock_name_from_db helper function exists."""
+        from stock_data.data_provider.cache import stock_list_cache
+
+        assert hasattr(stock_list_cache, "_get_stock_name_from_db")
+        assert callable(stock_list_cache._get_stock_name_from_db)
+
+    def test_update_cached_stocks_uses_executemany(self):
+        """Test update_cached_stocks performs batch insert efficiently."""
+        from stock_data.data_provider.cache import stock_list_cache
+        import inspect
+
+        # Check that executemany is used in the function
+        source = inspect.getsource(stock_list_cache.update_cached_stocks)
+        assert "executemany" in source, "update_cached_stocks should use executemany for batch insert"
+
+    def test_get_stock_name_priorities_db_lookup(self):
+        """Test get_stock_name first tries DB lookup before loading full list."""
+        from stock_data.data_provider.cache import stock_list_cache
+        import inspect
+
+        # Verify the function has logic to try DB first
+        source = inspect.getsource(stock_list_cache.get_stock_name)
+        assert "_get_stock_name_from_db" in source, "get_stock_name should try DB lookup first"

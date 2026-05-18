@@ -71,11 +71,10 @@ def update_cached_calendar(dates: list) -> int:
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             cursor.execute("DELETE FROM trade_calendar")
-            for date in dates:
-                cursor.execute(
-                    "INSERT INTO trade_calendar (trade_date, updated_at) VALUES (?, ?)",
-                    (date, now),
-                )
+            cursor.executemany(
+                "INSERT INTO trade_calendar (trade_date, updated_at) VALUES (?, ?)",
+                [(date, now) for date in dates],
+            )
 
             logger.info(f"[StockCache] Updated {len(dates)} trade calendar dates")
             return len(dates)

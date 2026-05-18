@@ -2,6 +2,9 @@
 Tests for base classes and utilities.
 """
 
+import os
+from unittest.mock import patch
+
 from stock_data.data_provider.base import (
     STANDARD_COLUMNS,
     index_market_tag,
@@ -155,3 +158,50 @@ class TestIndexMarketTag:
         assert index_market_tag("600519") is None
         assert index_market_tag("AAPL") is None
         assert index_market_tag("HK00700") is None
+
+
+class TestCircuitBreakerConfig:
+    """Tests for CircuitBreaker environment variable configuration."""
+
+    def test_default_values(self):
+        """Test CircuitBreaker uses default values when no env vars set."""
+        with patch.dict(os.environ, {}, clear=True):
+            from stock_data.data_provider.core.types import CircuitBreaker
+
+            cb = CircuitBreaker()
+            assert cb.failure_threshold == 3
+            assert cb.cooldown_seconds == 300.0
+            assert cb.half_open_max_calls == 1
+
+    def test_env_var_overrides(self):
+        """Test CircuitBreaker reads configuration from environment variables."""
+        with patch.dict(
+            os.environ,
+            {
+                "CB_FAILURE_THRESHOLD": "7",
+                "CB_COOLDOWN_SECONDS": "600.0",
+                "CB_HALF_OPEN_MAX_CALLS": "2",
+            },
+        ):
+            from stock_data.data_provider.core.types import CircuitBreaker
+
+            cb = CircuitBreaker()
+            assert cb.failure_threshold == 7
+            assert cb.cooldown_seconds == 600.0
+            assert cb.half_open_max_calls == 2
+
+
+class TestNormalizeAllExport:
+    """Tests for __all__ export in normalize module."""
+
+    def test_normalize_all_defined(self):
+        """Test that __all__ is properly defined in normalize module."""
+        from stock_data.data_provider.utils import normalize
+
+        assert hasattr(normalize, "__all__")
+        assert "normalize_stock_code" in normalize.__all__
+        assert "market_tag" in normalize.__all__
+        assert "is_us_market" in normalize.__all__
+        assert "is_hk_market" in normalize.__all__
+        assert "ETF_PREFIXES" in normalize.__all__
+        assert "BSE_CODES" in normalize.__all__

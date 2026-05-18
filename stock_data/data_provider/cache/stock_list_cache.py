@@ -146,11 +146,32 @@ def get_stock_name(code: str, market: str | None = None, manager=None) -> str:
     if market is None:
         market = market_tag(normalized)
 
+    # First try DB lookup (efficient for single stock)
+    name = _get_stock_name_from_db(normalized, market)
+    if name:
+        return name
+
+    # Fallback to full list load (for backward compat)
     stocks = get_stock_list(market, refresh=False, manager=manager)
     for s in stocks:
         if s["code"] == normalized:
             return s["name"]
     return ""
+
+
+def _get_stock_name_from_db(code: str, market: str) -> str:
+    """Query single stock name from DB efficiently."""
+    conn = _get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name FROM stock_list WHERE market = ? AND code = ?",
+            (market, code),
+        )
+        row = cursor.fetchone()
+        return row["name"] if row else ""
+    finally:
+        conn.close()
 
 
 def _read_from_db(market: str) -> list:
@@ -218,12 +239,10 @@ def update_cached_stocks(market: str, stocks: list) -> int:
             cursor = conn.cursor()
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            cursor.execute("DELETE FROM stock_list WHERE market = ?", (market,))
-            for stock in stocks:
-                cursor.execute(
-                    "INSERT INTO stock_list (market, code, name, updated_at) VALUES (?, ?, ?, ?)",
-                    (market, stock["code"], stock["name"], now),
-                )
+            cursor.executemany(
+                "INSERT OR REPLACE INTO stock_list (market, code, name, updated_at) VALUES (?, ?, ?, ?)",
+                [(market, stock["code"], stock["name"], now) for stock in stocks],
+            )
 
             logger.info(f"[StockCache] Updated {len(stocks)} stocks for market={market}")
             return len(stocks)
