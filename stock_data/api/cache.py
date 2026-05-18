@@ -58,5 +58,18 @@ def make_history_cache_key(
     return ":".join(parts)
 
 
+def make_board_cache_key(board_type: str, source: str) -> str:
+    """Make cache key for board list data."""
+    return f"board:{board_type}:{source}"
+
+
+def make_board_stocks_cache_key(
+    board_code: str, source: str, include_quote: bool
+) -> str:
+    """Make cache key for board stocks data."""
+    suffix = ":quote" if include_quote else ""
+    return f"board_stocks:{board_code}:{source}{suffix}"
+
+
 def is_cache_enabled() -> bool:
     return _ENABLE_CACHE
