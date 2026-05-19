@@ -16,6 +16,7 @@ from ..base import (
     is_hk_market,
     normalize_stock_code,
 )
+from ..cache.stock_zt_pool_cache import init_db as init_zt_cache_db
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 from ..utils.normalize import get_index_type, is_index_code
 from .index_symbols import US_INDEX_AKSHARE_MAP
@@ -39,6 +40,7 @@ class AkshareFetcher(BaseFetcher):
         | DataCapability.INDEX_QUOTE
         | DataCapability.INDEX_HISTORICAL
         | DataCapability.INDEX_INTRADAY
+        | DataCapability.STOCK_ZT_POOL
     )
 
     def _map_adjust(self, adjust: str) -> str | None:
@@ -974,3 +976,77 @@ class AkshareFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[AkshareFetcher] get_index_intraday failed: {e}")
             return None
+
+    def get_zt_pool(self, pool_type: str, date: str) -> list[dict] | None:
+        """
+        Get ZT (涨跌停) pool data from Akshare.
+
+        Args:
+            pool_type: Pool type - "zt" (涨停), "dt" (跌停), "zbgc" (炸板)
+            date: Pool date in YYYYMMDD format (Akshare expects this format)
+
+        Returns:
+            List of stock dicts with normalized fields, or None if unavailable.
+        """
+        try:
+            import akshare as ak
+
+            init_zt_cache_db()
+
+            # Map pool_type to Akshare function
+            func_map = {
+                "zt": ak.stock_zt_pool_em,
+                "zbgc": ak.stock_zt_pool_zbgc_em,
+                "dt": ak.stock_zt_pool_dtgc_em,
+            }
+            func = func_map.get(pool_type)
+            if not func:
+                logger.warning(f"[AkshareFetcher] Unknown pool_type: {pool_type}")
+                return None
+
+            df = func(date=date)
+            if df is None or df.empty:
+                return None
+
+            return self._normalize_zt_pool(df, pool_type)
+
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] get_zt_pool({pool_type}, {date}) failed: {e}")
+            return None
+
+    def _normalize_zt_pool(self, df: pd.DataFrame, pool_type: str) -> list[dict]:
+        """Normalize Akshare ZT pool DataFrame to standard format."""
+        result = []
+        for _, row in df.iterrows():
+            code = str(row.get("代码", "")).strip()
+            # Normalize to 6-digit format
+            code = normalize_stock_code(code)
+
+            stock = {
+                "code": code,
+                "name": str(row.get("名称", "")).strip(),
+                "price": row.get("最新价") if "最新价" in row.index else None,
+                "change_pct": row.get("涨跌幅") if "涨跌幅" in row.index else None,
+                "amount": row.get("成交额") if "成交额" in row.index else None,
+                "turnover_rate": row.get("换手率") if "换手率" in row.index else None,
+                "lb_count": row.get("连板数") if "连板数" in row.index else None,
+                "first_seal_time": row.get("首次封板时间") if "首次封板时间" in row.index else None,
+                "last_seal_time": row.get("最后封板时间") if "最后封板时间" in row.index else None,
+                "seal_count": row.get("炸板次数") if "炸板次数" in row.index else None,
+                "zt_count": row.get("涨停统计") if "涨停统计" in row.index else None,
+            }
+
+            # dt_pool has different fields (连续跌停次数, no 炸板次数, no 涨停统计)
+            if pool_type == "dt":
+                stock["lb_count"] = row.get("连续跌停次数") if "连续跌停次数" in row.index else None
+                stock["seal_amount"] = None
+            else:
+                stock["seal_amount"] = None
+
+            # circ_mv and total_mv are not in akshare ZT pool data
+            stock["circ_mv"] = None
+            stock["total_mv"] = None
+
+            result.append(stock)
+
+        return result

@@ -13,6 +13,7 @@ import pandas as pd
 import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
+from ..cache.stock_zt_pool_cache import init_db as init_zt_cache_db
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class ZhituFetcher(BaseFetcher):
     name = "ZhituFetcher"
     priority = int(os.getenv("ZHITU_PRIORITY", "4"))
     supported_markets: set[str] = {"csi"}
-    supported_data_types = DataCapability.REALTIME_QUOTE
+    supported_data_types = DataCapability.REALTIME_QUOTE | DataCapability.STOCK_ZT_POOL
 
     def __init__(self):
         self._token = os.getenv("ZHITU_TOKEN", "").strip()
@@ -229,6 +230,85 @@ class ZhituFetcher(BaseFetcher):
         except Exception:
             logger.warning(f"[ZhituFetcher] Error for {stock_code}", exc_info=True)
             return None
+
+    def get_zt_pool(self, pool_type: str, date: str) -> list[dict] | None:
+        """
+        Get ZT (涨跌停) pool data from Zhitu API.
+
+        Args:
+            pool_type: Pool type - "zt" (涨停), "dt" (跌停), "zbgc" (炸板)
+            date: Pool date in YYYY-MM-DD format
+
+        Returns:
+            List of stock dicts with normalized fields, or None if unavailable.
+        """
+        if not self.is_available():
+            logger.warning("[ZhituFetcher] ZHITU_TOKEN not configured")
+            return None
+
+        # Map pool_type to Zhitu API path
+        path_map = {"zt": "ztgc", "dt": "dtgc", "zbgc": "zbgc"}
+        api_path = path_map.get(pool_type)
+        if not api_path:
+            logger.warning(f"[ZhituFetcher] Unknown pool_type: {pool_type}")
+            return None
+
+        try:
+            url = f"{ZHITU_API_BASE}/hs/pool/{api_path}/{date}"
+            params = {"token": self._token}
+
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if isinstance(data, dict) and "detail" in data:
+                logger.warning(f"[ZhituFetcher] API error: {data.get('detail')}")
+                return None
+
+            if not isinstance(data, list):
+                logger.warning(f"[ZhituFetcher] Unexpected response type: {type(data)}")
+                return None
+
+            # Initialize ZT cache db
+            init_zt_cache_db()
+
+            # Normalize and return
+            return [self._normalize_zt_stock(row, pool_type) for row in data]
+
+        except requests.exceptions.Timeout:
+            logger.warning(f"[ZhituFetcher] Timeout for ZT pool {pool_type} {date}")
+            return None
+        except requests.exceptions.RequestException:
+            logger.warning(f"[ZhituFetcher] Request failed for ZT pool {pool_type}", exc_info=True)
+            return None
+        except Exception:
+            logger.warning(f"[ZhituFetcher] Error for ZT pool {pool_type}", exc_info=True)
+            return None
+
+    def _normalize_zt_stock(self, row: dict, pool_type: str) -> dict:
+        """Normalize Zhitu ZT pool response to standard format."""
+        code = row.get("dm", "")
+        # Strip exchange prefix: "sz000657" -> "000657", "sh600519" -> "600519"
+        if code.startswith(("sh", "sz", "SH", "SZ")):
+            code = code[2:]
+
+        return {
+            "code": code,
+            "name": row.get("mc", ""),
+            "price": row.get("p"),
+            "change_pct": row.get("zf"),
+            "amount": row.get("cje"),
+            "circ_mv": row.get("lt"),
+            "total_mv": row.get("zsz"),
+            "turnover_rate": row.get("hs"),
+            "lb_count": row.get("lbc"),
+            "first_seal_time": row.get("fbt"),
+            "last_seal_time": row.get("lbt"),
+            "seal_amount": row.get("zj"),
+            "seal_count": row.get("zbc"),
+            "zt_count": row.get("tj"),
+        }
 
     def _normalize_intraday_zhitu(self, df: pd.DataFrame) -> pd.DataFrame:
         """Normalize Zhitu history API output."""

@@ -53,6 +53,8 @@ from .schemas import (
     StockInfo,
     StockQuote,
     TradeCalendarResponse,
+    ZTPoolResponse,
+    ZTPoolStock,
 )
 
 logger = logging.getLogger(__name__)
@@ -955,6 +957,94 @@ def get_board_stocks(
         raise
     except Exception as e:
         logger.error(f"Board stocks error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
+
+
+@router.get(
+    "/pools",
+    response_model=ZTPoolResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid pool type"},
+        404: {"model": ErrorResponse, "description": "No data found for date"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["pools"],
+)
+def get_pools(
+    type: str = Query(
+        ...,
+        pattern="^(zt|dt|zbgc)$",
+        description="Pool type: zt (涨停) / dt (跌停) / zbgc (炸板)",
+    ),
+    date: str | None = Query(None, description="Pool date (YYYY-MM-DD), defaults to latest cached or today"),
+    refresh: bool = Query(False, description="Force refresh from upstream"),
+) -> ZTPoolResponse:
+    """
+    Get ZT (涨跌停) pool data for a specific type and date.
+
+    Args:
+        type: Pool type - zt (涨停), dt (跌停), zbgc (炸板)
+        date: Pool date in YYYY-MM-DD format. If not provided, uses the latest
+              cached date or today's date.
+        refresh: If True, force refresh from upstream and update cache.
+
+    Returns:
+        ZTPoolResponse with list of stocks in the pool.
+    """
+    try:
+        manager = get_manager()
+        stocks = manager.get_zt_pool(pool_type=type, date=date, refresh=refresh)
+
+        if not stocks:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": f"No {type} pool data found"},
+            )
+
+        # Determine actual date from returned data
+        actual_date = date or stocks[0].get("pool_date", "") if stocks else ""
+        if not actual_date and stocks:
+            actual_date = stocks[0].get("pool_date", "")
+
+        pool_stocks = [
+            ZTPoolStock(
+                code=s.get("code", ""),
+                name=s.get("name", ""),
+                price=s.get("price"),
+                change_pct=s.get("change_pct"),
+                amount=s.get("amount"),
+                circ_mv=s.get("circ_mv"),
+                total_mv=s.get("total_mv"),
+                turnover_rate=s.get("turnover_rate"),
+                lb_count=s.get("lb_count"),
+                first_seal_time=s.get("first_seal_time"),
+                last_seal_time=s.get("last_seal_time"),
+                seal_amount=s.get("seal_amount"),
+                seal_count=s.get("seal_count"),
+                zt_count=s.get("zt_count"),
+            )
+            for s in stocks
+        ]
+
+        return ZTPoolResponse(
+            date=actual_date,
+            type=type,
+            total=len(pool_stocks),
+            stocks=pool_stocks,
+        )
+
+    except DataFetchError as e:
+        logger.warning(f"ZT pool unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "data_unavailable", "message": f"ZT pool data not available: {e}"},
+        ) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"ZT pool error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500, detail={"error": "internal_error", "message": str(e)}
         ) from e

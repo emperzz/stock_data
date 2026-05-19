@@ -187,3 +187,31 @@ class IndexIntradayResponse(BaseModel):
     period: str = Field(description="Minute period (1m/5m/15m/30m/60m)")
     date: str = Field(description="Trade date (YYYY-MM-DD)")
     data: list[IntradayData] = Field(default_factory=list, description="Minute-level data points")
+
+
+class ZTPoolStock(BaseModel):
+    """Single stock in a ZT (涨跌停) pool."""
+
+    code: str = Field(description="Stock code")
+    name: str = Field(default="", description="Stock name")
+    price: float | None = Field(default=None, description="Latest price")
+    change_pct: float | None = Field(default=None, description="Change percent (%)")
+    amount: float | None = Field(default=None, description="Trading amount (元)")
+    circ_mv: float | None = Field(default=None, description="Circulating market value (元)")
+    total_mv: float | None = Field(default=None, description="Total market value (元)")
+    turnover_rate: float | None = Field(default=None, description="Turnover rate (%)")
+    lb_count: int | None = Field(default=None, description="Consecutive limit-up count (涨停连板数) / 连续跌停次数")
+    first_seal_time: str | None = Field(default=None, description="First seal time (HH:mm:ss)")
+    last_seal_time: str | None = Field(default=None, description="Last seal time (HH:mm:ss)")
+    seal_amount: float | None = Field(default=None, description="Seal amount (封板资金/封单资金, 元)")
+    seal_count: int | None = Field(default=None, description="Seal break count (炸板次数)")
+    zt_count: str | None = Field(default=None, description="Limit-up statistics (x天/y板)")
+
+
+class ZTPoolResponse(BaseModel):
+    """ZT (涨跌停) pool response."""
+
+    date: str = Field(description="Pool date (YYYY-MM-DD)")
+    type: str = Field(description="Pool type: zt (涨停) / dt (跌停) / zbgc (炸板)")
+    total: int = Field(description="Total number of stocks in the pool")
+    stocks: list[ZTPoolStock] = Field(default_factory=list, description="List of stocks in the pool")

@@ -49,6 +49,7 @@ class DataCapability(Flag):
     INDEX_QUOTE = auto()  # 指数实时行情
     INDEX_HISTORICAL = auto()  # 指数历史K线 (d/w/m)
     INDEX_INTRADAY = auto()  # 指数日内分时 (1/5/15/30/60m)
+    STOCK_ZT_POOL = auto()  # 涨跌停股池（涨停/跌停/炸板）
 
 
 class DataFetchError(Exception):
@@ -531,6 +532,79 @@ class DataFetcherManager:
             return cached
 
         raise DataFetchError("All fetchers failed for trade calendar:\n" + "\n".join(errors))
+
+    def get_zt_pool(
+        self,
+        pool_type: str,
+        date: str | None = None,
+        refresh: bool = False,
+    ) -> list[dict]:
+        """Get ZT (涨跌停) pool data with automatic failover and caching.
+
+        Args:
+            pool_type: Pool type - "zt" (涨停), "dt" (跌停), "zbgc" (炸板)
+            date: Pool date in YYYY-MM-DD format. If None, uses latest cached or today.
+            refresh: If True, force refresh from upstream and update cache.
+
+        Returns:
+            List of stock dicts with normalized fields.
+
+        Raises:
+            DataFetchError: When all fetchers fail and no cache available.
+        """
+        from .cache.stock_zt_pool_cache import (
+            get_zt_pool_cached,
+            save_zt_pool,
+            get_latest_cached_date,
+            has_cached_data,
+        )
+
+        # Determine the date to query
+        query_date = date
+        if not query_date:
+            # Try latest cached date first
+            latest = get_latest_cached_date(pool_type)
+            if latest:
+                query_date = latest
+            else:
+                # Use today as fallback
+                from datetime import date as date_cls
+                query_date = date_cls.today().strftime("%Y-%m-%d")
+
+        # Check cache first (only if not refreshing)
+        if not refresh:
+            cached = get_zt_pool_cached(pool_type, query_date)
+            if cached:
+                logger.info(f"[Manager] ZT pool {pool_type} {query_date} found in cache ({len(cached)} stocks)")
+                return cached
+
+        # Fetch from upstream with capability-based routing
+        fetchers = self._filter_by_capability("csi", DataCapability.STOCK_ZT_POOL)
+
+        errors = []
+        for fetcher in fetchers:
+            try:
+                # Akshare expects YYYYMMDD, Zhitu expects YYYY-MM-DD
+                fetcher_date = query_date.replace("-", "") if fetcher.name == "AkshareFetcher" else query_date
+                stocks = fetcher.get_zt_pool(pool_type, fetcher_date)
+                if stocks:
+                    # Save to cache
+                    save_zt_pool(pool_type, query_date, stocks)
+                    logger.info(f"[Manager] {fetcher.name} returned {len(stocks)} stocks for ZT pool {pool_type} {query_date}")
+                    return stocks
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} ZT pool failed: {e}")
+                continue
+
+        # Fallback: return cached data if upstream fails and not already cached
+        if not refresh:
+            cached = get_zt_pool_cached(pool_type, query_date)
+            if cached:
+                logger.warning(f"[Manager] All fetchers failed for ZT pool, using {len(cached)} cached stocks")
+                return cached
+
+        raise DataFetchError(f"All fetchers failed for ZT pool {pool_type}:\n" + "\n".join(errors))
 
     def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote for an index with capability-based failover.
