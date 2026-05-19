@@ -216,7 +216,16 @@ class DataCapability(Flag):
     STOCK_NAME       # 股票名称 (get_stock_name)
     TRADE_CALENDAR   # 交易日历
     STOCK_BOARD      # 板块数据（概念/行业板块列表）
+    INDEX_QUOTE      # 指数实时行情
+    INDEX_HISTORICAL # 指数历史K线 (d/w/m)
+    INDEX_INTRADAY   # 指数日内分时 (1/5/15/30/60m)
 ```
+
+**Hard rule**: EVERY data access method in `DataFetcherManager` MUST route through
+`_filter_by_capability(market, capability)`. Never hardcode a specific fetcher class
+(e.g. `AkshareFetcher()`) — that bypasses priority-based failover and is forbidden.
+If a new data type needs routing, add a capability flag and declare it on the
+fetchers that support it.
 
 `DataFetcherManager._filter_by_capability(market, capability)` filters fetchers by market AND capability flag. Each data method routes through this filter:
 
@@ -231,19 +240,21 @@ class DataCapability(Flag):
 | `get_trade_calendar` | `TRADE_CALENDAR` |
 | `get_all_concept_boards` / `get_all_industry_boards` | `STOCK_BOARD` |
 | `get_concept_board_stocks` / `get_industry_board_stocks` | `STOCK_BOARD` |
-| `get_index_realtime_quote` | AkshareFetcher-only (no capability routing) |
-| `get_index_historical` | AkshareFetcher-only (no capability routing) |
-| `get_index_intraday` | AkshareFetcher-only (no capability routing) |
+| `get_index_realtime_quote` | `INDEX_QUOTE` |
+| `get_index_historical` | `INDEX_HISTORICAL` |
+| `get_index_intraday` | `INDEX_INTRADAY` |
 
 **Fetcher capability declarations:**
 
 | Fetcher | Capabilities |
 |---------|-------------|
-| BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR` |
-| AkshareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| TRADE_CALENDAR \| STOCK_BOARD` |
-| TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME` |
-| YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE` |
+| BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR \| INDEX_HISTORICAL` |
+| AkshareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY` |
+| TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| INDEX_HISTORICAL` |
+| YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
 | ZhituFetcher | `REALTIME_QUOTE` |
+
+**Index routing design**: Each fetcher that declares an INDEX_* capability must implement the corresponding public method (`get_index_realtime_quote`, `get_index_historical`, `get_index_intraday`). The Manager calls these methods directly — no `hasattr` checks, no fallback to stock methods. Internally, a fetcher may delegate to shared data processing logic (e.g. `get_index_historical` → `get_kline_data`), but the public interface is always the dedicated index method.
 
 **Anti-pattern**: Do NOT use `supports_historical` or `supports_realtime` — these are deprecated. Use `supported_data_types` with `DataCapability` flags.
 
@@ -311,6 +322,8 @@ Environment variables (see `.env.example`):
 - `ZHITU_TOKEN` - Zhitu API token for realtime quotes
 - `ZHITU_PRIORITY` - Override Zhitu fetcher priority (default: 4)
 - `ENABLE_API_CACHE` - Enable/disable API response caching (default: true)
+- `CACHE_TTL_STOCK_INTRADAY` - Stock intraday cache TTL in seconds (default: 30)
+- `CACHE_TTL_INDEX_INTRADAY` - Index intraday cache TTL in seconds (default: 30)
 
 ## Anti-Patterns to Avoid
 
@@ -319,3 +332,5 @@ Environment variables (see `.env.example`):
 - **Don't** mix inline imports and top-level imports inconsistently
 - **Don't** add features not needed for core data fetching (defer fundamental data, sentiment, etc.)
 - **Don't** create deeply nested manager hierarchies — one `DataFetcherManager` is sufficient
+- **Don't** hardcode a specific fetcher class (e.g. `AkshareFetcher()`) in `DataFetcherManager` methods — ALL data access must route through `_filter_by_capability(market, capability)`. This applies to existing methods AND any new capability added in the future. If your new feature needs a data type that doesn't fit existing capabilities, add a new `DataCapability` flag, declare it on the fetchers that support it, and route through `_filter_by_capability`.
+- **Don't** cache realtime quote data in SQLite — the `stock_board` and `stock_board_stock` tables store metadata only (code, name, type, timestamps). Quote/price data is always fetched live from the API.

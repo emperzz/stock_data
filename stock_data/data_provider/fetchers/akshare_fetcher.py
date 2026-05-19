@@ -36,6 +36,9 @@ class AkshareFetcher(BaseFetcher):
         | DataCapability.STOCK_NAME
         | DataCapability.TRADE_CALENDAR
         | DataCapability.STOCK_BOARD
+        | DataCapability.INDEX_QUOTE
+        | DataCapability.INDEX_HISTORICAL
+        | DataCapability.INDEX_INTRADAY
     )
 
     def _map_adjust(self, adjust: str) -> str | None:

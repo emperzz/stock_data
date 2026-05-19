@@ -30,7 +30,14 @@ STANDARD_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount", 
 
 
 class DataCapability(Flag):
-    """Flag enum for fetcher data capabilities."""
+    """Flag enum for fetcher data capabilities.
+
+    Design rule: EVERY data access path in DataFetcherManager must route
+    through _filter_by_capability(market, capability). Hardcoding a specific
+    fetcher class (e.g. AkshareFetcher()) bypasses priority-based failover
+    and is forbidden. If a data type needs routing, add a capability flag here
+    and declare it on the fetchers that support it.
+    """
 
     HISTORICAL_DWM = auto()  # 日/周/月 K线 (d/w/m)
     HISTORICAL_MIN = auto()  # 分钟 K线 (1/5/15/30/60m)
@@ -39,6 +46,9 @@ class DataCapability(Flag):
     STOCK_NAME = auto()  # 股票名称 (get_stock_name)
     TRADE_CALENDAR = auto()  # 交易日历
     STOCK_BOARD = auto()  # 板块数据（概念/行业板块列表）
+    INDEX_QUOTE = auto()  # 指数实时行情
+    INDEX_HISTORICAL = auto()  # 指数历史K线 (d/w/m)
+    INDEX_INTRADAY = auto()  # 指数日内分时 (1/5/15/30/60m)
 
 
 class DataFetchError(Exception):
@@ -523,18 +533,32 @@ class DataFetcherManager:
         raise DataFetchError("All fetchers failed for trade calendar:\n" + "\n".join(errors))
 
     def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
-        """Get realtime quote for a CSI index via AkshareFetcher.
+        """Get realtime quote for an index with capability-based failover.
+
+        Routes through fetchers declaring INDEX_QUOTE capability.
+        Each fetcher must implement get_index_realtime_quote().
 
         Args:
-            index_code: Index code (e.g., 000300, 399006)
+            index_code: Index code (e.g., 000300, 399006, SPX, HSI)
 
         Returns:
             UnifiedRealtimeQuote or None if not available.
         """
-        from .fetchers.akshare_fetcher import AkshareFetcher
+        index_code = normalize_stock_code(index_code)
+        index_type = index_market_tag(index_code) or "csi"
+        fetchers = self._filter_by_capability(index_type, DataCapability.INDEX_QUOTE)
 
-        fetcher = AkshareFetcher()
-        return fetcher.get_index_realtime_quote(index_code)
+        for fetcher in fetchers:
+            try:
+                quote = fetcher.get_index_realtime_quote(index_code)
+                if quote is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {index_code} index quote")
+                    return quote
+            except Exception as e:
+                logger.warning(f"[Manager] {fetcher.name} index quote failed: {e}")
+                continue
+
+        return None
 
     def get_index_historical(
         self,
@@ -544,10 +568,13 @@ class DataFetcherManager:
         days: int = 30,
         frequency: str = "d",
     ) -> tuple[pd.DataFrame, str]:
-        """Get historical K-line data for a CSI index.
+        """Get historical K-line data for an index with capability-based failover.
+
+        Routes through fetchers declaring INDEX_HISTORICAL capability.
+        Each fetcher must implement get_index_historical().
 
         Args:
-            index_code: Index code (e.g., 000300, 399006)
+            index_code: Index code (e.g., 000300, 399006, SPX, HSI)
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
             days: Number of days when start_date not provided
@@ -558,22 +585,37 @@ class DataFetcherManager:
         """
         from datetime import datetime, timedelta
 
-        # Compute start_date from days if not provided
         if not start_date:
             start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
 
-        from .fetchers.akshare_fetcher import AkshareFetcher
+        index_code = normalize_stock_code(index_code)
+        index_type = index_market_tag(index_code) or "csi"
+        fetchers = self._filter_by_capability(index_type, DataCapability.INDEX_HISTORICAL)
 
-        fetcher = AkshareFetcher()
-        df = fetcher.get_index_historical(index_code, start_date, end_date, frequency)
-        if df is not None and not df.empty:
-            return df, fetcher.name
-        raise DataFetchError(f"AkshareFetcher failed for {index_code} historical")
+        errors = []
+        for fetcher in fetchers:
+            try:
+                logger.info(f"[Manager] Trying {fetcher.name} for {index_code} index history")
+                df = fetcher.get_index_historical(index_code, start_date, end_date, frequency)
+                if df is not None and not df.empty:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {index_code} index history")
+                    return df, fetcher.name
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} index history failed: {e}")
+                continue
+
+        raise DataFetchError(
+            f"All fetchers failed for {index_code} index history:\n" + "\n".join(errors)
+        )
 
     def get_index_intraday(
         self, index_code: str, period: str = "5"
     ) -> tuple[pd.DataFrame, str]:
-        """Get intraday minute-level data for a CSI index.
+        """Get intraday minute-level data for an index with capability-based failover.
+
+        Routes through fetchers declaring INDEX_INTRADAY capability.
+        Each fetcher must implement get_index_intraday().
 
         Args:
             index_code: Index code (e.g., 000300, 399006)
@@ -582,13 +624,26 @@ class DataFetcherManager:
         Returns:
             Tuple of (DataFrame, source_name)
         """
-        from .fetchers.akshare_fetcher import AkshareFetcher
+        index_code = normalize_stock_code(index_code)
+        index_type = index_market_tag(index_code) or "csi"
+        fetchers = self._filter_by_capability(index_type, DataCapability.INDEX_INTRADAY)
 
-        fetcher = AkshareFetcher()
-        df = fetcher.get_index_intraday(index_code, period)
-        if df is not None and not df.empty:
-            return df, fetcher.name
-        raise DataFetchError(f"AkshareFetcher failed for {index_code} intraday")
+        errors = []
+        for fetcher in fetchers:
+            try:
+                logger.info(f"[Manager] Trying {fetcher.name} for {index_code} index intraday ({period})")
+                df = fetcher.get_index_intraday(index_code, period)
+                if df is not None and not df.empty:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {index_code} index intraday")
+                    return df, fetcher.name
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} index intraday failed: {e}")
+                continue
+
+        raise DataFetchError(
+            f"All fetchers failed for {index_code} index intraday:\n" + "\n".join(errors)
+        )
 
     def get_all_concept_boards(self, source: str = "eastmoney", include_quote: bool = False) -> list[dict]:
         """Get all concept boards from fetchers that support STOCK_BOARD capability.

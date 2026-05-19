@@ -161,8 +161,9 @@ class TestIndexIntraday:
 
     def test_index_intraday_period_5(self, client):
         response = client.get("/api/v1/indices/000300/intraday?period=5")
-        # May fail due to upstream EM issues, but should not 500 unless implementation error
-        assert response.status_code in (200, 500, 502, 503, 504)
+        # 200 = success, 503 = data unavailable (market closed / upstream failure)
+        # 500 = implementation bug and should always fail the test
+        assert response.status_code in (200, 503)
 
     def test_index_intraday_invalid_period(self, client):
         response = client.get("/api/v1/indices/000300/intraday?period=999")

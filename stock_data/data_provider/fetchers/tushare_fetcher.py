@@ -24,7 +24,13 @@ class TushareFetcher(BaseFetcher):
     name = "TushareFetcher"
     priority = int(os.getenv("TUSHARE_PRIORITY", "0"))
     supported_markets: set[str] = {"csi"}
-    supported_data_types = DataCapability.HISTORICAL_DWM | DataCapability.REALTIME_QUOTE | DataCapability.STOCK_LIST | DataCapability.STOCK_NAME
+    supported_data_types = (
+        DataCapability.HISTORICAL_DWM
+        | DataCapability.REALTIME_QUOTE
+        | DataCapability.STOCK_LIST
+        | DataCapability.STOCK_NAME
+        | DataCapability.INDEX_HISTORICAL
+    )
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Tushare value."""
@@ -240,3 +246,34 @@ class TushareFetcher(BaseFetcher):
             logger.warning(f"[TushareFetcher] get_stock_name failed: {e}")
 
         return None
+
+    def get_index_historical(
+        self, index_code: str, start_date: str | None, end_date: str | None, frequency: str
+    ) -> pd.DataFrame | None:
+        """Get historical K-line data for a CSI index.
+
+        Internally delegates to get_kline_data which handles CSI indices via
+        the index_daily/index_weekly/index_monthly API. Only d/w/m supported.
+
+        Args:
+            index_code: Index code (e.g., 000300, 399006)
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            frequency: K-line period - 'd'=daily, 'w'=weekly, 'm'=monthly
+
+        Returns:
+            DataFrame or None if not supported.
+        """
+        from datetime import datetime, timedelta
+
+        code = normalize_stock_code(index_code)
+        if not is_index_code(code) or get_index_type(code) != "csi":
+            return None
+
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+
+        try:
+            return self.get_kline_data(index_code, start_date, end_date, days=365, frequency=frequency)
+        except DataFetchError:
+            return None

@@ -7,7 +7,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
-from ..data_provider import DataFetcherManager
+from ..data_provider import DataFetcherManager, DataFetchError
 from ..data_provider.cache import api_cache as stock_cache
 from ..data_provider.cache import stock_board_cache
 from ..data_provider.fetchers.akshare_fetcher import AkshareFetcher
@@ -24,6 +24,7 @@ from .cache import (
     get_index_intraday_cache,
     get_index_quote_cache,
     get_quote_cache,
+    get_stock_intraday_cache,
     is_cache_enabled,
     make_board_cache_key,
     make_board_stocks_cache_key,
@@ -32,6 +33,7 @@ from .cache import (
     make_index_intraday_cache_key,
     make_index_quote_cache_key,
     make_quote_cache_key,
+    make_stock_intraday_cache_key,
 )
 from .schemas import (
     BoardInfo,
@@ -363,6 +365,13 @@ def get_intraday(
                 },
             )
 
+        if is_cache_enabled():
+            cache = get_stock_intraday_cache()
+            key = make_stock_intraday_cache_key(stock_code, period, adjust)
+            if key in cache:
+                logger.info(f"[APICache] stock_intraday hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         df, source = manager.get_intraday_data(stock_code, period=period, adjust=adjust)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
@@ -389,7 +398,7 @@ def get_intraday(
         ]
 
         period_label = f"{period}m"
-        return IntradayResponse(
+        result = IntradayResponse(
             code=stock_code,
             stock_name=stock_name,
             period=period_label,
@@ -398,6 +407,17 @@ def get_intraday(
             data=data,
         )
 
+        if is_cache_enabled():
+            cache[key] = result
+
+        return result
+
+    except DataFetchError as e:
+        logger.warning(f"Intraday data unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "data_unavailable", "message": f"Intraday data not currently available: {e}"},
+        ) from e
     except HTTPException:
         raise
     except Exception as e:
@@ -660,6 +680,12 @@ def get_index_intraday(
 
         return result
 
+    except DataFetchError as e:
+        logger.warning(f"Index intraday data unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "data_unavailable", "message": f"Intraday data not currently available for {index_code}: {e}"},
+        ) from e
     except Exception as e:
         logger.error(f"Index intraday error: {e}", exc_info=True)
         raise HTTPException(
@@ -893,15 +919,14 @@ def get_board_stocks(
                 detail={"error": "not_found", "message": f"No stocks found for board {board_code}"},
             )
 
-        # Get board name
-        board_type = "concept" if board_code.startswith("BK") else "industry"
-        boards = stock_board_cache.get_board_list(
-            board_type,
-            source,
-            refresh=False,
-            manager=manager,
-        )
-        board_name = next((b["name"] for b in boards if b["code"] == board_code), board_code)
+        # Get board name — try both types since "BK" prefix is shared
+        board_name = board_code
+        for bt in ("concept", "industry"):
+            boards = stock_board_cache.get_board_list(bt, source, refresh=False, manager=manager)
+            match = next((b["name"] for b in boards if b["code"] == board_code), None)
+            if match:
+                board_name = match
+                break
 
         # Build stock list
         stock_list = [

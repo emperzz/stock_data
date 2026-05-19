@@ -19,6 +19,7 @@ _TTL_BOARD_LIST = int(os.getenv("CACHE_TTL_BOARD_LIST", 300))
 _TTL_BOARD_STOCKS = int(os.getenv("CACHE_TTL_BOARD_STOCKS", 300))
 _TTL_INDEX_QUOTE = int(os.getenv("CACHE_TTL_INDEX_QUOTE", 60))
 _TTL_INDEX_INTRADAY = int(os.getenv("CACHE_TTL_INDEX_INTRADAY", 30))
+_TTL_STOCK_INTRADAY = int(os.getenv("CACHE_TTL_STOCK_INTRADAY", 30))
 _ENABLE_CACHE = os.getenv("ENABLE_API_CACHE", "true").lower() == "true"
 
 # Global per-frequency history cache instances
@@ -31,6 +32,7 @@ _board_list_cache: TTLCache = TTLCache(maxsize=64, ttl=_TTL_BOARD_LIST)
 _board_stocks_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_BOARD_STOCKS)
 _index_quote_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_INDEX_QUOTE)
 _index_intraday_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_INDEX_INTRADAY)
+_stock_intraday_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INTRADAY)
 
 
 def get_quote_cache() -> TTLCache:
@@ -51,6 +53,10 @@ def get_index_quote_cache() -> TTLCache:
 
 def get_index_intraday_cache() -> TTLCache:
     return _index_intraday_cache
+
+
+def get_stock_intraday_cache() -> TTLCache:
+    return _stock_intraday_cache
 
 
 def get_history_cache(frequency: str) -> TTLCache:
@@ -99,6 +105,11 @@ def make_index_quote_cache_key(index_code: str) -> str:
     return f"idx_quote:{index_code}"
 
 
+def make_stock_intraday_cache_key(stock_code: str, period: str, adjust: str) -> str:
+    suffix = f":{adjust}" if adjust else ""
+    return f"stock_intraday:{stock_code}:{period}{suffix}"
+
+
 def make_index_intraday_cache_key(index_code: str, period: str) -> str:
     return f"idx_intraday:{index_code}:{period}"
 
@@ -113,7 +124,7 @@ def make_index_history_cache_key(
     parts = [index_code, frequency, str(days)]
     if start_date or end_date:
         parts.extend([start_date or "", end_date or ""])
-    return ":".join(parts)
+    return "idx_history:" + ":".join(parts)
 
 
 def is_cache_enabled() -> bool:

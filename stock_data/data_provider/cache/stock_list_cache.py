@@ -111,23 +111,31 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     needs_refresh = refresh or _is_first_call_of_day(normalized_market)
 
     if not needs_refresh:
-        cached = _read_from_db(market)
+        cached = _read_from_db(normalized_market)
         if cached:
             return cached
 
     # Need refresh: fetch from upstream and update cache
     # Lazy import to avoid circular dependency
     if manager is None:
-        from ..fetchers.akshare_fetcher import AkshareFetcher
         from ..base import DataFetcherManager
+        from ..fetchers.akshare_fetcher import AkshareFetcher
+        from ..fetchers.baostock_fetcher import BaostockFetcher
+        from ..fetchers.tushare_fetcher import TushareFetcher
 
         manager = DataFetcherManager()
+        tushare = TushareFetcher()
+        if tushare.is_available():
+            manager.add_fetcher(tushare)
+        baostock = BaostockFetcher()
+        if baostock.is_available():
+            manager.add_fetcher(baostock)
         manager.add_fetcher(AkshareFetcher())
 
-    stocks = _fetch_from_upstream(market, manager)
+    stocks = _fetch_from_upstream(normalized_market, manager)
     if stocks:
-        update_cached_stocks(market, stocks)
-        logger.info(f"[StockCache] Refreshed {len(stocks)} stocks for market={market}")
+        update_cached_stocks(normalized_market, stocks)
+        logger.info(f"[StockCache] Refreshed {len(stocks)} stocks for market={normalized_market}")
 
     return stocks
 

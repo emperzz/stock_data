@@ -44,6 +44,8 @@ class YfinanceFetcher(BaseFetcher):
         DataCapability.HISTORICAL_DWM
         | DataCapability.HISTORICAL_MIN
         | DataCapability.REALTIME_QUOTE
+        | DataCapability.INDEX_HISTORICAL
+        | DataCapability.INDEX_QUOTE
     )
 
     def _map_adjust(self, adjust: str) -> str | None:
@@ -357,3 +359,52 @@ class YfinanceFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[YfinanceFetcher] Stooq fallback failed: {e}")
             return None
+
+    def get_index_historical(
+        self, index_code: str, start_date: str | None, end_date: str | None, frequency: str
+    ) -> pd.DataFrame | None:
+        """Get historical K-line data for an index (US/CSI/HK).
+
+        Internally delegates to get_kline_data which handles index codes via
+        _convert_code (US_INDEX_MAP, .SS, HK_INDEX_MAP). Supports d/w/m and
+        minute frequencies.
+
+        Args:
+            index_code: Index code (e.g., SPX, 000300, HSI)
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            frequency: K-line period - 'd'=daily, 'w'=weekly, 'm'=monthly, '5/15/30/60'=minute
+
+        Returns:
+            DataFrame or None if not supported.
+        """
+        from datetime import datetime, timedelta
+
+        code = normalize_stock_code(index_code)
+        if not is_index_code(code):
+            return None
+
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+
+        try:
+            return self.get_kline_data(index_code, start_date, end_date, days=365, frequency=frequency)
+        except DataFetchError:
+            return None
+
+    def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
+        """Get realtime quote for an index (US/CSI/HK).
+
+        Internally delegates to get_realtime_quote which handles index codes
+        via _convert_code (US_INDEX_MAP, .SS, HK_INDEX_MAP).
+
+        Args:
+            index_code: Index code (e.g., SPX, 000300, HSI)
+
+        Returns:
+            UnifiedRealtimeQuote or None if not available.
+        """
+        code = normalize_stock_code(index_code)
+        if not is_index_code(code):
+            return None
+        return self.get_realtime_quote(index_code)
