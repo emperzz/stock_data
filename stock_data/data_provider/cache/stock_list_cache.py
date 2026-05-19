@@ -95,7 +95,7 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     - Otherwise -> return cached data
 
     Args:
-        market: Market type (csi/hk/us)
+        market: Market type (csi/hk/us). Note: 'cn' is normalized to 'csi' for A-shares.
         refresh: If True, force refresh from upstream
         manager: DataFetcherManager instance. If None, creates one lazily.
 
@@ -104,7 +104,11 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     """
     init_db()
 
-    needs_refresh = refresh or _is_first_call_of_day(market)
+    # Normalize 'cn' to 'csi' for A-share market consistency
+    # (routes.py converts cn->csi for API, but cache stores under 'csi')
+    normalized_market = "csi" if market == "cn" else market
+
+    needs_refresh = refresh or _is_first_call_of_day(normalized_market)
 
     if not needs_refresh:
         cached = _read_from_db(market)
