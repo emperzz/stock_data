@@ -1,17 +1,29 @@
-# Data Provider Package
-# Stock data fetchers with unified interface
+"""
+Data Provider Package
+Stock data fetchers with unified interface
+"""
 
+# Core classes - main entry point
 from .base import (
-    STANDARD_COLUMNS,
     BaseFetcher,
     DataCapability,
     DataFetcherManager,
     DataFetchError,
     RateLimitError,
+    STANDARD_COLUMNS,
 )
-from .core.types import CircuitBreaker, RealtimeSource, UnifiedRealtimeQuote
 
-# Re-export from cache for backward compatibility
+# Types
+from .core.types import (
+    CircuitBreaker,
+    RealtimeSource,
+    UnifiedRealtimeQuote,
+    safe_float,
+    safe_int,
+    get_realtime_circuit_breaker,
+)
+
+# Cache functions - use `from data_provider import stock_cache` for the module
 from .cache.api_cache import (
     get_cached_calendar,
     get_cached_stocks,
@@ -26,10 +38,10 @@ from .cache.api_cache import (
     update_cached_stocks,
 )
 
-# Re-export cache module for backward compatibility
-from .cache import api_cache as stock_cache
+# Backward compatibility: re-export cache module
+from . import cache as stock_cache
 
-# Re-export fetcher classes for backward compatibility
+# Fetcher classes
 from .fetchers.akshare_fetcher import AkshareFetcher
 from .fetchers.baostock_fetcher import BaostockFetcher
 from .fetchers.tushare_fetcher import TushareFetcher
@@ -37,15 +49,20 @@ from .fetchers.yfinance_fetcher import YfinanceFetcher
 from .fetchers.zhitu_fetcher import ZhituFetcher
 
 __all__ = [
+    # Core
     "BaseFetcher",
     "DataCapability",
     "DataFetcherManager",
     "DataFetchError",
     "RateLimitError",
     "STANDARD_COLUMNS",
-    "UnifiedRealtimeQuote",
+    # Types
     "CircuitBreaker",
     "RealtimeSource",
+    "UnifiedRealtimeQuote",
+    "safe_float",
+    "safe_int",
+    "get_realtime_circuit_breaker",
     # Cache functions
     "get_cached_calendar",
     "get_cached_stocks",
@@ -58,9 +75,9 @@ __all__ = [
     "init_db",
     "update_cached_calendar",
     "update_cached_stocks",
-    # Cache module for backward compatibility
+    # Cache module
     "stock_cache",
-    # Fetcher classes for backward compatibility
+    # Fetchers
     "AkshareFetcher",
     "BaostockFetcher",
     "TushareFetcher",
