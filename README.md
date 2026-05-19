@@ -114,6 +114,68 @@ GET /api/v1/stocks/{code}/quote
 
 ---
 
+### Get Stock Intraday Data
+
+```bash
+GET /api/v1/stocks/{code}/intraday?period=5
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | string | `5` | Minute period: `1`, `5`, `15`, `30`, `60` |
+| `adjust` | string | `` | Adjustment type: empty=不复权, `qfq`=前复权, `hfq`=后复权 |
+
+**Response:**
+```json
+{
+  "code": "600519",
+  "stock_name": "贵州茅台",
+  "period": "5m",
+  "date": "2026-05-19",
+  "data": [
+    {
+      "time": "09:30:00",
+      "open": 1698.0,
+      "high": 1700.0,
+      "low": 1695.0,
+      "close": 1699.0,
+      "volume": 12345,
+      "amount": 20987654.0
+    }
+  ]
+}
+```
+
+**Note:** Intraday data is only available for A-share stocks (not US/HK stocks or indices).
+
+---
+
+### Trade Calendar
+
+```bash
+GET /api/v1/calendar
+GET /api/v1/calendar?refresh=true
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `refresh` | bool | `false` | Force fetch latest from upstream |
+
+**Response:**
+```json
+{
+  "trade_dates": ["2026-05-07", "2026-05-08", "2026-05-09", ...],
+  "latest_date": "2026-05-09",
+  "total": 245
+}
+```
+
+**Note:** Returns A-share trade calendar. Data is cached in SQLite and refreshed when cache is stale.
+
+---
+
 ### Index APIs
 
 Index data is served via dedicated `/indices/` endpoints (separate from stocks).
@@ -215,7 +277,7 @@ GET /api/v1/stocks?market=cn&refresh=true
 ```
 
 **Caching behavior:**
-- First call fetches from upstream (Baostock for A-share, ~10-20 seconds)
+- First call fetches from upstream (Tushare for A-share if token, otherwise Akshare)
 - Subsequent calls return cached data (~50ms)
 - Use `refresh=true` to force update from upstream
 
@@ -316,6 +378,9 @@ The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to 
 | `CACHE_TTL_HISTORY_MONTHLY` | TTL for monthly K-line (seconds) | `7200` |
 | `CACHE_TTL_INDEX_QUOTE` | TTL for index realtime quotes (seconds) | `60` |
 | `CACHE_TTL_INDEX_INTRADAY` | TTL for index intraday (seconds) | `30` |
+| `CACHE_TTL_STOCK_INTRADAY` | TTL for stock intraday (seconds) | `30` |
+| `CACHE_TTL_BOARD_LIST` | TTL for board list (seconds) | `300` |
+| `CACHE_TTL_BOARD_STOCKS` | TTL for board stocks (seconds) | `300` |
 
 ---
 

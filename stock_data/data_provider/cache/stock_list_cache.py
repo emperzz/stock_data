@@ -120,16 +120,12 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     if manager is None:
         from ..base import DataFetcherManager
         from ..fetchers.akshare_fetcher import AkshareFetcher
-        from ..fetchers.baostock_fetcher import BaostockFetcher
         from ..fetchers.tushare_fetcher import TushareFetcher
 
         manager = DataFetcherManager()
         tushare = TushareFetcher()
         if tushare.is_available():
             manager.add_fetcher(tushare)
-        baostock = BaostockFetcher()
-        if baostock.is_available():
-            manager.add_fetcher(baostock)
         manager.add_fetcher(AkshareFetcher())
 
     stocks = _fetch_from_upstream(normalized_market, manager)
