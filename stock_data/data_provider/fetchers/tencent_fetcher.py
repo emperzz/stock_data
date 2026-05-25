@@ -6,7 +6,7 @@ Returns: GBK encoded, `~` delimited fields (88 fields total)
 
 Key fields used:
 - 39: PE(TTM), 43: 振幅%, 44: 总市值(亿), 45: 流通市值(亿)
-- 46: PB, 47: 涨停价, 48: 跌停价, 49: 量比, 52: PE(静)
+- 46: PB, 49: 量比, 52: PE(静)
 """
 
 import logging
@@ -34,10 +34,6 @@ class TencentFetcher(BaseFetcher):
     def is_available(self) -> bool:
         """Tencent API is always available (no auth required)."""
         return True
-
-    def _convert_code(self, stock_code: str) -> str:
-        """Normalize stock code to 6-digit format."""
-        return normalize_stock_code(stock_code)
 
     def _tencent_prefix(self, stock_code: str) -> str:
         """Convert to Tencent API prefix format.
@@ -151,7 +147,7 @@ class TencentFetcher(BaseFetcher):
                 price=safe_float(values[3]) if len(values) > 3 and values[3] else None,
                 pre_close=safe_float(values[4]) if len(values) > 4 and values[4] else None,
                 open_price=safe_float(values[5]) if len(values) > 5 and values[5] else None,
-                volume=None,  # Tencent doesn't return volume in same units
+                volume=safe_float(values[36]) * 100 if len(values) > 36 and values[36] else None,  # 手 -> shares
                 amount=safe_float(values[37]) * 10000 if len(values) > 37 and values[37] else None,  # 万元 -> 元
                 change_amount=safe_float(values[31]) if len(values) > 31 and values[31] else None,
                 change_pct=safe_float(values[32]) if len(values) > 32 and values[32] else None,
@@ -163,6 +159,7 @@ class TencentFetcher(BaseFetcher):
                 total_mv=safe_float(values[44]) * 1e8 if len(values) > 44 and values[44] else None,  # 亿 -> 元
                 circ_mv=safe_float(values[45]) * 1e8 if len(values) > 45 and values[45] else None,  # 亿 -> 元
                 pb_ratio=safe_float(values[46]) if len(values) > 46 and values[46] else None,
+                volume_ratio=safe_float(values[49]) if len(values) > 49 and values[49] else None,
             )
         except Exception as e:
             logger.warning(f"[TencentFetcher] Parse error for {stock_code}: {e}")
