@@ -21,6 +21,17 @@ class StockQuote(BaseModel):
     volume: int | None = Field(default=None, description="Trading volume")
     amount: float | None = Field(default=None, description="Trading amount")
     update_time: str | None = Field(default=None, description="Update timestamp")
+    # Valuation metrics (from Tencent财经)
+    pe_ttm: float | None = Field(default=None, description="PE(TTM)")
+    pe_static: float | None = Field(default=None, description="PE(静)")
+    pb: float | None = Field(default=None, description="PB (市净率)")
+    mcap_yi: float | None = Field(default=None, description="Total market cap (亿元)")
+    float_mcap_yi: float | None = Field(default=None, description="Float market cap (亿元)")
+    turnover_pct: float | None = Field(default=None, description="Turnover rate (%)")
+    amplitude_pct: float | None = Field(default=None, description="Amplitude (%)")
+    limit_up: float | None = Field(default=None, description="Limit up price (涨停价)")
+    limit_down: float | None = Field(default=None, description="Limit down price (跌停价)")
+    vol_ratio: float | None = Field(default=None, description="Volume ratio (量比)")
 
 
 class KLineData(BaseModel):
