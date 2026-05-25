@@ -44,6 +44,7 @@ from . import cache as stock_cache
 # Fetcher classes
 from .fetchers.akshare_fetcher import AkshareFetcher
 from .fetchers.baostock_fetcher import BaostockFetcher
+from .fetchers.tencent_fetcher import TencentFetcher
 from .fetchers.tushare_fetcher import TushareFetcher
 from .fetchers.yfinance_fetcher import YfinanceFetcher
 from .fetchers.zhitu_fetcher import ZhituFetcher
@@ -80,6 +81,7 @@ __all__ = [
     # Fetchers
     "AkshareFetcher",
     "BaostockFetcher",
+    "TencentFetcher",
     "TushareFetcher",
     "YfinanceFetcher",
     "ZhituFetcher",
