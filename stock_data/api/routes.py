@@ -189,6 +189,17 @@ def get_quote(stock_code: str = Path(max_length=20, description="Stock code")) -
             prev_close=quote.pre_close,
             volume=quote.volume,
             amount=quote.amount,
+            # Enhanced fields from Tencent财经
+            pe_ttm=quote.pe_ratio,
+            pe_static=None,  # Tencent API doesn't expose this in current parsing
+            pb=quote.pb_ratio,
+            mcap_yi=quote.total_mv / 1e8 if quote.total_mv else None,
+            float_mcap_yi=quote.circ_mv / 1e8 if quote.circ_mv else None,
+            turnover_pct=quote.turnover_rate,
+            amplitude_pct=quote.amplitude,
+            limit_up=None,  # Not yet parsed from Tencent response
+            limit_down=None,  # Not yet parsed from Tencent response
+            vol_ratio=quote.volume_ratio,
         )
 
         # Cache the result
