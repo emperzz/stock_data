@@ -14,7 +14,6 @@ import urllib.request
 from typing import Optional
 
 import pandas as pd
-import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float
