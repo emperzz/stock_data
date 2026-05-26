@@ -10,15 +10,17 @@ from fastapi import APIRouter, HTTPException, Path, Query
 from ..data_provider import DataFetcherManager, DataFetchError
 from ..data_provider.cache import api_cache as stock_cache
 from ..data_provider.cache import stock_board_cache
-from ..data_provider.fetchers.akshare_fetcher import AkshareFetcher
-from ..data_provider.fetchers.baostock_fetcher import BaostockFetcher
-from ..data_provider.fetchers.tushare_fetcher import TushareFetcher
-from ..data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
-from ..data_provider.fetchers.zhitu_fetcher import ZhituFetcher
-from ..data_provider.fetchers.tencent_fetcher import TencentFetcher
-from ..data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
-from ..data_provider.fetchers.ths_fetcher import ThsFetcher
-from ..data_provider.fetchers.cninfo_fetcher import CninfoFetcher
+from ..data_provider import (
+    AkshareFetcher,
+    BaostockFetcher,
+    CninfoFetcher,
+    EastMoneyFetcher,
+    TencentFetcher,
+    ThsFetcher,
+    TushareFetcher,
+    YfinanceFetcher,
+    ZhituFetcher,
+)
 from ..data_provider.utils.normalize import is_hk_market, is_index_code, is_us_market, normalize_stock_code
 from ..data_provider.fetchers.index_symbols import get_all_indices
 from .cache import (
@@ -1082,10 +1084,8 @@ def get_pools(
                 detail={"error": "not_found", "message": f"No {type} pool data found"},
             )
 
-        # Determine actual date from returned data
-        actual_date = date or stocks[0].get("pool_date", "") if stocks else ""
-        if not actual_date and stocks:
-            actual_date = stocks[0].get("pool_date", "")
+        # Derive actual date from query param or first stock record
+        actual_date = date or stocks[0].get("pool_date", "")
 
         pool_stocks = [
             ZTPoolStock(

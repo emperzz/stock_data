@@ -347,7 +347,8 @@ GET /api/v1/boards/BK1048/stocks?include_quote=true
 
 **Caching behavior for board endpoints:**
 - Results are cached in `stock_data/stock_cache.db` (SQLite)
-- `include_quote=true` skips cache and fetches fresh data from upstream
+- `include_quote=true` fetches fresh data from upstream AND updates cache
+- `refresh=true` forces upstream fetch and updates cache
 - First call of each day triggers a refresh from upstream
 
 ---

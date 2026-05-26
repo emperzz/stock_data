@@ -7,7 +7,7 @@ Provides persistent caching for A-share trade calendar data.
 import logging
 from datetime import datetime
 
-from .stock_list_cache import _get_connection
+from .db import _get_connection
 
 logger = logging.getLogger(__name__)
 

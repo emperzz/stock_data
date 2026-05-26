@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from stock_data.api.routes import reset_manager
 from stock_data.server import app
+from stock_data.data_provider.cache.stock_zt_pool_cache import _get_table_name
 
 
 @pytest.fixture(autouse=True)
@@ -199,6 +200,17 @@ class TestZTPoolCache:
         # Use a date far in the future that no test uses
         count = get_pool_count("zt", "2999-12-31")
         assert count == 0
+
+    def test_invalid_pool_type_raises_valueerror(self):
+        """_get_table_name should reject unknown pool types."""
+        with pytest.raises(ValueError, match="Unknown pool_type"):
+            _get_table_name("invalid")
+
+    def test_valid_pool_types(self):
+        """_get_table_name should return correct table for valid types."""
+        assert _get_table_name("zt") == "zt_pool"
+        assert _get_table_name("dt") == "dt_pool"
+        assert _get_table_name("zbgc") == "zbgc_pool"
 
 
 class TestZTFetcherCapabilities:

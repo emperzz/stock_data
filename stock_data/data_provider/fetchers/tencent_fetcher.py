@@ -13,6 +13,8 @@ import logging
 import urllib.request
 from typing import Optional
 
+import pandas as pd
+
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float
 from ..utils.normalize import normalize_stock_code
@@ -48,7 +50,7 @@ class TencentFetcher(BaseFetcher):
             return f"sz{code}"
         elif code.upper().startswith("HK"):
             return f"hk{code[2:].zfill(5)}"
-        elif code.startswith("8") or code.startswith("4"):
+        elif code.startswith("8"):
             return f"bj{code}"
         else:
             return f"sz{code}"
@@ -60,13 +62,13 @@ class TencentFetcher(BaseFetcher):
         end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
-    ) -> None:
+    ) -> pd.DataFrame:
         """Tencent API is realtime-only, not used for historical data."""
         raise DataFetchError(
             "TencentFetcher does not support historical K-line data, only realtime quotes"
         )
 
-    def _normalize_data(self, df: None, stock_code: str) -> None:
+    def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """Tencent API is realtime-only, not used for historical data."""
         raise DataFetchError("TencentFetcher does not support historical K-line data")
 

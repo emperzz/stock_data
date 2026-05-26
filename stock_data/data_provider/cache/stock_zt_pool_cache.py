@@ -10,30 +10,12 @@ Each pool type has its own table since they have different fields.
 """
 
 import logging
-import os
 import sqlite3
 from datetime import datetime
-from pathlib import Path
+
+from .db import _get_connection, _get_db_path
 
 logger = logging.getLogger(__name__)
-
-_db_path: Path | None = None
-
-
-def _get_db_path() -> Path:
-    """Get database path, lazily evaluated."""
-    global _db_path
-    if _db_path is None:
-        env_path = os.getenv("STOCK_CACHE_DB_PATH")
-        _db_path = Path(env_path) if env_path else Path(__file__).parent.parent.parent / "stock_cache.db"
-    return _db_path
-
-
-def _get_connection() -> sqlite3.Connection:
-    """Get a database connection with row factory."""
-    conn = sqlite3.connect(_get_db_path(), timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def init_db() -> None:

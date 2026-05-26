@@ -223,6 +223,46 @@ class TestYfinanceFetcher:
         assert "ma5" in df.columns
 
 
+class TestYfinanceCodeConversion:
+    """Unit tests for YfinanceFetcher._convert_code index suffix logic."""
+
+    @staticmethod
+    def _make_fetcher():
+        from stock_data.data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
+
+        return YfinanceFetcher()
+
+    def test_shanghai_csi_index_uses_ss(self):
+        """Shanghai-based CSI indices (000xxx) use .SS suffix."""
+        f = self._make_fetcher()
+        assert f._convert_code("000300") == "000300.SS"
+        assert f._convert_code("000001") == "000001.SS"
+        assert f._convert_code("000016") == "000016.SS"
+
+    def test_shenzhen_csi_index_uses_sz(self):
+        """Shenzhen-based CSI indices (399xxx) use .SZ suffix."""
+        f = self._make_fetcher()
+        assert f._convert_code("399001") == "399001.SZ"
+        assert f._convert_code("399006") == "399006.SZ"
+        assert f._convert_code("399005") == "399005.SZ"
+
+    def test_us_stock_unchanged(self):
+        """US stock codes pass through unchanged."""
+        f = self._make_fetcher()
+        assert f._convert_code("AAPL") == "AAPL"
+
+    def test_a_share_shanghai_uses_ss(self):
+        """Shanghai A-share (6xxxxx) use .SS suffix."""
+        f = self._make_fetcher()
+        assert f._convert_code("600519") == "600519.SS"
+
+    def test_a_share_shenzhen_uses_sz(self):
+        """Shenzhen A-share (00xxxx non-index, 3xxxxx) use .SZ suffix."""
+        f = self._make_fetcher()
+        assert f._convert_code("000651") == "000651.SZ"  # 格力电器, not an index
+        assert f._convert_code("300750") == "300750.SZ"  # 宁德时代
+
+
 class TestTushareFetcher:
     """Tests for TushareFetcher."""
 

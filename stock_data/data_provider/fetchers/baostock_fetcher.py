@@ -206,7 +206,7 @@ class BaostockFetcher(BaseFetcher):
                 if len(row) >= 2:
                     return row[1]  # code_name
         except Exception:
-            pass
+            logger.debug("Failed to query stock name via baostock", exc_info=True)
 
         return None
 

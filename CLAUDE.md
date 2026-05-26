@@ -44,10 +44,12 @@ stock_data/
 │   ├── __init__.py
 │   ├── routes.py
 │   ├── schemas.py
-│   └── cache.py
+│   └── cache.py                    # In-memory TTLCache for API responses
 └── data_provider/
     ├── __init__.py                  # Public API re-exports
-    ├── base.py                      # BaseFetcher, DataFetcherManager, DataCapability
+    ├── base.py                      # BaseFetcher (ABC), DataCapability, DataFetchError
+    ├── manager.py                   # DataFetcherManager (priority-based failover)
+    ├── realtime_types.py           # Backward-compat re-export of core/types.py
     ├── core/
     │   ├── __init__.py
     │   └── types.py                # UnifiedRealtimeQuote, CircuitBreaker, safe_float/int
@@ -56,13 +58,20 @@ stock_data/
     │   ├── index_symbols.py        # Index mappings (CSI/HK/US)
     │   ├── akshare_fetcher.py
     │   ├── baostock_fetcher.py
+    │   ├── cninfo_fetcher.py
+    │   ├── eastmoney_fetcher.py
+    │   ├── tencent_fetcher.py
+    │   ├── ths_fetcher.py
     │   ├── tushare_fetcher.py
     │   ├── yfinance_fetcher.py
     │   └── zhitu_fetcher.py
     ├── cache/
     │   ├── __init__.py
+    │   ├── db.py                   # Shared _get_db_path() / _get_connection()
     │   ├── api_cache.py            # Compatibility re-export module
     │   ├── stock_list_cache.py
+    │   ├── stock_board_cache.py
+    │   ├── stock_zt_pool_cache.py
     │   └── trade_calendar_cache.py
     └── utils/
         ├── __init__.py
@@ -72,9 +81,14 @@ stock_data/
 ## Core Components
 
 ### `data_provider/base.py`
-- `BaseFetcher`: Abstract base defining `_fetch_raw_data()`, `_normalize_data()`, `get_daily_data()`, `get_realtime_quote()`
-- `DataFetcherManager`: Orchestrates fetchers with priority-based failover, circuit breakers, and capability-based routing
+- `BaseFetcher`: Abstract base defining `_fetch_raw_data()`, `_normalize_data()`, `get_kline_data()`, `get_realtime_quote()`
 - `DataCapability`: Flag enum for fetcher capability declarations (see below)
+- `DataFetchError`, `RateLimitError`: Exception classes
+- `STANDARD_COLUMNS`: Standardized K-line column names
+
+### `data_provider/manager.py`
+- `DataFetcherManager`: Orchestrates fetchers with priority-based failover, circuit breakers, and capability-based routing
+- All data access methods route through `_filter_by_capability(market, capability)`
 
 ### `data_provider/fetchers/`
 - Each source has its own fetcher: `baostock_fetcher.py`, `akshare_fetcher.py`, `yfinance_fetcher.py`, `tushare_fetcher.py`, `zhitu_fetcher.py`, `tencent_fetcher.py`, `eastmoney_fetcher.py`, `ths_fetcher.py`, `cninfo_fetcher.py`
@@ -87,7 +101,14 @@ stock_data/
 ### `data_provider/core/types.py`
 - `UnifiedRealtimeQuote`: Dataclass for normalized realtime quotes
 - `CircuitBreaker`: Thread-safe circuit breaker implementation
-- `safe_float()`, `safe_int()`: Type-safe conversion utilities
+- `safe_float()`, `safe_int()`: Type-safe conversion utilities (rejects NaN, inf, -inf)
+
+### `data_provider/cache/`
+- `db.py`: Shared `_get_db_path()` and `_get_connection()` used by all SQLite cache modules
+- `stock_list_cache.py`: Persistent stock list cache with auto-refresh (first call of day)
+- `stock_board_cache.py`: Concept/industry board metadata cache
+- `stock_zt_pool_cache.py`: 涨跌停/炸板 pool data cache
+- `trade_calendar_cache.py`: A-share trade calendar cache
 
 ### `data_provider/utils/normalize.py`
 - `normalize_stock_code()`: Handles various input formats (SH600519 → 600519, etc.)
@@ -305,8 +326,10 @@ fetchers that support it.
 
 | API Method | Capability Used |
 |------------|----------------|
-| `get_kline_data` (d/w/m) | `HISTORICAL_DWM` |
-| `get_kline_data` (5/15/30/60) | `HISTORICAL_MIN` |
+| `get_kline_data` (d/w/m, stocks) | `HISTORICAL_DWM` |
+| `get_kline_data` (5/15/30/60, stocks) | `HISTORICAL_MIN` |
+| `get_kline_data` (d/w/m, indices) | `INDEX_HISTORICAL` (fallback: `HISTORICAL_DWM`) |
+| `get_kline_data` (5/15/30/60, indices) | `INDEX_INTRADAY` (fallback: `HISTORICAL_MIN`) |
 | `get_realtime_quote` | `REALTIME_QUOTE` |
 | `get_intraday_data` | `HISTORICAL_MIN` |
 | `get_stock_name` | `STOCK_NAME` |

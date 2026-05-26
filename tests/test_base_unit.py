@@ -244,6 +244,27 @@ class TestMarketTag:
 class TestStockListCache:
     """Tests for stock_list_cache modifications."""
 
+    def test_is_first_call_of_day(self):
+        """_is_first_call_of_day returns True on first call, False after."""
+        from stock_data.data_provider.cache.stock_list_cache import (
+            _is_first_call_of_day,
+            _last_refresh_date,
+            _lock,
+        )
+
+        test_market = "_test_market_first_call"
+
+        # Clean up any prior state under lock
+        with _lock:
+            _last_refresh_date.pop(test_market, None)
+
+        assert _is_first_call_of_day(test_market) is True
+        assert _is_first_call_of_day(test_market) is False
+
+        # Clean up
+        with _lock:
+            _last_refresh_date.pop(test_market, None)
+
     def test_get_stock_name_from_db_helper_exists(self):
         """Test _get_stock_name_from_db helper function exists."""
         from stock_data.data_provider.cache import stock_list_cache

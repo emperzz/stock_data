@@ -35,6 +35,18 @@ class TestSafeFloat:
     def test_int(self):
         assert safe_float(123) == 123.0
 
+    def test_nan_returns_default(self):
+        assert safe_float(float("nan")) is None
+
+    def test_inf_string_returns_default(self):
+        assert safe_float("inf") is None
+        assert safe_float("-inf") is None
+        assert safe_float("infinity") is None
+
+    def test_inf_float_returns_default(self):
+        assert safe_float(float("inf")) is None
+        assert safe_float(float("-inf")) is None
+
 
 class TestSafeInt:
     """Tests for safe_int function."""
@@ -96,6 +108,13 @@ class TestCircuitBreaker:
         assert cb.is_available("test_source")  # Not yet open
         cb.record_failure("test_source")
         assert not cb.is_available("test_source")  # Now open
+
+    def test_failure_threshold_zero(self):
+        """Explicit 0 means trip immediately on first failure."""
+        cb = CircuitBreaker(failure_threshold=0)
+        assert cb.failure_threshold == 0
+        cb.record_failure("test_source")
+        assert not cb.is_available("test_source")
 
 
 class TestRealtimeSource:
