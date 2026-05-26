@@ -226,3 +226,131 @@ class ZTPoolResponse(BaseModel):
     type: str = Field(description="Pool type: zt (涨停) / dt (跌停) / zbgc (炸板)")
     total: int = Field(description="Total number of stocks in the pool")
     stocks: list[ZTPoolStock] = Field(default_factory=list, description="List of stocks in the pool")
+
+
+class DragonTigerSeat(BaseModel):
+    """龙虎榜席位"""
+    name: str = Field(default="", description="营业部名称")
+    buy_wan: float = Field(default=0, description="买入金额(万元)")
+    sell_wan: float = Field(default=0, description="卖出金额(万元)")
+    net_wan: float = Field(default=0, description="净买入(万元)")
+
+
+class DragonTigerInstitution(BaseModel):
+    """机构买卖统计"""
+    buy_amt: float = Field(default=0, description="机构买入(万元)")
+    sell_amt: float = Field(default=0, description="机构卖出(万元)")
+    net_amt: float = Field(default=0, description="机构净买入(万元)")
+
+
+class DragonTigerRecord(BaseModel):
+    """上榜记录"""
+    date: str = Field(default="", description="上榜日期")
+    reason: str = Field(default="", description="上榜原因")
+    net_buy_wan: float = Field(default=0, description="净买入(万元)")
+    turnover_pct: float = Field(default=0, description="换手率(%)")
+
+
+class DragonTigerResponse(BaseModel):
+    """个股龙虎榜响应"""
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    records: list[DragonTigerRecord] = Field(default_factory=list)
+    seats: dict[str, list[DragonTigerSeat]] = Field(default_factory=dict)
+    institution: DragonTigerInstitution = Field(default_factory=DragonTigerInstitution)
+    source: str = Field(default="eastmoney")
+
+
+class DailyDragonTigerStock(BaseModel):
+    """全市场龙虎榜个股"""
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    reason: str = Field(default="", description="上榜原因")
+    close: float = Field(default=0, description="收盘价")
+    change_pct: float = Field(default=0, description="涨跌幅(%)")
+    net_buy_wan: float = Field(default=0, description="净买入(万元)")
+    buy_wan: float = Field(default=0, description="买入金额(万元)")
+    sell_wan: float = Field(default=0, description="卖出金额(万元)")
+    turnover_pct: float = Field(default=0, description="换手率(%)")
+
+
+class DailyDragonTigerResponse(BaseModel):
+    """全市场龙虎榜响应"""
+    date: str = Field(description="交易日期")
+    total: int = Field(default=0, description="上榜总数")
+    stocks: list[DailyDragonTigerStock] = Field(default_factory=list)
+    source: str = Field(default="eastmoney")
+
+
+class MarginTradingRecord(BaseModel):
+    """融资融券记录"""
+    date: str = Field(default="", description="日期")
+    rzye: float = Field(default=0, description="融资余额(元)")
+    rzmre: float = Field(default=0, description="融资买入额(元)")
+    rzche: float = Field(default=0, description="融资偿还额(元)")
+    rqye: float = Field(default=0, description="融券余额(元)")
+    rqmcl: float = Field(default=0, description="融券卖出量")
+    rqchl: float = Field(default=0, description="融券偿还量")
+    rzrqye: float = Field(default=0, description="融资融券余额合计(元)")
+
+
+class MarginTradingResponse(BaseModel):
+    """融资融券响应"""
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    records: list[MarginTradingRecord] = Field(default_factory=list)
+    source: str = Field(default="eastmoney")
+
+
+class BlockTradeRecord(BaseModel):
+    """大宗交易记录"""
+    date: str = Field(default="", description="交易日期")
+    price: float = Field(default=0, description="成交价")
+    close: float = Field(default=0, description="收盘价")
+    premium_pct: float = Field(default=0, description="溢价率(%)")
+    vol: float = Field(default=0, description="成交量(股)")
+    amount: float = Field(default=0, description="成交额(元)")
+    buyer: str = Field(default="", description="买方营业部")
+    seller: str = Field(default="", description="卖方营业部")
+
+
+class BlockTradeResponse(BaseModel):
+    """大宗交易响应"""
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    records: list[BlockTradeRecord] = Field(default_factory=list)
+    source: str = Field(default="eastmoney")
+
+
+class HolderNumRecord(BaseModel):
+    """股东户数记录"""
+    date: str = Field(default="", description="报告期")
+    holder_num: int = Field(default=0, description="股东户数")
+    change_num: int = Field(default=0, description="户数变化")
+    change_ratio: float = Field(default=0, description="环比变化(%)")
+    avg_shares: float = Field(default=0, description="户均持股")
+
+
+class HolderNumResponse(BaseModel):
+    """股东户数变化响应"""
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    records: list[HolderNumRecord] = Field(default_factory=list)
+    source: str = Field(default="eastmoney")
+
+
+class DividendRecord(BaseModel):
+    """分红送转记录"""
+    date: str = Field(default="", description="除权除息日")
+    bonus_rmb: float = Field(default=0, description="每股派息(税前)")
+    transfer_ratio: float = Field(default=0, description="每10股转增")
+    bonus_ratio: float = Field(default=0, description="每10股送股")
+    plan: str = Field(default="", description="进度")
+
+
+class DividendResponse(BaseModel):
+    """分红送转响应"""
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    records: list[DividendRecord] = Field(default_factory=list)
+    source: str = Field(default="eastmoney")
