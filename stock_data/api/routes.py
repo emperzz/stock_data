@@ -18,6 +18,7 @@ from ..data_provider.fetchers.zhitu_fetcher import ZhituFetcher
 from ..data_provider.fetchers.tencent_fetcher import TencentFetcher
 from ..data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 from ..data_provider.fetchers.ths_fetcher import ThsFetcher
+from ..data_provider.fetchers.cninfo_fetcher import CninfoFetcher
 from ..data_provider.utils.normalize import is_hk_market, is_index_code, is_us_market, normalize_stock_code
 from ..data_provider.fetchers.index_symbols import get_all_indices
 from .cache import (
@@ -79,6 +80,11 @@ from .schemas import (
     HotTopicRecord,
     NorthFlowResponse,
     NorthFlowRecord,
+    ReportResponse,
+    ReportRecord,
+    ReportPDFResponse,
+    AnnouncementResponse,
+    AnnouncementRecord,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +146,13 @@ def get_manager() -> DataFetcherManager:
             logger.info("ThsFetcher added")
         else:
             logger.info("ThsFetcher skipped")
+
+        cninfo = CninfoFetcher()
+        if cninfo.is_available():
+            _manager.add_fetcher(cninfo)
+            logger.info("CninfoFetcher added")
+        else:
+            logger.info("CninfoFetcher skipped")
 
         zhitu = ZhituFetcher()
         if zhitu.is_available():
@@ -1342,6 +1355,80 @@ def get_north_flow() -> NorthFlowResponse:
         data = fetcher.get_north_flow()
         records = [NorthFlowRecord(**r) for r in data]
         return NorthFlowResponse(records=records)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/reports",
+    response_model=ReportResponse,
+    tags=["stocks"],
+)
+def get_reports(
+    stock_code: str = Path(max_length=20),
+    max_pages: int = Query(default=3, ge=1, le=10, description="Max pages"),
+) -> ReportResponse:
+    """Get research reports for a stock."""
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
+        data = fetcher.get_reports(stock_code, max_pages)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+        reports = [ReportRecord(**r) for r in data]
+        return ReportResponse(code=stock_code, name=stock_name or "", reports=reports, total=len(reports))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/reports/{report_id}/pdf",
+    response_model=ReportPDFResponse,
+    tags=["stocks"],
+)
+def get_report_pdf(
+    stock_code: str = Path(max_length=20),
+    report_id: str = Path(description="info_code"),
+) -> ReportPDFResponse:
+    """Download a research report PDF. Returns local file path."""
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable"})
+        url = fetcher.get_report_pdf_url(report_id)
+        path = fetcher.download_report_pdf(report_id)
+        return ReportPDFResponse(report_id=report_id, download_path=path, url=url)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/announcements",
+    response_model=AnnouncementResponse,
+    tags=["stocks"],
+)
+def get_announcements(
+    stock_code: str = Path(max_length=20),
+    page_size: int = Query(default=30, ge=1, le=100, description="Page size"),
+) -> AnnouncementResponse:
+    """Get corporate announcements for a stock."""
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("CninfoFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "CninfoFetcher not registered"})
+        data = fetcher.get_announcements(stock_code, page_size)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+        announcements = [AnnouncementRecord(**r) for r in data]
+        return AnnouncementResponse(code=stock_code, name=stock_name or "", announcements=announcements, total=len(announcements))
     except HTTPException:
         raise
     except Exception as e:
