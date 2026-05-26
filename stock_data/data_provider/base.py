@@ -55,6 +55,9 @@ class DataCapability(Flag):
     BLOCK_TRADE = auto()  # 大宗交易
     HOLDER_NUM = auto()  # 股东户数变化
     DIVIDEND = auto()  # 分红送转
+    FUND_FLOW = auto()  # 资金流（个股资金流分钟级+120日）
+    HOT_TOPICS = auto()  # 热点题材（同花顺当日强势股+题材归因）
+    NORTH_FLOW = auto()  # 北向资金（沪股通/深股通分钟流向）
 
 
 class DataFetchError(Exception):
