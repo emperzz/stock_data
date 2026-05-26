@@ -50,6 +50,11 @@ class DataCapability(Flag):
     INDEX_HISTORICAL = auto()  # 指数历史K线 (d/w/m)
     INDEX_INTRADAY = auto()  # 指数日内分时 (1/5/15/30/60m)
     STOCK_ZT_POOL = auto()  # 涨跌停股池（涨停/跌停/炸板）
+    DRAGON_TIGER = auto()  # 龙虎榜（个股+全市场）
+    MARGIN_TRADING = auto()  # 融资融券
+    BLOCK_TRADE = auto()  # 大宗交易
+    HOLDER_NUM = auto()  # 股东户数变化
+    DIVIDEND = auto()  # 分红送转
 
 
 class DataFetchError(Exception):
