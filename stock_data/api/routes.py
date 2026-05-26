@@ -7,13 +7,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
-from ..data_provider import DataFetcherManager, DataFetchError
-from ..data_provider.cache import api_cache as stock_cache
-from ..data_provider.cache import stock_board_cache
 from ..data_provider import (
     AkshareFetcher,
     BaostockFetcher,
     CninfoFetcher,
+    DataFetcherManager,
+    DataFetchError,
     EastMoneyFetcher,
     TencentFetcher,
     ThsFetcher,
@@ -21,33 +20,83 @@ from ..data_provider import (
     YfinanceFetcher,
     ZhituFetcher,
 )
-from ..data_provider.utils.normalize import is_hk_market, is_index_code, is_us_market, normalize_stock_code
+from ..data_provider.cache import api_cache as stock_cache
+from ..data_provider.cache import stock_board_cache
 from ..data_provider.fetchers.index_symbols import get_all_indices
+from ..data_provider.utils.normalize import (
+    is_hk_market,
+    is_index_code,
+    is_us_market,
+    normalize_stock_code,
+)
 from .cache import (
+    get_announcements_cache,
+    get_block_trade_cache,
     get_board_list_cache,
     get_board_stocks_cache,
+    get_dividend_cache,
+    get_dragontiger_cache,
+    get_fund_flow_cache,
     get_history_cache,
+    get_holder_num_cache,
+    get_hot_topics_cache,
     get_index_intraday_cache,
     get_index_quote_cache,
+    get_margin_cache,
+    get_north_flow_cache,
+    get_pools_cache,
     get_quote_cache,
+    get_reports_cache,
     get_stock_intraday_cache,
     is_cache_enabled,
+    make_announcements_cache_key,
+    make_block_trade_cache_key,
     make_board_cache_key,
     make_board_stocks_cache_key,
+    make_daily_dragon_tiger_cache_key,
+    make_dividend_cache_key,
+    make_dragon_tiger_cache_key,
+    make_fund_flow_cache_key,
+    make_fund_flow_daily_cache_key,
     make_history_cache_key,
+    make_holder_num_cache_key,
+    make_hot_topics_cache_key,
     make_index_history_cache_key,
     make_index_intraday_cache_key,
     make_index_quote_cache_key,
+    make_margin_cache_key,
+    make_north_flow_cache_key,
+    make_pools_cache_key,
     make_quote_cache_key,
+    make_reports_cache_key,
     make_stock_intraday_cache_key,
 )
 from .schemas import (
+    AnnouncementRecord,
+    AnnouncementResponse,
+    BlockTradeRecord,
+    BlockTradeResponse,
     BoardInfo,
     BoardListResponse,
     BoardStockInfo,
     BoardStocksResponse,
+    DailyDragonTigerResponse,
+    DailyDragonTigerStock,
+    DividendRecord,
+    DividendResponse,
+    DragonTigerInstitution,
+    DragonTigerRecord,
+    DragonTigerResponse,
+    DragonTigerSeat,
     ErrorResponse,
+    FundFlowDailyRecord,
+    FundFlowMinuteRecord,
+    FundFlowResponse,
     HealthResponse,
+    HolderNumRecord,
+    HolderNumResponse,
+    HotTopicRecord,
+    HotTopicResponse,
     IndexHistoryResponse,
     IndexInfo,
     IndexIntradayResponse,
@@ -55,38 +104,19 @@ from .schemas import (
     IntradayData,
     IntradayResponse,
     KLineData,
+    MarginTradingRecord,
+    MarginTradingResponse,
+    NorthFlowRecord,
+    NorthFlowResponse,
+    ReportPDFResponse,
+    ReportRecord,
+    ReportResponse,
     StockHistoryResponse,
     StockInfo,
     StockQuote,
     TradeCalendarResponse,
     ZTPoolResponse,
     ZTPoolStock,
-    DragonTigerSeat,
-    DragonTigerInstitution,
-    DragonTigerRecord,
-    DragonTigerResponse,
-    DailyDragonTigerStock,
-    DailyDragonTigerResponse,
-    MarginTradingRecord,
-    MarginTradingResponse,
-    BlockTradeRecord,
-    BlockTradeResponse,
-    HolderNumRecord,
-    HolderNumResponse,
-    DividendRecord,
-    DividendResponse,
-    FundFlowResponse,
-    FundFlowMinuteRecord,
-    FundFlowDailyRecord,
-    HotTopicResponse,
-    HotTopicRecord,
-    NorthFlowResponse,
-    NorthFlowRecord,
-    ReportResponse,
-    ReportRecord,
-    ReportPDFResponse,
-    AnnouncementResponse,
-    AnnouncementRecord,
 )
 
 logger = logging.getLogger(__name__)
@@ -208,7 +238,10 @@ def get_quote(stock_code: str = Path(max_length=20, description="Stock code")) -
         if is_index_code(stock_code):
             raise HTTPException(
                 status_code=400,
-                detail={"error": "invalid_request", "message": f"Index {stock_code} is not supported via this endpoint. Use /indices/{stock_code}/quote instead."},
+                detail={
+                    "error": "invalid_request",
+                    "message": f"Index {stock_code} is not supported via this endpoint. Use /indices/{stock_code}/quote instead.",
+                },
             )
 
         # Cache check
@@ -313,7 +346,10 @@ def get_history(
         if is_index_code(stock_code):
             raise HTTPException(
                 status_code=400,
-                detail={"error": "invalid_request", "message": f"Index {stock_code} is not supported via this endpoint. Use /indices/{stock_code}/history instead."},
+                detail={
+                    "error": "invalid_request",
+                    "message": f"Index {stock_code} is not supported via this endpoint. Use /indices/{stock_code}/history instead.",
+                },
             )
 
         period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
@@ -387,7 +423,10 @@ def get_history(
         logger.warning(f"History data unavailable: {e}")
         raise HTTPException(
             status_code=503,
-            detail={"error": "data_unavailable", "message": f"History data not currently available: {e}"},
+            detail={
+                "error": "data_unavailable",
+                "message": f"History data not currently available: {e}",
+            },
         ) from e
     except HTTPException:
         raise
@@ -495,7 +534,10 @@ def get_intraday(
         logger.warning(f"Intraday data unavailable: {e}")
         raise HTTPException(
             status_code=503,
-            detail={"error": "data_unavailable", "message": f"Intraday data not currently available: {e}"},
+            detail={
+                "error": "data_unavailable",
+                "message": f"Intraday data not currently available: {e}",
+            },
         ) from e
     except HTTPException:
         raise
@@ -622,9 +664,7 @@ def get_index_history(
 
         if is_cache_enabled():
             cache = get_history_cache(frequency)
-            key = make_index_history_cache_key(
-                index_code, frequency, days, start_date, end_date
-            )
+            key = make_index_history_cache_key(index_code, frequency, days, start_date, end_date)
             if key in cache:
                 logger.info(f"[APICache] index_history hit: {key}")
                 return cache[key]
@@ -669,9 +709,7 @@ def get_index_history(
             for row in records
         ]
 
-        result = IndexHistoryResponse(
-            code=index_code, name=index_name, period=period, data=data
-        )
+        result = IndexHistoryResponse(code=index_code, name=index_name, period=period, data=data)
 
         if is_cache_enabled():
             cache[key] = result
@@ -682,7 +720,10 @@ def get_index_history(
         logger.warning(f"Index history data unavailable: {e}")
         raise HTTPException(
             status_code=503,
-            detail={"error": "data_unavailable", "message": f"Index history data not currently available: {e}"},
+            detail={
+                "error": "data_unavailable",
+                "message": f"Index history data not currently available: {e}",
+            },
         ) from e
     except Exception as e:
         logger.error(f"Index history error: {e}", exc_info=True)
@@ -769,7 +810,10 @@ def get_index_intraday(
         logger.warning(f"Index intraday data unavailable: {e}")
         raise HTTPException(
             status_code=503,
-            detail={"error": "data_unavailable", "message": f"Intraday data not currently available for {index_code}: {e}"},
+            detail={
+                "error": "data_unavailable",
+                "message": f"Intraday data not currently available for {index_code}: {e}",
+            },
         ) from e
     except Exception as e:
         logger.error(f"Index intraday error: {e}", exc_info=True)
@@ -810,9 +854,7 @@ def list_stocks(
     # Get stock list with automatic refresh (cache layer handles daily refresh logic)
     manager = get_manager()
     stocks = stock_cache.get_stock_list(market, refresh=refresh, manager=manager)
-    logger.info(
-        f"[list_stocks] Returned {len(stocks)} stocks for market={market}"
-    )
+    logger.info(f"[list_stocks] Returned {len(stocks)} stocks for market={market}")
     page = stocks[offset : offset + limit]
     return [StockInfo(code=s["code"], name=s["name"], market=market) for s in page]
 
@@ -921,7 +963,9 @@ def list_boards(
                 return cache[key]
 
         manager = get_manager()
-        boards = stock_board_cache.get_board_list(type, source, refresh=refresh, include_quote=include_quote, manager=manager)
+        boards = stock_board_cache.get_board_list(
+            type, source, refresh=refresh, include_quote=include_quote, manager=manager
+        )
 
         result = BoardListResponse(
             data=[
@@ -1059,7 +1103,9 @@ def get_pools(
         pattern="^(zt|dt|zbgc)$",
         description="Pool type: zt (涨停) / dt (跌停) / zbgc (炸板)",
     ),
-    date: str | None = Query(None, description="Pool date (YYYY-MM-DD), defaults to latest cached or today"),
+    date: str | None = Query(
+        None, description="Pool date (YYYY-MM-DD), defaults to latest cached or today"
+    ),
     refresh: bool = Query(False, description="Force refresh from upstream"),
 ) -> ZTPoolResponse:
     """
@@ -1075,6 +1121,13 @@ def get_pools(
         ZTPoolResponse with list of stocks in the pool.
     """
     try:
+        if is_cache_enabled():
+            cache = get_pools_cache()
+            key = make_pools_cache_key(type, date)
+            if key in cache:
+                logger.info(f"[APICache] pools hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         stocks = manager.get_zt_pool(pool_type=type, date=date, refresh=refresh)
 
@@ -1107,12 +1160,17 @@ def get_pools(
             for s in stocks
         ]
 
-        return ZTPoolResponse(
+        result = ZTPoolResponse(
             date=actual_date,
             type=type,
             total=len(pool_stocks),
             stocks=pool_stocks,
         )
+
+        if is_cache_enabled():
+            cache[key] = result
+
+        return result
 
     except DataFetchError as e:
         logger.warning(f"ZT pool unavailable: {e}")
@@ -1144,6 +1202,13 @@ def get_dragon_tiger(
     look_back: int = Query(default=30, ge=1, le=365),
 ) -> DragonTigerResponse:
     try:
+        if is_cache_enabled():
+            cache = get_dragontiger_cache()
+            key = make_dragon_tiger_cache_key(stock_code, trade_date, look_back)
+            if key in cache:
+                logger.info(f"[APICache] dragontiger hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_dragon_tiger(stock_code, trade_date, look_back)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
@@ -1153,18 +1218,27 @@ def get_dragon_tiger(
             "buy": [DragonTigerSeat(**s) for s in seats_data.get("buy", [])],
             "sell": [DragonTigerSeat(**s) for s in seats_data.get("sell", [])],
         }
-        return DragonTigerResponse(
-            code=stock_code, name=stock_name or "",
-            records=records, seats=seats,
+        result = DragonTigerResponse(
+            code=stock_code,
+            name=stock_name or "",
+            records=records,
+            seats=seats,
             institution=DragonTigerInstitution(**data.get("institution", {})),
         )
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Dragon tiger data unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1181,17 +1255,31 @@ def get_daily_dragon_tiger(
     min_net_buy: float | None = Query(default=None, description="Min net buy (万元)"),
 ) -> DailyDragonTigerResponse:
     try:
+        if is_cache_enabled():
+            cache = get_dragontiger_cache()
+            key = make_daily_dragon_tiger_cache_key(trade_date, min_net_buy)
+            if key in cache:
+                logger.info(f"[APICache] daily_dragon_tiger hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_daily_dragon_tiger(trade_date, min_net_buy)
         stocks = [DailyDragonTigerStock(**s) for s in data["stocks"]]
-        return DailyDragonTigerResponse(date=data["date"], total=data["total"], stocks=stocks)
+        result = DailyDragonTigerResponse(date=data["date"], total=data["total"], stocks=stocks)
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Daily dragon tiger unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1208,18 +1296,32 @@ def get_margin(
     page_size: int = Query(default=30, ge=1, le=100),
 ) -> MarginTradingResponse:
     try:
+        if is_cache_enabled():
+            cache = get_margin_cache()
+            key = make_margin_cache_key(stock_code, page_size)
+            if key in cache:
+                logger.info(f"[APICache] margin hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_margin_trading(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [MarginTradingRecord(**r) for r in data]
-        return MarginTradingResponse(code=stock_code, name=stock_name or "", records=records)
+        result = MarginTradingResponse(code=stock_code, name=stock_name or "", records=records)
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Margin trading unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1236,18 +1338,34 @@ def get_block_trade(
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> BlockTradeResponse:
     try:
+        if is_cache_enabled():
+            cache = get_block_trade_cache()
+            key = make_block_trade_cache_key(stock_code, page_size)
+            if key in cache:
+                logger.info(f"[APICache] block_trade hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_block_trade(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [BlockTradeRecord(**r) for r in data]
-        return BlockTradeResponse(code=stock_code, name=stock_name or "", records=records, total=len(records))
+        result = BlockTradeResponse(
+            code=stock_code, name=stock_name or "", records=records, total=len(records)
+        )
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Block trade unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1264,18 +1382,32 @@ def get_holder_num(
     page_size: int = Query(default=10, ge=1, le=50),
 ) -> HolderNumResponse:
     try:
+        if is_cache_enabled():
+            cache = get_holder_num_cache()
+            key = make_holder_num_cache_key(stock_code, page_size)
+            if key in cache:
+                logger.info(f"[APICache] holder_num hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_holder_num_change(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [HolderNumRecord(**r) for r in data]
-        return HolderNumResponse(code=stock_code, name=stock_name or "", records=records)
+        result = HolderNumResponse(code=stock_code, name=stock_name or "", records=records)
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Holder num unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1292,18 +1424,32 @@ def get_dividend(
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> DividendResponse:
     try:
+        if is_cache_enabled():
+            cache = get_dividend_cache()
+            key = make_dividend_cache_key(stock_code, page_size)
+            if key in cache:
+                logger.info(f"[APICache] dividend hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_dividend(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [DividendRecord(**r) for r in data]
-        return DividendResponse(code=stock_code, name=stock_name or "", records=records)
+        result = DividendResponse(code=stock_code, name=stock_name or "", records=records)
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Dividend unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1318,18 +1464,34 @@ def get_dividend(
 def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get minute-level capital flow for a stock."""
     try:
+        if is_cache_enabled():
+            cache = get_fund_flow_cache()
+            key = make_fund_flow_cache_key(stock_code)
+            if key in cache:
+                logger.info(f"[APICache] fund_flow hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_fund_flow_minute(stock_code)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [FundFlowMinuteRecord(**r) for r in data]
-        return FundFlowResponse(code=stock_code, name=stock_name or "", type="minute", records=records)
+        result = FundFlowResponse(
+            code=stock_code, name=stock_name or "", type="minute", records=records
+        )
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Fund flow unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1344,18 +1506,34 @@ def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
 def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get 120-day capital flow history for a stock."""
     try:
+        if is_cache_enabled():
+            cache = get_fund_flow_cache()
+            key = make_fund_flow_daily_cache_key(stock_code)
+            if key in cache:
+                logger.info(f"[APICache] fund_flow_daily hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_fund_flow_120d(stock_code)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [FundFlowDailyRecord(**r) for r in data]
-        return FundFlowResponse(code=stock_code, name=stock_name or "", type="daily", records=records)
+        result = FundFlowResponse(
+            code=stock_code, name=stock_name or "", type="daily", records=records
+        )
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Fund flow daily unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1372,19 +1550,34 @@ def get_hot_topics(
 ) -> HotTopicResponse:
     """Get daily hot stocks with reason tags."""
     try:
+        if is_cache_enabled():
+            cache = get_hot_topics_cache()
+            key = make_hot_topics_cache_key(date)
+            if key in cache:
+                logger.info(f"[APICache] hot_topics hit: {key}")
+                return cache[key]
+
         from datetime import datetime
+
         manager = get_manager()
         data = manager.get_hot_topics(date)
         topics = [HotTopicRecord(**r) for r in data]
         actual_date = date or datetime.now().strftime("%Y-%m-%d")
-        return HotTopicResponse(date=actual_date, total=len(topics), topics=topics)
+        result = HotTopicResponse(date=actual_date, total=len(topics), topics=topics)
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Hot topics unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1399,17 +1592,31 @@ def get_hot_topics(
 def get_north_flow() -> NorthFlowResponse:
     """Get north-bound capital flow (minute-level)."""
     try:
+        if is_cache_enabled():
+            cache = get_north_flow_cache()
+            key = make_north_flow_cache_key()
+            if key in cache:
+                logger.info(f"[APICache] north_flow hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_north_flow()
         records = [NorthFlowRecord(**r) for r in data]
-        return NorthFlowResponse(records=records)
+        result = NorthFlowResponse(records=records)
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"North flow unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1427,18 +1634,34 @@ def get_reports(
 ) -> ReportResponse:
     """Get research reports for a stock."""
     try:
+        if is_cache_enabled():
+            cache = get_reports_cache()
+            key = make_reports_cache_key(stock_code, max_pages)
+            if key in cache:
+                logger.info(f"[APICache] reports hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_reports(stock_code, max_pages)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         reports = [ReportRecord(**r) for r in data]
-        return ReportResponse(code=stock_code, name=stock_name or "", reports=reports, total=len(reports))
+        result = ReportResponse(
+            code=stock_code, name=stock_name or "", reports=reports, total=len(reports)
+        )
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Reports unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1466,7 +1689,9 @@ def get_report_pdf(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
 
 
 @router.get(
@@ -1484,15 +1709,34 @@ def get_announcements(
 ) -> AnnouncementResponse:
     """Get corporate announcements for a stock."""
     try:
+        if is_cache_enabled():
+            cache = get_announcements_cache()
+            key = make_announcements_cache_key(stock_code, page_size)
+            if key in cache:
+                logger.info(f"[APICache] announcements hit: {key}")
+                return cache[key]
+
         manager = get_manager()
         data = manager.get_announcements(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         announcements = [AnnouncementRecord(**r) for r in data]
-        return AnnouncementResponse(code=stock_code, name=stock_name or "", announcements=announcements, total=len(announcements))
+        result = AnnouncementResponse(
+            code=stock_code,
+            name=stock_name or "",
+            announcements=announcements,
+            total=len(announcements),
+        )
+        if is_cache_enabled():
+            cache[key] = result
+        return result
     except DataFetchError as e:
         logger.warning(f"Announcements unavailable: {e}")
-        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
+        raise HTTPException(
+            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
