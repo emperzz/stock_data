@@ -16,6 +16,7 @@ from ..data_provider.fetchers.tushare_fetcher import TushareFetcher
 from ..data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
 from ..data_provider.fetchers.zhitu_fetcher import ZhituFetcher
 from ..data_provider.fetchers.tencent_fetcher import TencentFetcher
+from ..data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 from ..data_provider.utils.normalize import is_hk_market, is_index_code, is_us_market, normalize_stock_code
 from ..data_provider.fetchers.index_symbols import get_all_indices
 from .cache import (
@@ -56,6 +57,20 @@ from .schemas import (
     TradeCalendarResponse,
     ZTPoolResponse,
     ZTPoolStock,
+    DragonTigerSeat,
+    DragonTigerInstitution,
+    DragonTigerRecord,
+    DragonTigerResponse,
+    DailyDragonTigerStock,
+    DailyDragonTigerResponse,
+    MarginTradingRecord,
+    MarginTradingResponse,
+    BlockTradeRecord,
+    BlockTradeResponse,
+    HolderNumRecord,
+    HolderNumResponse,
+    DividendRecord,
+    DividendResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,6 +118,13 @@ def get_manager() -> DataFetcherManager:
             logger.info("TencentFetcher added")
         else:
             logger.info("TencentFetcher skipped")
+
+        eastmoney = EastMoneyFetcher()
+        if eastmoney.is_available():
+            _manager.add_fetcher(eastmoney)
+            logger.info("EastMoneyFetcher added")
+        else:
+            logger.info("EastMoneyFetcher skipped")
 
         zhitu = ZhituFetcher()
         if zhitu.is_available():
@@ -1067,3 +1089,155 @@ def get_pools(
         raise HTTPException(
             status_code=500, detail={"error": "internal_error", "message": str(e)}
         ) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/dragon-tiger",
+    response_model=DragonTigerResponse,
+    tags=["stocks"],
+)
+def get_dragon_tiger(
+    stock_code: str = Path(max_length=20),
+    trade_date: str = Query(default="", description="Trade date (YYYY-MM-DD)"),
+    look_back: int = Query(default=30, ge=1, le=365),
+) -> DragonTigerResponse:
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
+        data = fetcher.get_dragon_tiger(stock_code, trade_date, look_back)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+        records = [DragonTigerRecord(**r) for r in data["records"]]
+        seats = {
+            "buy": [DragonTigerSeat(**s) for s in data["seats"]["buy"]],
+            "sell": [DragonTigerSeat(**s) for s in data["seats"]["sell"]],
+        }
+        return DragonTigerResponse(
+            code=stock_code, name=stock_name or "",
+            records=records, seats=seats,
+            institution=DragonTigerInstitution(**data["institution"]),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/dragon-tiger/daily",
+    response_model=DailyDragonTigerResponse,
+    tags=["dragon-tiger"],
+)
+def get_daily_dragon_tiger(
+    trade_date: str = Query(default="", description="Trade date (YYYY-MM-DD)"),
+    min_net_buy: float | None = Query(default=None, description="Min net buy (万元)"),
+) -> DailyDragonTigerResponse:
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
+        data = fetcher.get_daily_dragon_tiger(trade_date, min_net_buy)
+        stocks = [DailyDragonTigerStock(**s) for s in data["stocks"]]
+        return DailyDragonTigerResponse(date=data["date"], total=data["total"], stocks=stocks)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/margin",
+    response_model=MarginTradingResponse,
+    tags=["stocks"],
+)
+def get_margin(
+    stock_code: str = Path(max_length=20),
+    page_size: int = Query(default=30, ge=1, le=100),
+) -> MarginTradingResponse:
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
+        data = fetcher.get_margin_trading(stock_code, page_size)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+        records = [MarginTradingRecord(**r) for r in data]
+        return MarginTradingResponse(code=stock_code, name=stock_name or "", records=records)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/block-trade",
+    response_model=BlockTradeResponse,
+    tags=["stocks"],
+)
+def get_block_trade(
+    stock_code: str = Path(max_length=20),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> BlockTradeResponse:
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
+        data = fetcher.get_block_trade(stock_code, page_size)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+        records = [BlockTradeRecord(**r) for r in data]
+        return BlockTradeResponse(code=stock_code, name=stock_name or "", records=records)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/holder-num",
+    response_model=HolderNumResponse,
+    tags=["stocks"],
+)
+def get_holder_num(
+    stock_code: str = Path(max_length=20),
+    page_size: int = Query(default=10, ge=1, le=50),
+) -> HolderNumResponse:
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
+        data = fetcher.get_holder_num_change(stock_code, page_size)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+        records = [HolderNumRecord(**r) for r in data]
+        return HolderNumResponse(code=stock_code, name=stock_name or "", records=records)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/dividend",
+    response_model=DividendResponse,
+    tags=["stocks"],
+)
+def get_dividend(
+    stock_code: str = Path(max_length=20),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> DividendResponse:
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
+        data = fetcher.get_dividend(stock_code, page_size)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+        records = [DividendRecord(**r) for r in data]
+        return DividendResponse(code=stock_code, name=stock_name or "", records=records)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
