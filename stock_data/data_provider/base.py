@@ -58,6 +58,8 @@ class DataCapability(Flag):
     FUND_FLOW = auto()  # 资金流（个股资金流分钟级+120日）
     HOT_TOPICS = auto()  # 热点题材（同花顺当日强势股+题材归因）
     NORTH_FLOW = auto()  # 北向资金（沪股通/深股通分钟流向）
+    RESEARCH_REPORT = auto()  # 研报
+    ANNOUNCEMENT = auto()  # 公告
 
 
 class DataFetchError(Exception):
