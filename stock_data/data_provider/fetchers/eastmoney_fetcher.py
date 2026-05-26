@@ -34,6 +34,7 @@ class EastMoneyFetcher(BaseFetcher):
         | DataCapability.BLOCK_TRADE
         | DataCapability.HOLDER_NUM
         | DataCapability.DIVIDEND
+        | DataCapability.FUND_FLOW
     )
 
     def is_available(self) -> bool:
@@ -87,6 +88,11 @@ class EastMoneyFetcher(BaseFetcher):
     # ------------------------------------------------------------------
     # 龙虎榜 (Dragon Tiger Board)
     # ------------------------------------------------------------------
+
+    def _secid(self, code: str) -> str:
+        """Build EastMoney secid: 1.{code} for SH, 0.{code} for SZ."""
+        code = normalize_stock_code(code)
+        return f"1.{code}" if code.startswith(("6", "9")) else f"0.{code}"
 
     def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> dict:
         """Get dragon tiger board data for a single stock.
@@ -296,4 +302,73 @@ class EastMoneyFetcher(BaseFetcher):
                 "bonus_ratio": row.get("BONUS_RATIO", 0),
                 "plan": row.get("ASSIGN_PROGRESS", ""),
             })
+        return rows
+
+    # ------------------------------------------------------------------
+    # 资金流向 (Fund Flow) - push2 APIs
+    # ------------------------------------------------------------------
+
+    def get_fund_flow_minute(self, code: str) -> list[dict]:
+        """Get minute-level fund flow (intraday).
+        API: push2.eastmoney.com/api/qt/stock/fflow/kline/get
+        """
+        code = normalize_stock_code(code)
+        url = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
+        params = {
+            "secid": self._secid(code), "klt": 1,
+            "fields1": "f1,f2,f3,f7",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57",
+        }
+        headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=10)
+            d = r.json()
+        except Exception as e:
+            logger.warning(f"[EastMoneyFetcher] fund flow minute request failed: {e}")
+            return []
+        rows = []
+        for line in d.get("data", {}).get("klines", []):
+            parts = line.split(",")
+            if len(parts) >= 6:
+                rows.append({
+                    "time": parts[0],
+                    "main_net": float(parts[1]) if parts[1] != "-" else 0,
+                    "small_net": float(parts[2]) if parts[2] != "-" else 0,
+                    "mid_net": float(parts[3]) if parts[3] != "-" else 0,
+                    "large_net": float(parts[4]) if parts[4] != "-" else 0,
+                    "super_net": float(parts[5]) if parts[5] != "-" else 0,
+                })
+        return rows
+
+    def get_fund_flow_120d(self, code: str) -> list[dict]:
+        """Get daily fund flow for last 120 trading days.
+        API: push2his.eastmoney.com/api/qt/stock/fflow/daykline/get
+        """
+        code = normalize_stock_code(code)
+        url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
+        params = {
+            "secid": self._secid(code),
+            "fields1": "f1,f2,f3,f7",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+            "lmt": "120",
+        }
+        headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=15)
+            d = r.json()
+        except Exception as e:
+            logger.warning(f"[EastMoneyFetcher] fund flow 120d request failed: {e}")
+            return []
+        rows = []
+        for line in d.get("data", {}).get("klines", []):
+            parts = line.split(",")
+            if len(parts) >= 7:
+                rows.append({
+                    "date": parts[0],
+                    "main_net": float(parts[1]) if parts[1] != "-" else 0,
+                    "small_net": float(parts[2]) if parts[2] != "-" else 0,
+                    "mid_net": float(parts[3]) if parts[3] != "-" else 0,
+                    "large_net": float(parts[4]) if parts[4] != "-" else 0,
+                    "super_net": float(parts[5]) if parts[5] != "-" else 0,
+                })
         return rows
