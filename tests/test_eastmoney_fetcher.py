@@ -194,3 +194,29 @@ class TestFundFlow120d:
         assert len(result) == 1
         assert result[0]["date"] == "2026-05-20"
         assert result[0]["main_net"] == 5000
+
+
+class TestReports:
+    def setup_method(self):
+        self.fetcher = EastMoneyFetcher()
+
+    @patch.object(EastMoneyFetcher, "get_reports")
+    def test_returns_records(self, mock_reports):
+        mock_reports.return_value = [
+            {"title": "Test Report", "publish_date": "2026-05-20",
+             "org": "中信证券", "info_code": "ABC123", "rating": "买入"}
+        ]
+        result = self.fetcher.get_reports("600519", max_pages=1)
+        assert len(result) == 1
+        assert result[0]["title"] == "Test Report"
+        assert result[0]["rating"] == "买入"
+
+    def test_pdf_url(self):
+        f = EastMoneyFetcher()
+        url = f.get_report_pdf_url("ABC123")
+        assert "ABC123" in url
+        assert url.startswith("https://pdf.dfcfw.com")
+
+    def test_pdf_url_none(self):
+        f = EastMoneyFetcher()
+        assert f.get_report_pdf_url("") is None
