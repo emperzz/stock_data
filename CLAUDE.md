@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A Python-based local stock data aggregation server that:
-- Integrates multiple upstream stock data APIs (Tushare, Baostock, Akshare, Yfinance, Zhitu)
-- Normalizes data into a unified format
+- Integrates 9 upstream stock data APIs (Tushare, Baostock, Akshare, Yfinance, Zhitu, Tencent, EastMoney, THS, Cninfo)
+- Normalizes data into a unified format across 7 data layers (行情/研报/信号/资金面/新闻/基础数据/公告)
 - Provides a stable REST API for consumption by AI agents like OpenClaw
 
 ## Architecture
@@ -15,7 +15,11 @@ A Python-based local stock data aggregation server that:
 ┌─────────────────────────────────────────────────────────┐
 │                    API Layer (FastAPI)                   │
 │   GET /stocks/{code}/quote   GET /stocks/{code}/history  │
-│   GET /indices/{code}/quote  GET /indices/{code}/history │
+│   GET /stocks/{code}/intraday GET /stocks/{code}/dragon-tiger │
+│   GET /stocks/{code}/margin   GET /stocks/{code}/block-trade │
+│   GET /stocks/{code}/fund-flow GET /stocks/{code}/reports   │
+│   GET /dragon-tiger/daily     GET /hot/topics              │
+│   GET /north-flow/realtime    GET /indices/{code}/quote     │
 ├─────────────────────────────────────────────────────────┤
 │                    StockService                          │
 │         Unified interface for data access                 │
@@ -25,6 +29,7 @@ A Python-based local stock data aggregation server that:
 ├─────────────────────────────────────────────────────────┤
 │                   Source Adapters                         │
 │  TushareFetcher  BaostockFetcher  AkshareFetcher  YfinanceFetcher ...    │
+│  TencentFetcher  EastMoneyFetcher  ThsFetcher  CninfoFetcher              │
 ├─────────────────────────────────────────────────────────┤
 │              Upstream Stock Data APIs                    │
 ```
@@ -72,7 +77,7 @@ stock_data/
 - `DataCapability`: Flag enum for fetcher capability declarations (see below)
 
 ### `data_provider/fetchers/`
-- Each source has its own fetcher: `baostock_fetcher.py`, `akshare_fetcher.py`, `yfinance_fetcher.py`, `tushare_fetcher.py`, `zhitu_fetcher.py`
+- Each source has its own fetcher: `baostock_fetcher.py`, `akshare_fetcher.py`, `yfinance_fetcher.py`, `tushare_fetcher.py`, `zhitu_fetcher.py`, `tencent_fetcher.py`, `eastmoney_fetcher.py`, `ths_fetcher.py`, `cninfo_fetcher.py`
 - Each fetcher handles:
   - Source-specific API calls
   - Rate limiting (random jitter, User-Agent rotation)
@@ -192,6 +197,64 @@ It is used as a fallback for realtime quotes only.
 
 ---
 
+### TencentFetcher (Priority 5, A股+HK, Free)
+
+**API**: `https://qt.gtimg.cn/q={prefix_code}` (HTTP GET, GBK encoding)
+
+**Supports**: A-share + HK realtime quotes with enhanced valuation fields
+
+**Key enhanced fields** (88-field `~` delimited response):
+- Index 39: PE(TTM), Index 46: PB, Index 44/45: 总市值/流通市值(亿)
+- Index 47/48: 涨停价/跌停价, Index 49: 量比, Index 52: PE(静)
+
+**Note**: Tencent财经 provides enhanced valuation data not available from other providers. Uses `urllib` for GBK response handling.
+
+---
+
+### EastMoneyFetcher (Priority 6, A股, Free)
+
+**Datacenter domain** (datacenter-web.eastmoney.com):
+- 龙虎榜: `RPT_DAILYBILLBOARD_DETAILSNEW`, 席位: `RPT_BILLBOARD_DAILYDETAILSBUY/SELL`
+- 融资融券: `RPTA_WEB_RZRQ_GGMX`
+- 大宗交易: `RPT_DATA_BLOCKTRADE`
+- 股东户数: `RPT_HOLDERNUMLATEST`
+- 分红送转: `RPT_SHAREBONUS_DET`
+
+**push2 domain** (push2.eastmoney.com / push2his.eastmoney.com):
+- 资金流分钟级: `/api/qt/stock/fflow/kline/get?klt=1`
+- 资金流120日: `/api/qt/stock/fflow/daykline/get?lmt=120`
+
+**ReportAPI domain** (reportapi.eastmoney.com):
+- 研报列表: `/report/list`, PDF: `https://pdf.dfcfw.com/pdf/H3_{info_code}_1.pdf`
+
+**Note**: All domains share a unified `_datacenter_query()` helper. No authentication required.
+
+---
+
+### ThsFetcher (Priority 7, A股, Free)
+
+**热点题材**: `http://zx.10jqka.com.cn/event/api/getharden/`
+- Returns daily hot stocks with reason tags (题材归因), zero-auth, ~73ms
+
+**北向资金**: `https://data.hexin.cn/market/hsgtApi/method/dayChart/`
+- Minute-level 沪股通/深股通 cumulative net buy data (262 time points per day)
+
+**Note**: No API key required. Simple HTTP GET with User-Agent header.
+
+---
+
+### CninfoFetcher (Priority 8, A股, Free)
+
+**API**: `https://www.cninfo.com.cn/new/hisAnnouncement/query` (HTTP POST)
+
+**Supports**: Full-text announcement search and retrieval for A-share stocks
+
+**orgId format**: `gssh0{code}` (Shanghai), `gssz0{code}` (Shenzhen), `gsbj0{code}` (Beijing)
+
+**Note**: Returns announcement title, type, date, and detail page URL. PDF download not yet implemented.
+
+---
+
 ## Provider Frequency Support
 
 | Provider | d | w | m | 5m | 15m | 30m | 60m |
@@ -219,6 +282,17 @@ class DataCapability(Flag):
     INDEX_QUOTE      # 指数实时行情
     INDEX_HISTORICAL # 指数历史K线 (d/w/m)
     INDEX_INTRADAY   # 指数日内分时 (1/5/15/30/60m)
+    STOCK_ZT_POOL    # 涨跌停股池
+    DRAGON_TIGER     # 龙虎榜（个股+全市场）
+    MARGIN_TRADING   # 融资融券
+    BLOCK_TRADE      # 大宗交易
+    HOLDER_NUM       # 股东户数变化
+    DIVIDEND         # 分红送转
+    FUND_FLOW        # 资金流（个股资金流分钟级+120日）
+    HOT_TOPICS       # 热点题材（同花顺当日强势股+题材归因）
+    NORTH_FLOW       # 北向资金（沪股通/深股通分钟流向）
+    RESEARCH_REPORT  # 研报
+    ANNOUNCEMENT     # 公告
 ```
 
 **Hard rule**: EVERY data access method in `DataFetcherManager` MUST route through
@@ -243,6 +317,17 @@ fetchers that support it.
 | `get_index_realtime_quote` | `INDEX_QUOTE` |
 | `get_index_historical` | `INDEX_HISTORICAL` |
 | `get_index_intraday` | `INDEX_INTRADAY` |
+| `get_zt_pool` | `STOCK_ZT_POOL` |
+| `get_dragon_tiger` | `DRAGON_TIGER` |
+| `get_margin_trading` | `MARGIN_TRADING` |
+| `get_block_trade` | `BLOCK_TRADE` |
+| `get_holder_num_change` | `HOLDER_NUM` |
+| `get_dividend` | `DIVIDEND` |
+| `get_fund_flow_minute` / `get_fund_flow_120d` | `FUND_FLOW` |
+| `get_hot_topics` | `HOT_TOPICS` |
+| `get_north_flow` | `NORTH_FLOW` |
+| `get_reports` | `RESEARCH_REPORT` |
+| `get_announcements` | `ANNOUNCEMENT` |
 
 **Fetcher capability declarations:**
 
@@ -252,7 +337,11 @@ fetchers that support it.
 | AkshareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY` |
 | TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| INDEX_HISTORICAL` |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
-| ZhituFetcher | `REALTIME_QUOTE` |
+| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL` |
+| TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
+| EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT` |
+| ThsFetcher | `HOT_TOPICS \| NORTH_FLOW` |
+| CninfoFetcher | `ANNOUNCEMENT` |
 
 **Index routing design**: Each fetcher that declares an INDEX_* capability must implement the corresponding public method (`get_index_realtime_quote`, `get_index_historical`, `get_index_intraday`). The Manager calls these methods directly — no `hasattr` checks, no fallback to stock methods. Internally, a fetcher may delegate to shared data processing logic (e.g. `get_index_historical` → `get_kline_data`), but the public interface is always the dedicated index method.
 
@@ -322,6 +411,10 @@ Environment variables (see `.env.example`):
 - `ZHITU_TOKEN` - Zhitu API token for realtime quotes
 - `ZHITU_PRIORITY` - Override Zhitu fetcher priority (default: 4)
 - `ENABLE_API_CACHE` - Enable/disable API response caching (default: true)
+- `TENCENT_PRIORITY` - Override Tencent fetcher priority (default: 5)
+- `EASTMONEY_PRIORITY` - Override EastMoney fetcher priority (default: 6)
+- `THS_PRIORITY` - Override ThsFetcher priority (default: 7)
+- `CNINFO_PRIORITY` - Override Cninfo fetcher priority (default: 8)
 - `CACHE_TTL_STOCK_INTRADAY` - Stock intraday cache TTL in seconds (default: 30)
 - `CACHE_TTL_INDEX_INTRADAY` - Index intraday cache TTL in seconds (default: 30)
 

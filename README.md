@@ -4,11 +4,14 @@ A local stock data aggregation server that integrates multiple upstream APIs int
 
 ## Features
 
-- **Multi-source aggregation**: Tushare, Baostock, Akshare, Yfinance, Zhitu
+- **Multi-source aggregation**: Tushare, Baostock, Akshare, Yfinance, Zhitu, Tencent, EastMoney, THS, Cninfo
 - **Automatic failover**: Priority-based source selection with fallback
 - **Circuit breaker**: Prevents cascading failures from unavailable sources
 - **Unified data format**: Consistent schema across all sources
 - **Market support**: A-shares, Hong Kong stocks, US stocks and indices
+- **Enhanced quotes**: PE/PB/市值/涨跌停价 via Tencent财经
+- **Signal layer**: 龙虎榜/融资融券/大宗交易/股东户数/分红/资金流/热点题材/北向资金
+- **Fundamentals**: 研报检索+PDF下载 / 公告检索
 
 ## Quick Start
 
@@ -349,6 +352,296 @@ GET /api/v1/boards/BK1048/stocks?include_quote=true
 
 ---
 
+### Quote Enhancement (PE/PB/Market Cap)
+
+The `/quote` endpoint now returns enhanced valuation fields:
+
+```json
+{
+  "code": "600519",
+  "stock_name": "贵州茅台",
+  "current_price": 1698.0,
+  "pe_ttm": 28.5,
+  "pe_static": null,
+  "pb": 8.2,
+  "mcap_yi": 2350.0,
+  "float_mcap_yi": 2340.0,
+  "turnover_pct": 0.85,
+  "amplitude_pct": 2.75,
+  "limit_up": null,
+  "limit_down": null,
+  "vol_ratio": 1.2
+}
+```
+
+---
+
+### Margin Trading (融资融券)
+
+```bash
+GET /api/v1/stocks/{code}/margin?page_size=30
+```
+
+**Response:**
+```json
+{
+  "code": "600519",
+  "name": "贵州茅台",
+  "records": [
+    {
+      "date": "2026-05-20",
+      "rzye": 12000000000.0,
+      "rzmre": 500000000.0,
+      "rzche": 300000000.0,
+      "rqye": 200000000.0,
+      "rqmcl": 50000,
+      "rqchl": 30000,
+      "rzrqye": 12200000000.0
+    }
+  ],
+  "source": "eastmoney"
+}
+```
+
+---
+
+### Block Trade (大宗交易)
+
+```bash
+GET /api/v1/stocks/{code}/block-trade?page_size=20
+```
+
+```json
+{
+  "code": "600519",
+  "records": [
+    {
+      "date": "2026-05-20",
+      "price": 100.0,
+      "close": 98.0,
+      "premium_pct": 2.04,
+      "vol": 50000,
+      "amount": 5000000,
+      "buyer": "机构专用",
+      "seller": "中信证券"
+    }
+  ],
+  "source": "eastmoney"
+}
+```
+
+---
+
+### Shareholder Count (股东户数变化)
+
+```bash
+GET /api/v1/stocks/{code}/holder-num?page_size=10
+```
+
+```json
+{
+  "code": "600519",
+  "records": [
+    {
+      "date": "2026-03-31",
+      "holder_num": 150000,
+      "change_num": -5000,
+      "change_ratio": -3.2,
+      "avg_shares": 8000.0
+    }
+  ],
+  "source": "eastmoney"
+}
+```
+
+---
+
+### Dividend History (分红送转)
+
+```bash
+GET /api/v1/stocks/{code}/dividend?page_size=20
+```
+
+```json
+{
+  "code": "600519",
+  "records": [
+    {
+      "date": "2025-06-19",
+      "bonus_rmb": 21.91,
+      "transfer_ratio": 0,
+      "bonus_ratio": 0,
+      "plan": "实施完成"
+    }
+  ],
+  "source": "eastmoney"
+}
+```
+
+---
+
+### Dragon Tiger Board (龙虎榜)
+
+**个股龙虎榜:**
+```bash
+GET /api/v1/stocks/{code}/dragon-tiger?trade_date=2026-05-20&look_back=30
+```
+
+```json
+{
+  "code": "002475",
+  "name": "立讯精密",
+  "records": [
+    {"date": "2026-05-20", "reason": "日涨幅偏离值达7%", "net_buy_wan": 15230.5, "turnover_pct": 5.2}
+  ],
+  "seats": {
+    "buy": [{"name": "机构专用", "buy_wan": 8900.0, "sell_wan": 1200.0, "net_wan": 7700.0}],
+    "sell": [{"name": "中信证券", "buy_wan": 500.0, "sell_wan": 4500.0, "net_wan": -4000.0}]
+  },
+  "institution": {"buy_amt": 8900.0, "sell_amt": 600.0, "net_amt": 8300.0},
+  "source": "eastmoney"
+}
+```
+
+**全市场龙虎榜:**
+```bash
+GET /api/v1/dragon-tiger/daily?trade_date=2026-05-20&min_net_buy=5000
+```
+
+---
+
+### Fund Flow (资金流)
+
+**分钟级实时:**
+```bash
+GET /api/v1/stocks/{code}/fund-flow
+```
+
+**120日历史:**
+```bash
+GET /api/v1/stocks/{code}/fund-flow/daily
+```
+
+```json
+{
+  "code": "600519",
+  "type": "daily",
+  "records": [
+    {
+      "date": "2026-05-20",
+      "main_net": 5000000,
+      "small_net": -1000000,
+      "mid_net": 2000000,
+      "large_net": 3000000,
+      "super_net": -500000
+    }
+  ],
+  "source": "eastmoney"
+}
+```
+
+---
+
+### Hot Topics (热点题材)
+
+```bash
+GET /api/v1/hot/topics?date=2026-05-20
+```
+
+```json
+{
+  "date": "2026-05-20",
+  "total": 125,
+  "topics": [
+    {
+      "code": "688017",
+      "name": "绿的谐波",
+      "reason": "人形机器人+减速器+特斯拉",
+      "change_pct": 12.5,
+      "turnover_rate": 8.3,
+      "amount": 5000000000.0,
+      "dde_net": 1500.0
+    }
+  ],
+  "source": "ths"
+}
+```
+
+---
+
+### North-bound Flow (北向资金)
+
+```bash
+GET /api/v1/north-flow/realtime
+```
+
+```json
+{
+  "records": [
+    {"time": "09:30", "hgt_yi": 0.5, "sgt_yi": 0.3},
+    {"time": "09:31", "hgt_yi": 0.7, "sgt_yi": 0.4}
+  ],
+  "source": "ths"
+}
+```
+
+---
+
+### Research Reports (研报)
+
+```bash
+GET /api/v1/stocks/{code}/reports?max_pages=3
+GET /api/v1/stocks/{code}/reports/{info_code}/pdf
+```
+
+```json
+{
+  "code": "688017",
+  "name": "绿的谐波",
+  "reports": [
+    {
+      "title": "绿的谐波深度报告",
+      "publish_date": "2026-05-15",
+      "org": "中信证券",
+      "info_code": "ABC123",
+      "rating": "买入",
+      "predict_eps_this": 3.5,
+      "predict_eps_next": 5.2,
+      "predict_eps_next2": 7.1
+    }
+  ],
+  "total": 45,
+  "source": "eastmoney"
+}
+```
+
+---
+
+### Corporate Announcements (公告)
+
+```bash
+GET /api/v1/stocks/{code}/announcements?page_size=30
+```
+
+```json
+{
+  "code": "688017",
+  "name": "绿的谐波",
+  "announcements": [
+    {
+      "title": "2025年年度报告",
+      "type": "年报",
+      "date": "2026-03-31",
+      "url": "https://www.cninfo.com.cn/new/disclosure/detail?annoId=..."
+    }
+  ],
+  "total": 30,
+  "source": "cninfo"
+}
+```
+
+---
+
 ## API Response Caching
 
 The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to avoid repeated upstream API calls when multiple users request the same data within a short window.
@@ -512,6 +805,10 @@ The server automatically routes requests to the appropriate data source based on
 | 2 | Akshare | Fallback |
 | 3 | Yfinance | Fallback |
 | 4 | Zhitu | Realtime only, requires token |
+| 5 | Tencent | Enhanced quotes (PE/PB/市值/涨跌停价), HTTP only |
+| 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报 |
+| 7 | THS | 热点题材/北向资金 |
+| 8 | Cninfo | 公告检索 |
 
 ### A-share Indices (CSI)
 
@@ -576,6 +873,10 @@ The server automatically routes requests to the appropriate data source based on
 | `YFINANCE_PRIORITY` | Override Yfinance priority | 3 |
 | `ZHITU_TOKEN` | Zhitu API token (for realtime quotes) | - |
 | `ZHITU_PRIORITY` | Override Zhitu priority | 4 |
+| `TENCENT_PRIORITY` | Override Tencent priority | 5 |
+| `EASTMONEY_PRIORITY` | Override EastMoney priority | 6 |
+| `THS_PRIORITY` | Override THS priority | 7 |
+| `CNINFO_PRIORITY` | Override Cninfo priority | 8 |
 | `SERVER_PORT` | Server port | 8888 |
 | `SERVER_HOST` | Server host | 0.0.0.0 |
 
