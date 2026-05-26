@@ -29,7 +29,7 @@ from ..base import (
 )
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote
 from ..utils.normalize import get_index_type, is_index_code
-from .index_symbols import HK_INDEX_MAP, US_INDEX_MAP
+from .index_symbols import CSI_INDEX_MAP, HK_INDEX_MAP, US_INDEX_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,9 @@ class YfinanceFetcher(BaseFetcher):
                 if entry is not None:
                     return entry[0]
             elif index_type == "csi":
+                entry = CSI_INDEX_MAP.get(code)
+                if entry is not None and entry[0].startswith("sz."):
+                    return f"{code}.SZ"
                 return f"{code}.SS"
             elif index_type == "hk":
                 entry = HK_INDEX_MAP.get(code)

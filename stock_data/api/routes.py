@@ -381,6 +381,12 @@ def get_history(
 
         return result
 
+    except DataFetchError as e:
+        logger.warning(f"History data unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "data_unavailable", "message": f"History data not currently available: {e}"},
+        ) from e
     except HTTPException:
         raise
     except Exception as e:
@@ -670,6 +676,12 @@ def get_index_history(
 
         return result
 
+    except DataFetchError as e:
+        logger.warning(f"Index history data unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "data_unavailable", "message": f"Index history data not currently available: {e}"},
+        ) from e
     except Exception as e:
         logger.error(f"Index history error: {e}", exc_info=True)
         raise HTTPException(
@@ -899,11 +911,10 @@ def list_boards(
         Board list with code and name, optionally with realtime data
     """
     try:
-        cache = None
-        if is_cache_enabled() and not refresh and not include_quote:
+        if is_cache_enabled():
             cache = get_board_list_cache()
             key = make_board_cache_key(type, source)
-            if key in cache:
+            if not refresh and not include_quote and key in cache:
                 logger.info(f"[APICache] board list hit: {key}")
                 return cache[key]
 
@@ -931,7 +942,7 @@ def list_boards(
             ]
         )
 
-        if is_cache_enabled() and cache is not None:
+        if is_cache_enabled():
             cache[key] = result
 
         return result
@@ -971,11 +982,10 @@ def get_board_stocks(
         Board info and list of stocks, optionally with quote data
     """
     try:
-        cache = None
-        if is_cache_enabled() and not refresh and not include_quote:
+        if is_cache_enabled():
             cache = get_board_stocks_cache()
             key = make_board_stocks_cache_key(board_code, source, include_quote)
-            if key in cache:
+            if not refresh and not include_quote and key in cache:
                 logger.info(f"[APICache] board stocks hit: {key}")
                 return cache[key]
 
@@ -1002,8 +1012,8 @@ def get_board_stocks(
         # Build stock list
         stock_list = [
             BoardStockInfo(
-                code=s["stock_code"],
-                name=s["stock_name"],
+                code=s.get("stock_code", ""),
+                name=s.get("stock_name", ""),
                 price=s.get("price"),
                 change_pct=s.get("change_pct"),
                 volume=s.get("volume"),
@@ -1017,7 +1027,7 @@ def get_board_stocks(
             source=source,
         )
 
-        if is_cache_enabled() and cache is not None:
+        if is_cache_enabled():
             cache[key] = result
 
         return result
@@ -1122,6 +1132,10 @@ def get_pools(
 @router.get(
     "/stocks/{stock_code}/dragon-tiger",
     response_model=DragonTigerResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_dragon_tiger(
@@ -1133,15 +1147,16 @@ def get_dragon_tiger(
         manager = get_manager()
         data = manager.get_dragon_tiger(stock_code, trade_date, look_back)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        records = [DragonTigerRecord(**r) for r in data["records"]]
+        records = [DragonTigerRecord(**r) for r in data.get("records", [])]
+        seats_data = data.get("seats", {})
         seats = {
-            "buy": [DragonTigerSeat(**s) for s in data["seats"]["buy"]],
-            "sell": [DragonTigerSeat(**s) for s in data["seats"]["sell"]],
+            "buy": [DragonTigerSeat(**s) for s in seats_data.get("buy", [])],
+            "sell": [DragonTigerSeat(**s) for s in seats_data.get("sell", [])],
         }
         return DragonTigerResponse(
             code=stock_code, name=stock_name or "",
             records=records, seats=seats,
-            institution=DragonTigerInstitution(**data["institution"]),
+            institution=DragonTigerInstitution(**data.get("institution", {})),
         )
     except DataFetchError as e:
         logger.warning(f"Dragon tiger data unavailable: {e}")
@@ -1155,6 +1170,10 @@ def get_dragon_tiger(
 @router.get(
     "/dragon-tiger/daily",
     response_model=DailyDragonTigerResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["dragon-tiger"],
 )
 def get_daily_dragon_tiger(
@@ -1178,6 +1197,10 @@ def get_daily_dragon_tiger(
 @router.get(
     "/stocks/{stock_code}/margin",
     response_model=MarginTradingResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_margin(
@@ -1202,6 +1225,10 @@ def get_margin(
 @router.get(
     "/stocks/{stock_code}/block-trade",
     response_model=BlockTradeResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_block_trade(
@@ -1226,6 +1253,10 @@ def get_block_trade(
 @router.get(
     "/stocks/{stock_code}/holder-num",
     response_model=HolderNumResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_holder_num(
@@ -1250,6 +1281,10 @@ def get_holder_num(
 @router.get(
     "/stocks/{stock_code}/dividend",
     response_model=DividendResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_dividend(
@@ -1274,6 +1309,10 @@ def get_dividend(
 @router.get(
     "/stocks/{stock_code}/fund-flow",
     response_model=FundFlowResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
@@ -1296,6 +1335,10 @@ def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
 @router.get(
     "/stocks/{stock_code}/fund-flow/daily",
     response_model=FundFlowResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
@@ -1318,6 +1361,10 @@ def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowRespon
 @router.get(
     "/hot/topics",
     response_model=HotTopicResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["hot"],
 )
 def get_hot_topics(
@@ -1343,6 +1390,10 @@ def get_hot_topics(
 @router.get(
     "/north-flow/realtime",
     response_model=NorthFlowResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["north-flow"],
 )
 def get_north_flow() -> NorthFlowResponse:
@@ -1364,6 +1415,10 @@ def get_north_flow() -> NorthFlowResponse:
 @router.get(
     "/stocks/{stock_code}/reports",
     response_model=ReportResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_reports(
@@ -1389,6 +1444,10 @@ def get_reports(
 @router.get(
     "/stocks/{stock_code}/reports/{report_id}/pdf",
     response_model=ReportPDFResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_report_pdf(
@@ -1413,6 +1472,10 @@ def get_report_pdf(
 @router.get(
     "/stocks/{stock_code}/announcements",
     response_model=AnnouncementResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
     tags=["stocks"],
 )
 def get_announcements(

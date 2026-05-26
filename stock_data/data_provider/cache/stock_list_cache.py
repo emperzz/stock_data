@@ -10,20 +10,23 @@ import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 
 logger = logging.getLogger(__name__)
 
 _db_path: Path | None = None
 _last_refresh_date: dict[str, str] = {}  # market -> "YYYY-MM-DD"
+_lock: Lock = Lock()
 
 
 def _is_first_call_of_day(market: str) -> bool:
     """Check if this is the first call of the day for the market, and update the tracker."""
     today = datetime.now().strftime("%Y-%m-%d")
-    if _last_refresh_date.get(market) != today:
-        _last_refresh_date[market] = today
-        return True
-    return False
+    with _lock:
+        if _last_refresh_date.get(market) != today:
+            _last_refresh_date[market] = today
+            return True
+        return False
 
 
 def _get_db_path() -> Path:
@@ -47,6 +50,7 @@ def init_db() -> None:
     conn = _get_connection()
     try:
         cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS stock_list (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -85,10 +85,10 @@ class TestQuote:
 class TestHistory:
     """Tests for /api/v1/stocks/{code}/history endpoint."""
 
-    def test_history_returns_500_for_invalid_stock(self, client):
-        """Invalid stock code should eventually fail and return 500."""
+    def test_history_returns_503_for_invalid_stock(self, client):
+        """Invalid stock code should fail all fetchers and return 503."""
         response = client.get("/api/v1/stocks/INVALID/history?period=daily&days=5")
-        assert response.status_code == 500
+        assert response.status_code == 503
 
     def test_history_with_adjust(self, client):
         """Test history with adjustment parameter."""

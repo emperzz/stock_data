@@ -45,7 +45,9 @@ from . import cache as stock_cache
 from .fetchers.akshare_fetcher import AkshareFetcher
 from .fetchers.baostock_fetcher import BaostockFetcher
 from .fetchers.cninfo_fetcher import CninfoFetcher
+from .fetchers.eastmoney_fetcher import EastMoneyFetcher
 from .fetchers.tencent_fetcher import TencentFetcher
+from .fetchers.ths_fetcher import ThsFetcher
 from .fetchers.tushare_fetcher import TushareFetcher
 from .fetchers.yfinance_fetcher import YfinanceFetcher
 from .fetchers.zhitu_fetcher import ZhituFetcher
@@ -83,7 +85,9 @@ __all__ = [
     "AkshareFetcher",
     "BaostockFetcher",
     "CninfoFetcher",
+    "EastMoneyFetcher",
     "TencentFetcher",
+    "ThsFetcher",
     "TushareFetcher",
     "YfinanceFetcher",
     "ZhituFetcher",

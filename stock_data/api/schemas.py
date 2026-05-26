@@ -87,7 +87,7 @@ class StockInfo(BaseModel):
 
     code: str = Field(description="Stock code (e.g., 600519, AAPL, HK00700)")
     name: str = Field(description="Stock name")
-    market: str = Field(description="Market type: cn/hk/us")
+    market: str = Field(description="Market type: csi/hk/us")
 
 
 class TradeCalendarResponse(BaseModel):

@@ -371,12 +371,13 @@ class DataFetcherManager:
             Filtered list of fetchers sorted by priority.
         """
         result = []
-        for f in self._fetchers:
-            if market not in f.supported_markets:
-                continue
-            if capability not in f.supported_data_types:
-                continue
-            result.append(f)
+        with self._lock:
+            for f in self._fetchers:
+                if market not in f.supported_markets:
+                    continue
+                if capability not in f.supported_data_types:
+                    continue
+                result.append(f)
         return result
 
     def get_kline_data(
@@ -410,19 +411,24 @@ class DataFetcherManager:
         # Check if it's an index code for routing
         index_tag = index_market_tag(stock_code)
 
-        # Determine capability based on frequency
+        # Determine capability based on frequency.
+        # Index codes prefer INDEX_HISTORICAL/INDEX_INTRADAY so fetchers can
+        # declare index support independently of stock K-line support, then
+        # fall back to HISTORICAL_DWM/HISTORICAL_MIN for backward compat.
         if frequency in ("5", "15", "30", "60"):
-            cap = DataCapability.HISTORICAL_MIN
+            index_cap = DataCapability.INDEX_INTRADAY
+            gen_cap = DataCapability.HISTORICAL_MIN
         else:
-            cap = DataCapability.HISTORICAL_DWM
+            index_cap = DataCapability.INDEX_HISTORICAL
+            gen_cap = DataCapability.HISTORICAL_DWM
 
         if index_tag:
-            fetchers = self._filter_by_capability(index_tag, cap)
+            fetchers = self._filter_by_capability(index_tag, index_cap)
             if not fetchers:
-                fetchers = self._filter_by_capability(market_tag(stock_code), cap)
+                fetchers = self._filter_by_capability(index_tag, gen_cap)
         else:
             market = market_tag(stock_code)
-            fetchers = self._filter_by_capability(market, cap)
+            fetchers = self._filter_by_capability(market, gen_cap)
 
         errors = []
 

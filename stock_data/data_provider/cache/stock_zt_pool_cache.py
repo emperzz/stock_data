@@ -124,7 +124,9 @@ def init_db() -> None:
 def _get_table_name(pool_type: str) -> str:
     """Map pool type to table name."""
     mapping = {"zt": "zt_pool", "dt": "dt_pool", "zbgc": "zbgc_pool"}
-    return mapping.get(pool_type, "zt_pool")
+    if pool_type not in mapping:
+        raise ValueError(f"Unknown pool_type: {pool_type!r}, expected one of: {list(mapping.keys())}")
+    return mapping[pool_type]
 
 
 def get_zt_pool_cached(pool_type: str, date: str) -> list[dict]:

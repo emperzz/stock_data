@@ -199,7 +199,7 @@ class AkshareFetcher(BaseFetcher):
 
             if is_hk:
                 df = ak.stock_hk_spot_em()
-                symbol = code.replace(".hk", "").lstrip("0")
+                symbol = code.replace(".hk", "").zfill(5)
                 row = df[df["代码"] == symbol]
                 if row.empty:
                     return None
@@ -271,7 +271,7 @@ class AkshareFetcher(BaseFetcher):
             if is_hk_market(stock_code):
                 df = ak.stock_hk_spot_em()
                 if df is not None and not df.empty:
-                    symbol = code.replace("HK", "").lstrip("0")
+                    symbol = code.replace("HK", "").zfill(5)
                     match = df[df["代码"] == symbol]
                     if not match.empty:
                         return str(match.iloc[0].get("名称", "")).strip()

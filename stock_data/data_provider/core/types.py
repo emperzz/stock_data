@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
-    """Safely convert value to float, handling None, NaN, and string cases."""
+    """Safely convert value to float, handling None, NaN, inf, and string cases."""
     if val is None:
         return default
     try:
@@ -23,9 +23,10 @@ def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
             val = val.strip()
             if val in ("", "-", "--", "nan", "None"):
                 return default
-        if math.isnan(float(val)):
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
             return default
-        return float(val)
+        return f
     except (ValueError, TypeError):
         return default
 
@@ -146,9 +147,9 @@ class CircuitBreaker:
         cooldown_seconds: float | None = None,
         half_open_max_calls: int | None = None,
     ):
-        self.failure_threshold = int(os.getenv("CB_FAILURE_THRESHOLD", str(failure_threshold or 3)))
-        self.cooldown_seconds = float(os.getenv("CB_COOLDOWN_SECONDS", str(cooldown_seconds or 300.0)))
-        self.half_open_max_calls = int(os.getenv("CB_HALF_OPEN_MAX_CALLS", str(half_open_max_calls or 1)))
+        self.failure_threshold = int(os.getenv("CB_FAILURE_THRESHOLD", str(failure_threshold if failure_threshold is not None else 3)))
+        self.cooldown_seconds = float(os.getenv("CB_COOLDOWN_SECONDS", str(cooldown_seconds if cooldown_seconds is not None else 300.0)))
+        self.half_open_max_calls = int(os.getenv("CB_HALF_OPEN_MAX_CALLS", str(half_open_max_calls if half_open_max_calls is not None else 1)))
         self._states: dict = {}
         self._lock = RLock()
 
