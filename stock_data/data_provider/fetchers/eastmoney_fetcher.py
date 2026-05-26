@@ -10,7 +10,6 @@ All endpoints share the same base URL with different reportName params.
 
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
 
 import requests
 
