@@ -354,3 +354,64 @@ class DividendResponse(BaseModel):
     name: str = Field(default="", description="股票名称")
     records: list[DividendRecord] = Field(default_factory=list)
     source: str = Field(default="eastmoney")
+
+
+class FundFlowMinuteRecord(BaseModel):
+    """资金流分钟级记录"""
+    time: str = Field(default="", description="时间 (HH:mm)")
+    main_net: float = Field(default=0, description="主力净流入(元)")
+    small_net: float = Field(default=0, description="小单净流入(元)")
+    mid_net: float = Field(default=0, description="中单净流入(元)")
+    large_net: float = Field(default=0, description="大单净流入(元)")
+    super_net: float = Field(default=0, description="超大单净流入(元)")
+
+
+class FundFlowDailyRecord(BaseModel):
+    """资金流日级记录"""
+    date: str = Field(default="", description="日期")
+    main_net: float = Field(default=0, description="主力净流入(元)")
+    small_net: float = Field(default=0, description="小单净流入(元)")
+    mid_net: float = Field(default=0, description="中单净流入(元)")
+    large_net: float = Field(default=0, description="大单净流入(元)")
+    super_net: float = Field(default=0, description="超大单净流入(元)")
+
+
+class FundFlowResponse(BaseModel):
+    """资金流响应"""
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    type: str = Field(default="minute", description="类型: minute/daily")
+    records: list = Field(default_factory=list)
+    source: str = Field(default="eastmoney")
+
+
+class HotTopicRecord(BaseModel):
+    """热点题材记录"""
+    code: str = Field(default="", description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    reason: str = Field(default="", description="题材归因")
+    change_pct: float = Field(default=0, description="涨幅(%)")
+    turnover_rate: float = Field(default=0, description="换手率(%)")
+    amount: float = Field(default=0, description="成交额")
+    dde_net: float = Field(default=0, description="大单净量")
+
+
+class HotTopicResponse(BaseModel):
+    """热点题材响应"""
+    date: str = Field(description="交易日期")
+    total: int = Field(default=0)
+    topics: list[HotTopicRecord] = Field(default_factory=list)
+    source: str = Field(default="ths")
+
+
+class NorthFlowRecord(BaseModel):
+    """北向资金记录"""
+    time: str = Field(default="", description="时间")
+    hgt_yi: float | None = Field(default=None, description="沪股通累计净买入(亿元)")
+    sgt_yi: float | None = Field(default=None, description="深股通累计净买入(亿元)")
+
+
+class NorthFlowResponse(BaseModel):
+    """北向资金响应"""
+    records: list[NorthFlowRecord] = Field(default_factory=list)
+    source: str = Field(default="ths")
