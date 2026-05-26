@@ -71,6 +71,7 @@ from .cache import (
     make_reports_cache_key,
     make_stock_intraday_cache_key,
 )
+from stock_data.data_provider.core.types import get_realtime_circuit_breaker
 from .schemas import (
     AnnouncementRecord,
     AnnouncementResponse,
@@ -93,6 +94,7 @@ from .schemas import (
     FundFlowMinuteRecord,
     FundFlowResponse,
     HealthResponse,
+    SourceHealth,
     HolderNumRecord,
     HolderNumResponse,
     HotTopicRecord,
@@ -208,10 +210,47 @@ def reset_manager() -> None:
     response_model=HealthResponse,
     tags=["health"],
 )
-def health_check() -> HealthResponse:
-    """Health check endpoint."""
+def health_check(details: bool = False) -> HealthResponse:
+    """Health check endpoint.
+
+    Lightweight mode (default): returns overall status for k8s/lb probes.
+    Detailed mode (?details=true): returns per-source circuit breaker state for AI agents.
+    """
     manager = get_manager()
-    return HealthResponse(status="ok", available_sources=manager.available_fetchers)
+
+    # Collect circuit breaker states from the single global CB
+    cb = get_realtime_circuit_breaker()
+    source_states: list[SourceHealth] = []
+    any_available = False
+
+    for fetcher in manager.fetchers:
+        with cb._lock:
+            state = cb._get_state(fetcher.name)
+            is_available = cb.is_available(fetcher.name)
+            if is_available:
+                any_available = True
+            last_success = state.get("last_success_time")
+            last_failure = state.get("last_failure_time") if state.get("last_failure_time", 0) > 0 else None
+            source_states.append(SourceHealth(
+                name=fetcher.name,
+                state=state["state"],
+                available=is_available,
+                last_success_time=last_success if last_success and last_success > 0 else None,
+                last_failure_time=last_failure,
+                failure_count=state["failures"],
+            ))
+
+    # Compute overall status
+    if any_available:
+        open_count = sum(1 for s in source_states if s.state == "open" or s.state == "half_open")
+        status = "degraded" if open_count > 0 else "ok"
+    else:
+        status = "unhealthy"
+
+    return HealthResponse(
+        status=status,
+        sources=source_states if details else None,
+    )
 
 
 @router.get(

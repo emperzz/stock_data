@@ -66,12 +66,23 @@ class ErrorResponse(BaseModel):
     message: str = Field(description="Error message")
 
 
+class SourceHealth(BaseModel):
+    """Individual source health status."""
+
+    name: str = Field(description="Fetcher name")
+    state: str = Field(description="Circuit breaker state: closed/open/half_open")
+    available: bool = Field(description="Whether the source can be called")
+    last_success_time: float | None = Field(default=None, description="Unix timestamp of last successful call")
+    last_failure_time: float | None = Field(default=None, description="Unix timestamp of last failure")
+    failure_count: int = Field(default=0, description="Consecutive failure count")
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
 
-    status: str = Field(default="ok", description="Service status")
+    status: str = Field(default="ok", description="Service status: ok/degraded/unhealthy")
     version: str = Field(default="0.1.0", description="Server version")
-    available_sources: list[str] = Field(default_factory=list, description="Available data sources")
+    sources: list[SourceHealth] | None = Field(default=None, description="Per-source health details (only when details=true)")
 
 
 class IndexInfo(BaseModel):

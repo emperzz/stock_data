@@ -160,6 +160,7 @@ class CircuitBreaker:
                 "state": self.CLOSED,
                 "failures": 0,
                 "last_failure_time": 0.0,
+                "last_success_time": 0.0,
                 "half_open_calls": 0,
             }
         return self._states[source]
@@ -205,6 +206,7 @@ class CircuitBreaker:
             state["state"] = self.CLOSED
             state["failures"] = 0
             state["half_open_calls"] = 0
+            state["last_success_time"] = time.time()
 
     def record_failure(self, source: str, error: str | None = None) -> None:
         """Record failed call."""
