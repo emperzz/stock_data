@@ -17,6 +17,7 @@ from ..data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
 from ..data_provider.fetchers.zhitu_fetcher import ZhituFetcher
 from ..data_provider.fetchers.tencent_fetcher import TencentFetcher
 from ..data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
+from ..data_provider.fetchers.ths_fetcher import ThsFetcher
 from ..data_provider.utils.normalize import is_hk_market, is_index_code, is_us_market, normalize_stock_code
 from ..data_provider.fetchers.index_symbols import get_all_indices
 from .cache import (
@@ -71,6 +72,13 @@ from .schemas import (
     HolderNumResponse,
     DividendRecord,
     DividendResponse,
+    FundFlowResponse,
+    FundFlowMinuteRecord,
+    FundFlowDailyRecord,
+    HotTopicResponse,
+    HotTopicRecord,
+    NorthFlowResponse,
+    NorthFlowRecord,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,6 +133,13 @@ def get_manager() -> DataFetcherManager:
             logger.info("EastMoneyFetcher added")
         else:
             logger.info("EastMoneyFetcher skipped")
+
+        ths = ThsFetcher()
+        if ths.is_available():
+            _manager.add_fetcher(ths)
+            logger.info("ThsFetcher added")
+        else:
+            logger.info("ThsFetcher skipped")
 
         zhitu = ZhituFetcher()
         if zhitu.is_available():
@@ -1237,6 +1252,96 @@ def get_dividend(
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [DividendRecord(**r) for r in data]
         return DividendResponse(code=stock_code, name=stock_name or "", records=records)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/fund-flow",
+    response_model=FundFlowResponse,
+    tags=["stocks"],
+)
+def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
+    """Get minute-level capital flow for a stock."""
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
+        data = fetcher.get_fund_flow_minute(stock_code)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+        records = [FundFlowMinuteRecord(**r) for r in data]
+        return FundFlowResponse(code=stock_code, name=stock_name or "", type="minute", records=records)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/stocks/{stock_code}/fund-flow/daily",
+    response_model=FundFlowResponse,
+    tags=["stocks"],
+)
+def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
+    """Get 120-day capital flow history for a stock."""
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("EastMoneyFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
+        data = fetcher.get_fund_flow_120d(stock_code)
+        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+        records = [FundFlowDailyRecord(**r) for r in data]
+        return FundFlowResponse(code=stock_code, name=stock_name or "", type="daily", records=records)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/hot/topics",
+    response_model=HotTopicResponse,
+    tags=["hot"],
+)
+def get_hot_topics(
+    date: str = Query(default="", description="Date (YYYY-MM-DD), empty=today"),
+) -> HotTopicResponse:
+    """Get daily hot stocks with reason tags."""
+    try:
+        from datetime import datetime
+        manager = get_manager()
+        fetcher = manager.get_fetcher("ThsFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "ThsFetcher not registered"})
+        data = fetcher.get_hot_topics(date)
+        topics = [HotTopicRecord(**r) for r in data]
+        actual_date = date or datetime.now().strftime("%Y-%m-%d")
+        return HotTopicResponse(date=actual_date, total=len(topics), topics=topics)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": str(e)}) from e
+
+
+@router.get(
+    "/north-flow/realtime",
+    response_model=NorthFlowResponse,
+    tags=["north-flow"],
+)
+def get_north_flow() -> NorthFlowResponse:
+    """Get north-bound capital flow (minute-level)."""
+    try:
+        manager = get_manager()
+        fetcher = manager.get_fetcher("ThsFetcher")
+        if not fetcher:
+            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "ThsFetcher not registered"})
+        data = fetcher.get_north_flow()
+        records = [NorthFlowRecord(**r) for r in data]
+        return NorthFlowResponse(records=records)
     except HTTPException:
         raise
     except Exception as e:
