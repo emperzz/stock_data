@@ -415,3 +415,48 @@ class NorthFlowResponse(BaseModel):
     """北向资金响应"""
     records: list[NorthFlowRecord] = Field(default_factory=list)
     source: str = Field(default="ths")
+
+
+class ReportRecord(BaseModel):
+    """研报记录"""
+    title: str = Field(default="", description="标题")
+    publish_date: str = Field(default="", description="发布日期")
+    org: str = Field(default="", description="研究机构")
+    info_code: str = Field(default="", description="PDF编号")
+    rating: str = Field(default="", description="评级")
+    predict_eps_this: float | None = Field(default=None, description="今年EPS预测")
+    predict_eps_next: float | None = Field(default=None, description="明年EPS预测")
+    predict_eps_next2: float | None = Field(default=None, description="后年EPS预测")
+
+
+class ReportResponse(BaseModel):
+    """研报列表响应"""
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    reports: list[ReportRecord] = Field(default_factory=list)
+    total: int = Field(default=0)
+    source: str = Field(default="eastmoney")
+
+
+class ReportPDFResponse(BaseModel):
+    """研报PDF响应"""
+    report_id: str = Field(description="info_code")
+    download_path: str | None = Field(default=None, description="本地文件路径")
+    url: str | None = Field(default=None, description="PDF URL")
+
+
+class AnnouncementRecord(BaseModel):
+    """公告记录"""
+    title: str = Field(default="", description="标题")
+    type: str = Field(default="", description="公告类型")
+    date: str = Field(default="", description="发布日期")
+    url: str = Field(default="", description="公告链接")
+
+
+class AnnouncementResponse(BaseModel):
+    """公告列表响应"""
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    announcements: list[AnnouncementRecord] = Field(default_factory=list)
+    total: int = Field(default=0)
+    source: str = Field(default="cninfo")
