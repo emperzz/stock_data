@@ -32,6 +32,7 @@ class AkshareFetcher(BaseFetcher):
     supported_markets: set[str] = {"csi", "hk"}
     supported_data_types = (
         DataCapability.HISTORICAL_DWM
+        | DataCapability.HISTORICAL_MIN
         | DataCapability.REALTIME_QUOTE
         | DataCapability.STOCK_LIST
         | DataCapability.STOCK_NAME
