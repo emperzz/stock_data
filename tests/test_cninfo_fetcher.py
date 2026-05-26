@@ -47,6 +47,7 @@ class TestAnnouncements:
     @patch("stock_data.data_provider.fetchers.cninfo_fetcher.requests.post")
     def test_returns_records(self, mock_post):
         mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             "announcements": [
                 {"announcementTitle": "年度报告", "announcementTypeName": "年报",
@@ -58,6 +59,7 @@ class TestAnnouncements:
         assert len(result) == 1
         assert result[0]["title"] == "年度报告"
         assert result[0]["type"] == "年报"
+        assert result[0]["date"] == "2024-05-27"
 
 
 class TestHistoricalNotSupported:

@@ -319,6 +319,7 @@ class BlockTradeResponse(BaseModel):
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     records: list[BlockTradeRecord] = Field(default_factory=list)
+    total: int = Field(default=0, description="记录总数")
     source: str = Field(default="eastmoney")
 
 
@@ -381,7 +382,7 @@ class FundFlowResponse(BaseModel):
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     type: str = Field(default="minute", description="类型: minute/daily")
-    records: list = Field(default_factory=list)
+    records: list[FundFlowMinuteRecord | FundFlowDailyRecord] = Field(default_factory=list)
     source: str = Field(default="eastmoney")
 
 
@@ -392,6 +393,7 @@ class HotTopicRecord(BaseModel):
     reason: str = Field(default="", description="题材归因")
     change_pct: float = Field(default=0, description="涨幅(%)")
     turnover_rate: float = Field(default=0, description="换手率(%)")
+    volume: float = Field(default=0, description="成交量")
     amount: float = Field(default=0, description="成交额")
     dde_net: float = Field(default=0, description="大单净量")
 

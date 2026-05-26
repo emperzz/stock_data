@@ -1131,10 +1131,7 @@ def get_dragon_tiger(
 ) -> DragonTigerResponse:
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
-        data = fetcher.get_dragon_tiger(stock_code, trade_date, look_back)
+        data = manager.get_dragon_tiger(stock_code, trade_date, look_back)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [DragonTigerRecord(**r) for r in data["records"]]
         seats = {
@@ -1146,6 +1143,9 @@ def get_dragon_tiger(
             records=records, seats=seats,
             institution=DragonTigerInstitution(**data["institution"]),
         )
+    except DataFetchError as e:
+        logger.warning(f"Dragon tiger data unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1163,12 +1163,12 @@ def get_daily_dragon_tiger(
 ) -> DailyDragonTigerResponse:
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
-        data = fetcher.get_daily_dragon_tiger(trade_date, min_net_buy)
+        data = manager.get_daily_dragon_tiger(trade_date, min_net_buy)
         stocks = [DailyDragonTigerStock(**s) for s in data["stocks"]]
         return DailyDragonTigerResponse(date=data["date"], total=data["total"], stocks=stocks)
+    except DataFetchError as e:
+        logger.warning(f"Daily dragon tiger unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1186,13 +1186,13 @@ def get_margin(
 ) -> MarginTradingResponse:
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
-        data = fetcher.get_margin_trading(stock_code, page_size)
+        data = manager.get_margin_trading(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [MarginTradingRecord(**r) for r in data]
         return MarginTradingResponse(code=stock_code, name=stock_name or "", records=records)
+    except DataFetchError as e:
+        logger.warning(f"Margin trading unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1210,13 +1210,13 @@ def get_block_trade(
 ) -> BlockTradeResponse:
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
-        data = fetcher.get_block_trade(stock_code, page_size)
+        data = manager.get_block_trade(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [BlockTradeRecord(**r) for r in data]
-        return BlockTradeResponse(code=stock_code, name=stock_name or "", records=records)
+        return BlockTradeResponse(code=stock_code, name=stock_name or "", records=records, total=len(records))
+    except DataFetchError as e:
+        logger.warning(f"Block trade unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1234,13 +1234,13 @@ def get_holder_num(
 ) -> HolderNumResponse:
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
-        data = fetcher.get_holder_num_change(stock_code, page_size)
+        data = manager.get_holder_num_change(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [HolderNumRecord(**r) for r in data]
         return HolderNumResponse(code=stock_code, name=stock_name or "", records=records)
+    except DataFetchError as e:
+        logger.warning(f"Holder num unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1258,13 +1258,13 @@ def get_dividend(
 ) -> DividendResponse:
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
-        data = fetcher.get_dividend(stock_code, page_size)
+        data = manager.get_dividend(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [DividendRecord(**r) for r in data]
         return DividendResponse(code=stock_code, name=stock_name or "", records=records)
+    except DataFetchError as e:
+        logger.warning(f"Dividend unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1280,13 +1280,13 @@ def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get minute-level capital flow for a stock."""
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
-        data = fetcher.get_fund_flow_minute(stock_code)
+        data = manager.get_fund_flow_minute(stock_code)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [FundFlowMinuteRecord(**r) for r in data]
         return FundFlowResponse(code=stock_code, name=stock_name or "", type="minute", records=records)
+    except DataFetchError as e:
+        logger.warning(f"Fund flow unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1302,13 +1302,13 @@ def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowRespon
     """Get 120-day capital flow history for a stock."""
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
-        data = fetcher.get_fund_flow_120d(stock_code)
+        data = manager.get_fund_flow_120d(stock_code)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [FundFlowDailyRecord(**r) for r in data]
         return FundFlowResponse(code=stock_code, name=stock_name or "", type="daily", records=records)
+    except DataFetchError as e:
+        logger.warning(f"Fund flow daily unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1327,13 +1327,13 @@ def get_hot_topics(
     try:
         from datetime import datetime
         manager = get_manager()
-        fetcher = manager.get_fetcher("ThsFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "ThsFetcher not registered"})
-        data = fetcher.get_hot_topics(date)
+        data = manager.get_hot_topics(date)
         topics = [HotTopicRecord(**r) for r in data]
         actual_date = date or datetime.now().strftime("%Y-%m-%d")
         return HotTopicResponse(date=actual_date, total=len(topics), topics=topics)
+    except DataFetchError as e:
+        logger.warning(f"Hot topics unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1349,12 +1349,12 @@ def get_north_flow() -> NorthFlowResponse:
     """Get north-bound capital flow (minute-level)."""
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("ThsFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "ThsFetcher not registered"})
-        data = fetcher.get_north_flow()
+        data = manager.get_north_flow()
         records = [NorthFlowRecord(**r) for r in data]
         return NorthFlowResponse(records=records)
+    except DataFetchError as e:
+        logger.warning(f"North flow unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1373,13 +1373,13 @@ def get_reports(
     """Get research reports for a stock."""
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "EastMoneyFetcher not registered"})
-        data = fetcher.get_reports(stock_code, max_pages)
+        data = manager.get_reports(stock_code, max_pages)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         reports = [ReportRecord(**r) for r in data]
         return ReportResponse(code=stock_code, name=stock_name or "", reports=reports, total=len(reports))
+    except DataFetchError as e:
+        logger.warning(f"Reports unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:
@@ -1422,13 +1422,13 @@ def get_announcements(
     """Get corporate announcements for a stock."""
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("CninfoFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable", "message": "CninfoFetcher not registered"})
-        data = fetcher.get_announcements(stock_code, page_size)
+        data = manager.get_announcements(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         announcements = [AnnouncementRecord(**r) for r in data]
         return AnnouncementResponse(code=stock_code, name=stock_name or "", announcements=announcements, total=len(announcements))
+    except DataFetchError as e:
+        logger.warning(f"Announcements unavailable: {e}")
+        raise HTTPException(status_code=503, detail={"error": "data_unavailable", "message": str(e)})
     except HTTPException:
         raise
     except Exception as e:

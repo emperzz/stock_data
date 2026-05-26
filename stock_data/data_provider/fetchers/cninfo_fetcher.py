@@ -5,6 +5,7 @@ API: https://www.cninfo.com.cn/new/hisAnnouncement/query
 """
 
 import logging
+from datetime import datetime
 
 import requests
 
@@ -64,13 +65,16 @@ class CninfoFetcher(BaseFetcher):
         }
         try:
             r = requests.post(CNINFO_URL, data=payload, headers=headers, timeout=15)
+            if r.status_code != 200:
+                logger.warning(f"[CninfoFetcher] HTTP {r.status_code}")
+                return []
             d = r.json()
             rows = []
             for item in d.get("announcements", []) or []:
                 rows.append({
                     "title": item.get("announcementTitle", ""),
                     "type": item.get("announcementTypeName", ""),
-                    "date": str(item.get("announcementTime", ""))[:10],
+                    "date": datetime.fromtimestamp(item.get("announcementTime", 0) / 1000).strftime("%Y-%m-%d"),
                     "url": f"https://www.cninfo.com.cn/new/disclosure/detail?annoId={item.get('announcementId', '')}",
                 })
             return rows

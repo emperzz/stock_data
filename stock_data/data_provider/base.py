@@ -841,6 +841,198 @@ class DataFetcherManager:
                 continue
         raise DataFetchError(f"All fetchers failed for industry board stocks {board_code}:\n" + "\n".join(errors))
 
+    def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> dict:
+        """Get dragon tiger board data for a single stock."""
+        fetchers = self._filter_by_capability("csi", DataCapability.DRAGON_TIGER)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_dragon_tiger(code, trade_date, look_back)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {code} dragon_tiger")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} dragon_tiger failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for dragon_tiger {code}:\n" + "\n".join(errors))
+
+    def get_daily_dragon_tiger(self, trade_date: str = "", min_net_buy: float | None = None) -> dict:
+        """Get daily market-wide dragon tiger board summary."""
+        fetchers = self._filter_by_capability("csi", DataCapability.DRAGON_TIGER)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_daily_dragon_tiger(trade_date, min_net_buy)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for daily dragon_tiger")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} daily_dragon_tiger failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for daily dragon_tiger:\n" + "\n".join(errors))
+
+    def get_margin_trading(self, code: str, page_size: int = 30) -> list[dict]:
+        """Get margin trading data."""
+        fetchers = self._filter_by_capability("csi", DataCapability.MARGIN_TRADING)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_margin_trading(code, page_size)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {code} margin_trading")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} margin_trading failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for margin_trading {code}:\n" + "\n".join(errors))
+
+    def get_block_trade(self, code: str, page_size: int = 20) -> list[dict]:
+        """Get block trade records."""
+        fetchers = self._filter_by_capability("csi", DataCapability.BLOCK_TRADE)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_block_trade(code, page_size)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {code} block_trade")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} block_trade failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for block_trade {code}:\n" + "\n".join(errors))
+
+    def get_holder_num_change(self, code: str, page_size: int = 10) -> list[dict]:
+        """Get shareholder count change."""
+        fetchers = self._filter_by_capability("csi", DataCapability.HOLDER_NUM)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_holder_num_change(code, page_size)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {code} holder_num")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} holder_num failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for holder_num {code}:\n" + "\n".join(errors))
+
+    def get_dividend(self, code: str, page_size: int = 20) -> list[dict]:
+        """Get dividend history."""
+        fetchers = self._filter_by_capability("csi", DataCapability.DIVIDEND)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_dividend(code, page_size)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {code} dividend")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} dividend failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for dividend {code}:\n" + "\n".join(errors))
+
+    def get_fund_flow_minute(self, code: str) -> list[dict]:
+        """Get minute-level fund flow."""
+        fetchers = self._filter_by_capability("csi", DataCapability.FUND_FLOW)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_fund_flow_minute(code)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {code} fund_flow_minute")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} fund_flow_minute failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for fund_flow_minute {code}:\n" + "\n".join(errors))
+
+    def get_fund_flow_120d(self, code: str) -> list[dict]:
+        """Get 120-day fund flow history."""
+        fetchers = self._filter_by_capability("csi", DataCapability.FUND_FLOW)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_fund_flow_120d(code)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {code} fund_flow_120d")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} fund_flow_120d failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for fund_flow_120d {code}:\n" + "\n".join(errors))
+
+    def get_hot_topics(self, date_str: str = "") -> list[dict]:
+        """Get hot topics."""
+        fetchers = self._filter_by_capability("csi", DataCapability.HOT_TOPICS)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_hot_topics(date_str)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for hot_topics")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} hot_topics failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for hot_topics:\n" + "\n".join(errors))
+
+    def get_north_flow(self) -> list[dict]:
+        """Get north-bound capital flow."""
+        fetchers = self._filter_by_capability("csi", DataCapability.NORTH_FLOW)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_north_flow()
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for north_flow")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} north_flow failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for north_flow:\n" + "\n".join(errors))
+
+    def get_reports(self, code: str, max_pages: int = 5) -> list[dict]:
+        """Get research reports."""
+        fetchers = self._filter_by_capability("csi", DataCapability.RESEARCH_REPORT)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_reports(code, max_pages)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {code} reports")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} reports failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for reports {code}:\n" + "\n".join(errors))
+
+    def get_announcements(self, code: str, page_size: int = 30) -> list[dict]:
+        """Get corporate announcements."""
+        fetchers = self._filter_by_capability("csi", DataCapability.ANNOUNCEMENT)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                result = fetcher.get_announcements(code, page_size)
+                if result is not None:
+                    logger.info(f"[Manager] {fetcher.name} succeeded for {code} announcements")
+                    return result
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} announcements failed: {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed for announcements {code}:\n" + "\n".join(errors))
+
     @property
     def available_fetchers(self) -> list[str]:
         """List available fetcher names."""
