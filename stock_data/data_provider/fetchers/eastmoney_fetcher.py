@@ -27,6 +27,8 @@ class EastMoneyFetcher(BaseFetcher):
 
     name = "EastMoneyFetcher"
     priority = 6
+    REPORT_API = "https://reportapi.eastmoney.com/report/list"
+    PDF_TPL = "https://pdf.dfcfw.com/pdf/H3_{info_code}_1.pdf"
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
         DataCapability.DRAGON_TIGER
@@ -35,6 +37,7 @@ class EastMoneyFetcher(BaseFetcher):
         | DataCapability.HOLDER_NUM
         | DataCapability.DIVIDEND
         | DataCapability.FUND_FLOW
+        | DataCapability.RESEARCH_REPORT
     )
 
     def is_available(self) -> bool:
@@ -372,3 +375,69 @@ class EastMoneyFetcher(BaseFetcher):
                     "super_net": float(parts[5]) if parts[5] != "-" else 0,
                 })
         return rows
+
+    # ------------------------------------------------------------------
+    # 研究报告 (Research Reports) - reportapi
+    # ------------------------------------------------------------------
+
+    def get_reports(self, code: str, max_pages: int = 5) -> list[dict]:
+        """Get research report list for a stock."""
+        code = normalize_stock_code(code)
+        session = requests.Session()
+        session.headers.update({"User-Agent": UA, "Referer": "https://data.eastmoney.com/"})
+        all_records = []
+        for page in range(1, max_pages + 1):
+            params = {
+                "industryCode": "*", "pageSize": "100", "industry": "*",
+                "rating": "*", "ratingChange": "*",
+                "beginTime": "2000-01-01", "endTime": "2030-01-01",
+                "pageNo": str(page), "fields": "", "qType": "0",
+                "orgCode": "", "code": code, "rcode": "",
+                "p": str(page), "pageNum": str(page), "pageNumber": str(page),
+            }
+            try:
+                r = session.get(self.REPORT_API, params=params, timeout=30)
+                d = r.json()
+                rows = d.get("data") or []
+                if not rows:
+                    break
+                all_records.extend(rows)
+                if page >= (d.get("TotalPage", 1) or 1):
+                    break
+            except Exception as e:
+                logger.warning(f"[EastMoneyFetcher] reports failed page {page}: {e}")
+                break
+        return [
+            {
+                "title": r.get("title", ""),
+                "publish_date": (r.get("publishDate") or "")[:10],
+                "org": r.get("orgSName", ""),
+                "info_code": r.get("infoCode", ""),
+                "rating": r.get("emRatingName", ""),
+                "predict_eps_this": r.get("predictThisYearEps"),
+                "predict_eps_next": r.get("predictNextYearEps"),
+                "predict_eps_next2": r.get("predictNextTwoYearEps"),
+            }
+            for r in all_records
+        ]
+
+    def get_report_pdf_url(self, info_code: str) -> str | None:
+        if not info_code:
+            return None
+        return self.PDF_TPL.format(info_code=info_code)
+
+    def download_report_pdf(self, info_code: str, target_dir: str = "./reports") -> str | None:
+        from pathlib import Path
+        url = self.get_report_pdf_url(info_code)
+        if not url:
+            return None
+        try:
+            r = requests.get(url, headers={"User-Agent": UA, "Referer": "https://data.eastmoney.com/"}, timeout=60)
+            if r.status_code == 200 and len(r.content) >= 1024:
+                target = Path(target_dir) / f"{info_code}.pdf"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(r.content)
+                return str(target)
+        except Exception as e:
+            logger.warning(f"[EastMoneyFetcher] PDF download failed: {e}")
+        return None
