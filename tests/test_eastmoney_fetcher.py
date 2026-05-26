@@ -141,3 +141,56 @@ class TestHistoricalNotSupported:
         f = EastMoneyFetcher()
         with pytest.raises(DataFetchError, match="does not support historical"):
             f._normalize_data(pd.DataFrame(), "600519")
+
+
+class TestSecid:
+    def setup_method(self):
+        self.fetcher = EastMoneyFetcher()
+
+    def test_secid_sh(self):
+        assert self.fetcher._secid("600519") == "1.600519"
+        assert self.fetcher._secid("688017") == "1.688017"
+
+    def test_secid_sz(self):
+        assert self.fetcher._secid("000001") == "0.000001"
+        assert self.fetcher._secid("300476") == "0.300476"
+
+
+class TestFundFlowMinute:
+    def setup_method(self):
+        self.fetcher = EastMoneyFetcher()
+
+    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
+    def test_returns_records(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "data": {"klines": ["09:30,1000,200,300,400,600"]}
+        }
+        mock_get.return_value = mock_response
+        result = self.fetcher.get_fund_flow_minute("600519")
+        assert len(result) == 1
+        assert result[0]["time"] == "09:30"
+        assert result[0]["main_net"] == 1000
+
+    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
+    def test_returns_empty_on_error(self, mock_get):
+        mock_get.side_effect = Exception("Network error")
+        result = self.fetcher.get_fund_flow_minute("600519")
+        assert result == []
+
+
+class TestFundFlow120d:
+    def setup_method(self):
+        self.fetcher = EastMoneyFetcher()
+
+    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
+    def test_returns_records(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "data": {"klines": ["2026-05-20,5000,1000,2000,3000,4000,6000,7000"]}
+        }
+        mock_get.return_value = mock_response
+        result = self.fetcher.get_fund_flow_120d("600519")
+        assert len(result) == 1
+        assert result[0]["date"] == "2026-05-20"
+        assert result[0]["main_net"] == 5000
