@@ -95,13 +95,19 @@ class AkshareFetcher(BaseFetcher):
         frequency: str = "d",
         adjust: str | None = None,
     ) -> pd.DataFrame:
-        """Fetch daily K-line data from Akshare (supports d/w/m for stocks and indices).
+        """Fetch K-line data from Akshare.
+
+        Supports:
+        - Daily/weekly/monthly for A-share stocks, A-share (CSI) indices, HK stocks
+        - Minute (1/5/15/30/60) for A-share stocks via ``stock_zh_a_hist_min_em``
+        - Minute (1/5/15/30/60) for CSI indices via ``index_zh_a_hist_min_em``
 
         Args:
             stock_code: Stock code
-            start_date: Start date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD); for minute freq, this is also the date
             end_date: End date (YYYY-MM-DD)
-            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线
+            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线,
+                       '1'/'5'/'15'/'30'/'60'=分钟线 (A-share stocks & CSI indices only)
             adjust: Adjustment type - None/''=不复权, 'qfq'=前复权, 'hfq'=后复权.
         """
         try:
@@ -114,17 +120,41 @@ class AkshareFetcher(BaseFetcher):
 
             logger.debug(f"[AkshareFetcher] Fetching {code} ({frequency})")
 
-            # Akshare period mapping
+            # Akshare period mapping (d/w/m only)
             period_map = {"d": "daily", "w": "weekly", "m": "monthly"}
             period = period_map.get(frequency, "daily")
-
-            # Minute frequencies not supported
-            if frequency in ("5", "15", "30", "60"):
-                raise DataFetchError("Akshare does not support minute frequency for indices")
-
-            # adjust is already mapped by _map_adjust
             adj_value = adjust or ""
 
+            # ----- Minute-frequency branch -----
+            if frequency in ("1", "5", "15", "30", "60"):
+                if is_hk:
+                    raise DataFetchError(
+                        f"Akshare does not support minute frequency for HK {stock_code}"
+                    )
+                if is_index and index_type != "csi":
+                    raise DataFetchError(
+                        f"Akshare does not support minute frequency for {index_type} index {stock_code}"
+                    )
+                # For minute data, start_date/end_date refer to a single trading day
+                # (the EM endpoints can't return long history). Use start_date as the
+                # trading day and the full trading session 09:30-15:00.
+                trade_day = start_date
+                start_dt = f"{trade_day} 09:30:00"
+                end_dt = f"{trade_day} 15:00:00"
+                if is_index:
+                    df = ak.index_zh_a_hist_min_em(
+                        symbol=code, period=frequency, start_date=start_dt, end_date=end_dt
+                    )
+                else:
+                    df = ak.stock_zh_a_hist_min_em(
+                        symbol=code, period=frequency, start_date=start_dt, end_date=end_dt,
+                        adjust=adj_value,
+                    )
+                if df is None or df.empty:
+                    raise DataFetchError(f"Akshare returned no minute data for {stock_code}")
+                return self._normalize_intraday_minute(df, stock_code)
+
+            # ----- Daily/weekly/monthly branch -----
             if is_index and index_type == "us":
                 # US indices via index_us_stock_sina (.IXIC, .INX, .DJI, etc.)
                 df = ak.index_us_stock_sina(symbol=code)
@@ -170,6 +200,28 @@ class AkshareFetcher(BaseFetcher):
             raise DataFetchError("akshare not installed") from None
         except Exception as e:
             raise DataFetchError(f"AkshareFetcher fetch failed: {e}") from e
+
+    def _normalize_intraday_minute(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
+        """Normalize raw minute DataFrame (from stock_zh_a_hist_min_em /
+        index_zh_a_hist_min_em) to the standard intraday columns.
+
+        Raw columns (中文): 时间, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 均价
+        Standard columns: time, open, high, low, close, volume, amount
+        """
+        rename = {
+            "时间": "time",
+            "开盘": "open",
+            "最高": "high",
+            "最低": "low",
+            "收盘": "close",
+            "成交量": "volume",
+            "成交额": "amount",
+        }
+        out = df.rename(columns=rename)
+        for col in ("time", "open", "high", "low", "close", "volume", "amount"):
+            if col not in out.columns:
+                out[col] = None
+        return out[["time", "open", "high", "low", "close", "volume", "amount"]]
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """Normalize Akshare data to standard columns."""

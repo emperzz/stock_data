@@ -29,7 +29,20 @@ class TestHealthCheck:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
-        assert "available_sources" in data
+        # New schema: `sources` is None unless ?details=true
+        assert "sources" in data
+        assert data["sources"] is None
+
+    def test_health_with_details_returns_sources(self, client):
+        response = client.get("/api/v1/health?details=true")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] in ("ok", "degraded", "unhealthy")
+        assert isinstance(data["sources"], list)
+        for s in data["sources"]:
+            assert "name" in s
+            assert "state" in s
+            assert "available" in s
 
 
 class TestListIndices:

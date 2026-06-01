@@ -736,6 +736,36 @@ class DataFetcherManager:
                 continue
         raise DataFetchError(f"All fetchers failed for announcements {code}:\n" + "\n".join(errors))
 
+    def get_report_pdf(self, report_id: str) -> tuple[str, str]:
+        """Resolve a research report PDF via capability-based routing.
+
+        Returns ``(download_path, url)``. Routes through every fetcher that
+        declares ``RESEARCH_REPORT`` capability, calling ``download_report_pdf``
+        on each until one returns a non-None path. The URL is recovered from
+        the same fetcher.
+
+        Raises:
+            DataFetchError: when no fetcher can serve the PDF.
+        """
+        fetchers = self._filter_by_capability("csi", DataCapability.RESEARCH_REPORT)
+        errors = []
+        for fetcher in fetchers:
+            try:
+                path = fetcher.download_report_pdf(report_id)
+                if path is not None:
+                    url = fetcher.get_report_pdf_url(report_id) or ""
+                    logger.info(
+                        f"[Manager] {fetcher.name} served report PDF {report_id} -> {path}"
+                    )
+                    return path, url
+            except Exception as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(f"[Manager] {fetcher.name} report_pdf({report_id}) failed: {e}")
+                continue
+        raise DataFetchError(
+            f"All fetchers failed for report_pdf {report_id}:\n" + "\n".join(errors) or "(none)"
+        )
+
     @property
     def available_fetchers(self) -> list[str]:
         """List available fetcher names."""

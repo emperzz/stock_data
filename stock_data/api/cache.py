@@ -53,7 +53,8 @@ _margin_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_MARGIN)
 _block_trade_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_BLOCK_TRADE)
 _holder_num_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_HOLDER_NUM)
 _dividend_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_DIVIDEND)
-_fund_flow_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_FUND_FLOW)
+_fund_flow_minute_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_FUND_FLOW)
+_fund_flow_daily_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_FUND_FLOW)
 _hot_topics_cache: TTLCache = TTLCache(maxsize=128, ttl=_TTL_HOT_TOPICS)
 _north_flow_cache: TTLCache = TTLCache(maxsize=64, ttl=_TTL_NORTH_FLOW)
 _reports_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_REPORTS)
@@ -115,7 +116,13 @@ def get_dividend_cache() -> TTLCache:
 
 
 def get_fund_flow_cache() -> TTLCache:
-    return _fund_flow_cache
+    """Cache for minute-level fund flow (one entry per stock_code)."""
+    return _fund_flow_minute_cache
+
+
+def get_fund_flow_daily_cache() -> TTLCache:
+    """Cache for 120-day daily fund flow (one entry per stock_code)."""
+    return _fund_flow_daily_cache
 
 
 def get_hot_topics_cache() -> TTLCache:
@@ -251,3 +258,30 @@ def make_pools_cache_key(pool_type: str, date: str | None) -> str:
 
 def is_cache_enabled() -> bool:
     return _ENABLE_CACHE
+
+
+def cached_lookup(cache_fn, key: str, hit_label: str) -> object | None:
+    """Read-side helper: return cached value if present, else None.
+
+    Centralises the is_cache_enabled + cache-in + logger pattern that the route
+    handlers used to inline 13+ times. Use with ``cached_store()`` at write
+    time to keep cache writes explicit and visible at the call site.
+    """
+    if not _ENABLE_CACHE:
+        return None
+    cache = cache_fn()
+    if key in cache:
+        logger.info(f"[APICache] {hit_label} hit: {key}")
+        return cache[key]
+    return None
+
+
+def cached_store(cache_fn, key: str, value: object) -> None:
+    """Write-side helper: store ``value`` at ``key`` in the cache returned by
+    ``cache_fn``. No-op when caching is disabled, so callers don't have to
+    wrap the call in ``is_cache_enabled()``.
+    """
+    if not _ENABLE_CACHE:
+        return
+    cache = cache_fn()
+    cache[key] = value

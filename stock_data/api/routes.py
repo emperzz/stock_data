@@ -11,8 +11,8 @@ from ..data_provider import (
     AkshareFetcher,
     BaostockFetcher,
     CninfoFetcher,
-    DataFetcherManager,
     DataFetchError,
+    DataFetcherManager,
     EastMoneyFetcher,
     TencentFetcher,
     ThsFetcher,
@@ -37,6 +37,7 @@ from .cache import (
     get_dividend_cache,
     get_dragontiger_cache,
     get_fund_flow_cache,
+    get_fund_flow_daily_cache,
     get_history_cache,
     get_holder_num_cache,
     get_hot_topics_cache,
@@ -48,6 +49,8 @@ from .cache import (
     get_quote_cache,
     get_reports_cache,
     get_stock_intraday_cache,
+    cached_lookup,
+    cached_store,
     is_cache_enabled,
     make_announcements_cache_key,
     make_block_trade_cache_key,
@@ -215,34 +218,33 @@ def health_check(details: bool = False) -> HealthResponse:
 
     Lightweight mode (default): returns overall status for k8s/lb probes.
     Detailed mode (?details=true): returns per-source circuit breaker state for AI agents.
+
+    Both modes are READ-ONLY — they use ``CircuitBreaker.snapshot_state()`` which does
+    not transition states or consume half-open probe budgets, so frequent probes
+    cannot starve real fetches.
     """
     manager = get_manager()
-
-    # Collect circuit breaker states from the single global CB
     cb = get_realtime_circuit_breaker()
     source_states: list[SourceHealth] = []
     any_available = False
 
     for fetcher in manager.fetchers:
-        with cb._lock:
-            state = cb._get_state(fetcher.name)
-            is_available = cb.is_available(fetcher.name)
-            if is_available:
-                any_available = True
-            last_success = state.get("last_success_time")
-            last_failure = state.get("last_failure_time") if state.get("last_failure_time", 0) > 0 else None
-            source_states.append(SourceHealth(
-                name=fetcher.name,
-                state=state["state"],
-                available=is_available,
-                last_success_time=last_success if last_success and last_success > 0 else None,
-                last_failure_time=last_failure,
-                failure_count=state["failures"],
-            ))
+        snap = cb.snapshot_state(fetcher.name)
+        if snap["available"]:
+            any_available = True
+        last_success = snap["last_success_time"] if snap["last_success_time"] > 0 else None
+        last_failure = snap["last_failure_time"] if snap["last_failure_time"] > 0 else None
+        source_states.append(SourceHealth(
+            name=fetcher.name,
+            state=snap["state"],
+            available=snap["available"],
+            last_success_time=last_success,
+            last_failure_time=last_failure,
+            failure_count=snap["failures"],
+        ))
 
-    # Compute overall status
     if any_available:
-        open_count = sum(1 for s in source_states if s.state == "open" or s.state == "half_open")
+        open_count = sum(1 for s in source_states if s.state in ("open", "half_open"))
         status = "degraded" if open_count > 0 else "ok"
     else:
         status = "unhealthy"
@@ -1161,11 +1163,10 @@ def get_pools(
     """
     try:
         if is_cache_enabled():
-            cache = get_pools_cache()
-            key = make_pools_cache_key(type, date)
-            if key in cache:
-                logger.info(f"[APICache] pools hit: {key}")
-                return cache[key]
+            cache_key = make_pools_cache_key(type, date)
+            hit = cached_lookup(get_pools_cache, cache_key, "pools")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         stocks = manager.get_zt_pool(pool_type=type, date=date, refresh=refresh)
@@ -1206,9 +1207,7 @@ def get_pools(
             stocks=pool_stocks,
         )
 
-        if is_cache_enabled():
-            cache[key] = result
-
+        cached_store(get_pools_cache, cache_key, result)
         return result
 
     except DataFetchError as e:
@@ -1242,11 +1241,10 @@ def get_dragon_tiger(
 ) -> DragonTigerResponse:
     try:
         if is_cache_enabled():
-            cache = get_dragontiger_cache()
-            key = make_dragon_tiger_cache_key(stock_code, trade_date, look_back)
-            if key in cache:
-                logger.info(f"[APICache] dragontiger hit: {key}")
-                return cache[key]
+            cache_key = make_dragon_tiger_cache_key(stock_code, trade_date, look_back)
+            hit = cached_lookup(get_dragontiger_cache, cache_key, "dragontiger")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_dragon_tiger(stock_code, trade_date, look_back)
@@ -1264,8 +1262,7 @@ def get_dragon_tiger(
             seats=seats,
             institution=DragonTigerInstitution(**data.get("institution", {})),
         )
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_dragontiger_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Dragon tiger data unavailable: {e}")
@@ -1295,18 +1292,16 @@ def get_daily_dragon_tiger(
 ) -> DailyDragonTigerResponse:
     try:
         if is_cache_enabled():
-            cache = get_dragontiger_cache()
-            key = make_daily_dragon_tiger_cache_key(trade_date, min_net_buy)
-            if key in cache:
-                logger.info(f"[APICache] daily_dragon_tiger hit: {key}")
-                return cache[key]
+            cache_key = make_daily_dragon_tiger_cache_key(trade_date, min_net_buy)
+            hit = cached_lookup(get_dragontiger_cache, cache_key, "daily_dragon_tiger")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_daily_dragon_tiger(trade_date, min_net_buy)
         stocks = [DailyDragonTigerStock(**s) for s in data["stocks"]]
         result = DailyDragonTigerResponse(date=data["date"], total=data["total"], stocks=stocks)
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_dragontiger_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Daily dragon tiger unavailable: {e}")
@@ -1336,19 +1331,17 @@ def get_margin(
 ) -> MarginTradingResponse:
     try:
         if is_cache_enabled():
-            cache = get_margin_cache()
-            key = make_margin_cache_key(stock_code, page_size)
-            if key in cache:
-                logger.info(f"[APICache] margin hit: {key}")
-                return cache[key]
+            cache_key = make_margin_cache_key(stock_code, page_size)
+            hit = cached_lookup(get_margin_cache, cache_key, "margin")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_margin_trading(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [MarginTradingRecord(**r) for r in data]
         result = MarginTradingResponse(code=stock_code, name=stock_name or "", records=records)
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_margin_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Margin trading unavailable: {e}")
@@ -1378,11 +1371,10 @@ def get_block_trade(
 ) -> BlockTradeResponse:
     try:
         if is_cache_enabled():
-            cache = get_block_trade_cache()
-            key = make_block_trade_cache_key(stock_code, page_size)
-            if key in cache:
-                logger.info(f"[APICache] block_trade hit: {key}")
-                return cache[key]
+            cache_key = make_block_trade_cache_key(stock_code, page_size)
+            hit = cached_lookup(get_block_trade_cache, cache_key, "block_trade")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_block_trade(stock_code, page_size)
@@ -1391,8 +1383,7 @@ def get_block_trade(
         result = BlockTradeResponse(
             code=stock_code, name=stock_name or "", records=records, total=len(records)
         )
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_block_trade_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Block trade unavailable: {e}")
@@ -1422,19 +1413,17 @@ def get_holder_num(
 ) -> HolderNumResponse:
     try:
         if is_cache_enabled():
-            cache = get_holder_num_cache()
-            key = make_holder_num_cache_key(stock_code, page_size)
-            if key in cache:
-                logger.info(f"[APICache] holder_num hit: {key}")
-                return cache[key]
+            cache_key = make_holder_num_cache_key(stock_code, page_size)
+            hit = cached_lookup(get_holder_num_cache, cache_key, "holder_num")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_holder_num_change(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [HolderNumRecord(**r) for r in data]
         result = HolderNumResponse(code=stock_code, name=stock_name or "", records=records)
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_holder_num_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Holder num unavailable: {e}")
@@ -1464,19 +1453,17 @@ def get_dividend(
 ) -> DividendResponse:
     try:
         if is_cache_enabled():
-            cache = get_dividend_cache()
-            key = make_dividend_cache_key(stock_code, page_size)
-            if key in cache:
-                logger.info(f"[APICache] dividend hit: {key}")
-                return cache[key]
+            cache_key = make_dividend_cache_key(stock_code, page_size)
+            hit = cached_lookup(get_dividend_cache, cache_key, "dividend")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_dividend(stock_code, page_size)
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
         records = [DividendRecord(**r) for r in data]
         result = DividendResponse(code=stock_code, name=stock_name or "", records=records)
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_dividend_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Dividend unavailable: {e}")
@@ -1504,11 +1491,10 @@ def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get minute-level capital flow for a stock."""
     try:
         if is_cache_enabled():
-            cache = get_fund_flow_cache()
-            key = make_fund_flow_cache_key(stock_code)
-            if key in cache:
-                logger.info(f"[APICache] fund_flow hit: {key}")
-                return cache[key]
+            cache_key = make_fund_flow_cache_key(stock_code)
+            hit = cached_lookup(get_fund_flow_cache, cache_key, "fund_flow")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_fund_flow_minute(stock_code)
@@ -1517,8 +1503,7 @@ def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
         result = FundFlowResponse(
             code=stock_code, name=stock_name or "", type="minute", records=records
         )
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_fund_flow_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Fund flow unavailable: {e}")
@@ -1546,11 +1531,10 @@ def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowRespon
     """Get 120-day capital flow history for a stock."""
     try:
         if is_cache_enabled():
-            cache = get_fund_flow_cache()
-            key = make_fund_flow_daily_cache_key(stock_code)
-            if key in cache:
-                logger.info(f"[APICache] fund_flow_daily hit: {key}")
-                return cache[key]
+            cache_key = make_fund_flow_daily_cache_key(stock_code)
+            hit = cached_lookup(get_fund_flow_daily_cache, cache_key, "fund_flow_daily")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_fund_flow_120d(stock_code)
@@ -1559,8 +1543,7 @@ def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowRespon
         result = FundFlowResponse(
             code=stock_code, name=stock_name or "", type="daily", records=records
         )
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_fund_flow_daily_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Fund flow daily unavailable: {e}")
@@ -1590,21 +1573,17 @@ def get_hot_topics(
     """Get daily hot stocks with reason tags."""
     try:
         if is_cache_enabled():
-            cache = get_hot_topics_cache()
-            key = make_hot_topics_cache_key(date)
-            if key in cache:
-                logger.info(f"[APICache] hot_topics hit: {key}")
-                return cache[key]
-
-        from datetime import datetime
+            cache_key = make_hot_topics_cache_key(date)
+            hit = cached_lookup(get_hot_topics_cache, cache_key, "hot_topics")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_hot_topics(date)
         topics = [HotTopicRecord(**r) for r in data]
         actual_date = date or datetime.now().strftime("%Y-%m-%d")
         result = HotTopicResponse(date=actual_date, total=len(topics), topics=topics)
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_hot_topics_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Hot topics unavailable: {e}")
@@ -1632,18 +1611,16 @@ def get_north_flow() -> NorthFlowResponse:
     """Get north-bound capital flow (minute-level)."""
     try:
         if is_cache_enabled():
-            cache = get_north_flow_cache()
-            key = make_north_flow_cache_key()
-            if key in cache:
-                logger.info(f"[APICache] north_flow hit: {key}")
-                return cache[key]
+            cache_key = make_north_flow_cache_key()
+            hit = cached_lookup(get_north_flow_cache, cache_key, "north_flow")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_north_flow()
         records = [NorthFlowRecord(**r) for r in data]
         result = NorthFlowResponse(records=records)
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_north_flow_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"North flow unavailable: {e}")
@@ -1674,11 +1651,10 @@ def get_reports(
     """Get research reports for a stock."""
     try:
         if is_cache_enabled():
-            cache = get_reports_cache()
-            key = make_reports_cache_key(stock_code, max_pages)
-            if key in cache:
-                logger.info(f"[APICache] reports hit: {key}")
-                return cache[key]
+            cache_key = make_reports_cache_key(stock_code, max_pages)
+            hit = cached_lookup(get_reports_cache, cache_key, "reports")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_reports(stock_code, max_pages)
@@ -1687,8 +1663,7 @@ def get_reports(
         result = ReportResponse(
             code=stock_code, name=stock_name or "", reports=reports, total=len(reports)
         )
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_reports_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Reports unavailable: {e}")
@@ -1719,11 +1694,7 @@ def get_report_pdf(
     """Download a research report PDF. Returns local file path."""
     try:
         manager = get_manager()
-        fetcher = manager.get_fetcher("EastMoneyFetcher")
-        if not fetcher:
-            raise HTTPException(status_code=503, detail={"error": "unavailable"})
-        url = fetcher.get_report_pdf_url(report_id)
-        path = fetcher.download_report_pdf(report_id)
+        path, url = manager.get_report_pdf(report_id)
         return ReportPDFResponse(report_id=report_id, download_path=path, url=url)
     except HTTPException:
         raise
@@ -1749,11 +1720,10 @@ def get_announcements(
     """Get corporate announcements for a stock."""
     try:
         if is_cache_enabled():
-            cache = get_announcements_cache()
-            key = make_announcements_cache_key(stock_code, page_size)
-            if key in cache:
-                logger.info(f"[APICache] announcements hit: {key}")
-                return cache[key]
+            cache_key = make_announcements_cache_key(stock_code, page_size)
+            hit = cached_lookup(get_announcements_cache, cache_key, "announcements")
+            if hit is not None:
+                return hit
 
         manager = get_manager()
         data = manager.get_announcements(stock_code, page_size)
@@ -1765,8 +1735,7 @@ def get_announcements(
             announcements=announcements,
             total=len(announcements),
         )
-        if is_cache_enabled():
-            cache[key] = result
+        cached_store(get_announcements_cache, cache_key, result)
         return result
     except DataFetchError as e:
         logger.warning(f"Announcements unavailable: {e}")

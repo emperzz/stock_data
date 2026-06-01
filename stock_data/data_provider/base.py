@@ -317,6 +317,22 @@ class BaseFetcher(ABC):
         """
         return None
 
+    def get_report_pdf_url(self, report_id: str) -> str | None:
+        """Return the canonical PDF URL for ``report_id``, or None if unsupported.
+
+        Subclasses that serve research report PDFs override this and
+        ``download_report_pdf``. The base implementation returns None so
+        ``_filter_by_capability`` callers can transparently skip fetchers
+        that don't serve PDFs.
+        """
+        return None
+
+    def download_report_pdf(self, report_id: str) -> str | None:
+        """Download the PDF for ``report_id`` to a local cache. Returns the
+        local file path, or None if unsupported / download failed.
+        """
+        return None
+
 
 # Backward-compatible re-export of DataFetcherManager (now in .manager)
 from .manager import DataFetcherManager  # noqa: E402, F401

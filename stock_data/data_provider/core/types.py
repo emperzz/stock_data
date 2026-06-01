@@ -166,7 +166,8 @@ class CircuitBreaker:
         return self._states[source]
 
     def is_available(self, source: str) -> bool:
-        """Check if source can be called."""
+        """Check if source can be called. Has side effects — increments counters and may
+        transition OPEN→HALF_OPEN. Use ``snapshot_state()`` for read-only inspection."""
         with self._lock:
             state = self._get_state(source)
             now = time.time()
@@ -196,6 +197,47 @@ class CircuitBreaker:
                 return False
 
             return True
+
+    def snapshot_state(self, source: str) -> dict:
+        """Read-only snapshot of a source's state. Safe to call from health probes —
+        does NOT transition states or increment counters, unlike ``is_available()``.
+
+        Returns a dict with keys: state, available, failures, last_success_time,
+        last_failure_time. ``available`` reflects what ``is_available()`` would
+        return WITHOUT applying its side effects.
+        """
+        with self._lock:
+            state = self._get_state(source)
+            now = time.time()
+            current_state = state["state"]
+            last_failure = state["last_failure_time"]
+
+            # Mirror is_available()'s state-transition logic but DON'T mutate.
+            if current_state == self.OPEN:
+                elapsed = now - last_failure
+                if elapsed >= self.cooldown_seconds:
+                    current_state = self.HALF_OPEN
+                    # Probe budget not consumed yet — would be available.
+                    available = True
+                else:
+                    available = False
+            elif current_state == self.HALF_OPEN:
+                # If budget exhausted, would block (no transition here).
+                if state["half_open_calls"] < self.half_open_max_calls:
+                    available = True
+                else:
+                    elapsed = now - last_failure
+                    available = elapsed >= self.cooldown_seconds
+            else:  # CLOSED
+                available = True
+
+            return {
+                "state": current_state,
+                "available": available,
+                "failures": state["failures"],
+                "last_success_time": state["last_success_time"],
+                "last_failure_time": last_failure,
+            }
 
     def record_success(self, source: str) -> None:
         """Record successful call."""
