@@ -2,6 +2,11 @@
 
 A local stock data aggregation server that integrates multiple upstream APIs into a unified REST API for AI agents.
 
+**Two layers in one server:**
+
+- **Data layer** — aggregates 9 upstream APIs (Tushare / Baostock / Akshare / Yfinance / Zhitu / Tencent / EastMoney / THS / Cninfo) with priority-based failover, circuit breaker, and persistent cache.
+- **Compute layer** — 14 technical indicators (MA / MACD / BOLL / KDJ / RSI / WR / BIAS / CCI / ATR / OBV / ROC / DMI / SAR / KC) attached to K-line via `?indicators=...`. Pure-compute, no upstream calls.
+
 ## Features
 
 - **Multi-source aggregation**: Tushare, Baostock, Akshare, Yfinance, Zhitu, Tencent, EastMoney, THS, Cninfo
@@ -12,6 +17,7 @@ A local stock data aggregation server that integrates multiple upstream APIs int
 - **Enhanced quotes**: PE/PB/市值/涨跌停价 via Tencent财经
 - **Signal layer**: 龙虎榜/融资融券/大宗交易/股东户数/分红/资金流/热点题材/北向资金
 - **Fundamentals**: 研报检索+PDF下载 / 公告检索
+- **Technical indicators** (pure compute, 14 built-in): MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC — attach to K-line via `?indicators=ma,macd,kdj`
 
 ## Quick Start
 
@@ -28,6 +34,16 @@ python -m stock_data.server
 
 # Or with uvicorn directly
 uvicorn stock_data.server:app --host 0.0.0.0 --port 8888
+```
+
+**One-liner with technical indicators:**
+
+```bash
+# K-line + MACD + KDJ + BOLL
+curl 'http://localhost:8888/api/v1/stocks/600519/history?days=120&indicators=macd,kdj,boll'
+
+# What indicators are available?
+curl 'http://localhost:8888/api/v1/indicators/catalog'
 ```
 
 ## API Endpoints
@@ -48,7 +64,173 @@ Response:
 
 ---
 
-### Get Historical K-line Data
+### Technical Indicators
+
+The server ships with 14 pure-compute technical indicators. They are
+attached to the K-line response via `?indicators=...` on
+`/stocks/{code}/history` and never hit the network — they transform the
+K-line `DataFrame` in-process.
+
+#### List available indicators
+
+```bash
+GET /api/v1/indicators/catalog
+```
+
+**Response:**
+```json
+{
+  "indicators": [
+    {
+      "key": "ma",
+      "input_shape": "closes",
+      "default_options": {"periods": [5, 10, 20, 30, 60], "type": "sma"},
+      "output_columns": ["ma5", "ma10", "ma20", "ma30", "ma60"],
+      "default_lookback": 60
+    },
+    {
+      "key": "macd",
+      "input_shape": "closes",
+      "default_options": {"short": 12, "long": 26, "signal": 9},
+      "output_columns": ["macd_dif", "macd_dea", "macd_hist"],
+      "default_lookback": 87
+    },
+    {
+      "key": "kdj",
+      "input_shape": "ohlcv",
+      "default_options": {"period": 9, "kPeriod": 3, "dPeriod": 3},
+      "output_columns": ["kdj_k", "kdj_d", "kdj_j"],
+      "default_lookback": 18
+    }
+    /* ...11 more... */
+  ]
+}
+```
+
+Use the catalog for capability discovery — AI agents can introspect
+what's available without reading source.
+
+#### Attach indicators to K-line
+
+```bash
+GET /api/v1/stocks/600519/history?days=120&indicators=ma,macd,kdj,boll,rsi
+```
+
+**Supported indicators** (with their default `output_columns`):
+
+| Key | Type | Inputs | Output columns | Lookback |
+|-----|------|--------|----------------|----------|
+| `ma` | SMA/EMA/WMA | closes | `ma5, ma10, ma20, ma30, ma60` | 60 |
+| `macd` | 12/26/9 EMA diff | closes | `macd_dif, macd_dea, macd_hist` | 87 |
+| `boll` | Bollinger Bands | closes | `boll_mid, boll_upper, boll_lower, boll_bandwidth` | 20 |
+| `kdj` | Stochastic | ohlcv | `kdj_k, kdj_d, kdj_j` | 18 |
+| `rsi` | Wilder's RSI | closes | `rsi_6, rsi_12, rsi_24` | 48 |
+| `wr` | Williams %R | ohlcv | `wr_6, wr_10` | 10 |
+| `bias` | 乖离率 | closes | `bias_6, bias_12, bias_24` | 24 |
+| `cci` | Commodity Channel | ohlcv | `cci` | 28 |
+| `atr` | Average True Range | ohlcv | `atr, tr` | 28 |
+| `obv` | On-Balance Volume | ohlcv | `obv, obv_ma` | 1 |
+| `roc` | Rate of Change | closes | `roc, roc_signal` | 12 |
+| `dmi` | Directional Movement | ohlcv | `dmi_pdi, dmi_mdi, dmi_adx, dmi_adxr` | 56 |
+| `sar` | Parabolic SAR | ohlcv | `sar, sar_trend, sar_ep, sar_af` | 5 |
+| `kc` | Keltner Channel | ohlcv | `kc_mid, kc_upper, kc_lower, kc_width` | 60 |
+
+**Per-bar `indicators` field** is `null` for any bar where the
+indicator is not yet defined (insufficient lookback, NaN in input, or
+range collapses to zero). For example, `macd_dif` first appears on
+the 26th bar; `macd_dea` (signal line) only after 26+9 bars; `kdj_*`
+only after 9 bars.
+
+#### Auto lookback expansion
+
+The server fetches extra K-line bars automatically so the indicators
+have enough history to warm up, then truncates the response back to
+the `days` you asked for. You don't need to pre-compute a larger
+`days` value — just ask for what you want displayed.
+
+**Example**: `?days=30&indicators=macd` triggers an internal fetch of
+`max(30, 87) = 87` bars, runs MACD over all 87, then slices the last
+30 rows for the response.
+
+---
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | string | `daily` | K-line period: `daily`, `weekly`, `monthly` |
+| `days` | int | 30 | Number of days to retrieve (1-365, ignored when `start_date` provided) |
+| `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` parameter |
+| `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
+| `adjust` | string | `` | Adjustment type: empty=不复权, `qfq`=前复权, `hfq`=后复权 |
+| `indicators` | string | null | Comma-separated list of technical indicators to attach (see [Technical Indicators](#technical-indicators)) |
+
+**Response (without `indicators`):**
+```json
+{
+  "stock_code": "600519",
+  "stock_name": "贵州茅台",
+  "period": "daily",
+  "data": [
+    {
+      "date": "2026-05-06",
+      "open": 1680.0,
+      "high": 1700.0,
+      "low": 1670.0,
+      "close": 1698.0,
+      "volume": 1234567,
+      "amount": 2087654321.0,
+      "change_percent": 1.52,
+      "ma5": null,
+      "ma10": null,
+      "ma20": null,
+      "indicators": {}
+    }
+  ]
+}
+```
+
+> **Note:** `ma5`/`ma10`/`ma20` are always `null` unless you opt in by
+> adding `?indicators=ma` (or any indicator that produces them). The
+> legacy "always-on" inline MA computation was removed in favour of
+> the explicit `?indicators=` pattern.
+
+**Response (with `?indicators=ma,macd,kdj,boll`):**
+```json
+{
+  "stock_code": "600519",
+  "stock_name": "贵州茅台",
+  "period": "daily",
+  "data": [
+    {
+      "date": "2026-05-26",
+      "open": 1698.0,
+      "high": 1712.0,
+      "low": 1695.0,
+      "close": 1708.0,
+      "volume": 1234567,
+      "amount": 2100000000.0,
+      "change_percent": 0.59,
+      "ma5": 1701.0,
+      "ma10": 1695.0,
+      "ma20": 1678.0,
+      "indicators": {
+        "ma5": 1701.0, "ma10": 1695.0, "ma20": 1678.0, "ma30": 1665.0, "ma60": 1640.0,
+        "macd_dif": 5.32, "macd_dea": 4.18, "macd_hist": 2.28,
+        "kdj_k": 72.5, "kdj_d": 65.1, "kdj_j": 87.3,
+        "boll_mid": 1695.0, "boll_upper": 1720.5, "boll_lower": 1669.5, "boll_bandwidth": 3.01
+      }
+    }
+  ]
+}
+```
+
+The server automatically fetches extra lookback bars when the
+indicators need it (e.g. MACD needs ~87 bars to warm up) and then
+truncates the response to the `days` you asked for.
+
+---
+
+### Get Historical K-line Data (without indicators)
 
 ```bash
 GET /api/v1/stocks/{code}/history?period=daily&days=30
@@ -62,6 +244,7 @@ GET /api/v1/stocks/{code}/history?period=daily&days=30
 | `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` parameter |
 | `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
 | `adjust` | string | `` | Adjustment type: empty=不复权, `qfq`=前复权, `hfq`=后复权 |
+| `indicators` | string | null | Comma-separated list of technical indicators to attach (see [Technical Indicators](#technical-indicators)) |
 
 **Response:**
 ```json
@@ -79,13 +262,22 @@ GET /api/v1/stocks/{code}/history?period=daily&days=30
       "volume": 1234567,
       "amount": 2087654321.0,
       "change_percent": 1.52,
-      "ma5": 1690.0,
-      "ma10": 1685.0,
-      "ma20": 1678.0
+      "ma5": null,
+      "ma10": null,
+      "ma20": null,
+      "indicators": {}
     }
   ]
 }
 ```
+
+> **Note:** `ma5`/`ma10`/`ma20` are always `null` unless you opt in by
+> adding `?indicators=ma` (or any indicator that produces them). The
+> legacy "always-on" inline MA computation was removed in favour of
+> the explicit `?indicators=` pattern.
+>
+> For a fully-loaded example response (with indicators), see the
+> [Technical Indicators](#technical-indicators) section above.
 
 ---
 
