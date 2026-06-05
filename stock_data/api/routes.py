@@ -20,6 +20,8 @@ from ..data_provider import (
     YfinanceFetcher,
     ZhituFetcher,
 )
+from ..data_provider.indicators import IndicatorService, INDICATOR_REGISTRY
+from ..data_provider.indicators.types import IndicatorKey
 from ..data_provider.cache import api_cache as stock_cache
 from ..data_provider.cache import stock_board_cache
 from ..data_provider.fetchers.index_symbols import get_all_indices
@@ -106,6 +108,8 @@ from .schemas import (
     IndexInfo,
     IndexIntradayResponse,
     IndexQuote,
+    IndicatorCatalogEntry,
+    IndicatorCatalogResponse,
     IntradayData,
     IntradayResponse,
     KLineData,
@@ -368,9 +372,18 @@ def get_history(
         pattern="^(qfq|hfq)?$",
         description="Adjustment type: empty=不复权, qfq=前复权, hfq=后复权",
     ),
+    indicators: str | None = Query(
+        default=None,
+        description=(
+            "Comma-separated list of technical indicators to compute on the K-line. "
+            "Supported: ma, macd, boll, kdj, rsi, wr, bias, cci, atr, obv, "
+            "roc, dmi, sar, kc. The 'ma' indicator always returns ma5/10/20/30/60 "
+            "with default options. Use /indicators/catalog for details."
+        ),
+    ),
 ) -> StockHistoryResponse:
     """
-    Get historical K-line data for a stock.
+    Get historical K-line data for a stock, optionally with technical indicators.
 
     Args:
         stock_code: Stock code
@@ -379,6 +392,7 @@ def get_history(
         start_date: Start date (YYYY-MM-DD), overrides days parameter
         end_date: End date (YYYY-MM-DD), defaults to today
         adjust: Adjustment type - empty=不复权, qfq=前复权, hfq=后复权
+        indicators: Comma-separated indicator names, e.g. "ma,macd,kdj"
 
     Note:
         Index codes are not supported. Use /indices/{index_code}/history instead.
@@ -399,11 +413,34 @@ def get_history(
         # adjust is passed as-is to manager, which maps it per-provider
         adj_value = adjust or None
 
-        # Cache key includes all params including adjust
+        # Parse indicators param
+        requested_indicators: list[str] = []
+        if indicators:
+            for raw in indicators.split(","):
+                key = raw.strip()
+                if not key:
+                    continue
+                try:
+                    IndicatorKey(key)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "invalid_indicator",
+                            "message": (
+                                f"Unknown indicator: {key!r}. "
+                                "See /indicators/catalog for the list of supported indicators."
+                            ),
+                        },
+                    ) from None
+                if key not in requested_indicators:
+                    requested_indicators.append(key)
+
+        # Cache key includes all params including adjust + indicators
         if is_cache_enabled():
             cache = get_history_cache(frequency)
             key = make_history_cache_key(
-                stock_code, frequency, days, start_date, end_date, adj_value
+                stock_code, frequency, days, start_date, end_date, adj_value, requested_indicators
             )
             if key in cache:
                 logger.info(f"[APICache] history hit: {key}")
@@ -411,14 +448,30 @@ def get_history(
 
         manager = get_manager()
 
+        # If indicators are requested, fetch enough history to warm them up
+        actual_days = days
+        if requested_indicators:
+            indicator_service = IndicatorService()
+            extra_lookback = indicator_service.estimate_lookback(requested_indicators)
+            if extra_lookback > 0:
+                actual_days = max(days, extra_lookback)
+
         df, source = manager.get_kline_data(
             stock_code,
             start_date=start_date,
             end_date=end_date,
-            days=days,
+            days=actual_days,
             frequency=frequency,
             adjust=adj_value,
         )
+
+        # Compute indicators (if any) and merge into the DataFrame
+        if requested_indicators:
+            indicator_service = IndicatorService()
+            df = indicator_service.compute(df, requested_indicators)
+            # Truncate back to the user-requested bar count (keep the most recent `days` rows)
+            if actual_days > days and len(df) > days:
+                df = df.tail(days).reset_index(drop=True)
 
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
 
@@ -443,9 +496,24 @@ def get_history(
                 change_percent=float(row.get("pct_chg"))
                 if row.get("pct_chg") is not None
                 else None,
-                ma5=float(row.get("ma5")) if row.get("ma5") is not None else None,
-                ma10=float(row.get("ma10")) if row.get("ma10") is not None else None,
-                ma20=float(row.get("ma20")) if row.get("ma20") is not None else None,
+                # Backwards-compat: surface ma5/ma10/ma20 from the indicators dict
+                # if the user requested `ma` and these columns were emitted.
+                ma5=(
+                    float((row.get("indicators") or {}).get("ma5"))
+                    if (row.get("indicators") or {}).get("ma5") is not None
+                    else (float(row.get("ma5")) if row.get("ma5") is not None else None)
+                ),
+                ma10=(
+                    float((row.get("indicators") or {}).get("ma10"))
+                    if (row.get("indicators") or {}).get("ma10") is not None
+                    else (float(row.get("ma10")) if row.get("ma10") is not None else None)
+                ),
+                ma20=(
+                    float((row.get("indicators") or {}).get("ma20"))
+                    if (row.get("indicators") or {}).get("ma20") is not None
+                    else (float(row.get("ma20")) if row.get("ma20") is not None else None)
+                ),
+                indicators=row.get("indicators") or {},
             )
             for row in records
         ]
@@ -1702,6 +1770,27 @@ def get_report_pdf(
         raise HTTPException(
             status_code=500, detail={"error": "internal_error", "message": str(e)}
         ) from e
+
+
+@router.get(
+    "/indicators/catalog",
+    response_model=IndicatorCatalogResponse,
+    tags=["indicators"],
+)
+def get_indicator_catalog() -> IndicatorCatalogResponse:
+    """
+    List all available technical indicators.
+
+    Returns a catalog describing each indicator's key, default options,
+    output columns, and the default lookback (how many historical bars
+    the orchestrator needs to fetch to fully warm it up). Useful for
+    AI agents that want to introspect what's available before sending
+    `?indicators=...` on /stocks/{code}/history.
+    """
+    catalog = IndicatorService().list_available()
+    return IndicatorCatalogResponse(
+        indicators=[IndicatorCatalogEntry(**entry) for entry in catalog]
+    )
 
 
 @router.get(

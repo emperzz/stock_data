@@ -156,12 +156,16 @@ def make_history_cache_key(
     start_date: str | None = None,
     end_date: str | None = None,
     adjust: str | None = None,
+    indicators: list[str] | None = None,
 ) -> str:
     parts = [stock_code, frequency, str(days)]
     if start_date or end_date:
         parts.extend([start_date or "", end_date or ""])
     if adjust:
         parts.append(adjust)
+    if indicators:
+        # Sort to make key stable regardless of input order
+        parts.append("ind=" + ",".join(sorted(indicators)))
     return ":".join(parts)
 
 

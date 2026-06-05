@@ -61,13 +61,23 @@ class TestBaostockFetcher:
         assert "pct_chg" in df.columns
 
     def test_get_kline_data(self, fetcher):
-        """Test get_daily_data returns DataFrame with indicators."""
+        """Test get_daily_data returns DataFrame with the standard columns.
+
+        Technical indicators (MA/MACD/etc.) are no longer auto-computed
+        in the fetcher's K-line path. They live behind the
+        IndicatorService and the `?indicators=` query param.
+        """
         df = fetcher.get_kline_data("600519", days=10)
         assert df is not None
         assert len(df) > 0
-        assert "ma5" in df.columns
-        assert "ma10" in df.columns
-        assert "ma20" in df.columns
+        # Standard K-line columns must still be present
+        for col in ("date", "open", "high", "low", "close", "volume"):
+            assert col in df.columns
+        # Indicator columns must NOT be present
+        assert "ma5" not in df.columns
+        assert "ma10" not in df.columns
+        assert "ma20" not in df.columns
+        assert "volume_ratio" not in df.columns
 
     def test_get_realtime_quote_method_exists(self, fetcher):
         """Test get_realtime_quote method exists on fetcher."""

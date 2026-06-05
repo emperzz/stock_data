@@ -2,6 +2,8 @@
 Pydantic schemas for API request/response models.
 """
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -48,6 +50,15 @@ class KLineData(BaseModel):
     ma5: float | None = Field(default=None, description="5-day moving average")
     ma10: float | None = Field(default=None, description="10-day moving average")
     ma20: float | None = Field(default=None, description="20-day moving average")
+    # Per-bar indicator values. Populated only when the request
+    # supplies `?indicators=...` (or a JSON body with `indicators`).
+    # Keys are indicator-prefixed (e.g. macd_dif, kdj_k, boll_upper).
+    # Each value is the float value at this bar or null if the
+    # indicator is not yet defined at this bar.
+    indicators: dict[str, float | None] = Field(
+        default_factory=dict,
+        description="Per-bar technical indicator values keyed by `<indicator>_<field>`",
+    )
 
 
 class StockHistoryResponse(BaseModel):
@@ -64,6 +75,33 @@ class ErrorResponse(BaseModel):
 
     error: str = Field(description="Error code")
     message: str = Field(description="Error message")
+
+
+class IndicatorCatalogEntry(BaseModel):
+    """One entry in the /indicators/catalog response."""
+
+    key: str = Field(description="Indicator identifier (e.g. macd, kdj)")
+    input_shape: str = Field(description="Required input shape: 'closes' or 'ohlcv'")
+    default_options: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Default options for this indicator",
+    )
+    output_columns: list[str] = Field(
+        default_factory=list,
+        description="Dict keys this indicator produces (e.g. ['macd_dif', 'macd_dea', 'macd_hist'])",
+    )
+    default_lookback: int = Field(
+        default=0,
+        description="Number of historical bars required to fully warm up the indicator with defaults",
+    )
+
+
+class IndicatorCatalogResponse(BaseModel):
+    """Response for /indicators/catalog."""
+
+    indicators: list[IndicatorCatalogEntry] = Field(
+        default_factory=list, description="Available technical indicators"
+    )
 
 
 class SourceHealth(BaseModel):

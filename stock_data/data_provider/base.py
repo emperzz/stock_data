@@ -224,7 +224,10 @@ class BaseFetcher(ABC):
             df = self._normalize_data(raw_df, stock_code)
             # Single copy at entry point
             df = self._clean_data(df)
-            df = self._calculate_indicators(df)
+            # Note: technical indicators (MA/MACD/KDJ/...) are no longer
+            # computed here. The IndicatorService layer above this is
+            # responsible — see stock_data.data_provider.indicators and
+            # the `?indicators=` query param on /stocks/{code}/history.
 
             logger.info(f"[{self.name}] {stock_code} got {len(df)} rows")
             return df
@@ -250,27 +253,6 @@ class BaseFetcher(ABC):
             logger.debug(f"[{self.name}] Dropped {dropped} rows with NaN close/volume")
 
         df = df.sort_values("date", ascending=True).reset_index(drop=True)
-        return df
-
-    def _calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate technical indicators (operates in-place on caller's copy)."""
-        # Moving averages
-        df["ma5"] = df["close"].rolling(window=5, min_periods=1).mean()
-        df["ma10"] = df["close"].rolling(window=10, min_periods=1).mean()
-        df["ma20"] = df["close"].rolling(window=20, min_periods=1).mean()
-
-        # Volume ratio (guard against div-by-zero producing inf)
-        avg_vol = df["volume"].rolling(window=5, min_periods=1).mean()
-        df["volume_ratio"] = df["volume"] / avg_vol.shift(1)
-        df["volume_ratio"] = (
-            df["volume_ratio"].replace([float("inf"), float("-inf")], 1.0).fillna(1.0)
-        )
-
-        # Round to 2 decimals
-        for col in ["ma5", "ma10", "ma20", "volume_ratio"]:
-            if col in df.columns:
-                df[col] = df[col].round(2)
-
         return df
 
     @staticmethod

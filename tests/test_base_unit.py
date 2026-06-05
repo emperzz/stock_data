@@ -162,9 +162,12 @@ class TestKlineDataProcessing:
         cleaned = fetcher._clean_data(df)
         assert len(cleaned) == 2
 
-    def test_calculate_indicators_no_inf(self):
-        """Test that volume_ratio doesn't produce inf values."""
+    def test_no_inline_indicators_on_kline(self):
+        """Fletchers no longer auto-compute MA5/MA10/MA20 in get_kline_data.
 
+        Indicators are now the responsibility of the IndicatorService
+        layer; see the ?indicators= query param on /stocks/{code}/history.
+        """
         from stock_data.data_provider import BaostockFetcher
 
         df = pd.DataFrame(
@@ -174,15 +177,18 @@ class TestKlineDataProcessing:
                 "high": 102.0,
                 "low": 99.0,
                 "close": 101.0,
-                "volume": [0] * 5 + [1000] * 5,  # First 5 periods have zero volume
+                "volume": 1000.0,
                 "amount": 100000.0,
                 "pct_chg": 0.0,
             }
         )
         fetcher = BaostockFetcher()
         fetcher._initialized = True
-        result = fetcher._calculate_indicators(df.copy())
-        assert not result["volume_ratio"].isin([float("inf"), float("-inf")]).any()
+        result = fetcher._clean_data(df.copy())
+        assert "ma5" not in result.columns
+        assert "ma10" not in result.columns
+        assert "ma20" not in result.columns
+        assert "volume_ratio" not in result.columns
 
 
 class TestAdjustMapping:
