@@ -27,7 +27,6 @@ class TushareFetcher(BaseFetcher):
     supported_data_types = (
         DataCapability.HISTORICAL_DWM
         | DataCapability.REALTIME_QUOTE
-        | DataCapability.STOCK_LIST
         | DataCapability.STOCK_NAME
         | DataCapability.INDEX_HISTORICAL
     )

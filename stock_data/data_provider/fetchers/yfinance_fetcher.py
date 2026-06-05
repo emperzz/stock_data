@@ -42,7 +42,6 @@ class YfinanceFetcher(BaseFetcher):
     supported_markets: set[str] = {"csi", "hk", "us"}
     supported_data_types = (
         DataCapability.HISTORICAL_DWM
-        | DataCapability.HISTORICAL_MIN
         | DataCapability.REALTIME_QUOTE
         | DataCapability.INDEX_HISTORICAL
         | DataCapability.INDEX_QUOTE

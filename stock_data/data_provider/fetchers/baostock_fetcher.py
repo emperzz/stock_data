@@ -30,7 +30,6 @@ class BaostockFetcher(BaseFetcher):
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
         DataCapability.HISTORICAL_DWM
-        | DataCapability.HISTORICAL_MIN
         | DataCapability.TRADE_CALENDAR
         | DataCapability.INDEX_HISTORICAL
     )
