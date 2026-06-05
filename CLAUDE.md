@@ -14,15 +14,18 @@ A Python-based local stock data aggregation server that:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    API Layer (FastAPI)                   │
-│   GET /stocks/{code}/quote   GET /stocks/{code}/history  │
+│   GET /stocks/{code}/quote   GET /stocks/{code}/history?indicators=ma,macd │
 │   GET /stocks/{code}/intraday GET /stocks/{code}/dragon-tiger │
 │   GET /stocks/{code}/margin   GET /stocks/{code}/block-trade │
 │   GET /stocks/{code}/fund-flow GET /stocks/{code}/reports   │
 │   GET /dragon-tiger/daily     GET /hot/topics              │
 │   GET /north-flow/realtime    GET /indices/{code}/quote     │
+│   GET /indicators/catalog                                  │
 ├─────────────────────────────────────────────────────────┤
-│                    StockService                          │
-│         Unified interface for data access                 │
+│              IndicatorService (pure compute)              │
+│   MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR   │
+│   OBV · ROC · DMI · SAR · KC                              │
+│   Sits on top of the manager; no fetcher involvement       │
 ├─────────────────────────────────────────────────────────┤
 │                 DataFetcherManager                        │
 │    Priority-based failover, circuit breaker, caching       │
@@ -33,6 +36,13 @@ A Python-based local stock data aggregation server that:
 ├─────────────────────────────────────────────────────────┤
 │              Upstream Stock Data APIs                    │
 ```
+
+Indicators are a **pure-compute** layer that sits on top of
+`DataFetcherManager` — they take an already-fetched K-line `DataFrame`
+and enrich it with indicator columns. They do **not** call fetchers,
+do **not** use `DataCapability` routing, and do **not** hit the
+network. Adding a new indicator means writing a pure function in
+`data_provider/indicators/` and registering it in `registry.py`.
 
 ## Directory Structure
 
@@ -73,6 +83,25 @@ stock_data/
     │   ├── stock_board_cache.py
     │   ├── stock_zt_pool_cache.py
     │   └── trade_calendar_cache.py
+    ├── indicators/                 # Pure-compute technical indicator layer
+    │   ├── __init__.py             # Public exports (IndicatorService + 14 calcs)
+    │   ├── types.py                # IndicatorKey, MAOptions, MACDOptions, ...
+    │   ├── registry.py             # INDICATOR_REGISTRY + estimate_lookback()
+    │   ├── indicator_service.py    # Orchestrator (K-line → indicators → df)
+    │   ├── ma.py                   # SMA / EMA / WMA + calcMA
+    │   ├── macd.py
+    │   ├── boll.py
+    │   ├── kdj.py
+    │   ├── rsi.py
+    │   ├── wr.py
+    │   ├── bias.py
+    │   ├── cci.py
+    │   ├── atr.py
+    │   ├── obv.py
+    │   ├── roc.py
+    │   ├── dmi.py
+    │   ├── sar.py
+    │   └── kc.py
     └── utils/
         ├── __init__.py
         └── normalize.py            # normalize_stock_code, market_tag, etc.
@@ -115,6 +144,48 @@ stock_data/
 - `market_tag()`: Returns market tag (csi/us/hk)
 - `is_us_market()`, `is_hk_market()`: Market detection utilities
 
+### `data_provider/indicators/`
+Pure-compute technical-indicator layer. Sits **on top of** `DataFetcherManager`
+and never reaches down into fetchers or the network. Each indicator is a
+standalone pure function in its own file; `registry.py` and
+`indicator_service.py` provide the orchestration layer.
+
+- **`types.py`** — `IndicatorKey` enum, per-indicator options TypedDicts
+  (`MAOptions`, `MACDOptions`, `BOLLOptions`, ...), `OHLCV`, `IndicatorResult`
+- **`registry.py`** — `INDICATOR_REGISTRY` (key → `IndicatorDescriptor`),
+  `list_indicators()` (catalog for `/indicators/catalog`),
+  `estimate_lookback(spec)` (how many K-line bars to fetch to warm up
+  the requested indicators)
+- **`indicator_service.py`** — `IndicatorService.compute(df, spec)` is the
+  main entry point. It accepts either `["ma", "macd"]` (use defaults) or
+  a full `{"ma": {"periods": [5,20]}, "macd": {}}` spec, and returns a
+  copy of the K-line DataFrame with an added `indicators` column whose
+  values are per-bar dicts (e.g. `{"ma5": 12.34, "macd_dif": 0.23}`)
+- **One file per indicator** — `ma.py` (SMA/EMA/WMA), `macd.py`, `boll.py`,
+  `kdj.py`, `rsi.py`, `wr.py`, `bias.py`, `cci.py`, `atr.py`, `obv.py`,
+  `roc.py`, `dmi.py`, `sar.py`, `kc.py`. Each exports a `calcX(...)`
+  function with the same calling convention.
+
+**Conventions** (apply to all 14):
+- Inputs are `list[float | None]` (closes) or `list[OHLCV]` (bars needing
+  high/low/volume). `None` = "missing data", never 0.
+- Outputs are aligned to the input index. A value is `None` whenever the
+  indicator is not yet defined at that bar (insufficient lookback, NaN
+  in input, etc.) — never a forward-fill, never a 0 placeholder.
+- Outputs are rounded to 2 decimals at the boundary (not in inner loops,
+  to keep recursive indicators like EMA numerically clean).
+- NaN inputs in the input list are coerced to None by `_valid()` and
+  treated as missing.
+
+**Anti-patterns**:
+- Do NOT call fetchers from inside an indicator. Indicators are pure.
+- Do NOT add an indicator without registering it in `INDICATOR_REGISTRY`
+  AND adding a public export in `__init__.py`. The catalog endpoint and
+  the orchestrator both read the registry.
+- Do NOT bake an indicator's `min_periods=1` workaround into a calc
+  function to "produce a value sooner". Output `None` until the indicator
+  is properly defined — this is the convention.
+
 ## Standardized Data Schema
 
 **Historical K-line columns** (`STANDARD_COLUMNS`):
@@ -127,6 +198,36 @@ date, open, high, low, close, volume, amount, pct_chg
 code, name, source, price, change_pct, change_amount,
 volume, amount, volume_ratio, turnover_rate, amplitude,
 open_price, high, low, pre_close, pe_ratio, pb_ratio, total_mv, circ_mv
+```
+
+**K-line with indicators** (response of `/stocks/{code}/history?indicators=...`):
+```python
+# Standard columns PLUS:
+KLineData(
+    date, open, high, low, close, volume, amount, change_percent,
+    ma5, ma10, ma20,          # back-compat: copied from indicators dict when "ma" requested
+    indicators: {             # per-bar dict; populated only when ?indicators= is set
+        "ma5": float|None,
+        "macd_dif": float|None,
+        "macd_dea": float|None,
+        "macd_hist": float|None,
+        "kdj_k": float|None, "kdj_d": float|None, "kdj_j": float|None,
+        "boll_mid": float|None, "boll_upper": float|None,
+        "boll_lower": float|None, "boll_bandwidth": float|None,
+        # ... one entry per output column of the requested indicators
+    },
+)
+```
+
+**Indicator catalog entry** (response of `/indicators/catalog`):
+```python
+IndicatorCatalogEntry(
+    key: str,                   # "ma" | "macd" | "boll" | ...
+    input_shape: str,           # "closes" or "ohlcv"
+    default_options: dict,      # e.g. {"short": 12, "long": 26, "signal": 9}
+    output_columns: list[str],  # e.g. ["macd_dif", "macd_dea", "macd_hist"]
+    default_lookback: int,      # bars of K-line needed to warm up with defaults
+)
 ```
 
 ## Provider API Documentation
@@ -351,6 +452,8 @@ fetchers that support it.
 | `get_north_flow` | `NORTH_FLOW` |
 | `get_reports` | `RESEARCH_REPORT` |
 | `get_announcements` | `ANNOUNCEMENT` |
+| `get_indicator_catalog` (no routing needed) | n/a — pure compute |
+| `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `HISTORICAL_DWM` |
 
 **Fetcher capability declarations:**
 
@@ -391,6 +494,24 @@ Per-source circuit breakers prevent cascading failures:
 - Random jitter between requests (1.5-3.0s default)
 - Random User-Agent rotation from pool
 - Exponential backoff retry on failure
+
+### Indicator Computation
+The `IndicatorService` layer does not call any fetcher. It is a pure
+DataFrame transformer:
+1. `routes.py` calls `manager.get_kline_data(code, days=max(days, lookback))`
+   — `lookback` is the maximum across the requested indicators.
+2. The returned DataFrame is handed to `IndicatorService.compute(df, spec)`.
+3. The service iterates `INDICATOR_REGISTRY` once per requested indicator,
+   calls the corresponding `calc*` function, and merges the per-bar
+   result dicts onto the DataFrame as an `indicators` column.
+4. `routes.py` then truncates the DataFrame back to the user's `days`
+   (the extra lookback was only needed to warm the indicator).
+
+**`ma5`/`ma10`/`ma20` migration**: the legacy `BaseFetcher._calculate_indicators`
+was removed. Those fields on `KLineData` are preserved for back-compat
+and backfilled from the `ma` indicator's `ma5/ma10/ma20` output columns
+when the user requests `?indicators=ma`. When no indicator is requested,
+they are `None`.
 
 ### Market-Aware Routing
 Manager routes requests based on stock code and capability:
@@ -450,3 +571,6 @@ Environment variables (see `.env.example`):
 - **Don't** create deeply nested manager hierarchies — one `DataFetcherManager` is sufficient
 - **Don't** hardcode a specific fetcher class (e.g. `AkshareFetcher()`) in `DataFetcherManager` methods — ALL data access must route through `_filter_by_capability(market, capability)`. This applies to existing methods AND any new capability added in the future. If your new feature needs a data type that doesn't fit existing capabilities, add a new `DataCapability` flag, declare it on the fetchers that support it, and route through `_filter_by_capability`.
 - **Don't** cache realtime quote data in SQLite — the `stock_board` and `stock_board_stock` tables store metadata only (code, name, type, timestamps). Quote/price data is always fetched live from the API.
+- **Don't** put indicator math inside a `BaseFetcher` or anywhere in the fetcher layer. Indicators live in `data_provider/indicators/` and are pure-compute. The fetcher's job is to deliver a clean standardized K-line DataFrame; the indicator service's job is to enrich it.
+- **Don't** write `options.get(key) or default` for numeric/float option keys — when `key=0` is a valid value, the `or` treats it as missing. Use `options.get(key, default)` so `0` flows through.
+- **Don't** re-introduce inline MA/EMA/WMA calculations in the fetcher path. If you need a moving average on K-line data, ask the indicator service via `?indicators=ma` (or compute it downstream of the API).
