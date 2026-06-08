@@ -9,13 +9,15 @@ from .base import (
     DataFetchError,
     RateLimitError,
 )
-from .core.types import CircuitBreaker, RealtimeSource, UnifiedRealtimeQuote
+
+# Re-export cache module for backward compatibility
+from .cache import api_cache as stock_cache
 
 # Re-export from cache for backward compatibility
 from .cache.api_cache import (
+    get_cache_info,
     get_cached_calendar,
     get_cached_stocks,
-    get_cache_info,
     get_latest_cached_trade_date,
     get_stock_list,
     get_stock_name,
@@ -25,9 +27,7 @@ from .cache.api_cache import (
     update_cached_calendar,
     update_cached_stocks,
 )
-
-# Re-export cache module for backward compatibility
-from .cache import api_cache as stock_cache
+from .core.types import CircuitBreaker, RealtimeSource, UnifiedRealtimeQuote
 
 # Re-export fetcher classes for backward compatibility
 from .fetchers.akshare_fetcher import AkshareFetcher

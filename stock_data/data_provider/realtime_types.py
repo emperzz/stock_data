@@ -7,9 +7,9 @@ from .core.types import (
     CircuitBreaker,
     RealtimeSource,
     UnifiedRealtimeQuote,
+    get_realtime_circuit_breaker,
     safe_float,
     safe_int,
-    get_realtime_circuit_breaker,
 )
 
 __all__ = [

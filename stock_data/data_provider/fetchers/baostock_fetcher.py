@@ -16,8 +16,8 @@ from ..base import (
     normalize_stock_code,
 )
 from ..core.types import UnifiedRealtimeQuote
+from ..index_symbols import CSI_INDEX_MAP
 from ..utils.normalize import get_index_type, is_index_code
-from .index_symbols import CSI_INDEX_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -224,9 +224,10 @@ class BaostockFetcher(BaseFetcher):
             return []
 
         try:
-            import baostock as bs
             import re
             from datetime import date
+
+            import baostock as bs
 
             result = []
             # Query all A-share stocks, must pass trading day parameter for non-empty results

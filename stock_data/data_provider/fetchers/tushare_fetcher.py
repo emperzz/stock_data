@@ -12,8 +12,8 @@ import pandas as pd
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
+from ..index_symbols import CSI_INDEX_MAP
 from ..utils.normalize import get_index_type, is_index_code
-from .index_symbols import CSI_INDEX_MAP
 
 logger = logging.getLogger(__name__)
 

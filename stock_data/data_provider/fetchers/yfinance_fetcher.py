@@ -28,8 +28,8 @@ from ..base import (
     normalize_stock_code,
 )
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote
+from ..index_symbols import HK_INDEX_MAP, US_INDEX_MAP
 from ..utils.normalize import get_index_type, is_index_code
-from .index_symbols import HK_INDEX_MAP, US_INDEX_MAP
 
 logger = logging.getLogger(__name__)
 

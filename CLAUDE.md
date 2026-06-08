@@ -48,7 +48,6 @@ stock_data/
     │   └── types.py                # UnifiedRealtimeQuote, CircuitBreaker, safe_float/int
     ├── fetchers/
     │   ├── __init__.py
-    │   ├── index_symbols.py        # Index mappings (local copy for fetcher imports)
     │   ├── akshare_fetcher.py
     │   ├── baostock_fetcher.py
     │   ├── tushare_fetcher.py

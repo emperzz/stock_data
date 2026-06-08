@@ -14,8 +14,8 @@ from ..data_provider.fetchers.baostock_fetcher import BaostockFetcher
 from ..data_provider.fetchers.tushare_fetcher import TushareFetcher
 from ..data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
 from ..data_provider.fetchers.zhitu_fetcher import ZhituFetcher
-from ..data_provider.utils.normalize import is_hk_market, is_us_market, normalize_stock_code
 from ..data_provider.index_symbols import get_all_indices
+from ..data_provider.utils.normalize import is_hk_market, is_us_market, normalize_stock_code
 from .cache import (
     get_history_cache,
     get_quote_cache,
