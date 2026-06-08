@@ -1213,31 +1213,76 @@ def get_pools(
         description="Pool type: zt (涨停) / dt (跌停) / zbgc (炸板)",
     ),
     date: str | None = Query(
-        None, description="Pool date (YYYY-MM-DD), defaults to latest cached or today"
+        None,
+        description=(
+            "Pool date (YYYY-MM-DD). If not provided, the server picks the most recent "
+            "trade date relative to today: today itself when today is a trade day, "
+            "otherwise the latest cached trade date <= today."
+        ),
     ),
-    refresh: bool = Query(False, description="Force refresh from upstream"),
+    refresh: bool = Query(
+        False,
+        description=(
+            "Force refresh from upstream. Bypasses the persistence read, but the "
+            "persistence write is still skipped when the resolved date is the "
+            "'current trading day' (today AND today is a trade day), to avoid "
+            "persisting a partially-formed pool."
+        ),
+    ),
 ) -> ZTPoolResponse:
     """
     Get ZT (涨跌停) pool data for a specific type and date.
 
     Args:
         type: Pool type - zt (涨停), dt (跌停), zbgc (炸板)
-        date: Pool date in YYYY-MM-DD format. If not provided, uses the latest
-              cached date or today's date.
-        refresh: If True, force refresh from upstream and update cache.
+        date: Pool date in YYYY-MM-DD format. If not provided, the server resolves
+              it as: today (if today is a trade day) or the latest trade date <= today.
+        refresh: If True, force refresh from upstream and (for non-current-day) update cache.
 
     Returns:
         ZTPoolResponse with list of stocks in the pool.
     """
     try:
+        # ----- Resolve query_date and is_current_day -----
+        # is_current_day = True iff the resolved date is "today" AND today is a
+        # trade day. The current-trading-day branch never reads from or writes
+        # to persistence (see plan "ZT 池 当日 vs 历史 分流逻辑").
+        from datetime import date as date_cls
+        from ..data_provider.persistence import trade_calendar
+
+        today_str = date_cls.today().strftime("%Y-%m-%d")
+
+        if date:
+            query_date = date
+        else:
+            # User did not pass a date: today if it's a trade day, otherwise
+            # the latest persisted trade date <= today.
+            if trade_calendar.is_trade_date(today_str):
+                query_date = today_str
+            else:
+                resolved = trade_calendar.get_latest_trade_date_on_or_before(today_str)
+                # Extreme edge case: trade_calendar table is empty. Fall back to
+                # today so the caller gets a clear upstream error rather than a
+                # silent 404.
+                query_date = resolved or today_str
+
+        is_current_day = (query_date == today_str) and trade_calendar.is_trade_date(today_str)
+
+        # In-process response cache key uses the resolved date so the same
+        # effective request (with or without ?date=) hits the same slot.
         if is_cache_enabled():
-            cache_key = make_pools_cache_key(type, date)
+            cache_key = make_pools_cache_key(type, query_date)
             hit = cached_lookup(get_pools_cache, cache_key, "pools")
             if hit is not None:
                 return hit
 
         manager = get_manager()
-        stocks = manager.get_zt_pool(pool_type=type, date=date, refresh=refresh)
+        stocks = manager.get_zt_pool(
+            pool_type=type,
+            date=query_date,
+            refresh=refresh,
+            is_current_day=is_current_day,
+        )
 
         if not stocks:
             raise HTTPException(
@@ -1246,7 +1291,7 @@ def get_pools(
             )
 
         # Derive actual date from query param or first stock record
-        actual_date = date or stocks[0].get("pool_date", "")
+        actual_date = query_date or stocks[0].get("pool_date", "")
 
         pool_stocks = [
             ZTPoolStock(

@@ -251,25 +251,35 @@ class DataFetcherManager:
         pool_type: str,
         date: str | None = None,
         refresh: bool = False,
+        is_current_day: bool = False,
     ) -> list[dict]:
-        """Get ZT (涨跌停) pool data with automatic failover and caching.
+        """Get ZT (涨跌停) pool data with date-keyed persistence.
 
         Args:
-            pool_type: Pool type - "zt" (涨停), "dt" (跌停), "zbgc" (炸板)
-            date: Pool date in YYYY-MM-DD format. If None, uses latest cached or today.
-            refresh: If True, force refresh from upstream and update cache.
+            pool_type: "zt" (涨停) | "dt" (跌停) | "zbgc" (炸板)
+            date: Pool date in YYYY-MM-DD. If None, falls back to the latest
+                persisted date for this pool_type, or today.
+            refresh: Force upstream fetch (bypass cache read; the persistence
+                write policy is still determined by ``is_current_day``).
+            is_current_day: True iff the query is for the "current trading day"
+                (today AND today is a trade date). When True:
+                - NEVER reads from persistence (当日不该有 cache,即便有也不该用——
+                  可能是历史策略切换前残留的中间态)
+                - NEVER writes to persistence (避免固化未收盘的状态)
+                - 上游失败 → 抛 DataFetchError(不回退 cache)
 
         Returns:
             List of stock dicts with normalized fields.
 
         Raises:
-            DataFetchError: When all fetchers fail and no cache available.
+            DataFetchError: When all fetchers fail and no cache available
+                (or, for the current trading day, the upstream failed and
+                there is no cache to fall back to by design).
         """
-        from .cache.stock_zt_pool_cache import (
-            get_zt_pool_cached,
-            save_zt_pool,
+        from .persistence.pool_daily import (
+            get_pool_cached,
+            save_pool,
             get_latest_cached_date,
-            has_cached_data,
         )
 
         # Determine the date to query
@@ -284,11 +294,14 @@ class DataFetcherManager:
                 from datetime import date as date_cls
                 query_date = date_cls.today().strftime("%Y-%m-%d")
 
-        # Check cache first (only if not refreshing)
-        if not refresh:
-            cached = get_zt_pool_cached(pool_type, query_date)
+        # Non-current-day + not refreshing: check persistence first
+        if not is_current_day and not refresh:
+            cached = get_pool_cached(pool_type, query_date)
             if cached:
-                logger.info(f"[Manager] ZT pool {pool_type} {query_date} found in cache ({len(cached)} stocks)")
+                logger.info(
+                    f"[Manager] ZT pool {pool_type} {query_date} found in persistence "
+                    f"({len(cached)} stocks)"
+                )
                 return cached
 
         # Fetch from upstream with capability-based routing
@@ -301,20 +314,28 @@ class DataFetcherManager:
                 fetcher_date = query_date.replace("-", "") if fetcher.name == "AkshareFetcher" else query_date
                 stocks = fetcher.get_zt_pool(pool_type, fetcher_date)
                 if stocks:
-                    # Save to cache
-                    save_zt_pool(pool_type, query_date, stocks)
-                    logger.info(f"[Manager] {fetcher.name} returned {len(stocks)} stocks for ZT pool {pool_type} {query_date}")
+                    # Persist only for non-current-day queries
+                    if not is_current_day:
+                        save_pool(pool_type, query_date, stocks)
+                    logger.info(
+                        f"[Manager] {fetcher.name} returned {len(stocks)} stocks for "
+                        f"ZT pool {pool_type} {query_date} "
+                        f"(is_current_day={is_current_day})"
+                    )
                     return stocks
             except Exception as e:
                 errors.append(f"[{fetcher.name}] {e}")
                 logger.warning(f"[Manager] {fetcher.name} ZT pool failed: {e}")
                 continue
 
-        # Fallback: return cached data if upstream fails and not already cached
-        if not refresh:
-            cached = get_zt_pool_cached(pool_type, query_date)
+        # Fallback: return persisted data if upstream fails (only for non-current-day)
+        if not is_current_day and not refresh:
+            cached = get_pool_cached(pool_type, query_date)
             if cached:
-                logger.warning(f"[Manager] All fetchers failed for ZT pool, using {len(cached)} cached stocks")
+                logger.warning(
+                    f"[Manager] All fetchers failed for ZT pool {pool_type} {query_date}, "
+                    f"using {len(cached)} persisted stocks"
+                )
                 return cached
 
         raise DataFetchError(f"All fetchers failed for ZT pool {pool_type}:\n" + "\n".join(errors))

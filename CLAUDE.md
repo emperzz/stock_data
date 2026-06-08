@@ -81,8 +81,15 @@ stock_data/
     │   ├── api_cache.py            # Compatibility re-export module
     │   ├── stock_list_cache.py
     │   ├── stock_board_cache.py
-    │   ├── stock_zt_pool_cache.py
+    │   ├── stock_zt_pool_cache.py  # ZT/DT/ZBGC pool helpers (legacy 3-table API)
     │   └── trade_calendar_cache.py
+    ├── persistence/                # NEW (2026-06): cross-process SQLite storage layer
+    │   ├── __init__.py             # Top-level API: init_schema(), reset_all() (used by STOCK_DB_INIT)
+    │   ├── db.py                   # get_db_path() / get_connection() (public names; the cache.db aliases are kept for compat)
+    │   ├── stock_list.py           # Stock listing metadata (init_schema, get_stock_list, ...)
+    │   ├── board.py                # Concept/industry board metadata
+    │   ├── trade_calendar.py       # A-share trade calendar + is_trade_date() / get_latest_trade_date_on_or_before()
+    │   └── pool_daily.py           # Unified pool_daily (zt | dt | zbgc) — single table, date-keyed
     ├── indicators/                 # Pure-compute technical indicator layer
     │   ├── __init__.py             # Public exports (IndicatorService + 14 calcs)
     │   ├── types.py                # IndicatorKey, MAOptions, MACDOptions, ...
@@ -555,6 +562,8 @@ Environment variables (see `.env.example`):
 - `ZHITU_TOKEN` - Zhitu API token for realtime quotes
 - `ZHITU_PRIORITY` - Override Zhitu fetcher priority (default: 4)
 - `ENABLE_API_CACHE` - Enable/disable API response caching (default: true)
+- `STOCK_CACHE_DB_PATH` - Path to the SQLite persistence file (default: `<repo>/stock_data/stock_cache.db`)
+- `STOCK_DB_INIT` - Startup hook. `true` → DROP + recreate all persistence tables on boot (full reset for dev/test). `false` → idempotent CREATE IF NOT EXISTS only (default). Any other value is treated as false. **WARNING: `true` wipes all cached metadata.**
 - `TENCENT_PRIORITY` - Override Tencent fetcher priority (default: 5)
 - `EASTMONEY_PRIORITY` - Override EastMoney fetcher priority (default: 6)
 - `THS_PRIORITY` - Override ThsFetcher priority (default: 7)

@@ -34,6 +34,40 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     logger.info(f"Starting Stock Data Server v{__version__}")
     logger.info(f"Server port: {os.getenv('SERVER_PORT', '8888')}")
+
+    # ----- Persistence layer startup -----
+    # STOCK_DB_INIT=true  → DROP + recreate every persistence table (full reset).
+    # STOCK_DB_INIT=false → idempotent CREATE IF NOT EXISTS only.
+    # Any other value is treated as false (lenient parsing; no startup failure).
+    from .data_provider import persistence
+
+    db_init = os.getenv("STOCK_DB_INIT", "false").lower() == "true"
+    if db_init:
+        logger.warning(
+            "[Startup] STOCK_DB_INIT=true — DROPPING and recreating ALL persistence "
+            "tables. All previously cached metadata will be lost."
+        )
+        persistence.reset_all()
+    else:
+        persistence.init_schema()
+        logger.info("[Startup] Persistence schema ensured (STOCK_DB_INIT=false)")
+
+    # ----- Trade-calendar warm-up (non-fatal) -----
+    # The /pools endpoint needs is_trade_date() and
+    # get_latest_trade_date_on_or_before() to work, and both depend on the
+    # trade_calendar table being populated. If it's empty on startup, kick
+    # off a one-shot fetch. Failure here is non-fatal: the /calendar
+    # endpoint will retry on first access.
+    from .data_provider.persistence import trade_calendar
+    if not trade_calendar.get_cached_calendar():
+        logger.info("[Startup] Trade calendar empty, fetching from upstream")
+        try:
+            # Import lazily to avoid pulling in fetchers at module-import time
+            from .api.routes import get_manager
+            get_manager().get_trade_calendar()
+        except Exception as e:
+            logger.warning(f"[Startup] Trade calendar warm-up failed (non-fatal): {e}")
+
     yield
     logger.info("Shutting down Stock Data Server")
 

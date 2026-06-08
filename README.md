@@ -868,6 +868,13 @@ The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to 
 | `CACHE_TTL_BOARD_LIST` | TTL for board list (seconds) | `300` |
 | `CACHE_TTL_BOARD_STOCKS` | TTL for board stocks (seconds) | `300` |
 
+### Persistence (on-disk SQLite store)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `STOCK_CACHE_DB_PATH` | Path to the SQLite file used by the persistence layer | `<repo>/stock_data/stock_cache.db` |
+| `STOCK_DB_INIT` | Startup hook: `true` → DROP + recreate all persistence tables on boot; `false` → idempotent CREATE IF NOT EXISTS only. **WARNING: `true` wipes all cached stock lists, board metadata, trade calendar, and ZT/DT/ZBGC pool history.** | `false` |
+
 ---
 
 ## Symbol Conventions

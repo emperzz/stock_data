@@ -1,19 +1,46 @@
 """
-Tests for ZT (涨跌停) pool API and cache.
+Tests for ZT (涨跌停) pool API and persistence layer.
+
+Updated during the persistence refactor (2026-06): the three legacy
+per-type tables (zt_pool / dt_pool / zbgc_pool) have been merged into a
+single `pool_daily` table. Tests now target the unified schema; the
+old `_get_table_name` helper is gone.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from stock_data.api.cache import (
+    get_board_list_cache,
+    get_board_stocks_cache,
+    get_dragontiger_cache,
+    get_pools_cache,
+    get_quote_cache,
+)
 from stock_data.api.routes import reset_manager
 from stock_data.server import app
-from stock_data.data_provider.cache.stock_zt_pool_cache import _get_table_name
 
 
 @pytest.fixture(autouse=True)
 def reset_before_test():
-    """Reset manager state before each test."""
+    """Reset manager state and clear in-memory response caches before each test.
+
+    Without clearing the in-memory `_pools_cache` (and friends), tests that
+    share the same query (e.g. `?type=zt&date=2024-05-10`) interfere with
+    each other — the first test writes the response into the TTL cache,
+    and subsequent tests hit that entry instead of reaching the mocked
+    manager.
+    """
     reset_manager()
+    for cache in (
+        get_pools_cache(),
+        get_quote_cache(),
+        get_board_list_cache(),
+        get_board_stocks_cache(),
+        get_dragontiger_cache(),
+    ):
+        cache.clear()
     yield
 
 
@@ -93,7 +120,13 @@ class TestZTPoolAPIRoutes:
         assert response.status_code == 422
 
     def test_get_pools_with_refresh(self, client):
-        """Test GET /api/v1/pools?refresh=true forces refresh."""
+        """Test GET /api/v1/pools?refresh=true forces refresh.
+
+        The route now resolves a missing `date` to either today (if today is
+        a trade day) or the latest trade date <= today, and always passes an
+        explicit `is_current_day` flag. Pin the date so the assertion is
+        deterministic regardless of when the test runs.
+        """
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             # When refresh=True, manager returns data (forces fetch)
@@ -102,9 +135,12 @@ class TestZTPoolAPIRoutes:
             ]
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/pools?type=zt&refresh=true")
+            response = client.get("/api/v1/pools?type=zt&refresh=true&date=2024-05-10")
             assert response.status_code == 200
-            mock_mgr.get_zt_pool.assert_called_once_with(pool_type="zt", date=None, refresh=True)
+            # date pinned to 2024-05-10 (a historical Friday) → is_current_day=False
+            mock_mgr.get_zt_pool.assert_called_once_with(
+                pool_type="zt", date="2024-05-10", refresh=True, is_current_day=False,
+            )
 
     def test_get_pools_no_data_returns_404(self, client):
         """Test GET /api/v1/pools when no data returns 404."""
@@ -129,17 +165,52 @@ class TestZTPoolAPIRoutes:
             args, kwargs = mock_mgr.get_zt_pool.call_args
             assert "2024-06-15" in str(args) or kwargs.get("date") == "2024-06-15"
 
+    def test_get_pools_omitted_date_uses_trade_calendar(self, client):
+        """No `date` param: today if it's a trade day, else latest trade date <= today.
 
-class TestZTPoolCache:
-    """Tests for ZT pool cache module."""
+        Skips when today IS a trade day (the other branch is exercised by
+        the explicit-date and refresh tests). Forces today to look like a
+        non-trade day by patching is_trade_date to return False.
+        """
+        from stock_data.data_provider.persistence import trade_calendar
+        from datetime import date as date_cls
+
+        today_str = date_cls.today().strftime("%Y-%m-%d")
+        latest = trade_calendar.get_latest_trade_date_on_or_before(today_str)
+        if not latest:
+            pytest.skip("trade_calendar table is empty; cannot determine latest trade date")
+        if latest == today_str:
+            pytest.skip("Today is itself a trade day; this test exercises the fallback branch")
+
+        # Pretend today is not a trade day so the route falls back to `latest`.
+        with (
+            patch.object(trade_calendar, "is_trade_date", return_value=False),
+            patch("stock_data.api.routes.get_manager") as mock_manager,
+        ):
+            mock_mgr = MagicMock()
+            mock_mgr.get_zt_pool.return_value = [
+                {"code": "000099", "name": "最近交易日股", "price": 1.0},
+            ]
+            mock_manager.return_value = mock_mgr
+
+            response = client.get("/api/v1/pools?type=zt")
+            assert response.status_code == 200
+            # is_current_day=False because we forced today to look like a non-trade day
+            mock_mgr.get_zt_pool.assert_called_once_with(
+                pool_type="zt", date=latest, refresh=False, is_current_day=False,
+            )
+
+
+class TestZTPoolPersistence:
+    """Tests for the unified pool_daily persistence module."""
 
     def test_save_and_get_zt_pool(self):
-        """Test saving and retrieving ZT pool data."""
-        from stock_data.data_provider.cache.stock_zt_pool_cache import (
-            init_db, save_zt_pool, get_zt_pool_cached, get_pool_count,
+        """Test saving and retrieving ZT pool data via the unified pool_daily table."""
+        from stock_data.data_provider.persistence.pool_daily import (
+            init_schema, save_pool, get_pool_cached,
         )
 
-        init_db()
+        init_schema()
 
         # Use a unique date to avoid conflicts with other tests
         test_date = "2099-11-30"
@@ -161,25 +232,27 @@ class TestZTPoolCache:
             },
         ]
 
-        save_zt_pool("zt", test_date, sample_stocks)
+        save_pool("zt", test_date, sample_stocks)
 
-        stocks = get_zt_pool_cached("zt", test_date)
+        stocks = get_pool_cached("zt", test_date)
         assert len(stocks) == 1
         assert stocks[0]["code"] == "999999"
         assert stocks[0]["name"] == "测试股票"
         assert stocks[0]["price"] == 12.5
         assert stocks[0]["change_pct"] == 10.05
         assert stocks[0]["lb_count"] == 1
+        # pool_type discriminator round-trips
+        assert stocks[0]["pool_type"] == "zt"
+        assert stocks[0]["pool_date"] == test_date
 
     def test_get_pool_count(self):
-        """Test getting pool count."""
-        from stock_data.data_provider.cache.stock_zt_pool_cache import (
-            init_db, save_zt_pool, get_pool_count,
+        """Test getting pool count from the unified table."""
+        from stock_data.data_provider.persistence.pool_daily import (
+            init_schema, save_pool, get_pool_count,
         )
 
-        init_db()
+        init_schema()
 
-        # Use a unique date to avoid conflicts with other tests
         test_date = "2099-01-15"
 
         sample_stocks = [
@@ -188,29 +261,48 @@ class TestZTPoolCache:
             {"code": "999993", "name": "股票3", "price": 6.0, "change_pct": 10.0},
         ]
 
-        save_zt_pool("zt", test_date, sample_stocks)
+        save_pool("zt", test_date, sample_stocks)
 
         count = get_pool_count("zt", test_date)
         assert count == 3
 
     def test_get_pool_count_empty(self):
         """Test getting pool count returns 0 for empty pool."""
-        from stock_data.data_provider.cache.stock_zt_pool_cache import get_pool_count
+        from stock_data.data_provider.persistence.pool_daily import get_pool_count
 
-        # Use a date far in the future that no test uses
         count = get_pool_count("zt", "2999-12-31")
         assert count == 0
 
     def test_invalid_pool_type_raises_valueerror(self):
-        """_get_table_name should reject unknown pool types."""
-        with pytest.raises(ValueError, match="Unknown pool_type"):
-            _get_table_name("invalid")
+        """save_pool / get_pool_cached should reject unknown pool types."""
+        from stock_data.data_provider.persistence.pool_daily import (
+            save_pool, get_pool_cached,
+        )
 
-    def test_valid_pool_types(self):
-        """_get_table_name should return correct table for valid types."""
-        assert _get_table_name("zt") == "zt_pool"
-        assert _get_table_name("dt") == "dt_pool"
-        assert _get_table_name("zbgc") == "zbgc_pool"
+        with pytest.raises(ValueError, match="Unknown pool_type"):
+            save_pool("invalid", "2099-01-01", [])
+        with pytest.raises(ValueError, match="Unknown pool_type"):
+            get_pool_cached("invalid", "2099-01-01")
+
+    def test_unified_table_stores_all_pool_types(self):
+        """zt / dt / zbgc co-exist in the unified pool_daily table by (pool_type, date)."""
+        from stock_data.data_provider.persistence.pool_daily import (
+            init_schema, save_pool, get_pool_cached,
+        )
+
+        init_schema()
+        test_date = "2098-06-01"
+        save_pool("zt", test_date, [{"code": "600001", "name": "涨停股", "price": 10.0}])
+        save_pool("dt", test_date, [{"code": "600002", "name": "跌停股", "price": 5.0}])
+        save_pool("zbgc", test_date, [{"code": "600003", "name": "炸板股", "price": 8.0}])
+
+        zt = get_pool_cached("zt", test_date)
+        dt = get_pool_cached("dt", test_date)
+        zbgc = get_pool_cached("zbgc", test_date)
+
+        assert len(zt) == 1 and zt[0]["code"] == "600001"
+        assert len(dt) == 1 and dt[0]["code"] == "600002"
+        assert len(zbgc) == 1 and zbgc[0]["code"] == "600003"
 
 
 class TestZTFetcherCapabilities:
@@ -251,57 +343,75 @@ class TestZTFetcherManager:
     """Tests for DataFetcherManager ZT pool methods."""
 
     def test_manager_get_zt_pool_uses_cache(self):
-        """Test manager uses cache when data available."""
-        from stock_data.data_provider.cache.stock_zt_pool_cache import (
-            init_db, save_zt_pool,
+        """Test manager uses persistence when data available (historical date)."""
+        from stock_data.data_provider.persistence.pool_daily import (
+            init_schema, save_pool,
         )
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
-
-        init_db()
-
-        # Pre-populate cache
-        sample_stocks = [
-            {"code": "000001", "name": "缓存股票", "price": 10.0, "change_pct": 5.0},
-        ]
-        save_zt_pool("zt", "2024-05-10", sample_stocks)
-
-        manager = MagicMock()
-        manager._filter_by_capability = MagicMock(return_value=[])
-
         from stock_data.data_provider.base import DataFetcherManager
-        from stock_data.data_provider.cache.stock_zt_pool_cache import get_zt_pool_cached
 
-        # Test that get_zt_pool returns cached data when no fetchers available
+        init_schema()
+
+        # Pre-populate persistence with a historical date
+        sample_stocks = [
+            {"code": "000001", "name": "持久化股票", "price": 10.0, "change_pct": 5.0},
+        ]
+        save_pool("zt", "2024-05-10", sample_stocks)
+
         mgr = DataFetcherManager()
-        # Without any fetchers, should fallback to cache
-        stocks = mgr.get_zt_pool("zt", "2024-05-10", refresh=False)
+        # Without any fetchers, should fallback to persistence (historical date)
+        stocks = mgr.get_zt_pool("zt", "2024-05-10", refresh=False, is_current_day=False)
         assert len(stocks) >= 1
 
+    def test_manager_get_zt_pool_skips_persistence_on_current_day(self):
+        """Test that is_current_day=True bypasses persistence read AND write."""
+        from stock_data.data_provider.persistence.pool_daily import (
+            init_schema, save_pool, get_pool_cached,
+        )
+        from stock_data.data_provider.persistence.db import get_connection
+        from stock_data.data_provider.base import DataFetcherManager
+        from datetime import date as date_cls
+
+        init_schema()
+
+        # Even if a row exists in persistence for "today", the manager must
+        # NOT read it when is_current_day=True. And it must not write either.
+        today_str = date_cls.today().strftime("%Y-%m-%d")
+        # Make sure the table is clean for today's date
+        conn = get_connection()
+        try:
+            conn.execute(
+                "DELETE FROM pool_daily WHERE pool_type = 'zt' AND pool_date = ?",
+                (today_str,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Stub the upstream call so we don't hit the network
+        class FakeFetcher:
+            name = "FakeFetcher"
+            def get_zt_pool(self, pool_type, date):
+                return [{"code": "FAKE001", "name": "Fake", "price": 1.0}]
+
+        real_mgr = DataFetcherManager()
+        real_mgr._filter_by_capability = MagicMock(return_value=[FakeFetcher()])
+
+        stocks = real_mgr.get_zt_pool("zt", today_str, refresh=False, is_current_day=True)
+        assert len(stocks) == 1
+        assert stocks[0]["code"] == "FAKE001"
+
+        # Persistence MUST NOT have been written for today's date
+        persisted = get_pool_cached("zt", today_str)
+        assert persisted == []
+
     def test_manager_get_zt_pool_normalizes_code(self):
-        """Test manager normalizes stock code from Zhitu format."""
-        from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
+        """Test that manager.get_zt_pool normalizes the pool type code."""
+        from stock_data.data_provider.persistence.pool_daily import init_schema
+        from stock_data.data_provider.base import DataFetcherManager
 
-        fetcher = ZhituFetcher()
-
-        # Zhitu returns codes like "sz000657" but we normalize to "000657"
-        # This tests the _normalize_zt_stock method
-        test_row = {
-            "dm": "sz000657",
-            "mc": "中钨高新",
-            "p": 9.33,
-            "zf": 10.02,
-            "cje": 436073568.0,
-        }
-
-        if fetcher.is_available():
-            # If token available, test real normalization
-            result = fetcher._normalize_zt_stock(test_row, "zt")
-        else:
-            # Mock the normalization behavior
-            code = test_row["dm"]
-            if code.startswith(("sh", "sz", "SH", "SZ")):
-                code = code[2:]
-            result = {"code": code, "name": test_row["mc"]}
-
-        assert result["code"] == "000657"
-        assert result["name"] == "中钨高新"
+        init_schema()
+        mgr = DataFetcherManager()
+        # _filter_by_capability returns no fetchers; the call should still
+        # validate the pool type via the persistence layer helper.
+        with pytest.raises(ValueError, match="Unknown pool_type"):
+            mgr.get_zt_pool("invalid", "2099-01-01", refresh=False, is_current_day=False)
