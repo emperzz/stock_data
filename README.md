@@ -113,7 +113,10 @@ what's available without reading source.
 #### Attach indicators to K-line
 
 ```bash
+# Stocks
 GET /api/v1/stocks/600519/history?days=120&indicators=ma,macd,kdj,boll,rsi
+# Indices (same query param, same behavior)
+GET /api/v1/indices/000300/history?days=120&indicators=ma,macd,boll
 ```
 
 **Supported indicators** (with their default `output_columns`):
@@ -179,20 +182,17 @@ the `days` you asked for. You don't need to pre-compute a larger
       "close": 1698.0,
       "volume": 1234567,
       "amount": 2087654321.0,
-      "change_percent": 1.52,
-      "ma5": null,
-      "ma10": null,
-      "ma20": null,
-      "indicators": {}
+      "change_percent": 1.52
     }
   ]
 }
 ```
 
-> **Note:** `ma5`/`ma10`/`ma20` are always `null` unless you opt in by
-> adding `?indicators=ma` (or any indicator that produces them). The
-> legacy "always-on" inline MA computation was removed in favour of
-> the explicit `?indicators=` pattern.
+> **Note:** the 4 indicator fields (`ma5`, `ma10`, `ma20`, `indicators`)
+> are **omitted from the response entirely** when `?indicators=` is not
+> passed — instead of being present-but-null. To get them, opt in with
+> `?indicators=ma` (or any indicator set that produces them). `amount`
+> and `change_percent` keep their original "null when missing" behavior.
 
 **Response (with `?indicators=ma,macd,kdj,boll`):**
 ```json
@@ -261,23 +261,17 @@ GET /api/v1/stocks/{code}/history?period=daily&days=30
       "close": 1698.0,
       "volume": 1234567,
       "amount": 2087654321.0,
-      "change_percent": 1.52,
-      "ma5": null,
-      "ma10": null,
-      "ma20": null,
-      "indicators": {}
+      "change_percent": 1.52
     }
   ]
 }
 ```
 
-> **Note:** `ma5`/`ma10`/`ma20` are always `null` unless you opt in by
-> adding `?indicators=ma` (or any indicator that produces them). The
-> legacy "always-on" inline MA computation was removed in favour of
-> the explicit `?indicators=` pattern.
->
-> For a fully-loaded example response (with indicators), see the
-> [Technical Indicators](#technical-indicators) section above.
+> **Note:** the 4 indicator fields (`ma5`, `ma10`, `ma20`, `indicators`)
+> are **omitted from the response entirely** when `?indicators=` is not
+> passed. To get them, opt in with `?indicators=ma` (or any indicator
+> set that produces them). For a fully-loaded example response, see
+> the [Technical Indicators](#technical-indicators) section above.
 
 ---
 
@@ -412,6 +406,7 @@ GET /api/v1/indices/{index_code}/history?period=daily&days=30
 | `days` | int | 30 | Number of days (1-365, ignored when `start_date` provided) |
 | `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` |
 | `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
+| `indicators` | string | null | Comma-separated list of technical indicators to attach (see [Technical Indicators](#technical-indicators)). Same semantics as `/stocks/{code}/history`. |
 
 #### Index Intradaday (Minute-Level)
 

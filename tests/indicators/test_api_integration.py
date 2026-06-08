@@ -41,12 +41,21 @@ def client(monkeypatch):
         requested = int(kwargs.get("days") or 30)
         return fake_kline.tail(requested).reset_index(drop=True), "StubFetcher"
 
+    def fake_get_index_historical(self, index_code, **kwargs):
+        # Same shape as the stock stub — return the synthetic frame.
+        requested = int(kwargs.get("days") or 30)
+        return fake_kline.tail(requested).reset_index(drop=True), "StubFetcher"
+
     # Import the FastAPI app
     from stock_data.server import app  # noqa: F401
 
     monkeypatch.setattr(
         "stock_data.data_provider.DataFetcherManager.get_kline_data",
         fake_get_kline_data,
+    )
+    monkeypatch.setattr(
+        "stock_data.data_provider.DataFetcherManager.get_index_historical",
+        fake_get_index_historical,
     )
 
     # Also stub the stock-name lookup so /history doesn't try a network call
@@ -88,13 +97,17 @@ def test_history_default_no_indicators(client):
     body = r.json()
     assert body["code"] == "600519"
     assert len(body["data"]) == 30
-    # No indicators -> indicators dict is empty for every bar
+    # No indicators requested -> the 4 indicator fields are OMITTED from
+    # the response entirely (model_serializer drops them when None/empty).
     for row in body["data"]:
-        assert row["indicators"] == {}
-        # ma5/ma10/ma20 are present but null (no more in-pipeline calculation)
-        assert row["ma5"] is None
-        assert row["ma10"] is None
-        assert row["ma20"] is None
+        assert "indicators" not in row
+        assert "ma5" not in row
+        assert "ma10" not in row
+        assert "ma20" not in row
+        # amount / change_percent keep the original "null when missing"
+        # semantics — always present, possibly null.
+        assert "amount" in row
+        assert "change_percent" in row
 
 
 def test_history_with_ma_indicator(client):
@@ -160,8 +173,40 @@ def test_history_indicators_trigger_lookback_expansion(client):
         dp.DataFetcherManager.get_kline_data = original
 
 
-def test_history_index_code_rejected(client):
+def test_index_history_supports_indicators(client):
+    """The /indices/{code}/history endpoint accepts the same `?indicators=`
+    query param as /stocks/{code}/history. With it, the 4 indicator
+    fields appear; without it, they're omitted."""
+    # With indicators
     r = client.get("/api/v1/indices/000300/history?days=30&indicators=ma")
-    # Index history endpoint doesn't accept indicators — we did not wire
-    # them up. It should still succeed (no validation error).
     assert r.status_code == 200
+    body = r.json()
+    assert len(body["data"]) == 30
+    last = body["data"][-1]
+    # ma indicator should be computed and surfaced
+    assert "ma5" in last and last["ma5"] is not None
+    assert "ma10" in last and last["ma10"] is not None
+    assert "ma20" in last and last["ma20"] is not None
+    assert "indicators" in last
+    assert "ma5" in last["indicators"]
+    assert "ma30" in last["indicators"]
+
+    # Without indicators — same 4 fields must be omitted
+    r2 = client.get("/api/v1/indices/000300/history?days=30")
+    assert r2.status_code == 200
+    last2 = r2.json()["data"][-1]
+    assert "ma5" not in last2
+    assert "ma10" not in last2
+    assert "ma20" not in last2
+    assert "indicators" not in last2
+    # amount/change_percent remain
+    assert "amount" in last2
+    assert "change_percent" in last2
+
+
+def test_index_history_unknown_indicator_rejected(client):
+    r = client.get("/api/v1/indices/000300/history?days=30&indicators=macd,nope")
+    assert r.status_code == 400
+    body = r.json()
+    assert body["detail"]["error"] == "invalid_indicator"
+    assert "nope" in body["detail"]["message"]

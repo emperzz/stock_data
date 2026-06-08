@@ -4,7 +4,7 @@ Pydantic schemas for API request/response models.
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 
 class StockQuote(BaseModel):
@@ -37,7 +37,18 @@ class StockQuote(BaseModel):
 
 
 class KLineData(BaseModel):
-    """Single K-line data point."""
+    """Single K-line data point.
+
+    The 4 indicator fields (`ma5`, `ma10`, `ma20`, `indicators`) are
+    conditionally serialized: they are omitted from the JSON response
+    entirely when their value is None / empty. This keeps the response
+    clean when the caller did not pass `?indicators=...`, while still
+    surfacing them in full when the caller asked for indicator
+    computation. The `amount` and `change_percent` fields keep their
+    original "null when missing" semantics (always present, possibly
+    null) so consumers that distinguish "absent" from "explicitly
+    null" keep working.
+    """
 
     date: str = Field(description="Date")
     open: float = Field(description="Opening price")
@@ -54,11 +65,38 @@ class KLineData(BaseModel):
     # supplies `?indicators=...` (or a JSON body with `indicators`).
     # Keys are indicator-prefixed (e.g. macd_dif, kdj_k, boll_upper).
     # Each value is the float value at this bar or null if the
-    # indicator is not yet defined at this bar.
-    indicators: dict[str, float | None] = Field(
-        default_factory=dict,
+    # indicator is not yet defined at this bar. Default None so the
+    # model_serializer below can drop the key entirely.
+    indicators: dict[str, float | None] | None = Field(
+        default=None,
         description="Per-bar technical indicator values keyed by `<indicator>_<field>`",
     )
+
+    @model_serializer
+    def _serialize(self) -> dict[str, Any]:
+        # Always-present core + nullable-but-always-serialized fields.
+        data: dict[str, Any] = {
+            "date": self.date,
+            "open": self.open,
+            "high": self.high,
+            "low": self.low,
+            "close": self.close,
+            "volume": self.volume,
+            "amount": self.amount,
+            "change_percent": self.change_percent,
+        }
+        # Indicator fields: only emit when populated. None / empty
+        # means the caller didn't ask for them — drop the key from
+        # the response entirely instead of leaving a noisy `null`.
+        if self.ma5 is not None:
+            data["ma5"] = self.ma5
+        if self.ma10 is not None:
+            data["ma10"] = self.ma10
+        if self.ma20 is not None:
+            data["ma20"] = self.ma20
+        if self.indicators:
+            data["indicators"] = self.indicators
+        return data
 
 
 class StockHistoryResponse(BaseModel):

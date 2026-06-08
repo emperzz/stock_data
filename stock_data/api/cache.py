@@ -199,10 +199,13 @@ def make_index_history_cache_key(
     days: int,
     start_date: str | None = None,
     end_date: str | None = None,
+    indicators: list[str] | None = None,
 ) -> str:
     parts = [index_code, frequency, str(days)]
     if start_date or end_date:
         parts.extend([start_date or "", end_date or ""])
+    if indicators:
+        parts.append("ind=" + ",".join(sorted(indicators)))
     return "idx_history:" + ":".join(parts)
 
 

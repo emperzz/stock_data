@@ -207,23 +207,27 @@ volume, amount, volume_ratio, turnover_rate, amplitude,
 open_price, high, low, pre_close, pe_ratio, pb_ratio, total_mv, circ_mv
 ```
 
-**K-line with indicators** (response of `/stocks/{code}/history?indicators=...`):
+**K-line with indicators** (response of `/stocks/{code}/history?indicators=...`
+or `/indices/{code}/history?indicators=...`):
 ```python
-# Standard columns PLUS:
 KLineData(
-    date, open, high, low, close, volume, amount, change_percent,
-    ma5, ma10, ma20,          # back-compat: copied from indicators dict when "ma" requested
-    indicators: {             # per-bar dict; populated only when ?indicators= is set
+    date, open, high, low, close, volume,
+    amount: float|None,         # present in JSON as null when missing
+    change_percent: float|None, # present in JSON as null when missing
+    # ---- below: 4 fields OMITTED from JSON when their value is None/empty ----
+    ma5, ma10, ma20,   # back-compat: copied from indicators dict when "ma" requested
+    indicators: {     # per-bar dict; populated only when ?indicators= is set
         "ma5": float|None,
-        "macd_dif": float|None,
-        "macd_dea": float|None,
-        "macd_hist": float|None,
+        "macd_dif": float|None, "macd_dea": float|None, "macd_hist": float|None,
         "kdj_k": float|None, "kdj_d": float|None, "kdj_j": float|None,
         "boll_mid": float|None, "boll_upper": float|None,
         "boll_lower": float|None, "boll_bandwidth": float|None,
         # ... one entry per output column of the requested indicators
     },
 )
+# Without `?indicators=`, the 4 fields above are absent from the JSON
+# (KLineData._serialize uses @model_serializer to drop them when None/empty).
+# `amount` and `change_percent` keep their original "present-as-null-when-missing" behavior.
 ```
 
 **Indicator catalog entry** (response of `/indicators/catalog`):
@@ -518,7 +522,19 @@ DataFrame transformer:
 was removed. Those fields on `KLineData` are preserved for back-compat
 and backfilled from the `ma` indicator's `ma5/ma10/ma20` output columns
 when the user requests `?indicators=ma`. When no indicator is requested,
-they are `None`.
+the 4 indicator fields (`ma5`, `ma10`, `ma20`, `indicators`) are
+**omitted from the JSON response entirely** by the `KLineData._serialize`
+`@model_serializer` — they are not present as `null`. This is the
+contract optimization: clients can rely on "key exists ⇔ indicator was
+computed". `amount` and `change_percent` keep the original
+"present-as-null-when-missing" behavior.
+
+**Index indicators**: `/indices/{code}/history` accepts the same
+`?indicators=` query param as `/stocks/{code}/history`. The
+orchestrator in `routes.py` handles lookback expansion and truncation
+the same way for both endpoints (`_apply_indicators`, `_parse_indicators_param`
+are shared). Indices and stocks share the same `KLineData` response
+shape — the same conditional serialization applies.
 
 ### Market-Aware Routing
 Manager routes requests based on stock code and capability:

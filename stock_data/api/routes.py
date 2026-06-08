@@ -4,8 +4,12 @@ API routes for stock data server.
 
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Path, Query
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from ..data_provider import (
     AkshareFetcher,
@@ -131,6 +135,103 @@ from .schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------- shared helpers for the two history endpoints ----------
+
+
+def _parse_indicators_param(indicators: str | None) -> list[str]:
+    """Parse the `?indicators=a,b,c` query param.
+
+    Each name is validated against `IndicatorKey`. Empty / None returns
+    an empty list. Duplicates are deduplicated (preserves order of first
+    occurrence). Raises 400 on an unknown indicator name.
+
+    Used by both /stocks/{code}/history and /indices/{code}/history.
+    """
+    if not indicators:
+        return []
+    out: list[str] = []
+    for raw in indicators.split(","):
+        key = raw.strip()
+        if not key or key in out:
+            continue
+        try:
+            IndicatorKey(key)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_indicator",
+                    "message": (
+                        f"Unknown indicator: {key!r}. "
+                        "See /indicators/catalog for the list of supported indicators."
+                    ),
+                },
+            ) from None
+        out.append(key)
+    return out
+
+
+def _apply_indicators(
+    df: "pd.DataFrame",
+    requested_indicators: list[str],
+    days: int,
+    actual_days: int,
+) -> "pd.DataFrame":
+    """Run IndicatorService.compute on `df` if requested, then truncate
+    back to the user-requested bar count.
+
+    Args:
+        df: K-line DataFrame already fetched with `actual_days` rows.
+        requested_indicators: empty list → no-op (returns df unchanged).
+        days: the user-requested bar count.
+        actual_days: how many rows were actually fetched (>= days when
+            lookback expansion was needed).
+
+    Returns:
+        A DataFrame with the `indicators` column populated and at most
+        `days` rows (the most recent ones).
+    """
+    if not requested_indicators:
+        return df
+    df = IndicatorService().compute(df, requested_indicators)
+    if actual_days > days and len(df) > days:
+        df = df.tail(days).reset_index(drop=True)
+    return df
+
+
+def _build_kline_data(row: dict, format_date) -> KLineData:
+    """Build a KLineData from a DataFrame row dict.
+
+    Centralizes the back-compat fill for `ma5`/`ma10`/`ma20` from the
+    `indicators` dict (the legacy `KLineData` field surface). When
+    `indicators` wasn't computed, those fields are left as None — the
+    model's `@model_serializer` will then drop them from the JSON
+    response entirely. When `indicators` was computed, `ma5/10/20` are
+    populated from the dict (mirrors the pre-refactor shape) AND the
+    full `indicators` dict is preserved.
+
+    Used by both /stocks/{code}/history and /indices/{code}/history.
+    """
+    ind = row.get("indicators") or {}
+    return KLineData(
+        date=format_date(row.get("date")),
+        open=float(row.get("open", 0)),
+        high=float(row.get("high", 0)),
+        low=float(row.get("low", 0)),
+        close=float(row.get("close", 0)),
+        volume=int(row.get("volume", 0)),
+        amount=float(row.get("amount")) if row.get("amount") is not None else None,
+        change_percent=float(row.get("pct_chg")) if row.get("pct_chg") is not None else None,
+        # Back-compat: surface ma5/ma10/ma20 from the indicators dict if computed.
+        # None when not requested — model_serializer drops the key.
+        ma5=float(ind["ma5"]) if ind.get("ma5") is not None else None,
+        ma10=float(ind["ma10"]) if ind.get("ma10") is not None else None,
+        ma20=float(ind["ma20"]) if ind.get("ma20") is not None else None,
+        # Pass the full dict when computed, None when empty — serializer drops it.
+        indicators=ind or None,
+    )
 
 # Global manager instance
 _manager: DataFetcherManager | None = None
@@ -414,27 +515,7 @@ def get_history(
         adj_value = adjust or None
 
         # Parse indicators param
-        requested_indicators: list[str] = []
-        if indicators:
-            for raw in indicators.split(","):
-                key = raw.strip()
-                if not key:
-                    continue
-                try:
-                    IndicatorKey(key)
-                except ValueError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "invalid_indicator",
-                            "message": (
-                                f"Unknown indicator: {key!r}. "
-                                "See /indicators/catalog for the list of supported indicators."
-                            ),
-                        },
-                    ) from None
-                if key not in requested_indicators:
-                    requested_indicators.append(key)
+        requested_indicators = _parse_indicators_param(indicators)
 
         # Cache key includes all params including adjust + indicators
         if is_cache_enabled():
@@ -466,12 +547,7 @@ def get_history(
         )
 
         # Compute indicators (if any) and merge into the DataFrame
-        if requested_indicators:
-            indicator_service = IndicatorService()
-            df = indicator_service.compute(df, requested_indicators)
-            # Truncate back to the user-requested bar count (keep the most recent `days` rows)
-            if actual_days > days and len(df) > days:
-                df = df.tail(days).reset_index(drop=True)
+        df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
 
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
 
@@ -484,39 +560,7 @@ def get_history(
             return str(val)
 
         records = df.to_dict("records")
-        data = [
-            KLineData(
-                date=format_date(row.get("date")),
-                open=float(row.get("open", 0)),
-                high=float(row.get("high", 0)),
-                low=float(row.get("low", 0)),
-                close=float(row.get("close", 0)),
-                volume=int(row.get("volume", 0)),
-                amount=float(row.get("amount")) if row.get("amount") is not None else None,
-                change_percent=float(row.get("pct_chg"))
-                if row.get("pct_chg") is not None
-                else None,
-                # Backwards-compat: surface ma5/ma10/ma20 from the indicators dict
-                # if the user requested `ma` and these columns were emitted.
-                ma5=(
-                    float((row.get("indicators") or {}).get("ma5"))
-                    if (row.get("indicators") or {}).get("ma5") is not None
-                    else (float(row.get("ma5")) if row.get("ma5") is not None else None)
-                ),
-                ma10=(
-                    float((row.get("indicators") or {}).get("ma10"))
-                    if (row.get("indicators") or {}).get("ma10") is not None
-                    else (float(row.get("ma10")) if row.get("ma10") is not None else None)
-                ),
-                ma20=(
-                    float((row.get("indicators") or {}).get("ma20"))
-                    if (row.get("indicators") or {}).get("ma20") is not None
-                    else (float(row.get("ma20")) if row.get("ma20") is not None else None)
-                ),
-                indicators=row.get("indicators") or {},
-            )
-            for row in records
-        ]
+        data = [_build_kline_data(row, format_date) for row in records]
 
         result = StockHistoryResponse(
             code=stock_code, stock_name=stock_name, period=period, data=data
@@ -756,9 +800,18 @@ def get_index_history(
     end_date: str | None = Query(
         default=None, description="End date (YYYY-MM-DD), defaults to today"
     ),
+    indicators: str | None = Query(
+        default=None,
+        description=(
+            "Comma-separated list of technical indicators to compute on the K-line. "
+            "Supported: ma, macd, boll, kdj, rsi, wr, bias, cci, atr, obv, "
+            "roc, dmi, sar, kc. The 'ma' indicator always returns ma5/10/20/30/60 "
+            "with default options. Use /indicators/catalog for details."
+        ),
+    ),
 ) -> IndexHistoryResponse:
     """
-    Get historical K-line data for an index.
+    Get historical K-line data for an index, optionally with technical indicators.
 
     Args:
         index_code: Index code (e.g., 000300, 399006)
@@ -766,14 +819,29 @@ def get_index_history(
         days: Number of days when start_date not provided
         start_date: Start date (YYYY-MM-DD), overrides days parameter
         end_date: End date (YYYY-MM-DD), defaults to today
+        indicators: Comma-separated indicator names, e.g. "ma,macd,kdj"
     """
     try:
         period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
         frequency = period_map.get(period, "d")
 
+        # Parse indicators param (same semantics as /stocks/{code}/history)
+        requested_indicators = _parse_indicators_param(indicators)
+
+        # If indicators are requested, fetch enough history to warm them up.
+        # (Akshare's index branch doesn't go through BaseFetcher's auto-*2
+        # expansion, so the route must do the lookback itself.)
+        actual_days = days
+        if requested_indicators:
+            extra_lookback = IndicatorService().estimate_lookback(requested_indicators)
+            if extra_lookback > 0:
+                actual_days = max(days, extra_lookback)
+
         if is_cache_enabled():
             cache = get_history_cache(frequency)
-            key = make_index_history_cache_key(index_code, frequency, days, start_date, end_date)
+            key = make_index_history_cache_key(
+                index_code, frequency, days, start_date, end_date, requested_indicators
+            )
             if key in cache:
                 logger.info(f"[APICache] index_history hit: {key}")
                 return cache[key]
@@ -783,9 +851,12 @@ def get_index_history(
             index_code,
             start_date=start_date,
             end_date=end_date,
-            days=days,
+            days=actual_days,
             frequency=frequency,
         )
+
+        # Compute indicators (if any) and merge into the DataFrame
+        df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
 
         # Get index name from index list
         all_indices = get_all_indices()
@@ -799,24 +870,7 @@ def get_index_history(
             return str(val)
 
         records = df.to_dict("records")
-        data = [
-            KLineData(
-                date=format_date(row.get("date")),
-                open=float(row.get("open", 0)),
-                high=float(row.get("high", 0)),
-                low=float(row.get("low", 0)),
-                close=float(row.get("close", 0)),
-                volume=int(row.get("volume", 0)),
-                amount=float(row.get("amount")) if row.get("amount") is not None else None,
-                change_percent=float(row.get("pct_chg"))
-                if row.get("pct_chg") is not None
-                else None,
-                ma5=float(row.get("ma5")) if row.get("ma5") is not None else None,
-                ma10=float(row.get("ma10")) if row.get("ma10") is not None else None,
-                ma20=float(row.get("ma20")) if row.get("ma20") is not None else None,
-            )
-            for row in records
-        ]
+        data = [_build_kline_data(row, format_date) for row in records]
 
         result = IndexHistoryResponse(code=index_code, name=index_name, period=period, data=data)
 
@@ -834,6 +888,8 @@ def get_index_history(
                 "message": f"Index history data not currently available: {e}",
             },
         ) from e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Index history error: {e}", exc_info=True)
         raise HTTPException(
