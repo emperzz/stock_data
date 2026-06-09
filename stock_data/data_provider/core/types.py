@@ -48,6 +48,7 @@ class RealtimeSource(Enum):
     STOOQ = "stooq"
     ZHITU = "zhitu"
     TENCENT = "tencent"
+    MYQUANT = "myquant"
     FALLBACK = "fallback"
 
 

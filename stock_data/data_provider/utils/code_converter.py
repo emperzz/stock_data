@@ -261,3 +261,60 @@ def to_tushare_format(code: str) -> str:
     if code.startswith(("0", "1", "2", "3", "4")):
         return f"{code}.SZ"
     raise ValueError(f"Tushare does not support code {code}")
+
+
+# ---------------------------------------------------------------------------
+# Myquant
+# ---------------------------------------------------------------------------
+
+def to_myquant_format(code: str) -> str:
+    """Convert to myquant ``SHSE/SZSE.{code}`` format (A-share only).
+
+    600519 → ``SHSE.600519``  (Shanghai: 5/6/7/9 prefix)
+    000001 → ``SZSE.000001``  (Shenzhen/Beijing: 0/1/2/3/4/8 prefix)
+    HK / US / Index → 抛 ``ValueError``
+
+    Indices must use :func:`to_myquant_index_format` instead.
+    """
+    code = normalize_stock_code(code)
+
+    if is_index_code(code):
+        raise ValueError(f"Use to_myquant_index_format for index {code}")
+
+    if is_hk_market(code):
+        raise ValueError(f"Myquant does not support HK market {code}")
+    if code.isalpha() and len(code) <= 5:
+        raise ValueError(f"Myquant does not support US market {code}")
+
+    if code.startswith(("5", "6", "7", "9")):
+        return f"SHSE.{code}"
+    # Default Shenzhen prefix covers 0/1/2/3/4 (SZ main + ChiNext) and 8 (BJ)
+    if code.startswith(("0", "1", "2", "3", "4", "8")):
+        return f"SZSE.{code}"
+    raise ValueError(f"Cannot map code {code} to myquant format")
+
+
+def to_myquant_index_format(code: str) -> str:
+    """Convert CSI index to myquant format.
+
+    000300 → ``SHSE.000300``  (沪深 300, 中证 500, etc.)
+    399006 → ``SZSE.399006``  (创业板指, 深证 100, etc.)
+    非 CSI 指数 / 非指数代码 → 抛 ``ValueError``
+    """
+    code = normalize_stock_code(code)
+
+    if not is_index_code(code):
+        raise ValueError(f"Not an index code: {code}")
+
+    from ..fetchers.index_symbols import get_index_type
+
+    if get_index_type(code) != "csi":
+        raise ValueError(f"Myquant does not support non-CSI index {code}")
+
+    # Shanghai indices: 0xxxxx (000300, 000905, 000016, ...)
+    if code.startswith("0"):
+        return f"SHSE.{code}"
+    # Shenzhen indices: 3xxxxx (399006, 399001, 399905, ...)
+    if code.startswith("3"):
+        return f"SZSE.{code}"
+    raise ValueError(f"Cannot map index {code} to myquant format")

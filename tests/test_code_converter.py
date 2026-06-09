@@ -295,3 +295,67 @@ class TestCrossConsistency:
         assert cc.to_akshare_format(code) == "00700.hk"
         assert cc.to_tencent_prefix(code) == "hk00700"
         assert cc.to_yfinance_format(code) == "00700.HK"
+
+
+# ====================================================================
+# Myquant
+# ====================================================================
+
+class TestToMyquantFormat:
+    def test_shanghai_stock(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        assert to_myquant_format("600519") == "SHSE.600519"
+
+    def test_shenzhen_stock(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        # 000001 is 上证指数 index — use 000002 for Shenzhen stock
+        assert to_myquant_format("000002") == "SZSE.000002"
+
+    def test_beijing_stock(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        # Beijing exchange codes (8xxxxx) route to SZSE prefix per myquant docs
+        assert to_myquant_format("832000") == "SZSE.832000"
+
+    def test_hk_raises(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        with pytest.raises(ValueError, match="does not support"):
+            to_myquant_format("HK00700")
+
+    def test_us_raises(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        with pytest.raises(ValueError, match="does not support"):
+            to_myquant_format("AAPL")
+
+    def test_index_raises(self):
+        """Index code should raise to force caller to use to_myquant_index_format."""
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        with pytest.raises(ValueError, match="to_myquant_index_format"):
+            to_myquant_format("000300")
+
+    def test_chinext(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        assert to_myquant_format("300750") == "SZSE.300750"
+
+    def test_star_market(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        assert to_myquant_format("688981") == "SHSE.688981"
+
+
+class TestToMyquantIndexFormat:
+    def test_csi_shanghai(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_index_format
+        assert to_myquant_index_format("000300") == "SHSE.000300"
+
+    def test_csi_shenzhen(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_index_format
+        assert to_myquant_index_format("399006") == "SZSE.399006"
+
+    def test_non_csi_raises(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_index_format
+        with pytest.raises(ValueError, match="non-CSI"):
+            to_myquant_index_format("HSI")
+
+    def test_non_index_raises(self):
+        from stock_data.data_provider.utils.code_converter import to_myquant_index_format
+        with pytest.raises(ValueError, match="Not an index"):
+            to_myquant_index_format("600519")
