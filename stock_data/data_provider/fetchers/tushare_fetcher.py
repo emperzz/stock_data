@@ -12,8 +12,8 @@ import pandas as pd
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
+from ..utils.code_converter import to_tushare_format
 from ..utils.normalize import get_index_type, is_index_code
-from .index_symbols import CSI_INDEX_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -91,24 +91,10 @@ class TushareFetcher(BaseFetcher):
             code = normalize_stock_code(stock_code)
             is_index = is_index_code(code) and get_index_type(code) == "csi"
 
-            if is_index:
-                # CSI index: use index_daily API (no adjustment support)
-                entry = CSI_INDEX_MAP.get(code)
-                if entry is not None:
-                    bs_symbol = entry[0]
-                    market_prefix = bs_symbol.split(".")[0].upper()
-                    numeric_code = bs_symbol.split(".")[1]
-                    ts_code = f"{numeric_code}.{market_prefix}"
-                else:
-                    ts_code = f"{code}.SH"
-            else:
-                # Regular stock
-                if code.startswith(("6", "5")):
-                    ts_code = f"{code}.SH"
-                elif code.startswith(("4", "3", "0", "1", "2")):
-                    ts_code = f"{code}.SZ"
-                else:
-                    raise DataFetchError(f"TushareFetcher does not support {stock_code}")
+            try:
+                ts_code = to_tushare_format(stock_code)
+            except ValueError as e:
+                raise DataFetchError(str(e)) from e
 
             start = start_date.replace("-", "")
             end = end_date.replace("-", "")
@@ -190,7 +176,7 @@ class TushareFetcher(BaseFetcher):
             import tushare as ts
 
             code = normalize_stock_code(stock_code)
-            ts_code = f"{code}.SH" if code.startswith(("6", "5")) else f"{code}.SZ"
+            ts_code = to_tushare_format(stock_code)
 
             # Try to get realtime tick via tushare directly
             df = ts.realtime_quote(ts_code=ts_code)
@@ -234,8 +220,7 @@ class TushareFetcher(BaseFetcher):
             return None
 
         try:
-            code = normalize_stock_code(stock_code)
-            ts_code = f"{code}.SH" if code.startswith(("6", "5")) else f"{code}.SZ"
+            ts_code = to_tushare_format(stock_code)
 
             df = self._api.stock_basic(ts_code=ts_code, list_status="L")
             if df is not None and not df.empty:

@@ -9,17 +9,19 @@ import os
 
 import pandas as pd
 
-from ..base import (
+from ...base import (
     BaseFetcher,
     DataCapability,
     DataFetchError,
     is_hk_market,
     normalize_stock_code,
 )
-from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
-from ..persistence.pool_daily import init_schema as init_zt_cache_schema
-from ..utils.normalize import get_index_type, is_index_code
-from .index_symbols import US_INDEX_AKSHARE_MAP
+from ...core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
+from ...persistence.pool_daily import init_schema as init_zt_cache_schema
+from ...utils.code_converter import to_akshare_format
+from ...utils.normalize import get_index_type, is_index_code
+from .board import fetch_board_list, fetch_board_stocks
+from .index_norm import filter_by_date, normalize_index_df
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,10 @@ class AkshareFetcher(BaseFetcher):
         | DataCapability.STOCK_ZT_POOL
     )
 
+    def is_available(self) -> bool:
+        """Akshare is always available when installed (no auth required)."""
+        return True
+
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Akshare adjust value."""
         if not adjust:
@@ -51,40 +57,8 @@ class AkshareFetcher(BaseFetcher):
         return mapping.get(adjust, "")
 
     def _convert_code(self, stock_code: str) -> str:
-        """
-        Convert stock code to akshare format.
-
-        A-share:
-            600519 -> 600519
-            000001 -> 000001
-        HK:
-            HK00700 -> 00700.hk
-            00700 -> 00700.hk
-        CSI index:
-            000300 -> 000300
-        US index:
-            SPX -> .INX (Sina format via index_us_stock_sina)
-        """
-        code = normalize_stock_code(stock_code)
-
-        # Check if it's an index
-        if is_index_code(code):
-            index_type = get_index_type(code)
-            if index_type == "us":
-                entry = US_INDEX_AKSHARE_MAP.get(code)
-                return entry[0] if entry is not None else code
-            elif index_type == "hk":
-                return code  # HK indices need special EM handling in _fetch_raw_data
-            # CSI indices use same 6-digit format as A-share stocks
-            return code
-
-        if is_hk_market(code):
-            if code.startswith("HK"):
-                code = code[2:]
-            # Keep leading zeros: normalize_stock_code ensures HK codes are zero-padded to 5 digits
-            return f"{code}.hk"
-
-        return code
+        """Convert to akshare query format. Delegates to ``to_akshare_format``."""
+        return to_akshare_format(stock_code)
 
     def _fetch_raw_data(
         self,
@@ -509,222 +483,74 @@ class AkshareFetcher(BaseFetcher):
     def get_all_concept_boards(
         self, source: str = "eastmoney", include_quote: bool = False
     ) -> list[dict]:
-        """Get all concept boards from Akshare.
-
-        Args:
-            source: Data source - "eastmoney" (default)
-            include_quote: If True, include realtime price/change/market data
-
-        Returns:
-            List of dicts: [{"code": "BK1048", "name": "互联网服务"}, ...]
-            When include_quote=True, also includes: price, change_pct, change_amount,
-            volume, amount, turnover_rate, total_mv, up_count, down_count,
-            leading_stock, leading_stock_pct
-        """
-        try:
-            import akshare as ak
-
-            df = ak.stock_board_concept_name_em()
-            result = []
-            if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    code = str(row.get("板块代码", "")).strip()
-                    name = str(row.get("板块名称", "")).strip()
-                    if code:
-                        board = {"code": code, "name": name}
-                        if include_quote:
-                            board.update({
-                                "price": row.get("最新价"),
-                                "change_pct": row.get("涨跌幅"),
-                                "change_amount": row.get("涨跌额"),
-                                "volume": row.get("成交量"),
-                                "amount": row.get("成交额"),
-                                "turnover_rate": row.get("换手率"),
-                                "total_mv": row.get("总市值"),
-                                "up_count": row.get("上涨家数"),
-                                "down_count": row.get("下跌家数"),
-                                "leading_stock": row.get("领涨股票"),
-                                "leading_stock_pct": row.get("领涨股票-涨跌幅"),
-                            })
-                        result.append(board)
-            return result
-        except Exception as e:
-            logger.warning(f"[AkshareFetcher] get_all_concept_boards failed: {e}")
-            return []
+        """Get all concept boards. Delegates to the shared board helper."""
+        import akshare as ak
+        return fetch_board_list(
+            ak.stock_board_concept_name_em,
+            include_quote=include_quote,
+            fetcher_label=self.name,
+        )
 
     def get_concept_board_stocks(
         self, board_code: str, source: str = "eastmoney", include_quote: bool = False
     ) -> list[dict]:
-        """Get stocks within a concept board.
-
-        Args:
-            board_code: Board code like "BK1048"
-            source: Data source - "eastmoney" (default)
-            include_quote: If True, fetch realtime quote for each stock
-
-        Returns:
-            List of dicts: [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
-            When include_quote=True, also includes: price, change_pct, change_amount,
-            volume, amount, turnover_rate, pe_ratio, pb_ratio, high, low, open, pre_close
-        """
-        try:
-            import akshare as ak
-
-            df = ak.stock_board_concept_cons_em(symbol=board_code)
-            result = []
-            if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    code = str(row.get("代码", "")).strip()
-                    name = str(row.get("名称", "")).strip()
-                    if code:
-                        stock = {"stock_code": code, "stock_name": name}
-                        if include_quote:
-                            stock.update({
-                                "price": row.get("最新价"),
-                                "change_pct": row.get("涨跌幅"),
-                                "change_amount": row.get("涨跌额"),
-                                "volume": row.get("成交量"),
-                                "amount": row.get("成交额"),
-                                "turnover_rate": row.get("换手率"),
-                                "pe_ratio": row.get("市盈率-动态"),
-                                "pb_ratio": row.get("市净率"),
-                                "high": row.get("最高"),
-                                "low": row.get("最低"),
-                                "open": row.get("今开"),
-                                "pre_close": row.get("昨收"),
-                            })
-                        result.append(stock)
-            return result
-        except Exception as e:
-            logger.warning(f"[AkshareFetcher] get_concept_board_stocks({board_code}) failed: {e}")
-            if include_quote:
-                return self._get_board_stocks_with_fallback(board_code, source, "concept")
-            return []
+        """Get stocks within a concept board. Delegates to the shared board helper."""
+        import akshare as ak
+        return fetch_board_stocks(
+            ak.stock_board_concept_cons_em,
+            board_code,
+            include_quote=include_quote,
+            fallback_enricher=self._enrich_stock_from_realtime,
+            fetcher_label=self.name,
+        )
 
     def get_all_industry_boards(
         self, source: str = "eastmoney", include_quote: bool = False
     ) -> list[dict]:
-        """Get all industry boards from Akshare.
-
-        Args:
-            source: Data source - "eastmoney" (default)
-            include_quote: If True, include realtime price/change/market data
-
-        Returns:
-            List of dicts: [{"code": "BK0418", "name": "银行"}, ...]
-            When include_quote=True, also includes: price, change_pct, change_amount,
-            volume, amount, turnover_rate, total_mv, up_count, down_count,
-            leading_stock, leading_stock_pct
-        """
-        try:
-            import akshare as ak
-
-            df = ak.stock_board_industry_name_em()
-            result = []
-            if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    code = str(row.get("板块代码", "")).strip()
-                    name = str(row.get("板块名称", "")).strip()
-                    if code:
-                        board = {"code": code, "name": name}
-                        if include_quote:
-                            board.update({
-                                "price": row.get("最新价"),
-                                "change_pct": row.get("涨跌幅"),
-                                "change_amount": row.get("涨跌额"),
-                                "volume": row.get("成交量"),
-                                "amount": row.get("成交额"),
-                                "turnover_rate": row.get("换手率"),
-                                "total_mv": row.get("总市值"),
-                                "up_count": row.get("上涨家数"),
-                                "down_count": row.get("下跌家数"),
-                                "leading_stock": row.get("领涨股票"),
-                                "leading_stock_pct": row.get("领涨股票-涨跌幅"),
-                            })
-                        result.append(board)
-            return result
-        except Exception as e:
-            logger.warning(f"[AkshareFetcher] get_all_industry_boards failed: {e}")
-            return []
+        """Get all industry boards. Delegates to the shared board helper."""
+        import akshare as ak
+        return fetch_board_list(
+            ak.stock_board_industry_name_em,
+            include_quote=include_quote,
+            fetcher_label=self.name,
+        )
 
     def get_industry_board_stocks(
         self, board_code: str, source: str = "eastmoney", include_quote: bool = False
     ) -> list[dict]:
-        """Get stocks within an industry board.
+        """Get stocks within an industry board. Delegates to the shared board helper."""
+        import akshare as ak
+        return fetch_board_stocks(
+            ak.stock_board_industry_cons_em,
+            board_code,
+            include_quote=include_quote,
+            fallback_enricher=self._enrich_stock_from_realtime,
+            fetcher_label=self.name,
+        )
 
-        Args:
-            board_code: Board code like "BK0418"
-            source: Data source - "eastmoney" (default)
-            include_quote: If True, fetch realtime quote for each stock
+    def _enrich_stock_from_realtime(self, stock_code: str) -> dict | None:
+        """Enrich a single stock dict with realtime quote fields.
 
-        Returns:
-            List of dicts: [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
-            When include_quote=True, also includes: price, change_pct, change_amount,
-            volume, amount, turnover_rate, pe_ratio, pb_ratio, high, low, open, pre_close
+        Used as ``fallback_enricher`` by ``fetch_board_stocks`` when the
+        direct API quote enrichment fails.
         """
-        try:
-            import akshare as ak
-
-            df = ak.stock_board_industry_cons_em(symbol=board_code)
-            result = []
-            if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    code = str(row.get("代码", "")).strip()
-                    name = str(row.get("名称", "")).strip()
-                    if code:
-                        stock = {"stock_code": code, "stock_name": name}
-                        if include_quote:
-                            stock.update({
-                                "price": row.get("最新价"),
-                                "change_pct": row.get("涨跌幅"),
-                                "change_amount": row.get("涨跌额"),
-                                "volume": row.get("成交量"),
-                                "amount": row.get("成交额"),
-                                "turnover_rate": row.get("换手率"),
-                                "pe_ratio": row.get("市盈率-动态"),
-                                "pb_ratio": row.get("市净率"),
-                                "high": row.get("最高"),
-                                "low": row.get("最低"),
-                                "open": row.get("今开"),
-                                "pre_close": row.get("昨收"),
-                            })
-                        result.append(stock)
-            return result
-        except Exception as e:
-            logger.warning(f"[AkshareFetcher] get_industry_board_stocks({board_code}) failed: {e}")
-            if include_quote:
-                return self._get_board_stocks_with_fallback(board_code, source, "industry")
-            return []
-
-    def _get_board_stocks_with_fallback(
-        self, board_code: str, source: str, board_type: str
-    ) -> list[dict]:
-        """Fallback: get board stocks without realtime data, then enrich with get_realtime_quote."""
-        if board_type == "concept":
-            stocks = self.get_concept_board_stocks(board_code, source=source, include_quote=False)
-        else:
-            stocks = self.get_industry_board_stocks(board_code, source=source, include_quote=False)
-
-        if not stocks:
-            return []
-
-        # Fallback to get_realtime_quote for each stock
-        for stock in stocks:
-            quote = self.get_realtime_quote(stock["stock_code"])
-            if quote:
-                stock["price"] = quote.price
-                stock["change_pct"] = quote.change_pct
-                stock["change_amount"] = quote.change_amount
-                stock["volume"] = quote.volume
-                stock["amount"] = quote.amount
-                stock["turnover_rate"] = quote.turnover_rate
-                stock["pe_ratio"] = quote.pe_ratio
-                stock["pb_ratio"] = quote.pb_ratio
-                stock["high"] = quote.high
-                stock["low"] = quote.low
-                stock["open"] = quote.open_price
-                stock["pre_close"] = quote.pre_close
-        return stocks
+        quote = self.get_realtime_quote(stock_code)
+        if quote is None:
+            return None
+        return {
+            "price": quote.price,
+            "change_pct": quote.change_pct,
+            "change_amount": quote.change_amount,
+            "volume": quote.volume,
+            "amount": quote.amount,
+            "turnover_rate": quote.turnover_rate,
+            "pe_ratio": quote.pe_ratio,
+            "pb_ratio": quote.pb_ratio,
+            "high": quote.high,
+            "low": quote.low,
+            "open": quote.open_price,
+            "pre_close": quote.pre_close,
+        }
 
     def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote for a CSI index.
@@ -846,9 +672,10 @@ class AkshareFetcher(BaseFetcher):
             try:
                 df = ak.stock_zh_index_daily(symbol=sina_symbol)
                 if df is not None and not df.empty:
-                    df = self._normalize_index_daily(df, code)
+                    df = normalize_index_df(df, code, self._INDEX_SINA_MAP,
+                                            numeric_cols=self._INDEX_SINA_NUMERIC)
                     if start_date or end_date:
-                        df = self._filter_by_date(df, start_date, end_date)
+                        df = filter_by_date(df, start_date, end_date)
                     return df
             except Exception as e:
                 logger.debug(f"[AkshareFetcher] stock_zh_index_daily failed: {e}")
@@ -861,7 +688,8 @@ class AkshareFetcher(BaseFetcher):
                     end_date=(end_date or "").replace("-", ""),
                 )
                 if df is not None and not df.empty:
-                    df = self._normalize_index_daily_tx(df, code)
+                    df = normalize_index_df(df, code, self._INDEX_TX_MAP,
+                                            numeric_cols=self._INDEX_TX_NUMERIC)
                     return df
             except Exception as e:
                 logger.debug(f"[AkshareFetcher] stock_zh_index_daily_tx failed: {e}")
@@ -874,7 +702,8 @@ class AkshareFetcher(BaseFetcher):
                     end_date=end_date.replace("-", "") if end_date else "20500101",
                 )
                 if df is not None and not df.empty:
-                    df = self._normalize_index_daily_em(df, code)
+                    df = normalize_index_df(df, code, self._INDEX_EM_MAP,
+                                            numeric_cols=self._INDEX_EM_NUMERIC)
                     return df
             except Exception as e:
                 logger.debug(f"[AkshareFetcher] stock_zh_index_daily_em failed: {e}")
@@ -885,87 +714,29 @@ class AkshareFetcher(BaseFetcher):
             logger.warning(f"[AkshareFetcher] get_index_historical failed: {e}")
             return None
 
-    def _normalize_index_daily(self, df: pd.DataFrame, code: str) -> pd.DataFrame:
-        """Normalize stock_zh_index_daily (Sina) DataFrame."""
-        column_mapping = {
-            "date": "date",
-            "open": "open",
-            "high": "high",
-            "low": "low",
-            "close": "close",
-            "volume": "volume",
-        }
-        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        numeric_cols = ["open", "high", "low", "close", "volume"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        if "code" not in df.columns:
-            df["code"] = code
-        keep_cols = ["code", "date", "open", "high", "low", "close", "volume"]
-        df = df[[c for c in keep_cols if c in df.columns]]
-        return df
+    # ----- index DataFrame normalisation -----
+    # The three previously separate _normalize_index_daily* methods and
+    # _filter_by_date have been extracted to akshare_index_norm.py as
+    # parameterised helpers.  The calls below map each akshare source to
+    # its column layout.
 
-    def _normalize_index_daily_tx(self, df: pd.DataFrame, code: str) -> pd.DataFrame:
-        """Normalize stock_zh_index_daily_tx (Tencent) DataFrame."""
-        column_mapping = {
-            "date": "date",
-            "open": "open",
-            "close": "close",
-            "high": "high",
-            "low": "low",
-            "amount": "volume",
-        }
-        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        numeric_cols = ["open", "high", "low", "close", "volume"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        if "code" not in df.columns:
-            df["code"] = code
-        keep_cols = ["code", "date", "open", "high", "low", "close", "volume"]
-        df = df[[c for c in keep_cols if c in df.columns]]
-        return df
+    _INDEX_SINA_MAP: dict[str, str] = {
+        "date": "date", "open": "open", "high": "high",
+        "low": "low", "close": "close", "volume": "volume",
+    }
+    _INDEX_SINA_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume")
 
-    def _normalize_index_daily_em(self, df: pd.DataFrame, code: str) -> pd.DataFrame:
-        """Normalize stock_zh_index_daily_em (EM) DataFrame."""
-        column_mapping = {
-            "date": "date",
-            "open": "open",
-            "close": "close",
-            "high": "high",
-            "low": "low",
-            "volume": "volume",
-            "amount": "amount",
-        }
-        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-        if "date" in df.columns:
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        if "code" not in df.columns:
-            df["code"] = code
-        keep_cols = ["code", "date", "open", "high", "low", "close", "volume", "amount"]
-        df = df[[c for c in keep_cols if c in df.columns]]
-        return df
+    _INDEX_TX_MAP: dict[str, str] = {
+        "date": "date", "open": "open", "close": "close",
+        "high": "high", "low": "low", "amount": "volume",
+    }
+    _INDEX_TX_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume")
 
-    def _filter_by_date(
-        self, df: pd.DataFrame, start_date: str | None, end_date: str | None
-    ) -> pd.DataFrame:
-        """Filter DataFrame by date range."""
-        if "date" not in df.columns:
-            return df
-        if start_date:
-            df = df[df["date"] >= pd.to_datetime(start_date, errors="coerce")]
-        if end_date:
-            df = df[df["date"] <= pd.to_datetime(end_date, errors="coerce")]
-        return df
+    _INDEX_EM_MAP: dict[str, str] = {
+        "date": "date", "open": "open", "close": "close",
+        "high": "high", "low": "low", "volume": "volume", "amount": "amount",
+    }
+    _INDEX_EM_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume", "amount")
 
     def get_index_intraday(
         self, index_code: str, period: str = "5"

@@ -15,8 +15,6 @@ _TTL_QUOTE = int(os.getenv("CACHE_TTL_QUOTE", 60))
 _TTL_HISTORY_DAILY = int(os.getenv("CACHE_TTL_HISTORY_DAILY", 300))
 _TTL_HISTORY_WEEKLY = int(os.getenv("CACHE_TTL_HISTORY_WEEKLY", 3600))
 _TTL_HISTORY_MONTHLY = int(os.getenv("CACHE_TTL_HISTORY_MONTHLY", 7200))
-_TTL_BOARD_LIST = int(os.getenv("CACHE_TTL_BOARD_LIST", 300))
-_TTL_BOARD_STOCKS = int(os.getenv("CACHE_TTL_BOARD_STOCKS", 300))
 _TTL_INDEX_QUOTE = int(os.getenv("CACHE_TTL_INDEX_QUOTE", 60))
 _TTL_INDEX_INTRADAY = int(os.getenv("CACHE_TTL_INDEX_INTRADAY", 30))
 _TTL_STOCK_INTRADAY = int(os.getenv("CACHE_TTL_STOCK_INTRADAY", 30))
@@ -28,8 +26,6 @@ _history_cache_w: TTLCache = TTLCache(maxsize=512, ttl=_TTL_HISTORY_WEEKLY)
 _history_cache_m: TTLCache = TTLCache(maxsize=512, ttl=_TTL_HISTORY_MONTHLY)
 
 _quote_cache: TTLCache = TTLCache(maxsize=1024, ttl=_TTL_QUOTE)
-_board_list_cache: TTLCache = TTLCache(maxsize=64, ttl=_TTL_BOARD_LIST)
-_board_stocks_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_BOARD_STOCKS)
 _index_quote_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_INDEX_QUOTE)
 _index_intraday_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_INDEX_INTRADAY)
 _stock_intraday_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INTRADAY)
@@ -64,14 +60,6 @@ _pools_cache: TTLCache = TTLCache(maxsize=128, ttl=_TTL_POOLS)
 
 def get_quote_cache() -> TTLCache:
     return _quote_cache
-
-
-def get_board_list_cache() -> TTLCache:
-    return _board_list_cache
-
-
-def get_board_stocks_cache() -> TTLCache:
-    return _board_stocks_cache
 
 
 def get_index_quote_cache() -> TTLCache:
@@ -167,17 +155,6 @@ def make_history_cache_key(
         # Sort to make key stable regardless of input order
         parts.append("ind=" + ",".join(sorted(indicators)))
     return ":".join(parts)
-
-
-def make_board_cache_key(board_type: str, source: str) -> str:
-    """Make cache key for board list data."""
-    return f"board:{board_type}:{source}"
-
-
-def make_board_stocks_cache_key(board_code: str, source: str, include_quote: bool) -> str:
-    """Make cache key for board stocks data."""
-    suffix = ":quote" if include_quote else ""
-    return f"board_stocks:{board_code}:{source}{suffix}"
 
 
 def make_index_quote_cache_key(index_code: str) -> str:

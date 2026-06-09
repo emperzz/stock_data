@@ -28,8 +28,8 @@ from ..base import (
     normalize_stock_code,
 )
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote
-from ..utils.normalize import get_index_type, is_index_code
-from .index_symbols import CSI_INDEX_MAP, HK_INDEX_MAP, US_INDEX_MAP
+from ..utils.code_converter import to_yfinance_format
+from ..utils.normalize import is_index_code
 
 logger = logging.getLogger(__name__)
 
@@ -55,64 +55,8 @@ class YfinanceFetcher(BaseFetcher):
         return "qfq"  # yfinance only has one adjustment flavor, map both to it
 
     def _convert_code(self, stock_code: str) -> str:
-        """
-        Convert stock code to yfinance format.
-
-        A-share:
-            600519 -> 600519.SS
-            000001 -> 000001.SZ
-        HK:
-            HK00700 -> 0700.HK
-        US:
-            AAPL -> AAPL (unchanged)
-        Indices:
-            SPX -> ^GSPC
-            000300 -> 000300.SS (CSI 300)
-            HSI -> ^HSI (Hang Seng)
-        """
-        code = stock_code.strip().upper()
-
-        # Check if it's an index code
-        if is_index_code(code):
-            index_type = get_index_type(code)
-            if index_type == "us":
-                entry = US_INDEX_MAP.get(code)
-                if entry is not None:
-                    return entry[0]
-            elif index_type == "csi":
-                entry = CSI_INDEX_MAP.get(code)
-                if entry is not None and entry[0].startswith("sz."):
-                    return f"{code}.SZ"
-                return f"{code}.SS"
-            elif index_type == "hk":
-                entry = HK_INDEX_MAP.get(code)
-                if entry is not None:
-                    return entry[0]
-
-        # Already in yfinance format
-        if code.endswith((".SS", ".SZ", ".HK", ".BJ")):
-            return code
-
-        # US stock (1-5 letters)
-        if is_us_market(code):
-            return code
-
-        # HK stock
-        if code.startswith("HK"):
-            # Keep leading zeros: normalize_stock_code ensures HK codes are zero-padded to 5 digits
-            digits = code[2:]
-            return f"{digits}.HK"
-
-        # A-share Shanghai
-        if code.startswith(("6", "5", "7")):
-            return f"{code}.SS"
-
-        # A-share Shenzhen
-        if code.startswith(("0", "1", "2", "3")):
-            return f"{code}.SZ"
-
-        # Default to Shenzhen
-        return f"{code}.SZ"
+        """Convert to yfinance ticker. Delegates to ``to_yfinance_format``."""
+        return to_yfinance_format(stock_code)
 
     def is_available(self) -> bool:
         """Check if yfinance is available."""

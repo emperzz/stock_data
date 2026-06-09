@@ -11,7 +11,7 @@ from typing import Any, TypeVar
 import pandas as pd
 
 from .base import BaseFetcher, DataCapability, DataFetchError
-from .core.types import UnifiedRealtimeQuote, get_realtime_circuit_breaker
+from .core.types import CircuitBreaker, UnifiedRealtimeQuote, get_realtime_circuit_breaker
 from .utils.normalize import index_market_tag, market_tag, normalize_stock_code
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,8 @@ class DataFetcherManager:
         *,
         allow_none: bool = False,
         error_prefix: str | None = None,
+        return_source: bool = False,
+        circuit_breaker: CircuitBreaker | None = None,
     ) -> T:
         """Run `call(fetcher)` over every fetcher with the given capability, in priority order.
 
@@ -123,29 +125,44 @@ class DataFetcherManager:
             allow_none: if True, return None on total failure instead of raising
             error_prefix: override for the DataFetchError prefix (default:
                 f"All fetchers failed for {op_label}:")
+            return_source: if True, return ``(result, fetcher_name)`` tuple
+                instead of plain ``result``
+            circuit_breaker: optional CircuitBreaker to integrate per-fetcher
+                availability checks and success/failure recording
 
         Returns:
-            The first non-None/non-empty result, with `fetcher.name` already
-            included via the call site (the helper does not return the source).
+            The first non-None/non-empty result (or ``(result, source_name)``
+            when ``return_source=True``).
 
         Raises:
-            DataFetchError: when all fetchers fail and `allow_none` is False.
+            DataFetchError: when all fetchers fail and ``allow_none`` is False.
         """
         fetchers = self._filter_by_capability(market, capability)
         errors: list[str] = []
         for fetcher in fetchers:
+            # Circuit breaker: skip fetchers in OPEN state
+            if circuit_breaker is not None and not circuit_breaker.is_available(fetcher.name):
+                logger.debug(f"[Manager] {fetcher.name} circuit open, skipping")
+                continue
             try:
                 result = call(fetcher)
             except Exception as e:
+                if circuit_breaker is not None:
+                    circuit_breaker.record_failure(fetcher.name)
                 errors.append(f"[{fetcher.name}] {e}")
                 logger.warning(f"[Manager] {fetcher.name} {op_label} failed: {e}")
                 continue
             if _is_meaningful(result):
                 logger.info(f"[Manager] {fetcher.name} succeeded for {op_label}")
-                return result
+                if circuit_breaker is not None:
+                    circuit_breaker.record_success(fetcher.name)
+                return (result, fetcher.name) if return_source else result  # type: ignore[return-value]
+            # Result is None/empty — treat as soft failure for circuit breaker
+            if circuit_breaker is not None:
+                circuit_breaker.record_failure(fetcher.name)
 
         if allow_none:
-            return None  # type: ignore[return-value]
+            return (None, "") if return_source else None  # type: ignore[return-value]
         prefix = error_prefix or f"All fetchers failed for {op_label}:"
         raise DataFetchError(prefix + "\n" + "\n".join(errors))
 
@@ -191,30 +208,23 @@ class DataFetcherManager:
             gen_cap = DataCapability.HISTORICAL_DWM
 
         if index_tag:
-            fetchers = self._filter_by_capability(index_tag, index_cap)
-            if not fetchers:
-                fetchers = self._filter_by_capability(index_tag, gen_cap)
             market = index_tag
+            capability = index_cap
+            if not self._filter_by_capability(market, index_cap):
+                capability = gen_cap
         else:
             market = market_tag(stock_code)
-            fetchers = self._filter_by_capability(market, gen_cap)
+            capability = gen_cap
 
-        # Custom loop because the helper returns only the data, not the source.
-        errors: list[str] = []
-        for fetcher in fetchers:
-            try:
-                df = fetcher.get_kline_data(
-                    stock_code, start_date, end_date, days, frequency, adjust
-                )
-            except Exception as e:
-                errors.append(f"[{fetcher.name}] {e}")
-                logger.warning(f"[Manager] {fetcher.name} failed: {e}")
-                continue
-            if _is_meaningful(df):
-                logger.info(f"[Manager] {fetcher.name} succeeded for {stock_code} ({frequency})")
-                return df, fetcher.name
+        def _fetch(fetcher: BaseFetcher) -> pd.DataFrame:
+            return fetcher.get_kline_data(
+                stock_code, start_date, end_date, days, frequency, adjust
+            )
 
-        raise DataFetchError(f"All fetchers failed for {stock_code}:\n" + "\n".join(errors))
+        return self._with_failover(
+            capability, market, f"kline {frequency} {stock_code}",
+            _fetch, return_source=True,
+        )
 
     def get_intraday_data(
         self, stock_code: str, period: str = "5", adjust: str = ""
@@ -234,24 +244,10 @@ class DataFetcherManager:
         """
         stock_code = normalize_stock_code(stock_code)
         market = market_tag(stock_code)
-        fetchers = self._filter_by_capability(market, DataCapability.HISTORICAL_MIN)
-
-        errors: list[str] = []
-        for fetcher in fetchers:
-            try:
-                df = fetcher.get_intraday_data(stock_code, period, adjust)
-            except Exception as e:
-                errors.append(f"[{fetcher.name}] {e}")
-                logger.warning(f"[Manager] {fetcher.name} intraday failed: {e}")
-                continue
-            if _is_meaningful(df):
-                logger.info(
-                    f"[Manager] {fetcher.name} succeeded for {stock_code} intraday"
-                )
-                return df, fetcher.name
-
-        raise DataFetchError(
-            f"All fetchers failed for {stock_code} intraday:\n" + "\n".join(errors)
+        return self._with_failover(
+            DataCapability.HISTORICAL_MIN, market, f"intraday {stock_code}",
+            lambda f: f.get_intraday_data(stock_code, period, adjust),
+            return_source=True,
         )
 
     # ---------- realtime quotes (with circuit breaker) ----------
@@ -262,24 +258,11 @@ class DataFetcherManager:
         market = market_tag(stock_code)
 
         cb = get_realtime_circuit_breaker()
-        fetchers = self._filter_by_capability(market, DataCapability.REALTIME_QUOTE)
-
-        for fetcher in fetchers:
-            if not cb.is_available(fetcher.name):
-                logger.debug(f"[Manager] {fetcher.name} circuit open, skipping")
-                continue
-            try:
-                quote = fetcher.get_realtime_quote(stock_code)
-            except Exception as e:
-                cb.record_failure(fetcher.name)
-                logger.warning(f"[Manager] {fetcher.name} realtime quote failed: {e}")
-                continue
-            if quote is not None:
-                cb.record_success(fetcher.name)
-                return quote
-            cb.record_failure(fetcher.name)
-
-        return None
+        return self._with_failover(
+            DataCapability.REALTIME_QUOTE, market, f"realtime {stock_code}",
+            lambda f: f.get_realtime_quote(stock_code),
+            allow_none=True, circuit_breaker=cb,
+        )
 
     # ---------- trade calendar (with persistence) ----------
 
@@ -458,22 +441,10 @@ class DataFetcherManager:
             start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         index_code = normalize_stock_code(index_code)
         index_type = index_market_tag(index_code) or "csi"
-        fetchers = self._filter_by_capability(index_type, DataCapability.INDEX_HISTORICAL)
-
-        errors: list[str] = []
-        for fetcher in fetchers:
-            try:
-                df = fetcher.get_index_historical(index_code, start_date, end_date, frequency)
-            except Exception as e:
-                errors.append(f"[{fetcher.name}] {e}")
-                logger.warning(f"[Manager] {fetcher.name} index history failed: {e}")
-                continue
-            if _is_meaningful(df):
-                logger.info(f"[Manager] {fetcher.name} succeeded for {index_code} index history")
-                return df, fetcher.name
-
-        raise DataFetchError(
-            f"All fetchers failed for {index_code} index history:\n" + "\n".join(errors)
+        return self._with_failover(
+            DataCapability.INDEX_HISTORICAL, index_type, f"index_hist {index_code}",
+            lambda f: f.get_index_historical(index_code, start_date, end_date, frequency),
+            return_source=True,
         )
 
     def get_index_intraday(
@@ -493,22 +464,10 @@ class DataFetcherManager:
         """
         index_code = normalize_stock_code(index_code)
         index_type = index_market_tag(index_code) or "csi"
-        fetchers = self._filter_by_capability(index_type, DataCapability.INDEX_INTRADAY)
-
-        errors: list[str] = []
-        for fetcher in fetchers:
-            try:
-                df = fetcher.get_index_intraday(index_code, period)
-            except Exception as e:
-                errors.append(f"[{fetcher.name}] {e}")
-                logger.warning(f"[Manager] {fetcher.name} index intraday failed: {e}")
-                continue
-            if _is_meaningful(df):
-                logger.info(f"[Manager] {fetcher.name} succeeded for {index_code} index intraday")
-                return df, fetcher.name
-
-        raise DataFetchError(
-            f"All fetchers failed for {index_code} index intraday:\n" + "\n".join(errors)
+        return self._with_failover(
+            DataCapability.INDEX_INTRADAY, index_type, f"index_intra {index_code}",
+            lambda f: f.get_index_intraday(index_code, period),
+            return_source=True,
         )
 
     # ---------- boards (concept / industry) ----------
@@ -639,24 +598,15 @@ class DataFetcherManager:
         Raises:
             DataFetchError: when no fetcher can serve the PDF.
         """
-        fetchers = self._filter_by_capability("csi", DataCapability.RESEARCH_REPORT)
-        errors: list[str] = []
-        for fetcher in fetchers:
-            try:
-                path = fetcher.download_report_pdf(report_id)
-            except Exception as e:
-                errors.append(f"[{fetcher.name}] {e}")
-                logger.warning(f"[Manager] {fetcher.name} report_pdf({report_id}) failed: {e}")
-                continue
-            if path is not None:
-                url = fetcher.get_report_pdf_url(report_id) or ""
-                logger.info(
-                    f"[Manager] {fetcher.name} served report PDF {report_id} -> {path}"
-                )
-                return path, url
-        raise DataFetchError(
-            f"All fetchers failed for report_pdf {report_id}:\n" + "\n".join(errors) or "(none)"
+        path, source = self._with_failover(
+            DataCapability.RESEARCH_REPORT, "csi", f"report_pdf {report_id}",
+            lambda f: f.download_report_pdf(report_id),
+            return_source=True,
         )
+        fetcher = self.get_fetcher(source)
+        url = fetcher.get_report_pdf_url(report_id) or "" if fetcher else ""
+        logger.info(f"[Manager] {source} served report PDF {report_id} -> {path}")
+        return path, url
 
     # ---------- introspection ----------
 
@@ -669,3 +619,48 @@ class DataFetcherManager:
     def fetchers(self) -> list["BaseFetcher"]:  # type: ignore[misc]
         """List all fetchers. Prefer get_fetcher() for single fetcher lookup."""
         return list(self._fetchers)
+
+
+def create_default_manager() -> DataFetcherManager:
+    """Create a DataFetcherManager with all available fetchers registered.
+
+    Each fetcher is instantiated and tested via ``is_available()``; only
+    available fetchers are registered. This is the single source of truth
+    for fetcher registration — callers in ``routes.py`` and ``persistence/``
+    should use this factory instead of constructing their own manager.
+
+    Returns:
+        A fully configured DataFetcherManager with available fetchers
+        registered in priority order.
+    """
+    # Lazy imports to avoid circular dependencies at module level
+    from .fetchers.akshare import AkshareFetcher
+    from .fetchers.baostock_fetcher import BaostockFetcher
+    from .fetchers.cninfo_fetcher import CninfoFetcher
+    from .fetchers.eastmoney_fetcher import EastMoneyFetcher
+    from .fetchers.tencent_fetcher import TencentFetcher
+    from .fetchers.ths_fetcher import ThsFetcher
+    from .fetchers.tushare_fetcher import TushareFetcher
+    from .fetchers.yfinance_fetcher import YfinanceFetcher
+    from .fetchers.zhitu_fetcher import ZhituFetcher
+
+    manager = DataFetcherManager()
+    fetcher_classes = [
+        TushareFetcher,
+        BaostockFetcher,
+        AkshareFetcher,
+        YfinanceFetcher,
+        ZhituFetcher,
+        TencentFetcher,
+        EastMoneyFetcher,
+        ThsFetcher,
+        CninfoFetcher,
+    ]
+    for cls in fetcher_classes:
+        instance = cls()
+        if instance.is_available():
+            manager.add_fetcher(instance)
+            logger.info(f"{cls.__name__} added")
+        else:
+            logger.info(f"{cls.__name__} skipped")
+    return manager

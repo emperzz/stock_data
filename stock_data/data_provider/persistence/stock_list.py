@@ -102,17 +102,10 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
             return cached
 
     # Need refresh: fetch from upstream and update cache
-    # Lazy import to avoid circular dependency
     if manager is None:
-        from ..base import DataFetcherManager
-        from ..fetchers.akshare_fetcher import AkshareFetcher
-        from ..fetchers.tushare_fetcher import TushareFetcher
+        from ..manager import create_default_manager
 
-        manager = DataFetcherManager()
-        tushare = TushareFetcher()
-        if tushare.is_available():
-            manager.add_fetcher(tushare)
-        manager.add_fetcher(AkshareFetcher())
+        manager = create_default_manager()
 
     stocks = _fetch_from_upstream(normalized_market, manager)
     if stocks:

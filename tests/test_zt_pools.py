@@ -12,8 +12,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from stock_data.api.cache import (
-    get_board_list_cache,
-    get_board_stocks_cache,
     get_dragontiger_cache,
     get_pools_cache,
     get_quote_cache,
@@ -36,8 +34,6 @@ def reset_before_test():
     for cache in (
         get_pools_cache(),
         get_quote_cache(),
-        get_board_list_cache(),
-        get_board_stocks_cache(),
         get_dragontiger_cache(),
     ):
         cache.clear()
@@ -327,7 +323,7 @@ class TestZTFetcherCapabilities:
     def test_akshare_fetcher_supports_zt_pool(self):
         """Test AkshareFetcher declares STOCK_ZT_POOL capability."""
         from stock_data.data_provider.base import DataCapability
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
         assert DataCapability.STOCK_ZT_POOL in fetcher.supported_data_types
@@ -341,7 +337,7 @@ class TestZTFetcherCapabilities:
 
     def test_akshare_fetcher_has_get_zt_pool_method(self):
         """Test AkshareFetcher has get_zt_pool method."""
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
         assert hasattr(fetcher, "get_zt_pool")

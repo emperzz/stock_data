@@ -15,6 +15,7 @@ import requests
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 from ..persistence.pool_daily import init_schema as init_zt_cache_schema
+from ..utils.code_converter import to_zhitu_format, to_zhitu_market_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -38,25 +39,12 @@ class ZhituFetcher(BaseFetcher):
         return bool(self._token)
 
     def _convert_code(self, stock_code: str) -> str:
-        """
-        Convert stock code to Zhitu format.
-
-        Zhitu expects 6-digit code without exchange suffix.
-        Examples:
-            600519 -> 600519
-            000001 -> 000001
-        """
-        code = normalize_stock_code(stock_code)
-        return code
+        """Convert to Zhitu format. Delegates to ``to_zhitu_format``."""
+        return to_zhitu_format(stock_code)
 
     def _market_suffix(self, stock_code: str) -> str:
-        """Return market suffix for Zhitu API symbol format."""
-        code = normalize_stock_code(stock_code)
-        # Shanghai: starts with 5, 6, 7, 9 (688, 689)
-        # Shenzhen: starts with 0, 1, 2, 3, 4, 8
-        if code.startswith(("5", "6", "7", "9", "8")):
-            return ".sh"
-        return ".sz"
+        """Zhitu market suffix. Delegates to ``to_zhitu_market_suffix``."""
+        return to_zhitu_market_suffix(stock_code)
 
     def _fetch_raw_data(
         self,

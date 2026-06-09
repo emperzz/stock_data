@@ -16,8 +16,8 @@ from ..base import (
     normalize_stock_code,
 )
 from ..core.types import UnifiedRealtimeQuote
+from ..utils.code_converter import to_baostock_format
 from ..utils.normalize import get_index_type, is_index_code
-from .index_symbols import CSI_INDEX_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -73,38 +73,11 @@ class BaostockFetcher(BaseFetcher):
         return self._initialized
 
     def _convert_code(self, stock_code: str) -> tuple:
-        """
-        Convert A-share code to Baostock format.
-
-        Returns (bs_code, yw_code):
-            600519 -> (sh.600519, 600519)
-            000001 -> (sz.000001, 000001)
-            000300 -> (sh.000300, 000300)  CSI 300 index
-            HSI -> raises DataFetchError (not supported by Baostock)
-        """
-        code = normalize_stock_code(stock_code)
-
-        # Check if it's a CSI index
-        if is_index_code(code):
-            index_type = get_index_type(code)
-            if index_type == "csi":
-                # CSI indices use same sh./sz. format as stocks
-                entry = CSI_INDEX_MAP.get(code)
-                if entry is not None:
-                    return entry[0], code
-                # Fallback: CSI indices starting with 00 are Shanghai, 39 are Shenzhen
-                if code.startswith("00"):
-                    return f"sh.{code}", code
-                else:
-                    return f"sz.{code}", code
-            else:
-                # HK and US indices not supported by Baostock
-                raise DataFetchError(f"Baostock does not support {index_type} index {code}")
-
-        if code.startswith(("6", "5")):
-            return f"sh.{code}", code
-        else:
-            return f"sz.{code}", code
+        """Convert to Baostock ``(bs_code, yw_code)``. Delegates to ``to_baostock_format``."""
+        try:
+            return to_baostock_format(stock_code)
+        except ValueError as e:
+            raise DataFetchError(str(e)) from e
 
     def _fetch_raw_data(
         self,

@@ -28,7 +28,7 @@ from .core.types import (
 )
 
 # Fetcher classes
-from .fetchers.akshare_fetcher import AkshareFetcher
+from .fetchers.akshare import AkshareFetcher
 from .fetchers.baostock_fetcher import BaostockFetcher
 from .fetchers.cninfo_fetcher import CninfoFetcher
 from .fetchers.eastmoney_fetcher import EastMoneyFetcher
@@ -37,6 +37,9 @@ from .fetchers.ths_fetcher import ThsFetcher
 from .fetchers.tushare_fetcher import TushareFetcher
 from .fetchers.yfinance_fetcher import YfinanceFetcher
 from .fetchers.zhitu_fetcher import ZhituFetcher
+
+# Manager factory
+from .manager import create_default_manager
 
 # Persistence functions (on-disk SQLite store). The legacy data_provider.cache/
 # module was removed; this package is now the single home for SQLite-backed
@@ -89,6 +92,8 @@ __all__ = [
     "update_cached_stocks",
     # Persistence module alias (legacy name preserved for back-compat)
     "stock_cache",
+    # Manager factory
+    "create_default_manager",
     # Fetchers
     "AkshareFetcher",
     "BaostockFetcher",

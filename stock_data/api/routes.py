@@ -13,22 +13,11 @@ if TYPE_CHECKING:
 
 from stock_data.data_provider.core.types import get_realtime_circuit_breaker
 
-from ..data_provider import (
-    AkshareFetcher,
-    BaostockFetcher,
-    CninfoFetcher,
-    DataFetcherManager,
-    DataFetchError,
-    EastMoneyFetcher,
-    TencentFetcher,
-    ThsFetcher,
-    TushareFetcher,
-    YfinanceFetcher,
-    ZhituFetcher,
-)
+from ..data_provider import DataFetcherManager, DataFetchError
 from ..data_provider.fetchers.index_symbols import get_all_indices
 from ..data_provider.indicators import IndicatorService
 from ..data_provider.indicators.types import IndicatorKey
+from ..data_provider.manager import create_default_manager
 from ..data_provider.persistence import board as stock_board_cache
 from ..data_provider.persistence import stock_list as stock_cache
 from ..data_provider.utils.normalize import (
@@ -43,8 +32,6 @@ from .cache import (
     cached_store,
     get_announcements_cache,
     get_block_trade_cache,
-    get_board_list_cache,
-    get_board_stocks_cache,
     get_dividend_cache,
     get_dragontiger_cache,
     get_fund_flow_cache,
@@ -63,8 +50,6 @@ from .cache import (
     is_cache_enabled,
     make_announcements_cache_key,
     make_block_trade_cache_key,
-    make_board_cache_key,
-    make_board_stocks_cache_key,
     make_daily_dragon_tiger_cache_key,
     make_dividend_cache_key,
     make_dragon_tiger_cache_key,
@@ -243,68 +228,7 @@ def get_manager() -> DataFetcherManager:
     """Get or create the global DataFetcherManager."""
     global _manager
     if _manager is None:
-        _manager = DataFetcherManager()
-        # Add fetchers in priority order
-        tushare = TushareFetcher()
-        if tushare.is_available():
-            _manager.add_fetcher(tushare)
-            logger.info("TushareFetcher added")
-        else:
-            logger.info("TushareFetcher skipped (not configured)")
-
-        baostock = BaostockFetcher()
-        if baostock.is_available():
-            _manager.add_fetcher(baostock)
-            logger.info("BaostockFetcher added")
-        else:
-            logger.info("BaostockFetcher skipped (not configured)")
-
-        akshare = AkshareFetcher()
-        _manager.add_fetcher(akshare)
-        logger.info("AkshareFetcher added")
-
-        yfinance = YfinanceFetcher()
-        if yfinance.is_available():
-            _manager.add_fetcher(yfinance)
-            logger.info("YfinanceFetcher added")
-        else:
-            logger.info("YfinanceFetcher skipped (yfinance not installed)")
-
-        tencent = TencentFetcher()
-        if tencent.is_available():
-            _manager.add_fetcher(tencent)
-            logger.info("TencentFetcher added")
-        else:
-            logger.info("TencentFetcher skipped")
-
-        eastmoney = EastMoneyFetcher()
-        if eastmoney.is_available():
-            _manager.add_fetcher(eastmoney)
-            logger.info("EastMoneyFetcher added")
-        else:
-            logger.info("EastMoneyFetcher skipped")
-
-        ths = ThsFetcher()
-        if ths.is_available():
-            _manager.add_fetcher(ths)
-            logger.info("ThsFetcher added")
-        else:
-            logger.info("ThsFetcher skipped")
-
-        cninfo = CninfoFetcher()
-        if cninfo.is_available():
-            _manager.add_fetcher(cninfo)
-            logger.info("CninfoFetcher added")
-        else:
-            logger.info("CninfoFetcher skipped")
-
-        zhitu = ZhituFetcher()
-        if zhitu.is_available():
-            _manager.add_fetcher(zhitu)
-            logger.info("ZhituFetcher added")
-        else:
-            logger.info("ZhituFetcher skipped (ZHITU_TOKEN not configured)")
-
+        _manager = create_default_manager()
     return _manager
 
 
@@ -1122,13 +1046,9 @@ def list_boards(
         Board list with code and name, optionally with realtime data
     """
     try:
-        if is_cache_enabled():
-            cache = get_board_list_cache()
-            key = make_board_cache_key(type, source)
-            if not refresh and not include_quote and key in cache:
-                logger.info(f"[APICache] board list hit: {key}")
-                return cache[key]
-
+        # Board list metadata is persisted in SQLite; the persistence layer
+        # handles daily-refresh logic. No TTLCache needed — SQLite lookups
+        # on indexed columns are sub-millisecond.
         manager = get_manager()
         boards = stock_board_cache.get_board_list(
             type, source, refresh=refresh, include_quote=include_quote, manager=manager
@@ -1154,9 +1074,6 @@ def list_boards(
                 for b in boards
             ]
         )
-
-        if is_cache_enabled():
-            cache[key] = result
 
         return result
 
@@ -1195,13 +1112,9 @@ def get_board_stocks(
         Board info and list of stocks, optionally with quote data
     """
     try:
-        if is_cache_enabled():
-            cache = get_board_stocks_cache()
-            key = make_board_stocks_cache_key(board_code, source, include_quote)
-            if not refresh and not include_quote and key in cache:
-                logger.info(f"[APICache] board stocks hit: {key}")
-                return cache[key]
-
+        # Board-stock mapping is persisted in SQLite; the persistence layer
+        # handles refresh logic. No TTLCache needed — SQLite queries on
+        # indexed columns are sub-millisecond.
         manager = get_manager()
         stocks = stock_board_cache.get_board_stocks(
             board_code, source, refresh=refresh, include_quote=include_quote, manager=manager
@@ -1239,9 +1152,6 @@ def get_board_stocks(
             stocks=stock_list,
             source=source,
         )
-
-        if is_cache_enabled():
-            cache[key] = result
 
         return result
 
@@ -1327,10 +1237,11 @@ def get_pools(
 
         is_current_day = (query_date == today_str) and trade_calendar.is_trade_date(today_str)
 
-        # In-process response cache key uses the resolved date so the same
-        # effective request (with or without ?date=) hits the same slot.
-        if is_cache_enabled():
-            cache_key = make_pools_cache_key(type, query_date)
+        # TTLCache is only used for the current trading day (volatile data
+        # that must NOT hit SQLite). Historical queries go through the
+        # persistence layer directly — SQLite handles date-keyed lookups.
+        cache_key = make_pools_cache_key(type, query_date)
+        if is_current_day and is_cache_enabled():
             hit = cached_lookup(get_pools_cache, cache_key, "pools")
             if hit is not None:
                 return hit
@@ -1379,7 +1290,9 @@ def get_pools(
             stocks=pool_stocks,
         )
 
-        cached_store(get_pools_cache, cache_key, result)
+        # Only cache current-day results in TTLCache (historical goes to SQLite).
+        if is_current_day:
+            cached_store(get_pools_cache, cache_key, result)
         return result
 
     except DataFetchError as e:

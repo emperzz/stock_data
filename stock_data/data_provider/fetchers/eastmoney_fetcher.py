@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
+from ..utils.code_converter import to_eastmoney_secid
 from ..utils.normalize import normalize_stock_code
 
 logger = logging.getLogger(__name__)
@@ -93,9 +94,8 @@ class EastMoneyFetcher(BaseFetcher):
     # ------------------------------------------------------------------
 
     def _secid(self, code: str) -> str:
-        """Build EastMoney secid: 1.{code} for SH, 0.{code} for SZ."""
-        code = normalize_stock_code(code)
-        return f"1.{code}" if code.startswith(("6", "9")) else f"0.{code}"
+        """Build EastMoney secid. Delegates to ``to_eastmoney_secid``."""
+        return to_eastmoney_secid(code)
 
     def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> dict:
         """Get dragon tiger board data for a single stock.

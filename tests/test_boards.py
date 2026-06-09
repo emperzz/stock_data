@@ -173,11 +173,10 @@ class TestBoardAPIRoutes:
             _, kwargs = mock_get.call_args
             assert kwargs.get("include_quote") is True
 
-    def test_get_boards_include_quote_skips_memory_cache(self, client):
-        """Test GET /api/v1/boards?include_quote=true skips in-memory cache."""
+    def test_get_boards_include_quote_still_hits_persistence(self, client):
+        """Test GET /api/v1/boards?include_quote=true calls persistence (no TTLCache)."""
         with (
             patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get,
-            patch("stock_data.api.cache.is_cache_enabled", return_value=True),
         ):
             mock_get.return_value = [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}]
             response = client.get("/api/v1/boards?type=concept&include_quote=true")
@@ -187,58 +186,33 @@ class TestBoardAPIRoutes:
             assert kwargs.get("include_quote") is True
 
 
-class TestBoardCache:
-    """Tests for stock_board_cache module."""
-
-    def test_cache_key_functions(self):
-        """Test make_board_cache_key and make_board_stocks_cache_key."""
-        from stock_data.api.cache import make_board_cache_key, make_board_stocks_cache_key
-
-        key = make_board_cache_key("concept", "eastmoney")
-        assert key == "board:concept:eastmoney"
-
-        key_no_quote = make_board_stocks_cache_key("BK1048", "eastmoney", False)
-        assert key_no_quote == "board_stocks:BK1048:eastmoney"
-
-        key_with_quote = make_board_stocks_cache_key("BK1048", "eastmoney", True)
-        assert key_with_quote == "board_stocks:BK1048:eastmoney:quote"
-
-    def test_board_stocks_cache_ttl(self):
-        """Test board stocks cache uses appropriate TTL."""
-        from stock_data.api.cache import get_board_stocks_cache
-
-        with patch("stock_data.api.cache.is_cache_enabled", return_value=True):
-            cache = get_board_stocks_cache()
-            assert cache.maxsize == 512
-
-
 class TestAkshareFetcherBoards:
     """Tests for AkshareFetcher board methods."""
 
     def test_get_all_concept_boards(self):
         """Test get_all_concept_boards returns list of dicts."""
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
         assert hasattr(fetcher, "get_all_concept_boards")
 
     def test_get_all_industry_boards(self):
         """Test get_all_industry_boards returns list of dicts."""
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
         assert hasattr(fetcher, "get_all_industry_boards")
 
     def test_get_concept_board_stocks(self):
         """Test get_concept_board_stocks method exists."""
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
         assert hasattr(fetcher, "get_concept_board_stocks")
 
     def test_get_industry_board_stocks(self):
         """Test get_industry_board_stocks method exists."""
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
         assert hasattr(fetcher, "get_industry_board_stocks")
@@ -247,7 +221,7 @@ class TestAkshareFetcherBoards:
         """Test get_all_concept_boards accepts include_quote parameter."""
         import inspect
 
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
         sig = inspect.signature(fetcher.get_all_concept_boards)
@@ -257,7 +231,7 @@ class TestAkshareFetcherBoards:
         """Test get_all_industry_boards accepts include_quote parameter."""
         import inspect
 
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
         sig = inspect.signature(fetcher.get_all_industry_boards)
@@ -266,7 +240,7 @@ class TestAkshareFetcherBoards:
     def test_board_capability_declared(self):
         """Test AkshareFetcher has STOCK_BOARD capability."""
         from stock_data.data_provider.base import DataCapability
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
         assert DataCapability.STOCK_BOARD in fetcher.supported_data_types

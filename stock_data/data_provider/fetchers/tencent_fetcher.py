@@ -16,6 +16,7 @@ import pandas as pd
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float
+from ..utils.code_converter import to_tencent_prefix
 from ..utils.normalize import normalize_stock_code
 
 logger = logging.getLogger(__name__)
@@ -37,22 +38,8 @@ class TencentFetcher(BaseFetcher):
         return True
 
     def _tencent_prefix(self, stock_code: str) -> str:
-        """Convert to Tencent API prefix format.
-
-        Shanghai: sh600519, Shenzhen: sz000001, HK: hk00700, BJ: bj832000
-        """
-        code = normalize_stock_code(stock_code)
-
-        if code.startswith(("5", "6", "7", "9")):
-            return f"sh{code}"
-        elif code.startswith(("0", "1", "2", "3", "4")):
-            return f"sz{code}"
-        elif code.upper().startswith("HK"):
-            return f"hk{code[2:].zfill(5)}"
-        elif code.startswith("8"):
-            return f"bj{code}"
-        else:
-            return f"sz{code}"
+        """Convert to Tencent API prefix. Delegates to ``to_tencent_prefix``."""
+        return to_tencent_prefix(stock_code)
 
     def _fetch_raw_data(
         self,
