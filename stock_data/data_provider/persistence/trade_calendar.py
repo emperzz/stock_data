@@ -150,6 +150,3 @@ def get_latest_trade_date_on_or_before(date_str: str) -> str | None:
     finally:
         conn.close()
 
-
-# Backward-compat alias: 旧 init_calendar_db 调用方仍可用
-init_calendar_db = init_schema

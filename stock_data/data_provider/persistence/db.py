@@ -27,7 +27,3 @@ def get_connection() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     return conn
 
-
-# Backward-compat aliases (旧的 cache/_get_db_path / _get_connection 调用方仍可用)
-_get_db_path = get_db_path
-_get_connection = get_connection

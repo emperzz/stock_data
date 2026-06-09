@@ -220,4 +220,3 @@ def get_pool_count(pool_type: str, date: str) -> int:
 # Backward-compat aliases for callers still using the old per-table names.
 get_zt_pool_cached = get_pool_cached
 save_zt_pool = save_pool
-init_db = init_schema

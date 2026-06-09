@@ -386,6 +386,3 @@ def get_cache_info() -> dict:
     finally:
         conn.close()
 
-
-# Backward-compat alias
-init_db = init_schema
