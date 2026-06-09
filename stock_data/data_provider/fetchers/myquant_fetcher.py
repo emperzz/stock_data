@@ -11,15 +11,17 @@ This fetcher is a *backup* — placed right after Tushare, before Baostock on
 the failover list (tie-broken by registration order in create_default_manager).
 """
 
+# isort: off
 import logging
 import os
-from datetime import datetime
+from datetime import datetime  # noqa: F401 — used in get_trade_calendar and get_index_intraday (Tasks 7, 9)
 
 import pandas as pd
 
-from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
-from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float
-from ..utils.code_converter import to_myquant_format, to_myquant_index_format
+from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code  # noqa: F401 — normalize_stock_code used in get_realtime_quote (Task 6)
+from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float  # noqa: F401 — used in get_realtime_quote and get_all_stocks (Tasks 6, 8)
+from ..utils.code_converter import to_myquant_format, to_myquant_index_format  # noqa: F401 — used in _map_adjust and _convert_code (Task 4)
+# isort: on
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,6 @@ class MyquantFetcher(BaseFetcher):
 
     def is_available(self) -> bool:
         """True iff MYQUANT_TOKEN is set."""
-        self._ensure_initialized()
         return bool(self._token)
 
     # ---- unsupported base abstract methods ----
