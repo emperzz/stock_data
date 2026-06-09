@@ -292,3 +292,65 @@ def cached_store(cache_fn, key: str, value: object) -> None:
         return
     cache = cache_fn()
     cache[key] = value
+
+
+def cached_endpoint(
+    cache_fn,
+    key_builder,
+    hit_label: str,
+    err_label: str,
+):
+    """Decorator for routes that follow the stock-cached-endpoint pattern.
+
+    Wraps the route function with:
+      1. cache lookup (returns cached value on hit)
+      2. invocation of the wrapped function
+      3. cache store of the returned value
+      4. uniform 503/500/raise error translation
+
+    Args:
+        cache_fn: zero-arg callable returning the ``TTLCache`` to read/write.
+        key_builder: ``(*args, **kwargs) -> str`` mapping call args to a key.
+            Called twice (once for the lookup, once for the store) — the
+            wrapped function should be deterministic in its args.
+        hit_label: short label used in the "cache hit" log line.
+        err_label: prefix used in the 503 log line ("<err_label> unavailable").
+
+    The wrapped function must raise ``DataFetchError`` on upstream failure
+    and may raise ``HTTPException`` (which is re-raised unchanged). Any
+    other exception is wrapped as a 500.
+    """
+    from functools import wraps
+
+    from fastapi import HTTPException
+
+    from stock_data.data_provider.base import DataFetchError
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                cache_key = key_builder(*args, **kwargs)
+                hit = cached_lookup(cache_fn, cache_key, hit_label)
+                if hit is not None:
+                    return hit
+                result = func(*args, **kwargs)
+                cached_store(cache_fn, cache_key, result)
+                return result
+            except DataFetchError as e:
+                logger.warning(f"{err_label} unavailable: {e}")
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": "data_unavailable", "message": str(e)},
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": "internal_error", "message": str(e)},
+                ) from e
+
+        return wrapper
+
+    return decorator

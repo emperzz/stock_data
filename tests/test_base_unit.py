@@ -32,7 +32,6 @@ class MockFetcher(BaseFetcher):
         | DataCapability.HISTORICAL_MIN
         | DataCapability.REALTIME_QUOTE
         | DataCapability.STOCK_LIST
-        | DataCapability.STOCK_NAME
     )
 
     def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
@@ -74,7 +73,7 @@ class MockFetcherNoRealtime(BaseFetcher):
     name = "MockNoRealtime"
     priority = 5
     supported_markets = {"csi"}
-    supported_data_types = DataCapability.HISTORICAL_DWM | DataCapability.STOCK_LIST | DataCapability.STOCK_NAME
+    supported_data_types = DataCapability.HISTORICAL_DWM | DataCapability.STOCK_LIST
 
     def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
         raise DataFetchError("Not available")

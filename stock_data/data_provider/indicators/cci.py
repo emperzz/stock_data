@@ -10,8 +10,9 @@ Default period = 14. Needs OHLC.
 """
 
 from __future__ import annotations
+from typing import Any
 
-from .types import CCIOptions, OHLCV
+from .types import OHLCV
 
 
 def _sma(values: list[float], period: int) -> list[float | None]:
@@ -32,7 +33,7 @@ def _sma(values: list[float], period: int) -> list[float | None]:
 
 def calcCCI(
     bars: list[OHLCV],
-    options: CCIOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     period: int = int(options.get("period", 14))

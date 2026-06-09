@@ -10,14 +10,15 @@ Defaults match the industry standard (12/26/9).
 """
 
 from __future__ import annotations
+from typing import Any
 
 from .ma import calcEMA
-from .types import MACDOptions
+
 
 
 def calcMACD(
     closes: list[float | None],
-    options: MACDOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     """Compute MACD for each bar.
 

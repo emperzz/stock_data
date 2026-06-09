@@ -55,6 +55,7 @@ from .cache import (
     get_quote_cache,
     get_reports_cache,
     get_stock_intraday_cache,
+    cached_endpoint,
     cached_lookup,
     cached_store,
     is_cache_enabled,
@@ -1408,42 +1409,28 @@ def get_dragon_tiger(
     trade_date: str = Query(default="", description="Trade date (YYYY-MM-DD)"),
     look_back: int = Query(default=30, ge=1, le=365),
 ) -> DragonTigerResponse:
-    try:
-        if is_cache_enabled():
-            cache_key = make_dragon_tiger_cache_key(stock_code, trade_date, look_back)
-            hit = cached_lookup(get_dragontiger_cache, cache_key, "dragontiger")
-            if hit is not None:
-                return hit
-
-        manager = get_manager()
-        data = manager.get_dragon_tiger(stock_code, trade_date, look_back)
-        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        records = [DragonTigerRecord(**r) for r in data.get("records", [])]
-        seats_data = data.get("seats", {})
-        seats = {
+    manager = get_manager()
+    data = manager.get_dragon_tiger(stock_code, trade_date, look_back)
+    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    seats_data = data.get("seats", {})
+    return DragonTigerResponse(
+        code=stock_code,
+        name=stock_name or "",
+        records=[DragonTigerRecord(**r) for r in data.get("records", [])],
+        seats={
             "buy": [DragonTigerSeat(**s) for s in seats_data.get("buy", [])],
             "sell": [DragonTigerSeat(**s) for s in seats_data.get("sell", [])],
-        }
-        result = DragonTigerResponse(
-            code=stock_code,
-            name=stock_name or "",
-            records=records,
-            seats=seats,
-            institution=DragonTigerInstitution(**data.get("institution", {})),
-        )
-        cached_store(get_dragontiger_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Dragon tiger data unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+        },
+        institution=DragonTigerInstitution(**data.get("institution", {})),
+    )
+
+
+get_dragon_tiger = cached_endpoint(
+    get_dragontiger_cache,
+    make_dragon_tiger_cache_key,
+    "dragontiger",
+    "Dragon tiger",
+)(get_dragon_tiger)
 
 
 @router.get(
@@ -1459,30 +1446,21 @@ def get_daily_dragon_tiger(
     trade_date: str = Query(default="", description="Trade date (YYYY-MM-DD)"),
     min_net_buy: float | None = Query(default=None, description="Min net buy (万元)"),
 ) -> DailyDragonTigerResponse:
-    try:
-        if is_cache_enabled():
-            cache_key = make_daily_dragon_tiger_cache_key(trade_date, min_net_buy)
-            hit = cached_lookup(get_dragontiger_cache, cache_key, "daily_dragon_tiger")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_daily_dragon_tiger(trade_date, min_net_buy)
+    return DailyDragonTigerResponse(
+        date=data["date"],
+        total=data["total"],
+        stocks=[DailyDragonTigerStock(**s) for s in data["stocks"]],
+    )
 
-        manager = get_manager()
-        data = manager.get_daily_dragon_tiger(trade_date, min_net_buy)
-        stocks = [DailyDragonTigerStock(**s) for s in data["stocks"]]
-        result = DailyDragonTigerResponse(date=data["date"], total=data["total"], stocks=stocks)
-        cached_store(get_dragontiger_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Daily dragon tiger unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_daily_dragon_tiger = cached_endpoint(
+    get_dragontiger_cache,
+    make_daily_dragon_tiger_cache_key,
+    "daily_dragon_tiger",
+    "Daily dragon tiger",
+)(get_daily_dragon_tiger)
 
 
 @router.get(
@@ -1498,31 +1476,19 @@ def get_margin(
     stock_code: str = Path(max_length=20),
     page_size: int = Query(default=30, ge=1, le=100),
 ) -> MarginTradingResponse:
-    try:
-        if is_cache_enabled():
-            cache_key = make_margin_cache_key(stock_code, page_size)
-            hit = cached_lookup(get_margin_cache, cache_key, "margin")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_margin_trading(stock_code, page_size)
+    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    return MarginTradingResponse(
+        code=stock_code,
+        name=stock_name or "",
+        records=[MarginTradingRecord(**r) for r in data],
+    )
 
-        manager = get_manager()
-        data = manager.get_margin_trading(stock_code, page_size)
-        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        records = [MarginTradingRecord(**r) for r in data]
-        result = MarginTradingResponse(code=stock_code, name=stock_name or "", records=records)
-        cached_store(get_margin_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Margin trading unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_margin = cached_endpoint(
+    get_margin_cache, make_margin_cache_key, "margin", "Margin trading"
+)(get_margin)
 
 
 @router.get(
@@ -1538,33 +1504,18 @@ def get_block_trade(
     stock_code: str = Path(max_length=20),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> BlockTradeResponse:
-    try:
-        if is_cache_enabled():
-            cache_key = make_block_trade_cache_key(stock_code, page_size)
-            hit = cached_lookup(get_block_trade_cache, cache_key, "block_trade")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_block_trade(stock_code, page_size)
+    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    records = [BlockTradeRecord(**r) for r in data]
+    return BlockTradeResponse(
+        code=stock_code, name=stock_name or "", records=records, total=len(records)
+    )
 
-        manager = get_manager()
-        data = manager.get_block_trade(stock_code, page_size)
-        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        records = [BlockTradeRecord(**r) for r in data]
-        result = BlockTradeResponse(
-            code=stock_code, name=stock_name or "", records=records, total=len(records)
-        )
-        cached_store(get_block_trade_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Block trade unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_block_trade = cached_endpoint(
+    get_block_trade_cache, make_block_trade_cache_key, "block_trade", "Block trade"
+)(get_block_trade)
 
 
 @router.get(
@@ -1580,31 +1531,19 @@ def get_holder_num(
     stock_code: str = Path(max_length=20),
     page_size: int = Query(default=10, ge=1, le=50),
 ) -> HolderNumResponse:
-    try:
-        if is_cache_enabled():
-            cache_key = make_holder_num_cache_key(stock_code, page_size)
-            hit = cached_lookup(get_holder_num_cache, cache_key, "holder_num")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_holder_num_change(stock_code, page_size)
+    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    return HolderNumResponse(
+        code=stock_code,
+        name=stock_name or "",
+        records=[HolderNumRecord(**r) for r in data],
+    )
 
-        manager = get_manager()
-        data = manager.get_holder_num_change(stock_code, page_size)
-        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        records = [HolderNumRecord(**r) for r in data]
-        result = HolderNumResponse(code=stock_code, name=stock_name or "", records=records)
-        cached_store(get_holder_num_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Holder num unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_holder_num = cached_endpoint(
+    get_holder_num_cache, make_holder_num_cache_key, "holder_num", "Holder num"
+)(get_holder_num)
 
 
 @router.get(
@@ -1620,31 +1559,19 @@ def get_dividend(
     stock_code: str = Path(max_length=20),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> DividendResponse:
-    try:
-        if is_cache_enabled():
-            cache_key = make_dividend_cache_key(stock_code, page_size)
-            hit = cached_lookup(get_dividend_cache, cache_key, "dividend")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_dividend(stock_code, page_size)
+    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    return DividendResponse(
+        code=stock_code,
+        name=stock_name or "",
+        records=[DividendRecord(**r) for r in data],
+    )
 
-        manager = get_manager()
-        data = manager.get_dividend(stock_code, page_size)
-        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        records = [DividendRecord(**r) for r in data]
-        result = DividendResponse(code=stock_code, name=stock_name or "", records=records)
-        cached_store(get_dividend_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Dividend unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_dividend = cached_endpoint(
+    get_dividend_cache, make_dividend_cache_key, "dividend", "Dividend"
+)(get_dividend)
 
 
 @router.get(
@@ -1658,33 +1585,20 @@ def get_dividend(
 )
 def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get minute-level capital flow for a stock."""
-    try:
-        if is_cache_enabled():
-            cache_key = make_fund_flow_cache_key(stock_code)
-            hit = cached_lookup(get_fund_flow_cache, cache_key, "fund_flow")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_fund_flow_minute(stock_code)
+    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    return FundFlowResponse(
+        code=stock_code,
+        name=stock_name or "",
+        type="minute",
+        records=[FundFlowMinuteRecord(**r) for r in data],
+    )
 
-        manager = get_manager()
-        data = manager.get_fund_flow_minute(stock_code)
-        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        records = [FundFlowMinuteRecord(**r) for r in data]
-        result = FundFlowResponse(
-            code=stock_code, name=stock_name or "", type="minute", records=records
-        )
-        cached_store(get_fund_flow_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Fund flow unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_fund_flow = cached_endpoint(
+    get_fund_flow_cache, make_fund_flow_cache_key, "fund_flow", "Fund flow"
+)(get_fund_flow)
 
 
 @router.get(
@@ -1698,33 +1612,23 @@ def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
 )
 def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get 120-day capital flow history for a stock."""
-    try:
-        if is_cache_enabled():
-            cache_key = make_fund_flow_daily_cache_key(stock_code)
-            hit = cached_lookup(get_fund_flow_daily_cache, cache_key, "fund_flow_daily")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_fund_flow_120d(stock_code)
+    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    return FundFlowResponse(
+        code=stock_code,
+        name=stock_name or "",
+        type="daily",
+        records=[FundFlowDailyRecord(**r) for r in data],
+    )
 
-        manager = get_manager()
-        data = manager.get_fund_flow_120d(stock_code)
-        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        records = [FundFlowDailyRecord(**r) for r in data]
-        result = FundFlowResponse(
-            code=stock_code, name=stock_name or "", type="daily", records=records
-        )
-        cached_store(get_fund_flow_daily_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Fund flow daily unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_fund_flow_daily = cached_endpoint(
+    get_fund_flow_daily_cache,
+    make_fund_flow_daily_cache_key,
+    "fund_flow_daily",
+    "Fund flow daily",
+)(get_fund_flow_daily)
 
 
 @router.get(
@@ -1740,31 +1644,16 @@ def get_hot_topics(
     date: str = Query(default="", description="Date (YYYY-MM-DD), empty=today"),
 ) -> HotTopicResponse:
     """Get daily hot stocks with reason tags."""
-    try:
-        if is_cache_enabled():
-            cache_key = make_hot_topics_cache_key(date)
-            hit = cached_lookup(get_hot_topics_cache, cache_key, "hot_topics")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_hot_topics(date)
+    topics = [HotTopicRecord(**r) for r in data]
+    actual_date = date or datetime.now().strftime("%Y-%m-%d")
+    return HotTopicResponse(date=actual_date, total=len(topics), topics=topics)
 
-        manager = get_manager()
-        data = manager.get_hot_topics(date)
-        topics = [HotTopicRecord(**r) for r in data]
-        actual_date = date or datetime.now().strftime("%Y-%m-%d")
-        result = HotTopicResponse(date=actual_date, total=len(topics), topics=topics)
-        cached_store(get_hot_topics_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Hot topics unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_hot_topics = cached_endpoint(
+    get_hot_topics_cache, make_hot_topics_cache_key, "hot_topics", "Hot topics"
+)(get_hot_topics)
 
 
 @router.get(
@@ -1778,30 +1667,14 @@ def get_hot_topics(
 )
 def get_north_flow() -> NorthFlowResponse:
     """Get north-bound capital flow (minute-level)."""
-    try:
-        if is_cache_enabled():
-            cache_key = make_north_flow_cache_key()
-            hit = cached_lookup(get_north_flow_cache, cache_key, "north_flow")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_north_flow()
+    return NorthFlowResponse(records=[NorthFlowRecord(**r) for r in data])
 
-        manager = get_manager()
-        data = manager.get_north_flow()
-        records = [NorthFlowRecord(**r) for r in data]
-        result = NorthFlowResponse(records=records)
-        cached_store(get_north_flow_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"North flow unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_north_flow = cached_endpoint(
+    get_north_flow_cache, make_north_flow_cache_key, "north_flow", "North flow"
+)(get_north_flow)
 
 
 @router.get(
@@ -1818,33 +1691,18 @@ def get_reports(
     max_pages: int = Query(default=3, ge=1, le=10, description="Max pages"),
 ) -> ReportResponse:
     """Get research reports for a stock."""
-    try:
-        if is_cache_enabled():
-            cache_key = make_reports_cache_key(stock_code, max_pages)
-            hit = cached_lookup(get_reports_cache, cache_key, "reports")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_reports(stock_code, max_pages)
+    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    reports = [ReportRecord(**r) for r in data]
+    return ReportResponse(
+        code=stock_code, name=stock_name or "", reports=reports, total=len(reports)
+    )
 
-        manager = get_manager()
-        data = manager.get_reports(stock_code, max_pages)
-        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        reports = [ReportRecord(**r) for r in data]
-        result = ReportResponse(
-            code=stock_code, name=stock_name or "", reports=reports, total=len(reports)
-        )
-        cached_store(get_reports_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Reports unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_reports = cached_endpoint(
+    get_reports_cache, make_reports_cache_key, "reports", "Reports"
+)(get_reports)
 
 
 @router.get(
@@ -1908,33 +1766,21 @@ def get_announcements(
     page_size: int = Query(default=30, ge=1, le=100, description="Page size"),
 ) -> AnnouncementResponse:
     """Get corporate announcements for a stock."""
-    try:
-        if is_cache_enabled():
-            cache_key = make_announcements_cache_key(stock_code, page_size)
-            hit = cached_lookup(get_announcements_cache, cache_key, "announcements")
-            if hit is not None:
-                return hit
+    manager = get_manager()
+    data = manager.get_announcements(stock_code, page_size)
+    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    announcements = [AnnouncementRecord(**r) for r in data]
+    return AnnouncementResponse(
+        code=stock_code,
+        name=stock_name or "",
+        announcements=announcements,
+        total=len(announcements),
+    )
 
-        manager = get_manager()
-        data = manager.get_announcements(stock_code, page_size)
-        stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-        announcements = [AnnouncementRecord(**r) for r in data]
-        result = AnnouncementResponse(
-            code=stock_code,
-            name=stock_name or "",
-            announcements=announcements,
-            total=len(announcements),
-        )
-        cached_store(get_announcements_cache, cache_key, result)
-        return result
-    except DataFetchError as e:
-        logger.warning(f"Announcements unavailable: {e}")
-        raise HTTPException(
-            status_code=503, detail={"error": "data_unavailable", "message": str(e)}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail={"error": "internal_error", "message": str(e)}
-        ) from e
+
+get_announcements = cached_endpoint(
+    get_announcements_cache,
+    make_announcements_cache_key,
+    "announcements",
+    "Announcements",
+)(get_announcements)

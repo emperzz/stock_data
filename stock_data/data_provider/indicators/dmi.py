@@ -14,8 +14,9 @@ DMI — Directional Movement Index (Wilder's smoothing).
 """
 
 from __future__ import annotations
+from typing import Any
 
-from .types import DMIOptions, OHLCV
+from .types import OHLCV
 
 
 def _wilder_smooth(values: list[float | None], period: int) -> list[float | None]:
@@ -47,7 +48,7 @@ def _wilder_smooth(values: list[float | None], period: int) -> list[float | None
 
 def calcDMI(
     bars: list[OHLCV],
-    options: DMIOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     period: int = int(options.get("period", 14))

@@ -43,7 +43,6 @@ class DataCapability(Flag):
     HISTORICAL_MIN = auto()  # 分钟 K线 (1/5/15/30/60m)
     REALTIME_QUOTE = auto()  # 实时报价
     STOCK_LIST = auto()  # 股票列表 (get_all_stocks)
-    STOCK_NAME = auto()  # 股票名称 (get_stock_name)
     TRADE_CALENDAR = auto()  # 交易日历
     STOCK_BOARD = auto()  # 板块数据（概念/行业板块列表）
     INDEX_QUOTE = auto()  # 指数实时行情

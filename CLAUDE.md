@@ -435,8 +435,7 @@ fetchers that support it.
 | `get_kline_data` (5/15/30/60, indices) | `INDEX_INTRADAY` (fallback: `HISTORICAL_MIN`) |
 | `get_realtime_quote` | `REALTIME_QUOTE` |
 | `get_intraday_data` | `HISTORICAL_MIN` |
-| `get_stock_name` | `STOCK_NAME` |
-| `list_stocks` (via `_filter_by_capability`) | `STOCK_LIST` |
+| `get_stock_name` | n/a — handled by `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
 | `get_trade_calendar` | `TRADE_CALENDAR` |
 | `get_all_concept_boards` / `get_all_industry_boards` | `STOCK_BOARD` |
 | `get_concept_board_stocks` / `get_industry_board_stocks` | `STOCK_BOARD` |
@@ -462,8 +461,8 @@ fetchers that support it.
 | Fetcher | Capabilities |
 |---------|-------------|
 | BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR \| INDEX_HISTORICAL` |
-| AkshareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY` |
-| TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_LIST \| STOCK_NAME \| INDEX_HISTORICAL` |
+| AkshareFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_ZT_POOL` |
+| TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_NAME \| INDEX_HISTORICAL` |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
 | ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |

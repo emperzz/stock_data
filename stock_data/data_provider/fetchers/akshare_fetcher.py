@@ -35,7 +35,6 @@ class AkshareFetcher(BaseFetcher):
         | DataCapability.HISTORICAL_MIN
         | DataCapability.REALTIME_QUOTE
         | DataCapability.STOCK_LIST
-        | DataCapability.STOCK_NAME
         | DataCapability.TRADE_CALENDAR
         | DataCapability.STOCK_BOARD
         | DataCapability.INDEX_QUOTE
@@ -51,7 +50,7 @@ class AkshareFetcher(BaseFetcher):
         mapping = {"qfq": "qfq", "hfq": "hfq"}
         return mapping.get(adjust, "")
 
-    def _convert_to_akshare_code(self, stock_code: str) -> str:
+    def _convert_code(self, stock_code: str) -> str:
         """
         Convert stock code to akshare format.
 
@@ -113,7 +112,7 @@ class AkshareFetcher(BaseFetcher):
         try:
             import akshare as ak
 
-            code = self._convert_to_akshare_code(stock_code)
+            code = self._convert_code(stock_code)
             is_hk = is_hk_market(stock_code)
             is_index = is_index_code(stock_code)
             index_type = get_index_type(stock_code) if is_index else None
@@ -246,7 +245,7 @@ class AkshareFetcher(BaseFetcher):
         try:
             import akshare as ak
 
-            code = self._convert_to_akshare_code(stock_code)
+            code = self._convert_code(stock_code)
             is_hk = is_hk_market(stock_code)
             is_index = is_index_code(stock_code)
 
@@ -1036,7 +1035,8 @@ class AkshareFetcher(BaseFetcher):
 
         Args:
             pool_type: Pool type - "zt" (涨停), "dt" (跌停), "zbgc" (炸板)
-            date: Pool date in YYYYMMDD format (Akshare expects this format)
+            date: Pool date in YYYY-MM-DD format (converted to YYYYMMDD internally
+                to match Akshare's expected format)
 
         Returns:
             List of stock dicts with normalized fields, or None if unavailable.
@@ -1057,7 +1057,9 @@ class AkshareFetcher(BaseFetcher):
                 logger.warning(f"[AkshareFetcher] Unknown pool_type: {pool_type}")
                 return None
 
-            df = func(date=date)
+            # Akshare's pool APIs expect YYYYMMDD; the manager hands us YYYY-MM-DD
+            akshare_date = date.replace("-", "") if date else date
+            df = func(date=akshare_date)
             if df is None or df.empty:
                 return None
 

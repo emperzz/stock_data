@@ -18,13 +18,14 @@ the trend line.
 """
 
 from __future__ import annotations
+from typing import Any
 
-from .types import OHLCV, SAROptions
+from .types import OHLCV
 
 
 def calcSAR(
     bars: list[OHLCV],
-    options: SAROptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     af_start: float = float(options.get("afStart", 0.02))

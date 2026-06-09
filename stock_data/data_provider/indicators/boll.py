@@ -8,11 +8,12 @@ BOLL — Bollinger Bands.
 """
 
 from __future__ import annotations
+from typing import Any
 
 import math
 
 from .ma import calcSMA
-from .types import BOLLOptions
+
 
 
 def _stddev(window: list[float], mean: float) -> float:
@@ -25,7 +26,7 @@ def _stddev(window: list[float], mean: float) -> float:
 
 def calcBOLL(
     closes: list[float | None],
-    options: BOLLOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     """Compute Bollinger Bands for each bar.
 

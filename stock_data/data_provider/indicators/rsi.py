@@ -17,13 +17,14 @@ Wilder smoothing (recursive, not the simple SMA variant):
 """
 
 from __future__ import annotations
+from typing import Any
 
-from .types import RSIOptions
+
 
 
 def calcRSI(
     closes: list[float | None],
-    options: RSIOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     """Compute Wilder's RSI for one or more periods.
 

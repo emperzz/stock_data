@@ -8,8 +8,9 @@ Needs OHLC.
 """
 
 from __future__ import annotations
+from typing import Any
 
-from .types import OHLCV, WROptions
+from .types import OHLCV
 
 
 def _round2(v: float) -> float:
@@ -20,7 +21,7 @@ def _round2(v: float) -> float:
 
 def calcWR(
     bars: list[OHLCV],
-    options: WROptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     periods: list[int] = sorted(options.get("periods") or [6, 10])

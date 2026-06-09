@@ -7,14 +7,15 @@ Expressed as a percentage. Positive = price above its MA, negative = below.
 """
 
 from __future__ import annotations
+from typing import Any
 
 from .ma import calcSMA
-from .types import BIASOptions
+
 
 
 def calcBIAS(
     closes: list[float | None],
-    options: BIASOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     periods: list[int] = sorted(options.get("periods") or [6, 12, 24])

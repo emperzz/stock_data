@@ -7,14 +7,15 @@ Optionally a signal line: `EMA(ROC, signalPeriod)`.
 """
 
 from __future__ import annotations
+from typing import Any
 
 from .ma import calcEMA
-from .types import ROCOptions
+
 
 
 def calcROC(
     closes: list[float | None],
-    options: ROCOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     period: int = int(options.get("period", 12))

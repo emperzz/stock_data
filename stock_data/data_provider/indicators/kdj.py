@@ -14,8 +14,9 @@ all four prices. Close is the only one that matters for the recursion.
 """
 
 from __future__ import annotations
+from typing import Any
 
-from .types import KDJOptions, OHLCV
+from .types import OHLCV
 
 
 def _round2(v: float) -> float:
@@ -26,7 +27,7 @@ def _round2(v: float) -> float:
 
 def calcKDJ(
     bars: list[OHLCV],
-    options: KDJOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     """Compute KDJ for each bar.
 

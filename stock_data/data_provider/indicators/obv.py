@@ -9,14 +9,15 @@ Optionally smooth with an SMA: `obv_ma{N}`.
 """
 
 from __future__ import annotations
+from typing import Any
 
 from .ma import calcSMA
-from .types import OBVOptions, OHLCV
+from .types import OHLCV
 
 
 def calcOBV(
     bars: list[OHLCV],
-    options: OBVOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     ma_period: int = int(options.get("maPeriod", 0))

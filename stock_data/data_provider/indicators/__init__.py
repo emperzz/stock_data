@@ -23,29 +23,14 @@ Public surface:
     - IndicatorKey                             : enum of supported indicators
 """
 
-from .types import (
-    IndicatorKey,
-    IndicatorOptions,
-    IndicatorResult,
-    MAType,
-    MAOptions,
-    MACDOptions,
-    BOLLOptions,
-    KDJOptions,
-    RSIOptions,
-    WROptions,
-    BIASOptions,
-    CCIOptions,
-    ATROptions,
-    OBVOptions,
-    ROCOptions,
-    DMIOptions,
-    SAROptions,
-    KCOptions,
-    OHLCV,
-)
+from .types import IndicatorKey, MAType, OHLCV
 from .registry import INDICATOR_REGISTRY, estimate_lookback, list_indicators
-from .indicator_service import IndicatorService
+from .indicator_service import (
+    IndicatorService,
+    available_catalog,
+    compute,
+    compute_lookback,
+)
 
 # Re-export the per-indicator calc functions for advanced / one-off use
 from .ma import calcSMA, calcEMA, calcWMA, calcMA
@@ -66,29 +51,16 @@ from .kc import calcKC
 __all__ = [
     # Service
     "IndicatorService",
+    "compute",
+    "compute_lookback",
+    "available_catalog",
     # Registry / metadata
     "INDICATOR_REGISTRY",
     "estimate_lookback",
     "list_indicators",
     # Types
     "IndicatorKey",
-    "IndicatorOptions",
-    "IndicatorResult",
     "MAType",
-    "MAOptions",
-    "MACDOptions",
-    "BOLLOptions",
-    "KDJOptions",
-    "RSIOptions",
-    "WROptions",
-    "BIASOptions",
-    "CCIOptions",
-    "ATROptions",
-    "OBVOptions",
-    "ROCOptions",
-    "DMIOptions",
-    "SAROptions",
-    "KCOptions",
     "OHLCV",
     # Pure calc functions
     "calcSMA",

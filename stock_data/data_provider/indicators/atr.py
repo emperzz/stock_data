@@ -9,13 +9,14 @@ so callers can also see the most recent bar's TR without recomputing.
 """
 
 from __future__ import annotations
+from typing import Any
 
-from .types import ATROptions, OHLCV
+from .types import OHLCV
 
 
 def calcATR(
     bars: list[OHLCV],
-    options: ATROptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     period: int = int(options.get("period", 14))

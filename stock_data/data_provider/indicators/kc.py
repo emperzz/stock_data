@@ -9,15 +9,16 @@ KC — Keltner Channel.
 """
 
 from __future__ import annotations
+from typing import Any
 
 from .atr import calcATR
 from .ma import calcEMA
-from .types import KCOptions, OHLCV
+from .types import OHLCV
 
 
 def calcKC(
     bars: list[OHLCV],
-    options: KCOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     ema_period: int = int(options.get("emaPeriod", 20))

@@ -17,8 +17,7 @@ amount of history without ever publishing a half-warmed indicator.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 from . import (
     atr as _atr,
@@ -38,257 +37,154 @@ from . import (
 )
 from .types import IndicatorKey, OHLCV
 
-
-ComputeFn = Callable[[list[float | None], dict[str, Any]], list[dict[str, float | None]]]
-ComputeFnOHLCV = Callable[[list[OHLCV], dict[str, Any]], list[dict[str, float | None]]]
-LookbackFn = Callable[[dict[str, Any]], int]
-ColumnsFn = Callable[[dict[str, Any]], list[str]]
+# Per-bar output shape: column -> value (or None when not yet defined).
+IndicatorBar = dict[str, float | None]
 
 
-@dataclass(frozen=True)
-class IndicatorDescriptor:
+class _IndicatorSpec(NamedTuple):
+    """Internal descriptor for one indicator.
+
+    `compute` accepts the appropriate input shape (closes list or OHLCV
+    list) plus the merged options dict, and returns a list of per-bar
+    dicts aligned to the input index.
+    """
+
     key: IndicatorKey
     input_shape: str  # "closes" or "ohlcv"
-    default_options: dict[str, Any] = field(default_factory=dict)
-    estimate_lookback: LookbackFn = field(default=lambda opt: 0)
-    output_columns: ColumnsFn = field(default=lambda opt: [])
-    compute_closes: ComputeFn | None = None
-    compute_ohlcv: ComputeFnOHLCV | None = None
-
-    def run(
-        self, closes: list[float | None], ohlcv: list[OHLCV], options: dict[str, Any]
-    ) -> list[dict[str, float | None]]:
-        if self.input_shape == "closes":
-            assert self.compute_closes is not None
-            return self.compute_closes(closes, options)
-        assert self.compute_ohlcv is not None
-        return self.compute_ohlcv(ohlcv, options)
-
-
-# ---------- per-indicator lookback estimators ----------
-
-# We over-estimate slightly to account for EMA's recursive nature
-# (MACD needs roughly 3*long + signal bars to fully warm up).
-
-
-def _ma_lookback(opt: dict[str, Any]) -> int:
-    periods = opt.get("periods") or [5, 10, 20, 30, 60, 120, 250]
-    ma_type = opt.get("type") or "sma"
-    max_period = max(periods)
-    if ma_type == "ema":
-        return max_period * 3  # EMA needs ~3x its period to stabilize
-    return max_period
-
-
-def _macd_lookback(opt: dict[str, Any]) -> int:
-    long = int(opt.get("long") or 26)
-    signal = int(opt.get("signal") or 9)
-    return long * 3 + signal
-
-
-def _kdj_lookback(opt: dict[str, Any]) -> int:
-    return int(opt.get("period") or 9) * 2
-
-
-def _rsi_lookback(opt: dict[str, Any]) -> int:
-    periods = opt.get("periods") or [6, 12, 24]
-    # Wilder's smoothing needs ~2x the period to stabilize
-    return max(periods) * 2
-
-
-def _wr_lookback(opt: dict[str, Any]) -> int:
-    periods = opt.get("periods") or [6, 10]
-    return max(periods)
-
-
-def _bias_lookback(opt: dict[str, Any]) -> int:
-    periods = opt.get("periods") or [6, 12, 24]
-    return max(periods)
-
-
-def _cci_lookback(opt: dict[str, Any]) -> int:
-    return int(opt.get("period") or 14)
-
-
-def _atr_lookback(opt: dict[str, Any]) -> int:
-    return int(opt.get("period") or 14) * 2
-
-
-def _obv_lookback(opt: dict[str, Any]) -> int:
-    return int(opt.get("maPeriod") or 0) + 1
-
-
-def _roc_lookback(opt: dict[str, Any]) -> int:
-    period = int(opt.get("period") or 12)
-    signal = int(opt.get("signalPeriod") or 0)
-    return period + signal * 3 if signal else period
-
-
-def _dmi_lookback(opt: dict[str, Any]) -> int:
-    period = int(opt.get("period") or 14)
-    adx = int(opt.get("adxPeriod") or period)
-    return period * 2 + adx * 2
-
-
-def _sar_lookback(_opt: dict[str, Any]) -> int:
-    return 5  # SAR stabilizes after a handful of bars
-
-
-def _kc_lookback(opt: dict[str, Any]) -> int:
-    ema_p = int(opt.get("emaPeriod") or 20)
-    atr_p = int(opt.get("atrPeriod") or 10)
-    return max(ema_p * 3, atr_p * 2)
-
-
-# ---------- per-indicator output column estimators ----------
-
-
-def _ma_columns(opt: dict[str, Any]) -> list[str]:
-    periods = opt.get("periods") or [5, 10, 20, 30, 60, 120, 250]
-    return [f"ma{p}" for p in periods]
-
-
-def _rsi_columns(opt: dict[str, Any]) -> list[str]:
-    return [f"rsi_{p}" for p in (opt.get("periods") or [6, 12, 24])]
-
-
-def _wr_columns(opt: dict[str, Any]) -> list[str]:
-    return [f"wr_{p}" for p in (opt.get("periods") or [6, 10])]
-
-
-def _bias_columns(opt: dict[str, Any]) -> list[str]:
-    return [f"bias_{p}" for p in (opt.get("periods") or [6, 12, 24])]
-
-
-def _obv_columns(opt: dict[str, Any]) -> list[str]:
-    cols = ["obv"]
-    if int(opt.get("maPeriod") or 0) > 0:
-        cols.append("obv_ma")
-    return cols
-
-
-def _roc_columns(opt: dict[str, Any]) -> list[str]:
-    cols = ["roc"]
-    if int(opt.get("signalPeriod") or 0) > 0:
-        cols.append("roc_signal")
-    return cols
+    default_options: dict[str, Any]
+    estimate_lookback: Callable[[dict[str, Any]], int]
+    output_columns: Callable[[dict[str, Any]], list[str]]
+    compute: Callable[..., list[IndicatorBar]]
 
 
 # ---------- the registry itself ----------
+#
+# Lookback & column helpers are inline lambdas. EMA-based indicators
+# over-estimate (~3x period) to account for the recursive nature of EMA
+# needing extra warmup bars to fully stabilize.
 
-
-INDICATOR_REGISTRY: dict[IndicatorKey, IndicatorDescriptor] = {
-    IndicatorKey.MA: IndicatorDescriptor(
-        key=IndicatorKey.MA,
-        input_shape="closes",
-        default_options={"periods": [5, 10, 20, 30, 60], "type": "sma"},
-        estimate_lookback=_ma_lookback,
-        output_columns=_ma_columns,
-        compute_closes=_ma.calcMA,
+INDICATOR_REGISTRY: dict[IndicatorKey, _IndicatorSpec] = {
+    IndicatorKey.MA: _IndicatorSpec(
+        IndicatorKey.MA,
+        "closes",
+        {"periods": [5, 10, 20, 30, 60], "type": "sma"},
+        lambda o: max(o.get("periods") or [5, 10, 20, 30, 60, 120, 250]) * (
+            3 if (o.get("type") or "sma") == "ema" else 1
+        ),
+        lambda o: [f"ma{p}" for p in (o.get("periods") or [5, 10, 20, 30, 60, 120, 250])],
+        _ma.calcMA,
     ),
-    IndicatorKey.MACD: IndicatorDescriptor(
-        key=IndicatorKey.MACD,
-        input_shape="closes",
-        default_options={"short": 12, "long": 26, "signal": 9},
-        estimate_lookback=_macd_lookback,
-        output_columns=lambda _o: ["macd_dif", "macd_dea", "macd_hist"],
-        compute_closes=_macd.calcMACD,
+    IndicatorKey.MACD: _IndicatorSpec(
+        IndicatorKey.MACD,
+        "closes",
+        {"short": 12, "long": 26, "signal": 9},
+        lambda o: int(o.get("long") or 26) * 3 + int(o.get("signal") or 9),
+        lambda _o: ["macd_dif", "macd_dea", "macd_hist"],
+        _macd.calcMACD,
     ),
-    IndicatorKey.BOLL: IndicatorDescriptor(
-        key=IndicatorKey.BOLL,
-        input_shape="closes",
-        default_options={"period": 20, "stdDev": 2.0},
-        estimate_lookback=lambda o: int(o.get("period") or 20),
-        output_columns=lambda _o: ["boll_mid", "boll_upper", "boll_lower", "boll_bandwidth"],
-        compute_closes=_boll.calcBOLL,
+    IndicatorKey.BOLL: _IndicatorSpec(
+        IndicatorKey.BOLL,
+        "closes",
+        {"period": 20, "stdDev": 2.0},
+        lambda o: int(o.get("period") or 20),
+        lambda _o: ["boll_mid", "boll_upper", "boll_lower", "boll_bandwidth"],
+        _boll.calcBOLL,
     ),
-    IndicatorKey.KDJ: IndicatorDescriptor(
-        key=IndicatorKey.KDJ,
-        input_shape="ohlcv",
-        default_options={"period": 9, "kPeriod": 3, "dPeriod": 3},
-        estimate_lookback=_kdj_lookback,
-        output_columns=lambda _o: ["kdj_k", "kdj_d", "kdj_j"],
-        compute_ohlcv=_kdj.calcKDJ,
+    IndicatorKey.KDJ: _IndicatorSpec(
+        IndicatorKey.KDJ,
+        "ohlcv",
+        {"period": 9, "kPeriod": 3, "dPeriod": 3},
+        lambda o: int(o.get("period") or 9) * 2,
+        lambda _o: ["kdj_k", "kdj_d", "kdj_j"],
+        _kdj.calcKDJ,
     ),
-    IndicatorKey.RSI: IndicatorDescriptor(
-        key=IndicatorKey.RSI,
-        input_shape="closes",
-        default_options={"periods": [6, 12, 24]},
-        estimate_lookback=_rsi_lookback,
-        output_columns=_rsi_columns,
-        compute_closes=_rsi.calcRSI,
+    IndicatorKey.RSI: _IndicatorSpec(
+        IndicatorKey.RSI,
+        "closes",
+        {"periods": [6, 12, 24]},
+        # Wilder's smoothing needs ~2x the period to stabilize
+        lambda o: max(o.get("periods") or [6, 12, 24]) * 2,
+        lambda o: [f"rsi_{p}" for p in (o.get("periods") or [6, 12, 24])],
+        _rsi.calcRSI,
     ),
-    IndicatorKey.WR: IndicatorDescriptor(
-        key=IndicatorKey.WR,
-        input_shape="ohlcv",
-        default_options={"periods": [6, 10]},
-        estimate_lookback=_wr_lookback,
-        output_columns=_wr_columns,
-        compute_ohlcv=_wr.calcWR,
+    IndicatorKey.WR: _IndicatorSpec(
+        IndicatorKey.WR,
+        "ohlcv",
+        {"periods": [6, 10]},
+        lambda o: max(o.get("periods") or [6, 10]),
+        lambda o: [f"wr_{p}" for p in (o.get("periods") or [6, 10])],
+        _wr.calcWR,
     ),
-    IndicatorKey.BIAS: IndicatorDescriptor(
-        key=IndicatorKey.BIAS,
-        input_shape="closes",
-        default_options={"periods": [6, 12, 24]},
-        estimate_lookback=_bias_lookback,
-        output_columns=_bias_columns,
-        compute_closes=_bias.calcBIAS,
+    IndicatorKey.BIAS: _IndicatorSpec(
+        IndicatorKey.BIAS,
+        "closes",
+        {"periods": [6, 12, 24]},
+        lambda o: max(o.get("periods") or [6, 12, 24]),
+        lambda o: [f"bias_{p}" for p in (o.get("periods") or [6, 12, 24])],
+        _bias.calcBIAS,
     ),
-    IndicatorKey.CCI: IndicatorDescriptor(
-        key=IndicatorKey.CCI,
-        input_shape="ohlcv",
-        default_options={"period": 14},
-        estimate_lookback=_cci_lookback,
-        output_columns=lambda _o: ["cci"],
-        compute_ohlcv=_cci.calcCCI,
+    IndicatorKey.CCI: _IndicatorSpec(
+        IndicatorKey.CCI,
+        "ohlcv",
+        {"period": 14},
+        lambda o: int(o.get("period") or 14),
+        lambda _o: ["cci"],
+        _cci.calcCCI,
     ),
-    IndicatorKey.ATR: IndicatorDescriptor(
-        key=IndicatorKey.ATR,
-        input_shape="ohlcv",
-        default_options={"period": 14},
-        estimate_lookback=_atr_lookback,
-        output_columns=lambda _o: ["atr", "tr"],
-        compute_ohlcv=_atr.calcATR,
+    IndicatorKey.ATR: _IndicatorSpec(
+        IndicatorKey.ATR,
+        "ohlcv",
+        {"period": 14},
+        lambda o: int(o.get("period") or 14) * 2,
+        lambda _o: ["atr", "tr"],
+        _atr.calcATR,
     ),
-    IndicatorKey.OBV: IndicatorDescriptor(
-        key=IndicatorKey.OBV,
-        input_shape="ohlcv",
-        default_options={"maPeriod": 0},
-        estimate_lookback=_obv_lookback,
-        output_columns=_obv_columns,
-        compute_ohlcv=_obv.calcOBV,
+    IndicatorKey.OBV: _IndicatorSpec(
+        IndicatorKey.OBV,
+        "ohlcv",
+        {"maPeriod": 0},
+        lambda o: int(o.get("maPeriod") or 0) + 1,
+        lambda o: ["obv", "obv_ma"] if int(o.get("maPeriod") or 0) > 0 else ["obv"],
+        _obv.calcOBV,
     ),
-    IndicatorKey.ROC: IndicatorDescriptor(
-        key=IndicatorKey.ROC,
-        input_shape="closes",
-        default_options={"period": 12, "signalPeriod": 0},
-        estimate_lookback=_roc_lookback,
-        output_columns=_roc_columns,
-        compute_closes=_roc.calcROC,
+    IndicatorKey.ROC: _IndicatorSpec(
+        IndicatorKey.ROC,
+        "closes",
+        {"period": 12, "signalPeriod": 0},
+        lambda o: int(o.get("period") or 12) + (
+            int(o.get("signalPeriod") or 0) * 3
+            if int(o.get("signalPeriod") or 0)
+            else 0
+        ),
+        lambda o: ["roc", "roc_signal"] if int(o.get("signalPeriod") or 0) > 0 else ["roc"],
+        _roc.calcROC,
     ),
-    IndicatorKey.DMI: IndicatorDescriptor(
-        key=IndicatorKey.DMI,
-        input_shape="ohlcv",
-        default_options={"period": 14, "adxPeriod": 14},
-        estimate_lookback=_dmi_lookback,
-        output_columns=lambda _o: ["dmi_pdi", "dmi_mdi", "dmi_adx", "dmi_adxr"],
-        compute_ohlcv=_dmi.calcDMI,
+    IndicatorKey.DMI: _IndicatorSpec(
+        IndicatorKey.DMI,
+        "ohlcv",
+        {"period": 14, "adxPeriod": 14},
+        lambda o: int(o.get("period") or 14) * 2 + int(o.get("adxPeriod") or 14) * 2,
+        lambda _o: ["dmi_pdi", "dmi_mdi", "dmi_adx", "dmi_adxr"],
+        _dmi.calcDMI,
     ),
-    IndicatorKey.SAR: IndicatorDescriptor(
-        key=IndicatorKey.SAR,
-        input_shape="ohlcv",
-        default_options={"afStart": 0.02, "afIncrement": 0.02, "afMax": 0.20},
-        estimate_lookback=_sar_lookback,
-        output_columns=lambda _o: ["sar", "sar_trend", "sar_ep", "sar_af"],
-        compute_ohlcv=_sar.calcSAR,
+    IndicatorKey.SAR: _IndicatorSpec(
+        IndicatorKey.SAR,
+        "ohlcv",
+        {"afStart": 0.02, "afIncrement": 0.02, "afMax": 0.20},
+        lambda _o: 5,  # SAR stabilizes after a handful of bars
+        lambda _o: ["sar", "sar_trend", "sar_ep", "sar_af"],
+        _sar.calcSAR,
     ),
-    IndicatorKey.KC: IndicatorDescriptor(
-        key=IndicatorKey.KC,
-        input_shape="ohlcv",
-        default_options={"emaPeriod": 20, "atrPeriod": 10, "multiplier": 2.0},
-        estimate_lookback=_kc_lookback,
-        output_columns=lambda _o: ["kc_mid", "kc_upper", "kc_lower", "kc_width"],
-        compute_ohlcv=_kc.calcKC,
+    IndicatorKey.KC: _IndicatorSpec(
+        IndicatorKey.KC,
+        "ohlcv",
+        {"emaPeriod": 20, "atrPeriod": 10, "multiplier": 2.0},
+        lambda o: max(
+            int(o.get("emaPeriod") or 20) * 3,
+            int(o.get("atrPeriod") or 10) * 2,
+        ),
+        lambda _o: ["kc_mid", "kc_upper", "kc_lower", "kc_width"],
+        _kc.calcKC,
     ),
 }
 
@@ -299,18 +195,16 @@ def list_indicators() -> list[dict[str, Any]]:
     Used by the `/indicators/catalog` endpoint to advertise capability
     to AI agents without their having to read the source.
     """
-    catalog: list[dict[str, Any]] = []
-    for descriptor in INDICATOR_REGISTRY.values():
-        catalog.append(
-            {
-                "key": descriptor.key.value,
-                "input_shape": descriptor.input_shape,
-                "default_options": descriptor.default_options,
-                "output_columns": descriptor.output_columns(descriptor.default_options),
-                "default_lookback": descriptor.estimate_lookback(descriptor.default_options),
-            }
-        )
-    return catalog
+    return [
+        {
+            "key": spec.key.value,
+            "input_shape": spec.input_shape,
+            "default_options": spec.default_options,
+            "output_columns": spec.output_columns(spec.default_options),
+            "default_lookback": spec.estimate_lookback(spec.default_options),
+        }
+        for spec in INDICATOR_REGISTRY.values()
+    ]
 
 
 def estimate_lookback(spec: dict[str, Any]) -> int:
@@ -331,17 +225,15 @@ def estimate_lookback(spec: dict[str, Any]) -> int:
                 continue
         else:
             key = key_value
-        descriptor = INDICATOR_REGISTRY.get(key)
-        if descriptor is None:
+        spec_obj = INDICATOR_REGISTRY.get(key)
+        if spec_obj is None:
             continue
-        lookback = descriptor.estimate_lookback(options or {})
-        max_lookback = max(max_lookback, lookback)
+        max_lookback = max(max_lookback, spec_obj.estimate_lookback(options or {}))
     return max_lookback
 
 
 __all__ = [
-    "IndicatorDescriptor",
     "INDICATOR_REGISTRY",
-    "list_indicators",
     "estimate_lookback",
+    "list_indicators",
 ]

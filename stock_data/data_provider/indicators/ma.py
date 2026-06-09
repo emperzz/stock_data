@@ -23,8 +23,9 @@ A note on lookback:
 """
 
 from __future__ import annotations
+from typing import Any
 
-from .types import MAType, MAOptions
+from .types import MAType
 
 
 # ---------- low-level helpers ----------
@@ -178,7 +179,7 @@ def calcWMA(data: list[float | None], period: int) -> list[float | None]:
 
 def calcMA(
     closes: list[float | None],
-    options: MAOptions | None = None,
+    options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
     """Compute one or more moving averages in a single pass.
 
