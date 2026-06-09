@@ -10,6 +10,7 @@ __all__ = [
     "index_market_tag",
     "is_us_market",
     "is_hk_market",
+    "is_index_code",
     "ETF_PREFIXES",
     "BSE_CODES",
 ]

@@ -159,7 +159,7 @@ class TestZTPoolAPIRoutes:
             mock_mgr.get_zt_pool.return_value = []
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/pools?type=zt&date=2024-06-15")
+            client.get("/api/v1/pools?type=zt&date=2024-06-15")
             # Should pass date to manager
             mock_mgr.get_zt_pool.assert_called_once()
             args, kwargs = mock_mgr.get_zt_pool.call_args
@@ -172,8 +172,9 @@ class TestZTPoolAPIRoutes:
         the explicit-date and refresh tests). Forces today to look like a
         non-trade day by patching is_trade_date to return False.
         """
-        from stock_data.data_provider.persistence import trade_calendar
         from datetime import date as date_cls
+
+        from stock_data.data_provider.persistence import trade_calendar
 
         today_str = date_cls.today().strftime("%Y-%m-%d")
         latest = trade_calendar.get_latest_trade_date_on_or_before(today_str)
@@ -207,7 +208,9 @@ class TestZTPoolPersistence:
     def test_save_and_get_zt_pool(self):
         """Test saving and retrieving ZT pool data via the unified pool_daily table."""
         from stock_data.data_provider.persistence.pool_daily import (
-            init_schema, save_pool, get_pool_cached,
+            get_pool_cached,
+            init_schema,
+            save_pool,
         )
 
         init_schema()
@@ -248,7 +251,9 @@ class TestZTPoolPersistence:
     def test_get_pool_count(self):
         """Test getting pool count from the unified table."""
         from stock_data.data_provider.persistence.pool_daily import (
-            init_schema, save_pool, get_pool_count,
+            get_pool_count,
+            init_schema,
+            save_pool,
         )
 
         init_schema()
@@ -276,7 +281,8 @@ class TestZTPoolPersistence:
     def test_invalid_pool_type_raises_valueerror(self):
         """save_pool / get_pool_cached should reject unknown pool types."""
         from stock_data.data_provider.persistence.pool_daily import (
-            save_pool, get_pool_cached,
+            get_pool_cached,
+            save_pool,
         )
 
         with pytest.raises(ValueError, match="Unknown pool_type"):
@@ -287,7 +293,9 @@ class TestZTPoolPersistence:
     def test_unified_table_stores_all_pool_types(self):
         """zt / dt / zbgc co-exist in the unified pool_daily table by (pool_type, date)."""
         from stock_data.data_provider.persistence.pool_daily import (
-            init_schema, save_pool, get_pool_cached,
+            get_pool_cached,
+            init_schema,
+            save_pool,
         )
 
         init_schema()
@@ -310,16 +318,16 @@ class TestZTFetcherCapabilities:
 
     def test_zhitu_fetcher_supports_zt_pool(self):
         """Test ZhituFetcher declares STOCK_ZT_POOL capability."""
-        from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
         from stock_data.data_provider.base import DataCapability
+        from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
 
         fetcher = ZhituFetcher()
         assert DataCapability.STOCK_ZT_POOL in fetcher.supported_data_types
 
     def test_akshare_fetcher_supports_zt_pool(self):
         """Test AkshareFetcher declares STOCK_ZT_POOL capability."""
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
         from stock_data.data_provider.base import DataCapability
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
 
         fetcher = AkshareFetcher()
         assert DataCapability.STOCK_ZT_POOL in fetcher.supported_data_types
@@ -344,10 +352,11 @@ class TestZTFetcherManager:
 
     def test_manager_get_zt_pool_uses_cache(self):
         """Test manager uses persistence when data available (historical date)."""
-        from stock_data.data_provider.persistence.pool_daily import (
-            init_schema, save_pool,
-        )
         from stock_data.data_provider.base import DataFetcherManager
+        from stock_data.data_provider.persistence.pool_daily import (
+            init_schema,
+            save_pool,
+        )
 
         init_schema()
 
@@ -364,12 +373,14 @@ class TestZTFetcherManager:
 
     def test_manager_get_zt_pool_skips_persistence_on_current_day(self):
         """Test that is_current_day=True bypasses persistence read AND write."""
-        from stock_data.data_provider.persistence.pool_daily import (
-            init_schema, save_pool, get_pool_cached,
-        )
-        from stock_data.data_provider.persistence.db import get_connection
-        from stock_data.data_provider.base import DataFetcherManager
         from datetime import date as date_cls
+
+        from stock_data.data_provider.base import DataFetcherManager
+        from stock_data.data_provider.persistence.db import get_connection
+        from stock_data.data_provider.persistence.pool_daily import (
+            get_pool_cached,
+            init_schema,
+        )
 
         init_schema()
 
@@ -406,8 +417,8 @@ class TestZTFetcherManager:
 
     def test_manager_get_zt_pool_normalizes_code(self):
         """Test that manager.get_zt_pool normalizes the pool type code."""
-        from stock_data.data_provider.persistence.pool_daily import init_schema
         from stock_data.data_provider.base import DataFetcherManager
+        from stock_data.data_provider.persistence.pool_daily import init_schema
 
         init_schema()
         mgr = DataFetcherManager()

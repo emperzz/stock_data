@@ -14,7 +14,6 @@ from datetime import date as _date
 import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
-from ..utils.normalize import normalize_stock_code
 
 logger = logging.getLogger(__name__)
 

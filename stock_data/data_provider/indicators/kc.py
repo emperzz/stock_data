@@ -9,6 +9,7 @@ KC — Keltner Channel.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .atr import calcATR
@@ -16,7 +17,7 @@ from .ma import calcEMA
 from .types import OHLCV
 
 
-def calcKC(
+def calcKC(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -32,7 +33,7 @@ def calcKC(
     atr_rows = calcATR(bars, {"period": atr_period})
 
     out: list[dict[str, float | None]] = []
-    for i, bar in enumerate(bars):
+    for i, _bar in enumerate(bars):
         mid = mids[i]
         atr_val = atr_rows[i].get("atr")
         if mid is None or atr_val is None or mid == 0:

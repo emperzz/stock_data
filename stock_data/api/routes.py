@@ -11,12 +11,14 @@ from fastapi import APIRouter, HTTPException, Path, Query
 if TYPE_CHECKING:
     import pandas as pd
 
+from stock_data.data_provider.core.types import get_realtime_circuit_breaker
+
 from ..data_provider import (
     AkshareFetcher,
     BaostockFetcher,
     CninfoFetcher,
-    DataFetchError,
     DataFetcherManager,
+    DataFetchError,
     EastMoneyFetcher,
     TencentFetcher,
     ThsFetcher,
@@ -24,11 +26,11 @@ from ..data_provider import (
     YfinanceFetcher,
     ZhituFetcher,
 )
-from ..data_provider.indicators import IndicatorService, INDICATOR_REGISTRY
+from ..data_provider.fetchers.index_symbols import get_all_indices
+from ..data_provider.indicators import IndicatorService
 from ..data_provider.indicators.types import IndicatorKey
 from ..data_provider.persistence import board as stock_board_cache
 from ..data_provider.persistence import stock_list as stock_cache
-from ..data_provider.fetchers.index_symbols import get_all_indices
 from ..data_provider.utils.normalize import (
     is_hk_market,
     is_index_code,
@@ -36,6 +38,9 @@ from ..data_provider.utils.normalize import (
     normalize_stock_code,
 )
 from .cache import (
+    cached_endpoint,
+    cached_lookup,
+    cached_store,
     get_announcements_cache,
     get_block_trade_cache,
     get_board_list_cache,
@@ -55,9 +60,6 @@ from .cache import (
     get_quote_cache,
     get_reports_cache,
     get_stock_intraday_cache,
-    cached_endpoint,
-    cached_lookup,
-    cached_store,
     is_cache_enabled,
     make_announcements_cache_key,
     make_block_trade_cache_key,
@@ -81,7 +83,6 @@ from .cache import (
     make_reports_cache_key,
     make_stock_intraday_cache_key,
 )
-from stock_data.data_provider.core.types import get_realtime_circuit_breaker
 from .schemas import (
     AnnouncementRecord,
     AnnouncementResponse,
@@ -104,7 +105,6 @@ from .schemas import (
     FundFlowMinuteRecord,
     FundFlowResponse,
     HealthResponse,
-    SourceHealth,
     HolderNumRecord,
     HolderNumResponse,
     HotTopicRecord,
@@ -125,6 +125,7 @@ from .schemas import (
     ReportPDFResponse,
     ReportRecord,
     ReportResponse,
+    SourceHealth,
     StockHistoryResponse,
     StockInfo,
     StockQuote,
@@ -1305,6 +1306,7 @@ def get_pools(
         # trade day. The current-trading-day branch never reads from or writes
         # to persistence (see plan "ZT 池 当日 vs 历史 分流逻辑").
         from datetime import date as date_cls
+
         from ..data_provider.persistence import trade_calendar
 
         today_str = date_cls.today().strftime("%Y-%m-%d")

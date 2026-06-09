@@ -10,13 +10,13 @@ Defaults match the industry standard (12/26/9).
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .ma import calcEMA
 
 
-
-def calcMACD(
+def calcMACD(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -41,17 +41,17 @@ def calcMACD(
 
     # DIF is only valid at indices where BOTH EMAs are defined
     dif: list[float | None] = []
-    for s, l in zip(ema_short, ema_long):
-        if s is None or l is None:
+    for s, long_ema in zip(ema_short, ema_long, strict=True):
+        if s is None or long_ema is None:
             dif.append(None)
         else:
-            dif.append(s - l)
+            dif.append(s - long_ema)
 
     # DEA = EMA(DIF, signal) — calcEMA handles None correctly
     dea = calcEMA(dif, signal)
 
     out: list[dict[str, float | None]] = []
-    for d, e in zip(dif, dea):
+    for d, e in zip(dif, dea, strict=True):
         # Publish whatever is defined. DIF becomes valid first; DEA
         # needs `signal` valid DIF values to seed and lags by that
         # many bars. hist is the difference, so it's only meaningful

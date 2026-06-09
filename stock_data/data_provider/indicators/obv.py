@@ -9,13 +9,14 @@ Optionally smooth with an SMA: `obv_ma{N}`.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .ma import calcSMA
 from .types import OHLCV
 
 
-def calcOBV(
+def calcOBV(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:

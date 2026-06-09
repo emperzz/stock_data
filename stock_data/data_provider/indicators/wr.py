@@ -8,6 +8,7 @@ Needs OHLC.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .types import OHLCV
@@ -19,7 +20,7 @@ def _round2(v: float) -> float:
     return round(float(v), 2)
 
 
-def calcWR(
+def calcWR(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -30,7 +31,6 @@ def calcWR(
         if p <= 0:
             raise ValueError(f"period must be > 0, got {p}")
 
-    n = len(bars)
     out: list[dict[str, float | None]] = []
     window: list[OHLCV] = []
 
@@ -54,12 +54,12 @@ def calcWR(
             valid = True
             for w in slice_:
                 h = w.get("high")
-                l = w.get("low")
-                if h is None or l is None:
+                low = w.get("low")
+                if h is None or low is None:
                     valid = False
                     break
                 high_n = max(high_n, h)
-                low_n = min(low_n, l)
+                low_n = min(low_n, low)
 
             close = bar.get("close")
             if not valid or close is None or high_n == low_n:

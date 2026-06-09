@@ -342,7 +342,7 @@ def cached_endpoint(
                 raise HTTPException(
                     status_code=503,
                     detail={"error": "data_unavailable", "message": str(e)},
-                )
+                ) from e
             except HTTPException:
                 raise
             except Exception as e:

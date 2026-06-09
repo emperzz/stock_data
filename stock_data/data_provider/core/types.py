@@ -9,12 +9,12 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
-from typing import Any, Optional, Union
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
+def safe_float(val: Any, default: float | None = None) -> float | None:
     """Safely convert value to float, handling None, NaN, inf, and string cases."""
     if val is None:
         return default

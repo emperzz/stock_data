@@ -2,11 +2,12 @@
 Unit tests for TencentFetcher.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
-from stock_data.data_provider.fetchers.tencent_fetcher import TencentFetcher
+import pytest
+
 from stock_data.data_provider.base import DataCapability
+from stock_data.data_provider.fetchers.tencent_fetcher import TencentFetcher
 
 
 class TestTencentFetcherBasics:
@@ -238,8 +239,9 @@ class TestHistoricalNotSupported:
 
     def test_normalize_data_raises(self):
         """Test that _normalize_data raises DataFetchError."""
-        from stock_data.data_provider.base import DataFetchError
         import pandas as pd
+
+        from stock_data.data_provider.base import DataFetchError
 
         f = TencentFetcher()
         with pytest.raises(DataFetchError, match="does not support historical"):

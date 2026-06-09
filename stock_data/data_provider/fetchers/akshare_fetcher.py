@@ -16,8 +16,8 @@ from ..base import (
     is_hk_market,
     normalize_stock_code,
 )
-from ..persistence.pool_daily import init_schema as init_zt_cache_schema
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
+from ..persistence.pool_daily import init_schema as init_zt_cache_schema
 from ..utils.normalize import get_index_type, is_index_code
 from .index_symbols import US_INDEX_AKSHARE_MAP
 
@@ -837,8 +837,6 @@ class AkshareFetcher(BaseFetcher):
             import akshare as ak
 
             code = normalize_stock_code(index_code)
-            period_map = {"d": "daily", "w": "weekly", "m": "monthly"}
-            period_value = period_map.get(period, "daily")
 
             # Determine Sina/Tencent prefix
             prefix = "sh" if code.startswith(("6", "5", "0")) else "sz"
@@ -983,8 +981,9 @@ class AkshareFetcher(BaseFetcher):
             or None if not available.
         """
         try:
+            from datetime import date, datetime
+
             import akshare as ak
-            from datetime import date, datetime, timedelta
 
             code = normalize_stock_code(index_code)
 

@@ -491,9 +491,9 @@ class TestDataFetcherManager:
 
     @pytest.fixture
     def manager(self):
+        from stock_data.data_provider.base import DataFetcherManager
         from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
         from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
-        from stock_data.data_provider.base import DataFetcherManager
         from stock_data.data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
 
         return DataFetcherManager(

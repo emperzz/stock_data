@@ -17,12 +17,11 @@ Wilder smoothing (recursive, not the simple SMA variant):
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 
-
-
-def calcRSI(
+def calcRSI(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -40,7 +39,7 @@ def calcRSI(
 
     n = len(closes)
     out: list[dict[str, float | None]] = []
-    for i in range(n):
+    for _i in range(n):
         row: dict[str, float | None] = {f"rsi_{p}": None for p in periods}
         out.append(row)
 

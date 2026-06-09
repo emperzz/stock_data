@@ -17,7 +17,6 @@ Covers: stock_data/api/cache.py
 - make_pools_cache_key
 """
 
-import pytest
 from stock_data.api.cache import (
     make_announcements_cache_key,
     make_block_trade_cache_key,

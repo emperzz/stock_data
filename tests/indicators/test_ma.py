@@ -1,11 +1,9 @@
 """Unit tests for the moving-average family (SMA / EMA / WMA)."""
 
-import math
 
 import pytest
 
-from stock_data.data_provider.indicators.ma import calcSMA, calcEMA, calcWMA, calcMA
-
+from stock_data.data_provider.indicators.ma import calcEMA, calcMA, calcSMA, calcWMA
 
 # ---------- SMA ----------
 

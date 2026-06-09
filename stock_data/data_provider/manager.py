@@ -3,9 +3,10 @@ Manager for multiple stock data fetchers with priority-based failover.
 """
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from threading import RLock
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 import pandas as pd
 
@@ -22,9 +23,7 @@ def _is_meaningful(result: Any) -> bool:
     """Treat None and empty DataFrames as 'no data' (skip fetcher)."""
     if result is None:
         return False
-    if isinstance(result, pd.DataFrame) and result.empty:
-        return False
-    return True
+    return not (isinstance(result, pd.DataFrame) and result.empty)
 
 
 class DataFetcherManager:

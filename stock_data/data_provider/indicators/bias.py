@@ -7,13 +7,13 @@ Expressed as a percentage. Positive = price above its MA, negative = below.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .ma import calcSMA
 
 
-
-def calcBIAS(
+def calcBIAS(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:

@@ -157,7 +157,7 @@ def save_pool(pool_type: str, date: str, stocks: list[dict]) -> int:
 def _row_to_dict(row: sqlite3.Row) -> dict:
     """Convert sqlite3.Row to dict, excluding id and updated_at."""
     result = {}
-    for key in row.keys():
+    for key in row.keys():  # noqa: SIM118 — sqlite3.Row iterates values, not keys
         if key not in ("id", "updated_at"):
             result[key] = row[key]
     return result

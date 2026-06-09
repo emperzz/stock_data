@@ -7,13 +7,13 @@ Optionally a signal line: `EMA(ROC, signalPeriod)`.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .ma import calcEMA
 
 
-
-def calcROC(
+def calcROC(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -39,7 +39,7 @@ def calcROC(
     out: list[dict[str, float | None]] = []
     if signal_period > 0:
         signal = calcEMA(rocs, signal_period)
-        for r, s in zip(rocs, signal):
+        for r, s in zip(rocs, signal, strict=True):
             out.append({"roc": r, "roc_signal": s})
     else:
         for r in rocs:

@@ -10,6 +10,7 @@ Default period = 14. Needs OHLC.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .types import OHLCV
@@ -31,7 +32,7 @@ def _sma(values: list[float], period: int) -> list[float | None]:
     return out
 
 
-def calcCCI(
+def calcCCI(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -43,12 +44,12 @@ def calcCCI(
     tp: list[float] = []
     for bar in bars:
         h = bar.get("high")
-        l = bar.get("low")
+        low = bar.get("low")
         c = bar.get("close")
-        if h is None or l is None or c is None:
+        if h is None or low is None or c is None:
             tp.append(0.0)  # placeholder; the output for this bar will be None anyway
         else:
-            tp.append((h + l + c) / 3.0)
+            tp.append((h + low + c) / 3.0)
 
     ma_tp = _sma(tp, period)
 

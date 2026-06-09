@@ -18,12 +18,13 @@ the trend line.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .types import OHLCV
 
 
-def calcSAR(
+def calcSAR(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -77,8 +78,8 @@ def calcSAR(
     for i in range(1, len(bars)):
         bar = bars[i]
         h = bar.get("high")
-        l = bar.get("low")
-        if h is None or l is None:
+        low = bar.get("low")
+        if h is None or low is None:
             out.append({"sar": None, "sar_trend": trend, "sar_ep": round(ep, 2), "sar_af": round(af, 4)})
             continue
 
@@ -86,11 +87,11 @@ def calcSAR(
         next_sar = sar_value + af * (ep - sar_value)
         # Trend check BEFORE assigning new EP/AF (to use the old EP)
         flipped = False
-        if trend == 1 and l < next_sar:
+        if trend == 1 and low < next_sar:
             # Flip to downtrend
             trend = -1
             next_sar = ep  # SAR resets to the prior EP
-            ep = l
+            ep = low
             af = af_start
             flipped = True
         elif trend == -1 and h > next_sar:
@@ -105,15 +106,15 @@ def calcSAR(
             if trend == 1 and h > ep:
                 ep = h
                 af = min(af + af_increment, af_max)
-            elif trend == -1 and l < ep:
-                ep = l
+            elif trend == -1 and low < ep:
+                ep = low
                 af = min(af + af_increment, af_max)
             # SAR must not penetrate the prior two bars' extremes
             if i >= 2:
                 p1 = bars[i - 1]
                 p2 = bars[i - 2]
                 if trend == 1:
-                    floor_ = min(p1.get("low") or l, p2.get("low") or l)  # type: ignore[arg-type]
+                    floor_ = min(p1.get("low") or low, p2.get("low") or low)  # type: ignore[arg-type]
                     next_sar = min(next_sar, floor_)
                 else:
                     ceil_ = max(p1.get("high") or h, p2.get("high") or h)  # type: ignore[arg-type]

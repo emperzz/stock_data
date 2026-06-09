@@ -8,14 +8,13 @@ import time
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Flag, auto
-from threading import RLock
 
 import pandas as pd
 
-from .core.types import UnifiedRealtimeQuote, get_realtime_circuit_breaker
+from .core.types import UnifiedRealtimeQuote
 from .utils.normalize import (
-    ETF_PREFIXES,
     BSE_CODES,
+    ETF_PREFIXES,
     index_market_tag,
     is_hk_market,
     is_us_market,

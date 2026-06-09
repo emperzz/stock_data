@@ -23,10 +23,10 @@ A note on lookback:
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .types import MAType
-
 
 # ---------- low-level helpers ----------
 
@@ -52,7 +52,10 @@ def _valid(value: float | None) -> bool:
 # ---------- SMA ----------
 
 
-def calcSMA(data: list[float | None], period: int) -> list[float | None]:
+def calcSMA(  # noqa: N802
+    data: list[float | None],
+    period: int,
+) -> list[float | None]:
     """Simple Moving Average over `period` bars.
 
     Returns None for bars where fewer than `period` valid closes are
@@ -91,7 +94,10 @@ def calcSMA(data: list[float | None], period: int) -> list[float | None]:
 # ---------- EMA ----------
 
 
-def calcEMA(data: list[float | None], period: int) -> list[float | None]:
+def calcEMA(  # noqa: N802
+    data: list[float | None],
+    period: int,
+) -> list[float | None]:
     """Exponential Moving Average over `period` bars.
 
     Seed: the first valid EMA is the SMA of the first `period` valid
@@ -139,7 +145,10 @@ def calcEMA(data: list[float | None], period: int) -> list[float | None]:
 # ---------- WMA ----------
 
 
-def calcWMA(data: list[float | None], period: int) -> list[float | None]:
+def calcWMA(  # noqa: N802
+    data: list[float | None],
+    period: int,
+) -> list[float | None]:
     """Linearly-Weighted Moving Average.
 
     Weights increase arithmetically: bar at offset -period+1 gets weight 1,
@@ -168,7 +177,7 @@ def calcWMA(data: list[float | None], period: int) -> list[float | None]:
             result.append(None)
             continue
 
-        weighted = sum(w * v for w, v in zip(weights, window))  # type: ignore[arg-type]
+        weighted = sum(w * v for w, v in zip(weights, window, strict=True))  # type: ignore[arg-type]
         result.append(_round2(weighted / weight_sum))
 
     return result
@@ -177,7 +186,7 @@ def calcWMA(data: list[float | None], period: int) -> list[float | None]:
 # ---------- bulk calcMA ----------
 
 
-def calcMA(
+def calcMA(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:

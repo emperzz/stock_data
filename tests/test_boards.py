@@ -2,8 +2,9 @@
 Tests for stock board (concept/industry) API and cache.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from stock_data.api.routes import reset_manager
 from stock_data.server import app
@@ -67,22 +68,24 @@ class TestBoardAPIRoutes:
 
     def test_get_board_stocks(self, client):
         """Test GET /api/v1/boards/{board_code}/stocks."""
-        with patch("stock_data.api.routes.stock_board_cache.get_board_stocks") as mock_get_stocks:
-            with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get_boards:
-                mock_get_stocks.return_value = [
-                    {"stock_code": "600519", "stock_name": "贵州茅台"},
-                    {"stock_code": "000001", "stock_name": "平安银行"},
-                ]
-                mock_get_boards.return_value = [
-                    {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
-                ]
-                response = client.get("/api/v1/boards/BK1048/stocks")
-                assert response.status_code == 200
-                data = response.json()
-                assert "board" in data
-                assert "stocks" in data
-                assert data["board"]["code"] == "BK1048"
-                assert len(data["stocks"]) == 2
+        with (
+            patch("stock_data.api.routes.stock_board_cache.get_board_stocks") as mock_get_stocks,
+            patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get_boards,
+        ):
+            mock_get_stocks.return_value = [
+                {"stock_code": "600519", "stock_name": "贵州茅台"},
+                {"stock_code": "000001", "stock_name": "平安银行"},
+            ]
+            mock_get_boards.return_value = [
+                {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
+            ]
+            response = client.get("/api/v1/boards/BK1048/stocks")
+            assert response.status_code == 200
+            data = response.json()
+            assert "board" in data
+            assert "stocks" in data
+            assert data["board"]["code"] == "BK1048"
+            assert len(data["stocks"]) == 2
 
     def test_get_board_stocks_with_quote(self, client):
         """Test GET /api/v1/boards/{board_code}/stocks?include_quote=true."""
@@ -172,14 +175,16 @@ class TestBoardAPIRoutes:
 
     def test_get_boards_include_quote_skips_memory_cache(self, client):
         """Test GET /api/v1/boards?include_quote=true skips in-memory cache."""
-        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
-            with patch("stock_data.api.cache.is_cache_enabled", return_value=True):
-                mock_get.return_value = [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}]
-                response = client.get("/api/v1/boards?type=concept&include_quote=true")
-                assert response.status_code == 200
-                mock_get.assert_called_once()
-                _, kwargs = mock_get.call_args
-                assert kwargs.get("include_quote") is True
+        with (
+            patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get,
+            patch("stock_data.api.cache.is_cache_enabled", return_value=True),
+        ):
+            mock_get.return_value = [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}]
+            response = client.get("/api/v1/boards?type=concept&include_quote=true")
+            assert response.status_code == 200
+            mock_get.assert_called_once()
+            _, kwargs = mock_get.call_args
+            assert kwargs.get("include_quote") is True
 
 
 class TestBoardCache:
@@ -200,7 +205,7 @@ class TestBoardCache:
 
     def test_board_stocks_cache_ttl(self):
         """Test board stocks cache uses appropriate TTL."""
-        from stock_data.api.cache import get_board_stocks_cache, is_cache_enabled
+        from stock_data.api.cache import get_board_stocks_cache
 
         with patch("stock_data.api.cache.is_cache_enabled", return_value=True):
             cache = get_board_stocks_cache()
@@ -240,8 +245,9 @@ class TestAkshareFetcherBoards:
 
     def test_get_all_concept_boards_include_quote_parameter(self):
         """Test get_all_concept_boards accepts include_quote parameter."""
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
         import inspect
+
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
 
         fetcher = AkshareFetcher()
         sig = inspect.signature(fetcher.get_all_concept_boards)
@@ -249,8 +255,9 @@ class TestAkshareFetcherBoards:
 
     def test_get_all_industry_boards_include_quote_parameter(self):
         """Test get_all_industry_boards accepts include_quote parameter."""
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
         import inspect
+
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
 
         fetcher = AkshareFetcher()
         sig = inspect.signature(fetcher.get_all_industry_boards)
@@ -258,8 +265,8 @@ class TestAkshareFetcherBoards:
 
     def test_board_capability_declared(self):
         """Test AkshareFetcher has STOCK_BOARD capability."""
-        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
         from stock_data.data_provider.base import DataCapability
+        from stock_data.data_provider.fetchers.akshare_fetcher import AkshareFetcher
 
         fetcher = AkshareFetcher()
         assert DataCapability.STOCK_BOARD in fetcher.supported_data_types
@@ -331,7 +338,7 @@ class TestBoardSchemas:
 
     def test_board_list_response_schema(self):
         """Test BoardListResponse schema."""
-        from stock_data.api.schemas import BoardListResponse, BoardInfo
+        from stock_data.api.schemas import BoardInfo, BoardListResponse
 
         boards = [BoardInfo(code="BK1048", name="互联网服务")]
         response = BoardListResponse(data=boards)
@@ -339,7 +346,7 @@ class TestBoardSchemas:
 
     def test_board_stocks_response_schema(self):
         """Test BoardStocksResponse schema."""
-        from stock_data.api.schemas import BoardStocksResponse, BoardInfo, BoardStockInfo
+        from stock_data.api.schemas import BoardInfo, BoardStockInfo, BoardStocksResponse
 
         board = BoardInfo(code="BK1048", name="互联网服务")
         stocks = [BoardStockInfo(code="600519", name="贵州茅台")]

@@ -1,11 +1,12 @@
 """
 Unit tests for EastMoneyFetcher.
 """
-import pytest
 from unittest.mock import MagicMock, patch
 
-from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
+import pytest
+
 from stock_data.data_provider.base import DataCapability
+from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 
 
 class TestEastMoneyFetcherBasics:
@@ -136,8 +137,9 @@ class TestHistoricalNotSupported:
             f._fetch_raw_data("600519", "2026-01-01", "2026-05-01")
 
     def test_normalize_data_raises(self):
-        from stock_data.data_provider.base import DataFetchError
         import pandas as pd
+
+        from stock_data.data_provider.base import DataFetchError
         f = EastMoneyFetcher()
         with pytest.raises(DataFetchError, match="does not support historical"):
             f._normalize_data(pd.DataFrame(), "600519")

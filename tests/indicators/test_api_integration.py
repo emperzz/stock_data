@@ -6,9 +6,6 @@ system is irrelevant for these tests — we only care that the API layer
 plumbs `?indicators=` through to IndicatorService correctly.
 """
 
-import sys
-import types
-from unittest.mock import patch
 
 import pandas as pd
 import pytest

@@ -13,8 +13,8 @@ import pandas as pd
 import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
-from ..persistence.pool_daily import init_schema as init_zt_cache_schema
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
+from ..persistence.pool_daily import init_schema as init_zt_cache_schema
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ class ZhituFetcher(BaseFetcher):
             if isinstance(data, dict) and "detail" in data:
                 error_msg = data.get("detail", "Unknown error")
                 if "Licence证书" in str(error_msg) or "不存在" in str(error_msg):
-                    logger.warning(f"[ZhituFetcher] Invalid token: token rejected by upstream")
+                    logger.warning("[ZhituFetcher] Invalid token: token rejected by upstream")
                 else:
                     logger.warning(f"[ZhituFetcher] API error: {error_msg[:50]}...")
                 return None

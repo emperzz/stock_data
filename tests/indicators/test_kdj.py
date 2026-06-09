@@ -4,8 +4,6 @@ import pytest
 
 from stock_data.data_provider.indicators.kdj import calcKDJ
 
-from stock_data.data_provider.indicators.kdj import calcKDJ
-
 
 def _make_bars(closes, opens=None, highs=None, lows=None):
     """Helper: synthesize OHLCV bars with close=given, high/low from a 1% wiggle."""
@@ -13,8 +11,8 @@ def _make_bars(closes, opens=None, highs=None, lows=None):
     for i, c in enumerate(closes):
         o = opens[i] if opens else c - 0.5
         h = highs[i] if highs else c + 1.0
-        l = lows[i] if lows else c - 1.0
-        bars.append({"open": o, "high": h, "low": l, "close": c, "volume": 1000.0})
+        low = lows[i] if lows else c - 1.0
+        bars.append({"open": o, "high": h, "low": low, "close": c, "volume": 1000.0})
     return bars
 
 

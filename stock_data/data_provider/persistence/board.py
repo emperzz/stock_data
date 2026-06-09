@@ -146,10 +146,7 @@ def get_board_stocks(
     init_schema()
 
     # include_quote=True means always fetch fresh data, skip cache
-    if include_quote:
-        needs_refresh = True
-    else:
-        needs_refresh = refresh or _is_first_call_of_day(board_code, source)
+    needs_refresh = include_quote or refresh or _is_first_call_of_day(board_code, source)
 
     if not needs_refresh:
         cached = _read_board_stocks_from_db(board_code, source)

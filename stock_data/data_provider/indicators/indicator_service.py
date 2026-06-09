@@ -23,7 +23,7 @@ from typing import Any
 import pandas as pd
 
 from .registry import INDICATOR_REGISTRY, estimate_lookback, list_indicators
-from .types import IndicatorKey, OHLCV
+from .types import OHLCV, IndicatorKey
 
 
 def _coerce_indicator_key(raw: Any) -> IndicatorKey:
@@ -103,9 +103,7 @@ def _attach_indicators_dict(
     for row in per_bar:
         clean_row: dict[str, float | None] = {}
         for k, v in row.items():
-            if v is None:
-                clean_row[k] = None
-            elif isinstance(v, float) and math.isnan(v):
+            if v is None or isinstance(v, float) and math.isnan(v):
                 clean_row[k] = None
             else:
                 clean_row[k] = v

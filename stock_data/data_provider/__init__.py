@@ -4,13 +4,17 @@ Stock data fetchers with unified interface
 """
 
 # Core classes - main entry point
+# Backward compatibility: `stock_cache` is the on-disk persistence layer.
+# Kept as a public alias because external consumers (OpenClaw) and many
+# call sites in routes.py use `from data_provider import stock_cache`.
+from . import persistence as stock_cache
 from .base import (
+    STANDARD_COLUMNS,
     BaseFetcher,
     DataCapability,
     DataFetcherManager,
     DataFetchError,
     RateLimitError,
-    STANDARD_COLUMNS,
 )
 
 # Types
@@ -18,10 +22,21 @@ from .core.types import (
     CircuitBreaker,
     RealtimeSource,
     UnifiedRealtimeQuote,
+    get_realtime_circuit_breaker,
     safe_float,
     safe_int,
-    get_realtime_circuit_breaker,
 )
+
+# Fetcher classes
+from .fetchers.akshare_fetcher import AkshareFetcher
+from .fetchers.baostock_fetcher import BaostockFetcher
+from .fetchers.cninfo_fetcher import CninfoFetcher
+from .fetchers.eastmoney_fetcher import EastMoneyFetcher
+from .fetchers.tencent_fetcher import TencentFetcher
+from .fetchers.ths_fetcher import ThsFetcher
+from .fetchers.tushare_fetcher import TushareFetcher
+from .fetchers.yfinance_fetcher import YfinanceFetcher
+from .fetchers.zhitu_fetcher import ZhituFetcher
 
 # Persistence functions (on-disk SQLite store). The legacy data_provider.cache/
 # module was removed; this package is now the single home for SQLite-backed
@@ -42,22 +57,6 @@ from .persistence import (
     update_cached_calendar,
     update_cached_stocks,
 )
-
-# Backward compatibility: `stock_cache` is the on-disk persistence layer.
-# Kept as a public alias because external consumers (OpenClaw) and many
-# call sites in routes.py use `from data_provider import stock_cache`.
-from . import persistence as stock_cache
-
-# Fetcher classes
-from .fetchers.akshare_fetcher import AkshareFetcher
-from .fetchers.baostock_fetcher import BaostockFetcher
-from .fetchers.cninfo_fetcher import CninfoFetcher
-from .fetchers.eastmoney_fetcher import EastMoneyFetcher
-from .fetchers.tencent_fetcher import TencentFetcher
-from .fetchers.ths_fetcher import ThsFetcher
-from .fetchers.tushare_fetcher import TushareFetcher
-from .fetchers.yfinance_fetcher import YfinanceFetcher
-from .fetchers.zhitu_fetcher import ZhituFetcher
 
 __all__ = [
     # Core

@@ -14,6 +14,7 @@ DMI — Directional Movement Index (Wilder's smoothing).
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .types import OHLCV
@@ -46,7 +47,7 @@ def _wilder_smooth(values: list[float | None], period: int) -> list[float | None
     return out
 
 
-def calcDMI(
+def calcDMI(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -65,15 +66,22 @@ def calcDMI(
 
     for bar in bars:
         h = bar.get("high")
-        l = bar.get("low")
+        low = bar.get("low")
         c = bar.get("close")
-        if h is None or l is None or c is None or prev_high is None or prev_low is None or prev_close is None:
+        if (
+            h is None
+            or low is None
+            or c is None
+            or prev_high is None
+            or prev_low is None
+            or prev_close is None
+        ):
             plus_dm.append(None)
             minus_dm.append(None)
             trs.append(None)
         else:
             up = h - prev_high
-            down = prev_low - l
+            down = prev_low - low
             if up > down and up > 0:
                 plus_dm.append(up)
             else:
@@ -82,9 +90,9 @@ def calcDMI(
                 minus_dm.append(down)
             else:
                 minus_dm.append(0.0)
-            tr = max(h - l, abs(h - prev_close), abs(l - prev_close))  # type: ignore[arg-type]
+            tr = max(h - low, abs(h - prev_close), abs(low - prev_close))  # type: ignore[arg-type]
             trs.append(tr)
-        prev_high, prev_low, prev_close = h, l, c
+        prev_high, prev_low, prev_close = h, low, c
 
     smooth_plus = _wilder_smooth(plus_dm, period)
     smooth_minus = _wilder_smooth(minus_dm, period)

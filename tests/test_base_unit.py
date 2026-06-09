@@ -5,18 +5,18 @@ Unit tests for base classes and utilities (no network calls).
 import pandas as pd
 import pytest
 
+from stock_data.data_provider import (
+    AkshareFetcher,
+    BaostockFetcher,
+    TushareFetcher,
+    YfinanceFetcher,
+    stock_cache,
+)
 from stock_data.data_provider.base import (
     BaseFetcher,
     DataCapability,
     DataFetcherManager,
     DataFetchError,
-)
-from stock_data.data_provider import (
-    BaostockFetcher,
-    AkshareFetcher,
-    YfinanceFetcher,
-    TushareFetcher,
-    stock_cache,
 )
 from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
 
@@ -111,7 +111,6 @@ class TestDataFetcherManagerUnit:
 
     def test_get_stock_name(self, manager):
         # get_stock_name now lives in stock_cache, not manager
-        from stock_data.data_provider import stock_cache
 
         name = stock_cache.get_stock_name("000001", manager=manager)
         assert name == "Test"
@@ -140,7 +139,6 @@ class TestKlineDataProcessing:
     """Unit tests for kline data cleaning and indicator calculation."""
 
     def test_clean_data_drops_nan_close(self):
-        from stock_data.data_provider import BaostockFetcher
 
         df = pd.DataFrame(
             {
@@ -167,7 +165,6 @@ class TestKlineDataProcessing:
         Indicators are now the responsibility of the IndicatorService
         layer; see the ?indicators= query param on /stocks/{code}/history.
         """
-        from stock_data.data_provider import BaostockFetcher
 
         df = pd.DataFrame(
             {
@@ -194,7 +191,6 @@ class TestAdjustMapping:
     """Tests for unified adjust parameter mapping."""
 
     def test_baostock_adjust_mapping(self):
-        from stock_data.data_provider import BaostockFetcher
 
         f = BaostockFetcher()
         assert f._map_adjust("") == "3"  # 不复权
@@ -202,7 +198,6 @@ class TestAdjustMapping:
         assert f._map_adjust("hfq") == "1"  # 后复权
 
     def test_akshare_adjust_mapping(self):
-        from stock_data.data_provider import AkshareFetcher
 
         f = AkshareFetcher()
         assert f._map_adjust("") == ""  # 不复权
@@ -210,7 +205,6 @@ class TestAdjustMapping:
         assert f._map_adjust("hfq") == "hfq"  # 后复权
 
     def test_yfinance_adjust_mapping(self):
-        from stock_data.data_provider import YfinanceFetcher
 
         f = YfinanceFetcher()
         assert f._map_adjust("") is None  # 不复权
@@ -218,7 +212,6 @@ class TestAdjustMapping:
         assert f._map_adjust("hfq") == "qfq"  # 后复权→前复权 (yfinance only has one)
 
     def test_tushare_adjust_mapping(self):
-        from stock_data.data_provider import TushareFetcher
 
         f = TushareFetcher()
         assert f._map_adjust("") is None  # 不复权
@@ -279,8 +272,9 @@ class TestStockListCache:
 
     def test_update_cached_stocks_uses_executemany(self):
         """Test update_cached_stocks performs batch insert efficiently."""
-        from stock_data.data_provider.persistence import stock_list as stock_list_cache
         import inspect
+
+        from stock_data.data_provider.persistence import stock_list as stock_list_cache
 
         # Check that executemany is used in the function
         source = inspect.getsource(stock_list_cache.update_cached_stocks)
@@ -288,8 +282,9 @@ class TestStockListCache:
 
     def test_get_stock_name_priorities_db_lookup(self):
         """Test get_stock_name first tries DB lookup before loading full list."""
-        from stock_data.data_provider.persistence import stock_list as stock_list_cache
         import inspect
+
+        from stock_data.data_provider.persistence import stock_list as stock_list_cache
 
         # Verify the function has logic to try DB first
         source = inspect.getsource(stock_list_cache.get_stock_name)

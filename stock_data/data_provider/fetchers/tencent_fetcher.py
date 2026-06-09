@@ -11,7 +11,6 @@ Key fields used:
 
 import logging
 import urllib.request
-from typing import Optional
 
 import pandas as pd
 
@@ -72,7 +71,7 @@ class TencentFetcher(BaseFetcher):
         """Tencent API is realtime-only, not used for historical data."""
         raise DataFetchError("TencentFetcher does not support historical K-line data")
 
-    def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Tencent财经 API.
 
         Returns enhanced fields including PE/PB/市值/涨跌停价.
@@ -98,7 +97,7 @@ class TencentFetcher(BaseFetcher):
             logger.warning(f"[TencentFetcher] Error for {stock_code}: {e}")
             return None
 
-    def _parse_tencent_response(self, data: str, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+    def _parse_tencent_response(self, data: str, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Parse Tencent财经 response.
 
         Response format: v_pv_title="data~field1~field2~...";

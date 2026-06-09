@@ -8,12 +8,11 @@ BOLL — Bollinger Bands.
 """
 
 from __future__ import annotations
-from typing import Any
 
 import math
+from typing import Any
 
 from .ma import calcSMA
-
 
 
 def _stddev(window: list[float], mean: float) -> float:
@@ -24,7 +23,7 @@ def _stddev(window: list[float], mean: float) -> float:
     return math.sqrt(variance)
 
 
-def calcBOLL(
+def calcBOLL(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -48,7 +47,7 @@ def calcBOLL(
     # Rolling window of raw closes for stddev calculation
     out: list[dict[str, float | None]] = []
     window: list[float | None] = []
-    for value, mid in zip(closes, mids):
+    for value, mid in zip(closes, mids, strict=True):
         window.append(value)
         if len(window) > period:
             window.pop(0)

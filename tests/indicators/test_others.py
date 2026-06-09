@@ -5,16 +5,15 @@ import math
 import pandas as pd
 import pytest
 
-from stock_data.data_provider.indicators.wr import calcWR
+from stock_data.data_provider.indicators.atr import calcATR
 from stock_data.data_provider.indicators.bias import calcBIAS
 from stock_data.data_provider.indicators.cci import calcCCI
-from stock_data.data_provider.indicators.atr import calcATR
+from stock_data.data_provider.indicators.dmi import calcDMI
+from stock_data.data_provider.indicators.kc import calcKC
 from stock_data.data_provider.indicators.obv import calcOBV
 from stock_data.data_provider.indicators.roc import calcROC
-from stock_data.data_provider.indicators.dmi import calcDMI
 from stock_data.data_provider.indicators.sar import calcSAR
-from stock_data.data_provider.indicators.kc import calcKC
-
+from stock_data.data_provider.indicators.wr import calcWR
 
 # ---------- helpers ----------
 

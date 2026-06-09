@@ -5,12 +5,10 @@ import pytest
 
 from stock_data.data_provider.indicators import (
     INDICATOR_REGISTRY,
-    IndicatorKey,
     IndicatorService,
     estimate_lookback,
     list_indicators,
 )
-
 
 # ---------- registry / catalog ----------
 
@@ -21,7 +19,7 @@ def test_registry_has_14_indicators():
         "ma", "macd", "boll", "kdj", "rsi", "wr", "bias",
         "cci", "atr", "obv", "roc", "dmi", "sar", "kc",
     }
-    assert {k.value for k in INDICATOR_REGISTRY.keys()} == expected
+    assert {k.value for k in INDICATOR_REGISTRY} == expected
 
 
 def test_list_indicators_returns_catalog():

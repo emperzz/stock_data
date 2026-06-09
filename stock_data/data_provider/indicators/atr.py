@@ -9,12 +9,13 @@ so callers can also see the most recent bar's TR without recomputing.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .types import OHLCV
 
 
-def calcATR(
+def calcATR(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -28,12 +29,12 @@ def calcATR(
     prev_close: float | None = None
     for bar in bars:
         h = bar.get("high")
-        l = bar.get("low")
+        low = bar.get("low")
         c = bar.get("close")
-        if h is None or l is None or c is None or prev_close is None:
+        if h is None or low is None or c is None or prev_close is None:
             trs.append(None)
         else:
-            tr = max(h - l, abs(h - prev_close), abs(l - prev_close))
+            tr = max(h - low, abs(h - prev_close), abs(low - prev_close))
             trs.append(tr)
         prev_close = c
 

@@ -1,8 +1,10 @@
 """Unit tests for CninfoFetcher."""
-import pytest
 from unittest.mock import MagicMock, patch
-from stock_data.data_provider.fetchers.cninfo_fetcher import CninfoFetcher
+
+import pytest
+
 from stock_data.data_provider.base import DataCapability
+from stock_data.data_provider.fetchers.cninfo_fetcher import CninfoFetcher
 
 
 class TestCninfoFetcherBasics:
@@ -70,8 +72,9 @@ class TestHistoricalNotSupported:
             f._fetch_raw_data("600519", "", "")
 
     def test_normalize_data_raises(self):
-        from stock_data.data_provider.base import DataFetchError
         import pandas as pd
+
+        from stock_data.data_provider.base import DataFetchError
         f = CninfoFetcher()
         with pytest.raises(DataFetchError):
             f._normalize_data(pd.DataFrame(), "600519")

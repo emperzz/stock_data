@@ -14,6 +14,7 @@ all four prices. Close is the only one that matters for the recursion.
 """
 
 from __future__ import annotations
+
 from typing import Any
 
 from .types import OHLCV
@@ -25,7 +26,7 @@ def _round2(v: float) -> float:
     return round(float(v), 2)
 
 
-def calcKDJ(
+def calcKDJ(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, float | None]]:
@@ -62,12 +63,12 @@ def calcKDJ(
         valid = True
         for w in window:
             h = w.get("high")
-            l = w.get("low")
-            if h is None or l is None:
+            low = w.get("low")
+            if h is None or low is None:
                 valid = False
                 break
             high_n = max(high_n, h)
-            low_n = min(low_n, l)
+            low_n = min(low_n, low)
 
         close = bar.get("close")
         if not valid or close is None or high_n == low_n:

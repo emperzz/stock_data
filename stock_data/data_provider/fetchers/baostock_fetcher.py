@@ -229,9 +229,10 @@ class BaostockFetcher(BaseFetcher):
             return []
 
         try:
-            import baostock as bs
             import re
             from datetime import date
+
+            import baostock as bs
 
             result = []
             # Query all A-share stocks, must pass trading day parameter for non-empty results
