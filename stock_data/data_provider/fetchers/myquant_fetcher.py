@@ -26,9 +26,9 @@ from ..utils.code_converter import to_myquant_format, to_myquant_index_format
 logger = logging.getLogger(__name__)
 
 # myquant adjust constants (see gm.api)
-ADJUST_NONE = 0   # 不复权
-ADJUST_PREV = 1   # 前复权
-ADJUST_POST = 2   # 后复权
+ADJUST_NONE = 0  # 不复权
+ADJUST_PREV = 1  # 前复权
+ADJUST_POST = 2  # 后复权
 
 # Frequency mapping: server "d/5/15/30/60" → myquant "1d/300s/900s/1800s/3600s"
 _FREQ_MAP: dict[str, str] = {
@@ -216,7 +216,8 @@ class MyquantFetcher(BaseFetcher):
                 return None
             # myquant sets trade_date="" for non-trading days; filter those out
             dates = [
-                d for d in df["trade_date"].astype(str).tolist()
+                d
+                for d in df["trade_date"].astype(str).tolist()
                 if d and d not in ("", "nan", "None")
             ]
             return sorted(dates)
@@ -248,19 +249,21 @@ class MyquantFetcher(BaseFetcher):
             for _, row in df.iterrows():
                 full = str(row.get("symbol", ""))
                 code = full.split(".", 1)[1] if "." in full else full
-                out.append({
-                    "code": code,
-                    "name": str(row.get("sec_name", "")),
-                    "symbol_full": full,
-                    "exchange": str(row.get("exchange", "")),
-                    "is_st": bool(row.get("is_st", False)),
-                    "is_suspended": bool(row.get("is_suspended", False)),
-                    "upper_limit": safe_float(row.get("upper_limit")),
-                    "lower_limit": safe_float(row.get("lower_limit")),
-                    "turn_rate": safe_float(row.get("turn_rate")),
-                    "adj_factor": safe_float(row.get("adj_factor")),
-                    "pre_close": safe_float(row.get("pre_close")),
-                })
+                out.append(
+                    {
+                        "code": code,
+                        "name": str(row.get("sec_name", "")),
+                        "symbol_full": full,
+                        "exchange": str(row.get("exchange", "")),
+                        "is_st": bool(row.get("is_st", False)),
+                        "is_suspended": bool(row.get("is_suspended", False)),
+                        "upper_limit": safe_float(row.get("upper_limit")),
+                        "lower_limit": safe_float(row.get("lower_limit")),
+                        "turn_rate": safe_float(row.get("turn_rate")),
+                        "adj_factor": safe_float(row.get("adj_factor")),
+                        "pre_close": safe_float(row.get("pre_close")),
+                    }
+                )
             return out
         except Exception as e:
             logger.warning(f"[MyquantFetcher] get_all_stocks failed: {e}")
@@ -306,14 +309,10 @@ class MyquantFetcher(BaseFetcher):
         except DataFetchError:
             raise
         except Exception as e:
-            logger.warning(
-                f"[MyquantFetcher] get_index_historical failed for {index_code}: {e}"
-            )
+            logger.warning(f"[MyquantFetcher] get_index_historical failed for {index_code}: {e}")
             return None
 
-    def get_index_intraday(
-        self, index_code: str, period: str = "5"
-    ) -> pd.DataFrame | None:
+    def get_index_intraday(self, index_code: str, period: str = "5") -> pd.DataFrame | None:
         """Get intraday minute-level data for a CSI index via myquant.
 
         Fetches the most recent trading day (myquant 18:00 wash rule applies
@@ -347,9 +346,7 @@ class MyquantFetcher(BaseFetcher):
         except DataFetchError:
             raise
         except Exception as e:
-            logger.warning(
-                f"[MyquantFetcher] get_index_intraday failed for {index_code}: {e}"
-            )
+            logger.warning(f"[MyquantFetcher] get_index_intraday failed for {index_code}: {e}")
             return None
 
     def _normalize_index_df(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -367,9 +364,7 @@ class MyquantFetcher(BaseFetcher):
                 df = df.drop(columns=[col])
         return df
 
-    def _normalize_index_intraday_df(
-        self, df: pd.DataFrame, period: str
-    ) -> pd.DataFrame:
+    def _normalize_index_intraday_df(self, df: pd.DataFrame, period: str) -> pd.DataFrame:
         """Normalize myquant index intraday to time/o/h/l/c/v/a schema."""
         df = df.copy()
         if "bob" in df.columns:
@@ -384,5 +379,9 @@ class MyquantFetcher(BaseFetcher):
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         if "volume" in df.columns:
             df["volume"] = pd.to_numeric(df["volume"], errors="coerce").astype("Int64")
-        keep = [c for c in ("time", "open", "high", "low", "close", "volume", "amount") if c in df.columns]
+        keep = [
+            c
+            for c in ("time", "open", "high", "low", "close", "volume", "amount")
+            if c in df.columns
+        ]
         return df[keep]
