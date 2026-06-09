@@ -616,6 +616,7 @@ def create_default_manager() -> DataFetcherManager:
     from .fetchers.baostock_fetcher import BaostockFetcher
     from .fetchers.cninfo_fetcher import CninfoFetcher
     from .fetchers.eastmoney_fetcher import EastMoneyFetcher
+    from .fetchers.myquant_fetcher import MyquantFetcher
     from .fetchers.tencent_fetcher import TencentFetcher
     from .fetchers.ths_fetcher import ThsFetcher
     from .fetchers.tushare_fetcher import TushareFetcher
@@ -626,6 +627,7 @@ def create_default_manager() -> DataFetcherManager:
     fetcher_classes = [
         TushareFetcher,
         BaostockFetcher,
+        MyquantFetcher,
         AkshareFetcher,
         YfinanceFetcher,
         ZhituFetcher,
