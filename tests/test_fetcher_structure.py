@@ -365,6 +365,7 @@ class TestMyquantFetcher:
 
     def test_realtime_quote_uses_myquant_source(self, fetcher, monkeypatch):
         """When gm returns data, source should be RealtimeSource.MYQUANT."""
+        pytest.importorskip("gm")  # Skip gracefully if gm SDK is not installed
         from stock_data.data_provider.core.types import RealtimeSource
 
         def fake_current_price(symbols, **_kwargs):
