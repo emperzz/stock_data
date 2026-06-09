@@ -404,3 +404,37 @@ class TestMyquantFetcher:
         )
         dates = fetcher.get_trade_calendar()
         assert dates == ["2024-01-02", "2024-01-03"]  # Empty trade_date filtered, sorted asc
+
+    def test_get_all_stocks_without_token_returns_empty(self, fetcher_no_token):
+        assert fetcher_no_token.get_all_stocks("csi") == []
+
+    def test_get_all_stocks_normalizes_myquant_dataframe(self, fetcher, monkeypatch):
+        pytest.importorskip("gm")
+        import pandas as pd
+
+        def fake_get_symbols(*_args, **_kwargs):
+            return pd.DataFrame({
+                "symbol": ["SHSE.600519", "SZSE.000001"],
+                "sec_name": ["贵州茅台", "平安银行"],
+                "is_st": [False, False],
+                "is_suspended": [False, False],
+                "upper_limit": [1872.10, 11.55],
+                "lower_limit": [1531.72, 9.45],
+                "turn_rate": [0.5, 0.3],
+                "adj_factor": [1.0, 1.0],
+                "pre_close": [1701.91, 10.50],
+            })
+
+        monkeypatch.setattr("gm.api.get_symbols", fake_get_symbols, raising=False)
+        stocks = fetcher.get_all_stocks("csi")
+        assert len(stocks) == 2
+        # SHSE.600519 → "600519" (strip exchange prefix)
+        assert stocks[0]["code"] == "600519"
+        assert stocks[0]["name"] == "贵州茅台"
+        assert stocks[0]["upper_limit"] == 1872.10
+        # SZSE.000001 → "000001"
+        assert stocks[1]["code"] == "000001"
+
+    def test_get_all_stocks_non_csi_returns_empty(self, fetcher):
+        assert fetcher.get_all_stocks("hk") == []
+        assert fetcher.get_all_stocks("us") == []

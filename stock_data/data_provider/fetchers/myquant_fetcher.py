@@ -223,3 +223,45 @@ class MyquantFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[MyquantFetcher] get_trade_calendar failed: {e}")
             return None
+
+    def get_all_stocks(self, market: str = "csi") -> list:
+        """Get A-share stock list from myquant.
+
+        myquant's ``get_symbols(sec_type1=1010)`` returns additional fields
+        beyond code/name: upper_limit / lower_limit / is_st / is_suspended /
+        pre_close / turn_rate / adj_factor. We surface these as raw dict keys
+        so the persistence layer can optionally consume them.
+
+        Returns ``[]`` for non-CSI markets (myquant only covers A-share).
+        """
+        if market != "csi":
+            return []
+        if not self.is_available():
+            return []
+        try:
+            from gm.api import get_symbols  # type: ignore
+
+            df = get_symbols(sec_type1=1010, df=True)
+            if df is None or df.empty:
+                return []
+            out: list = []
+            for _, row in df.iterrows():
+                full = str(row.get("symbol", ""))
+                code = full.split(".", 1)[1] if "." in full else full
+                out.append({
+                    "code": code,
+                    "name": str(row.get("sec_name", "")),
+                    "symbol_full": full,
+                    "exchange": str(row.get("exchange", "")),
+                    "is_st": bool(row.get("is_st", False)),
+                    "is_suspended": bool(row.get("is_suspended", False)),
+                    "upper_limit": safe_float(row.get("upper_limit")),
+                    "lower_limit": safe_float(row.get("lower_limit")),
+                    "turn_rate": safe_float(row.get("turn_rate")),
+                    "adj_factor": safe_float(row.get("adj_factor")),
+                    "pre_close": safe_float(row.get("pre_close")),
+                })
+            return out
+        except Exception as e:
+            logger.warning(f"[MyquantFetcher] get_all_stocks failed: {e}")
+            return []
