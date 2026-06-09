@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from stock_data.data_provider.base import DataCapability
-from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
+from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher, _DCEndpoint
 
 
 class TestEastMoneyFetcherBasics:
@@ -35,6 +35,8 @@ class TestDatacenterQuery:
     def setup_method(self):
         self.fetcher = EastMoneyFetcher()
 
+    _TEST_EP = _DCEndpoint(report_name="RPT_TEST")
+
     @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
     def test_query_returns_data(self, mock_get):
         mock_response = MagicMock()
@@ -43,14 +45,14 @@ class TestDatacenterQuery:
         }
         mock_get.return_value = mock_response
 
-        result = self.fetcher._datacenter_query("RPT_TEST", filter_str='(SECURITY_CODE="600519")')
+        result = self.fetcher._datacenter_query(self._TEST_EP, filter_str='(SECURITY_CODE="600519")')
         assert len(result) == 1
         assert result[0]["SECURITY_CODE"] == "600519"
 
     @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
     def test_query_returns_empty_on_error(self, mock_get):
         mock_get.side_effect = Exception("Network error")
-        result = self.fetcher._datacenter_query("RPT_TEST")
+        result = self.fetcher._datacenter_query(self._TEST_EP)
         assert result == []
 
     @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
@@ -58,7 +60,7 @@ class TestDatacenterQuery:
         mock_response = MagicMock()
         mock_response.json.return_value = {"result": None}
         mock_get.return_value = mock_response
-        result = self.fetcher._datacenter_query("RPT_TEST")
+        result = self.fetcher._datacenter_query(self._TEST_EP)
         assert result == []
 
 
