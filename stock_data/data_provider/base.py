@@ -245,10 +245,10 @@ class BaseFetcher(ABC):
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
         before = len(df)
-        df = df.dropna(subset=["close", "volume"])
+        df = df.dropna(subset=["open", "high", "low", "close", "volume"])
         dropped = before - len(df)
         if dropped > 0:
-            logger.debug(f"[{self.name}] Dropped {dropped} rows with NaN close/volume")
+            logger.debug(f"[{self.name}] Dropped {dropped} rows with NaN in required OHLCV fields")
 
         df = df.sort_values("date", ascending=True).reset_index(drop=True)
         return df

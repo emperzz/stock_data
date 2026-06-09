@@ -11,7 +11,11 @@ from fastapi import APIRouter, HTTPException, Path, Query
 if TYPE_CHECKING:
     import pandas as pd
 
-from stock_data.data_provider.core.types import get_realtime_circuit_breaker
+from stock_data.data_provider.core.types import (
+    get_realtime_circuit_breaker,
+    safe_float,
+    safe_int,
+)
 
 from ..data_provider import DataFetcherManager, DataFetchError
 from ..data_provider.fetchers.index_symbols import get_all_indices
@@ -204,18 +208,21 @@ def _build_kline_data(row: dict, format_date) -> KLineData:
     ind = row.get("indicators") or {}
     return KLineData(
         date=format_date(row.get("date")),
-        open=float(row.get("open", 0)),
-        high=float(row.get("high", 0)),
-        low=float(row.get("low", 0)),
-        close=float(row.get("close", 0)),
-        volume=int(row.get("volume", 0)),
-        amount=float(row.get("amount")) if row.get("amount") is not None else None,
-        change_percent=float(row.get("pct_chg")) if row.get("pct_chg") is not None else None,
+        # Required OHLCV fields — _clean_data already drops rows with NaN
+        # in these columns; safe_float/safe_int are defense-in-depth.
+        open=safe_float(row.get("open"), 0.0) or 0.0,
+        high=safe_float(row.get("high"), 0.0) or 0.0,
+        low=safe_float(row.get("low"), 0.0) or 0.0,
+        close=safe_float(row.get("close"), 0.0) or 0.0,
+        volume=safe_int(row.get("volume"), 0) or 0,
+        # Optional fields — NaN → None → JSON null (semantically correct).
+        amount=safe_float(row.get("amount")),
+        change_percent=safe_float(row.get("pct_chg")),
         # Back-compat: surface ma5/ma10/ma20 from the indicators dict if computed.
         # None when not requested — model_serializer drops the key.
-        ma5=float(ind["ma5"]) if ind.get("ma5") is not None else None,
-        ma10=float(ind["ma10"]) if ind.get("ma10") is not None else None,
-        ma20=float(ind["ma20"]) if ind.get("ma20") is not None else None,
+        ma5=safe_float(ind.get("ma5")),
+        ma10=safe_float(ind.get("ma10")),
+        ma20=safe_float(ind.get("ma20")),
         # Pass the full dict when computed, None when empty — serializer drops it.
         indicators=ind or None,
     )
