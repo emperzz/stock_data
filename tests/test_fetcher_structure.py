@@ -316,3 +316,46 @@ class TestMyquantFetcher:
         from stock_data.data_provider.base import DataFetchError
         with pytest.raises(DataFetchError, match="Myquant does not support"):
             fetcher._convert_code("HK00700")
+
+    def test_fetch_unsupported_weekly_raises(self, fetcher):
+        from stock_data.data_provider.base import DataFetchError
+        with pytest.raises(DataFetchError, match="does not support frequency"):
+            fetcher._fetch_raw_data("600519", "2024-01-01", "2024-01-31", frequency="w")
+
+    def test_fetch_unsupported_monthly_raises(self, fetcher):
+        from stock_data.data_provider.base import DataFetchError
+        with pytest.raises(DataFetchError, match="does not support frequency"):
+            fetcher._fetch_raw_data("600519", "2024-01-01", "2024-01-31", frequency="m")
+
+    def test_fetch_unsupported_1min_raises(self, fetcher):
+        from stock_data.data_provider.base import DataFetchError
+        with pytest.raises(DataFetchError, match="does not support frequency"):
+            fetcher._fetch_raw_data("600519", "2024-01-01", "2024-01-31", frequency="1")
+
+    def test_normalize_history_dataframe(self, fetcher):
+        """myquant history returns columns: open, close, high, low, amount, volume, bob, eob.
+        Normalization should map 'bob' → 'date' and produce STANDARD_COLUMNS."""
+        import pandas as pd
+        raw = pd.DataFrame({
+            "symbol": ["SHSE.600519"] * 3,
+            "frequency": ["1d"] * 3,
+            "open": [1700.0, 1710.0, 1720.0],
+            "close": [1710.0, 1720.0, 1730.0],
+            "high": [1715.0, 1725.0, 1735.0],
+            "low": [1695.0, 1705.0, 1715.0],
+            "amount": [1e9, 1.1e9, 1.2e9],
+            "volume": [1e6, 1.1e6, 1.2e6],
+            "bob": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+            "eob": pd.to_datetime(["2024-01-01 15:00", "2024-01-02 15:00", "2024-01-03 15:00"]),
+        })
+        normalized = fetcher._normalize_data(raw, "600519")
+        # Required STANDARD_COLUMNS
+        for col in ["date", "open", "high", "low", "close", "volume", "amount"]:
+            assert col in normalized.columns, f"missing {col}"
+        # pct_chg computed from close/open since myquant doesn't return it
+        assert "pct_chg" in normalized.columns
+        # First row pct_chg = 1710/1700 - 1 = 0.588% (rounded to 2 dp)
+        assert abs(normalized.iloc[0]["pct_chg"] - 0.59) < 0.01
+        # code column added
+        assert "code" in normalized.columns
+        assert normalized.iloc[0]["code"] == "600519"

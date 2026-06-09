@@ -117,7 +117,53 @@ class MyquantFetcher(BaseFetcher):
         frequency: str = "d",
         adjust: str | None = None,
     ) -> pd.DataFrame:
-        raise DataFetchError("MyquantFetcher routes through get_kline_data override")
+        """Fetch K-line data from myquant (stocks only — indices use get_index_historical).
+
+        Supported frequencies: d, 5, 15, 30, 60. Raises DataFetchError on others.
+        """
+        if not self.is_available():
+            return None  # type: ignore[return-value]
+        if frequency not in _FREQ_MAP:
+            raise DataFetchError(
+                f"MyquantFetcher does not support frequency={frequency!r} "
+                f"(supported: {sorted(_FREQ_MAP.keys())})"
+            )
+
+        try:
+            from gm.api import history  # type: ignore
+
+            symbol = self._convert_code(stock_code)
+            df = history(
+                symbol=symbol,
+                frequency=_FREQ_MAP[frequency],
+                start_time=start_date,
+                end_time=end_date,
+                adjust=self._map_adjust(adjust or ""),
+                df=True,
+            )
+            if df is None or df.empty:
+                raise DataFetchError(f"Myquant returned empty for {stock_code}")
+            return df
+        except DataFetchError:
+            raise
+        except Exception as e:
+            raise DataFetchError(f"Myquant fetch_raw_data failed for {stock_code}: {e}") from e
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
-        raise DataFetchError("MyquantFetcher routes through get_kline_data override")
+        """Normalize myquant history output to STANDARD_COLUMNS.
+
+        myquant returns: symbol, frequency, open, close, high, low, amount, volume, bob, eob.
+        - 'bob' (begin of bar) is the time anchor → renamed to 'date'
+        - 'pct_chg' is NOT provided by myquant → computed from close/open (×100)
+        - Other STANDARD_COLUMNS already match the source naming.
+        """
+        df = df.copy()
+        if "bob" in df.columns:
+            df = df.rename(columns={"bob": "date"})
+        # myquant doesn't return pct_chg; derive it from close vs open (consistent with the
+        # rest of the codebase, which uses open as the reference for "intraday change").
+        if "pct_chg" not in df.columns and "open" in df.columns and "close" in df.columns:
+            open_num = pd.to_numeric(df["open"], errors="coerce")
+            close_num = pd.to_numeric(df["close"], errors="coerce")
+            df["pct_chg"] = ((close_num / open_num) - 1.0) * 100.0
+        return self._normalize_dataframe(df, stock_code, column_mapping={})
