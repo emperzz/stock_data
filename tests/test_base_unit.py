@@ -243,25 +243,14 @@ class TestStockListCache:
     """Tests for stock_list persistence modifications."""
 
     def test_is_first_call_of_day(self):
-        """_is_first_call_of_day returns True on first call, False after."""
-        from stock_data.data_provider.persistence.stock_list import (
-            _is_first_call_of_day,
-            _last_refresh_date,
-            _lock,
-        )
+        """DailyRefreshTracker.is_first_call returns True on first call, False after."""
+        from stock_data.data_provider.persistence._refresh import DailyRefreshTracker
 
-        test_market = "_test_market_first_call"
+        tracker = DailyRefreshTracker()
+        key = "_test_key"
 
-        # Clean up any prior state under lock
-        with _lock:
-            _last_refresh_date.pop(test_market, None)
-
-        assert _is_first_call_of_day(test_market) is True
-        assert _is_first_call_of_day(test_market) is False
-
-        # Clean up
-        with _lock:
-            _last_refresh_date.pop(test_market, None)
+        assert tracker.is_first_call(key) is True
+        assert tracker.is_first_call(key) is False
 
     def test_get_stock_name_from_db_helper_exists(self):
         """Test _get_stock_name_from_db helper function exists."""

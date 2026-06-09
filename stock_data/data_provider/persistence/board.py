@@ -7,25 +7,13 @@ upstream API calls which are slow and may fail.
 
 import logging
 from datetime import datetime
-from threading import Lock
 
+from ._refresh import DailyRefreshTracker
 from .db import get_connection, get_db_path
 
 logger = logging.getLogger(__name__)
 
-_last_refresh_date: dict[str, str] = {}  # key: "board_type:source" -> "YYYY-MM-DD"
-_lock = Lock()
-
-
-def _is_first_call_of_day(board_type: str, source: str) -> bool:
-    """Check if this is the first call of the day for the board_type+source, and update the tracker."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    key = f"{board_type}:{source}"
-    with _lock:
-        if _last_refresh_date.get(key) != today:
-            _last_refresh_date[key] = today
-            return True
-        return False
+_refresh_tracker = DailyRefreshTracker()
 
 
 def init_schema() -> None:
@@ -95,7 +83,7 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
     """
     init_schema()
 
-    needs_refresh = refresh or include_quote or _is_first_call_of_day(board_type, source)
+    needs_refresh = refresh or include_quote or _refresh_tracker.is_first_call(f"{board_type}:{source}")
 
     if not needs_refresh:
         cached = _read_boards_from_db(board_type, source)
@@ -146,7 +134,7 @@ def get_board_stocks(
     init_schema()
 
     # include_quote=True means always fetch fresh data, skip cache
-    needs_refresh = include_quote or refresh or _is_first_call_of_day(board_code, source)
+    needs_refresh = include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:{source}")
 
     if not needs_refresh:
         cached = _read_board_stocks_from_db(board_code, source)

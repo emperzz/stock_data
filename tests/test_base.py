@@ -6,19 +6,19 @@ import os
 from unittest.mock import patch
 
 from stock_data.data_provider.base import STANDARD_COLUMNS
-from stock_data.data_provider.utils.normalize import (
-    index_market_tag,
-    is_hk_market,
-    is_us_market,
-    market_tag,
-    normalize_stock_code,
-)
 from stock_data.data_provider.fetchers.index_symbols import (
     CSI_INDEX_MAP,
     HK_INDEX_MAP,
     US_INDEX_MAP,
     get_index_type,
     is_index_code,
+)
+from stock_data.data_provider.utils.normalize import (
+    index_market_tag,
+    is_hk_market,
+    is_us_market,
+    market_tag,
+    normalize_stock_code,
 )
 
 

@@ -7,24 +7,13 @@ upstream API calls which are slow and may fail.
 
 import logging
 from datetime import datetime
-from threading import Lock
 
+from ._refresh import DailyRefreshTracker
 from .db import get_connection, get_db_path
 
 logger = logging.getLogger(__name__)
 
-_last_refresh_date: dict[str, str] = {}  # market -> "YYYY-MM-DD"
-_lock: Lock = Lock()
-
-
-def _is_first_call_of_day(market: str) -> bool:
-    """Check if this is the first call of the day for the market, and update the tracker."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    with _lock:
-        if _last_refresh_date.get(market) != today:
-            _last_refresh_date[market] = today
-            return True
-        return False
+_refresh_tracker = DailyRefreshTracker()
 
 
 def init_schema() -> None:
@@ -94,7 +83,7 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     # (routes.py converts cn->csi for API, but cache stores under 'csi')
     normalized_market = "csi" if market == "cn" else market
 
-    needs_refresh = refresh or _is_first_call_of_day(normalized_market)
+    needs_refresh = refresh or _refresh_tracker.is_first_call(normalized_market)
 
     if not needs_refresh:
         cached = _read_from_db(normalized_market)
