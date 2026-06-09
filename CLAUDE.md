@@ -59,7 +59,6 @@ stock_data/
     ├── __init__.py                  # Public API re-exports
     ├── base.py                      # BaseFetcher (ABC), DataCapability, DataFetchError
     ├── manager.py                   # DataFetcherManager (priority-based failover)
-    ├── realtime_types.py           # Backward-compat re-export of core/types.py
     ├── core/
     │   ├── __init__.py
     │   └── types.py                # UnifiedRealtimeQuote, CircuitBreaker, safe_float/int

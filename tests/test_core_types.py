@@ -1,8 +1,8 @@
 """
-Tests for realtime types and utilities.
+Tests for core types and utilities (data_provider/core/types.py).
 """
 
-from stock_data.data_provider.realtime_types import (
+from stock_data.data_provider.core.types import (
     CircuitBreaker,
     RealtimeSource,
     UnifiedRealtimeQuote,
