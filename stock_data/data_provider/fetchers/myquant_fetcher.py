@@ -20,7 +20,7 @@ import pandas as pd
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float
-from ..utils.code_converter import to_myquant_format, to_myquant_index_format  # noqa: F401 — to_myquant_index_format used in get_index_intraday (Task 9)
+from ..utils.code_converter import to_myquant_format, to_myquant_index_format
 # isort: on
 
 logger = logging.getLogger(__name__)
@@ -265,3 +265,124 @@ class MyquantFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[MyquantFetcher] get_all_stocks failed: {e}")
             return []
+
+    def get_index_historical(
+        self,
+        index_code: str,
+        start_date: str | None,
+        end_date: str | None,
+        frequency: str,
+    ) -> pd.DataFrame | None:
+        """Get historical K-line data for a CSI index via myquant.
+
+        Only ``frequency="d"`` is supported. Weekly/monthly would need
+        separate ``history`` calls aggregated client-side, which we don't
+        implement here — the manager will fall through to other fetchers.
+        """
+        if not self.is_available():
+            return None
+        if frequency != "d":
+            raise DataFetchError(
+                f"MyquantFetcher index does not support frequency={frequency!r} "
+                "(only 'd' is supported; use another fetcher for w/m)"
+            )
+        try:
+            symbol = to_myquant_index_format(index_code)
+        except ValueError as e:
+            raise DataFetchError(f"Myquant does not support {index_code}: {e}") from e
+        try:
+            from gm.api import history  # type: ignore
+
+            df = history(
+                symbol=symbol,
+                frequency="1d",
+                start_time=start_date or "",
+                end_time=end_date or "",
+                df=True,
+            )
+            if df is None or df.empty:
+                return None
+            return self._normalize_index_df(df)
+        except DataFetchError:
+            raise
+        except Exception as e:
+            logger.warning(
+                f"[MyquantFetcher] get_index_historical failed for {index_code}: {e}"
+            )
+            return None
+
+    def get_index_intraday(
+        self, index_code: str, period: str = "5"
+    ) -> pd.DataFrame | None:
+        """Get intraday minute-level data for a CSI index via myquant.
+
+        Fetches the most recent trading day (myquant 18:00 wash rule applies
+        for same-day data; for older dates the result is also fine).
+        """
+        if not self.is_available():
+            return None
+        if period not in _INDEX_FREQ_MAP:
+            raise DataFetchError(
+                f"MyquantFetcher index intraday does not support period={period!r} "
+                f"(supported: {sorted(_INDEX_FREQ_MAP.keys())})"
+            )
+        try:
+            symbol = to_myquant_index_format(index_code)
+        except ValueError as e:
+            raise DataFetchError(f"Myquant does not support {index_code}: {e}") from e
+        try:
+            from gm.api import history  # type: ignore
+
+            today = datetime.now().strftime("%Y-%m-%d")
+            df = history(
+                symbol=symbol,
+                frequency=_INDEX_FREQ_MAP[period],
+                start_time=today,
+                end_time=today,
+                df=True,
+            )
+            if df is None or df.empty:
+                return None
+            return self._normalize_index_intraday_df(df, period)
+        except DataFetchError:
+            raise
+        except Exception as e:
+            logger.warning(
+                f"[MyquantFetcher] get_index_intraday failed for {index_code}: {e}"
+            )
+            return None
+
+    def _normalize_index_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize myquant daily-index history to STANDARD_COLUMNS + 'code'."""
+        df = df.copy()
+        if "bob" in df.columns:
+            df = df.rename(columns={"bob": "date"})
+        if "pct_chg" not in df.columns and "open" in df.columns and "close" in df.columns:
+            open_num = pd.to_numeric(df["open"], errors="coerce")
+            close_num = pd.to_numeric(df["close"], errors="coerce")
+            df["pct_chg"] = ((close_num / open_num) - 1.0) * 100.0
+        # No 'code' column needed for index history; strip symbol-related noise
+        for col in ("symbol", "frequency"):
+            if col in df.columns:
+                df = df.drop(columns=[col])
+        return df
+
+    def _normalize_index_intraday_df(
+        self, df: pd.DataFrame, period: str
+    ) -> pd.DataFrame:
+        """Normalize myquant index intraday to time/o/h/l/c/v/a schema."""
+        df = df.copy()
+        if "bob" in df.columns:
+            df = df.rename(columns={"bob": "time"})
+        elif "eob" in df.columns:
+            df = df.rename(columns={"eob": "time"})
+        # Coerce to HH:MM:SS strings if datetime
+        if "time" in df.columns and hasattr(df["time"].iloc[0] if len(df) else None, "strftime"):
+            df["time"] = df["time"].dt.strftime("%H:%M:%S")
+        for col in ("open", "high", "low", "close", "amount"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "volume" in df.columns:
+            df["volume"] = pd.to_numeric(df["volume"], errors="coerce").astype("Int64")
+        keep = [c for c in ("time", "open", "high", "low", "close", "volume", "amount") if c in df.columns]
+        return df[keep]

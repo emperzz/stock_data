@@ -438,3 +438,47 @@ class TestMyquantFetcher:
     def test_get_all_stocks_non_csi_returns_empty(self, fetcher):
         assert fetcher.get_all_stocks("hk") == []
         assert fetcher.get_all_stocks("us") == []
+
+    def test_index_historical_without_token_returns_none(self, fetcher_no_token):
+        assert fetcher_no_token.get_index_historical(
+            "000300", "2024-01-01", "2024-01-31", "d"
+        ) is None
+
+    def test_index_historical_uses_myquant(self, fetcher, monkeypatch):
+        pytest.importorskip("gm")
+        import pandas as pd
+
+        def fake_history(*_args, **_kwargs):
+            return pd.DataFrame({
+                "symbol": ["SHSE.000300"] * 2,
+                "frequency": ["1d"] * 2,
+                "open": [3500.0, 3510.0],
+                "close": [3510.0, 3520.0],
+                "high": [3520.0, 3530.0],
+                "low": [3490.0, 3500.0],
+                "amount": [1e11, 1.1e11],
+                "volume": [1e8, 1.1e8],
+                "bob": pd.to_datetime(["2024-01-01", "2024-01-02"]),
+                "eob": pd.to_datetime(["2024-01-01 15:00", "2024-01-02 15:00"]),
+            })
+
+        monkeypatch.setattr("gm.api.history", fake_history, raising=False)
+        df = fetcher.get_index_historical("000300", "2024-01-01", "2024-01-31", "d")
+        assert df is not None
+        assert "date" in df.columns
+        assert "pct_chg" in df.columns
+
+    def test_index_historical_minute_raises(self, fetcher):
+        from stock_data.data_provider.base import DataFetchError
+        with pytest.raises(DataFetchError, match="index does not support frequency"):
+            fetcher.get_index_historical("000300", "2024-01-01", "2024-01-31", "5")
+
+    def test_index_intraday_unsupported_1min_raises(self, fetcher):
+        from stock_data.data_provider.base import DataFetchError
+        with pytest.raises(DataFetchError, match="index intraday does not support"):
+            fetcher.get_index_intraday("000300", period="1")
+
+    def test_index_intraday_non_csi_raises(self, fetcher):
+        from stock_data.data_provider.base import DataFetchError
+        with pytest.raises(DataFetchError, match="Myquant does not support"):
+            fetcher.get_index_intraday("HSI", period="5")
