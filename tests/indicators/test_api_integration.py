@@ -44,7 +44,7 @@ def client(monkeypatch):
         return fake_kline.tail(requested).reset_index(drop=True), "StubFetcher"
 
     # Import the FastAPI app
-    from stock_data.server import app  # noqa: F401
+    from stock_data.server import app
 
     monkeypatch.setattr(
         "stock_data.data_provider.DataFetcherManager.get_kline_data",
