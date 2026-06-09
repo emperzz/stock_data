@@ -1,0 +1,34 @@
+document.addEventListener('DOMContentLoaded', function() {
+    var tabLinks = document.querySelectorAll('.custom-tab-item a');
+    
+    tabLinks.forEach(function(tabLink) {
+        tabLink.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            // 移除所有选项卡的active类
+            document.querySelectorAll('.custom-tab-item').forEach(function(tab) {
+                tab.classList.remove('active');
+            });
+            
+            // 移除所有内容面板的active类
+            document.querySelectorAll('.custom-tab-pane').forEach(function(pane) {
+                pane.classList.remove('active');
+            });
+            
+            // 为当前点击的选项卡添加active类
+            var currentTab = tabLink.parentElement;
+            currentTab.classList.add('active');
+            
+            // 获取对应的内容面板的ID，并显示它
+            var targetPaneId = tabLink.getAttribute('href').substring(1);
+            console.log('Target pane ID:', targetPaneId); // 调试输出
+            var targetPane = document.getElementById(targetPaneId);
+            if (targetPane) {
+                targetPane.classList.add('active');
+                console.log('Target pane found and activated.'); // 调试输出
+            } else {
+                console.error('Target pane not found!'); // 调试输出错误
+            }
+        });
+    });
+});
