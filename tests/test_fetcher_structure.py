@@ -292,3 +292,27 @@ class TestMyquantFetcher:
 
     def test_is_available_without_token(self, fetcher_no_token):
         assert fetcher_no_token.is_available() is False
+
+    def test_map_adjust(self, fetcher):
+        from stock_data.data_provider.fetchers.myquant_fetcher import (
+            ADJUST_NONE,
+            ADJUST_POST,
+            ADJUST_PREV,
+        )
+        assert fetcher._map_adjust("") == ADJUST_NONE
+        assert fetcher._map_adjust(None) == ADJUST_NONE
+        assert fetcher._map_adjust("qfq") == ADJUST_PREV
+        assert fetcher._map_adjust("hfq") == ADJUST_POST
+
+    def test_convert_code_sh(self, fetcher):
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        assert fetcher._convert_code("600519") == to_myquant_format("600519")
+
+    def test_convert_code_sz(self, fetcher):
+        from stock_data.data_provider.utils.code_converter import to_myquant_format
+        assert fetcher._convert_code("000002") == to_myquant_format("000002")
+
+    def test_convert_code_hk_raises(self, fetcher):
+        from stock_data.data_provider.base import DataFetchError
+        with pytest.raises(DataFetchError, match="Myquant does not support"):
+            fetcher._convert_code("HK00700")

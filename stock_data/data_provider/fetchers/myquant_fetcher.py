@@ -88,6 +88,25 @@ class MyquantFetcher(BaseFetcher):
         """True iff MYQUANT_TOKEN is set."""
         return bool(self._token)
 
+    def _map_adjust(self, adjust: str) -> int:
+        """Map unified adjust to myquant integer constant.
+
+        "" / None → ADJUST_NONE (0)
+        "qfq"      → ADJUST_PREV (1)
+        "hfq"      → ADJUST_POST (2)
+        """
+        if not adjust:
+            return ADJUST_NONE
+        mapping = {"qfq": ADJUST_PREV, "hfq": ADJUST_POST}
+        return mapping.get(adjust, ADJUST_NONE)
+
+    def _convert_code(self, stock_code: str) -> str:
+        """Convert to myquant ``SHSE/SZSE.{code}`` format. Raises DataFetchError on unsupported markets."""
+        try:
+            return to_myquant_format(stock_code)
+        except ValueError as e:
+            raise DataFetchError(f"Myquant does not support code {stock_code}: {e}") from e
+
     # ---- unsupported base abstract methods ----
 
     def _fetch_raw_data(
