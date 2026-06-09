@@ -383,3 +383,24 @@ class TestMyquantFetcher:
         assert quote.volume is None
         assert quote.change_pct is None
         assert quote.pre_close is None
+
+    def test_trade_calendar_without_token_returns_none(self, fetcher_no_token):
+        assert fetcher_no_token.get_trade_calendar() is None
+
+    def test_trade_calendar_parses_myquant_dataframe(self, fetcher, monkeypatch):
+        pytest.importorskip("gm")
+        import pandas as pd
+
+        def fake_calendar(*_args, **_kwargs):
+            return pd.DataFrame({
+                "date": ["2024-01-01", "2024-01-02", "2024-01-03"],
+                "trade_date": ["", "2024-01-02", "2024-01-03"],
+                "pre_trade_date": ["", "2023-12-29", "2024-01-02"],
+                "next_trade_date": ["2024-01-02", "2024-01-03", "2024-01-04"],
+            })
+
+        monkeypatch.setattr(
+            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
+        )
+        dates = fetcher.get_trade_calendar()
+        assert dates == ["2024-01-02", "2024-01-03"]  # Empty trade_date filtered, sorted asc

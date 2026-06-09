@@ -14,7 +14,7 @@ the failover list (tie-broken by registration order in create_default_manager).
 # isort: off
 import logging
 import os
-from datetime import datetime  # noqa: F401 — used in get_trade_calendar and get_index_intraday (Tasks 7, 9)
+from datetime import datetime  # used in get_trade_calendar (Task 7) and get_index_intraday (Task 9)
 
 import pandas as pd
 
@@ -193,4 +193,33 @@ class MyquantFetcher(BaseFetcher):
             )
         except Exception as e:
             logger.warning(f"[MyquantFetcher] get_realtime_quote failed for {stock_code}: {e}")
+            return None
+
+    def get_trade_calendar(self) -> list[str] | None:
+        """Get A-share trade calendar from myquant.
+
+        Uses SHSE calendar (沪深共用). Returns ascending YYYY-MM-DD list.
+        Returns None if unavailable or no data.
+        """
+        if not self.is_available():
+            return None
+        try:
+            from gm.api import get_trading_dates_by_year  # type: ignore
+
+            now = datetime.now()
+            df = get_trading_dates_by_year(
+                exchange="SHSE",
+                start_year=2010,
+                end_year=now.year,
+            )
+            if df is None or df.empty or "trade_date" not in df.columns:
+                return None
+            # myquant sets trade_date="" for non-trading days; filter those out
+            dates = [
+                d for d in df["trade_date"].astype(str).tolist()
+                if d and d not in ("", "nan", "None")
+            ]
+            return sorted(dates)
+        except Exception as e:
+            logger.warning(f"[MyquantFetcher] get_trade_calendar failed: {e}")
             return None
