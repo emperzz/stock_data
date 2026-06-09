@@ -249,3 +249,46 @@ class TestTushareFetcher:
 
     def test_index_methods_exist(self, fetcher):
         assert hasattr(fetcher, "get_index_historical")
+
+
+# ====================================================================
+# MyquantFetcher
+# ====================================================================
+
+class TestMyquantFetcher:
+    @pytest.fixture
+    def fetcher(self, monkeypatch):
+        """Build a fetcher with token pre-set."""
+        monkeypatch.setenv("MYQUANT_TOKEN", "test-token")
+        from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
+        return MyquantFetcher()
+
+    @pytest.fixture
+    def fetcher_no_token(self, monkeypatch):
+        """Build a fetcher without a token."""
+        monkeypatch.delenv("MYQUANT_TOKEN", raising=False)
+        from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
+        return MyquantFetcher()
+
+    def test_name_and_priority(self, fetcher):
+        assert fetcher.name == "MyquantFetcher"
+        assert fetcher.priority == 1
+
+    def test_supported_markets(self, fetcher):
+        assert fetcher.supported_markets == {"csi"}
+
+    def test_capabilities(self, fetcher):
+        caps = [
+            DataCapability.HISTORICAL_DWM, DataCapability.HISTORICAL_MIN,
+            DataCapability.REALTIME_QUOTE, DataCapability.STOCK_LIST,
+            DataCapability.TRADE_CALENDAR, DataCapability.INDEX_HISTORICAL,
+            DataCapability.INDEX_INTRADAY,
+        ]
+        for c in caps:
+            assert c in fetcher.supported_data_types, f"missing {c}"
+
+    def test_is_available_with_token(self, fetcher):
+        assert fetcher.is_available() is True
+
+    def test_is_available_without_token(self, fetcher_no_token):
+        assert fetcher_no_token.is_available() is False
