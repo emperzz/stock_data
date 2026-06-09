@@ -301,7 +301,7 @@ def _normalize_data(self, df, stock_code):
 
 | 风险 | 缓解 |
 |---|---|
-| `gm` 强制 `pandas<2.0` (Python ≤3.11) 与项目 `pandas>=2.0` 冲突 | CI 改用 Python 3.12；运行时 gm 仅用基础 DataFrame API，dependency warning 可接受 |
+| `gm` 的 `pyproject` 声明 `pandas<2.0` (Python ≤3.11) 与项目 `pandas>=2.0` 冲突 | 已验证：在 Python 3.10.11 + pandas 2.3.3 下，`import gm.api` 与真实 API 调用（如 `get_trading_dates_by_year`）均可正常工作。该 pin 是 myquant 端的过度保守；运行时 `pip install` 会产生 dependency warning，但 gm 仅使用基础 DataFrame API（`pd.DataFrame.rename/astype` 等），无 pandas 2.x 不兼容用法。**不**为支持 gm 而调整项目 Python 版本要求。 |
 | myquant 盘后 18:00 清洗入库 | myquant 在 failover 链中位置靠后（Baostock/Akshare 先于它），仅在它们都失败时才用，OK |
 | Realtime 字段稀少 | 决策上接受；定位为"最后兜底" |
 | 不支持 w/m/1 频率 | 显式 raise DataFetchError 透明降级 |
