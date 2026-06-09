@@ -5,8 +5,8 @@ Tests for base classes and utilities.
 import os
 from unittest.mock import patch
 
-from stock_data.data_provider.base import (
-    STANDARD_COLUMNS,
+from stock_data.data_provider.base import STANDARD_COLUMNS
+from stock_data.data_provider.utils.normalize import (
     index_market_tag,
     is_hk_market,
     is_us_market,

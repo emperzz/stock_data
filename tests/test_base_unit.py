@@ -223,18 +223,18 @@ class TestMarketTag:
     """Tests for market_tag after rename from cn to csi."""
 
     def test_a_share_is_csi(self):
-        from stock_data.data_provider.base import market_tag
+        from stock_data.data_provider.utils.normalize import market_tag
 
         assert market_tag("600519") == "csi"
         assert market_tag("000001") == "csi"
 
     def test_hk_is_hk(self):
-        from stock_data.data_provider.base import market_tag
+        from stock_data.data_provider.utils.normalize import market_tag
 
         assert market_tag("HK00700") == "hk"
 
     def test_us_is_us(self):
-        from stock_data.data_provider.base import market_tag
+        from stock_data.data_provider.utils.normalize import market_tag
 
         assert market_tag("AAPL") == "us"
 

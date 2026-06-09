@@ -13,12 +13,8 @@ import pandas as pd
 
 from .core.types import UnifiedRealtimeQuote
 from .utils.normalize import (
-    BSE_CODES,
-    ETF_PREFIXES,
-    index_market_tag,
-    is_hk_market,
-    is_us_market,
-    market_tag,
+    is_hk_market,  # noqa: F401 — re-exported for fetchers
+    is_us_market,  # noqa: F401 — re-exported for fetchers
     normalize_stock_code,
 )
 
@@ -74,18 +70,11 @@ class RateLimitError(DataFetchError):
 
 # Re-export utilities for backward compatibility
 __all__ = [
+    "BaseFetcher",
     "DataCapability",
     "DataFetchError",
-    "DataFetcherManager",
     "RateLimitError",
     "STANDARD_COLUMNS",
-    "BSE_CODES",
-    "ETF_PREFIXES",
-    "index_market_tag",
-    "is_hk_market",
-    "is_us_market",
-    "market_tag",
-    "normalize_stock_code",
 ]
 
 
