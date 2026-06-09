@@ -268,12 +268,9 @@ class CircuitBreaker:
                 )
 
 
-# Global circuit breaker for realtime quotes
-_realtime_circuit_breaker = CircuitBreaker(
+# Global circuit breaker for realtime quotes. Imported directly by callers —
+# the previous ``get_realtime_circuit_breaker()`` factory only added a
+# no-op indirection over this module-level singleton.
+REALTIME_CIRCUIT_BREAKER = CircuitBreaker(
     failure_threshold=3, cooldown_seconds=300.0, half_open_max_calls=1
 )
-
-
-def get_realtime_circuit_breaker() -> CircuitBreaker:
-    """Get the global realtime circuit breaker."""
-    return _realtime_circuit_breaker

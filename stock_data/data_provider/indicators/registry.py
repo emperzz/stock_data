@@ -10,9 +10,9 @@ Each entry in INDICATOR_REGISTRY describes one indicator:
     - compute:         the actual calc function (closes-only or OHLCV)
     - input_shape:     'closes' (1-D list) or 'ohlcv' (list of OHLCV dicts)
 
-The orchestrator (IndicatorService) walks the registry once per
-`compute()` call. The lookback estimator lets callers fetch the right
-amount of history without ever publishing a half-warmed indicator.
+The orchestrator walks the registry once per `compute()` call. The
+lookback estimator lets callers fetch the right amount of history
+without ever publishing a half-warmed indicator.
 """
 
 from __future__ import annotations

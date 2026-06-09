@@ -17,7 +17,7 @@ from ..base import (
 )
 from ..core.types import UnifiedRealtimeQuote
 from ..utils.code_converter import to_baostock_format
-from ..utils.normalize import get_index_type, is_index_code
+from ..utils.normalize import get_index_type, is_a_share_stock_code, is_index_code
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +202,6 @@ class BaostockFetcher(BaseFetcher):
             return []
 
         try:
-            import re
             from datetime import date
 
             import baostock as bs
@@ -237,14 +236,11 @@ class BaostockFetcher(BaseFetcher):
                                 continue
                             if code and code.startswith(("sh.", "sz.")):
                                 code = code[3:]
-                            # Filter: only actual stocks (not ETFs or indices)
-                            # Shanghai main: 600, 601, 603, 605, 689
-                            # Shanghai STAR (科创板): 688
-                            # Shenzhen main: 001, 002, 003 (000 handled above)
-                            # ChiNext (创业板): 300, 301, 302 (300=2009, 301=2020, 302=2024改革)
-                            # Beijing (北交所): 8, 4, 920
-                            stock_pattern = re.compile(r"^(600|601|603|605|689|688|001|002|003|300|301|302|8|4|920)\d{3}$")
-                            if code and stock_pattern.match(code):
+                            # Filter: only actual stocks (not ETFs or indices).
+                            # The A-share stock prefix list is centralised in
+                            # utils/normalize.py (A_SHARE_STOCK_PREFIXES) so
+                            # adding a new board code is a one-line change.
+                            if is_a_share_stock_code(code):
                                 result.append({"code": code, "name": name})
                         break
 

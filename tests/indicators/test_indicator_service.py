@@ -1,11 +1,12 @@
-"""Tests for the orchestrating IndicatorService and registry."""
+"""Tests for the indicator orchestrator and registry."""
 
 import pandas as pd
 import pytest
 
 from stock_data.data_provider.indicators import (
     INDICATOR_REGISTRY,
-    IndicatorService,
+    compute,
+    compute_lookback,
     estimate_lookback,
     list_indicators,
 )
@@ -71,18 +72,16 @@ def _kline(n: int) -> pd.DataFrame:
 
 
 def test_compute_no_op_when_spec_none():
-    svc = IndicatorService()
     df = _kline(30)
-    out = svc.compute(df, None)
+    out = compute(df, None)
     assert "indicators" in out.columns
     # Each row's `indicators` is an empty dict
     assert all(out["indicators"].apply(lambda d: d == {}).tolist())
 
 
 def test_compute_with_list_of_names():
-    svc = IndicatorService()
     df = _kline(60)
-    out = svc.compute(df, ["ma", "macd", "rsi"])
+    out = compute(df, ["ma", "macd", "rsi"])
     last = out.iloc[-1]["indicators"]
     assert "ma5" in last
     assert "macd_dif" in last
@@ -92,9 +91,8 @@ def test_compute_with_list_of_names():
 
 
 def test_compute_with_full_spec():
-    svc = IndicatorService()
     df = _kline(60)
-    out = svc.compute(df, {"ma": {"periods": [5, 10]}, "boll": {"period": 20, "stdDev": 1.5}})
+    out = compute(df, {"ma": {"periods": [5, 10]}, "boll": {"period": 20, "stdDev": 1.5}})
     last = out.iloc[-1]["indicators"]
     # Only the columns we asked for
     assert "ma5" in last and "ma10" in last
@@ -103,17 +101,15 @@ def test_compute_with_full_spec():
 
 
 def test_compute_rejects_unknown_indicator():
-    svc = IndicatorService()
     df = _kline(30)
     with pytest.raises(ValueError, match="unknown indicator"):
-        svc.compute(df, ["nope"])
+        compute(df, ["nope"])
 
 
 def test_compute_partial_options_uses_defaults():
-    svc = IndicatorService()
     df = _kline(60)
     # Only override periods, leave `type` default
-    out = svc.compute(df, {"ma": {"periods": [3, 7]}})
+    out = compute(df, {"ma": {"periods": [3, 7]}})
     last = out.iloc[-1]["indicators"]
     assert "ma3" in last
     assert "ma7" in last
@@ -122,28 +118,25 @@ def test_compute_partial_options_uses_defaults():
 
 
 def test_compute_nan_becomes_none():
-    svc = IndicatorService()
     df = _kline(30)
     # Force a NaN in volume so OBV's leading entry is None
     df.loc[0, "volume"] = float("nan")
-    out = svc.compute(df, ["obv"])
+    out = compute(df, ["obv"])
     # Row 0 indicators dict should have obv=None, not NaN
     first = out.iloc[0]["indicators"]
     assert first["obv"] is None
 
 
 def test_compute_does_not_mutate_input():
-    svc = IndicatorService()
     df = _kline(30)
     before_cols = list(df.columns)
-    svc.compute(df, ["ma"])
+    compute(df, ["ma"])
     assert list(df.columns) == before_cols
     assert "indicators" not in df.columns
 
 
 def test_estimate_lookback_for_service():
-    svc = IndicatorService()
-    assert svc.estimate_lookback(None) == 0
-    assert svc.estimate_lookback([]) == 0
-    assert svc.estimate_lookback(["ma"]) > 0
-    assert svc.estimate_lookback({"macd": {}}) >= 87
+    assert compute_lookback(None) == 0
+    assert compute_lookback([]) == 0
+    assert compute_lookback(["ma"]) > 0
+    assert compute_lookback({"macd": {}}) >= 87

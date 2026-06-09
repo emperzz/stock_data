@@ -12,14 +12,14 @@ if TYPE_CHECKING:
     import pandas as pd
 
 from stock_data.data_provider.core.types import (
-    get_realtime_circuit_breaker,
+    REALTIME_CIRCUIT_BREAKER,
     safe_float,
     safe_int,
 )
 
 from ..data_provider import DataFetcherManager, DataFetchError
 from ..data_provider.fetchers.index_symbols import get_all_indices
-from ..data_provider.indicators import IndicatorService
+from ..data_provider.indicators import available_catalog, compute, compute_lookback
 from ..data_provider.indicators.types import IndicatorKey
 from ..data_provider.manager import create_default_manager
 from ..data_provider.persistence import board as stock_board_cache
@@ -170,7 +170,7 @@ def _apply_indicators(
     days: int,
     actual_days: int,
 ) -> "pd.DataFrame":
-    """Run IndicatorService.compute on `df` if requested, then truncate
+    """Run the indicator orchestrator on `df` if requested, then truncate
     back to the user-requested bar count.
 
     Args:
@@ -186,7 +186,7 @@ def _apply_indicators(
     """
     if not requested_indicators:
         return df
-    df = IndicatorService().compute(df, requested_indicators)
+    df = compute(df, requested_indicators)
     if actual_days > days and len(df) > days:
         df = df.tail(days).reset_index(drop=True)
     return df
@@ -227,6 +227,20 @@ def _build_kline_data(row: dict, format_date) -> KLineData:
         indicators=ind or None,
     )
 
+
+def _format_date(val) -> str:
+    """Format a K-line / intraday `date` cell to a YYYY-MM-DD string.
+
+    Used by both the stock and index history routes. Module-level
+    (instead of inlined in each route) because it's pure and stable.
+    """
+    if val is None:
+        return ""
+    if hasattr(val, "strftime"):
+        return val.strftime("%Y-%m-%d")
+    return str(val)
+
+
 # Global manager instance
 _manager: DataFetcherManager | None = None
 
@@ -262,12 +276,11 @@ def health_check(details: bool = False) -> HealthResponse:
     cannot starve real fetches.
     """
     manager = get_manager()
-    cb = get_realtime_circuit_breaker()
     source_states: list[SourceHealth] = []
     any_available = False
 
     for fetcher in manager.fetchers:
-        snap = cb.snapshot_state(fetcher.name)
+        snap = REALTIME_CIRCUIT_BREAKER.snapshot_state(fetcher.name)
         if snap["available"]:
             any_available = True
         last_success = snap["last_success_time"] if snap["last_success_time"] > 0 else None
@@ -465,8 +478,7 @@ def get_history(
         # If indicators are requested, fetch enough history to warm them up
         actual_days = days
         if requested_indicators:
-            indicator_service = IndicatorService()
-            extra_lookback = indicator_service.estimate_lookback(requested_indicators)
+            extra_lookback = compute_lookback(requested_indicators)
             if extra_lookback > 0:
                 actual_days = max(days, extra_lookback)
 
@@ -485,15 +497,8 @@ def get_history(
         stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
 
         # Convert to response model
-        def format_date(val):
-            if val is None:
-                return ""
-            if hasattr(val, "strftime"):
-                return val.strftime("%Y-%m-%d")
-            return str(val)
-
         records = df.to_dict("records")
-        data = [_build_kline_data(row, format_date) for row in records]
+        data = [_build_kline_data(row, _format_date) for row in records]
 
         result = StockHistoryResponse(
             code=stock_code, stock_name=stock_name, period=period, data=data
@@ -766,7 +771,7 @@ def get_index_history(
         # expansion, so the route must do the lookback itself.)
         actual_days = days
         if requested_indicators:
-            extra_lookback = IndicatorService().estimate_lookback(requested_indicators)
+            extra_lookback = compute_lookback(requested_indicators)
             if extra_lookback > 0:
                 actual_days = max(days, extra_lookback)
 
@@ -795,15 +800,8 @@ def get_index_history(
         all_indices = get_all_indices()
         index_name = next((i["name"] for i in all_indices if i["code"] == index_code), index_code)
 
-        def format_date(val):
-            if val is None:
-                return ""
-            if hasattr(val, "strftime"):
-                return val.strftime("%Y-%m-%d")
-            return str(val)
-
         records = df.to_dict("records")
-        data = [_build_kline_data(row, format_date) for row in records]
+        data = [_build_kline_data(row, _format_date) for row in records]
 
         result = IndexHistoryResponse(code=index_code, name=index_name, period=period, data=data)
 
@@ -1218,10 +1216,7 @@ def get_pools(
         ZTPoolResponse with list of stocks in the pool.
     """
     try:
-        # ----- Resolve query_date and is_current_day -----
-        # is_current_day = True iff the resolved date is "today" AND today is a
-        # trade day. The current-trading-day branch never reads from or writes
-        # to persistence (see plan "ZT 池 当日 vs 历史 分流逻辑").
+        # ----- Resolve query_date -----
         from datetime import date as date_cls
 
         from ..data_provider.persistence import trade_calendar
@@ -1242,6 +1237,10 @@ def get_pools(
                 # silent 404.
                 query_date = resolved or today_str
 
+        # `is_current_day` is now a ROUTE-LAYER concern only — it drives
+        # the in-process TTLCache (which is per-process and short-lived).
+        # The persistence layer (pool_daily.get_pool) computes the same
+        # decision internally to control SQLite read/write/fallback.
         is_current_day = (query_date == today_str) and trade_calendar.is_trade_date(today_str)
 
         # TTLCache is only used for the current trading day (volatile data
@@ -1254,11 +1253,13 @@ def get_pools(
                 return hit
 
         manager = get_manager()
+        # The persistence layer now owns the volatile/historical policy
+        # via pool_daily.is_volatile_date(); no need to pass is_current_day
+        # down anymore.
         stocks = manager.get_zt_pool(
             pool_type=type,
             date=query_date,
             refresh=refresh,
-            is_current_day=is_current_day,
         )
 
         if not stocks:
@@ -1668,7 +1669,7 @@ def get_indicator_catalog() -> IndicatorCatalogResponse:
     AI agents that want to introspect what's available before sending
     `?indicators=...` on /stocks/{code}/history.
     """
-    catalog = IndicatorService().list_available()
+    catalog = available_catalog()
     return IndicatorCatalogResponse(
         indicators=[IndicatorCatalogEntry(**entry) for entry in catalog]
     )

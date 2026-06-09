@@ -212,9 +212,9 @@ class BaseFetcher(ABC):
             # Single copy at entry point
             df = self._clean_data(df)
             # Note: technical indicators (MA/MACD/KDJ/...) are no longer
-            # computed here. The IndicatorService layer above this is
-            # responsible — see stock_data.data_provider.indicators and
-            # the `?indicators=` query param on /stocks/{code}/history.
+            # computed here. The indicator layer above this is responsible —
+            # see stock_data.data_provider.indicators and the `?indicators=`
+            # query param on /stocks/{code}/history.
 
             logger.info(f"[{self.name}] {stock_code} got {len(df)} rows")
             return df

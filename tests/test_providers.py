@@ -64,8 +64,8 @@ class TestBaostockFetcher:
         """Test get_daily_data returns DataFrame with the standard columns.
 
         Technical indicators (MA/MACD/etc.) are no longer auto-computed
-        in the fetcher's K-line path. They live behind the
-        IndicatorService and the `?indicators=` query param.
+        in the fetcher's K-line path. They live behind the indicator
+        layer and the `?indicators=` query param.
         """
         df = fetcher.get_kline_data("600519", days=10)
         assert df is not None

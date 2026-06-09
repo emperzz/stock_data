@@ -3,13 +3,15 @@ SQLite persistence for ZT/DT/ZBGC pool data.
 
 Refactored (2026-06): merges the previous zt_pool / dt_pool / zbgc_pool three
 tables into a single `pool_daily` table discriminated by `pool_type`. The
-"current trading day" routing decision is now made in routes.py and the
-manager; this module just provides date-keyed get/save helpers.
+"current trading day" routing decision is now centralised in
+``get_pool()`` below — this module is the single source of truth for
+the volatile/historical date policy. The route layer no longer needs
+to compute ``is_current_day`` and pass it down.
 """
 
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 
 from .db import get_connection, get_db_path
 
@@ -220,3 +222,112 @@ def get_pool_count(pool_type: str, date: str) -> int:
 # Backward-compat aliases for callers still using the old per-table names.
 get_zt_pool_cached = get_pool_cached
 save_zt_pool = save_pool
+
+
+# ---------------------------------------------------------------------------
+# Date-aware fetch policy (single source of truth)
+# ---------------------------------------------------------------------------
+# The previous design pushed the "is this a current trading day?" decision
+# up to the route layer, which then passed ``is_current_day`` down to
+# the manager as a boolean parameter. The manager used that flag to
+# control four separate behaviours (read cache? write cache? fallback to
+# cache on failure? document the behaviour?). All of those branches are
+# derivable from the date itself + the trade calendar, so they belong
+# here next to the storage layer — not in the orchestrator or the
+# HTTP layer.
+
+def is_volatile_date(date_str: str) -> bool:
+    """True iff ``date_str`` is today AND today is a trade date.
+
+    A "volatile" date is one whose pool data is still mutating (market
+    open, partial seal counts, etc.). Persisting it to SQLite would
+    freeze an incomplete snapshot, so we skip both reads and writes.
+
+    Uses the cached A-share trade calendar to decide whether today is a
+    trading day. If the calendar is empty (e.g. very fresh install with
+    no warmup), ``is_trade_date`` returns False and the date is treated
+    as non-volatile — the caller's path then becomes "read from empty
+    SQLite, fetch upstream, persist", which is the safe default.
+    """
+    from .trade_calendar import is_trade_date
+
+    today = date.today().strftime("%Y-%m-%d")
+    return date_str == today and is_trade_date(today)
+
+
+def get_pool(
+    pool_type: str,
+    date: str,
+    manager,
+    *,
+    refresh: bool = False,
+) -> list[dict]:
+    """Fetch a ZT/DT/ZBGC pool with the volatile-date policy baked in.
+
+    Args:
+        pool_type: "zt" | "dt" | "zbgc"
+        date: Pool date in YYYY-MM-DD
+        manager: DataFetcherManager — used for the upstream call.
+        refresh: Force upstream fetch even when SQLite has the data
+            (only meaningful for historical dates; for volatile dates
+            we always go upstream anyway).
+
+    Returns:
+        List of stock dicts.
+
+    Raises:
+        DataFetchError: When the upstream fails AND there is no
+            persisted fallback (i.e. the volatile-date path always
+            raises on upstream failure by design).
+    """
+    from ..base import DataFetchError
+
+    _validate_pool_type(pool_type)
+
+    if is_volatile_date(date):
+        # Volatile: pure upstream pass-through. Never read or write SQLite.
+        # On failure, raise — the route layer is responsible for
+        # surfacing a clear 5xx to the caller.
+        return manager.get_zt_pool_raw(pool_type, date)
+
+    # Historical: SQLite-first, upstream on miss, write-back on success.
+    # On upstream failure, fall back to whatever SQLite has.
+    if not refresh:
+        cached = get_pool_cached(pool_type, date)
+        if cached:
+            logger.info(
+                f"[PoolDaily] {pool_type} {date} hit in persistence "
+                f"({len(cached)} stocks)"
+            )
+            return cached
+
+    try:
+        stocks = manager.get_zt_pool_raw(pool_type, date)
+    except DataFetchError:
+        cached = get_pool_cached(pool_type, date)
+        if cached:
+            logger.warning(
+                f"[PoolDaily] Upstream failed for {pool_type} {date}, "
+                f"falling back to {len(cached)} persisted stocks"
+            )
+            return cached
+        raise
+
+    if stocks:
+        save_pool(pool_type, date, stocks)
+    return stocks
+
+
+__all__ = [
+    "init_schema",
+    "is_volatile_date",
+    "get_pool",
+    "get_pool_cached",
+    "save_pool",
+    "get_latest_cached_date",
+    "has_cached_data",
+    "get_pool_count",
+    # Backward-compat
+    "get_zt_pool_cached",
+    "save_zt_pool",
+]

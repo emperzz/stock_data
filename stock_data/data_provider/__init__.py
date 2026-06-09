@@ -19,10 +19,10 @@ from .base import (
 
 # Types
 from .core.types import (
+    REALTIME_CIRCUIT_BREAKER,
     CircuitBreaker,
     RealtimeSource,
     UnifiedRealtimeQuote,
-    get_realtime_circuit_breaker,
     safe_float,
     safe_int,
 )
@@ -75,7 +75,7 @@ __all__ = [
     "UnifiedRealtimeQuote",
     "safe_float",
     "safe_int",
-    "get_realtime_circuit_breaker",
+    "REALTIME_CIRCUIT_BREAKER",
     # Persistence functions (on-disk SQLite store)
     "get_cached_calendar",
     "get_cached_stocks",

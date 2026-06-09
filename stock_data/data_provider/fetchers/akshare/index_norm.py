@@ -1,15 +1,45 @@
 """
-Index DataFrame normalisation helpers for AkshareFetcher.
+Index and intraday DataFrame normalisation helpers for AkshareFetcher.
 
-Internal implementation detail — merges the three previously
-duplicated ``_normalize_index_daily*`` methods into a single
-parameterised function.
+Internal implementation detail — merges the previously duplicated
+``_normalize_index_daily*`` methods and the three intraday-normalisation
+copies (``_normalize_intraday_minute``, ``_normalize_intraday``, and the
+inline block in ``get_index_intraday``) into a single parameterised
+function each.
 """
 
 from __future__ import annotations
 
 import pandas as pd
 
+# ---------------------------------------------------------------------------
+# Daily K-line: per-source column maps for the three index-history endpoints
+# ---------------------------------------------------------------------------
+# These were previously class attributes on AkshareFetcher but are pure
+# data — no `self` access — so they belong here as module-level constants.
+
+_INDEX_SINA_MAP: dict[str, str] = {
+    "date": "date", "open": "open", "high": "high",
+    "low": "low", "close": "close", "volume": "volume",
+}
+_INDEX_SINA_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume")
+
+_INDEX_TX_MAP: dict[str, str] = {
+    "date": "date", "open": "open", "close": "close",
+    "high": "high", "low": "low", "amount": "volume",
+}
+_INDEX_TX_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume")
+
+_INDEX_EM_MAP: dict[str, str] = {
+    "date": "date", "open": "open", "close": "close",
+    "high": "high", "low": "low", "volume": "volume", "amount": "amount",
+}
+_INDEX_EM_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume", "amount")
+
+
+# ---------------------------------------------------------------------------
+# Daily K-line normalisation (replaces 3 duplicate _normalize_index_daily*)
+# ---------------------------------------------------------------------------
 
 def normalize_index_df(
     df: pd.DataFrame,
@@ -69,3 +99,63 @@ def filter_by_date(
     if end_date:
         df = df[df["date"] <= pd.to_datetime(end_date, errors="coerce")]
     return df
+
+
+# ---------------------------------------------------------------------------
+# Intraday / minute K-line: single helper replacing 3 duplicates
+# ---------------------------------------------------------------------------
+# The three previously separate intraday-normalisation call sites all did
+# the same thing: rename Chinese columns to English, extract HH:MM:SS from
+# the time column, coerce numeric types, and select the standard column
+# layout.  ``normalize_intraday_df`` is the single source of truth.
+
+_INTRADAY_COLUMN_MAPPING: dict[str, str] = {
+    "时间": "time",
+    "开盘": "open",
+    "收盘": "close",
+    "最高": "high",
+    "最低": "low",
+    "成交量": "volume",
+    "成交额": "amount",
+}
+_INTRADAY_NUMERIC_COLS: tuple[str, ...] = ("open", "high", "low", "close", "volume", "amount")
+_INTRADAY_STANDARD_COLS: tuple[str, ...] = ("time", "open", "high", "low", "close", "volume", "amount")
+
+
+def normalize_intraday_df(df: pd.DataFrame, time_col: str = "时间") -> pd.DataFrame:
+    """Normalize an akshare intraday DataFrame to the standard column layout.
+
+    Replaces the three previously duplicated helpers
+    (``_normalize_intraday_minute``, ``_normalize_intraday``, and the
+    inline block in ``get_index_intraday``).  Behaviour:
+
+    1. Renames Chinese columns (or any ``time_col``) to English.
+    2. Strips the time column to ``HH:MM:SS`` (the 8 rightmost chars) when
+       present — akshare's EM and Sina endpoints return full timestamps.
+    3. Coerces the OHLCV/amount columns via ``pd.to_numeric``.
+    4. Returns only the standard columns that exist after rename, in
+       the canonical order.
+
+    Args:
+        df: Raw DataFrame from an akshare minute/intraday API.
+        time_col: Source column name holding the timestamp.  Defaults to
+            ``"时间"`` (akshare's standard).  Pass ``"day"`` for the
+            Sina-fallback format used by ``stock_zh_a_minute``.
+
+    Returns:
+        DataFrame with the standard intraday columns (subset of
+        ``time/open/high/low/close/volume/amount``) in canonical order.
+    """
+    column_mapping = {time_col: "time", **_INTRADAY_COLUMN_MAPPING}
+    out = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+    if "time" in out.columns:
+        out["time"] = out["time"].astype(str).str[-8:]
+    for col in _INTRADAY_NUMERIC_COLS:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+    # Ensure all standard columns are present (None for missing) and
+    # in canonical order.
+    for col in _INTRADAY_STANDARD_COLS:
+        if col not in out.columns:
+            out[col] = None
+    return out[list(_INTRADAY_STANDARD_COLS)]

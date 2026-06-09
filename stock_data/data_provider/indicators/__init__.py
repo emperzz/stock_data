@@ -4,13 +4,13 @@ Technical indicators package.
 Pure-compute layer that sits on top of DataFetcherManager. Indicators are
 calculated from already-fetched K-line data — no external API calls, no
 fetcher involvement, no capability routing. The fetchers' job ends when
-the K-line DataFrame is in hand; the indicator service's job is to enrich
-that frame with the requested technical columns.
+the K-line DataFrame is in hand; this layer's job is to enrich that
+frame with the requested technical columns.
 
 Architecture:
     API Layer
         ↓
-    IndicatorService.compute(df, indicators)  ←  THIS LAYER
+    compute(df, spec) / compute_lookback(spec)  ←  THIS LAYER
         ↓
     DataFetcherManager.get_kline_data(...)    ←  capability-routed
         ↓
@@ -19,7 +19,7 @@ Architecture:
 Public surface:
     - calcMA, calcMACD, calcBOLL, calcKDJ, ... : per-indicator pure functions
     - INDICATOR_REGISTRY                       : metadata for introspection
-    - IndicatorService                         : orchestrator
+    - compute, compute_lookback, available_catalog : orchestrator functions
     - IndicatorKey                             : enum of supported indicators
 """
 
@@ -29,7 +29,6 @@ from .boll import calcBOLL
 from .cci import calcCCI
 from .dmi import calcDMI
 from .indicator_service import (
-    IndicatorService,
     available_catalog,
     compute,
     compute_lookback,
@@ -49,8 +48,7 @@ from .types import OHLCV, IndicatorKey, MAType
 from .wr import calcWR
 
 __all__ = [
-    # Service
-    "IndicatorService",
+    # Service functions
     "compute",
     "compute_lookback",
     "available_catalog",

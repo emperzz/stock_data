@@ -128,26 +128,39 @@ class TencentFetcher(BaseFetcher):
                 logger.warning(f"[TencentFetcher] Insufficient fields for {stock_code}: {len(values)}")
                 return None
 
+            def v(idx: int, scale: float = 1.0) -> float | None:
+                """Parse a single `~`-delimited field, applying a unit scale.
+
+                Centralises the (bounds-check, empty-check, float-coerce, scale)
+                sequence that was previously open-coded 13 times in this constructor.
+                Returns None on any failure rather than letting ``None * scale``
+                raise ``TypeError``.
+                """
+                if idx >= len(values) or not values[idx]:
+                    return None
+                f = safe_float(values[idx])
+                return f * scale if f is not None else None
+
             return UnifiedRealtimeQuote(
                 code=normalize_stock_code(stock_code),
                 name=values[1] if len(values) > 1 else "",
                 source=RealtimeSource.TENCENT,
-                price=safe_float(values[3]) if len(values) > 3 and values[3] else None,
-                pre_close=safe_float(values[4]) if len(values) > 4 and values[4] else None,
-                open_price=safe_float(values[5]) if len(values) > 5 and values[5] else None,
-                volume=safe_float(values[36]) * 100 if len(values) > 36 and values[36] else None,  # 手 -> shares
-                amount=safe_float(values[37]) * 10000 if len(values) > 37 and values[37] else None,  # 万元 -> 元
-                change_amount=safe_float(values[31]) if len(values) > 31 and values[31] else None,
-                change_pct=safe_float(values[32]) if len(values) > 32 and values[32] else None,
-                high=safe_float(values[33]) if len(values) > 33 and values[33] else None,
-                low=safe_float(values[34]) if len(values) > 34 and values[34] else None,
-                turnover_rate=safe_float(values[38]) if len(values) > 38 and values[38] else None,
-                pe_ratio=safe_float(values[39]) if len(values) > 39 and values[39] else None,
-                amplitude=safe_float(values[43]) if len(values) > 43 and values[43] else None,
-                total_mv=safe_float(values[44]) * 1e8 if len(values) > 44 and values[44] else None,  # 亿 -> 元
-                circ_mv=safe_float(values[45]) * 1e8 if len(values) > 45 and values[45] else None,  # 亿 -> 元
-                pb_ratio=safe_float(values[46]) if len(values) > 46 and values[46] else None,
-                volume_ratio=safe_float(values[49]) if len(values) > 49 and values[49] else None,
+                price=v(3),
+                pre_close=v(4),
+                open_price=v(5),
+                volume=v(36, 100),  # 手 -> shares
+                amount=v(37, 10000),  # 万元 -> 元
+                change_amount=v(31),
+                change_pct=v(32),
+                high=v(33),
+                low=v(34),
+                turnover_rate=v(38),
+                pe_ratio=v(39),
+                amplitude=v(43),
+                total_mv=v(44, 1e8),  # 亿 -> 元
+                circ_mv=v(45, 1e8),  # 亿 -> 元
+                pb_ratio=v(46),
+                volume_ratio=v(49),
             )
         except Exception as e:
             logger.warning(f"[TencentFetcher] Parse error for {stock_code}: {e}")

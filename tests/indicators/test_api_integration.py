@@ -3,7 +3,7 @@
 These tests bypass the network by monkey-patching the DataFetcherManager's
 `get_kline_data` method to return a synthetic K-line. The real fetcher
 system is irrelevant for these tests — we only care that the API layer
-plumbs `?indicators=` through to IndicatorService correctly.
+plumbs `?indicators=` through to the indicator orchestrator correctly.
 """
 
 

@@ -17,11 +17,20 @@ from ...base import (
     normalize_stock_code,
 )
 from ...core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
-from ...persistence.pool_daily import init_schema as init_zt_cache_schema
 from ...utils.code_converter import to_akshare_format
 from ...utils.normalize import get_index_type, is_index_code
 from .board import fetch_board_list, fetch_board_stocks
-from .index_norm import filter_by_date, normalize_index_df
+from .index_norm import (
+    _INDEX_EM_MAP,
+    _INDEX_EM_NUMERIC,
+    _INDEX_SINA_MAP,
+    _INDEX_SINA_NUMERIC,
+    _INDEX_TX_MAP,
+    _INDEX_TX_NUMERIC,
+    filter_by_date,
+    normalize_index_df,
+    normalize_intraday_df,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,23 +187,11 @@ class AkshareFetcher(BaseFetcher):
         """Normalize raw minute DataFrame (from stock_zh_a_hist_min_em /
         index_zh_a_hist_min_em) to the standard intraday columns.
 
-        Raw columns (中文): 时间, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 均价
-        Standard columns: time, open, high, low, close, volume, amount
+        Thin wrapper over ``index_norm.normalize_intraday_df`` — kept as
+        an instance method so the call site in ``_fetch_raw_data`` reads
+        the same as the ``get_intraday_data`` path.
         """
-        rename = {
-            "时间": "time",
-            "开盘": "open",
-            "最高": "high",
-            "最低": "low",
-            "收盘": "close",
-            "成交量": "volume",
-            "成交额": "amount",
-        }
-        out = df.rename(columns=rename)
-        for col in ("time", "open", "high", "low", "close", "volume", "amount"):
-            if col not in out.columns:
-                out[col] = None
-        return out[["time", "open", "high", "low", "close", "volume", "amount"]]
+        return normalize_intraday_df(df)
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """Normalize Akshare data to standard columns."""
@@ -437,13 +434,13 @@ class AkshareFetcher(BaseFetcher):
             )
             if df is None or df.empty:
                 return None
-            return self._normalize_intraday(df, time_col="时间")
+            return normalize_intraday_df(df)
         except Exception as e:
             logger.debug(f"[AkshareFetcher] EM intraday failed: {e}")
             return None
 
     def _fetch_intraday_sina(self, code: str, period: str, adjust: str) -> pd.DataFrame | None:
-        """Fetch via stock_zh_a_minute."""
+        """Fetch via stock_zh_a_minute. Sina uses ``"day"`` as the time column."""
         try:
             import akshare as ak
 
@@ -452,33 +449,10 @@ class AkshareFetcher(BaseFetcher):
             df = ak.stock_zh_a_minute(symbol=symbol, period=period, adjust=adjust)
             if df is None or df.empty:
                 return None
-            return self._normalize_intraday(df, time_col="day")
+            return normalize_intraday_df(df, time_col="day")
         except Exception as e:
             logger.debug(f"[AkshareFetcher] Sina intraday failed: {e}")
             return None
-
-    def _normalize_intraday(self, df: pd.DataFrame, time_col: str = "时间") -> pd.DataFrame:
-        """Normalize intraday data from EM or Sina source."""
-        df = df.copy()
-        column_mapping = {
-            time_col: "time",
-            "开盘": "open",
-            "收盘": "close",
-            "最高": "high",
-            "最低": "low",
-            "成交量": "volume",
-            "成交额": "amount",
-        }
-        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
-        if "time" in df.columns:
-            df["time"] = df["time"].astype(str).str[-8:]  # Extract HH:MM:SS
-        numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
-        df = df[[c for c in keep_cols if c in df.columns]]
-        return df
 
     def get_all_concept_boards(
         self, source: str = "eastmoney", include_quote: bool = False
@@ -672,8 +646,8 @@ class AkshareFetcher(BaseFetcher):
             try:
                 df = ak.stock_zh_index_daily(symbol=sina_symbol)
                 if df is not None and not df.empty:
-                    df = normalize_index_df(df, code, self._INDEX_SINA_MAP,
-                                            numeric_cols=self._INDEX_SINA_NUMERIC)
+                    df = normalize_index_df(df, code, _INDEX_SINA_MAP,
+                                            numeric_cols=_INDEX_SINA_NUMERIC)
                     if start_date or end_date:
                         df = filter_by_date(df, start_date, end_date)
                     return df
@@ -688,8 +662,8 @@ class AkshareFetcher(BaseFetcher):
                     end_date=(end_date or "").replace("-", ""),
                 )
                 if df is not None and not df.empty:
-                    df = normalize_index_df(df, code, self._INDEX_TX_MAP,
-                                            numeric_cols=self._INDEX_TX_NUMERIC)
+                    df = normalize_index_df(df, code, _INDEX_TX_MAP,
+                                            numeric_cols=_INDEX_TX_NUMERIC)
                     return df
             except Exception as e:
                 logger.debug(f"[AkshareFetcher] stock_zh_index_daily_tx failed: {e}")
@@ -702,8 +676,8 @@ class AkshareFetcher(BaseFetcher):
                     end_date=end_date.replace("-", "") if end_date else "20500101",
                 )
                 if df is not None and not df.empty:
-                    df = normalize_index_df(df, code, self._INDEX_EM_MAP,
-                                            numeric_cols=self._INDEX_EM_NUMERIC)
+                    df = normalize_index_df(df, code, _INDEX_EM_MAP,
+                                            numeric_cols=_INDEX_EM_NUMERIC)
                     return df
             except Exception as e:
                 logger.debug(f"[AkshareFetcher] stock_zh_index_daily_em failed: {e}")
@@ -713,30 +687,6 @@ class AkshareFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[AkshareFetcher] get_index_historical failed: {e}")
             return None
-
-    # ----- index DataFrame normalisation -----
-    # The three previously separate _normalize_index_daily* methods and
-    # _filter_by_date have been extracted to akshare_index_norm.py as
-    # parameterised helpers.  The calls below map each akshare source to
-    # its column layout.
-
-    _INDEX_SINA_MAP: dict[str, str] = {
-        "date": "date", "open": "open", "high": "high",
-        "low": "low", "close": "close", "volume": "volume",
-    }
-    _INDEX_SINA_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume")
-
-    _INDEX_TX_MAP: dict[str, str] = {
-        "date": "date", "open": "open", "close": "close",
-        "high": "high", "low": "low", "amount": "volume",
-    }
-    _INDEX_TX_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume")
-
-    _INDEX_EM_MAP: dict[str, str] = {
-        "date": "date", "open": "open", "close": "close",
-        "high": "high", "low": "low", "volume": "volume", "amount": "amount",
-    }
-    _INDEX_EM_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume", "amount")
 
     def get_index_intraday(
         self, index_code: str, period: str = "5"
@@ -774,26 +724,7 @@ class AkshareFetcher(BaseFetcher):
             if df is None or df.empty:
                 return None
 
-            df = df.rename(
-                columns={
-                    "时间": "time",
-                    "开盘": "open",
-                    "收盘": "close",
-                    "最高": "high",
-                    "最低": "low",
-                    "成交量": "volume",
-                    "成交额": "amount",
-                }
-            )
-            if "time" in df.columns:
-                df["time"] = df["time"].astype(str).str[-8:]
-            numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
-            for col in numeric_cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-            keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
-            df = df[[c for c in keep_cols if c in df.columns]]
-            return df
+            return normalize_intraday_df(df)
 
         except Exception as e:
             logger.warning(f"[AkshareFetcher] get_index_intraday failed: {e}")
@@ -813,8 +744,6 @@ class AkshareFetcher(BaseFetcher):
         """
         try:
             import akshare as ak
-
-            init_zt_cache_schema()
 
             # Map pool_type to Akshare function
             func_map = {

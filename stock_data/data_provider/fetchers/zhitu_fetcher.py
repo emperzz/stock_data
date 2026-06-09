@@ -14,7 +14,6 @@ import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
-from ..persistence.pool_daily import init_schema as init_zt_cache_schema
 from ..utils.code_converter import to_zhitu_format, to_zhitu_market_suffix
 
 logger = logging.getLogger(__name__)
@@ -257,9 +256,6 @@ class ZhituFetcher(BaseFetcher):
             if not isinstance(data, list):
                 logger.warning(f"[ZhituFetcher] Unexpected response type: {type(data)}")
                 return None
-
-            # Initialize ZT cache schema (defensive — also runs at server startup)
-            init_zt_cache_schema()
 
             # Normalize and return
             return [self._normalize_zt_stock(row, pool_type) for row in data]

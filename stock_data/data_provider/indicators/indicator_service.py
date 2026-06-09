@@ -1,18 +1,18 @@
 """
-IndicatorService — orchestrator that binds the registry to a K-line
+Indicator service — orchestrator that binds the registry to a K-line
 DataFrame and produces a final frame with indicator columns.
 
 Pure compute: it does NOT touch the network, the fetcher system, or
 the cache. Callers are expected to:
 
     1. Fetch the K-line via DataFetcherManager.get_kline_data().
-    2. Hand the resulting DataFrame to IndicatorService.compute().
+    2. Hand the resulting DataFrame to ``compute()``.
     3. Truncate to the user's requested bar count if you over-fetched.
 
-Why a class and not a flat function? `routes.py` instantiates it as a
-stateless object (`.compute()`, `.estimate_lookback()`, `.list_available()`);
-keeping the class shape preserves the public contract while internal
-state stays empty.
+This module exposes plain functions (``compute``, ``compute_lookback``,
+``available_catalog``) instead of a wrapper class — the previous
+``IndicatorService`` facade was a stateless shell that added no value
+over calling the module functions directly.
 """
 
 from __future__ import annotations
@@ -169,29 +169,7 @@ def available_catalog() -> list[dict[str, Any]]:
     return list_indicators()
 
 
-class IndicatorService:
-    """Stateless orchestrator. One instance is fine to share across requests.
-
-    Thin facade over the module-level functions for callers that prefer
-    OO style (`IndicatorService().compute(df, spec)`).
-    """
-
-    def compute(
-        self,
-        df: pd.DataFrame,
-        spec: dict[str, dict[str, Any]] | list[str] | None,
-    ) -> pd.DataFrame:
-        return compute(df, spec)
-
-    def estimate_lookback(self, spec: dict[str, dict[str, Any]] | list[str] | None) -> int:
-        return compute_lookback(spec)
-
-    def list_available(self) -> list[dict[str, Any]]:
-        return available_catalog()
-
-
 __all__ = [
-    "IndicatorService",
     "compute",
     "compute_lookback",
     "available_catalog",

@@ -11,13 +11,56 @@ __all__ = [
     "is_us_market",
     "is_hk_market",
     "is_index_code",
+    "is_a_share_stock_code",
     "ETF_PREFIXES",
     "BSE_CODES",
+    "A_SHARE_STOCK_PREFIXES",
 ]
 
 # Market tag constants
 ETF_PREFIXES = ("51", "52", "56", "58", "15", "16", "18")
 BSE_CODES = ("92", "43", "81", "82", "83", "87", "88")
+
+# A-share stock code prefixes (used to distinguish real stocks from
+# ETFs/funds/indices on the Shanghai, Shenzhen, and Beijing exchanges).
+# Hoisted from baostock_fetcher.get_all_stocks so the "what is a real
+# A-share stock" definition lives in one place.
+#
+# - Shanghai main:    600, 601, 603, 605, 689
+# - Shanghai STAR:    688
+# - Shenzhen main:    001, 002, 003
+# - ChiNext:          300, 301, 302
+# - Beijing (BSE):    8 (1-digit prefix), 4, 920
+#
+# Note: the 1-digit "8" / "4" prefixes are matched first below so the
+# 3-digit "920" doesn't shadow them.  ``is_a_share_stock_code`` handles
+# the matching order correctly.
+A_SHARE_STOCK_PREFIXES: tuple[str, ...] = (
+    "600", "601", "603", "605", "689", "688",  # Shanghai
+    "001", "002", "003",                       # Shenzhen main
+    "300", "301", "302",                       # ChiNext
+    "920",                                     # Beijing (3-digit)
+    "8", "4",                                  # Beijing (1-digit, checked last)
+)
+
+
+def is_a_share_stock_code(code: str) -> bool:
+    """True iff ``code`` is a 6-digit string whose prefix is in
+    ``A_SHARE_STOCK_PREFIXES`` (i.e. a real A-share stock, not an ETF,
+    fund, or index).
+
+    Replaces the hardcoded regex previously inlined in
+    ``baostock_fetcher.get_all_stocks`` — keep the prefix list here so
+    new board codes (e.g. another Beijing prefix) are a one-line change.
+    """
+    if not code or not code.isdigit() or len(code) != 6:
+        return False
+    # 1-digit prefixes need to be checked after 3-digit ones to avoid
+    # false matches, but since we're scanning a 6-digit string with
+    # startswith, the order doesn't actually matter — the 1-digit prefix
+    # only matches if the *first* char of the code is "8" or "4", which
+    # is independent of the 3-digit check.
+    return any(code.startswith(p) for p in A_SHARE_STOCK_PREFIXES)
 
 
 def normalize_stock_code(code: str) -> str:

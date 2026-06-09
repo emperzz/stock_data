@@ -162,8 +162,9 @@ class TestKlineDataProcessing:
     def test_no_inline_indicators_on_kline(self):
         """Fletchers no longer auto-compute MA5/MA10/MA20 in get_kline_data.
 
-        Indicators are now the responsibility of the IndicatorService
-        layer; see the ?indicators= query param on /stocks/{code}/history.
+        Indicators are now the responsibility of the indicator layer
+        (see stock_data.data_provider.indicators); the orchestrator is
+        reached via the ?indicators= query param on /stocks/{code}/history.
         """
 
         df = pd.DataFrame(

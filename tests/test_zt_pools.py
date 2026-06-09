@@ -118,10 +118,11 @@ class TestZTPoolAPIRoutes:
     def test_get_pools_with_refresh(self, client):
         """Test GET /api/v1/pools?refresh=true forces refresh.
 
-        The route now resolves a missing `date` to either today (if today is
-        a trade day) or the latest trade date <= today, and always passes an
-        explicit `is_current_day` flag. Pin the date so the assertion is
-        deterministic regardless of when the test runs.
+        The route resolves a missing `date` to either today (if today is
+        a trade day) or the latest trade date <= today. The volatile/
+        historical policy now lives in pool_daily.get_pool — the route
+        just resolves the date and forwards it. Pin the date so the
+        assertion is deterministic regardless of when the test runs.
         """
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
@@ -133,9 +134,11 @@ class TestZTPoolAPIRoutes:
 
             response = client.get("/api/v1/pools?type=zt&refresh=true&date=2024-05-10")
             assert response.status_code == 200
-            # date pinned to 2024-05-10 (a historical Friday) → is_current_day=False
+            # date pinned to 2024-05-10 (a historical Friday) — the
+            # route no longer passes is_current_day; the persistence
+            # layer computes volatility from the date itself.
             mock_mgr.get_zt_pool.assert_called_once_with(
-                pool_type="zt", date="2024-05-10", refresh=True, is_current_day=False,
+                pool_type="zt", date="2024-05-10", refresh=True,
             )
 
     def test_get_pools_no_data_returns_404(self, client):
