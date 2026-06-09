@@ -65,7 +65,11 @@ stock_data/
     ├── fetchers/
     │   ├── __init__.py
     │   ├── index_symbols.py        # Index mappings (CSI/HK/US)
-    │   ├── akshare_fetcher.py
+    │   ├── akshare/
+    │   │   ├── __init__.py
+    │   │   ├── fetcher.py
+    │   │   ├── board.py
+    │   │   └── index_norm.py
     │   ├── baostock_fetcher.py
     │   ├── cninfo_fetcher.py
     │   ├── eastmoney_fetcher.py
@@ -118,7 +122,7 @@ stock_data/
 - All data access methods route through `_filter_by_capability(market, capability)`
 
 ### `data_provider/fetchers/`
-- Each source has its own fetcher: `baostock_fetcher.py`, `akshare_fetcher.py`, `yfinance_fetcher.py`, `tushare_fetcher.py`, `zhitu_fetcher.py`, `tencent_fetcher.py`, `eastmoney_fetcher.py`, `ths_fetcher.py`, `cninfo_fetcher.py`
+- Each source has its own fetcher: `baostock_fetcher.py`, `akshare/` (package), `yfinance_fetcher.py`, `tushare_fetcher.py`, `zhitu_fetcher.py`, `tencent_fetcher.py`, `eastmoney_fetcher.py`, `ths_fetcher.py`, `cninfo_fetcher.py`
 - Each fetcher handles:
   - Source-specific API calls
   - Rate limiting (random jitter, User-Agent rotation)
@@ -400,7 +404,6 @@ class DataCapability(Flag):
     HISTORICAL_MIN   # 分钟 K线 (1/5/15/30/60m)
     REALTIME_QUOTE   # 实时报价
     STOCK_LIST       # 股票列表 (get_all_stocks)
-    STOCK_NAME       # 股票名称 (get_stock_name)
     TRADE_CALENDAR   # 交易日历
     STOCK_BOARD      # 板块数据（概念/行业板块列表）
     INDEX_QUOTE      # 指数实时行情
@@ -462,7 +465,7 @@ fetchers that support it.
 |---------|-------------|
 | BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR \| INDEX_HISTORICAL` |
 | AkshareFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_ZT_POOL` |
-| TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| STOCK_NAME \| INDEX_HISTORICAL` |
+| TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| INDEX_HISTORICAL` |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
 | ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |

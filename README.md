@@ -54,13 +54,18 @@ curl 'http://localhost:8888/api/v1/indicators/catalog'
 GET /api/v1/health
 ```
 
-Response:
+Response (lightweight, default):
 ```json
 {
   "status": "ok",
-  "available_sources": ["TushareFetcher", "BaostockFetcher", "AkshareFetcher", "YfinanceFetcher", "ZhituFetcher"]
+  "sources": null
 }
 ```
+
+Append `?details=true` to receive per-fetcher circuit-breaker state (a
+list of `SourceHealth` objects). When all sources are unavailable the
+status field is `"unhealthy"`; when at least one is open/half-open
+it's `"degraded"`.
 
 ---
 
@@ -230,48 +235,15 @@ truncates the response to the `days` you asked for.
 
 ---
 
-### Get Historical K-line Data (without indicators)
+### Get Historical K-line Data
 
-```bash
-GET /api/v1/stocks/{code}/history?period=daily&days=30
-```
-
-**Parameters:**
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `period` | string | `daily` | K-line period: `daily`, `weekly`, `monthly` |
-| `days` | int | 30 | Number of days to retrieve (1-365, ignored when `start_date` provided) |
-| `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` parameter |
-| `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
-| `adjust` | string | `` | Adjustment type: empty=不复权, `qfq`=前复权, `hfq`=后复权 |
-| `indicators` | string | null | Comma-separated list of technical indicators to attach (see [Technical Indicators](#technical-indicators)) |
-
-**Response:**
-```json
-{
-  "stock_code": "600519",
-  "stock_name": "贵州茅台",
-  "period": "daily",
-  "data": [
-    {
-      "date": "2026-05-06",
-      "open": 1680.0,
-      "high": 1700.0,
-      "low": 1670.0,
-      "close": 1698.0,
-      "volume": 1234567,
-      "amount": 2087654321.0,
-      "change_percent": 1.52
-    }
-  ]
-}
-```
-
-> **Note:** the 4 indicator fields (`ma5`, `ma10`, `ma20`, `indicators`)
-> are **omitted from the response entirely** when `?indicators=` is not
-> passed. To get them, opt in with `?indicators=ma` (or any indicator
-> set that produces them). For a fully-loaded example response, see
-> the [Technical Indicators](#technical-indicators) section above.
+The `GET /api/v1/stocks/{code}/history` endpoint is fully documented
+under [Technical Indicators](#technical-indicators) above (parameters,
+auto-lookback expansion, with- and without-`?indicators=` response
+shapes). Omit `?indicators=` to receive the slim per-bar payload shown
+in the **Response (without `indicators`)** block; pass
+`?indicators=ma,macd,kdj,boll` to attach per-bar values and the
+back-compat `ma5`/`ma10`/`ma20` top-level fields.
 
 ---
 
@@ -779,7 +751,7 @@ GET /api/v1/north-flow/realtime
 
 ```bash
 GET /api/v1/stocks/{code}/reports?max_pages=3
-GET /api/v1/stocks/{code}/reports/{info_code}/pdf
+GET /api/v1/stocks/{code}/reports/{report_id}/pdf
 ```
 
 ```json
@@ -860,8 +832,6 @@ The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to 
 | `CACHE_TTL_INDEX_QUOTE` | TTL for index realtime quotes (seconds) | `60` |
 | `CACHE_TTL_INDEX_INTRADAY` | TTL for index intraday (seconds) | `30` |
 | `CACHE_TTL_STOCK_INTRADAY` | TTL for stock intraday (seconds) | `30` |
-| `CACHE_TTL_BOARD_LIST` | TTL for board list (seconds) | `300` |
-| `CACHE_TTL_BOARD_STOCKS` | TTL for board stocks (seconds) | `300` |
 
 ### Persistence (on-disk SQLite store)
 
@@ -941,19 +911,6 @@ GET /api/v1/indices/000300/intraday?period=15  # 沪深300 15-minute
 ```bash
 GET /api/v1/stocks/HK00700/history    # 腾讯控股
 GET /api/v1/stocks/HK01810/history   # 小米集团
-```
-
-### Hong Kong Indices
-
-| Index | Code | Full Name |
-|-------|------|----------|
-| 恒生指数 | `HSI` | Hang Seng Index |
-| 国企指数 | `HSCE` | HSCEI |
-
-**Examples:**
-```bash
-GET /api/v1/stocks/HSI/history       # 恒生指数
-GET /api/v1/stocks/HSCE/history       # 国企指数
 ```
 
 ### US Stocks
