@@ -16,7 +16,7 @@ from ..base import (
     is_hk_market,
     normalize_stock_code,
 )
-from ..cache.stock_zt_pool_cache import init_db as init_zt_cache_db
+from ..persistence.pool_daily import init_schema as init_zt_cache_schema
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 from ..utils.normalize import get_index_type, is_index_code
 from .index_symbols import US_INDEX_AKSHARE_MAP
@@ -1044,7 +1044,7 @@ class AkshareFetcher(BaseFetcher):
         try:
             import akshare as ak
 
-            init_zt_cache_db()
+            init_zt_cache_schema()
 
             # Map pool_type to Akshare function
             func_map = {

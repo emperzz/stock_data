@@ -23,23 +23,30 @@ from .core.types import (
     get_realtime_circuit_breaker,
 )
 
-# Cache functions - use `from data_provider import stock_cache` for the module
-from .cache.api_cache import (
+# Persistence functions (on-disk SQLite store). The legacy data_provider.cache/
+# module was removed; this package is now the single home for SQLite-backed
+# metadata. For in-memory caching of recent API responses, use api.cache
+# (cachetools.TTLCache) — see routes.py `from .cache import`.
+from .persistence import (
     get_cached_calendar,
     get_cached_stocks,
-    get_cache_info,
     get_latest_cached_trade_date,
+    get_latest_trade_date_on_or_before,
     get_stock_list,
+    get_stock_list_cache_info,
     get_stock_name,
     has_cached_data,
-    init_calendar_db,
-    init_db,
+    init_stock_list_schema,
+    init_trade_calendar_schema,
+    is_trade_date,
     update_cached_calendar,
     update_cached_stocks,
 )
 
-# Backward compatibility: re-export cache module
-from . import cache as stock_cache
+# Backward compatibility: `stock_cache` is the on-disk persistence layer.
+# Kept as a public alias because external consumers (OpenClaw) and many
+# call sites in routes.py use `from data_provider import stock_cache`.
+from . import persistence as stock_cache
 
 # Fetcher classes
 from .fetchers.akshare_fetcher import AkshareFetcher
@@ -67,19 +74,21 @@ __all__ = [
     "safe_float",
     "safe_int",
     "get_realtime_circuit_breaker",
-    # Cache functions
+    # Persistence functions (on-disk SQLite store)
     "get_cached_calendar",
     "get_cached_stocks",
-    "get_cache_info",
     "get_latest_cached_trade_date",
+    "get_latest_trade_date_on_or_before",
     "get_stock_list",
+    "get_stock_list_cache_info",
     "get_stock_name",
     "has_cached_data",
-    "init_calendar_db",
-    "init_db",
+    "init_stock_list_schema",
+    "init_trade_calendar_schema",
+    "is_trade_date",
     "update_cached_calendar",
     "update_cached_stocks",
-    # Cache module
+    # Persistence module alias (legacy name preserved for back-compat)
     "stock_cache",
     # Fetchers
     "AkshareFetcher",

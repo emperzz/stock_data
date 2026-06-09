@@ -248,11 +248,11 @@ class TestMarketTag:
 
 
 class TestStockListCache:
-    """Tests for stock_list_cache modifications."""
+    """Tests for stock_list persistence modifications."""
 
     def test_is_first_call_of_day(self):
         """_is_first_call_of_day returns True on first call, False after."""
-        from stock_data.data_provider.cache.stock_list_cache import (
+        from stock_data.data_provider.persistence.stock_list import (
             _is_first_call_of_day,
             _last_refresh_date,
             _lock,
@@ -273,14 +273,14 @@ class TestStockListCache:
 
     def test_get_stock_name_from_db_helper_exists(self):
         """Test _get_stock_name_from_db helper function exists."""
-        from stock_data.data_provider.cache import stock_list_cache
+        from stock_data.data_provider.persistence import stock_list as stock_list_cache
 
         assert hasattr(stock_list_cache, "_get_stock_name_from_db")
         assert callable(stock_list_cache._get_stock_name_from_db)
 
     def test_update_cached_stocks_uses_executemany(self):
         """Test update_cached_stocks performs batch insert efficiently."""
-        from stock_data.data_provider.cache import stock_list_cache
+        from stock_data.data_provider.persistence import stock_list as stock_list_cache
         import inspect
 
         # Check that executemany is used in the function
@@ -289,7 +289,7 @@ class TestStockListCache:
 
     def test_get_stock_name_priorities_db_lookup(self):
         """Test get_stock_name first tries DB lookup before loading full list."""
-        from stock_data.data_provider.cache import stock_list_cache
+        from stock_data.data_provider.persistence import stock_list as stock_list_cache
         import inspect
 
         # Verify the function has logic to try DB first

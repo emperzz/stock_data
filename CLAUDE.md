@@ -74,17 +74,9 @@ stock_data/
     │   ├── tushare_fetcher.py
     │   ├── yfinance_fetcher.py
     │   └── zhitu_fetcher.py
-    ├── cache/
-    │   ├── __init__.py
-    │   ├── db.py                   # Shared _get_db_path() / _get_connection()
-    │   ├── api_cache.py            # Compatibility re-export module
-    │   ├── stock_list_cache.py
-    │   ├── stock_board_cache.py
-    │   ├── stock_zt_pool_cache.py  # ZT/DT/ZBGC pool helpers (legacy 3-table API)
-    │   └── trade_calendar_cache.py
-    ├── persistence/                # NEW (2026-06): cross-process SQLite storage layer
-    │   ├── __init__.py             # Top-level API: init_schema(), reset_all() (used by STOCK_DB_INIT)
-    │   ├── db.py                   # get_db_path() / get_connection() (public names; the cache.db aliases are kept for compat)
+    ├── persistence/                # Cross-process SQLite storage layer (on-disk; replaces legacy data_provider/cache/)
+    │   ├── __init__.py             # Top-level API: init_schema(), reset_all() (used by STOCK_DB_INIT); re-exports CRUD
+    │   ├── db.py                   # get_db_path() / get_connection() (public names)
     │   ├── stock_list.py           # Stock listing metadata (init_schema, get_stock_list, ...)
     │   ├── board.py                # Concept/industry board metadata
     │   ├── trade_calendar.py       # A-share trade calendar + is_trade_date() / get_latest_trade_date_on_or_before()
@@ -138,12 +130,12 @@ stock_data/
 - `CircuitBreaker`: Thread-safe circuit breaker implementation
 - `safe_float()`, `safe_int()`: Type-safe conversion utilities (rejects NaN, inf, -inf)
 
-### `data_provider/cache/`
-- `db.py`: Shared `_get_db_path()` and `_get_connection()` used by all SQLite cache modules
-- `stock_list_cache.py`: Persistent stock list cache with auto-refresh (first call of day)
-- `stock_board_cache.py`: Concept/industry board metadata cache
-- `stock_zt_pool_cache.py`: 涨跌停/炸板 pool data cache
-- `trade_calendar_cache.py`: A-share trade calendar cache
+### `data_provider/persistence/`
+- `db.py`: Shared `get_db_path()` and `get_connection()` used by all persistence submodules
+- `stock_list.py`: Persistent stock list with auto-refresh (first call of day)
+- `board.py`: Concept/industry board metadata
+- `pool_daily.py`: Unified ZT/DT/ZBGC pool table (single `pool_daily` table, `pool_type` column discriminator)
+- `trade_calendar.py`: A-share trade calendar + `is_trade_date()` / `get_latest_trade_date_on_or_before()` helpers
 
 ### `data_provider/utils/normalize.py`
 - `normalize_stock_code()`: Handles various input formats (SH600519 → 600519, etc.)

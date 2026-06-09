@@ -63,7 +63,7 @@ def client(monkeypatch):
         return "贵州茅台"
 
     monkeypatch.setattr(
-        "stock_data.data_provider.cache.api_cache.get_stock_name",
+        "stock_data.data_provider.persistence.stock_list.get_stock_name",
         fake_get_stock_name,
     )
 

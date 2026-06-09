@@ -235,7 +235,7 @@ class BaostockFetcher(BaseFetcher):
             result = []
             # Query all A-share stocks, must pass trading day parameter for non-empty results
             # Use cached trade calendar to find valid trading dates
-            from ..cache.trade_calendar_cache import get_cached_calendar
+            from ..persistence.trade_calendar import get_cached_calendar
 
             today_str = date.today().strftime("%Y-%m-%d")
             calendar = get_cached_calendar()

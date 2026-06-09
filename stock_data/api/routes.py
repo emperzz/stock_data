@@ -26,8 +26,8 @@ from ..data_provider import (
 )
 from ..data_provider.indicators import IndicatorService, INDICATOR_REGISTRY
 from ..data_provider.indicators.types import IndicatorKey
-from ..data_provider.cache import api_cache as stock_cache
-from ..data_provider.cache import stock_board_cache
+from ..data_provider.persistence import board as stock_board_cache
+from ..data_provider.persistence import stock_list as stock_cache
 from ..data_provider.fetchers.index_symbols import get_all_indices
 from ..data_provider.utils.normalize import (
     is_hk_market,
@@ -1046,7 +1046,7 @@ def get_trade_calendar(
 
     Uses akshare tool_trade_date_hist_sina API.
     """
-    from ..data_provider.cache.api_cache import (
+    from ..data_provider.persistence.trade_calendar import (
         get_cached_calendar,
         get_latest_cached_trade_date,
     )

@@ -219,7 +219,7 @@ class DataFetcherManager:
         Raises:
             DataFetchError: When all fetchers fail.
         """
-        from .cache.trade_calendar_cache import get_cached_calendar, update_cached_calendar
+        from .persistence.trade_calendar import get_cached_calendar, update_cached_calendar
 
         fetchers = self._filter_by_capability("csi", DataCapability.TRADE_CALENDAR)
 

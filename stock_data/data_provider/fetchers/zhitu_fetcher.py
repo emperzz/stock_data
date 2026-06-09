@@ -13,7 +13,7 @@ import pandas as pd
 import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
-from ..cache.stock_zt_pool_cache import init_db as init_zt_cache_db
+from ..persistence.pool_daily import init_schema as init_zt_cache_schema
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
@@ -186,7 +186,7 @@ class ZhituFetcher(BaseFetcher):
             adj_value = adj_map.get(adjust, "n")
 
             # Get latest trade date
-            from ..cache.api_cache import get_latest_cached_trade_date
+            from ..persistence.trade_calendar import get_latest_cached_trade_date
 
             latest_date = get_latest_cached_trade_date()
             if not latest_date:
@@ -270,8 +270,8 @@ class ZhituFetcher(BaseFetcher):
                 logger.warning(f"[ZhituFetcher] Unexpected response type: {type(data)}")
                 return None
 
-            # Initialize ZT cache db
-            init_zt_cache_db()
+            # Initialize ZT cache schema (defensive — also runs at server startup)
+            init_zt_cache_schema()
 
             # Normalize and return
             return [self._normalize_zt_stock(row, pool_type) for row in data]
