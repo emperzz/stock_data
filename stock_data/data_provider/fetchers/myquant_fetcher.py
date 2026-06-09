@@ -18,9 +18,9 @@ from datetime import datetime  # noqa: F401 — used in get_trade_calendar and g
 
 import pandas as pd
 
-from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code  # noqa: F401 — normalize_stock_code used in get_realtime_quote (Task 6)
-from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float  # noqa: F401 — used in get_realtime_quote and get_all_stocks (Tasks 6, 8)
-from ..utils.code_converter import to_myquant_format, to_myquant_index_format  # noqa: F401 — used in _map_adjust and _convert_code (Task 4)
+from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
+from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float
+from ..utils.code_converter import to_myquant_format, to_myquant_index_format  # noqa: F401 — to_myquant_index_format used in get_index_intraday (Task 9)
 # isort: on
 
 logger = logging.getLogger(__name__)
@@ -167,3 +167,30 @@ class MyquantFetcher(BaseFetcher):
             close_num = pd.to_numeric(df["close"], errors="coerce")
             df["pct_chg"] = ((close_num / open_num) - 1.0) * 100.0
         return self._normalize_dataframe(df, stock_code, column_mapping={})
+
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
+        """Get realtime quote from myquant.
+
+        Note: myquant's ``current_price`` only returns ``{symbol, price, created_at}`` —
+        no volume/amount/change_pct/open/high/low. This fetcher is therefore
+        positioned as a *last-resort* backup; richer quotes come from Tushare/
+        Tencent/Zhitu in the failover chain. Most other fields stay ``None``.
+        """
+        if not self.is_available():
+            return None
+        try:
+            from gm.api import current_price  # type: ignore
+
+            symbol = self._convert_code(stock_code)
+            rows = current_price(symbols=symbol)
+            if not rows:
+                return None
+            row = rows[0] if isinstance(rows, list) else rows
+            return UnifiedRealtimeQuote(
+                code=normalize_stock_code(stock_code),
+                source=RealtimeSource.MYQUANT,
+                price=safe_float(row.get("price")),
+            )
+        except Exception as e:
+            logger.warning(f"[MyquantFetcher] get_realtime_quote failed for {stock_code}: {e}")
+            return None

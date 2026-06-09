@@ -359,3 +359,26 @@ class TestMyquantFetcher:
         # code column added
         assert "code" in normalized.columns
         assert normalized.iloc[0]["code"] == "600519"
+
+    def test_realtime_quote_without_token_returns_none(self, fetcher_no_token):
+        assert fetcher_no_token.get_realtime_quote("600519") is None
+
+    def test_realtime_quote_uses_myquant_source(self, fetcher, monkeypatch):
+        """When gm returns data, source should be RealtimeSource.MYQUANT."""
+        from stock_data.data_provider.core.types import RealtimeSource
+
+        def fake_current_price(symbols, **_kwargs):
+            return [{"symbol": "SHSE.600519", "price": 1700.5, "created_at": None}]
+
+        monkeypatch.setattr(
+            "gm.api.current_price", fake_current_price, raising=False
+        )
+        quote = fetcher.get_realtime_quote("600519")
+        assert quote is not None
+        assert quote.code == "600519"
+        assert quote.price == 1700.5
+        assert quote.source == RealtimeSource.MYQUANT
+        # Other fields are intentionally None
+        assert quote.volume is None
+        assert quote.change_pct is None
+        assert quote.pre_close is None
