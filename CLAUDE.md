@@ -383,6 +383,28 @@ It is used as a fallback for realtime quotes only.
 
 ---
 
+### MyquantFetcher (Priority 1, A股 only, Requires Token, Backup)
+
+**SDK**: `gm` (pip install gm>=3.0.180,<4) — https://www.myquant.cn/
+
+**Used APIs** (all free / public-tier):
+- `gm.api.history(symbol, frequency, ...)` — 日线 + 分钟线（60s/300s/900s/1800s/3600s）历史 K 线
+- `gm.api.current_price(symbols)` — 实时最新价（仅 price，无其他字段；定位为"最后兜底"）
+- `gm.api.get_symbols(sec_type1=1010)` — 股票列表（含 ST/停牌/涨跌停价/复权因子）
+- `gm.api.get_trading_dates_by_year(exchange, ...)` — 交易日历
+- `gm.api.history(指数代码)` — 指数 K 线（日线 + 分钟线）
+
+**Token**: Set via `MYQUANT_TOKEN` environment variable. Lazy `gm.api.set_token` on first use.
+
+**Note**:
+- 仅 A 股（SHSE/SZSE），**无港股/美股**
+- 不支持周线/月线/1 分钟线 — `raise DataFetchError` 透明降级
+- 盘后 18:00 清洗入库
+- myquant `current_price` 字段极简（仅 price），其他字段保持 None；failover 链上为"最后兜底"角色
+- 依赖注：gm 3.0.x 声明 `pandas<2.0`（Python ≤3.11）— 该 pin 是 myquant 端过度保守；运行时与 pandas 2.x 兼容（已验证）。`pip install` 会产生 dependency warning，install 时需 `pip install -e ".[dev]" --no-deps` 或先单独装 pandas 2.x。
+
+---
+
 ## Provider Frequency Support
 
 | Provider | d | w | m | 5m | 15m | 30m | 60m |
@@ -466,6 +488,7 @@ fetchers that support it.
 | BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR \| INDEX_HISTORICAL` |
 | AkshareFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_ZT_POOL` |
 | TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| INDEX_HISTORICAL` |
+| MyquantFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_HISTORICAL \| INDEX_INTRADAY` | csi |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
 | ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
@@ -573,6 +596,8 @@ Environment variables (see `.env.example`):
 - `ENABLE_API_CACHE` - Enable/disable API response caching (default: true)
 - `STOCK_CACHE_DB_PATH` - Path to the SQLite persistence file (default: `<repo>/stock_data/stock_cache.db`)
 - `STOCK_DB_INIT` - Startup hook. `true` → DROP + recreate all persistence tables on boot (full reset for dev/test). `false` → idempotent CREATE IF NOT EXISTS only (default). Any other value is treated as false. **WARNING: `true` wipes all cached metadata.**
+- `MYQUANT_TOKEN` - 掘金量化 myquant SDK token (https://www.myquant.cn/)
+- `MYQUANT_PRIORITY` - Override Myquant fetcher priority (default: 1)
 - `TENCENT_PRIORITY` - Override Tencent fetcher priority (default: 5)
 - `EASTMONEY_PRIORITY` - Override EastMoney fetcher priority (default: 6)
 - `THS_PRIORITY` - Override ThsFetcher priority (default: 7)
