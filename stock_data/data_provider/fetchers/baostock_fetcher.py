@@ -193,8 +193,10 @@ class BaostockFetcher(BaseFetcher):
         Returns:
             List of dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
         """
-        if market not in ("cn", "csi"):
-            # Baostock only supports A-share
+        if market != "cn":
+            # Baostock only supports A-share. 'cn' is the fetcher-internal
+            # tag; the public 'csi' is translated upstream by
+            # persistence/stock_list.py.
             return []
 
         self._ensure_initialized()

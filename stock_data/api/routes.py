@@ -927,7 +927,7 @@ def get_index_intraday(
     tags=["stocks"],
 )
 def list_stocks(
-    market: str = Query(..., pattern="^(csi|cn|hk|us)$", description="Market: csi/cn/hk/us"),
+    market: str = Query(..., pattern="^(csi|hk|us)$", description="Market: csi/hk/us"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(100, ge=1, le=1000, description="Pagination limit"),
@@ -943,9 +943,12 @@ def list_stocks(
 
     Returns:
         List of stock codes and names for the specified market.
+
+    Note:
+        A-shares are exposed as ``csi`` (中证). The legacy ``cn`` tag is
+        an internal fetcher convention and is NOT a valid value here —
+        ``csi`` is the single public-facing A-share tag.
     """
-    if market == "cn":
-        market = "csi"  # Backward compat
 
     # Get stock list with automatic refresh (cache layer handles daily refresh logic)
     manager = get_manager()

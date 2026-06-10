@@ -16,6 +16,23 @@ logger = logging.getLogger(__name__)
 _refresh_tracker = DailyRefreshTracker()
 
 
+# Public → fetcher market-tag conversion. The external API (routes.py)
+# exposes A-shares as ``csi``; the fetcher's ``get_all_stocks`` API uses
+# the legacy ``cn`` tag. ``csi → cn`` happens here at the single
+# call site to the fetcher, so the rest of the codebase can use the
+# public ``csi`` tag consistently (DB key, response, logs, etc.).
+PUBLIC_TO_FETCHER_MARKET = {"csi": "cn"}
+
+
+def _to_fetcher_market(public_market: str) -> str:
+    """Translate a public-facing market tag to the fetcher's internal tag.
+
+    Currently a 1:1 mapping except for A-shares (csi → cn). Kept as a
+    helper so future boundary tags can be added in one place.
+    """
+    return PUBLIC_TO_FETCHER_MARKET.get(public_market, public_market)
+
+
 def init_schema() -> None:
     """Initialize the database schema."""
     conn = get_connection()
@@ -41,22 +58,29 @@ def init_schema() -> None:
         conn.close()
 
 
-def _fetch_from_upstream(market: str, manager) -> list:
-    """Fetch stock list from upstream fetchers."""
+def _fetch_from_upstream(public_market: str, manager) -> list:
+    """Fetch stock list from upstream fetchers.
+
+    The public_market (csi/hk/us) is converted to the fetcher's
+    internal tag (cn/hk/us) at the call site. Capability-based
+    filtering still uses the public tag so fetcher market declarations
+    (e.g. ``supported_markets={"csi", "hk"}``) match correctly.
+    """
     from ..base import DataCapability
 
-    fetchers = manager._filter_by_capability(market, DataCapability.STOCK_LIST)
+    fetchers = manager._filter_by_capability(public_market, DataCapability.STOCK_LIST)
+    fetcher_market = _to_fetcher_market(public_market)
 
     for fetcher in fetchers:
         try:
-            stocks = fetcher.get_all_stocks(market)
+            stocks = fetcher.get_all_stocks(fetcher_market)
             if stocks:
                 return stocks
         except Exception as e:
-            logger.warning(f"[StockCache] {fetcher.name} failed to fetch {market}: {e}")
+            logger.warning(f"[StockCache] {fetcher.name} failed to fetch {public_market}: {e}")
             continue
 
-    logger.warning(f"[StockCache] No fetcher available for market={market}")
+    logger.warning(f"[StockCache] No fetcher available for market={public_market}")
     return []
 
 
@@ -70,7 +94,9 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     - Otherwise -> return cached data
 
     Args:
-        market: Market type (csi/hk/us). Note: 'cn' is normalized to 'csi' for A-shares.
+        market: Public market tag (csi/hk/us). A-shares are ``csi`` —
+            the legacy ``cn`` tag is an internal fetcher convention
+            and is converted transparently at the fetcher call site.
         refresh: If True, force refresh from upstream
         manager: DataFetcherManager instance. If None, creates one lazily.
 
@@ -79,14 +105,13 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     """
     init_schema()
 
-    # Normalize 'cn' to 'csi' for A-share market consistency
-    # (routes.py converts cn->csi for API, but cache stores under 'csi')
-    normalized_market = "csi" if market == "cn" else market
+    # DB cache key uses the public tag (csi) for stable on-disk layout.
+    public_market = market
 
-    needs_refresh = refresh or _refresh_tracker.is_first_call(normalized_market)
+    needs_refresh = refresh or _refresh_tracker.is_first_call(public_market)
 
     if not needs_refresh:
-        cached = _read_from_db(normalized_market)
+        cached = _read_from_db(public_market)
         if cached:
             return cached
 
@@ -96,10 +121,10 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
 
         manager = create_default_manager()
 
-    stocks = _fetch_from_upstream(normalized_market, manager)
+    stocks = _fetch_from_upstream(public_market, manager)
     if stocks:
-        update_cached_stocks(normalized_market, stocks)
-        logger.info(f"[StockCache] Refreshed {len(stocks)} stocks for market={normalized_market}")
+        update_cached_stocks(public_market, stocks)
+        logger.info(f"[StockCache] Refreshed {len(stocks)} stocks for market={public_market}")
 
     return stocks
 
