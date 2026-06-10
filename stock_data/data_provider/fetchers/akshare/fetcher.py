@@ -319,8 +319,11 @@ class AkshareFetcher(BaseFetcher):
 
             result = []
 
-            if market == "cn":
+            if market in ("cn", "csi"):
                 # A-share stocks via stock_info_a_code_name
+                # Accept both "cn" (legacy) and "csi" (normalized by
+                # persistence/stock_list.py) so the upstream call
+                # actually fires for csi market.
                 df = ak.stock_info_a_code_name()
                 if df is not None and not df.empty:
                     for _, row in df.iterrows():
