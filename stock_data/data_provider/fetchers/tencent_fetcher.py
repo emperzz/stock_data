@@ -10,6 +10,7 @@ Key fields used:
 """
 
 import logging
+import os
 import urllib.request
 
 import pandas as pd
@@ -29,7 +30,7 @@ class TencentFetcher(BaseFetcher):
     """Tencent财经 HTTP API fetcher for enhanced realtime quotes."""
 
     name = "TencentFetcher"
-    priority = 5  # After Tushare(0), Baostock(1), Akshare(2), Yfinance(3), Zhitu(4)
+    priority = int(os.getenv("TENCENT_PRIORITY", "5"))
     supported_markets: set[str] = {"csi", "hk"}
     supported_data_types = DataCapability.REALTIME_QUOTE
 

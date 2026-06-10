@@ -23,6 +23,7 @@ sort / filter strings inline.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -137,7 +138,7 @@ class EastMoneyFetcher(BaseFetcher):
     """EastMoney data-centre API fetcher for financial data."""
 
     name = "EastMoneyFetcher"
-    priority = 6
+    priority = int(os.getenv("EASTMONEY_PRIORITY", "6"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
         DataCapability.DRAGON_TIGER

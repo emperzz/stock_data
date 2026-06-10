@@ -32,10 +32,10 @@ HTTP  ──▶  FastAPI Router (api/routes.py)
 | **AkshareFetcher** | 2 (可覆盖) | csi, hk | `HISTORICAL_DWM · HISTORICAL_MIN · REALTIME_QUOTE · STOCK_LIST · TRADE_CALENDAR · STOCK_BOARD · INDEX_QUOTE · INDEX_HISTORICAL · INDEX_INTRADAY · STOCK_ZT_POOL` |
 | **YfinanceFetcher** | 3 (可覆盖) | csi, hk, us | `HISTORICAL_DWM · HISTORICAL_MIN · REALTIME_QUOTE · INDEX_HISTORICAL · INDEX_QUOTE` |
 | **ZhituFetcher** | 4 (可覆盖) | csi | `REALTIME_QUOTE · STOCK_ZT_POOL` |
-| **TencentFetcher** | 5 | csi, hk | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
-| **EastMoneyFetcher** | 6 | csi | `DRAGON_TIGER · MARGIN_TRADING · BLOCK_TRADE · HOLDER_NUM · DIVIDEND · FUND_FLOW · RESEARCH_REPORT` |
-| **ThsFetcher** | 7 | csi | `HOT_TOPICS · NORTH_FLOW` |
-| **CninfoFetcher** | 8 | csi | `ANNOUNCEMENT` |
+| **TencentFetcher** | 5 (可覆盖) | csi, hk | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
+| **EastMoneyFetcher** | 6 (可覆盖) | csi | `DRAGON_TIGER · MARGIN_TRADING · BLOCK_TRADE · HOLDER_NUM · DIVIDEND · FUND_FLOW · RESEARCH_REPORT` |
+| **ThsFetcher** | 7 (可覆盖) | csi | `HOT_TOPICS · NORTH_FLOW` |
+| **CninfoFetcher** | 8 (可覆盖) | csi | `ANNOUNCEMENT` |
 
 环境变量可覆盖 priority: `TUSHARE_PRIORITY` / `BAOSTOCK_PRIORITY` / `AKSHARE_PRIORITY` / `YFINANCE_PRIORITY` / `ZHITU_PRIORITY` / `MYQUANT_PRIORITY` / `TENCENT_PRIORITY` / `EASTMONEY_PRIORITY` / `THS_PRIORITY` / `CNINFO_PRIORITY`。
 

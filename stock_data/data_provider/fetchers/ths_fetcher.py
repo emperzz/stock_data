@@ -9,6 +9,7 @@ APIs:
 """
 
 import logging
+import os
 from datetime import date as _date
 
 import requests
@@ -33,7 +34,7 @@ class ThsFetcher(BaseFetcher):
     """同花顺 HTTP API fetcher for signal data."""
 
     name = "ThsFetcher"
-    priority = 7
+    priority = int(os.getenv("THS_PRIORITY", "7"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
         DataCapability.HOT_TOPICS

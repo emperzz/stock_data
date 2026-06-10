@@ -5,6 +5,7 @@ API: https://www.cninfo.com.cn/new/hisAnnouncement/query
 """
 
 import logging
+import os
 from datetime import datetime
 
 import requests
@@ -22,7 +23,7 @@ class CninfoFetcher(BaseFetcher):
     """巨潮公告 API fetcher."""
 
     name = "CninfoFetcher"
-    priority = 8
+    priority = int(os.getenv("CNINFO_PRIORITY", "8"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = DataCapability.ANNOUNCEMENT
 
