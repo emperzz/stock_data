@@ -4,7 +4,71 @@ Pydantic schemas for API request/response models.
 
 from typing import Any
 
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, Field, model_serializer, model_validator
+
+
+def _sanitize_upstream_dict(data: Any) -> Any:
+    """Sanitize upstream-supplied dict for pydantic v2 strict-input.
+
+    Two normalizations applied (driven by real upstream quirks in
+    EastMoneyFetcher and CninfoFetcher):
+
+    1. ``None`` for a non-Optional field → the field's declared default.
+       pydantic v2 rejects ``None`` for ``str`` / ``float`` even when the
+       field has a default. Falling back to the default preserves the
+       API contract (field is still non-null in JSON) while tolerating
+       the upstream quirk.
+
+    2. ``""`` for an Optional field → ``None``.
+       EastMoney sometimes returns an empty string instead of null for
+       numeric fields. pydantic v2 cannot parse ``""`` as ``float``, so
+       we coerce to ``None`` (the Optional field's default).
+
+    Only operates on dict inputs; passes other types through unchanged.
+    Real validators (see usages) call this with ``cls``-aware context.
+    """
+    if not isinstance(data, dict):
+        return data
+    return data
+
+
+class _UpstreamSanitizedModel(BaseModel):
+    """Mixin: pydantic v2 strict-input handling for upstream data.
+
+    EastMoneyFetcher / CninfoFetcher sometimes emit ``None`` for fields
+    that the schema declares as non-Optional ``str`` / ``float``, and
+    ``""`` for fields declared as ``float | None``. Pydantic v2 raises
+    ``ValidationError`` on these. The pre-validator below normalizes the
+    raw dict before field validation runs, so the schema's stated
+    defaults (``str = ""``, ``float = 0``, ``float | None = None``) are
+    honored in JSON output. The API contract (non-null fields stay
+    non-null; Optional fields may be null) is preserved.
+
+    Only affects three response models whose upstream data is known to
+    emit these quirks (DividendRecord, ReportRecord, AnnouncementRecord).
+    Other models continue to validate strictly.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        for field_name, field_info in cls.model_fields.items():
+            if field_name not in data:
+                continue
+            value = data[field_name]
+            if value is None:
+                # None for a field with a non-None default → use that default.
+                # (Field with default None is Optional — leave as None.)
+                if field_info.default is not None:
+                    data[field_name] = field_info.default
+            elif value == "" and field_info.default is None:
+                # Empty string for an Optional field → None. (pydantic v2
+                # cannot parse "" as float; cninfo also sometimes emits ""
+                # where None was meant.)
+                data[field_name] = None
+        return data
 
 
 class StockQuote(BaseModel):
@@ -427,7 +491,7 @@ class HolderNumResponse(BaseModel):
     source: str = Field(default="eastmoney")
 
 
-class DividendRecord(BaseModel):
+class DividendRecord(_UpstreamSanitizedModel):
     """分红送转记录"""
     date: str = Field(default="", description="除权除息日")
     bonus_rmb: float = Field(default=0, description="每股派息(税前)")
@@ -506,7 +570,7 @@ class NorthFlowResponse(BaseModel):
     source: str = Field(default="ths")
 
 
-class ReportRecord(BaseModel):
+class ReportRecord(_UpstreamSanitizedModel):
     """研报记录"""
     title: str = Field(default="", description="标题")
     publish_date: str = Field(default="", description="发布日期")
@@ -534,7 +598,7 @@ class ReportPDFResponse(BaseModel):
     url: str | None = Field(default=None, description="PDF URL")
 
 
-class AnnouncementRecord(BaseModel):
+class AnnouncementRecord(_UpstreamSanitizedModel):
     """公告记录"""
     title: str = Field(default="", description="标题")
     type: str = Field(default="", description="公告类型")
