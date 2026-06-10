@@ -30,6 +30,31 @@ from ..utils.normalize import is_a_share_stock_code
 
 logger = logging.getLogger(__name__)
 
+
+def _decode_gm_name(raw: object) -> str:
+    """Reverse-decode gm SDK's double-encoded ``sec_name`` field.
+
+    gm 3.x's ``get_symbols(sec_type1=1010)`` returns ``sec_name`` that has
+    been GBK-encoded and then decoded as latin-1, producing a string of
+    high-ord characters. This helper reverses that: each char's codepoint
+    is treated as a byte, then decoded as GBK to recover the original
+    Chinese name (e.g. ``'浦发银行'``).
+
+    Falls back to ``str(raw)`` if the input is empty, ``None``, or
+    already-clean UTF-8 (e.g. a future gm SDK release that fixes the bug
+    or returns names with codepoints > U+00FF).
+    """
+    if raw is None:
+        return ""
+    s = str(raw)
+    if not s:
+        return s
+    try:
+        return bytes(s, "latin-1").decode("gbk")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
 # myquant adjust constants (see gm.api)
 ADJUST_NONE = 0  # 不复权
 ADJUST_PREV = 1  # 前复权
@@ -303,7 +328,7 @@ class MyquantFetcher(BaseFetcher):
                 out.append(
                     {
                         "code": code,
-                        "name": str(row.get("sec_name", "")),
+                        "name": _decode_gm_name(row.get("sec_name", "")),
                         "symbol_full": full,
                         "exchange": str(row.get("exchange", "")),
                         "is_st": bool(row.get("is_st", False)),

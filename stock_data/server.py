@@ -8,8 +8,15 @@ Or with uvicorn directly:
     uvicorn stock_data.server:app --host 0.0.0.0 --port 8888
 """
 
-import logging
+# Must be set BEFORE any import that transitively loads gm.api / protobuf.
+# gm 3.x is incompatible with protobuf's C++ descriptor parser; the pure-Python
+# parser is the only working path. Tests set this in conftest.py; the server
+# entry point must do the same.
 import os
+
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
+import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv

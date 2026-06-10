@@ -480,6 +480,10 @@ class TestMyquantFetcher:
         pytest.importorskip("gm")
         import pandas as pd
 
+        def _g(s: str) -> str:
+            """Simulate gm's double-encoding: GBK bytes read as latin-1 string."""
+            return bytes(s, "gbk").decode("latin-1")
+
         def fake_get_symbols(*_args, **_kwargs):
             return pd.DataFrame({
                 # 600519 (Shanghai main, passes filter)
@@ -488,7 +492,9 @@ class TestMyquantFetcher:
                 #   is reserved for Shanghai indices in A_SHARE_STOCK_PREFIXES
                 #   and defensively excluded even when returned under SZSE)
                 "symbol": ["SHSE.600519", "SZSE.002415", "SZSE.000001"],
-                "sec_name": ["贵州茅台", "海康威视", "平安银行"],
+                # gm 3.x returns these double-encoded; the fetcher's
+                # _decode_gm_name helper must reverse the encoding.
+                "sec_name": [_g("贵州茅台"), _g("海康威视"), _g("平安银行")],
                 "is_st": [False, False, False],
                 "is_suspended": [False, False, False],
                 "upper_limit": [1872.10, 35.00, 11.55],
@@ -509,6 +515,23 @@ class TestMyquantFetcher:
         # SZSE.002415 → "002415"
         assert stocks[1]["code"] == "002415"
         assert stocks[1]["name"] == "海康威视"
+
+    def test_decode_gm_name_passes_through_clean_utf8(self):
+        """Future gm fix: helper must not corrupt already-clean names."""
+        pytest.importorskip("gm")
+        from stock_data.data_provider.fetchers.myquant_fetcher import _decode_gm_name
+
+        assert _decode_gm_name("贵州茅台") == "贵州茅台"
+        assert _decode_gm_name("") == ""
+        assert _decode_gm_name(None) == ""
+
+    def test_decode_gm_name_handles_garbled_input(self):
+        """Current gm 3.x behavior: must reverse the double-encoding."""
+        pytest.importorskip("gm")
+        from stock_data.data_provider.fetchers.myquant_fetcher import _decode_gm_name
+
+        garbled = bytes("浦发银行", "gbk").decode("latin-1")
+        assert _decode_gm_name(garbled) == "浦发银行"
 
     def test_get_all_stocks_filters_non_a_share_codes(self, fetcher, monkeypatch):
         """Defensive filter drops ETFs/funds/indices (sec_type1 widening guard)."""
