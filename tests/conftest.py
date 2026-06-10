@@ -2,8 +2,18 @@
 Pytest configuration and fixtures.
 """
 
+import os
+
 import pandas as pd
 import pytest
+
+
+# Force the pure-Python protobuf parser before any test imports ``gm.api``.
+# The shipped gm 3.0.180 wheel's auto-generated _pb2 descriptors are
+# incompatible with the C++-backed parser in modern protobuf; this env
+# var must be set BEFORE the very first ``import gm.api`` (which happens
+# transitively via monkeypatch.setattr's __import__ path-resolution).
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 
 @pytest.fixture

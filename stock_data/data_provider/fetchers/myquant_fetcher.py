@@ -1,26 +1,31 @@
 """
-Myquant (掘金量化) fetcher for A-share stock data (Priority 1).
+Myquant (掘金量化) fetcher for A-share stock data (default priority 9 — last-resort backup).
 
 API: ``gm`` SDK (https://www.myquant.cn/) — free public version (体验版/专业版/机构版)
 covers history / current_price / get_symbols / get_trading_dates_by_year / stk_get_*.
 
 Token configured via MYQUANT_TOKEN environment variable.
-Lazy ``gm.api.set_token`` on first data call.
+``gm.api.set_token`` is called lazily on the first ``is_available()`` invocation
+(matching the Baostock/Tushare convention) so the manager can register-or-skip
+correctly at construction time.
 
-This fetcher is a *backup* — placed right after Tushare, before Baostock on
-the failover list (tie-broken by registration order in create_default_manager).
+This fetcher is a *last-resort backup* — its default priority (9) places it
+after every richer source in the failover chain (Tushare → Zhitu/Tencent/
+Akshare → Myquant). Realtime quote is price-only; intraday minute line is
+supported only for the most recent trading day (myquant 18:00 wash rule).
 """
 
 # isort: off
 import logging
 import os
-from datetime import datetime  # used in get_trade_calendar (Task 7) and get_index_intraday (Task 9)
+from datetime import datetime  # used in get_trade_calendar, get_index_intraday, get_intraday_data
 
 import pandas as pd
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float
 from ..utils.code_converter import to_myquant_format, to_myquant_index_format
+from ..utils.normalize import is_a_share_stock_code
 # isort: on
 
 logger = logging.getLogger(__name__)
@@ -39,20 +44,23 @@ _FREQ_MAP: dict[str, str] = {
     "60": "3600s",
 }
 
-# Index intraday mapping (same minute periods)
-_INDEX_FREQ_MAP: dict[str, str] = {
+# Intraday mapping (used by both get_index_intraday and get_intraday_data)
+_INTRADAY_FREQ_MAP: dict[str, str] = {
     "5": "300s",
     "15": "900s",
     "30": "1800s",
     "60": "3600s",
 }
 
+# Trade calendar start year — env-var overridable for deep backfill needs.
+_CALENDAR_START_YEAR = int(os.getenv("MYQUANT_CALENDAR_START_YEAR", "2010"))
+
 
 class MyquantFetcher(BaseFetcher):
     """Myquant (掘金量化) SDK fetcher for A-share data."""
 
     name = "MyquantFetcher"
-    priority = int(os.getenv("MYQUANT_PRIORITY", "1"))
+    priority = int(os.getenv("MYQUANT_PRIORITY", "9"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
         DataCapability.HISTORICAL_DWM
@@ -69,24 +77,42 @@ class MyquantFetcher(BaseFetcher):
         self._initialized = False
 
     def _ensure_initialized(self) -> None:
-        """Lazily import gm.api and call set_token on first use."""
+        """Lazily import ``gm.api`` and call ``set_token``.
+
+        Sets ``self._initialized = True`` only when ALL three preconditions
+        hold: ``MYQUANT_TOKEN`` is set, the ``gm`` package is importable,
+        AND ``set_token(token)`` runs without error. Mirrors the
+        Baostock/Tushare convention: ``is_available()`` triggers this so
+        the manager can register-or-skip correctly at construction time.
+        """
         if self._initialized:
             return
-        self._initialized = True
         if not self._token:
             logger.warning("[MyquantFetcher] MYQUANT_TOKEN not set")
-            return
+            return  # _initialized stays False → is_available() returns False
+        # Optimistic: assume success. Roll back to False on ImportError /
+        # set_token failure so a subsequent is_available() returns False.
+        self._initialized = True
         try:
             from gm.api import set_token  # type: ignore
 
             set_token(self._token)
             logger.info("[MyquantFetcher] Initialized (token configured)")
+        except ImportError:
+            logger.warning("[MyquantFetcher] gm package not installed")
+            self._initialized = False
         except Exception as e:
             logger.warning(f"[MyquantFetcher] Failed to set token: {e}")
+            self._initialized = False
 
     def is_available(self) -> bool:
-        """True iff MYQUANT_TOKEN is set."""
-        return bool(self._token)
+        """True iff MYQUANT_TOKEN is set AND ``gm`` SDK initializes successfully.
+
+        Triggers lazy ``_ensure_initialized`` on first call, so once this
+        returns True every later ``gm.api`` call has a configured token.
+        """
+        self._ensure_initialized()
+        return self._initialized
 
     def _map_adjust(self, adjust: str) -> int:
         """Map unified adjust to myquant integer constant.
@@ -154,18 +180,27 @@ class MyquantFetcher(BaseFetcher):
 
         myquant returns: symbol, frequency, open, close, high, low, amount, volume, bob, eob.
         - 'bob' (begin of bar) is the time anchor → renamed to 'date'
-        - 'pct_chg' is NOT provided by myquant → computed from close/open (×100)
+        - 'pct_chg' is NOT provided by myquant → derived from previous row's close:
+              pct_chg[t] = (close[t] / close[t-1] - 1) * 100
+          matching the standard convention used by Baostock/Akshare/Tushare
+          (close vs prev_close, not close vs open). The first row has no
+          prior reference → pct_chg = None.
         - Other STANDARD_COLUMNS already match the source naming.
         """
         df = df.copy()
         if "bob" in df.columns:
             df = df.rename(columns={"bob": "date"})
-        # myquant doesn't return pct_chg; derive it from close vs open (consistent with the
-        # rest of the codebase, which uses open as the reference for "intraday change").
-        if "pct_chg" not in df.columns and "open" in df.columns and "close" in df.columns:
-            open_num = pd.to_numeric(df["open"], errors="coerce")
+
+        if "pct_chg" not in df.columns and "close" in df.columns:
+            # Ensure deterministic row order before computing inter-bar deltas.
+            if "date" in df.columns:
+                df = df.sort_values("date", kind="mergesort").reset_index(drop=True)
             close_num = pd.to_numeric(df["close"], errors="coerce")
-            df["pct_chg"] = ((close_num / open_num) - 1.0) * 100.0
+            prev_close = close_num.shift(1)
+            pct = (close_num / prev_close) - 1.0
+            # Guard against division-by-zero / inf → NaN; first row is already NaN.
+            pct = pct.replace([float("inf"), float("-inf")], float("nan"))
+            df["pct_chg"] = pct * 100.0
         return self._normalize_dataframe(df, stock_code, column_mapping={})
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
@@ -174,7 +209,7 @@ class MyquantFetcher(BaseFetcher):
         Note: myquant's ``current_price`` only returns ``{symbol, price, created_at}`` —
         no volume/amount/change_pct/open/high/low. This fetcher is therefore
         positioned as a *last-resort* backup; richer quotes come from Tushare/
-        Tencent/Zhitu in the failover chain. Most other fields stay ``None``.
+        Zhitu/Tencent/Akshare in the failover chain. Most other fields stay ``None``.
         """
         if not self.is_available():
             return None
@@ -185,14 +220,20 @@ class MyquantFetcher(BaseFetcher):
             rows = current_price(symbols=symbol)
             if not rows:
                 return None
-            row = rows[0] if isinstance(rows, list) else rows
+            # Defensive: gm may return a list of dicts or a single dict — normalize.
+            if not isinstance(rows, list):
+                rows = [rows]
+            row = rows[0]
             return UnifiedRealtimeQuote(
                 code=normalize_stock_code(stock_code),
                 source=RealtimeSource.MYQUANT,
                 price=safe_float(row.get("price")),
             )
-        except Exception as e:
-            logger.warning(f"[MyquantFetcher] get_realtime_quote failed for {stock_code}: {e}")
+        except Exception:
+            logger.warning(
+                f"[MyquantFetcher] get_realtime_quote failed for {stock_code}",
+                exc_info=True,
+            )
             return None
 
     def get_trade_calendar(self) -> list[str] | None:
@@ -209,7 +250,7 @@ class MyquantFetcher(BaseFetcher):
             now = datetime.now()
             df = get_trading_dates_by_year(
                 exchange="SHSE",
-                start_year=2010,
+                start_year=_CALENDAR_START_YEAR,
                 end_year=now.year,
             )
             if df is None or df.empty or "trade_date" not in df.columns:
@@ -221,8 +262,11 @@ class MyquantFetcher(BaseFetcher):
                 if d and d not in ("", "nan", "None")
             ]
             return sorted(dates)
-        except Exception as e:
-            logger.warning(f"[MyquantFetcher] get_trade_calendar failed: {e}")
+        except Exception:
+            logger.warning(
+                "[MyquantFetcher] get_trade_calendar failed",
+                exc_info=True,
+            )
             return None
 
     def get_all_stocks(self, market: str = "csi") -> list:
@@ -234,6 +278,10 @@ class MyquantFetcher(BaseFetcher):
         so the persistence layer can optionally consume them.
 
         Returns ``[]`` for non-CSI markets (myquant only covers A-share).
+        Filters the upstream result with ``is_a_share_stock_code`` to
+        defensively drop ETFs / funds / indices in case the upstream
+        ``sec_type1`` semantics broaden. Matches the Baostock filter
+        convention (utils/normalize.A_SHARE_STOCK_PREFIXES).
         """
         if market != "csi":
             return []
@@ -249,6 +297,9 @@ class MyquantFetcher(BaseFetcher):
             for _, row in df.iterrows():
                 full = str(row.get("symbol", ""))
                 code = full.split(".", 1)[1] if "." in full else full
+                # Defensive filter: drop non-A-share-stock codes (ETFs/funds/indices).
+                if not is_a_share_stock_code(code):
+                    continue
                 out.append(
                     {
                         "code": code,
@@ -265,9 +316,63 @@ class MyquantFetcher(BaseFetcher):
                     }
                 )
             return out
-        except Exception as e:
-            logger.warning(f"[MyquantFetcher] get_all_stocks failed: {e}")
+        except Exception:
+            logger.warning(
+                "[MyquantFetcher] get_all_stocks failed",
+                exc_info=True,
+            )
             return []
+
+    def get_intraday_data(
+        self, stock_code: str, period: str = "5", adjust: str = ""
+    ) -> pd.DataFrame | None:
+        """Get intraday minute-level data for a CSI stock via myquant.
+
+        Fetches the most recent trading day (myquant 18:00 wash rule applies
+        for same-day data; for older dates the result is also fine).
+        Supports 5/15/30/60; ``1min`` is intentionally rejected because
+        myquant's public tier does not expose 1s-resolution.
+
+        Args:
+            stock_code: 6-digit A-share code (e.g., "600519", "000002")
+            period: Minute period - "5", "15", "30", "60"
+            adjust: Unified adjust ("", "qfq", "hfq") — mapped to myquant int
+
+        Returns:
+            DataFrame with columns: time, open, high, low, close, volume, amount
+            or None if unavailable.
+        """
+        if not self.is_available():
+            return None
+        if period not in _INTRADAY_FREQ_MAP:
+            raise DataFetchError(
+                f"MyquantFetcher intraday does not support period={period!r} "
+                f"(supported: {sorted(_INTRADAY_FREQ_MAP.keys())})"
+            )
+        try:
+            from gm.api import history  # type: ignore
+
+            symbol = self._convert_code(stock_code)
+            today = datetime.now().strftime("%Y-%m-%d")
+            df = history(
+                symbol=symbol,
+                frequency=_INTRADAY_FREQ_MAP[period],
+                start_time=today,
+                end_time=today,
+                adjust=self._map_adjust(adjust or ""),
+                df=True,
+            )
+            if df is None or df.empty:
+                return None
+            return self._normalize_intraday_df(df)
+        except DataFetchError:
+            raise
+        except Exception:
+            logger.warning(
+                f"[MyquantFetcher] get_intraday_data failed for {stock_code}",
+                exc_info=True,
+            )
+            return None
 
     def get_index_historical(
         self,
@@ -308,8 +413,11 @@ class MyquantFetcher(BaseFetcher):
             return self._normalize_index_df(df)
         except DataFetchError:
             raise
-        except Exception as e:
-            logger.warning(f"[MyquantFetcher] get_index_historical failed for {index_code}: {e}")
+        except Exception:
+            logger.warning(
+                f"[MyquantFetcher] get_index_historical failed for {index_code}",
+                exc_info=True,
+            )
             return None
 
     def get_index_intraday(self, index_code: str, period: str = "5") -> pd.DataFrame | None:
@@ -320,10 +428,10 @@ class MyquantFetcher(BaseFetcher):
         """
         if not self.is_available():
             return None
-        if period not in _INDEX_FREQ_MAP:
+        if period not in _INTRADAY_FREQ_MAP:
             raise DataFetchError(
                 f"MyquantFetcher index intraday does not support period={period!r} "
-                f"(supported: {sorted(_INDEX_FREQ_MAP.keys())})"
+                f"(supported: {sorted(_INTRADAY_FREQ_MAP.keys())})"
             )
         try:
             symbol = to_myquant_index_format(index_code)
@@ -335,44 +443,64 @@ class MyquantFetcher(BaseFetcher):
             today = datetime.now().strftime("%Y-%m-%d")
             df = history(
                 symbol=symbol,
-                frequency=_INDEX_FREQ_MAP[period],
+                frequency=_INTRADAY_FREQ_MAP[period],
                 start_time=today,
                 end_time=today,
                 df=True,
             )
             if df is None or df.empty:
                 return None
-            return self._normalize_index_intraday_df(df, period)
+            return self._normalize_intraday_df(df)
         except DataFetchError:
             raise
-        except Exception as e:
-            logger.warning(f"[MyquantFetcher] get_index_intraday failed for {index_code}: {e}")
+        except Exception:
+            logger.warning(
+                f"[MyquantFetcher] get_index_intraday failed for {index_code}",
+                exc_info=True,
+            )
             return None
 
     def _normalize_index_df(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Normalize myquant daily-index history to STANDARD_COLUMNS + 'code'."""
+        """Normalize myquant daily-index history to STANDARD_COLUMNS.
+
+        Mirrors the inter-bar pct_chg convention used by
+        :meth:`_normalize_data`: pct_chg[t] = (close[t] / close[t-1] - 1) * 100,
+        first row NaN. ``pct_chg`` is not part of the standard
+        ``IndexHistoryResponse`` schema today, but kept for parity with
+        the stock K-line response and in case it lands in the index
+        schema later.
+        """
         df = df.copy()
         if "bob" in df.columns:
             df = df.rename(columns={"bob": "date"})
-        if "pct_chg" not in df.columns and "open" in df.columns and "close" in df.columns:
-            open_num = pd.to_numeric(df["open"], errors="coerce")
+        if "pct_chg" not in df.columns and "close" in df.columns:
+            if "date" in df.columns:
+                df = df.sort_values("date", kind="mergesort").reset_index(drop=True)
             close_num = pd.to_numeric(df["close"], errors="coerce")
-            df["pct_chg"] = ((close_num / open_num) - 1.0) * 100.0
+            prev_close = close_num.shift(1)
+            pct = (close_num / prev_close) - 1.0
+            pct = pct.replace([float("inf"), float("-inf")], float("nan"))
+            df["pct_chg"] = pct * 100.0
         # No 'code' column needed for index history; strip symbol-related noise
         for col in ("symbol", "frequency"):
             if col in df.columns:
                 df = df.drop(columns=[col])
         return df
 
-    def _normalize_index_intraday_df(self, df: pd.DataFrame, period: str) -> pd.DataFrame:
-        """Normalize myquant index intraday to time/o/h/l/c/v/a schema."""
+    def _normalize_intraday_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize myquant intraday (stock or index) to time/o/h/l/c/v/a schema.
+
+        Used by both :meth:`get_intraday_data` (stocks) and
+        :meth:`get_index_intraday` (indices) — the upstream ``gm.api.history``
+        returns the same shape for both, so a single normalizer suffices.
+        """
         df = df.copy()
         if "bob" in df.columns:
             df = df.rename(columns={"bob": "time"})
         elif "eob" in df.columns:
             df = df.rename(columns={"eob": "time"})
-        # Coerce to HH:MM:SS strings if datetime
-        if "time" in df.columns and hasattr(df["time"].iloc[0] if len(df) else None, "strftime"):
+        # Coerce to HH:MM:SS strings iff the time column is datetime-typed.
+        if "time" in df.columns and pd.api.types.is_datetime64_any_dtype(df["time"]):
             df["time"] = df["time"].dt.strftime("%H:%M:%S")
         for col in ("open", "high", "low", "close", "amount"):
             if col in df.columns:

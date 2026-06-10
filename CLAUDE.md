@@ -383,7 +383,7 @@ It is used as a fallback for realtime quotes only.
 
 ---
 
-### MyquantFetcher (Priority 1, A股 only, Requires Token, Backup)
+### MyquantFetcher (Priority 9 — last-resort backup, A股 only, Requires Token)
 
 **SDK**: `gm` (pip install gm>=3.0.180,<4) — https://www.myquant.cn/
 
@@ -394,14 +394,23 @@ It is used as a fallback for realtime quotes only.
 - `gm.api.get_trading_dates_by_year(exchange, ...)` — 交易日历
 - `gm.api.history(指数代码)` — 指数 K 线（日线 + 分钟线）
 
-**Token**: Set via `MYQUANT_TOKEN` environment variable. Lazy `gm.api.set_token` on first use.
+**Token**: Set via `MYQUANT_TOKEN` environment variable. `gm.api.set_token` is called
+on the first `is_available()` invocation (matches Baostock/Tushare convention). If
+`gm` is not importable or `set_token` fails, `is_available()` returns False and
+the fetcher is skipped at registration.
 
 **Note**:
 - 仅 A 股（SHSE/SZSE），**无港股/美股**
 - 不支持周线/月线/1 分钟线 — `raise DataFetchError` 透明降级
 - 盘后 18:00 清洗入库
-- myquant `current_price` 字段极简（仅 price），其他字段保持 None；failover 链上为"最后兜底"角色
-- 依赖注：gm 3.0.x 声明 `pandas<2.0`（Python ≤3.11）— 该 pin 是 myquant 端过度保守；运行时与 pandas 2.x 兼容（已验证）。`pip install` 会产生 dependency warning，install 时需 `pip install -e ".[dev]" --no-deps` 或先单独装 pandas 2.x。
+- myquant `current_price` 字段极简（仅 price），其他字段保持 None；**默认 priority=9**
+  是有意的,确保 REALTIME_QUOTE 失败转移链是 `Tushare → Zhitu/Tencent/Akshare → Myquant`
+  (而不是先 Myquant 后 Akshare —— 跟其它 fetcher 的"丰富数据优先"约定一致)
+- `pct_chg` 不来自 myquant,本 fetcher 在 `_normalize_data` 中按 `bob` 排序后用
+  `close_t / close_{t-1} - 1` 派生(跟 Baostock/Akshare/Tushere 一致,而不是 close/open)
+- `get_all_stocks` 走 `is_a_share_stock_code` 防御性过滤(对齐 baostock 的
+  `A_SHARE_STOCK_PREFIXES`),即使 myquant `sec_type1=1010` 拓宽也不会污染缓存
+- 依赖注：gm 3.0.x 声明 `pandas<2.0`（Python ≤3.11）— 该 pin 是 myquant 端过度保守；运行时与 pandas 2.x 兼容（已验证）。`pip install` 会产生 dependency warning,install 时需 `pip install -e ".[dev]" --no-deps` 或先单独装 pandas 2.x。
 
 ---
 
@@ -597,7 +606,8 @@ Environment variables (see `.env.example`):
 - `STOCK_CACHE_DB_PATH` - Path to the SQLite persistence file (default: `<repo>/stock_data/stock_cache.db`)
 - `STOCK_DB_INIT` - Startup hook. `true` → DROP + recreate all persistence tables on boot (full reset for dev/test). `false` → idempotent CREATE IF NOT EXISTS only (default). Any other value is treated as false. **WARNING: `true` wipes all cached metadata.**
 - `MYQUANT_TOKEN` - 掘金量化 myquant SDK token (https://www.myquant.cn/)
-- `MYQUANT_PRIORITY` - Override Myquant fetcher priority (default: 1)
+- `MYQUANT_PRIORITY` - Override Myquant fetcher priority (default: 9 — last-resort backup)
+- `MYQUANT_CALENDAR_START_YEAR` - Override the start year for `get_trade_calendar` (default: 2010)
 - `TENCENT_PRIORITY` - Override Tencent fetcher priority (default: 5)
 - `EASTMONEY_PRIORITY` - Override EastMoney fetcher priority (default: 6)
 - `THS_PRIORITY` - Override ThsFetcher priority (default: 7)
