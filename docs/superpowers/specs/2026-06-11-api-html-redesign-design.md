@@ -137,9 +137,8 @@ const ENDPOINTS = {
 
 ### 5.1 布局
 
-- **桌面（≥1200px）**：两栏 — 侧边栏 280px + 主内容 max-width 920px 居中（V1 不做右侧元信息卡片，预留空间）
-- **平板（768-1199px）**：两栏 — 侧边栏 + 主内容
-- **手机（<768px）**：单栏 + 顶栏 hamburger 菜单
+- **PC 浏览器（≥1280px）**：两栏 — 侧边栏 280px + 主内容 max-width 920px 居中（V1 不做右侧元信息卡片，预留空间）
+- 浏览器窗口缩到 1280px 以下时，**不做专门优化**（仍可阅读，但不做折叠/汉堡菜单等移动端适配）
 
 ### 5.2 配色
 
@@ -209,7 +208,6 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 
 ### 7.2 手工 smoke test（实施完成时跑）
 
-详见 brainstorm §6 检查表 12 项：
 1. 启动 server，浏览器打开 `/docs/API.html`
 2. Server Status 卡片显示 `Running on :8000`
 3. 侧边栏点击章节 → 滚动到位
@@ -221,7 +219,6 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 9. Start Test Instance → 状态变 Running on :8001
 10. 关闭 Test Instance → 状态回 Stopped
 11. `file://` 打开 → 黄色横幅
-12. 移动端宽度 → hamburger 菜单
 
 ## 8. 实施步骤
 
@@ -250,9 +247,8 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 10. Test Instance 控制卡片 + 状态轮询
 
 ### Phase 5 — 收尾
-11. 移动端响应式
-12. `file://` 降级提示横幅
-13. CLAUDE.md 增量更新
+11. `file://` 降级提示横幅
+12. CLAUDE.md 增量更新
 
 ## 9. 风险与缓解
 
@@ -334,5 +330,5 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 8. `docs/API.html` Try it 交互实现
 9. `docs/API.html` 搜索 + 过滤 + 主题 + localStorage
 10. `docs/API.html` Test Instance 控制卡片
-11. 移动端响应式 + file:// 降级横幅
+11. `file://` 降级提示横幅
 12. CLAUDE.md 增量更新
