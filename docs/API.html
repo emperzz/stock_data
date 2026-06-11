@@ -109,7 +109,7 @@
     <input type="search" id="search" placeholder="Search endpoints (Ctrl+K)..." style="width:300px">
     <span class="spacer"></span>
     <label style="font-size:13px;color:var(--text-muted)">Base URL:</label>
-    <input type="text" id="baseUrl" style="width:240px" placeholder="http://localhost:8888">
+    <input type="text" id="baseUrl" style="width:240px" placeholder="http://127.0.0.1:8888">
     <button id="useTestInstance" title="Use Test Instance as base URL">Use Test</button>
     <span id="serverStatus" class="status" style="font-size:13px;color:var(--text-muted)">…</span>
     <button class="icon-btn" id="themeToggle" title="Toggle theme">🌗</button>
@@ -900,10 +900,17 @@
     async function boot() {
       applyTheme();
       bindUI();
+      // Always derive baseUrl from the page's own origin so it works
+      // regardless of "localhost" vs "127.0.0.1" DNS ambiguity. User can
+      // still override the input field (e.g., to point at the Test Instance).
+      // We only fall back to a saved value if the user explicitly set one
+      // via the "Use Test" button or the Base URL input.
+      const pageOrigin = location.origin;  // e.g. "http://127.0.0.1:8888"
       try {
         const cfg = await fetch("/control/config").then(r => r.json());
+        // First visit (no saved value) → use the page's own origin
         if (!state.baseUrl) {
-          state.baseUrl = `http://localhost:${cfg.port}`;
+          state.baseUrl = pageOrigin;
         }
         $("#baseUrl").value = state.baseUrl;
         $("#captionBaseUrl").textContent = state.baseUrl;
@@ -912,7 +919,7 @@
         setInterval(refreshTestStatus, 5000);
       } catch (e) {
         console.warn("Failed to fetch /control/config:", e);
-        $("#baseUrl").value = state.baseUrl || "http://localhost:8888";
+        $("#baseUrl").value = state.baseUrl || pageOrigin || "http://127.0.0.1:8888";
       }
       renderSidebar();
       renderContent();
