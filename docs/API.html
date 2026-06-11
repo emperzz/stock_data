@@ -508,6 +508,185 @@
           },
         ],
       },
+      {
+        id: "4.7",
+        title: "龙虎榜",
+        endpoints: [
+          {
+            id: "stocks-dragon-tiger",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/dragon-tiger",
+            summary: "个股龙虎榜",
+            markets: ["csi"],
+            capabilities: ["DRAGON_TIGER"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+              { name: "trade_date", in: "query", required: false, type: "string", desc: "YYYY-MM-DD，空=今天" },
+              { name: "look_back", in: "query", required: false, type: "int", desc: "1..365（默认 30）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "source (\"eastmoney\")"] },
+              { group: "records", fields: ["date", "reason", "net_buy_wan", "turnover_pct"] },
+              { group: "seats", fields: ["buy: list[{name, buy_wan, sell_wan, net_wan}] (Top 5)", "sell: ..."] },
+              { group: "institution", fields: ["buy_amt, sell_amt, net_amt (单位万元)"] },
+            ],
+            cache: { ttl_sec: 300, env: "CACHE_TTL_DRAGON_TIGER" },
+            sources: [
+              { fetcher: "EastMoney", method: "get_dragon_tiger", upstream: "datacenter-web.eastmoney.com RPT_DAILYBILLBOARD_DETAILSNEW + RPT_BILLBOARD_DAILYDETAILSBUY/SELL" },
+            ],
+          },
+          {
+            id: "dragon-tiger-daily",
+            method: "GET",
+            path: "/api/v1/dragon-tiger/daily",
+            summary: "全市场龙虎榜",
+            markets: ["csi"],
+            capabilities: ["DRAGON_TIGER"],
+            params: [
+              { name: "trade_date", in: "query", required: false, type: "string", desc: "YYYY-MM-DD，空=今天" },
+              { name: "min_net_buy", in: "query", required: false, type: "float", desc: "最小净买入（万元）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["date", "total", "stocks: list[DailyDragonTigerStock]"] },
+              { group: "Stock", fields: ["code", "name", "reason", "close", "change_pct", "net_buy_wan", "buy_wan", "sell_wan", "turnover_pct"] },
+            ],
+            cache: { ttl_sec: 300, env: "CACHE_TTL_DRAGON_TIGER" },
+            sources: [
+              { fetcher: "EastMoney", method: "get_daily_dragon_tiger", upstream: "datacenter-web.eastmoney.com RPT_DAILYBILLBOARD_DETAILSNEW（pageSize=500）" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "4.8",
+        title: "融资融券 / 大宗 / 股东 / 分红",
+        endpoints: [
+          {
+            id: "stocks-margin",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/margin",
+            summary: "融资融券",
+            markets: ["csi"],
+            capabilities: ["MARGIN_TRADING"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+              { name: "page_size", in: "query", required: false, type: "int", desc: "1..100（默认 30）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "source", "records: list[MarginTradingRecord]"] },
+              { group: "Record", fields: ["date", "rzye (融资余额, 元)", "rzmre", "rzche", "rqye (融券余额, 元)", "rqmcl", "rqchl", "rzrqye"] },
+            ],
+            cache: { ttl_sec: 300, env: "CACHE_TTL_MARGIN" },
+            sources: [
+              { fetcher: "EastMoney", method: "get_margin_trading", upstream: "datacenter-web.eastmoney.com RPTA_WEB_RZRQ_GGMX" },
+            ],
+          },
+          {
+            id: "stocks-block-trade",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/block-trade",
+            summary: "大宗交易",
+            markets: ["csi"],
+            capabilities: ["BLOCK_TRADE"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+              { name: "page_size", in: "query", required: false, type: "int", desc: "1..100（默认 20）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "source", "total", "records: list[BlockTradeRecord]"] },
+              { group: "Record", fields: ["date", "price (成交价)", "close (收盘价)", "premium_pct (溢价率%)", "vol (成交量, 股)", "amount (成交额, 元)", "buyer", "seller"] },
+            ],
+            cache: { ttl_sec: 300, env: "CACHE_TTL_BLOCK_TRADE" },
+            sources: [
+              { fetcher: "EastMoney", method: "get_block_trade", upstream: "datacenter-web.eastmoney.com RPT_DATA_BLOCKTRADE" },
+            ],
+          },
+          {
+            id: "stocks-holder-num",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/holder-num",
+            summary: "股东户数变化",
+            markets: ["csi"],
+            capabilities: ["HOLDER_NUM"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+              { name: "page_size", in: "query", required: false, type: "int", desc: "1..50（默认 10）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "source", "records: list[HolderNumRecord]"] },
+              { group: "Record", fields: ["date (报告期)", "holder_num", "change_num", "change_ratio", "avg_shares"] },
+            ],
+            cache: { ttl_sec: 300, env: "CACHE_TTL_HOLDER_NUM" },
+            sources: [
+              { fetcher: "EastMoney", method: "get_holder_num_change", upstream: "datacenter-web.eastmoney.com RPT_HOLDERNUMLATEST" },
+            ],
+          },
+          {
+            id: "stocks-dividend",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/dividend",
+            summary: "分红送转",
+            markets: ["csi"],
+            capabilities: ["DIVIDEND"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+              { name: "page_size", in: "query", required: false, type: "int", desc: "1..100（默认 20）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "source", "records: list[DividendRecord]"] },
+              { group: "Record", fields: ["date (除权除息日)", "bonus_rmb (每股派息, 税前)", "transfer_ratio (每10股转增)", "bonus_ratio (每10股送股)", "plan (进度)"] },
+            ],
+            cache: { ttl_sec: 300, env: "CACHE_TTL_DIVIDEND" },
+            sources: [
+              { fetcher: "EastMoney", method: "get_dividend", upstream: "datacenter-web.eastmoney.com RPT_SHAREBONUS_DET" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "4.9",
+        title: "资金流",
+        endpoints: [
+          {
+            id: "stocks-fund-flow",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/fund-flow",
+            summary: "资金流（分钟级）",
+            markets: ["csi"],
+            capabilities: ["FUND_FLOW"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "type (\"minute\")", "source", "records: list[FundFlowMinuteRecord]"] },
+              { group: "Record", fields: ["time (HH:mm)", "main_net", "small_net", "mid_net", "large_net", "super_net (单位: 元)"] },
+            ],
+            cache: { ttl_sec: 60, env: "CACHE_TTL_FUND_FLOW" },
+            sources: [
+              { fetcher: "EastMoney", method: "get_fund_flow_minute", upstream: "push2.eastmoney.com/api/qt/stock/fflow/kline/get?klt=1" },
+            ],
+          },
+          {
+            id: "stocks-fund-flow-daily",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/fund-flow/daily",
+            summary: "资金流（120 日）",
+            markets: ["csi"],
+            capabilities: ["FUND_FLOW"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "type (\"daily\")", "source", "records: list[FundFlowDailyRecord]"] },
+              { group: "Record", fields: ["date", "main_net", "small_net", "mid_net", "large_net", "super_net"] },
+            ],
+            cache: { ttl_sec: 60, env: "CACHE_TTL_FUND_FLOW" },
+            sources: [
+              { fetcher: "EastMoney", method: "get_fund_flow_120d", upstream: "push2his.eastmoney.com/api/qt/stock/fflow/daykline/get?lmt=120" },
+            ],
+          },
+        ],
+      },
     ],
   };
   </script>
