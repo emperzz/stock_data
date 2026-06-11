@@ -53,7 +53,7 @@ class TestControlTestInstanceLifecycle:
         def fake_start(**kw):
             captured["kwargs"] = kw
             return {"running": True, "pid": 12345, "port": kw["port"], "error": None}
-        monkeypatch.setattr("stock_data.control.start_test_instance", fake_start)
+        monkeypatch.setattr("stock_data.explorer.control.start_test_instance", fake_start)
 
         response = client.post("/control/test-instance/start")
         assert response.status_code == 200
@@ -67,7 +67,7 @@ class TestControlTestInstanceLifecycle:
     def test_stop_returns_not_running(self, client, monkeypatch):
         """stop returns running=False (idempotent)."""
         monkeypatch.setattr(
-            "stock_data.control.stop_test_instance",
+            "stock_data.explorer.control.stop_test_instance",
             lambda **kw: {"running": False, "pid": None, "error": None},
         )
         response = client.post("/control/test-instance/stop")
@@ -79,7 +79,7 @@ class TestControlTestInstanceLifecycle:
         """status response always includes 'port' for UI display."""
         monkeypatch.setenv("STOCK_TEST_INSTANCE_PORT", "18889")
         monkeypatch.setattr(
-            "stock_data.control.get_test_instance_status",
+            "stock_data.explorer.control.get_test_instance_status",
             lambda **kw: {"running": False, "pid": None, "port": None, "error": None},
         )
         response = client.get("/control/test-instance/status")
@@ -89,11 +89,11 @@ class TestControlTestInstanceLifecycle:
         assert data["running"] is False
 
 
-class TestDocsMount:
-    def test_api_html_served(self, client):
-        """GET /docs/API.html returns 200 and contains <html>."""
-        response = client.get("/docs/API.html")
+class TestExplorerMount:
+    def test_explorer_index_served(self, client):
+        """GET /explorer/ returns 200 and contains <html>."""
+        response = client.get("/explorer/")
         if response.status_code == 404:
-            pytest.skip("docs/API.html not yet created (Task 3)")
+            pytest.skip("explorer not yet mounted")
         assert response.status_code == 200
         assert "<html" in response.text.lower()

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from bs4 import BeautifulSoup
 
-HTML_PATH = Path(__file__).resolve().parent.parent / "docs" / "API.html"
+HTML_PATH = Path(__file__).resolve().parent.parent / "stock_data" / "explorer" / "static" / "index.html"
 
 
 @pytest.fixture
