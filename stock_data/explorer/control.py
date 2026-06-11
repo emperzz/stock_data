@@ -18,7 +18,7 @@ from typing import Any
 # tree but is gitignored. Default path is overridable via start_*/get_*/stop_*
 # args, which is what tests use.
 DEFAULT_PID_PATH = str(
-    Path(__file__).resolve().parent.parent / "docs" / ".server.pid"
+    Path(__file__).resolve().parent / ".server.pid"
 )
 
 
