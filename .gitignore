@@ -95,3 +95,6 @@ worktrees/
 
 # Playwright MCP browser session caches
 .playwright-mcp/
+
+# Test Instance PID file (runtime artifact)
+/docs/.server.pid
