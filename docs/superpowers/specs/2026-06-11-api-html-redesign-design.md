@@ -30,7 +30,8 @@
 | `tests/test_server_control_endpoints.py` | 新建 | `server.py` 新增端点的 FastAPI TestClient 集成测试 |
 | `tests/test_api_html.py` | 新建 | BeautifulSoup 解析 HTML，验证锚点 id、ENDPOINTS JSON 完整性 |
 | `docs/API.md` | **不修改** | 严格遵守 |
-| `pyproject.toml` | 可能需要 | 若 `psutil` 未在 `dependencies`，则新增 |
+| `pyproject.toml` | 可能需要 | 不新增依赖（用 `os.kill(pid, 0)` 探测进程存活，避免引入 psutil） |
+| `.gitignore` | 修改（小） | 新增 `docs/.server.pid`（子进程 PID 文件） |
 | `CLAUDE.md` | 增量更新 | 在合适章节补一句"API 文档网页位于 `docs/API.html`" |
 
 ## 3. 架构总览
@@ -61,7 +62,7 @@
                  │
                  └──→ subprocess (Test Instance)
                        监听 127.0.0.1:<TEST_PORT>
-                       端口默认 = STOCK_SERVER_PORT + 1
+                       端口默认 = SERVER_PORT + 1
 ```
 
 ## 4. 关键设计决策
@@ -83,7 +84,7 @@
 
 ### 4.3 Test Instance 子进程
 
-- **决策**：HTML 页面控制一个**独立的子进程 stock_data 实例**（不同端口，默认 `:8001`），用于手动测 failover、对比数据
+- **决策**：HTML 页面控制一个**独立的子进程 stock_data 实例**（不同端口，默认 `:8889`），用于手动测 failover、对比数据
 - **理由**：
   - 主服务是 HTML 的"宿主"，不能停止自己（页面会失联）
   - 子进程是常规 stock_data 进程，行为完全一致
@@ -107,8 +108,10 @@
 
 ### 4.5 端口与配置
 
-- 主服务端口：从 `STOCK_SERVER_PORT` 环境变量读（默认 8000），host 限制 127.0.0.1
-- Test Instance 端口：`STOCK_TEST_INSTANCE_PORT`（默认 `STOCK_SERVER_PORT + 1`）
+- 主服务端口：从 `SERVER_PORT` 环境变量读（默认 8888，与 `stock_data/server.py:115` 保持一致）
+- Test Instance 端口：`STOCK_TEST_INSTANCE_PORT`（默认 `SERVER_PORT + 1`）
+- host：从 `SERVER_HOST` 环境变量读（默认 `127.0.0.1` — V1 把默认从 `0.0.0.0` 改为 `127.0.0.1`，因为 `/control/*` 端点不应对外暴露；如需远程访问，用户显式设 `SERVER_HOST=0.0.0.0` 即可）
+- API 路径前缀：`/api/v1`（与 `stock_data/server.py:108` 一致，HTML "Try it" 必须带此前缀）
 - 端口冲突时 `start_test_instance()` 返回 `{running: false, error: "port_in_use"}`，不抛异常
 
 ### 4.6 端点元数据 Schema（HTML 内嵌 JSON）
@@ -184,7 +187,7 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 | 场景 | 行为 |
 |---|---|
 | 启动时主服务端口占用 | uvicorn 抛 `OSError: [Errno 48]`；HTML 启动按钮 fallback 提示用户换端口 |
-| `.env` 未设 `STOCK_SERVER_PORT` | 默认 8000 |
+| `.env` 未设 `SERVER_PORT` | 默认 8888 |
 | `docs/` 目录不存在 | server 启动时打印 WARN；不挂载 `/docs`；主功能不受影响 |
 | Test Instance 启动失败（端口冲突） | `/control/test-instance/start` 返回 `{running: false, error: "port_in_use"}`；UI 红色提示 |
 | Test Instance 崩溃 | 下次 status 查询返回 `running: false, exit_code: <n>`；UI 变红 |
@@ -194,7 +197,7 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 | `file://` 打开 HTML | 顶部黄色横幅，部分功能（同源 Try it、Start/Stop）不可用 |
 | 主题切换持久化失败 | 静默失败，回到 `prefers-color-scheme` |
 | 搜索无结果 | "No endpoints match '<query>'" + 清除按钮 |
-| 子进程 PID 文件丢失但进程仍在 | `psutil.pid_exists` 二次确认；不存在则从 `lsof` / `netstat` 重新发现 |
+| 子进程 PID 文件丢失但进程仍在 | `os.kill(pid, 0)` 二次确认（Windows 抛 `PermissionError`/`OSError` 也算存活）；不存在则从 `lsof` / `netstat` 重新发现 |
 
 ## 7. 测试策略
 
@@ -209,14 +212,14 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 ### 7.2 手工 smoke test（实施完成时跑）
 
 1. 启动 server，浏览器打开 `/docs/API.html`
-2. Server Status 卡片显示 `Running on :8000`
+2. Server Status 卡片显示 `Running on :8888`
 3. 侧边栏点击章节 → 滚动到位
 4. Try it 600519 行情 → 看到 JSON
 5. 换 Base URL → 错误卡片
 6. Ctrl+K 搜索 "dragon"
 7. 勾选 us market 过滤
 8. 切 dark 主题
-9. Start Test Instance → 状态变 Running on :8001
+9. Start Test Instance → 状态变 Running on :8889
 10. 关闭 Test Instance → 状态回 Stopped
 11. `file://` 打开 → 黄色横幅
 
@@ -230,7 +233,7 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
    - import 新模块
    - `app.mount("/docs", StaticFiles(directory=PROJECT_ROOT / "docs", html=True), name="docs")`
    - 注册 5 个 control 路由
-   - host 限制 127.0.0.1（检查现有 `server.py` 的 uvicorn 启动方式）
+   - host 限制 127.0.0.1（修改 `server.py:116` 的默认 `os.getenv("SERVER_HOST", "0.0.0.0")` → `"127.0.0.1"`，并写进 `.env.example` 注释）
 3. 新建 `tests/test_control.py` + `tests/test_server_control_endpoints.py`
 
 ### Phase 2 — HTML 骨架
@@ -277,13 +280,13 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 {
   id: "stocks-quote",
   method: "GET",
-  path: "/stocks/{stock_code}/quote",
+  path: "/api/v1/stocks/{stock_code}/quote",
   summary: "实时行情",
   markets: ["csi", "hk", "us"],
   capabilities: ["REALTIME_QUOTE"],
   params: [
     { name: "stock_code", in: "path", required: true,
-      type: "string", desc: "例 600519 / AAPL / HK00700（不支持指数代码）" }
+      type: "string", desc: "例 600519 / AAPL / HK00700（路径前缀 /api/v1 已固定，不属于 param）" }
   ],
   response_fields: [
     { group: "基础", fields: [
