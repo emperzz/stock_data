@@ -1,0 +1,438 @@
+<!doctype html>
+<!--
+  stock_data API Explorer
+  LAST_SYNCED: 2026-06-11
+  Source of truth: docs/API.md (do not edit that file; sync ENDPOINTS here)
+-->
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1280">
+  <title>stock_data API Explorer</title>
+  <style>
+    /* === Theme variables (light) === */
+    :root {
+      --bg: #fafafa; --bg-card: #ffffff; --bg-sidebar: #f5f5f7;
+      --text: #1d1d1f; --text-muted: #6e6e73;
+      --accent: #0071e3; --accent-post: #34c759; --accent-warn: #ff9500;
+      --border: #e5e5ea; --code-bg: #f5f5f7;
+      --shadow: 0 1px 3px rgba(0,0,0,0.05);
+      --shadow-hover: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    [data-theme="dark"] {
+      --bg: #0d0d0f; --bg-card: #1c1c1e; --bg-sidebar: #141416;
+      --text: #f5f5f7; --text-muted: #98989d;
+      --accent: #0a84ff; --accent-post: #30d158; --accent-warn: #ff9f0a;
+      --border: #2c2c2e; --code-bg: #1c1c1e;
+      --shadow: 0 1px 3px rgba(0,0,0,0.3);
+      --shadow-hover: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI",
+            "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text); background: var(--bg);
+    }
+    code, pre {
+      font: 13px/1.5 "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    }
+    /* === Top bar === */
+    .topbar {
+      position: sticky; top: 0; z-index: 10;
+      height: 64px; padding: 0 24px;
+      display: flex; align-items: center; gap: 16px;
+      background: var(--bg-card); border-bottom: 1px solid var(--border);
+    }
+    .topbar h1 { font-size: 18px; margin: 0; font-weight: 600; }
+    .topbar .spacer { flex: 1; }
+    .topbar input, .topbar button {
+      font: inherit; padding: 6px 12px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg);
+      color: var(--text);
+    }
+    .topbar .icon-btn { cursor: pointer; background: none; border: 0; font-size: 18px; }
+    /* === Layout === */
+    .layout { display: grid; grid-template-columns: 280px 1fr; gap: 0; }
+    .sidebar {
+      position: sticky; top: 64px; height: calc(100vh - 64px);
+      overflow-y: auto; padding: 24px 16px;
+      background: var(--bg-sidebar); border-right: 1px solid var(--border);
+    }
+    .sidebar h3 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margin: 16px 0 8px; letter-spacing: 0.05em; }
+    .sidebar a { display: block; padding: 6px 10px; color: var(--text); text-decoration: none; border-radius: 6px; font-size: 14px; }
+    .sidebar a:hover { background: var(--bg-card); }
+    .sidebar a.active { background: var(--accent); color: #fff; }
+    .sidebar .filter-group { display: flex; flex-direction: column; gap: 4px; }
+    .sidebar label { font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .main { padding: 40px 32px; max-width: 920px; }
+    .main h1 { font-size: 32px; margin-top: 0; }
+    .main h2 { font-size: 24px; margin-top: 48px; border-bottom: 1px solid var(--border); padding-bottom: 8px; scroll-margin-top: 80px; }
+    .main h3 { font-size: 18px; scroll-margin-top: 80px; }
+    /* === Endpoint card === */
+    .endpoint { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 16px 0; box-shadow: var(--shadow); transition: box-shadow 0.2s; }
+    .endpoint:hover { box-shadow: var(--shadow-hover); }
+    .endpoint .method { display: inline-block; font: 600 12px/1 "SF Mono", monospace; padding: 4px 8px; border-radius: 4px; color: #fff; background: var(--accent); }
+    .endpoint .method.GET { background: var(--accent); }
+    .endpoint .method.POST { background: var(--accent-post); }
+    .endpoint .path { font: 600 14px/1.4 "SF Mono", monospace; margin-left: 8px; }
+    .endpoint .summary { color: var(--text-muted); margin: 8px 0; }
+    .endpoint details { margin-top: 12px; }
+    .endpoint summary { cursor: pointer; font-weight: 500; color: var(--accent); }
+    .endpoint pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; }
+    /* === Try-it form === */
+    .try-it { background: var(--bg-sidebar); padding: 16px; border-radius: 8px; margin-top: 12px; }
+    .try-it .field { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+    .try-it .field label { font-size: 13px; min-width: 120px; color: var(--text-muted); }
+    .try-it .field input, .try-it .field select { flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); font: inherit; }
+    .try-it button { background: var(--accent); color: #fff; border: 0; padding: 8px 16px; border-radius: 6px; cursor: pointer; font: inherit; }
+    .try-it button:hover { filter: brightness(1.1); }
+    .try-it .response { margin-top: 12px; }
+    .try-it .response pre { background: var(--code-bg); }
+    .try-it .response.error { color: #c00; }
+    .try-it .response.error pre { background: #fee; color: #c00; }
+    /* === Test Instance card === */
+    .test-instance { padding: 12px; border-radius: 8px; background: var(--bg-card); }
+    .test-instance .status { font-size: 13px; color: var(--text-muted); margin: 4px 0; }
+    .test-instance .status.running { color: var(--accent-post); }
+    .test-instance .status.error { color: #c00; }
+    .test-instance button { font-size: 12px; padding: 4px 10px; margin-right: 4px; }
+    /* === Banner === */
+    .banner { background: #fff3cd; color: #856404; padding: 12px 24px; border-bottom: 1px solid #ffeeba; font-size: 14px; }
+    [data-theme="dark"] .banner { background: #3a2f00; color: #ffd966; border-bottom-color: #5a4900; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <h1>◐ stock_data API Explorer</h1>
+    <input type="search" id="search" placeholder="Search endpoints (Ctrl+K)..." style="width:300px">
+    <span class="spacer"></span>
+    <label style="font-size:13px;color:var(--text-muted)">Base URL:</label>
+    <input type="text" id="baseUrl" style="width:240px" placeholder="http://localhost:8888">
+    <button id="useTestInstance" title="Use Test Instance as base URL">Use Test</button>
+    <span id="serverStatus" class="status" style="font-size:13px;color:var(--text-muted)">…</span>
+    <button class="icon-btn" id="themeToggle" title="Toggle theme">🌗</button>
+  </header>
+
+  <div id="banner" class="banner" style="display:none">
+    Detected file:// protocol — interactive features (Try it, Start/Stop) are disabled.
+    Open via <code>http://localhost:8888/docs/API.html</code> instead.
+  </div>
+
+  <div class="layout">
+    <nav class="sidebar">
+      <h3>Sections</h3>
+      <div id="nav"></div>
+      <h3>Filter by market</h3>
+      <div class="filter-group" id="marketFilter">
+        <label><input type="checkbox" value="csi" checked> csi (A股)</label>
+        <label><input type="checkbox" value="hk" checked> hk</label>
+        <label><input type="checkbox" value="us" checked> us</label>
+      </div>
+      <h3>Test Instance</h3>
+      <div class="test-instance">
+        <div class="status" id="testStatus">Stopped</div>
+        <button id="testStart">Start</button>
+        <button id="testStop">Stop</button>
+        <button id="testRefresh">↻</button>
+      </div>
+    </nav>
+    <main class="main">
+      <h1>stock_data API Explorer</h1>
+      <p>Interactive documentation for the <code>stock_data</code> server.
+      Source of truth: <code>docs/API.md</code>. All Try-it calls hit
+      <code id="captionBaseUrl">…</code> with the <code>/api/v1</code> prefix.</p>
+      <div id="content"></div>
+    </main>
+  </div>
+
+  <script>
+  // === Inline ENDPOINTS metadata (placeholder; replaced in Tasks 4-7) ===
+  // "sections": []  (populated in Tasks 4-7)
+  const ENDPOINTS = {
+    meta: { version: "1.0", generated: "2026-06-11" },
+    capabilities: {
+      HISTORICAL_DWM:   { label: "日/周/月 K线",     icon: "📈" },
+      HISTORICAL_MIN:   { label: "分钟 K线",         icon: "⏱" },
+      REALTIME_QUOTE:   { label: "实时行情",         icon: "💹" },
+      STOCK_LIST:       { label: "股票列表",         icon: "📋" },
+      TRADE_CALENDAR:   { label: "交易日历",         icon: "📅" },
+      STOCK_BOARD:      { label: "板块",             icon: "🏷" },
+      INDEX_QUOTE:      { label: "指数实时",         icon: "📊" },
+      INDEX_HISTORICAL: { label: "指数历史",         icon: "📉" },
+      INDEX_INTRADAY:   { label: "指数分时",         icon: "⏰" },
+      STOCK_ZT_POOL:    { label: "涨跌停股池",       icon: "🚦" },
+      DRAGON_TIGER:     { label: "龙虎榜",           icon: "🐉" },
+      MARGIN_TRADING:   { label: "融资融券",         icon: "💰" },
+      BLOCK_TRADE:      { label: "大宗交易",         icon: "🤝" },
+      HOLDER_NUM:       { label: "股东户数",         icon: "👥" },
+      DIVIDEND:         { label: "分红送转",         icon: "🎁" },
+      FUND_FLOW:        { label: "资金流",           icon: "💸" },
+      HOT_TOPICS:       { label: "热点题材",         icon: "🔥" },
+      NORTH_FLOW:       { label: "北向资金",         icon: "🌏" },
+      RESEARCH_REPORT:  { label: "研报",             icon: "📑" },
+      ANNOUNCEMENT:     { label: "公告",             icon: "📢" },
+    },
+    fetcher_meta: {
+      Tushare:   { priority: 0, color: "#ff3b30" },
+      Baostock:  { priority: 1, color: "#ff9500" },
+      Myquant:   { priority: 9, color: "#5856d6" },
+      Akshare:   { priority: 2, color: "#34c759" },
+      Yfinance:  { priority: 3, color: "#0a84ff" },
+      Zhitu:     { priority: 4, color: "#af52de" },
+      Tencent:   { priority: 5, color: "#00b8a9" },
+      EastMoney: { priority: 6, color: "#ff2d55" },
+      Ths:       { priority: 7, color: "#ffcc00" },
+      Cninfo:    { priority: 8, color: "#8e8e93" },
+    },
+    sections: [
+      // Populated in Tasks 4-7
+    ],
+  };
+  </script>
+  <script>
+  // === Main app (boots after ENDPOINTS) ===
+  (function() {
+    "use strict";
+
+    const $ = (sel) => document.querySelector(sel);
+    const $$ = (sel) => document.querySelectorAll(sel);
+    const el = (tag, props = {}, children = []) => {
+      const e = document.createElement(tag);
+      Object.assign(e, props);
+      children.forEach(c => e.appendChild(c));
+      return e;
+    };
+
+    let state = {
+      baseUrl: localStorage.getItem("baseUrl") || "",
+      theme: localStorage.getItem("theme") || "light",
+      marketFilter: JSON.parse(localStorage.getItem("marketFilter") || '["csi","hk","us"]'),
+    };
+
+    // --- Detect file:// ---
+    if (location.protocol === "file:") {
+      $("#banner").style.display = "block";
+    }
+
+    // --- Boot ---
+    async function boot() {
+      applyTheme();
+      bindUI();
+      try {
+        const cfg = await fetch("/control/config").then(r => r.json());
+        if (!state.baseUrl) {
+          state.baseUrl = `http://localhost:${cfg.port}`;
+        }
+        $("#baseUrl").value = state.baseUrl;
+        $("#captionBaseUrl").textContent = state.baseUrl;
+        refreshServerStatus();
+        refreshTestStatus();
+        setInterval(refreshTestStatus, 5000);
+      } catch (e) {
+        console.warn("Failed to fetch /control/config:", e);
+        $("#baseUrl").value = state.baseUrl || "http://localhost:8888";
+      }
+      renderSidebar();
+      renderContent();
+    }
+
+    function applyTheme() {
+      document.documentElement.dataset.theme = state.theme;
+    }
+
+    function bindUI() {
+      $("#themeToggle").onclick = () => {
+        state.theme = state.theme === "light" ? "dark" : "light";
+        localStorage.setItem("theme", state.theme);
+        applyTheme();
+      };
+      $("#baseUrl").onchange = (e) => {
+        state.baseUrl = e.target.value;
+        localStorage.setItem("baseUrl", state.baseUrl);
+        $("#captionBaseUrl").textContent = state.baseUrl;
+      };
+      $("#search").oninput = (e) => {
+        const q = e.target.value.toLowerCase();
+        $$(".endpoint").forEach(card => {
+          const text = card.textContent.toLowerCase();
+          card.style.display = text.includes(q) ? "" : "none";
+        });
+      };
+      $("#marketFilter").onchange = () => {
+        const checked = $$("#marketFilter input:checked").map(i => i.value);
+        state.marketFilter = checked;
+        localStorage.setItem("marketFilter", JSON.stringify(checked));
+        renderContent();
+      };
+      $("#testStart").onclick = async () => {
+        await fetch("/control/test-instance/start", { method: "POST" });
+        await refreshTestStatus();
+      };
+      $("#testStop").onclick = async () => {
+        await fetch("/control/test-instance/stop", { method: "POST" });
+        await refreshTestStatus();
+      };
+      $("#testRefresh").onclick = refreshTestStatus;
+      $("#useTestInstance").onclick = async () => {
+        const s = await fetch("/control/test-instance/status").then(r => r.json());
+        if (s.running && s.port) {
+          state.baseUrl = `http://localhost:${s.port}`;
+          $("#baseUrl").value = state.baseUrl;
+          localStorage.setItem("baseUrl", state.baseUrl);
+          $("#captionBaseUrl").textContent = state.baseUrl;
+        }
+      };
+    }
+
+    async function refreshServerStatus() {
+      try {
+        const s = await fetch("/control/server/status").then(r => r.json());
+        $("#serverStatus").textContent =
+          `Server: :${s.port} (pid ${s.pid}, ${s.uptime_sec}s)`;
+        $("#serverStatus").style.color = "var(--accent-post)";
+      } catch (e) {
+        $("#serverStatus").textContent = "Server: unreachable";
+        $("#serverStatus").style.color = "#c00";
+      }
+    }
+
+    async function refreshTestStatus() {
+      try {
+        const s = await fetch("/control/test-instance/status").then(r => r.json());
+        const el = $("#testStatus");
+        if (s.running) {
+          el.textContent = `Running on :${s.port} (pid ${s.pid})`;
+          el.className = "status running";
+        } else {
+          el.textContent = s.error ? `Stopped (${s.error})` : "Stopped";
+          el.className = s.error ? "status error" : "status";
+        }
+      } catch (e) {
+        $("#testStatus").textContent = "Status unavailable";
+      }
+    }
+
+    function renderSidebar() {
+      const nav = $("#nav");
+      nav.innerHTML = "";
+      ENDPOINTS.sections.forEach(sec => {
+        const a = el("a", { href: `#section-${sec.id}`, textContent: sec.title });
+        a.onclick = (e) => {
+          e.preventDefault();
+          location.hash = `section-${sec.id}`;
+        };
+        nav.appendChild(a);
+      });
+    }
+
+    function renderContent() {
+      const content = $("#content");
+      content.innerHTML = "";
+      ENDPOINTS.sections.forEach(sec => {
+        const h2 = el("h2", { id: `section-${sec.id}`, textContent: `${sec.id} ${sec.title}` });
+        content.appendChild(h2);
+        sec.endpoints
+          .filter(ep => ep.markets.some(m => state.marketFilter.includes(m)))
+          .forEach(ep => content.appendChild(renderEndpoint(ep)));
+      });
+    }
+
+    function renderEndpoint(ep) {
+      const card = el("div", { className: "endpoint", id: `ep-${ep.id}` });
+      const method = el("span", { className: `method ${ep.method}`, textContent: ep.method });
+      const path = el("span", { className: "path", textContent: ep.path });
+      const summary = el("div", { className: "summary", textContent: ep.summary || "" });
+      card.appendChild(method);
+      card.appendChild(path);
+      card.appendChild(summary);
+
+      const det = el("details");
+      det.appendChild(el("summary", { textContent: "Show details / Try it" }));
+      det.appendChild(renderEndpointDetails(ep));
+      card.appendChild(det);
+      return card;
+    }
+
+    function renderEndpointDetails(ep) {
+      const wrap = el("div");
+      if (ep.params && ep.params.length) {
+        wrap.appendChild(el("h4", { textContent: "Parameters" }));
+        const pre = el("pre");
+        ep.params.forEach(p => {
+          pre.appendChild(document.createTextNode(
+            `${p.in}.${p.name}${p.required ? " (required)" : ""}: ${p.type} — ${p.desc || ""}\n`
+          ));
+        });
+        wrap.appendChild(pre);
+      }
+      const ti = el("div", { className: "try-it" });
+      ep.params && ep.params.forEach(p => {
+        const field = el("div", { className: "field" });
+        field.appendChild(el("label", { textContent: `${p.in}.${p.name}` }));
+        const input = el("input", { type: "text", placeholder: p.desc || p.name, value: p.example || "" });
+        input.dataset.paramName = p.name;
+        input.dataset.paramIn = p.in;
+        field.appendChild(input);
+        ti.appendChild(field);
+      });
+      const sendBtn = el("button", { textContent: "Send (Try it)" });
+      sendBtn.onclick = () => tryIt(ep, ti);
+      ti.appendChild(sendBtn);
+      const respDiv = el("div", { className: "response" });
+      ti.appendChild(respDiv);
+      wrap.appendChild(ti);
+      return wrap;
+    }
+
+    async function tryIt(ep, container) {
+      const respDiv = container.querySelector(".response");
+      respDiv.innerHTML = "";
+      respDiv.className = "response";
+      let path = ep.path;
+      const qs = new URLSearchParams();
+      container.querySelectorAll("input[data-param-name]").forEach(inp => {
+        const v = inp.value.trim();
+        if (!v) return;
+        if (inp.dataset.paramIn === "path") {
+          path = path.replace(`{${inp.dataset.paramName}}`, encodeURIComponent(v));
+        } else {
+          qs.append(inp.dataset.paramName, v);
+        }
+      });
+      const url = `${state.baseUrl}${path}${qs.toString() ? "?" + qs : ""}`;
+      try {
+        const r = await fetch(url);
+        const text_body = await r.text();
+        const pre = el("pre", { textContent: text_body });
+        respDiv.appendChild(el("div", { textContent: `HTTP ${r.status}` }));
+        respDiv.appendChild(pre);
+        if (!r.ok) respDiv.className = "response error";
+      } catch (e) {
+        respDiv.className = "response error";
+        respDiv.appendChild(el("pre", { textContent: `Network error: ${e.message}\nURL: ${url}` }));
+      }
+    }
+
+    // Intersection observer for sidebar active state
+    const obs = new IntersectionObserver((entries) => {
+      entries.forEach(en => {
+        if (en.isIntersecting) {
+          $$("#nav a").forEach(a => a.classList.remove("active"));
+          const href = `#${en.target.id}`;
+          const link = document.querySelector(`#nav a[href="${href}"]`);
+          if (link) link.classList.add("active");
+        }
+      });
+    }, { rootMargin: "-80px 0px -80% 0px" });
+
+    document.addEventListener("DOMContentLoaded", () => {
+      boot();
+      setTimeout(() => {
+        $$(".main h2").forEach(h => obs.observe(h));
+      }, 100);
+    });
+  })();
+  </script>
+</body>
+</html>
