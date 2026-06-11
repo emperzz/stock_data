@@ -383,6 +383,131 @@
           },
         ],
       },
+      {
+        id: "4.4",
+        title: "股票 / 指数列表与日历",
+        endpoints: [
+          {
+            id: "stocks-list",
+            method: "GET",
+            path: "/api/v1/stocks",
+            summary: "股票列表（分页）",
+            markets: ["csi", "hk", "us"],
+            capabilities: ["STOCK_LIST"],
+            params: [
+              { name: "market", in: "query", required: true, type: "string", desc: 'csi (或 cn 兼容) / hk / us' },
+              { name: "refresh", in: "query", required: false, type: "bool", desc: "强制刷新（默认 False）" },
+              { name: "offset", in: "query", required: false, type: "int", desc: ">=0（默认 0）" },
+              { name: "limit", in: "query", required: false, type: "int", desc: "1..1000（默认 100）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "market"] },
+            ],
+            cache: { ttl_sec: 0, env: "无（SQLite 持久化）" },
+            sources: [
+              { fetcher: "Baostock", method: "get_all_stocks", upstream: "bs.query_all_stock(day=最近交易日)", notes: "csi" },
+              { fetcher: "Myquant", method: "get_all_stocks", upstream: "gm.api.get_symbols(sec_type1=1010)", notes: "csi" },
+              { fetcher: "Akshare", method: "get_all_stocks", upstream: "ak.stock_info_a_code_name() (csi) / ak.stock_hk_spot_em() (hk) / ak.index_cons_sina('SPX') (us)" },
+            ],
+          },
+          {
+            id: "calendar",
+            method: "GET",
+            path: "/api/v1/calendar",
+            summary: "A 股交易日历",
+            markets: ["csi"],
+            capabilities: ["TRADE_CALENDAR"],
+            params: [
+              { name: "refresh", in: "query", required: false, type: "bool", desc: "强制从上游刷新" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["trade_dates: list[str] (YYYY-MM-DD, 升序)", "latest_date", "total"] },
+            ],
+            cache: { ttl_sec: 0, env: "无（持久化层拥有）" },
+            sources: [
+              { fetcher: "Akshare", method: "get_trade_calendar", upstream: "ak.tool_trade_date_hist_sina()" },
+              { fetcher: "Myquant", method: "get_trade_calendar", upstream: "gm.api.get_trading_dates_by_year(exchange='SHSE', ...)" },
+              { fetcher: "Baostock", method: "get_trade_calendar", upstream: "bs.query_trade_dates()，过滤 is_trading_day=='1'" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "4.5",
+        title: "板块 (Boards)",
+        endpoints: [
+          {
+            id: "boards",
+            method: "GET",
+            path: "/api/v1/boards",
+            summary: "概念 / 行业板块列表",
+            markets: ["csi"],
+            capabilities: ["STOCK_BOARD"],
+            params: [
+              { name: "type", in: "query", required: true, type: "string", desc: "concept | industry" },
+              { name: "source", in: "query", required: false, type: "string", desc: '默认 "eastmoney"（保留）' },
+              { name: "include_quote", in: "query", required: false, type: "bool", desc: "是否带实时行情字段" },
+              { name: "refresh", in: "query", required: false, type: "bool", desc: "强制刷新" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code (e.g. BK1048)", "name"] },
+              { group: "include_quote=true", fields: ["price", "change_pct", "change_amount", "volume", "amount", "turnover_rate", "total_mv", "up_count", "down_count", "leading_stock", "leading_stock_pct"] },
+            ],
+            cache: { ttl_sec: 0, env: "无（SQLite 持久化）" },
+            sources: [
+              { fetcher: "Akshare", method: "get_all_concept_boards / get_all_industry_boards", upstream: "ak.stock_board_concept_name_em() / ak.stock_board_industry_name_em()" },
+            ],
+          },
+          {
+            id: "boards-stocks",
+            method: "GET",
+            path: "/api/v1/boards/{board_code}/stocks",
+            summary: "板块成份股",
+            markets: ["csi"],
+            capabilities: ["STOCK_BOARD"],
+            params: [
+              { name: "board_code", in: "path", required: true, type: "string", desc: "例 BK1048" },
+              { name: "include_quote", in: "query", required: false, type: "bool" },
+              { name: "refresh", in: "query", required: false, type: "bool" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["board: BoardInfo (code, name)", "stocks: list[BoardStockInfo]", "source"] },
+            ],
+            cache: { ttl_sec: 0, env: "无（SQLite 持久化）" },
+            sources: [
+              { fetcher: "Akshare", method: "get_concept_board_stocks / get_industry_board_stocks", upstream: "ak.stock_board_concept_cons_em('BK1048')" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "4.6",
+        title: "涨跌停股池",
+        endpoints: [
+          {
+            id: "pools",
+            method: "GET",
+            path: "/api/v1/pools",
+            summary: "ZT / DT / ZBGC 股池",
+            markets: ["csi"],
+            capabilities: ["STOCK_ZT_POOL"],
+            params: [
+              { name: "type", in: "query", required: true, type: "string", desc: "zt | dt | zbgc" },
+              { name: "date", in: "query", required: false, type: "string", desc: "YYYY-MM-DD；不传=今日" },
+              { name: "refresh", in: "query", required: false, type: "bool" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["date", "type", "total", "stocks: list[ZTPoolStock]"] },
+              { group: "ZTPoolStock", fields: ["code", "name", "price", "change_pct", "amount", "circ_mv", "total_mv", "turnover_rate", "lb_count", "first_seal_time", "last_seal_time", "seal_amount", "seal_count", "zt_count"] },
+            ],
+            cache: { ttl_sec: 60, env: "CACHE_TTL_POOLS（仅当日）" },
+            sources: [
+              { fetcher: "Akshare", method: "get_zt_pool", upstream: "ak.stock_zt_pool_em(date) / _dtgc_em / _zbgc_em" },
+              { fetcher: "Zhitu", method: "get_zt_pool", upstream: "https://api.zhituapi.com/hs/pool/{ztgc,dtgc,zbgc}/{date}?token=..." },
+            ],
+          },
+        ],
+      },
     ],
   };
   </script>
