@@ -1,8 +1,8 @@
 """API Explorer subpackage: interactive HTML UI at /explorer/ and /control/* endpoints.
 
-Mounts the static HTML frontend (formerly docs/API.html) at /explorer/ and
-the Test Instance management endpoints at /control/*. Used by
-stock_data.server via the single-line mount(app) entry point.
+Mounts the static HTML frontend at /explorer/ and the Test Instance
+management endpoints at /control/*. Used by stock_data.server via
+the single-line mount(app) entry point.
 """
 
 from __future__ import annotations

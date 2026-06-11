@@ -1,4 +1,4 @@
-"""Tests for docs/API.html structure."""
+"""Tests for stock_data/explorer/static/index.html structure."""
 from pathlib import Path
 
 import pytest
@@ -10,7 +10,7 @@ HTML_PATH = Path(__file__).resolve().parent.parent / "stock_data" / "explorer" /
 @pytest.fixture
 def html_text():
     if not HTML_PATH.exists():
-        pytest.skip("docs/API.html not yet created")
+        pytest.skip("explorer not yet mounted")
     return HTML_PATH.read_text(encoding="utf-8")
 
 
