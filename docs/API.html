@@ -687,6 +687,143 @@
           },
         ],
       },
+      {
+        id: "4.10",
+        title: "热点题材 / 北向资金",
+        endpoints: [
+          {
+            id: "hot-topics",
+            method: "GET",
+            path: "/api/v1/hot/topics",
+            summary: "当日热点题材",
+            markets: ["csi"],
+            capabilities: ["HOT_TOPICS"],
+            params: [
+              { name: "date", in: "query", required: false, type: "string", desc: "YYYY-MM-DD，空=今天" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["date", "total", "topics: list[HotTopicRecord]"] },
+              { group: "Record", fields: ["code", "name", "reason (题材归因)", "change_pct (涨幅%)", "turnover_rate (换手率%)", "volume", "amount", "dde_net (大单净量)"] },
+            ],
+            cache: { ttl_sec: 60, env: "CACHE_TTL_HOT_TOPICS" },
+            sources: [
+              { fetcher: "Ths", method: "get_hot_topics", upstream: "zx.10jqka.com.cn/event/api/getharden/date/{date}/orderby/date/..." },
+            ],
+          },
+          {
+            id: "north-flow-realtime",
+            method: "GET",
+            path: "/api/v1/north-flow/realtime",
+            summary: "北向资金（分钟级累计）",
+            markets: ["csi"],
+            capabilities: ["NORTH_FLOW"],
+            params: [],
+            response_fields: [
+              { group: "基础", fields: ["source (\"ths\")", "records: list[NorthFlowRecord]"] },
+              { group: "Record", fields: ["time", "hgt_yi (沪股通累计净买入, 亿元)", "sgt_yi (深股通累计净买入, 亿元)"] },
+            ],
+            cache: { ttl_sec: 60, env: "CACHE_TTL_NORTH_FLOW" },
+            sources: [
+              { fetcher: "Ths", method: "get_north_flow", upstream: "data.hexin.cn/market/hsgtApi/method/dayChart/" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "4.11",
+        title: "研报",
+        endpoints: [
+          {
+            id: "stocks-reports",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/reports",
+            summary: "研报列表",
+            markets: ["csi"],
+            capabilities: ["RESEARCH_REPORT"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+              { name: "max_pages", in: "query", required: false, type: "int", desc: "1..10（默认 3）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "source", "total", "reports: list[ReportRecord]"] },
+              { group: "Record", fields: ["title", "publish_date", "org", "info_code (PDF 编号)", "rating", "predict_eps_this", "predict_eps_next", "predict_eps_next2"] },
+            ],
+            cache: { ttl_sec: 1800, env: "CACHE_TTL_REPORTS" },
+            sources: [
+              { fetcher: "EastMoney", method: "get_reports", upstream: "reportapi.eastmoney.com/report/list（code={code}, pageSize=100）" },
+            ],
+          },
+          {
+            id: "stocks-reports-pdf",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/reports/{report_id}/pdf",
+            summary: "研报 PDF 下载",
+            markets: ["csi"],
+            capabilities: ["RESEARCH_REPORT"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+              { name: "report_id", in: "path", required: true, type: "string", desc: "即 info_code" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["report_id", "download_path (本地路径)", "url (PDF 直链)"] },
+            ],
+            cache: { ttl_sec: 0, env: "无" },
+            sources: [
+              { fetcher: "EastMoney", method: "download_report_pdf", upstream: "pdf.dfcfw.com/pdf/H3_{info_code}_1.pdf（落盘 ./reports/{info_code}.pdf）" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "4.12",
+        title: "公告",
+        endpoints: [
+          {
+            id: "stocks-announcements",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/announcements",
+            summary: "公告",
+            markets: ["csi"],
+            capabilities: ["ANNOUNCEMENT"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string" },
+              { name: "page_size", in: "query", required: false, type: "int", desc: "1..100（默认 30）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "source (\"cninfo\")", "total", "announcements: list[AnnouncementRecord]"] },
+              { group: "Record", fields: ["title", "type", "date", "url"] },
+            ],
+            cache: { ttl_sec: 1800, env: "CACHE_TTL_ANNOUNCEMENTS" },
+            sources: [
+              { fetcher: "Cninfo", method: "get_announcements", upstream: "POST www.cninfo.com.cn/new/hisAnnouncement/query（form 表单）" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "4.13",
+        title: "指标目录",
+        endpoints: [
+          {
+            id: "indicators-catalog",
+            method: "GET",
+            path: "/api/v1/indicators/catalog",
+            summary: "技术指标目录（14 个）",
+            markets: ["csi", "hk", "us"],
+            capabilities: [],
+            params: [],
+            response_fields: [
+              { group: "基础", fields: ["indicators: list[IndicatorCatalogEntry]"] },
+              { group: "Entry", fields: ["key", "input_shape (\"closes\" | \"ohlcv\")", "default_options", "output_columns", "default_lookback"] },
+            ],
+            cache: { ttl_sec: 0, env: "无（静态元数据）" },
+            sources: [
+              { fetcher: "indicators.registry", method: "INDICATOR_REGISTRY", upstream: "data_provider/indicators/registry.py" },
+            ],
+            notes: "14 个指标: ma, macd, boll, kdj, rsi, wr, bias, cci, atr, obv, roc, dmi, sar, kc。详细参数见 /indicators/catalog 响应。",
+          },
+        ],
+      },
     ],
   };
   </script>

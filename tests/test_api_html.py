@@ -59,8 +59,8 @@ class TestHtmlStructure:
         assert external == [], f"Found external resources: {external}"
 
     def test_endpoints_count_grows(self, html_text):
-        """Each task adds more endpoints; we check the count is non-zero and growing."""
+        """By Task 7 we should have ~27 endpoints across 13 sections."""
         n_get = html_text.count('method: "GET"')
         n_post = html_text.count('method: "POST"')
         total = n_get + n_post
-        assert total >= 8, f"Expected ≥8 endpoints by Task 4, got {total}"
+        assert total >= 25, f"Expected ≥25 endpoints by Task 7, got {total}"
