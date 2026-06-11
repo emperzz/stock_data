@@ -28,7 +28,21 @@ class TestAkshareFetcher:
         assert fetcher.priority == 2
 
     def test_is_available(self, fetcher):
-        assert fetcher.is_available() is True
+        """is_available() must reflect whether the akshare package is importable.
+
+        Mirrors the yfinance pattern: probe via importlib.util.find_spec.
+        Mock find_spec to simulate "akshare installed" so this test is
+        environment-independent.
+        """
+        from unittest.mock import MagicMock
+        with patch("importlib.util.find_spec", return_value=MagicMock()) as m:
+            assert fetcher.is_available() is True
+            m.assert_called_with("akshare")
+
+    def test_is_available_unavailable(self, fetcher):
+        """When akshare is not installed, is_available() must return False."""
+        with patch("importlib.util.find_spec", return_value=None):
+            assert fetcher.is_available() is False
 
     def test_supported_markets(self, fetcher):
         assert "csi" in fetcher.supported_markets

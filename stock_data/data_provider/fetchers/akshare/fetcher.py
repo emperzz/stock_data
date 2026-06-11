@@ -55,8 +55,20 @@ class AkshareFetcher(BaseFetcher):
     )
 
     def is_available(self) -> bool:
-        """Akshare is always available when installed (no auth required)."""
-        return True
+        """True iff the ``akshare`` Python package is importable.
+
+        Akshare is imported lazily inside each call (see ``import akshare
+        as ak`` lines below), so a missing module would only surface at
+        request time and bubble up as a 500. We probe via
+        ``importlib.util.find_spec`` so the manager can skip this fetcher
+        cleanly when akshare isn't installed, mirroring the pattern used
+        by ``yfinance_fetcher.is_available``.
+        """
+        try:
+            import importlib.util
+            return importlib.util.find_spec("akshare") is not None
+        except (ImportError, ValueError):
+            return False
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Akshare adjust value."""
