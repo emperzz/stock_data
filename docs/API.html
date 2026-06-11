@@ -186,7 +186,203 @@
       Cninfo:    { priority: 8, color: "#8e8e93" },
     },
     sections: [
-      // Populated in Tasks 4-7
+      {
+        id: "4.1",
+        title: "健康检查",
+        endpoints: [
+          {
+            id: "health",
+            method: "GET",
+            path: "/api/v1/health",
+            summary: "健康检查 + fetcher 断路器状态",
+            markets: ["csi", "hk", "us"],
+            capabilities: [],
+            params: [
+              { name: "details", in: "query", required: false, type: "bool", desc: "默认 False；为 true 时返回每个 fetcher 的断路器状态" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["status (ok/degraded/unhealthy)", "version"] },
+              { group: "details=true 时", fields: ["sources: list[{name, state, available, last_success_time, last_failure_time, failure_count}]"] },
+            ],
+            cache: { ttl_sec: 0, env: "无" },
+            sources: [
+              { fetcher: "REALTIME_CIRCUIT_BREAKER", method: "snapshot_state", upstream: "遍历所有 fetcher 汇总 CircuitBreaker" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "4.2",
+        title: "股票 / 个股 API",
+        endpoints: [
+          {
+            id: "stocks-quote",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/quote",
+            summary: "实时行情",
+            markets: ["csi", "hk", "us"],
+            capabilities: ["REALTIME_QUOTE"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string", desc: "例 600519 / AAPL / HK00700（不支持指数代码）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "stock_name", "source", "current_price", "change", "change_percent", "open", "high", "low", "prev_close", "volume", "amount", "update_time"] },
+              { group: "估值增强", fields: ["pe_ttm", "pe_static", "pb", "mcap_yi (亿)", "float_mcap_yi (亿)", "turnover_pct", "amplitude_pct", "limit_up", "limit_down", "vol_ratio"] },
+            ],
+            cache: { ttl_sec: 60, env: "CACHE_TTL_QUOTE" },
+            sources: [
+              { fetcher: "Tushare", method: "get_realtime_quote", upstream: "tushare.realtime_quote(ts_code=...)", notes: "需 TUSHARE_TOKEN" },
+              { fetcher: "Baostock", method: "get_realtime_quote", upstream: "永远返回 None（无实时 API）" },
+              { fetcher: "Myquant", method: "get_realtime_quote", upstream: "gm.api.current_price(symbols=...)", notes: "需 MYQUANT_TOKEN；仅 price" },
+              { fetcher: "Akshare", method: "get_realtime_quote", upstream: "ak.stock_zh_a_spot_em() / ak.stock_hk_spot_em()", notes: "中文字段归一化" },
+              { fetcher: "Yfinance", method: "get_realtime_quote", upstream: "yf.Ticker(...).fast_info；US 失败回退 Stooq" },
+              { fetcher: "Zhitu", method: "get_realtime_quote", upstream: "https://api.zhituapi.com/hs/real/ssjy/{code}?token=...", notes: "需 ZHITU_TOKEN" },
+              { fetcher: "Tencent", method: "get_realtime_quote", upstream: "https://qt.gtimg.cn/q={prefix}（GBK 88 字段）" },
+            ],
+          },
+          {
+            id: "stocks-history",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/history",
+            summary: "历史 K 线（含可选指标）",
+            markets: ["csi", "hk", "us"],
+            capabilities: ["HISTORICAL_DWM", "HISTORICAL_MIN"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string", desc: "例 600519" },
+              { name: "period", in: "query", required: false, type: "string", desc: "daily | weekly | monthly（默认 daily）" },
+              { name: "days", in: "query", required: false, type: "int", desc: "1..365（默认 30）" },
+              { name: "start_date", in: "query", required: false, type: "string", desc: "YYYY-MM-DD（覆盖 days）" },
+              { name: "end_date", in: "query", required: false, type: "string", desc: "YYYY-MM-DD（默认今天）" },
+              { name: "adjust", in: "query", required: false, type: "string", desc: '"" | qfq | hfq' },
+              { name: "indicators", in: "query", required: false, type: "string", desc: "逗号分隔：ma,macd,kdj,...（14 个可选）" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["date", "open", "high", "low", "close", "volume", "amount", "change_percent"] },
+              { group: "?indicators=ma 时", fields: ["ma5", "ma10", "ma20", "indicators: {ma5, ma10, ...}"] },
+            ],
+            cache: { ttl_sec: 300, env: "CACHE_TTL_HISTORY_DAILY / _WEEKLY / _MONTHLY" },
+            sources: [
+              { fetcher: "Tushare", method: "_fetch_raw_data", upstream: "tushare.pro_bar / api.query('daily'/'weekly'/'monthly')", notes: "需 TUSHARE_TOKEN" },
+              { fetcher: "Baostock", method: "_fetch_raw_data", upstream: "bs.query_history_k_data_plus(...)（d/w/m + 5/15/30/60）" },
+              { fetcher: "Myquant", method: "_fetch_raw_data", upstream: "gm.api.history(... frequency='1d'/'300s'/...)" },
+              { fetcher: "Akshare", method: "_fetch_raw_data", upstream: "ak.stock_zh_a_hist / ak.stock_hk_hist" },
+              { fetcher: "Yfinance", method: "_fetch_raw_data", upstream: "yf.download(tickers, start, end, auto_adjust=bool)" },
+            ],
+          },
+          {
+            id: "stocks-intraday",
+            method: "GET",
+            path: "/api/v1/stocks/{stock_code}/intraday",
+            summary: "分钟 K 线",
+            markets: ["csi"],
+            capabilities: ["HISTORICAL_MIN"],
+            params: [
+              { name: "stock_code", in: "path", required: true, type: "string", desc: "6 位 A 股代码" },
+              { name: "period", in: "query", required: false, type: "string", desc: "1 | 5 | 15 | 30 | 60（默认 5）" },
+              { name: "adjust", in: "query", required: false, type: "string", desc: '"" | qfq | hfq' },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["time (HH:MM:SS)", "open", "high", "low", "close", "volume", "amount"] },
+            ],
+            cache: { ttl_sec: 30, env: "CACHE_TTL_STOCK_INTRADAY" },
+            sources: [
+              { fetcher: "Tushare", method: "(不支持)", upstream: "raise DataFetchError", notes: "跳过" },
+              { fetcher: "Baostock", method: "_fetch_raw_data", upstream: "bs.query_history_k_data_plus(... frequency='5'/'15'/'30'/'60')" },
+              { fetcher: "Myquant", method: "get_intraday_data", upstream: "gm.api.history(... frequency='300s'/...)" },
+              { fetcher: "Akshare", method: "get_intraday_data", upstream: "ak.stock_zh_a_hist_min_em() → fallback ak.stock_zh_a_minute()" },
+              { fetcher: "Yfinance", method: "_fetch_raw_data", upstream: "yf.download(..., interval='5m'/...)" },
+              { fetcher: "Zhitu", method: "get_intraday_data", upstream: "https://api.zhituapi.com/hs/history/{symbol}.{sh|sz}/{period}/{adj}?token=..." },
+            ],
+          },
+        ],
+      },
+      {
+        id: "4.3",
+        title: "指数 API",
+        endpoints: [
+          {
+            id: "indices-list",
+            method: "GET",
+            path: "/api/v1/indices",
+            summary: "指数列表（A 股 + 港股 + 美股）",
+            markets: ["csi", "hk", "us"],
+            capabilities: [],
+            params: [],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "market (csi/hk/us)"] },
+            ],
+            cache: { ttl_sec: 0, env: "无（进程内静态表）" },
+            sources: [
+              { fetcher: "index_symbols", method: "get_all_indices", upstream: "静态表：CSI_INDEX_MAP + HK_INDEX_MAP + US_INDEX_MAP" },
+            ],
+          },
+          {
+            id: "indices-quote",
+            method: "GET",
+            path: "/api/v1/indices/{index_code}/quote",
+            summary: "指数实时行情",
+            markets: ["csi", "hk", "us"],
+            capabilities: ["INDEX_QUOTE"],
+            params: [
+              { name: "index_code", in: "path", required: true, type: "string", desc: "例 000300 / SPX / HSI" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["code", "name", "source", "current_price", "change", "change_percent", "open", "high", "low", "prev_close", "volume", "amount", "update_time"] },
+            ],
+            cache: { ttl_sec: 60, env: "CACHE_TTL_INDEX_QUOTE" },
+            sources: [
+              { fetcher: "Akshare", method: "get_index_realtime_quote", upstream: "ak.stock_zh_index_spot_em()（多 series 试）→ ak.stock_zh_index_spot_sina()" },
+              { fetcher: "Yfinance", method: "get_index_realtime_quote", upstream: "yf.Ticker('^GSPC'/'^HSI').fast_info", notes: "US 失败回退 Stooq" },
+            ],
+          },
+          {
+            id: "indices-history",
+            method: "GET",
+            path: "/api/v1/indices/{index_code}/history",
+            summary: "指数历史 K 线",
+            markets: ["csi", "hk", "us"],
+            capabilities: ["INDEX_HISTORICAL", "HISTORICAL_DWM"],
+            params: [
+              { name: "index_code", in: "path", required: true, type: "string" },
+              { name: "period", in: "query", required: false, type: "string", desc: "daily | weekly | monthly" },
+              { name: "days", in: "query", required: false, type: "int", desc: "1..365" },
+              { name: "start_date / end_date / indicators", in: "query", required: false, type: "string", desc: "同股票 history" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["date", "open", "high", "low", "close", "volume", "amount", "change_percent"] },
+            ],
+            cache: { ttl_sec: 300, env: "CACHE_TTL_HISTORY_DAILY" },
+            sources: [
+              { fetcher: "Tushare", method: "get_index_historical", upstream: "api.query('index_daily'/'index_weekly'/'index_monthly')" },
+              { fetcher: "Baostock", method: "get_index_historical", upstream: "bs.query_history_k_data_plus('sh.000300', ..., adjustflag='3')" },
+              { fetcher: "Myquant", method: "get_index_historical", upstream: "gm.api.history(symbol='SHSE.000300', frequency='1d')" },
+              { fetcher: "Akshare", method: "get_index_historical", upstream: "ak.stock_zh_index_daily / _tx / _em（依次试）" },
+              { fetcher: "Yfinance", method: "get_index_historical", upstream: "yf.download(ticker='^HSI'/'^GSPC', interval=...)" },
+            ],
+          },
+          {
+            id: "indices-intraday",
+            method: "GET",
+            path: "/api/v1/indices/{index_code}/intraday",
+            summary: "指数分钟 K 线",
+            markets: ["csi", "hk", "us"],
+            capabilities: ["INDEX_INTRADAY", "HISTORICAL_MIN"],
+            params: [
+              { name: "index_code", in: "path", required: true, type: "string" },
+              { name: "period", in: "query", required: false, type: "string", desc: "1 | 5 | 15 | 30 | 60" },
+            ],
+            response_fields: [
+              { group: "基础", fields: ["time", "open", "high", "low", "close", "volume", "amount"] },
+            ],
+            cache: { ttl_sec: 30, env: "CACHE_TTL_INDEX_INTRADAY" },
+            sources: [
+              { fetcher: "Akshare", method: "get_index_intraday", upstream: "ak.index_zh_a_hist_min_em(...)" },
+              { fetcher: "Myquant", method: "get_index_intraday", upstream: "gm.api.history(... frequency='300s'/...)" },
+              { fetcher: "Yfinance", method: "(复用 get_intraday_data)", upstream: "yf.download(ticker='^HSI', interval='5m')" },
+            ],
+          },
+        ],
+      },
     ],
   };
   </script>
