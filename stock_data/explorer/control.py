@@ -1,8 +1,9 @@
 """Test Instance subprocess management for the API Explorer.
 
-Lets the HTML explorer (docs/API.html) spawn an independent stock_data
-server process on a different port for manual failover testing. The
-main server (the one serving the HTML) is never stopped by this module.
+Lets the HTML explorer (mounted at /explorer/) spawn an independent
+stock_data server process on a different port for manual failover
+testing. The main server (the one serving the HTML) is never stopped
+by this module.
 """
 
 from __future__ import annotations
@@ -14,11 +15,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-# PID file lives next to docs/API.html so it ships with the repo source
-# tree but is gitignored. Default path is overridable via start_*/get_*/stop_*
-# args, which is what tests use.
+# PID file lives in the explorer subpackage so it ships with the repo
+# source tree but is gitignored. Default path is overridable via
+# start_*/get_*/stop_* args, which is what tests use.
 DEFAULT_PID_PATH = str(
-    Path(__file__).resolve().parent.parent / "docs" / ".server.pid"
+    Path(__file__).resolve().parent / ".server.pid"
 )
 
 

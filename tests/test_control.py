@@ -1,7 +1,7 @@
-"""Tests for stock_data.control — Test Instance subprocess management."""
+"""Tests for stock_data.explorer.control — Test Instance subprocess management."""
 import socket
 
-from stock_data import control
+from stock_data.explorer import control
 
 
 def _free_port() -> int:
