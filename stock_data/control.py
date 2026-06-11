@@ -4,6 +4,7 @@ Lets the HTML explorer (docs/API.html) spawn an independent stock_data
 server process on a different port for manual failover testing. The
 main server (the one serving the HTML) is never stopped by this module.
 """
+
 from __future__ import annotations
 
 import os
@@ -12,7 +13,6 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-
 
 # PID file lives next to docs/API.html so it ships with the repo source
 # tree but is gitignored. Default path is overridable via start_*/get_*/stop_*
@@ -63,9 +63,10 @@ def get_test_instance_status(pid_path: str = DEFAULT_PID_PATH) -> dict[str, Any]
     if not _pid_alive(pid):
         # Stale PID file — clean it up
         try:
-            Path(pid_path).unlink()
-        except OSError:
-            pass
+            Path(pid_path).unlink(missing_ok=True)
+        except TypeError:
+            if Path(pid_path).exists():
+                Path(pid_path).unlink()
         return {"running": False, "pid": pid, "port": None, "error": "stale_pid"}
     return {"running": True, "pid": pid, "port": None, "error": None}
 
@@ -132,8 +133,9 @@ def stop_test_instance(pid_path: str = DEFAULT_PID_PATH) -> dict[str, Any]:
     # Best-effort cleanup of PID file (the subprocess is gone, even if kill
     # didn't synchronously reap it on Windows)
     try:
-        Path(pid_path).unlink()
-    except OSError:
-        pass
+        Path(pid_path).unlink(missing_ok=True)
+    except TypeError:
+        if Path(pid_path).exists():
+            Path(pid_path).unlink()
 
     return {"running": False, "pid": pid, "error": None}

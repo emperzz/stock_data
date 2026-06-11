@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 from bs4 import BeautifulSoup
 
-
 HTML_PATH = Path(__file__).resolve().parent.parent / "docs" / "API.html"
 
 

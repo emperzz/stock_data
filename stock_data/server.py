@@ -128,8 +128,9 @@ except Exception as e:
 # Bound to 127.0.0.1 — never expose on 0.0.0.0. The control router gives the
 # HTML explorer the ability to read config, query status, and start/stop
 # an independent Test Instance subprocess.
-import time as _time  # for uptime tracking
-from . import control as _control
+import time as _time  # for uptime tracking  # noqa: E402
+
+from . import control as _control  # noqa: E402
 
 _CONTROL_STARTED_AT = _time.time()
 

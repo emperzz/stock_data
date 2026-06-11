@@ -1,9 +1,5 @@
 """Tests for stock_data.control — Test Instance subprocess management."""
-import os
 import socket
-from pathlib import Path
-
-import pytest
 
 from stock_data import control
 
