@@ -573,18 +573,27 @@ Manager routes requests based on stock code and capability:
 
 ## Common Commands
 
+> **Always use the project venv.** The `akshare` / `yfinance` / `gm`
+> packages are installed in `.venv/`, not the system Python. Running
+> `python` (system) will hit `ModuleNotFoundError` for those modules,
+> and `AkshareFetcher.is_available()` will return `False`, breaking
+> every endpoint that routes through akshare (STOCK_BOARD, STOCK_LIST,
+> INDEX_*, ZT_POOL, REALTIME_QUOTE, …). Use `.venv/Scripts/python.exe`
+> directly, or `source .venv/Scripts/activate` first.
+
 ```bash
-# Install dependencies
-pip install -e ".[dev]"
+# Install dependencies (into the venv)
+.venv/Scripts/python.exe -m pip install -e ".[dev]"
+#  — or, with the venv activated:  pip install -e ".[dev]"
 
 # Run the server
-python -m stock_data.server
+.venv/Scripts/python.exe -m stock_data.server
 
 # Run tests
-pytest
+.venv/Scripts/python.exe -m pytest
 
 # Run a single test
-pytest tests/test_adapter.py -v
+.venv/Scripts/python.exe -m pytest tests/test_adapter.py -v
 
 # Lint
 ruff check .

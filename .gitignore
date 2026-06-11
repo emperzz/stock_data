@@ -51,7 +51,7 @@ coverage.xml
 .env
 .env.local
 .env.*.local
-.venv
+.venv/
 venv/
 ENV/
 env/
