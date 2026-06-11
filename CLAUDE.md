@@ -595,7 +595,7 @@ ruff format .
 
 ## API Documentation
 
-Interactive web docs live at `docs/API.html` and are mounted at `/docs/API.html` when the server runs. After `python -m stock_data.server`, open `http://localhost:8888/docs/API.html`. The page supports Try-it, search, market/capability filtering, dark theme, and an optional Test Instance subprocess (controlled from the sidebar). The Markdown source remains at `docs/API.md` (do not edit that file — sync changes into `ENDPOINTS` in the HTML).
+Interactive web docs live at `stock_data/explorer/static/index.html` (the `stock_data/explorer/` subpackage) and are mounted at `/explorer/` when the server runs. After `python -m stock_data.server`, open `http://localhost:8888/explorer/`. The page supports Try-it, search, market/capability filtering, dark theme, and an optional Test Instance subprocess (controlled from the sidebar). The Markdown source remains at `docs/API.md` (do not edit that file — sync changes into `ENDPOINTS` in the HTML). The `/control/*` management endpoints live alongside at the same prefix. Note: as of 2026-06-11 the URL changed from `/docs/API.html` to `/explorer/` (breaking change, no redirect).
 
 ## Configuration
 

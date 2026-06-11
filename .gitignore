@@ -97,4 +97,4 @@ worktrees/
 .playwright-mcp/
 
 # Test Instance PID file (runtime artifact)
-/docs/.server.pid
+/stock_data/explorer/.server.pid
