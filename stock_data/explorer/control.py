@@ -63,11 +63,7 @@ def get_test_instance_status(pid_path: str = DEFAULT_PID_PATH) -> dict[str, Any]
         return {"running": False, "pid": None, "port": None, "error": None}
     if not _pid_alive(pid):
         # Stale PID file — clean it up
-        try:
-            Path(pid_path).unlink(missing_ok=True)
-        except TypeError:
-            if Path(pid_path).exists():
-                Path(pid_path).unlink()
+        Path(pid_path).unlink(missing_ok=True)
         return {"running": False, "pid": pid, "port": None, "error": "stale_pid"}
     return {"running": True, "pid": pid, "port": None, "error": None}
 
@@ -117,11 +113,7 @@ def stop_test_instance(pid_path: str = DEFAULT_PID_PATH) -> dict[str, Any]:
     pid = _read_pid(pid_path)
     if pid is None or not _pid_alive(pid):
         # Clean up stale file
-        try:
-            Path(pid_path).unlink(missing_ok=True)
-        except TypeError:
-            if Path(pid_path).exists():
-                Path(pid_path).unlink()
+        Path(pid_path).unlink(missing_ok=True)
         return {"running": False, "pid": pid, "error": None}
 
     try:
@@ -133,10 +125,6 @@ def stop_test_instance(pid_path: str = DEFAULT_PID_PATH) -> dict[str, Any]:
 
     # Best-effort cleanup of PID file (the subprocess is gone, even if kill
     # didn't synchronously reap it on Windows)
-    try:
-        Path(pid_path).unlink(missing_ok=True)
-    except TypeError:
-        if Path(pid_path).exists():
-            Path(pid_path).unlink()
+    Path(pid_path).unlink(missing_ok=True)
 
     return {"running": False, "pid": pid, "error": None}

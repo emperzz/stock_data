@@ -28,27 +28,31 @@ def _read_server_host() -> str:
     return os.getenv("SERVER_HOST", "127.0.0.1")
 
 
+def _read_test_instance_port() -> int:
+    """Port the optional Test Instance subprocess listens on.
+
+    Defaults to main server port + 1. Overridable via STOCK_TEST_INSTANCE_PORT.
+    """
+    return int(os.getenv("STOCK_TEST_INSTANCE_PORT", str(_read_server_port() + 1)))
+
+
 def build_control_router() -> APIRouter:
     """Build the /control/* APIRouter. Called once by explorer.mount()."""
     router = APIRouter(prefix="/control", tags=["control"])
 
     @router.get("/config")
     def control_config() -> dict:
-        """Static config used by the HTML explorer to initialize itself."""
-        port = _read_server_port()
-        test_port = int(os.getenv("STOCK_TEST_INSTANCE_PORT", str(port + 1)))
+        """Static config used by external tools (smoke tests, AI agents).
+
+        The HTML explorer derives baseUrl from location.origin and reads the
+        test-instance port from /control/test-instance/status, so it does
+        not consume this endpoint.
+        """
         return {
-            "port": port,
+            "port": _read_server_port(),
             "host": _read_server_host(),
-            "test_port": test_port,
+            "test_port": _read_test_instance_port(),
             "version": __version__,
-            "env_keys": [
-                "TUSHARE_TOKEN", "BAOSTOCK_PRIORITY", "AKSHARE_PRIORITY",
-                "YFINANCE_PRIORITY", "ZHITU_TOKEN", "ZHITU_PRIORITY",
-                "MYQUANT_TOKEN", "MYQUANT_PRIORITY", "TENCENT_PRIORITY",
-                "EASTMONEY_PRIORITY", "THS_PRIORITY", "CNINFO_PRIORITY",
-                "ENABLE_API_CACHE", "STOCK_CACHE_DB_PATH", "STOCK_DB_INIT",
-            ],
         }
 
     @router.get("/server/status")
@@ -65,17 +69,16 @@ def build_control_router() -> APIRouter:
     def control_test_instance_status() -> dict:
         """Status of the optional Test Instance subprocess."""
         status = _control.get_test_instance_status()
-        port = int(os.getenv("STOCK_TEST_INSTANCE_PORT",
-                             str(_read_server_port() + 1)))
-        return {**status, "port": port}
+        return {**status, "port": _read_test_instance_port()}
 
     @router.post("/test-instance/start")
     def control_test_instance_start() -> dict:
         """Start the Test Instance subprocess. Idempotent."""
-        port = int(os.getenv("STOCK_TEST_INSTANCE_PORT",
-                             str(_read_server_port() + 1)))
-        host = _read_server_host()
-        return _control.start_test_instance(port=port, host=host, wait_seconds=1.0)
+        return _control.start_test_instance(
+            port=_read_test_instance_port(),
+            host=_read_server_host(),
+            wait_seconds=1.0,
+        )
 
     @router.post("/test-instance/stop")
     def control_test_instance_stop() -> dict:

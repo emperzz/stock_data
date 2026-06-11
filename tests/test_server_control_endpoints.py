@@ -22,9 +22,6 @@ class TestControlConfig:
         assert "host" in data
         assert "version" in data
         assert "test_port" in data
-        assert "env_keys" in data
-        assert isinstance(data["env_keys"], list)
-        assert "TUSHARE_TOKEN" in data["env_keys"]
 
 
 class TestControlServerStatus:

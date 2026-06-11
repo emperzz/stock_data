@@ -900,27 +900,18 @@
     async function boot() {
       applyTheme();
       bindUI();
-      // Always derive baseUrl from the page's own origin so it works
-      // regardless of "localhost" vs "127.0.0.1" DNS ambiguity. User can
-      // still override the input field (e.g., to point at the Test Instance).
-      // We only fall back to a saved value if the user explicitly set one
-      // via the "Use Test" button or the Base URL input.
-      const pageOrigin = location.origin;  // e.g. "http://127.0.0.1:8888"
-      try {
-        const cfg = await fetch("/control/config").then(r => r.json());
-        // First visit (no saved value) → use the page's own origin
-        if (!state.baseUrl) {
-          state.baseUrl = pageOrigin;
-        }
-        $("#baseUrl").value = state.baseUrl;
-        $("#captionBaseUrl").textContent = state.baseUrl;
-        refreshServerStatus();
-        refreshTestStatus();
-        setInterval(refreshTestStatus, 5000);
-      } catch (e) {
-        console.warn("Failed to fetch /control/config:", e);
-        $("#baseUrl").value = state.baseUrl || pageOrigin || "http://127.0.0.1:8888";
+      // baseUrl defaults to the page's own origin so it works regardless
+      // of "localhost" vs "127.0.0.1" DNS ambiguity. The user can override
+      // via the Base URL input or the "Use Test" button.
+      const pageOrigin = location.origin;
+      if (!state.baseUrl) {
+        state.baseUrl = pageOrigin;
       }
+      $("#baseUrl").value = state.baseUrl;
+      $("#captionBaseUrl").textContent = state.baseUrl;
+      refreshServerStatus();
+      refreshTestStatus();
+      setInterval(refreshTestStatus, 5000);
       renderSidebar();
       renderContent();
     }
@@ -932,12 +923,12 @@
     function bindUI() {
       $("#themeToggle").onclick = () => {
         state.theme = state.theme === "light" ? "dark" : "light";
-        localStorage.setItem("theme", state.theme);
+        safeSetItem("theme", state.theme);
         applyTheme();
       };
       $("#baseUrl").onchange = (e) => {
         state.baseUrl = e.target.value;
-        localStorage.setItem("baseUrl", state.baseUrl);
+        safeSetItem("baseUrl", state.baseUrl);
         $("#captionBaseUrl").textContent = state.baseUrl;
       };
       // --- Search: fuzzy match + Ctrl+K to focus + ↑/↓/Enter to navigate ---
@@ -1000,10 +991,13 @@
       $("#testRefresh").onclick = refreshTestStatus;
       $("#useTestInstance").onclick = async () => {
         const s = await fetch("/control/test-instance/status").then(r => r.json());
-        if (s.running && s.port) {
-          state.baseUrl = `http://localhost:${s.port}`;
+        if (s.running) {
+          // Derive the test-instance baseUrl from the page's own origin to
+          // avoid the localhost vs 127.0.0.1 (IPv4/IPv6) DNS ambiguity on
+          // Windows. The user can still override via the Base URL input.
+          state.baseUrl = `${location.protocol}//${location.hostname}:${s.port}`;
           $("#baseUrl").value = state.baseUrl;
-          localStorage.setItem("baseUrl", state.baseUrl);
+          safeSetItem("baseUrl", state.baseUrl);
           $("#captionBaseUrl").textContent = state.baseUrl;
         }
       };
@@ -1115,7 +1109,7 @@
       ep.params && ep.params.forEach(p => {
         const field = el("div", { className: "field" });
         field.appendChild(el("label", { textContent: `${p.in}.${p.name}` }));
-        const input = el("input", { type: "text", placeholder: p.desc || p.name, value: p.example || "" });
+        const input = el("input", { type: "text", placeholder: p.desc || p.name });
         input.dataset.paramName = p.name;
         input.dataset.paramIn = p.in;
         field.appendChild(input);

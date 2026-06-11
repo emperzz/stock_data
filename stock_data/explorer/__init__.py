@@ -44,6 +44,9 @@ def mount(app: FastAPI) -> None:
     except Exception as e:
         logger.warning(f"[Explorer] Failed to mount /explorer: {e}")
 
-    # Control router (any failure here is fatal — re-raise to abort server startup)
+    # Control router. include_router() has no try/except here: any error
+    # propagates naturally and aborts server startup, which is the desired
+    # behavior (a broken /control/* surface is a deployment bug, not
+    # something to silently degrade past).
     app.include_router(build_control_router())
     logger.info("[Explorer] Mounted /control/* (5 endpoints)")
