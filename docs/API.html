@@ -65,6 +65,7 @@
     .sidebar a.active { background: var(--accent); color: #fff; }
     .sidebar .filter-group { display: flex; flex-direction: column; gap: 4px; }
     .sidebar label { font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .endpoint.search-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
     .main { padding: 40px 32px; max-width: 920px; }
     .main h1 { font-size: 32px; margin-top: 0; }
     .main h2 { font-size: 24px; margin-top: 48px; border-bottom: 1px solid var(--border); padding-bottom: 8px; scroll-margin-top: 80px; }
@@ -128,6 +129,15 @@
         <label><input type="checkbox" value="csi" checked> csi (A股)</label>
         <label><input type="checkbox" value="hk" checked> hk</label>
         <label><input type="checkbox" value="us" checked> us</label>
+      </div>
+      <h3>Filter by capability</h3>
+      <div class="filter-group" id="capabilityFilter">
+        <label><input type="checkbox" value="quotes" checked> 行情 (Quotes)</label>
+        <label><input type="checkbox" value="history" checked> 历史 K线 (Historical)</label>
+        <label><input type="checkbox" value="metadata" checked> 元数据 (Lists/Calendar/Boards)</label>
+        <label><input type="checkbox" value="flows" checked> 资金流向 (Flows)</label>
+        <label><input type="checkbox" value="notices" checked> 公告研报 (Notices/Reports)</label>
+        <label><input type="checkbox" value="pools" checked> 特殊池 (Pools/Topics)</label>
       </div>
       <h3>Test Instance</h3>
       <div class="test-instance">
@@ -841,11 +851,45 @@
       return e;
     };
 
-    let state = {
-      baseUrl: localStorage.getItem("baseUrl") || "",
-      theme: localStorage.getItem("theme") || "light",
-      marketFilter: JSON.parse(localStorage.getItem("marketFilter") || '["csi","hk","us"]'),
+    // Capability → group mapping (used by the sidebar capability filter).
+    const CAPABILITY_GROUPS = {
+      quotes:   ["REALTIME_QUOTE", "INDEX_QUOTE"],
+      history:  ["HISTORICAL_DWM", "HISTORICAL_MIN", "INDEX_HISTORICAL", "INDEX_INTRADAY"],
+      metadata: ["STOCK_LIST", "TRADE_CALENDAR", "STOCK_BOARD"],
+      flows:    ["MARGIN_TRADING", "BLOCK_TRADE", "FUND_FLOW", "NORTH_FLOW"],
+      notices:  ["DRAGON_TIGER", "HOLDER_NUM", "DIVIDEND", "RESEARCH_REPORT", "ANNOUNCEMENT"],
+      pools:    ["STOCK_ZT_POOL", "HOT_TOPICS"],
     };
+    const DEFAULT_CAP_GROUPS = Object.keys(CAPABILITY_GROUPS);
+
+    // --- Try localStorage (with try/catch for private/incognito mode) ---
+    function safeGetItem(key, fallback) {
+      try { const v = localStorage.getItem(key); return v === null ? fallback : v; }
+      catch { return fallback; }
+    }
+    function safeSetItem(key, value) {
+      try { localStorage.setItem(key, value); } catch {}
+    }
+
+    let state = {
+      baseUrl: safeGetItem("baseUrl", ""),
+      theme: safeGetItem("theme", "light"),
+      marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
+      capabilityFilter: JSON.parse(safeGetItem("capabilityFilter", JSON.stringify(DEFAULT_CAP_GROUPS))),
+    };
+
+    // --- Subsequence fuzzy match: all chars of `q` must appear in `text` in order ---
+    function fuzzyMatch(query, text) {
+      if (!query) return true;
+      const q = query.toLowerCase();
+      const t = text.toLowerCase();
+      let i = 0;
+      for (const c of t) {
+        if (c === q[i]) i++;
+        if (i === q.length) return true;
+      }
+      return false;
+    }
 
     // --- Detect file:// ---
     if (location.protocol === "file:") {
@@ -889,18 +933,54 @@
         localStorage.setItem("baseUrl", state.baseUrl);
         $("#captionBaseUrl").textContent = state.baseUrl;
       };
-      $("#search").oninput = (e) => {
-        const q = e.target.value.toLowerCase();
-        $$(".endpoint").forEach(card => {
-          const text = card.textContent.toLowerCase();
-          card.style.display = text.includes(q) ? "" : "none";
-        });
+      // --- Search: fuzzy match + Ctrl+K to focus + ↑/↓/Enter to navigate ---
+      $("#search").oninput = () => applySearchAndFilter();
+      $("#search").onkeydown = (e) => {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const visible = $$(".endpoint").filter(c => c.style.display !== "none");
+          if (!visible.length) return;
+          let idx = visible.findIndex(c => c.classList.contains("search-focus"));
+          if (idx < 0) idx = e.key === "ArrowDown" ? -1 : 0;
+          const next = e.key === "ArrowDown"
+            ? Math.min(idx + 1, visible.length - 1)
+            : Math.max(idx - 1, 0);
+          visible.forEach(c => c.classList.remove("search-focus"));
+          visible[next].classList.add("search-focus");
+          visible[next].scrollIntoView({ block: "center", behavior: "smooth" });
+        } else if (e.key === "Enter") {
+          const focused = $(".endpoint.search-focus");
+          if (focused) {
+            const det = focused.querySelector("details");
+            if (det) det.open = true;
+            focused.scrollIntoView({ block: "center" });
+          }
+        } else if (e.key === "Escape") {
+          $("#search").value = "";
+          applySearchAndFilter();
+          $("#search").blur();
+        }
       };
+      // Global Ctrl+K / Cmd+K to focus search
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+          e.preventDefault();
+          $("#search").focus();
+          $("#search").select();
+        }
+      });
+
       $("#marketFilter").onchange = () => {
         const checked = $$("#marketFilter input:checked").map(i => i.value);
         state.marketFilter = checked;
-        localStorage.setItem("marketFilter", JSON.stringify(checked));
-        renderContent();
+        safeSetItem("marketFilter", JSON.stringify(checked));
+        applySearchAndFilter();
+      };
+      $("#capabilityFilter").onchange = () => {
+        const checked = $$("#capabilityFilter input:checked").map(i => i.value);
+        state.capabilityFilter = checked;
+        safeSetItem("capabilityFilter", JSON.stringify(checked));
+        applySearchAndFilter();
       };
       $("#testStart").onclick = async () => {
         await fetch("/control/test-instance/start", { method: "POST" });
@@ -971,8 +1051,29 @@
         content.appendChild(h2);
         sec.endpoints
           .filter(ep => ep.markets.some(m => state.marketFilter.includes(m)))
+          .filter(ep => epMatchesCapabilityFilter(ep))
           .forEach(ep => content.appendChild(renderEndpoint(ep)));
       });
+      applySearchAndFilter();  // re-apply search highlight after re-render
+    }
+
+    // Apply both the search query and the current market+capability filters
+    // to all rendered endpoint cards.
+    function applySearchAndFilter() {
+      const q = ($("#search").value || "").trim();
+      $$(".endpoint").forEach(card => {
+        const matches = fuzzyMatch(q, card.textContent);
+        card.style.display = matches ? "" : "none";
+      });
+    }
+
+    // A section's "no capabilities" endpoints (e.g., /health, /indices list)
+    // always show. Endpoints with capabilities must intersect at least one
+    // active capability group.
+    function epMatchesCapabilityFilter(ep) {
+      if (!ep.capabilities || ep.capabilities.length === 0) return true;
+      const activeCaps = state.capabilityFilter.flatMap(g => CAPABILITY_GROUPS[g] || []);
+      return ep.capabilities.some(c => activeCaps.includes(c));
     }
 
     function renderEndpoint(ep) {

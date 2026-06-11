@@ -51,6 +51,28 @@ class TestHtmlStructure:
         assert soup.select_one("#testStart") is not None
         assert soup.select_one("#testStop") is not None
 
+    def test_has_capability_filter(self, soup):
+        """Capability filter UI: 6 grouped checkboxes."""
+        cf = soup.select_one("#capabilityFilter")
+        assert cf is not None
+        checkboxes = cf.select("input[type=checkbox]")
+        assert len(checkboxes) == 6, f"Expected 6 capability groups, got {len(checkboxes)}"
+        values = [c.get("value") for c in checkboxes]
+        for g in ("quotes", "history", "metadata", "flows", "notices", "pools"):
+            assert g in values, f"Missing capability group: {g}"
+
+    def test_has_fuzzy_search_handler(self, html_text):
+        """Search uses fuzzyMatch (subsequence), not just String.includes."""
+        assert "fuzzyMatch" in html_text
+        assert "ctrlKey" in html_text
+        assert "ArrowDown" in html_text  # keyboard navigation
+
+    def test_has_capability_groups_definition(self, html_text):
+        """The CAPABILITY_GROUPS mapping must exist in JS."""
+        assert "CAPABILITY_GROUPS" in html_text
+        assert "REALTIME_QUOTE" in html_text
+        assert "ANNOUNCEMENT" in html_text
+
     def test_has_no_external_dependencies(self, html_text):
         """No <script src=...> or <link href=...> to external URLs."""
         import re
