@@ -25,7 +25,7 @@
 |---|---|---|
 | `docs/API.html` | 新建 | 单文件 HTML：内联 CSS + JS，零外部依赖 |
 | `stock_data/control.py` | 新建 | 测试实例的 start / stop / status 封装 |
-| `stock_data/server.py` | 修改（小） | 挂载 `/docs` 静态资源 + 注册 4 个 `/control/*` 端点 |
+| `stock_data/server.py` | 修改（小） | 挂载 `/docs` 静态资源 + 注册 5 个 `/control/*` 端点 |
 | `tests/test_control.py` | 新建 | `control.py` 单元测试 |
 | `tests/test_server_control_endpoints.py` | 新建 | `server.py` 新增端点的 FastAPI TestClient 集成测试 |
 | `tests/test_api_html.py` | 新建 | BeautifulSoup 解析 HTML，验证锚点 id、ENDPOINTS JSON 完整性 |
@@ -113,7 +113,7 @@
 
 ### 4.6 端点元数据 Schema（HTML 内嵌 JSON）
 
-见设计 §4（已确定）：
+HTML 顶部 inline 一个 `ENDPOINTS` 字典，是侧边栏、卡片、过滤、搜索的唯一数据源：
 
 ```js
 const ENDPOINTS = {
@@ -137,7 +137,7 @@ const ENDPOINTS = {
 
 ### 5.1 布局
 
-- **桌面（≥1200px）**：三栏 — 侧边栏 280px + 主内容 max-width 920px 居中 + 右侧 endpoint 元信息卡片（可选）
+- **桌面（≥1200px）**：两栏 — 侧边栏 280px + 主内容 max-width 920px 居中（V1 不做右侧元信息卡片，预留空间）
 - **平板（768-1199px）**：两栏 — 侧边栏 + 主内容
 - **手机（<768px）**：单栏 + 顶栏 hamburger 菜单
 
@@ -204,7 +204,7 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 | 模块 | 测试文件 | 覆盖 |
 |---|---|---|
 | `control.py` | `tests/test_control.py` | `start` / `stop` / `status` 正常路径；PID 文件存在但进程已死；端口占用；幂等性 |
-| `server.py` 新增端点 | `tests/test_server_control_endpoints.py` | FastAPI `TestClient` 调 4 个端点；断言响应 schema |
+| `server.py` 新增端点 | `tests/test_server_control_endpoints.py` | FastAPI `TestClient` 调 5 个端点；断言响应 schema |
 | `docs/API.html` 静态结构 | `tests/test_api_html.py` | BeautifulSoup 验证锚点 id（`#4.2`、`#stocks-quote`）、CSS 变量定义、`ENDPOINTS` ≥ 25 项、fuse 索引存在 |
 
 ### 7.2 手工 smoke test（实施完成时跑）
@@ -241,7 +241,7 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 5. 跑通启动 + 浏览器打开 `/docs/API.html`，确认布局、主题切换、sidebar 渲染
 
 ### Phase 3 — 元数据填充
-6. 从 `docs/API.md` 转写 ENDPOINTS JSON：25 个 endpoint 逐个录入
+6. 从 `docs/API.md` 转写 ENDPOINTS JSON：按 `docs/API.md` §4.1 → §4.13 顺序逐个录入（约 27 个 endpoint）
 7. 新建 `tests/test_api_html.py`，验证 HTML 结构
 
 ### Phase 4 — 交互层
@@ -327,10 +327,10 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
 1. `control.py` 模块 + 单元测试
 2. `server.py` 挂载 `/docs` + 5 个 control 端点 + 集成测试
 3. `docs/API.html` 骨架（CSS + JS 框架 + 空 ENDPOINTS）
-4. `docs/API.html` 录入 §4.1-4.2 的 endpoint 元数据（健康 + 股票 + 指数）
-5. `docs/API.html` 录入 §4.3-4.6 的 endpoint 元数据（列表/日历/板块/涨跌停）
-6. `docs/API.html` 录入 §4.7-4.9 的 endpoint 元数据（龙虎榜/融资融券/资金流）
-7. `docs/API.html` 录入 §4.10-4.13 的 endpoint 元数据（热点北向/研报/公告/指标）
+4. `docs/API.html` 录入 `docs/API.md` §4.1-§4.3 的 endpoint 元数据（健康 + 股票 + 指数）
+5. `docs/API.html` 录入 `docs/API.md` §4.4-§4.6 的 endpoint 元数据（列表/日历/板块/涨跌停）
+6. `docs/API.html` 录入 `docs/API.md` §4.7-§4.9 的 endpoint 元数据（龙虎榜/融资融券/资金流）
+7. `docs/API.html` 录入 `docs/API.md` §4.10-§4.13 的 endpoint 元数据（热点北向/研报/公告/指标）
 8. `docs/API.html` Try it 交互实现
 9. `docs/API.html` 搜索 + 过滤 + 主题 + localStorage
 10. `docs/API.html` Test Instance 控制卡片
