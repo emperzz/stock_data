@@ -31,9 +31,12 @@ class TestHtmlStructure:
         assert soup.select_one("nav.sidebar") is not None
         assert soup.select_one("main.main") is not None
 
-    def test_has_endpoints_dict(self, html_text):
-        assert "const ENDPOINTS = {" in html_text
-        assert '"sections":' in html_text
+    def test_has_manifest_bootstrap(self, html_text):
+        """The 1000-line hand-written ENDPOINTS block is gone; replaced by
+        a fetch of /control/api-manifest + ENDPOINTS shim."""
+        assert "const ENDPOINTS = {" not in html_text
+        assert "fetch(\"/control/api-manifest\"" in html_text
+        assert "loadManifest" in html_text
 
     def test_has_capability_definitions(self, html_text):
         assert "HISTORICAL_DWM" in html_text
@@ -80,8 +83,13 @@ class TestHtmlStructure:
         assert external == [], f"Found external resources: {external}"
 
     def test_endpoints_count_grows(self, html_text):
-        """By Task 7 we should have ~27 endpoints across 13 sections."""
-        n_get = html_text.count('method: "GET"')
-        n_post = html_text.count('method: "POST"')
-        total = n_get + n_post
-        assert total >= 25, f"Expected ≥25 endpoints by Task 7, got {total}"
+        """The HTML no longer hard-codes endpoint metadata (Task 5 refactor).
+        Verify the manifest fetch is wired in. The actual endpoint count is
+        asserted in tests/test_manifest.py via the live /control/api-manifest
+        response.
+        """
+        # Sanity: the boot() entry point exists and the manifest shim wires
+        # ENDPOINTS -> MANIFEST transparently for the render code.
+        assert "async function boot()" in html_text
+        assert "await window.loadManifest()" in html_text
+        assert "Object.defineProperty(window, \"ENDPOINTS\"" in html_text
