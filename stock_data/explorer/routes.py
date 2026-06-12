@@ -175,20 +175,10 @@ def build_control_router() -> APIRouter:
             result = method(**req.kwargs)
         except TypeError as e:
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            return {
-                "ok": False, "fetcher": req.fetcher, "method": req.method,
-                "elapsed_ms": elapsed_ms, "result": None,
-                "error": {"type": "TypeError", "message": str(e),
-                          "traceback": _traceback.format_exc()},
-            }
+            return _err("TypeError", str(e), with_tb=True, elapsed_ms=elapsed_ms)
         except Exception as e:
             elapsed_ms = int((time.monotonic() - start) * 1000)
-            return {
-                "ok": False, "fetcher": req.fetcher, "method": req.method,
-                "elapsed_ms": elapsed_ms, "result": None,
-                "error": {"type": type(e).__name__, "message": str(e),
-                          "traceback": _traceback.format_exc()},
-            }
+            return _err(type(e).__name__, str(e), with_tb=True, elapsed_ms=elapsed_ms)
         elapsed_ms = int((time.monotonic() - start) * 1000)
         return {
             "ok": True,
