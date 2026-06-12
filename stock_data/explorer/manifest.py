@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import inspect
 import logging
 import types
 from typing import Any, Union, get_args, get_origin
@@ -118,6 +119,50 @@ def _python_type_to_str(annotation) -> str:
     if annotation is float:
         return "float"
     return "string"  # 兜底
+
+
+def _reflect_signature(method) -> list[dict]:
+    """Reflect a fetcher method into JSON-serializable param dicts.
+
+    Skips `self`. Falls back to "string" for unannotated params and
+    JSON-serializes defaults (unrepresentable defaults stringify via repr()).
+    """
+    out: list[dict] = []
+    try:
+        sig = inspect.signature(method)
+    except (ValueError, TypeError):
+        return out
+    for name, param in sig.parameters.items():
+        if name == "self":
+            continue
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue  # *args / **kwargs not representable as discrete fields
+        # Type rendering
+        if param.annotation is inspect.Parameter.empty:
+            type_str = "string"
+        else:
+            type_str = _python_type_to_str(param.annotation)
+        # Default rendering
+        if param.default is inspect.Parameter.empty:
+            required = True
+            default_val = None
+        else:
+            required = False
+            default_val = _jsonify_default(param.default)
+        out.append({
+            "name": name,
+            "type": type_str,
+            "required": required,
+            "default": default_val,
+        })
+    return out
+
+
+def _jsonify_default(value):
+    """Make a default value JSON-serializable, falling back to repr()."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return repr(value)
 
 
 def _build_meta() -> dict:
