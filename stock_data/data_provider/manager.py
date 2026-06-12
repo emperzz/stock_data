@@ -492,78 +492,90 @@ class DataFetcherManager:
 
     # ---------- eastmoney datacenter endpoints ----------
 
-    def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> dict:
+    def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> tuple[dict, str]:
         return self._with_failover(
             DataCapability.DRAGON_TIGER, "csi", f"dragon_tiger {code}",
             lambda f: f.get_dragon_tiger(code, trade_date, look_back),
+            return_source=True,
         )
 
-    def get_daily_dragon_tiger(self, trade_date: str = "", min_net_buy: float | None = None) -> dict:
+    def get_daily_dragon_tiger(self, trade_date: str = "", min_net_buy: float | None = None) -> tuple[dict, str]:
         return self._with_failover(
             DataCapability.DRAGON_TIGER, "csi", "daily dragon_tiger",
             lambda f: f.get_daily_dragon_tiger(trade_date, min_net_buy),
+            return_source=True,
         )
 
-    def get_margin_trading(self, code: str, page_size: int = 30) -> list[dict]:
+    def get_margin_trading(self, code: str, page_size: int = 30) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.MARGIN_TRADING, "csi", f"margin_trading {code}",
             lambda f: f.get_margin_trading(code, page_size),
+            return_source=True,
         )
 
-    def get_block_trade(self, code: str, page_size: int = 20) -> list[dict]:
+    def get_block_trade(self, code: str, page_size: int = 20) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.BLOCK_TRADE, "csi", f"block_trade {code}",
             lambda f: f.get_block_trade(code, page_size),
+            return_source=True,
         )
 
-    def get_holder_num_change(self, code: str, page_size: int = 10) -> list[dict]:
+    def get_holder_num_change(self, code: str, page_size: int = 10) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.HOLDER_NUM, "csi", f"holder_num {code}",
             lambda f: f.get_holder_num_change(code, page_size),
+            return_source=True,
         )
 
-    def get_dividend(self, code: str, page_size: int = 20) -> list[dict]:
+    def get_dividend(self, code: str, page_size: int = 20) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.DIVIDEND, "csi", f"dividend {code}",
             lambda f: f.get_dividend(code, page_size),
+            return_source=True,
         )
 
-    def get_fund_flow_minute(self, code: str) -> list[dict]:
+    def get_fund_flow_minute(self, code: str) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.FUND_FLOW, "csi", f"fund_flow_minute {code}",
             lambda f: f.get_fund_flow_minute(code),
+            return_source=True,
         )
 
-    def get_fund_flow_120d(self, code: str) -> list[dict]:
+    def get_fund_flow_120d(self, code: str) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.FUND_FLOW, "csi", f"fund_flow_120d {code}",
             lambda f: f.get_fund_flow_120d(code),
+            return_source=True,
         )
 
     # ---------- ths / research / announcement ----------
 
-    def get_hot_topics(self, date_str: str = "") -> list[dict]:
+    def get_hot_topics(self, date_str: str = "") -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.HOT_TOPICS, "csi", "hot_topics",
             lambda f: f.get_hot_topics(date_str),
+            return_source=True,
         )
 
-    def get_north_flow(self) -> list[dict]:
+    def get_north_flow(self) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.NORTH_FLOW, "csi", "north_flow",
             lambda f: f.get_north_flow(),
+            return_source=True,
         )
 
-    def get_reports(self, code: str, max_pages: int = 5) -> list[dict]:
+    def get_reports(self, code: str, max_pages: int = 5) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.RESEARCH_REPORT, "csi", f"reports {code}",
             lambda f: f.get_reports(code, max_pages),
+            return_source=True,
         )
 
-    def get_announcements(self, code: str, page_size: int = 30) -> list[dict]:
+    def get_announcements(self, code: str, page_size: int = 30) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.ANNOUNCEMENT, "csi", f"announcements {code}",
             lambda f: f.get_announcements(code, page_size),
+            return_source=True,
         )
 
     def get_report_pdf(self, report_id: str) -> tuple[str, str]:
