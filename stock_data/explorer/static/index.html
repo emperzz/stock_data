@@ -251,6 +251,38 @@
       background: var(--bg); color: var(--text); cursor: pointer;
     }
     .fetcher-test-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+    /* === Fetcher mini-form (Stage 2) === */
+    .fetcher-miniform {
+      grid-column: 1 / -1;
+      margin-top: 8px; padding: 12px;
+      background: var(--bg-sidebar); border-radius: 6px;
+    }
+    .fetcher-miniform[hidden] { display: none; }
+    .fetcher-miniform h4 {
+      margin: 0 0 8px; font-size: 13px;
+      font-family: monospace; color: var(--text);
+    }
+    .fetcher-miniform .field {
+      display: grid; grid-template-columns: 100px 1fr;
+      gap: 8px; align-items: center; margin-bottom: 6px;
+    }
+    .fetcher-miniform label { font-size: 12px; color: var(--text-muted); }
+    .fetcher-miniform input {
+      font: inherit; padding: 4px 8px;
+      border: 1px solid var(--border); border-radius: 4px;
+      background: var(--bg); color: var(--text);
+    }
+    .fetcher-miniform .actions {
+      margin-top: 8px; display: flex; gap: 8px;
+    }
+    .fetcher-miniform .actions button {
+      font: inherit; padding: 4px 12px; cursor: pointer;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg); color: var(--text);
+    }
+    .fetcher-miniform .actions button.primary {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+    }
     /* === Try-it form === */
     .try-it { background: var(--bg-sidebar); padding: 16px; border-radius: 8px; margin-top: 12px; }
     .try-it .field { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
@@ -781,6 +813,7 @@
       }
       applyTheme();
       bindUI();
+      bindFetcherTestHandlers();
       // Initialize the right-side response panel (binds copy/clear buttons).
       ResultPanel.init();
       // baseUrl defaults to the page's own origin so it works regardless
@@ -961,11 +994,206 @@
       const btn = el("button", {
         className: "fetcher-test-btn", type: "button", textContent: "Test",
       });
-      // Stage 2 (Task 11) replaces this no-op with a real handler that
-      // POSTs to /control/fetcher-test and routes the response through
-      // ResultPanel.
+      // Click handler is wired via document-level delegation in
+      // bindFetcherTestHandlers() (see bottom of this IIFE). The handler
+      // toggles the mini-form open/closed and pre-fills it from the
+      // endpoint's Try-it inputs.
       row.appendChild(btn);
+
+      // Stage 2: hidden mini-form revealed when the user clicks Test.
+      // Fields are generated from the fetcher's method signature (name,
+      // required, default). Values can be pre-filled from same-named Try-it
+      // inputs on the parent endpoint card.
+      const mini = el("div", { className: "fetcher-miniform", hidden: true });
+      mini.appendChild(el("h4", {
+        textContent: `Direct call: ${f.name}.${f.method}`,
+      }));
+      (f.signature || []).forEach(p => {
+        const field = el("div", { className: "field" });
+        field.appendChild(el("label", {
+          textContent: `${p.name}${p.required ? " *" : ""}:`,
+        }));
+        const input = el("input", {
+          type: "text",
+          placeholder: p.required ? "required" : "optional",
+        });
+        input.dataset.param = p.name;
+        if (p.default !== null && p.default !== undefined && p.default !== "") {
+          input.value = String(p.default);
+        }
+        field.appendChild(input);
+        mini.appendChild(field);
+      });
+      const actions = el("div", { className: "actions" });
+      actions.appendChild(el("button", {
+        className: "primary fetcher-run-btn", type: "button", textContent: "Run",
+      }));
+      actions.appendChild(el("button", {
+        className: "fetcher-cancel-btn", type: "button", textContent: "Cancel",
+      }));
+      mini.appendChild(actions);
+      row.appendChild(mini);
       return row;
+    }
+
+    // === Stage 2: Fetcher mini-form event delegation ===
+    // A single document-level click listener handles Test/Run/Cancel clicks
+    // inside any .fetcher-row. We delegate rather than binding per-row
+    // because the rows are re-rendered on every filter change, so per-row
+    // listeners would leak.
+
+    // Best-effort prefill: copy any same-named value from the parent
+    // endpoint card's Try-it inputs into the mini-form. We only fill an
+    // empty field so the user can still type over it; and we don't
+    // disturb the value derived from the signature's `default`.
+    function prefillMiniFormFromTryIt(row, mini) {
+      const card = row.closest(".endpoint");
+      if (!card) return;
+      const tryitInputs = card.querySelectorAll(
+        ".try-it input[data-param-name]"
+      );
+      const lookup = {};
+      tryitInputs.forEach(inp => {
+        const k = inp.dataset.paramName;
+        const v = inp.value;
+        if (k && v) lookup[k] = v;
+      });
+      mini.querySelectorAll("input[data-param]").forEach(inp => {
+        const k = inp.dataset.param;
+        if (lookup[k] != null && !inp.value) inp.value = lookup[k];
+      });
+    }
+
+    // POST {fetcher, method, kwargs} to /control/fetcher-test. Reuses the
+    // existing ResultPanel — the right-side panel is the single source of
+    // truth for response display.
+    async function runFetcherTest(row, mini) {
+      const fetcherName = row.dataset.fetcher;
+      const method = row.dataset.method;
+      const kwargs = {};
+      mini.querySelectorAll("input[data-param]").forEach(inp => {
+        if (inp.value !== "") kwargs[inp.dataset.param] = inp.value;
+      });
+      // ResultPanel.showLoading + .show is the established pattern (see
+      // tryIt()). We render a synthetic payload because the mini-form is
+      // a non-HTTP "request" — there's no real URL/status. We use a
+      // "FETCHER" method label and synthesize a status based on the
+      // response's `ok` field.
+      const labelUrl = `Direct fetcher · ${fetcherName}.${method}`;
+      ResultPanel.showLoading();
+      const t0 = performance.now();
+      try {
+        const resp = await fetch("/control/fetcher-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fetcher: fetcherName, method, kwargs }),
+        });
+        const ms = performance.now() - t0;
+        const bodyText = await resp.text();
+        let parsed = null;
+        try { parsed = JSON.parse(bodyText); } catch (_) { /* leave null */ }
+        if (resp.status !== 200 || !parsed) {
+          // HTTP-level error (e.g. 422 from Pydantic) or non-JSON body.
+          ResultPanel.show({
+            method: "FETCHER",
+            url: labelUrl,
+            status: resp.status || 0,
+            statusText: resp.statusText || "",
+            ms,
+            sizeBytes: bodyText.length,
+            body: bodyText,
+            contentType: resp.headers.get("content-type") || "",
+            error: null,
+          });
+          return;
+        }
+        if (!parsed.ok) {
+          // Fetcher raised an exception. Render the traceback as a
+          // synthetic error so the user sees it in the result panel.
+          const errMsg = `${parsed.error.type}: ${parsed.error.message}`;
+          const fullBody = parsed.error.traceback
+            ? `${errMsg}\n\n${parsed.error.traceback}`
+            : errMsg;
+          ResultPanel.show({
+            method: "FETCHER",
+            url: labelUrl,
+            status: 500,
+            statusText: parsed.error.type || "FetcherError",
+            ms,
+            sizeBytes: fullBody.length,
+            body: fullBody,
+            contentType: "text/plain",
+            error: new Error(errMsg),
+          });
+          return;
+        }
+        // Success — `result` is the return value of the fetcher call.
+        ResultPanel.show({
+          method: "FETCHER",
+          url: `${labelUrl} · ${parsed.elapsed_ms}ms`,
+          status: 200,
+          statusText: "OK",
+          ms,
+          sizeBytes: JSON.stringify(parsed.result).length,
+          body: parsed.result,
+          contentType: "application/json",
+          error: null,
+        });
+      } catch (e) {
+        // Network error (server unreachable, CORS, etc.).
+        const ms = performance.now() - t0;
+        ResultPanel.show({
+          method: "FETCHER",
+          url: labelUrl,
+          status: 0,
+          statusText: "",
+          ms,
+          sizeBytes: 0,
+          body: "",
+          contentType: "",
+          error: e,
+        });
+      }
+    }
+
+    function bindFetcherTestHandlers() {
+      document.addEventListener("click", (ev) => {
+        const target = ev.target;
+        if (!(target instanceof HTMLElement)) return;
+
+        // Test button → reveal mini-form + prefill from Try-it
+        if (target.classList.contains("fetcher-test-btn")) {
+          const row = target.closest(".fetcher-row");
+          if (!row) return;
+          const mini = row.querySelector(".fetcher-miniform");
+          if (!mini) return;
+          if (mini.hidden) {
+            prefillMiniFormFromTryIt(row, mini);
+            mini.hidden = false;
+          } else {
+            mini.hidden = true;
+          }
+          ev.stopPropagation();
+          return;
+        }
+
+        // Cancel button → hide mini-form
+        if (target.classList.contains("fetcher-cancel-btn")) {
+          const mini = target.closest(".fetcher-miniform");
+          if (mini) mini.hidden = true;
+          ev.stopPropagation();
+          return;
+        }
+
+        // Run button → POST to /control/fetcher-test
+        if (target.classList.contains("fetcher-run-btn")) {
+          const mini = target.closest(".fetcher-miniform");
+          const row = mini ? mini.closest(".fetcher-row") : null;
+          if (mini && row) runFetcherTest(row, mini);
+          ev.stopPropagation();
+          return;
+        }
+      });
     }
 
     // Build the <details>-wrapped fetcher list for one endpoint card.
