@@ -48,3 +48,23 @@ class TestApiManifestEndpoint:
         # sections (control/* is excluded by tag filter).
         data = client.get("/control/api-manifest").json()
         assert data["sections"] == []
+
+
+def test_app_state_has_manager_after_startup():
+    """app.state.manager must be wired during lifespan startup.
+
+    The manifest builder (added in subsequent tasks) enumerates fetchers per
+    (market, capability) via app.state.manager. Tests that mock fetchers
+    also need this hook to inject a fake manager.
+    """
+    from stock_data.data_provider.manager import DataFetcherManager
+
+    with TestClient(app) as client:
+        # Trigger lifespan startup/shutdown explicitly via the context manager.
+        # Calling an endpoint forces lifespan to run before the request.
+        client.get("/control/server/status")
+        assert hasattr(app.state, "manager"), (
+            "app.state.manager not set — manifest builder will fail to "
+            "enumerate fetchers"
+        )
+        assert isinstance(app.state.manager, DataFetcherManager)

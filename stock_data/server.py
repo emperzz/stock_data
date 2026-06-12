@@ -76,6 +76,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"[Startup] Trade calendar warm-up failed (non-fatal): {e}")
 
+    # ----- Expose manager via app.state for the explorer manifest builder -----
+    # The manifest needs to enumerate fetchers per (market, capability).
+    # Using app.state avoids importing the global get_manager() into manifest.py,
+    # which would make manifest.py harder to unit-test (couldn't inject a mock).
+    from .api.routes import get_manager
+    app.state.manager = get_manager()
+    logger.info("[Startup] app.state.manager wired for explorer manifest")
+
     yield
     logger.info("Shutting down Stock Data Server")
 
