@@ -517,7 +517,7 @@ def get_history(
         data = [_build_kline_data(row, _format_date) for row in records]
 
         result = StockHistoryResponse(
-            code=stock_code, stock_name=stock_name, period=period, data=data
+            code=stock_code, stock_name=stock_name, period=period, data=data, source=source
         )
 
         # Cache the result
@@ -635,6 +635,7 @@ def get_intraday(
             adjust=adjust,
             date=trade_date,
             data=data,
+            source=source,
         )
 
         if is_cache_enabled():
@@ -839,7 +840,7 @@ def get_index_history(
         records = df.to_dict("records")
         data = [_build_kline_data(row, _format_date) for row in records]
 
-        result = IndexHistoryResponse(code=index_code, name=index_name, period=period, data=data)
+        result = IndexHistoryResponse(code=index_code, name=index_name, period=period, data=data, source=source)
 
         if is_cache_enabled():
             cache[key] = result
@@ -936,6 +937,7 @@ def get_index_intraday(
             period=period_label,
             date=trade_date,
             data=data,
+            source=source,
         )
 
         if is_cache_enabled():
