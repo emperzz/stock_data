@@ -13,7 +13,6 @@ import pytest
 from stock_data.data_provider.base import DataCapability
 from stock_data.data_provider.manager import DataFetcherManager
 
-
 # ---------------------------------------------------------------------------
 # Mock fetcher that implements all 12 methods under test
 # ---------------------------------------------------------------------------
