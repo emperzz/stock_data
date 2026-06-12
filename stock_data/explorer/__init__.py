@@ -48,5 +48,6 @@ def mount(app: FastAPI) -> None:
     # propagates naturally and aborts server startup, which is the desired
     # behavior (a broken /control/* surface is a deployment bug, not
     # something to silently degrade past).
-    app.include_router(build_control_router())
-    logger.info("[Explorer] Mounted /control/* (5 endpoints)")
+    control_router = build_control_router()
+    app.include_router(control_router)
+    logger.info(f"[Explorer] Mounted /control/* ({len(control_router.routes)} endpoints)")

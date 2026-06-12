@@ -1,18 +1,20 @@
 """Control endpoints for the API Explorer (/control/*).
 
-Exposes server config, server status, and Test Instance subprocess
-management. Bound to 127.0.0.1 only — never expose on 0.0.0.0.
+Exposes server config, server status, the API manifest, and Test Instance
+subprocess management. Bound to 127.0.0.1 only — never expose on 0.0.0.0.
 """
 
 from __future__ import annotations
 
 import os
 import time
+from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from .. import __version__
 from . import control as _control
+from .manifest import build_manifest
 
 _CONTROL_STARTED_AT = time.time()
 
@@ -64,6 +66,18 @@ def build_control_router() -> APIRouter:
             "port": _read_server_port(),
             "uptime_sec": int(time.time() - _CONTROL_STARTED_AT),
         }
+
+    @router.get("/api-manifest")
+    def control_api_manifest(request: Request) -> dict:
+        """The /explorer/ HTML fetches this on load.
+
+        返回 build_manifest(request.app) 的结果,加 generated_at 时间戳。
+        不缓存(每次重新反射),保证"加 endpoint 不重启不生效"成为陷阱
+        不存在——重启 server 才会触发新 route 注册,这是预期。
+        """
+        manifest = build_manifest(request.app)
+        manifest["meta"]["generated_at"] = datetime.now(timezone.utc).isoformat()
+        return manifest
 
     @router.get("/test-instance/status")
     def control_test_instance_status() -> dict:
