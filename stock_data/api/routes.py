@@ -1164,6 +1164,7 @@ def list_boards(
     summary="板块成分股",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
+    fetcher_method="get_concept_board_stocks",  # default get_all_concept_boards is the list variant
 )
 def get_board_stocks(
     board_code: str = Path(max_length=20, description="Board code (e.g., BK1048)"),
@@ -1449,6 +1450,7 @@ get_dragon_tiger = cached_endpoint(
     summary="龙虎榜（全市场）",
     markets=["csi"],
     capabilities=["DRAGON_TIGER"],
+    fetcher_method="get_daily_dragon_tiger",  # default get_dragon_tiger is per-stock variant
 )
 def get_daily_dragon_tiger(
     trade_date: str = Query(default="", description="Trade date (YYYY-MM-DD)"),
@@ -1656,6 +1658,7 @@ get_fund_flow = cached_endpoint(
     summary="资金流（120 日）",
     markets=["csi"],
     capabilities=["FUND_FLOW"],
+    fetcher_method="get_fund_flow_120d",  # default get_fund_flow_minute is minute-level variant
 )
 def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get 120-day capital flow history for a stock."""
