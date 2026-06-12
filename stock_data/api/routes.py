@@ -1407,7 +1407,7 @@ def get_dragon_tiger(
     look_back: int = Query(default=30, ge=1, le=365),
 ) -> DragonTigerResponse:
     manager = get_manager()
-    data = manager.get_dragon_tiger(stock_code, trade_date, look_back)
+    data, source = manager.get_dragon_tiger(stock_code, trade_date, look_back)
     stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
     seats_data = data.get("seats", {})
     return DragonTigerResponse(
@@ -1419,6 +1419,7 @@ def get_dragon_tiger(
             "sell": [DragonTigerSeat(**s) for s in seats_data.get("sell", [])],
         },
         institution=DragonTigerInstitution(**data.get("institution", {})),
+        source=source,
     )
 
 
@@ -1449,11 +1450,12 @@ def get_daily_dragon_tiger(
     min_net_buy: float | None = Query(default=None, description="Min net buy (万元)"),
 ) -> DailyDragonTigerResponse:
     manager = get_manager()
-    data = manager.get_daily_dragon_tiger(trade_date, min_net_buy)
+    data, source = manager.get_daily_dragon_tiger(trade_date, min_net_buy)
     return DailyDragonTigerResponse(
         date=data["date"],
         total=data["total"],
         stocks=[DailyDragonTigerStock(**s) for s in data["stocks"]],
+        source=source,
     )
 
 
@@ -1484,12 +1486,13 @@ def get_margin(
     page_size: int = Query(default=30, ge=1, le=100),
 ) -> MarginTradingResponse:
     manager = get_manager()
-    data = manager.get_margin_trading(stock_code, page_size)
+    data, source = manager.get_margin_trading(stock_code, page_size)
     stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
     return MarginTradingResponse(
         code=stock_code,
         name=stock_name or "",
         records=[MarginTradingRecord(**r) for r in data],
+        source=source,
     )
 
 
@@ -1517,11 +1520,15 @@ def get_block_trade(
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> BlockTradeResponse:
     manager = get_manager()
-    data = manager.get_block_trade(stock_code, page_size)
+    data, source = manager.get_block_trade(stock_code, page_size)
     stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
     records = [BlockTradeRecord(**r) for r in data]
     return BlockTradeResponse(
-        code=stock_code, name=stock_name or "", records=records, total=len(records)
+        code=stock_code,
+        name=stock_name or "",
+        records=records,
+        total=len(records),
+        source=source,
     )
 
 
@@ -1549,12 +1556,13 @@ def get_holder_num(
     page_size: int = Query(default=10, ge=1, le=50),
 ) -> HolderNumResponse:
     manager = get_manager()
-    data = manager.get_holder_num_change(stock_code, page_size)
+    data, source = manager.get_holder_num_change(stock_code, page_size)
     stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
     return HolderNumResponse(
         code=stock_code,
         name=stock_name or "",
         records=[HolderNumRecord(**r) for r in data],
+        source=source,
     )
 
 
@@ -1582,12 +1590,13 @@ def get_dividend(
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> DividendResponse:
     manager = get_manager()
-    data = manager.get_dividend(stock_code, page_size)
+    data, source = manager.get_dividend(stock_code, page_size)
     stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
     return DividendResponse(
         code=stock_code,
         name=stock_name or "",
         records=[DividendRecord(**r) for r in data],
+        source=source,
     )
 
 
@@ -1613,13 +1622,14 @@ get_dividend = cached_endpoint(
 def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get minute-level capital flow for a stock."""
     manager = get_manager()
-    data = manager.get_fund_flow_minute(stock_code)
+    data, source = manager.get_fund_flow_minute(stock_code)
     stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
     return FundFlowResponse(
         code=stock_code,
         name=stock_name or "",
         type="minute",
         records=[FundFlowMinuteRecord(**r) for r in data],
+        source=source,
     )
 
 
@@ -1645,13 +1655,14 @@ get_fund_flow = cached_endpoint(
 def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get 120-day capital flow history for a stock."""
     manager = get_manager()
-    data = manager.get_fund_flow_120d(stock_code)
+    data, source = manager.get_fund_flow_120d(stock_code)
     stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
     return FundFlowResponse(
         code=stock_code,
         name=stock_name or "",
         type="daily",
         records=[FundFlowDailyRecord(**r) for r in data],
+        source=source,
     )
 
 
@@ -1682,10 +1693,12 @@ def get_hot_topics(
 ) -> HotTopicResponse:
     """Get daily hot stocks with reason tags."""
     manager = get_manager()
-    data = manager.get_hot_topics(date)
+    data, source = manager.get_hot_topics(date)
     topics = [HotTopicRecord(**r) for r in data]
     actual_date = date or datetime.now().strftime("%Y-%m-%d")
-    return HotTopicResponse(date=actual_date, total=len(topics), topics=topics)
+    return HotTopicResponse(
+        date=actual_date, total=len(topics), topics=topics, source=source
+    )
 
 
 get_hot_topics = cached_endpoint(
@@ -1710,8 +1723,8 @@ get_hot_topics = cached_endpoint(
 def get_north_flow() -> NorthFlowResponse:
     """Get north-bound capital flow (minute-level)."""
     manager = get_manager()
-    data = manager.get_north_flow()
-    return NorthFlowResponse(records=[NorthFlowRecord(**r) for r in data])
+    data, source = manager.get_north_flow()
+    return NorthFlowResponse(records=[NorthFlowRecord(**r) for r in data], source=source)
 
 
 get_north_flow = cached_endpoint(
@@ -1739,11 +1752,15 @@ def get_reports(
 ) -> ReportResponse:
     """Get research reports for a stock."""
     manager = get_manager()
-    data = manager.get_reports(stock_code, max_pages)
+    data, source = manager.get_reports(stock_code, max_pages)
     stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
     reports = [ReportRecord(**r) for r in data]
     return ReportResponse(
-        code=stock_code, name=stock_name or "", reports=reports, total=len(reports)
+        code=stock_code,
+        name=stock_name or "",
+        reports=reports,
+        total=len(reports),
+        source=source,
     )
 
 
@@ -1829,7 +1846,7 @@ def get_announcements(
 ) -> AnnouncementResponse:
     """Get corporate announcements for a stock."""
     manager = get_manager()
-    data = manager.get_announcements(stock_code, page_size)
+    data, source = manager.get_announcements(stock_code, page_size)
     stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
     announcements = [AnnouncementRecord(**r) for r in data]
     return AnnouncementResponse(
@@ -1837,6 +1854,7 @@ def get_announcements(
         name=stock_name or "",
         announcements=announcements,
         total=len(announcements),
+        source=source,
     )
 
 
