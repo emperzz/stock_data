@@ -56,6 +56,53 @@ class DataCapability(Flag):
     ANNOUNCEMENT = auto()  # 公告
 
 
+# ────────────────────────────────────────────────────────────────────────
+# Capability → fetcher method name lookup
+# ────────────────────────────────────────────────────────────────────────
+#
+# Single source of truth used by the explorer manifest (`build_manifest`)
+# to enumerate "which fetcher method corresponds to this capability".
+# Manager.py does NOT consume this table — its routing methods already
+# hardcode the method call (e.g. `manager.get_kline_data` calls
+# `fetcher.get_kline_data` directly). This table is reflection-only.
+#
+# Rule (enforced by tests/test_capability_method_map.py):
+#   Every DataCapability flag MUST be in CAPABILITY_TO_METHOD or
+#   _NO_FETCHER_METHOD. Adding a new capability without declaring
+#   intent breaks the test suite.
+#
+# When a single capability is used by multiple endpoints that call
+# different fetcher methods (STOCK_BOARD, DRAGON_TIGER, FUND_FLOW),
+# the value here is the DEFAULT. Endpoints that need a different
+# method override via `@endpoint_meta(fetcher_method="...")`.
+CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
+    DataCapability.HISTORICAL_DWM: "get_kline_data",
+    DataCapability.HISTORICAL_MIN: "get_kline_data",
+    DataCapability.REALTIME_QUOTE: "get_realtime_quote",
+    DataCapability.STOCK_LIST: "get_all_stocks",
+    DataCapability.TRADE_CALENDAR: "get_trade_calendar",
+    DataCapability.STOCK_BOARD: "get_all_concept_boards",   # default; industry/.stocks variants override
+    DataCapability.INDEX_QUOTE: "get_index_realtime_quote",
+    DataCapability.INDEX_HISTORICAL: "get_index_historical",
+    DataCapability.INDEX_INTRADAY: "get_index_intraday",
+    DataCapability.STOCK_ZT_POOL: "get_zt_pool",
+    DataCapability.DRAGON_TIGER: "get_dragon_tiger",         # default; /daily variant overrides
+    DataCapability.MARGIN_TRADING: "get_margin_trading",
+    DataCapability.BLOCK_TRADE: "get_block_trade",
+    DataCapability.HOLDER_NUM: "get_holder_num_change",
+    DataCapability.DIVIDEND: "get_dividend",
+    DataCapability.FUND_FLOW: "get_fund_flow_minute",        # default; /daily variant overrides
+    DataCapability.HOT_TOPICS: "get_hot_topics",
+    DataCapability.NORTH_FLOW: "get_north_flow",
+    DataCapability.RESEARCH_REPORT: "get_reports",
+    DataCapability.ANNOUNCEMENT: "get_announcements",
+}
+
+# Explicit "this capability legitimately has no fetcher method" set.
+# Empty today — placeholder for future pure-compute capabilities.
+_NO_FETCHER_METHOD: frozenset[DataCapability] = frozenset()
+
+
 class DataFetchError(Exception):
     """Raised when data fetching fails."""
 
@@ -75,6 +122,8 @@ __all__ = [
     "DataFetchError",
     "RateLimitError",
     "STANDARD_COLUMNS",
+    "CAPABILITY_TO_METHOD",
+    "_NO_FETCHER_METHOD",
 ]
 
 
