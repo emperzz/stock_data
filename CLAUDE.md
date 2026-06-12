@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A Python-based local stock data aggregation server that:
-- Integrates 9 upstream stock data APIs (Tushare, Baostock, Akshare, Yfinance, Zhitu, Tencent, EastMoney, THS, Cninfo)
-- Normalizes data into a unified format across 7 data layers (行情/研报/信号/资金面/新闻/基础数据/公告)
+- Integrates 10 upstream stock data APIs (Tushare, Baostock, Akshare, Yfinance, Zhitu, Tencent, EastMoney, THS, Cninfo, Myquant)
+- Normalizes data into a unified format across all capability groups (行情/资金面/基础数据/公告/研报/特殊池/etc.)
 - Provides a stable REST API for consumption by AI agents like OpenClaw
 
 ## Architecture
@@ -37,12 +37,9 @@ A Python-based local stock data aggregation server that:
 │              Upstream Stock Data APIs                    │
 ```
 
-Indicators are a **pure-compute** layer that sits on top of
-`DataFetcherManager` — they take an already-fetched K-line `DataFrame`
-and enrich it with indicator columns. They do **not** call fetchers,
-do **not** use `DataCapability` routing, and do **not** hit the
-network. Adding a new indicator means writing a pure function in
-`data_provider/indicators/` and registering it in `registry.py`.
+Indicators are a **pure-compute** layer on top of `DataFetcherManager`
+(see `data_provider/indicators/` for the architectural details and the
+conventions that govern adding a new indicator).
 
 ## Directory Structure
 
@@ -54,7 +51,16 @@ stock_data/
 │   ├── __init__.py
 │   ├── routes.py
 │   ├── schemas.py
-│   └── cache.py                    # In-memory TTLCache for API responses
+│   ├── cache.py                    # In-memory TTLCache for API responses
+│   └── endpoint_meta.py            # @endpoint_meta decorator + REGISTRY (explorer manifest)
+├── explorer/                       # /explorer/ HTML UI + /control/* management endpoints
+│   ├── __init__.py                 # mount(app) entry point; also runs startup sanity checks
+│   ├── control.py                  # Test Instance subprocess management
+│   ├── manifest.py                 # build_manifest(app) — reflects app.routes + REGISTRY
+│   ├── routes.py                   # /control/* FastAPI router (config, status, api-manifest, test-instance/*)
+│   ├── tags.py                     # TAG_TO_TITLE + CAPABILITY_LABELS
+│   └── static/
+│       └── index.html              # Single-page interactive docs (1014 lines, vanilla JS)
 └── data_provider/
     ├── __init__.py                  # Public API re-exports
     ├── base.py                      # BaseFetcher (ABC), DataCapability, DataFetchError
@@ -145,6 +151,42 @@ stock_data/
 - `normalize_stock_code()`: Handles various input formats (SH600519 → 600519, etc.)
 - `market_tag()`: Returns market tag (csi/us/hk)
 - `is_us_market()`, `is_hk_market()`: Market detection utilities
+
+### `api/endpoint_meta.py`
+Per-route metadata used by the explorer manifest. Each route in `api/routes.py`
+is decorated with `@endpoint_meta(summary=..., markets=[...], capabilities=[...])`,
+which stores an `EndpointMeta` (frozen dataclass: `summary / markets / capabilities`)
+in a module-level `REGISTRY: dict[Callable, EndpointMeta]`.
+
+- **Decorator contract**: `endpoint_meta.deco` MUST return the same `func` it
+  receives (not a wrapper). FastAPI captures `route.endpoint` at `@router.get`
+  decoration time as the function reference AFTER the inner `@endpoint_meta` has
+  run; if this ever wraps/replaces, `REGISTRY.get(route.endpoint)` misses and
+  the route silently disappears from the explorer manifest.
+- **Cache/sources/probe_url/section_id were removed** in the manifest cleanup;
+  the manifest now carries only fields actually consumed by the HTML.
+
+### `explorer/`
+Subpackage owning the `/explorer/` HTML UI and `/control/*` management
+endpoints. Mounted by `stock_data.server` via `explorer.mount(app)`.
+
+- **`explorer/__init__.py`** — `mount(app)` is the single entry point. It mounts
+  the static HTML, includes the `/control/*` router, and runs a startup sanity
+  check (`_validate_manifest_invariants`) that warns about (a) routes missing
+  `@endpoint_meta` and (b) route tags not present in `TAG_TO_TITLE`.
+- **`explorer/manifest.py`** — `build_manifest(app)` reflects `app.routes`,
+  merges each route's `route.endpoint` lookup into `REGISTRY`, and returns a
+  JSON tree (`{meta, sections[]}`). Rebuilt on every request to
+  `/control/api-manifest` (no caching — ~5 KB payload, sub-millisecond build).
+- **`explorer/routes.py`** — `/control/*` APIRouter. Endpoints: `/config`,
+  `/server/status`, `/api-manifest`, `/test-instance/{status,start,stop}`. All
+  tagged `control` → excluded from the manifest.
+- **`explorer/tags.py`** — `TAG_TO_TITLE` (route tag → sidebar section title). The section id is the tag name itself (just a stable DOM anchor / URL hash; no business meaning).
+  and `CAPABILITY_LABELS` (DataCapability flag → `{label, icon}`).
+- **`explorer/static/index.html`** — Single-page interactive docs. Fetches
+  `/control/api-manifest` on load and renders a sidebar with search, market
+  filter, capability filter, and a right-side response panel. Includes a
+  manifest-fetch-failure error banner (in `.main`, not the top bar).
 
 ### `data_provider/indicators/`
 Pure-compute technical-indicator layer. Sits **on top of** `DataFetcherManager`
@@ -387,30 +429,17 @@ It is used as a fallback for realtime quotes only.
 
 **SDK**: `gm` (pip install gm>=3.0.180,<4) — https://www.myquant.cn/
 
-**Used APIs** (all free / public-tier):
-- `gm.api.history(symbol, frequency, ...)` — 日线 + 分钟线（60s/300s/900s/1800s/3600s）历史 K 线
-- `gm.api.current_price(symbols)` — 实时最新价（仅 price，无其他字段；定位为"最后兜底"）
-- `gm.api.get_symbols(sec_type1=1010)` — 股票列表（含 ST/停牌/涨跌停价/复权因子）
-- `gm.api.get_trading_dates_by_year(exchange, ...)` — 交易日历
-- `gm.api.history(指数代码)` — 指数 K 线（日线 + 分钟线）
+**Token**: Set via `MYQUANT_TOKEN` environment variable. `is_available()` calls
+`gm.api.set_token` on first invocation; if `gm` is unimportable, the fetcher is
+skipped at registration. A-share only (no HK/US); no weekly/monthly/1-minute
+K-line. Realtime `current_price` is price-only. Implementation details
+(field-by-field quirks, pct_chg derivation, defensive A-share filtering, the
+gm/pandas dependency warning) live in the `myquant_fetcher.py` module docstring
+— not duplicated here.
 
-**Token**: Set via `MYQUANT_TOKEN` environment variable. `gm.api.set_token` is called
-on the first `is_available()` invocation (matches Baostock/Tushare convention). If
-`gm` is not importable or `set_token` fails, `is_available()` returns False and
-the fetcher is skipped at registration.
-
-**Note**:
-- 仅 A 股（SHSE/SZSE），**无港股/美股**
-- 不支持周线/月线/1 分钟线 — `raise DataFetchError` 透明降级
-- 盘后 18:00 清洗入库
-- myquant `current_price` 字段极简（仅 price），其他字段保持 None；**默认 priority=9**
-  是有意的,确保 REALTIME_QUOTE 失败转移链是 `Tushare → Zhitu/Tencent/Akshare → Myquant`
-  (而不是先 Myquant 后 Akshare —— 跟其它 fetcher 的"丰富数据优先"约定一致)
-- `pct_chg` 不来自 myquant,本 fetcher 在 `_normalize_data` 中按 `bob` 排序后用
-  `close_t / close_{t-1} - 1` 派生(跟 Baostock/Akshare/Tushere 一致,而不是 close/open)
-- `get_all_stocks` 走 `is_a_share_stock_code` 防御性过滤(对齐 baostock 的
-  `A_SHARE_STOCK_PREFIXES`),即使 myquant `sec_type1=1010` 拓宽也不会污染缓存
-- 依赖注：gm 3.0.x 声明 `pandas<2.0`（Python ≤3.11）— 该 pin 是 myquant 端过度保守；运行时与 pandas 2.x 兼容（已验证）。`pip install` 会产生 dependency warning,install 时需 `pip install -e ".[dev]" --no-deps` 或先单独装 pandas 2.x。
+**Priority 9 is intentional**: it ensures the REALTIME_QUOTE failover chain is
+`Tushare → Zhitu/Tencent/Akshare → Myquant` (richer-data first), matching the
+"richer source wins" convention used by every other fetcher.
 
 ---
 
@@ -497,7 +526,7 @@ fetchers that support it.
 | BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR \| INDEX_HISTORICAL` |
 | AkshareFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_ZT_POOL` |
 | TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| INDEX_HISTORICAL` |
-| MyquantFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_HISTORICAL \| INDEX_INTRADAY` | csi |
+| MyquantFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_HISTORICAL \| INDEX_INTRADAY` |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
 | ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
@@ -532,8 +561,7 @@ Per-source circuit breakers prevent cascading failures:
 - Exponential backoff retry on failure
 
 ### Indicator Computation
-The `IndicatorService` layer does not call any fetcher. It is a pure
-DataFrame transformer:
+Pure DataFrame transformer at the orchestration boundary:
 1. `routes.py` calls `manager.get_kline_data(code, days=max(days, lookback))`
    — `lookback` is the maximum across the requested indicators.
 2. The returned DataFrame is handed to `IndicatorService.compute(df, spec)`.
@@ -543,23 +571,20 @@ DataFrame transformer:
 4. `routes.py` then truncates the DataFrame back to the user's `days`
    (the extra lookback was only needed to warm the indicator).
 
-**`ma5`/`ma10`/`ma20` migration**: the legacy `BaseFetcher._calculate_indicators`
-was removed. Those fields on `KLineData` are preserved for back-compat
-and backfilled from the `ma` indicator's `ma5/ma10/ma20` output columns
-when the user requests `?indicators=ma`. When no indicator is requested,
-the 4 indicator fields (`ma5`, `ma10`, `ma20`, `indicators`) are
-**omitted from the JSON response entirely** by the `KLineData._serialize`
-`@model_serializer` — they are not present as `null`. This is the
-contract optimization: clients can rely on "key exists ⇔ indicator was
-computed". `amount` and `change_percent` keep the original
-"present-as-null-when-missing" behavior.
-
 **Index indicators**: `/indices/{code}/history` accepts the same
 `?indicators=` query param as `/stocks/{code}/history`. The
 orchestrator in `routes.py` handles lookback expansion and truncation
 the same way for both endpoints (`_apply_indicators`, `_parse_indicators_param`
 are shared). Indices and stocks share the same `KLineData` response
 shape — the same conditional serialization applies.
+
+**`ma5`/`ma10`/`ma20` back-compat fields** on `KLineData` are backfilled
+from the `ma` indicator's `ma5/ma10/ma20` output columns when the user
+requests `?indicators=ma`. When no indicator is requested, the 4 indicator
+fields (`ma5`, `ma10`, `ma20`, `indicators`) are **omitted from the JSON
+response entirely** by `KLineData._serialize`'s `@model_serializer` —
+they are not present as `null`. Contract: clients can rely on "key exists
+⇔ indicator was computed".
 
 ### Market-Aware Routing
 Manager routes requests based on stock code and capability:
@@ -593,7 +618,7 @@ Manager routes requests based on stock code and capability:
 .venv/Scripts/python.exe -m pytest
 
 # Run a single test
-.venv/Scripts/python.exe -m pytest tests/test_adapter.py -v
+.venv/Scripts/python.exe -m pytest tests/test_explorer_manifest_endpoint.py -v
 
 # Lint
 ruff check .
@@ -604,7 +629,21 @@ ruff format .
 
 ## API Documentation
 
-Interactive web docs live at `stock_data/explorer/static/index.html` (the `stock_data/explorer/` subpackage) and are mounted at `/explorer/` when the server runs. After `python -m stock_data.server`, open `http://localhost:8888/explorer/`. The page supports Try-it, search, market/capability filtering, dark theme, and an optional Test Instance subprocess (controlled from the sidebar). The Markdown source remains at `docs/API.md` (do not edit that file — sync changes into `ENDPOINTS` in the HTML). The `/control/*` management endpoints live alongside at the same prefix. Note: as of 2026-06-11 the URL changed from `/docs/API.html` to `/explorer/` (breaking change, no redirect).
+Interactive web docs live at `stock_data/explorer/static/index.html` (the
+`stock_data/explorer/` subpackage) and are mounted at `/explorer/` when the
+server runs. After `python -m stock_data.server`, open
+`http://localhost:8888/explorer/`. The page supports Try-it, search,
+market/capability filtering, dark theme, and an optional Test Instance
+subprocess (controlled from the sidebar).
+
+**Source of truth is server-side**, not the HTML. The page fetches
+`GET /control/api-manifest` on load, which is generated by
+`explorer/manifest.build_manifest(app)` reflecting `app.routes` + the
+`@endpoint_meta` decorator on each route. To add or change an endpoint's
+explorer metadata, edit the `@endpoint_meta(...)` call in `api/routes.py` —
+the manifest rebuilds on the next request.
+
+The `/control/*` management endpoints live alongside at the same prefix.
 
 ## Configuration
 
@@ -635,8 +674,9 @@ Environment variables (see `.env.example`):
 - **Don't** mix inline imports and top-level imports inconsistently
 - **Don't** add features not needed for core data fetching (defer fundamental data, sentiment, etc.)
 - **Don't** create deeply nested manager hierarchies — one `DataFetcherManager` is sufficient
-- **Don't** hardcode a specific fetcher class (e.g. `AkshareFetcher()`) in `DataFetcherManager` methods — ALL data access must route through `_filter_by_capability(market, capability)`. This applies to existing methods AND any new capability added in the future. If your new feature needs a data type that doesn't fit existing capabilities, add a new `DataCapability` flag, declare it on the fetchers that support it, and route through `_filter_by_capability`.
+- **Don't** hardcode a specific fetcher class (e.g. `AkshareFetcher()`) in `DataFetcherManager` methods. The Hard rule under *Capability-Based Routing* above is the canonical statement; this list just mirrors it for grep-ability.
 - **Don't** cache realtime quote data in SQLite — the `stock_board` and `stock_board_stock` tables store metadata only (code, name, type, timestamps). Quote/price data is always fetched live from the API.
-- **Don't** put indicator math inside a `BaseFetcher` or anywhere in the fetcher layer. Indicators live in `data_provider/indicators/` and are pure-compute. The fetcher's job is to deliver a clean standardized K-line DataFrame; the indicator service's job is to enrich it.
+- **Don't** put indicator math inside a `BaseFetcher` or anywhere in the fetcher layer. The fetcher's job is to deliver a clean standardized K-line DataFrame; the indicator service's job is to enrich it.
 - **Don't** write `options.get(key) or default` for numeric/float option keys — when `key=0` is a valid value, the `or` treats it as missing. Use `options.get(key, default)` so `0` flows through.
 - **Don't** re-introduce inline MA/EMA/WMA calculations in the fetcher path. If you need a moving average on K-line data, ask the indicator service via `?indicators=ma` (or compute it downstream of the API).
+- **Don't** reorder decorators on a route so `@endpoint_meta` sits OUTSIDE `@router.get` (i.e. `@endpoint_meta(...) @router.get(...) def f`). The contract requires `@endpoint_meta` to be the INNER decorator so FastAPI captures the same function object that `REGISTRY[f]` was keyed on. Reversing the order silently drops the route from the explorer manifest (a startup warning is logged, but the endpoint still works as an API). The runtime sanity check in `explorer/__init__.py` catches this on boot.
