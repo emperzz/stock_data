@@ -194,6 +194,63 @@
     .endpoint details { margin-top: 12px; }
     .endpoint summary { cursor: pointer; font-weight: 500; color: var(--accent); }
     .endpoint pre { background: var(--code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; }
+    /* === Chip (generic + capability variants) === */
+    .chip {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font: 11px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-sidebar);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+    .cap-chip { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+    /* === Fetcher backends section (Stage 1) === */
+    .fetcher-backends { margin-top: 16px; }
+    /* Override the generic .endpoint summary style for our own summary */
+    .endpoint .fetcher-backends > summary {
+      cursor: pointer; user-select: none;
+      padding: 6px 10px; font-size: 13px; font-weight: 500;
+      color: var(--text-muted); border-radius: 6px;
+      list-style: none;
+    }
+    .endpoint .fetcher-backends > summary::-webkit-details-marker { display: none; }
+    .endpoint .fetcher-backends > summary:hover { background: var(--bg-sidebar); }
+    .endpoint .fetcher-backends > summary::before {
+      content: "▶"; display: inline-block;
+      width: 14px; transition: transform 0.15s;
+    }
+    .endpoint .fetcher-backends[open] > summary::before { transform: rotate(90deg); }
+    .fetcher-list {
+      margin-top: 8px; border: 1px solid var(--border);
+      border-radius: 8px; overflow: hidden;
+    }
+    .fetcher-row {
+      display: grid;
+      grid-template-columns: 50px 1fr auto;
+      gap: 12px; align-items: start;
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+    }
+    .fetcher-row:last-child { border-bottom: 0; }
+    .fetcher-priority {
+      display: inline-block; padding: 2px 8px;
+      background: #888; color: #fff;
+      border-radius: 4px; font: 11px monospace; font-weight: 600;
+    }
+    .fetcher-body { min-width: 0; }
+    .fetcher-name { font-weight: 600; font-size: 14px; }
+    .fetcher-method {
+      font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: var(--text-muted); margin-top: 2px; word-break: break-all;
+    }
+    .fetcher-caps { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    .fetcher-test-btn {
+      font: 12px inherit; padding: 4px 10px;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg); color: var(--text); cursor: pointer;
+    }
+    .fetcher-test-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
     /* === Try-it form === */
     .try-it { background: var(--bg-sidebar); padding: 16px; border-radius: 8px; margin-top: 12px; }
     .try-it .field { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
@@ -864,6 +921,68 @@
       return ep.capabilities.some(c => activeCaps.includes(c));
     }
 
+    // HTML-escape utility. The manifest can carry fetcher names / method
+    // names / capability identifiers sourced from arbitrary strings in the
+    // codebase; never inject them into innerHTML without escaping.
+    function escapeHTML(s) {
+      if (s == null) return "";
+      return String(s).replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    // Build one fetcher row: priority badge, fetcher name + method signature,
+    // capability chips, and an inert Test button (Stage 2 in Task 11 will
+    // wire the click handler).
+    function renderFetcherRow(f) {
+      const sigArgs = (f.signature || []).map(p => p.name).join(", ");
+      const capChips = (f.capabilities || [])
+        .map(c => `<span class="chip cap-chip">${escapeHTML(c)}</span>`)
+        .join("");
+      const sigTitle = `${f.method}(${sigArgs})`;
+      const row = el("div", { className: "fetcher-row" });
+      row.dataset.fetcher = f.name;
+      row.dataset.method = f.method;
+      row.title = sigTitle;
+      row.appendChild(el("span", {
+        className: "fetcher-priority", textContent: `P${f.priority}`,
+      }));
+      const body = el("div", { className: "fetcher-body" });
+      body.appendChild(el("div", { className: "fetcher-name", textContent: f.name }));
+      const sigLine = el("div", { className: "fetcher-method" });
+      sigLine.appendChild(document.createTextNode(`.${f.method}(${sigArgs})`));
+      body.appendChild(sigLine);
+      if (capChips) {
+        const caps = el("div", { className: "fetcher-caps" });
+        caps.innerHTML = capChips;
+        body.appendChild(caps);
+      }
+      row.appendChild(body);
+      const btn = el("button", {
+        className: "fetcher-test-btn", type: "button", textContent: "Test",
+      });
+      // Stage 2 (Task 11) replaces this no-op with a real handler that
+      // POSTs to /control/fetcher-test and routes the response through
+      // ResultPanel.
+      row.appendChild(btn);
+      return row;
+    }
+
+    // Build the <details>-wrapped fetcher list for one endpoint card.
+    // Returns an empty string when the endpoint has no eligible fetchers
+    // (e.g. /indicators/catalog), so the card stays compact.
+    function renderFetcherBackends(ep) {
+      if (!ep.fetchers || ep.fetchers.length === 0) return null;
+      const det = el("details", { className: "fetcher-backends" });
+      det.appendChild(el("summary", {
+        textContent: `Fetcher backends (${ep.fetchers.length})`,
+      }));
+      const list = el("div", { className: "fetcher-list" });
+      ep.fetchers.forEach(f => list.appendChild(renderFetcherRow(f)));
+      det.appendChild(list);
+      return det;
+    }
+
     function renderEndpoint(ep) {
       const card = el("div", { className: "endpoint", id: `ep-${ep.id}` });
       const method = el("span", { className: `method ${ep.method}`, textContent: ep.method });
@@ -877,6 +996,12 @@
       det.appendChild(el("summary", { textContent: "Show details / Try it" }));
       det.appendChild(renderEndpointDetails(ep));
       card.appendChild(det);
+      // Fetcher backends list — an independent <details> so the user can
+      // collapse the try-it form without collapsing the backend list, and
+      // vice versa. Hidden entirely when the endpoint has no eligible
+      // fetchers (e.g. /indicators/catalog).
+      const fb = renderFetcherBackends(ep);
+      if (fb) card.appendChild(fb);
       return card;
     }
 
