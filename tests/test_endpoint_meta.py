@@ -47,3 +47,34 @@ class TestEndpointMetaDecorator:
         meta = REGISTRY[my_route]
         assert meta.markets == []
         assert meta.capabilities == []
+
+
+class TestFetcherMethodOverride:
+    def teardown_method(self):
+        REGISTRY.clear()
+
+    def test_default_is_none(self):
+        m = EndpointMeta(summary="x")
+        assert m.fetcher_method is None
+
+    def test_explicit_value_stored(self):
+        m = EndpointMeta(summary="x", fetcher_method="get_dragon_tiger")
+        assert m.fetcher_method == "get_dragon_tiger"
+
+    def test_decorator_accepts_fetcher_method(self):
+        @endpoint_meta(
+            summary="龙虎榜每日",
+            capabilities=["DRAGON_TIGER"],
+            fetcher_method="get_daily_dragon_tiger",
+        )
+        def my_route():
+            return None
+        meta = REGISTRY[my_route]
+        assert meta.fetcher_method == "get_daily_dragon_tiger"
+        assert meta.capabilities == ["DRAGON_TIGER"]
+
+    def test_decorator_default_fetcher_method_is_none(self):
+        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        def my_route():
+            return None
+        assert REGISTRY[my_route].fetcher_method is None

@@ -31,10 +31,17 @@ class EndpointMeta:
 
     path / method / params / response_model 不在此处——它们在 build_manifest()
     里从 FastAPI 路由对象反射出来(单一真相在 @router.get 装饰器)。
+
+    `fetcher_method` (optional): overrides the default method derived from
+    CAPABILITY_TO_METHOD. Use when the endpoint's capability is shared by
+    multiple endpoints calling different fetcher methods (e.g.
+    /dragon-tiger/daily declares DRAGON_TIGER but calls
+    get_daily_dragon_tiger, not the default get_dragon_tiger).
     """
     summary: str
     markets: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
+    fetcher_method: str | None = None
 
 
 def endpoint_meta(
@@ -42,12 +49,14 @@ def endpoint_meta(
     summary: str,
     markets: list[str] | None = None,
     capabilities: list[str] | None = None,
+    fetcher_method: str | None = None,
 ) -> Callable:
     """装饰器,把 EndpointMeta 存到 REGISTRY[func]。"""
     meta = EndpointMeta(
         summary=summary,
         markets=list(markets) if markets else [],
         capabilities=list(capabilities) if capabilities else [],
+        fetcher_method=fetcher_method,
     )
 
     def deco(func: Callable) -> Callable:
