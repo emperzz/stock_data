@@ -278,6 +278,26 @@ IndicatorCatalogEntry(
 )
 ```
 
+## Source Tracking (new)
+
+所有响应都包含 `source: str` 字段, 取值:
+- **fetcher 名** (e.g. `tushare`, `akshare`, `eastmoney`): 实时从上游拉取
+- **fetcher 名**: API TTLCache 命中时, 保留写入时的 fetcher (Pydantic 字段自然带过去, 无需额外代码)
+- **`"persistence"`**: 从 SQLite 持久化层读取 (历史数据 / 板块列表 / 交易日历等)
+
+`source` 为可选字段, `default=""`. 旧 client 可忽略.
+
+**覆盖矩阵**:
+
+| Endpoint 类型 | 实时拉取 / 缓存命中 | SQLite persistence |
+|---|---|---|
+| K线 / 分时 / 实时行情 / 指数 | fetcher 名 (e.g. `tushare`, `akshare`) | n/a |
+| 龙虎榜 / 融资融券 / 大宗交易 / 资金流 / 研报 / 公告 等 | fetcher 名 (e.g. `eastmoney`, `cninfo`, `ths`) | n/a (每次 fetch) |
+| 板块 / 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
+| 板块成分股 | 用户传入 source → `query_source`; 实际数据源 → `data_source` | `data_source = "persistence"` (缓存命中) |
+
+> **注意**: `/stocks` 和 `/calendar` 当前响应**不暴露** source 字段 (其 response model 没有 source 字段), 持久化层 origin 仍被透传但被丢弃。这是 YAGNI 决策——如果未来要暴露, 给对应 response model 加 `source: str` 字段即可, 路由层已准备好。
+
 ## Provider API Documentation
 
 ### BaostockFetcher (Priority 1, A股 only, Free)
