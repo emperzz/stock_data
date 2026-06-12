@@ -16,16 +16,6 @@ logger = logging.getLogger(__name__)
 _refresh_tracker = DailyRefreshTracker()
 
 
-# Public → fetcher market-tag conversion. The external API (routes.py)
-# exposes A-shares as ``csi``; the fetcher's ``get_all_stocks`` API uses
-# the legacy ``cn`` tag. The ``csi -> cn`` translation is now applied
-# inside ``manager.get_all_stocks`` at the call boundary, so this
-# mapping is documented here as the single source of truth for the
-# public-to-fetcher tag boundary (in case future boundary tags are
-# added and need cross-referencing).
-PUBLIC_TO_FETCHER_MARKET = {"csi": "cn"}
-
-
 def init_schema() -> None:
     """Initialize the database schema."""
     conn = get_connection()
