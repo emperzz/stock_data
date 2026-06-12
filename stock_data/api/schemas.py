@@ -170,6 +170,10 @@ class StockHistoryResponse(BaseModel):
     stock_name: str = Field(default="", description="Stock name")
     period: str = Field(default="daily", description="K-line period")
     data: list[KLineData] = Field(default_factory=list, description="K-line data points")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. tushare, akshare) 或 'persistence'",
+    )
 
 
 class ErrorResponse(BaseModel):
@@ -270,6 +274,10 @@ class IntradayResponse(BaseModel):
     adjust: str = Field(default="", description="Adjustment type")
     date: str = Field(description="Trade date (YYYY-MM-DD)")
     data: list[IntradayData] = Field(default_factory=list, description="Minute-level data points")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. tushare, akshare) 或 'persistence'",
+    )
 
 
 class BoardInfo(BaseModel):
@@ -304,6 +312,10 @@ class BoardListResponse(BaseModel):
     """Response for board list endpoint."""
 
     data: list[BoardInfo] = Field(default_factory=list, description="List of boards")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 或 'persistence'",
+    )
 
 
 class BoardStocksResponse(BaseModel):
@@ -311,7 +323,8 @@ class BoardStocksResponse(BaseModel):
 
     board: BoardInfo = Field(description="Board info")
     stocks: list[BoardStockInfo] = Field(default_factory=list, description="Stocks in the board")
-    source: str = Field(default="", description="Data source")
+    query_source: str = Field(default="eastmoney", description="用户请求时传入的 source 参数")
+    data_source: str = Field(default="", description="实际数据来源 fetcher 名 或 'persistence'")
 
 
 class IndexQuote(BaseModel):
@@ -339,6 +352,10 @@ class IndexHistoryResponse(BaseModel):
     name: str = Field(default="", description="Index name")
     period: str = Field(default="daily", description="K-line period: daily/weekly/monthly")
     data: list[KLineData] = Field(default_factory=list, description="K-line data points")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. tushare, akshare) 或 'persistence'",
+    )
 
 
 class IndexIntradayResponse(BaseModel):
@@ -349,6 +366,10 @@ class IndexIntradayResponse(BaseModel):
     period: str = Field(description="Minute period (1m/5m/15m/30m/60m)")
     date: str = Field(description="Trade date (YYYY-MM-DD)")
     data: list[IntradayData] = Field(default_factory=list, description="Minute-level data points")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. tushare, akshare) 或 'persistence'",
+    )
 
 
 class ZTPoolStock(BaseModel):
@@ -377,6 +398,10 @@ class ZTPoolResponse(BaseModel):
     type: str = Field(description="Pool type: zt (涨停) / dt (跌停) / zbgc (炸板)")
     total: int = Field(description="Total number of stocks in the pool")
     stocks: list[ZTPoolStock] = Field(default_factory=list, description="List of stocks in the pool")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 或 'persistence' (历史日期的池数据从 SQLite 读取)",
+    )
 
 
 class DragonTigerSeat(BaseModel):
@@ -409,7 +434,10 @@ class DragonTigerResponse(BaseModel):
     records: list[DragonTigerRecord] = Field(default_factory=list)
     seats: dict[str, list[DragonTigerSeat]] = Field(default_factory=dict)
     institution: DragonTigerInstitution = Field(default_factory=DragonTigerInstitution)
-    source: str = Field(default="eastmoney")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class DailyDragonTigerStock(BaseModel):
@@ -430,7 +458,10 @@ class DailyDragonTigerResponse(BaseModel):
     date: str = Field(description="交易日期")
     total: int = Field(default=0, description="上榜总数")
     stocks: list[DailyDragonTigerStock] = Field(default_factory=list)
-    source: str = Field(default="eastmoney")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class MarginTradingRecord(BaseModel):
@@ -450,7 +481,10 @@ class MarginTradingResponse(BaseModel):
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     records: list[MarginTradingRecord] = Field(default_factory=list)
-    source: str = Field(default="eastmoney")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class BlockTradeRecord(BaseModel):
@@ -471,7 +505,10 @@ class BlockTradeResponse(BaseModel):
     name: str = Field(default="", description="股票名称")
     records: list[BlockTradeRecord] = Field(default_factory=list)
     total: int = Field(default=0, description="记录总数")
-    source: str = Field(default="eastmoney")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class HolderNumRecord(BaseModel):
@@ -488,7 +525,10 @@ class HolderNumResponse(BaseModel):
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     records: list[HolderNumRecord] = Field(default_factory=list)
-    source: str = Field(default="eastmoney")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class DividendRecord(_UpstreamSanitizedModel):
@@ -505,7 +545,10 @@ class DividendResponse(BaseModel):
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     records: list[DividendRecord] = Field(default_factory=list)
-    source: str = Field(default="eastmoney")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class FundFlowMinuteRecord(BaseModel):
@@ -534,7 +577,10 @@ class FundFlowResponse(BaseModel):
     name: str = Field(default="", description="股票名称")
     type: str = Field(default="minute", description="类型: minute/daily")
     records: list[FundFlowMinuteRecord | FundFlowDailyRecord] = Field(default_factory=list)
-    source: str = Field(default="eastmoney")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class HotTopicRecord(BaseModel):
@@ -554,7 +600,10 @@ class HotTopicResponse(BaseModel):
     date: str = Field(description="交易日期")
     total: int = Field(default=0)
     topics: list[HotTopicRecord] = Field(default_factory=list)
-    source: str = Field(default="ths")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class NorthFlowRecord(BaseModel):
@@ -567,7 +616,10 @@ class NorthFlowRecord(BaseModel):
 class NorthFlowResponse(BaseModel):
     """北向资金响应"""
     records: list[NorthFlowRecord] = Field(default_factory=list)
-    source: str = Field(default="ths")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class ReportRecord(_UpstreamSanitizedModel):
@@ -588,7 +640,10 @@ class ReportResponse(BaseModel):
     name: str = Field(default="", description="股票名称")
     reports: list[ReportRecord] = Field(default_factory=list)
     total: int = Field(default=0)
-    source: str = Field(default="eastmoney")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
 
 
 class ReportPDFResponse(BaseModel):
@@ -612,4 +667,7 @@ class AnnouncementResponse(BaseModel):
     name: str = Field(default="", description="股票名称")
     announcements: list[AnnouncementRecord] = Field(default_factory=list)
     total: int = Field(default=0)
-    source: str = Field(default="cninfo")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
+    )
