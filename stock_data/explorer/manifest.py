@@ -36,14 +36,19 @@ def build_manifest(app: FastAPI) -> dict[str, Any]:
           { id, title, endpoints: [
               { id, method, path, summary, markets, capabilities,
                 params: [{name, in, required, type}],
-                response_model }
+                response_model,
+                fetchers: [{name, method, priority, capabilities, signature}] }
           ]}
         ]
     }
 
     section id 直接用 route 的 primary tag(无业务含义,仅作 DOM
     锚点);title 从 TAG_TO_TITLE 查,查不到回退到 tag 名本身。
+
+    `fetchers` 字段枚举该 endpoint 实际可调度的 fetcher(按 priority 升序);
+    数据源是 `app.state.manager`(lifespan 启动时由 server.py 注入)。
     """
+    manager = getattr(app.state, "manager", None)
     sections_map: dict[str, dict] = {}
     for route in app.routes:
         if not isinstance(route, APIRoute):
@@ -61,14 +66,14 @@ def build_manifest(app: FastAPI) -> dict[str, Any]:
         section = sections_map.setdefault(
             tag, {"id": tag, "title": TAG_TO_TITLE.get(tag, tag), "endpoints": []}
         )
-        section["endpoints"].append(_build_endpoint_node(route, meta))
+        section["endpoints"].append(_build_endpoint_node(route, meta, manager))
     return {
         "meta": _build_meta(),
         "sections": sorted(sections_map.values(), key=_section_sort_key),
     }
 
 
-def _build_endpoint_node(route: APIRoute, meta: EndpointMeta) -> dict:
+def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager) -> dict:
     params: list[dict] = []
     for p in route.dependant.path_params:
         params.append({
@@ -84,6 +89,7 @@ def _build_endpoint_node(route: APIRoute, meta: EndpointMeta) -> dict:
     full_path = route.path
     # HTTP method: route.methods 是 frozenset, 例 {'GET'} 或 {'GET', 'HEAD'}
     method = _pick_method(route.methods)
+    fetchers = _resolve_fetchers(meta, manager) if manager is not None else []
     return {
         "id": _slugify(f"{method}_{full_path}"),
         "method": method,
@@ -93,6 +99,7 @@ def _build_endpoint_node(route: APIRoute, meta: EndpointMeta) -> dict:
         "capabilities": list(meta.capabilities),
         "params": params,
         "response_model": route.response_model.__name__ if route.response_model else None,
+        "fetchers": fetchers,
     }
 
 
