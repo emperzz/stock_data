@@ -270,7 +270,6 @@ def reset_manager() -> None:
     summary="健康检查 + fetcher 断路器状态",
     markets=["csi", "hk", "us"],
     capabilities=[],
-    cache={"ttl_sec": 0, "env": "无"},
 )
 def health_check(details: bool = False) -> HealthResponse:
     """Health check endpoint.
@@ -326,7 +325,6 @@ def health_check(details: bool = False) -> HealthResponse:
     summary="实时行情",
     markets=["csi", "hk", "us"],
     capabilities=["REALTIME_QUOTE"],
-    cache={"ttl_sec": 60, "env": "CACHE_TTL_QUOTE"},
 )
 def get_quote(stock_code: str = Path(max_length=20, description="Stock code")) -> StockQuote:
     """
@@ -419,7 +417,6 @@ def get_quote(stock_code: str = Path(max_length=20, description="Stock code")) -
     summary="历史 K 线（含可选指标）",
     markets=["csi", "hk", "us"],
     capabilities=["HISTORICAL_DWM", "HISTORICAL_MIN"],
-    cache={"ttl_sec": 300, "env": "CACHE_TTL_HISTORY_DAILY / _WEEKLY / _MONTHLY"},
 )
 def get_history(
     stock_code: str = Path(max_length=20, description="Stock code"),
@@ -560,7 +557,6 @@ def get_history(
     summary="分钟 K 线",
     markets=["csi"],
     capabilities=["HISTORICAL_MIN"],
-    cache={"ttl_sec": 30, "env": "CACHE_TTL_STOCK_INTRADAY"},
 )
 def get_intraday(
     stock_code: str = Path(max_length=20, description="Stock code"),
@@ -673,7 +669,6 @@ def get_intraday(
     summary="指数列表（A 股 + 港股 + 美股）",
     markets=["csi", "hk", "us"],
     capabilities=[],
-    cache=None,
 )
 def list_indices() -> list[IndexInfo]:
     """
@@ -699,7 +694,6 @@ def list_indices() -> list[IndexInfo]:
     summary="指数实时行情",
     markets=["csi", "hk", "us"],
     capabilities=["INDEX_QUOTE"],
-    cache={"ttl_sec": 60, "env": "CACHE_TTL_INDEX_QUOTE"},
 )
 def get_index_quote(index_code: str = Path(max_length=20, description="Index code")) -> IndexQuote:
     """
@@ -767,7 +761,6 @@ def get_index_quote(index_code: str = Path(max_length=20, description="Index cod
     summary="指数历史 K 线",
     markets=["csi", "hk", "us"],
     capabilities=["INDEX_HISTORICAL", "HISTORICAL_DWM"],
-    cache={"ttl_sec": 300, "env": "CACHE_TTL_HISTORY_DAILY"},
 )
 def get_index_history(
     index_code: str = Path(max_length=20, description="Index code"),
@@ -884,7 +877,6 @@ def get_index_history(
     summary="指数分钟 K 线",
     markets=["csi", "hk", "us"],
     capabilities=["INDEX_INTRADAY", "HISTORICAL_MIN"],
-    cache={"ttl_sec": 30, "env": "CACHE_TTL_INDEX_INTRADAY"},
 )
 def get_index_intraday(
     index_code: str = Path(max_length=20, description="Index code"),
@@ -979,7 +971,6 @@ def get_index_intraday(
     summary="股票列表（分页）",
     markets=["csi", "hk", "us"],
     capabilities=["STOCK_LIST"],
-    cache=None,
 )
 def list_stocks(
     market: str = Query(..., pattern="^(csi|hk|us)$", description="Market: csi/hk/us"),
@@ -1025,7 +1016,6 @@ def list_stocks(
     summary="A 股交易日历",
     markets=["csi"],
     capabilities=["TRADE_CALENDAR"],
-    cache=None,
 )
 def get_trade_calendar(
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
@@ -1096,7 +1086,6 @@ def get_trade_calendar(
     summary="概念 / 行业板块列表",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
-    cache=None,
 )
 def list_boards(
     type: str = Query(
@@ -1172,7 +1161,6 @@ def list_boards(
     summary="板块成分股",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
-    cache=None,
 )
 def get_board_stocks(
     board_code: str = Path(max_length=20, description="Board code (e.g., BK1048)"),
@@ -1259,7 +1247,6 @@ def get_board_stocks(
     summary="涨跌停股池",
     markets=["csi"],
     capabilities=["STOCK_ZT_POOL"],
-    cache={"ttl_sec": 30, "env": "CACHE_TTL_POOLS"},
 )
 def get_pools(
     type: str = Query(
@@ -1413,7 +1400,6 @@ def get_pools(
     summary="龙虎榜（个股）",
     markets=["csi"],
     capabilities=["DRAGON_TIGER"],
-    cache={"ttl_sec": 600, "env": "CACHE_TTL_DRAGONTIGER"},
 )
 def get_dragon_tiger(
     stock_code: str = Path(max_length=20),
@@ -1457,7 +1443,6 @@ get_dragon_tiger = cached_endpoint(
     summary="龙虎榜（全市场）",
     markets=["csi"],
     capabilities=["DRAGON_TIGER"],
-    cache={"ttl_sec": 600, "env": "CACHE_TTL_DAILY_DRAGONTIGER"},
 )
 def get_daily_dragon_tiger(
     trade_date: str = Query(default="", description="Trade date (YYYY-MM-DD)"),
@@ -1493,7 +1478,6 @@ get_daily_dragon_tiger = cached_endpoint(
     summary="融资融券",
     markets=["csi"],
     capabilities=["MARGIN_TRADING"],
-    cache={"ttl_sec": 600, "env": "CACHE_TTL_MARGIN"},
 )
 def get_margin(
     stock_code: str = Path(max_length=20),
@@ -1527,7 +1511,6 @@ get_margin = cached_endpoint(
     summary="大宗交易",
     markets=["csi"],
     capabilities=["BLOCK_TRADE"],
-    cache={"ttl_sec": 600, "env": "CACHE_TTL_BLOCK_TRADE"},
 )
 def get_block_trade(
     stock_code: str = Path(max_length=20),
@@ -1560,7 +1543,6 @@ get_block_trade = cached_endpoint(
     summary="股东户数变化",
     markets=["csi"],
     capabilities=["HOLDER_NUM"],
-    cache={"ttl_sec": 600, "env": "CACHE_TTL_HOLDER_NUM"},
 )
 def get_holder_num(
     stock_code: str = Path(max_length=20),
@@ -1594,7 +1576,6 @@ get_holder_num = cached_endpoint(
     summary="分红送转",
     markets=["csi"],
     capabilities=["DIVIDEND"],
-    cache={"ttl_sec": 600, "env": "CACHE_TTL_DIVIDEND"},
 )
 def get_dividend(
     stock_code: str = Path(max_length=20),
@@ -1628,7 +1609,6 @@ get_dividend = cached_endpoint(
     summary="资金流（分钟级）",
     markets=["csi"],
     capabilities=["FUND_FLOW"],
-    cache={"ttl_sec": 60, "env": "CACHE_TTL_FUND_FLOW"},
 )
 def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get minute-level capital flow for a stock."""
@@ -1661,7 +1641,6 @@ get_fund_flow = cached_endpoint(
     summary="资金流（120 日）",
     markets=["csi"],
     capabilities=["FUND_FLOW"],
-    cache={"ttl_sec": 600, "env": "CACHE_TTL_FUND_FLOW_DAILY"},
 )
 def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get 120-day capital flow history for a stock."""
@@ -1697,7 +1676,6 @@ get_fund_flow_daily = cached_endpoint(
     summary="热点题材",
     markets=["csi"],
     capabilities=["HOT_TOPICS"],
-    cache={"ttl_sec": 300, "env": "CACHE_TTL_HOT_TOPICS"},
 )
 def get_hot_topics(
     date: str = Query(default="", description="Date (YYYY-MM-DD), empty=today"),
@@ -1728,7 +1706,6 @@ get_hot_topics = cached_endpoint(
     summary="北向资金",
     markets=["csi"],
     capabilities=["NORTH_FLOW"],
-    cache={"ttl_sec": 60, "env": "CACHE_TTL_NORTH_FLOW"},
 )
 def get_north_flow() -> NorthFlowResponse:
     """Get north-bound capital flow (minute-level)."""
@@ -1755,7 +1732,6 @@ get_north_flow = cached_endpoint(
     summary="研报列表",
     markets=["csi"],
     capabilities=["RESEARCH_REPORT"],
-    cache={"ttl_sec": 600, "env": "CACHE_TTL_REPORTS"},
 )
 def get_reports(
     stock_code: str = Path(max_length=20),
@@ -1789,7 +1765,6 @@ get_reports = cached_endpoint(
     summary="研报 PDF 下载",
     markets=["csi"],
     capabilities=["RESEARCH_REPORT"],
-    cache=None,
 )
 def get_report_pdf(
     stock_code: str = Path(max_length=20),
@@ -1817,7 +1792,6 @@ def get_report_pdf(
     summary="技术指标目录",
     markets=["csi", "hk", "us"],
     capabilities=[],
-    cache=None,
 )
 def get_indicator_catalog() -> IndicatorCatalogResponse:
     """
@@ -1848,7 +1822,6 @@ def get_indicator_catalog() -> IndicatorCatalogResponse:
     summary="公告",
     markets=["csi"],
     capabilities=["ANNOUNCEMENT"],
-    cache={"ttl_sec": 600, "env": "CACHE_TTL_ANNOUNCEMENTS"},
 )
 def get_announcements(
     stock_code: str = Path(max_length=20),

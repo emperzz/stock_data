@@ -11,11 +11,17 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 
+from ..api.endpoint_meta import REGISTRY
 from .routes import build_control_router
+from .tags import TAG_TO_TITLE
 
 logger = logging.getLogger(__name__)
+
+# explorer 不展示的 tag(manifest 过滤用 + startup 校验用)
+_INTERNAL_TAGS = frozenset({"control"})
 
 
 def mount(app: FastAPI) -> None:
@@ -23,6 +29,11 @@ def mount(app: FastAPI) -> None:
 
     Failure mode: if static/ is missing, log a warning and skip the static
     mount, but still register /control/* routes (they don't need the HTML).
+
+    Startup validation: every non-control APIRoute must be decorated with
+    @endpoint_meta AND its primary tag must appear in TAG_TO_TITLE.
+    Violations are logged at WARNING level — they don't abort server start
+    (the data API still works), but they're a deployment bug worth fixing.
 
     Reentrancy: NOT protected. FastAPI's app.mount() raises RuntimeError on
     duplicate mount, which is sufficient. Call exactly once per FastAPI app.
@@ -51,3 +62,34 @@ def mount(app: FastAPI) -> None:
     control_router = build_control_router()
     app.include_router(control_router)
     logger.info(f"[Explorer] Mounted /control/* ({len(control_router.routes)} endpoints)")
+
+    # Startup sanity: every visible APIRoute must be registered in
+    # REGISTRY and its primary tag must be mapped to a title. This is
+    # the early-warning net for the "developer forgot to decorate" /
+    # "developer added a new tag without updating TAG_TO_TITLE" cases.
+    _validate_manifest_invariants(app)
+
+
+def _validate_manifest_invariants(app: FastAPI) -> None:
+    """Log warnings for any APIRoute that would be missing/broken in the manifest."""
+    undecorated: list[str] = []
+    untitled_tags: set[str] = set()
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if not route.tags or any(t in _INTERNAL_TAGS for t in route.tags):
+            continue
+        if route.endpoint not in REGISTRY:
+            undecorated.append(f"{list(route.methods)[0]} {route.path}")
+        elif route.tags[0] not in TAG_TO_TITLE:
+            untitled_tags.add(route.tags[0])
+    if undecorated:
+        logger.warning(
+            f"[Explorer] {len(undecorated)} route(s) missing @endpoint_meta; "
+            f"they will not appear in the explorer: {undecorated}"
+        )
+    if untitled_tags:
+        logger.warning(
+            f"[Explorer] tag(s) not in TAG_TO_TITLE (sidebar will use tag name "
+            f"as fallback title): {sorted(untitled_tags)}"
+        )

@@ -13,6 +13,22 @@ This fetcher is a *last-resort backup* — its default priority (9) places it
 after every richer source in the failover chain (Tushare → Zhitu/Tencent/
 Akshare → Myquant). Realtime quote is price-only; intraday minute line is
 supported only for the most recent trading day (myquant 18:00 wash rule).
+
+Implementation notes (not in CLAUDE.md — these are fetcher-internal quirks):
+- A-share only (SHSE/SZSE); no HK/US. Unsupported frequencies (weekly/monthly/
+  1-min) raise ``DataFetchError`` for transparent degradation.
+- ``current_price`` returns price only; all other fields stay ``None`` when
+  we can't fill them from elsewhere.
+- ``pct_chg`` is not provided by myquant; we derive it in ``_normalize_data``
+  as ``close_t / close_{t-1} - 1`` after sorting by ``bob`` (matching the
+  Baostock/Akshare/Tushare convention — not close/open).
+- ``get_all_stocks`` runs ``is_a_share_stock_code`` defensively, so even if
+  myquant widens ``sec_type1=1010`` we don't pollute the cache with
+  non-A-share rows.
+- gm 3.0.x declares ``pandas<2.0`` (Python ≤3.11) — that pin is over-conservative
+  upstream; the fetcher is verified compatible with pandas 2.x. Install with
+  ``pip install -e ".[dev]" --no-deps`` or pre-install pandas 2.x to silence
+  the resolver warning.
 """
 
 # isort: off

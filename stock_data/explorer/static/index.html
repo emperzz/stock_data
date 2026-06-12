@@ -1,8 +1,8 @@
 <!doctype html>
 <!--
   stock_data API Explorer
-  LAST_SYNCED: 2026-06-11
-  Source of truth: docs/API.md (do not edit that file; sync ENDPOINTS here)
+  Source of truth: server-side /control/api-manifest (see stock_data/explorer/manifest.py
+  + @endpoint_meta in stock_data/api/routes.py). Edit the decorator, not this file.
 -->
 <html lang="zh-CN" data-theme="light">
 <head>
@@ -210,6 +210,10 @@
     /* === Banner === */
     .banner { background: #fff3cd; color: #856404; padding: 12px 24px; border-bottom: 1px solid #ffeeba; font-size: 14px; }
     [data-theme="dark"] .banner { background: #3a2f00; color: #ffd966; border-bottom-color: #5a4900; }
+    /* === Manifest error (shown in main area when /control/api-manifest fetch fails) === */
+    .manifest-error { background: #fee; color: #c00; padding: 12px 16px; border: 1px solid #fcc; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+    .manifest-error code { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; }
+    [data-theme="dark"] .manifest-error { background: #3a0d0d; color: #ff6b6b; border-color: #5a1a1a; }
   </style>
 </head>
 <body>
@@ -257,10 +261,11 @@
       </div>
     </nav>
     <main class="main">
+      <div id="manifestError" class="manifest-error" style="display:none" role="alert"></div>
       <h1>stock_data API Explorer</h1>
       <p>Interactive documentation for the <code>stock_data</code> server.
-      Source of truth: <code>docs/API.md</code>. All Try-it calls hit
-      <code id="captionBaseUrl">…</code> with the <code>/api/v1</code> prefix.</p>
+      All Try-it calls hit <code id="captionBaseUrl">…</code> with the
+      <code>/api/v1</code> prefix.</p>
       <div id="content"></div>
     </main>
     <aside class="result-panel" id="resultPanel" aria-label="Try-it response">
@@ -293,17 +298,21 @@
       sections: [],
     };
     let MANIFEST = FALLBACK;
+    let MANIFEST_ERROR = null;  // surfaced to the user via the error banner
     window.MANIFEST = MANIFEST;  // exposed for any debugging
 
     async function loadManifest() {
       try {
         const r = await fetch("/control/api-manifest", { cache: "no-store" });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
         MANIFEST = await r.json();
+        MANIFEST_ERROR = null;
         window.MANIFEST = MANIFEST;
       } catch (e) {
         console.warn("[explorer] manifest fetch failed, using empty fallback:", e);
         MANIFEST = FALLBACK;
+        MANIFEST_ERROR = e && e.message ? e.message : String(e);
+        window.MANIFEST_ERROR = MANIFEST_ERROR;
       }
     }
 
@@ -714,9 +723,19 @@
       // Manifest must be loaded before any render function runs; otherwise
       // renderSidebar/renderContent see FALLBACK (empty sections) and the
       // page shows no endpoints. If the server is unreachable, loadManifest
-      // logs a warning and leaves MANIFEST=FALLBACK — the page then renders
-      // an empty sidebar, which is the safe degradation state.
+      // logs a warning, leaves MANIFEST=FALLBACK, and records the error
+      // message — we show it as a banner so the user knows why the page
+      // is empty.
       await window.loadManifest();
+      if (window.MANIFEST_ERROR) {
+        const el = document.getElementById("manifestError");
+        el.innerHTML = "<b>无法加载 API 清单</b>: " +
+          "<code>/control/api-manifest</code> 返回 " +
+          (window.MANIFEST_ERROR || "未知错误") +
+          "。请确认服务在 <code>" + (state.baseUrl || location.origin) +
+          "</code> 正常运行,刷新重试。";
+        el.style.display = "block";
+      }
       applyTheme();
       bindUI();
       // Initialize the right-side response panel (binds copy/clear buttons).
@@ -921,7 +940,7 @@
         const pre = el("pre");
         ep.params.forEach(p => {
           pre.appendChild(document.createTextNode(
-            `${p.in}.${p.name}${p.required ? " (required)" : ""}: ${p.type} — ${p.desc || ""}\n`
+            `${p.in}.${p.name}${p.required ? " (required)" : ""}: ${p.type}\n`
           ));
         });
         wrap.appendChild(pre);
@@ -930,7 +949,7 @@
       ep.params && ep.params.forEach(p => {
         const field = el("div", { className: "field" });
         field.appendChild(el("label", { textContent: `${p.in}.${p.name}` }));
-        const input = el("input", { type: "text", placeholder: p.desc || p.name });
+        const input = el("input", { type: "text", placeholder: p.name });
         input.dataset.paramName = p.name;
         input.dataset.paramIn = p.in;
         field.appendChild(input);

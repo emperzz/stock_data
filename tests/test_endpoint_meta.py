@@ -47,19 +47,3 @@ class TestEndpointMetaDecorator:
         meta = REGISTRY[my_route]
         assert meta.markets == []
         assert meta.capabilities == []
-        assert meta.sources == []
-        assert meta.cache is None
-        assert meta.probe_url is None
-        assert meta.section_id is None
-
-    def test_cache_and_probe_url_passed_through(self):
-        @endpoint_meta(
-            summary="x",
-            cache={"ttl_sec": 60, "env": "CACHE_TTL_QUOTE"},
-            probe_url="/control/fetcher/probe",
-        )
-        def my_route():
-            return None
-        meta = REGISTRY[my_route]
-        assert meta.cache == {"ttl_sec": 60, "env": "CACHE_TTL_QUOTE"}
-        assert meta.probe_url == "/control/fetcher/probe"

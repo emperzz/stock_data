@@ -31,14 +31,13 @@ class TestBuildManifestIncludesDecoratedRoutes:
         def health():
             return {"status": "ok"}
 
-        @app.get("/stocks/{code}/quote", response_model=QuoteResp, tags=["stocks"])
+        @app.get("/stocks/{stock_code}/quote", response_model=QuoteResp, tags=["stocks"])
         @endpoint_meta(
             summary="实时行情",
             markets=["csi", "hk", "us"],
             capabilities=["REALTIME_QUOTE"],
-            cache={"ttl_sec": 60, "env": "CACHE_TTL_QUOTE"},
         )
-        def quote(code: str, days: int = Query(30, ge=1)):
+        def quote(stock_code: str, days: int = Query(30, ge=1)):
             return None
 
         return app
@@ -78,16 +77,16 @@ class TestParamReflection:
     def test_path_params(self):
         app = FastAPI()
 
-        @app.get("/stocks/{code}/quote", tags=["stocks"])
+        @app.get("/stocks/{stock_code}/quote", tags=["stocks"])
         @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
-        def q(code: str):
+        def quote(stock_code: str):
             return None
 
         m = build_manifest(app)
         ep = m["sections"][0]["endpoints"][0]
         path_params = [p for p in ep["params"] if p["in"] == "path"]
-        assert path_params == [{"name": "code", "in": "path", "required": True,
-                                "type": "string", "desc": ""}]
+        assert path_params == [{"name": "stock_code", "in": "path", "required": True,
+                                "type": "string"}]
 
     def test_query_params_with_type_and_required(self):
         app = FastAPI()
@@ -104,7 +103,7 @@ class TestParamReflection:
         m = build_manifest(app)
         params = {p["name"]: p for p in m["sections"][0]["endpoints"][0]["params"]}
         assert params["days"] == {"name": "days", "in": "query", "required": False,
-                                  "type": "int", "desc": ""}
+                                  "type": "int"}
         assert params["refresh"]["type"] == "bool"
         assert params["adj"]["type"] == "string"
 
@@ -123,7 +122,7 @@ class TestParamReflection:
 
 
 class TestResponseModelReflection:
-    def test_response_fields_from_pydantic(self):
+    def test_response_model_reflected(self):
         app = FastAPI()
 
         @app.get("/q", response_model=QuoteResp, tags=["stocks"])
@@ -134,8 +133,6 @@ class TestResponseModelReflection:
         m = build_manifest(app)
         ep = m["sections"][0]["endpoints"][0]
         assert ep["response_model"] == "QuoteResp"
-        # Pydantic field order is preserved
-        assert ep["response_fields"] == ["code", "price", "name"]
 
     def test_no_response_model(self):
         app = FastAPI()
@@ -148,7 +145,6 @@ class TestResponseModelReflection:
         m = build_manifest(app)
         ep = m["sections"][0]["endpoints"][0]
         assert ep["response_model"] is None
-        assert ep["response_fields"] == []
 
 
 class TestPrefixPrepending:
@@ -156,9 +152,9 @@ class TestPrefixPrepending:
         app = FastAPI()
         sub = FastAPI()
 
-        @sub.get("/stocks/{code}/quote", tags=["stocks"])
+        @sub.get("/stocks/{stock_code}/quote", tags=["stocks"])
         @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
-        def q(code: str):
+        def q(stock_code: str):
             return None
 
         app.mount("/api/v1", sub)
@@ -179,16 +175,16 @@ class TestIncludeRouterPrefix:
         app = FastAPI()
         router = APIRouter()
 
-        @router.get("/stocks/{code}/quote", tags=["stocks"])
+        @router.get("/stocks/{stock_code}/quote", tags=["stocks"])
         @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
-        def q(code: str):
+        def q(stock_code: str):
             return None
 
         app.include_router(router, prefix="/api/v1")
         m = build_manifest(app)
         ep = m["sections"][0]["endpoints"][0]
-        assert ep["path"] == "/api/v1/stocks/{code}/quote"
-        assert "code" in ep["id"]
+        assert ep["path"] == "/api/v1/stocks/{stock_code}/quote"
+        assert "stock_code" in ep["id"]
 
 
 class TestSectionSorting:
@@ -229,20 +225,6 @@ class TestControlTagExclusion:
         assert "/visible" in paths
 
 
-class TestSectionOverride:
-    def test_explicit_section_id_overrides_tag_mapping(self):
-        app = FastAPI()
-
-        @app.get("/weird", tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"],
-                       section_id="4.99")
-        def weird():
-            return None
-
-        m = build_manifest(app)
-        assert m["sections"][0]["id"] == "4.99"
-
-
 class TestSlugifyAndMethod:
     def test_id_is_stable_slug(self):
         from fastapi import APIRouter
@@ -250,9 +232,9 @@ class TestSlugifyAndMethod:
         app = FastAPI()
         router = APIRouter()
 
-        @router.get("/stocks/{code}/quote", tags=["stocks"])
+        @router.get("/stocks/{stock_code}/quote", tags=["stocks"])
         @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
-        def q(code: str):
+        def q(stock_code: str):
             return None
 
         app.include_router(router, prefix="/api/v1")
@@ -260,7 +242,7 @@ class TestSlugifyAndMethod:
         ep = m["sections"][0]["endpoints"][0]
         assert ep["method"] == "GET"
         # id should be deterministic, lowercase, path-component safe
-        assert ep["id"] == "get_api_v1_stocks_code_quote"
+        assert ep["id"] == "get_api_v1_stocks_stock_code_quote"
 
     def test_uses_first_method_only(self):
         """If a route supports multiple methods, manifest picks one (GET preferred)."""
