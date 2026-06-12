@@ -66,7 +66,8 @@ async def lifespan(app: FastAPI):
     # off a one-shot fetch. Failure here is non-fatal: the /calendar
     # endpoint will retry on first access.
     from .data_provider.persistence import trade_calendar
-    if not trade_calendar.get_cached_calendar():
+    cached_dates, _ = trade_calendar.get_cached_calendar()
+    if not cached_dates:
         logger.info("[Startup] Trade calendar empty, fetching from upstream")
         try:
             # Import lazily to avoid pulling in fetchers at module-import time

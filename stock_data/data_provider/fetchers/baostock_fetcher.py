@@ -214,7 +214,7 @@ class BaostockFetcher(BaseFetcher):
             from ..persistence.trade_calendar import get_cached_calendar
 
             today_str = date.today().strftime("%Y-%m-%d")
-            calendar = get_cached_calendar()
+            calendar, _ = get_cached_calendar()
             # Find most recent date <= today, iterate in reverse to get latest first
             valid_dates = [d for d in reversed(calendar) if d <= today_str]
 

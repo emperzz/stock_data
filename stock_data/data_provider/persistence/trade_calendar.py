@@ -36,12 +36,13 @@ def init_schema() -> None:
         conn.close()
 
 
-def get_cached_calendar() -> list:
+def get_cached_calendar() -> tuple[list, str]:
     """
     Get all cached trade dates.
 
     Returns:
-        List of trade dates as strings (YYYY-MM-DD), sorted ascending.
+        Tuple of (dates, origin) where ``origin`` is ``"persistence"``
+        when the cache has any rows, and ``""`` when the cache is empty.
     """
     init_schema()
 
@@ -49,7 +50,9 @@ def get_cached_calendar() -> list:
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT trade_date FROM trade_calendar ORDER BY trade_date ASC")
-        return [row["trade_date"] for row in cursor.fetchall()]
+        dates = [row["trade_date"] for row in cursor.fetchall()]
+        origin = "persistence" if dates else ""
+        return dates, origin
     finally:
         conn.close()
 

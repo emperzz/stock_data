@@ -261,7 +261,7 @@ def get_pool(
     manager,
     *,
     refresh: bool = False,
-) -> list[dict]:
+) -> tuple[list[dict], str]:
     """Fetch a ZT/DT/ZBGC pool with the volatile-date policy baked in.
 
     Args:
@@ -273,7 +273,12 @@ def get_pool(
             we always go upstream anyway).
 
     Returns:
-        List of stock dicts.
+        Tuple of ``(stocks, origin)`` where ``origin`` is:
+          - the fetcher name (e.g. ``"akshare"``) when the data was
+            served from the upstream,
+          - ``"persistence"`` when the data was read from the SQLite
+            cache (either the primary historical hit, the write-back
+            of a fresh fetch, or the fallback after upstream failure).
 
     Raises:
         DataFetchError: When the upstream fails AND there is no
@@ -299,10 +304,10 @@ def get_pool(
                 f"[PoolDaily] {pool_type} {date} hit in persistence "
                 f"({len(cached)} stocks)"
             )
-            return cached
+            return cached, "persistence"
 
     try:
-        stocks = manager.get_zt_pool_raw(pool_type, date)
+        stocks, fetcher_source = manager.get_zt_pool_raw(pool_type, date)
     except DataFetchError:
         cached = get_pool_cached(pool_type, date)
         if cached:
@@ -310,12 +315,12 @@ def get_pool(
                 f"[PoolDaily] Upstream failed for {pool_type} {date}, "
                 f"falling back to {len(cached)} persisted stocks"
             )
-            return cached
+            return cached, "persistence"
         raise
 
     if stocks:
         save_pool(pool_type, date, stocks)
-    return stocks
+    return stocks, fetcher_source
 
 
 __all__ = [

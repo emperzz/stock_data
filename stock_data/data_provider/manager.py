@@ -297,7 +297,7 @@ class DataFetcherManager:
             )
         except DataFetchError:
             # Fallback: return cached data if upstream fails
-            cached = get_cached_calendar()
+            cached, _ = get_cached_calendar()
             if cached:
                 logger.warning(
                     f"[Manager] All fetchers failed calendar, using {len(cached)} cached dates"
@@ -311,7 +311,7 @@ class DataFetcherManager:
         self,
         pool_type: str,
         date: str,
-    ) -> list[dict]:
+    ) -> tuple[list[dict], str]:
         """Pure upstream ZT/DT/ZBGC pool fetch — no caching, no fallback.
 
         Thin wrapper over the ZT_POOL-capability failover. Raises
@@ -320,6 +320,11 @@ class DataFetcherManager:
         date-aware read/write/fallback policy; this method is the
         single point of "talk to upstream" and has no opinion on
         volatility or current-day semantics.
+
+        Returns:
+            Tuple of (stocks, fetcher_name) when the upstream call
+            succeeds; the persistence layer unpacks this to forward
+            the fetcher name as the response's origin.
         """
         def _fetch(fetcher: BaseFetcher) -> list[dict] | None:
             return fetcher.get_zt_pool(pool_type, date) or None
@@ -328,6 +333,7 @@ class DataFetcherManager:
             "csi",
             f"ZT pool {pool_type} {date}",
             _fetch,
+            return_source=True,
         )
 
     def get_zt_pool(
@@ -345,6 +351,11 @@ class DataFetcherManager:
         parameter is kept for backward compatibility but is now
         ignored — the persistence layer computes volatility from the
         date itself.
+
+        The persistence layer returns ``(stocks, origin)``; this
+        wrapper unpacks and discards ``origin`` (the API layer reaches
+        the same data via ``get_zt_pool_raw``'s ``return_source`` path
+        in Task 6, not through this convenience wrapper).
         """
         from .persistence.pool_daily import (
             get_latest_cached_date,
@@ -361,12 +372,13 @@ class DataFetcherManager:
                 from datetime import date as date_cls
                 query_date = date_cls.today().strftime("%Y-%m-%d")
 
-        return get_pool(
+        stocks, _ = get_pool(
             pool_type=pool_type,
             date=query_date,
             manager=self,
             refresh=refresh,
         )
+        return stocks
 
     # ---------- index methods ----------
 
