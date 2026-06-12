@@ -1041,7 +1041,7 @@ def get_trade_calendar(
     # Check if refresh is needed
     should_refresh = refresh
     if not should_refresh:
-        cached_dates = get_cached_calendar()
+        cached_dates, _ = get_cached_calendar()
         if not cached_dates:
             should_refresh = True
         else:
@@ -1058,7 +1058,7 @@ def get_trade_calendar(
                 logger.info(f"[calendar] Updated {len(dates)} dates from manager")
         except Exception as e:
             logger.error(f"[calendar] Manager calendar failed: {e}")
-            cached_dates = get_cached_calendar()
+            cached_dates, _ = get_cached_calendar()
             if not cached_dates:
                 raise HTTPException(
                     status_code=500,
@@ -1067,7 +1067,7 @@ def get_trade_calendar(
             # Fall through to use cached data
 
     # Get dates from cache
-    dates = get_cached_calendar()
+    dates, _ = get_cached_calendar()
     latest = get_latest_cached_trade_date() if dates else None
 
     return TradeCalendarResponse(trade_dates=dates, latest_date=latest, total=len(dates))

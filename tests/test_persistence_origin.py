@@ -11,12 +11,7 @@ This task covers:
 
 Reference: ``docs/superpowers/plans/2026-06-12-source-tracking.md`` (Task 2)
 """
-import pytest
-
-from stock_data.data_provider.persistence import (
-    pool_daily,
-    trade_calendar,
-)
+from stock_data.data_provider.persistence import trade_calendar
 
 
 def test_get_cached_calendar_returns_tuple():
