@@ -1114,7 +1114,7 @@ def list_boards(
         # handles daily-refresh logic. No TTLCache needed — SQLite lookups
         # on indexed columns are sub-millisecond.
         manager = get_manager()
-        boards = stock_board_cache.get_board_list(
+        boards, _ = stock_board_cache.get_board_list(
             type, source, refresh=refresh, include_quote=include_quote, manager=manager
         )
 
@@ -1185,7 +1185,7 @@ def get_board_stocks(
         # handles refresh logic. No TTLCache needed — SQLite queries on
         # indexed columns are sub-millisecond.
         manager = get_manager()
-        stocks = stock_board_cache.get_board_stocks(
+        stocks, _ = stock_board_cache.get_board_stocks(
             board_code, source, refresh=refresh, include_quote=include_quote, manager=manager
         )
 
@@ -1198,7 +1198,7 @@ def get_board_stocks(
         # Get board name — try both types since "BK" prefix is shared
         board_name = board_code
         for bt in ("concept", "industry"):
-            boards = stock_board_cache.get_board_list(bt, source, refresh=False, manager=manager)
+            boards, _ = stock_board_cache.get_board_list(bt, source, refresh=False, manager=manager)
             match = next((b["name"] for b in boards if b["code"] == board_code), None)
             if match:
                 board_name = match

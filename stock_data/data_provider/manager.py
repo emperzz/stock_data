@@ -462,44 +462,48 @@ class DataFetcherManager:
 
     # ---------- boards (concept / industry) ----------
 
-    def get_all_concept_boards(self, source: str = "eastmoney", include_quote: bool = False) -> list[dict]:
+    def get_all_concept_boards(self, source: str = "eastmoney", include_quote: bool = False) -> tuple[list[dict], str]:
         """Get all concept boards. See _with_failover docstring for behavior."""
         return self._with_failover(
             DataCapability.STOCK_BOARD,
             "csi",
             "concept boards",
             lambda f: f.get_all_concept_boards(source=source, include_quote=include_quote),
+            return_source=True,
         )
 
-    def get_all_industry_boards(self, source: str = "eastmoney", include_quote: bool = False) -> list[dict]:
+    def get_all_industry_boards(self, source: str = "eastmoney", include_quote: bool = False) -> tuple[list[dict], str]:
         """Get all industry boards. See _with_failover docstring for behavior."""
         return self._with_failover(
             DataCapability.STOCK_BOARD,
             "csi",
             "industry boards",
             lambda f: f.get_all_industry_boards(source=source, include_quote=include_quote),
+            return_source=True,
         )
 
     def get_concept_board_stocks(
         self, board_code: str, source: str = "eastmoney", include_quote: bool = False
-    ) -> list[dict]:
+    ) -> tuple[list[dict], str]:
         """Get stocks belonging to a concept board."""
         return self._with_failover(
             DataCapability.STOCK_BOARD,
             "csi",
             f"concept board stocks {board_code}",
             lambda f: f.get_concept_board_stocks(board_code, source=source, include_quote=include_quote),
+            return_source=True,
         )
 
     def get_industry_board_stocks(
         self, board_code: str, source: str = "eastmoney", include_quote: bool = False
-    ) -> list[dict]:
+    ) -> tuple[list[dict], str]:
         """Get stocks belonging to an industry board."""
         return self._with_failover(
             DataCapability.STOCK_BOARD,
             "csi",
             f"industry board stocks {board_code}",
             lambda f: f.get_industry_board_stocks(board_code, source=source, include_quote=include_quote),
+            return_source=True,
         )
 
     # ---------- eastmoney datacenter endpoints ----------

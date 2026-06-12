@@ -29,10 +29,13 @@ class TestBoardAPIRoutes:
     def test_get_concept_boards(self, client):
         """Test GET /api/v1/boards with type=concept."""
         with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
-            mock_get.return_value = [
-                {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
-                {"code": "BK1049", "name": "云计算", "board_type": "concept", "source": "eastmoney"},
-            ]
+            mock_get.return_value = (
+                [
+                    {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
+                    {"code": "BK1049", "name": "云计算", "board_type": "concept", "source": "eastmoney"},
+                ],
+                "akshare",
+            )
             response = client.get("/api/v1/boards?type=concept")
             assert response.status_code == 200
             data = response.json()
@@ -43,9 +46,10 @@ class TestBoardAPIRoutes:
     def test_get_industry_boards(self, client):
         """Test GET /api/v1/boards with type=industry."""
         with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
-            mock_get.return_value = [
-                {"code": "BK0816", "name": "银行", "board_type": "industry", "source": "eastmoney"},
-            ]
+            mock_get.return_value = (
+                [{"code": "BK0816", "name": "银行", "board_type": "industry", "source": "eastmoney"}],
+                "akshare",
+            )
             response = client.get("/api/v1/boards?type=industry")
             assert response.status_code == 200
             data = response.json()
@@ -72,13 +76,17 @@ class TestBoardAPIRoutes:
             patch("stock_data.api.routes.stock_board_cache.get_board_stocks") as mock_get_stocks,
             patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get_boards,
         ):
-            mock_get_stocks.return_value = [
-                {"stock_code": "600519", "stock_name": "贵州茅台"},
-                {"stock_code": "000001", "stock_name": "平安银行"},
-            ]
-            mock_get_boards.return_value = [
-                {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
-            ]
+            mock_get_stocks.return_value = (
+                [
+                    {"stock_code": "600519", "stock_name": "贵州茅台"},
+                    {"stock_code": "000001", "stock_name": "平安银行"},
+                ],
+                "akshare",
+            )
+            mock_get_boards.return_value = (
+                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
+                "akshare",
+            )
             response = client.get("/api/v1/boards/BK1048/stocks")
             assert response.status_code == 200
             data = response.json()
@@ -89,10 +97,18 @@ class TestBoardAPIRoutes:
 
     def test_get_board_stocks_with_quote(self, client):
         """Test GET /api/v1/boards/{board_code}/stocks?include_quote=true."""
-        with patch("stock_data.api.routes.stock_board_cache.get_board_stocks") as mock_get:
-            mock_get.return_value = [
-                {"stock_code": "600519", "stock_name": "贵州茅台"},
-            ]
+        with (
+            patch("stock_data.api.routes.stock_board_cache.get_board_stocks") as mock_get_stocks,
+            patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get_boards,
+        ):
+            mock_get_stocks.return_value = (
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "akshare",
+            )
+            mock_get_boards.return_value = (
+                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
+                "akshare",
+            )
             with patch("stock_data.api.routes.get_manager") as mock_manager:
                 mock_mgr = MagicMock()
                 mock_quote = MagicMock()
@@ -114,7 +130,10 @@ class TestBoardAPIRoutes:
     def test_get_boards_with_refresh(self, client):
         """Test GET /api/v1/boards?refresh=true forces refresh."""
         with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
-            mock_get.return_value = [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}]
+            mock_get.return_value = (
+                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
+                "akshare",
+            )
             response = client.get("/api/v1/boards?type=concept&refresh=true")
             assert response.status_code == 200
             mock_get.assert_called_once()
@@ -124,7 +143,7 @@ class TestBoardAPIRoutes:
     def test_get_boards_with_source(self, client):
         """Test GET /api/v1/boards?source=tonghuashun."""
         with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
-            mock_get.return_value = []
+            mock_get.return_value = ([], "")
             response = client.get("/api/v1/boards?type=concept&source=tonghuashun")
             assert response.status_code == 200
             mock_get.assert_called_once()
@@ -135,25 +154,28 @@ class TestBoardAPIRoutes:
     def test_get_boards_with_include_quote(self, client):
         """Test GET /api/v1/boards?include_quote=true passes include_quote to cache layer."""
         with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
-            mock_get.return_value = [
-                {
-                    "code": "BK1048",
-                    "name": "互联网服务",
-                    "board_type": "concept",
-                    "source": "eastmoney",
-                    "price": 1850.5,
-                    "change_pct": 2.35,
-                    "change_amount": 42.3,
-                    "volume": 52000000,
-                    "amount": 95800000000.0,
-                    "turnover_rate": 3.58,
-                    "total_mv": 2345000000000.0,
-                    "up_count": 45,
-                    "down_count": 12,
-                    "leading_stock": "科大讯飞",
-                    "leading_stock_pct": 8.5,
-                },
-            ]
+            mock_get.return_value = (
+                [
+                    {
+                        "code": "BK1048",
+                        "name": "互联网服务",
+                        "board_type": "concept",
+                        "source": "eastmoney",
+                        "price": 1850.5,
+                        "change_pct": 2.35,
+                        "change_amount": 42.3,
+                        "volume": 52000000,
+                        "amount": 95800000000.0,
+                        "turnover_rate": 3.58,
+                        "total_mv": 2345000000000.0,
+                        "up_count": 45,
+                        "down_count": 12,
+                        "leading_stock": "科大讯飞",
+                        "leading_stock_pct": 8.5,
+                    },
+                ],
+                "akshare",
+            )
             response = client.get("/api/v1/boards?type=concept&include_quote=true")
             assert response.status_code == 200
             data = response.json()
@@ -178,7 +200,10 @@ class TestBoardAPIRoutes:
         with (
             patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get,
         ):
-            mock_get.return_value = [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}]
+            mock_get.return_value = (
+                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
+                "akshare",
+            )
             response = client.get("/api/v1/boards?type=concept&include_quote=true")
             assert response.status_code == 200
             mock_get.assert_called_once()

@@ -60,7 +60,7 @@ def init_schema() -> None:
         conn.close()
 
 
-def get_board_list(board_type: str, source: str, refresh: bool = False, include_quote: bool = False, manager=None) -> list:
+def get_board_list(board_type: str, source: str, refresh: bool = False, include_quote: bool = False, manager=None) -> tuple[list, str]:
     """
     Get board list with automatic refresh.
 
@@ -78,6 +78,9 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
         manager: DataFetcherManager instance. Required for fetching from upstream.
 
     Returns:
+        Tuple of (boards, origin) where origin is:
+          - the fetcher name (e.g. "akshare") when the data was freshly fetched
+          - "persistence" when the data was read from the SQLite cache
         List of board dicts: [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}, ...]
             May include quote fields when include_quote=True.
     """
@@ -88,7 +91,7 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
     if not needs_refresh:
         cached = _read_boards_from_db(board_type, source)
         if cached:
-            return cached
+            return cached, "persistence"
 
     # Need refresh: fetch from upstream and update cache
     if manager is None:
@@ -96,18 +99,18 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
 
     # Fetch based on board_type
     if board_type == "concept":
-        boards = manager.get_all_concept_boards(source=source, include_quote=include_quote)
+        boards, fetcher_source = manager.get_all_concept_boards(source=source, include_quote=include_quote)
     elif board_type == "industry":
-        boards = manager.get_all_industry_boards(source=source, include_quote=include_quote)
+        boards, fetcher_source = manager.get_all_industry_boards(source=source, include_quote=include_quote)
     else:
-        boards = []
+        boards, fetcher_source = [], ""
 
     if boards:
         # Always cache the base board data (without quote if include_quote=False)
         update_cached_boards(board_type, source, boards)
         logger.info(f"[BoardCache] Refreshed {len(boards)} boards for {board_type}/{source}")
 
-    return boards
+    return boards, fetcher_source
 
 
 def get_board_stocks(
@@ -116,7 +119,7 @@ def get_board_stocks(
     refresh: bool = False,
     include_quote: bool = False,
     manager=None,
-) -> list:
+) -> tuple[list, str]:
     """
     Get stocks belonging to a board with automatic refresh.
 
@@ -128,6 +131,9 @@ def get_board_stocks(
         manager: DataFetcherManager instance. Required for fetching from upstream.
 
     Returns:
+        Tuple of (stocks, origin) where origin is:
+          - the fetcher name (e.g. "akshare") when the data was freshly fetched
+          - "persistence" when the data was read from the SQLite cache
         List of stock dicts: [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
             May include quote fields when include_quote=True.
     """
@@ -139,7 +145,7 @@ def get_board_stocks(
     if not needs_refresh:
         cached = _read_board_stocks_from_db(board_code, source)
         if cached:
-            return cached
+            return cached, "persistence"
 
     # Need refresh: fetch from upstream and update cache
     if manager is None:
@@ -149,25 +155,25 @@ def get_board_stocks(
     if board_type is None:
         # Cache miss: try concept first, fall back to industry.
         # Both board types use "BK" prefix on EastMoney so code alone can't distinguish them.
-        stocks = manager.get_concept_board_stocks(board_code, source=source, include_quote=include_quote)
+        stocks, fetcher_source = manager.get_concept_board_stocks(board_code, source=source, include_quote=include_quote)
         if not stocks:
-            stocks = manager.get_industry_board_stocks(board_code, source=source, include_quote=include_quote)
+            stocks, fetcher_source = manager.get_industry_board_stocks(board_code, source=source, include_quote=include_quote)
         if stocks:
             update_cached_board_stocks(board_code, source, stocks)
-        return stocks
+        return stocks, fetcher_source
 
     if board_type == "concept":
-        stocks = manager.get_concept_board_stocks(board_code, source=source, include_quote=include_quote)
+        stocks, fetcher_source = manager.get_concept_board_stocks(board_code, source=source, include_quote=include_quote)
     elif board_type == "industry":
-        stocks = manager.get_industry_board_stocks(board_code, source=source, include_quote=include_quote)
+        stocks, fetcher_source = manager.get_industry_board_stocks(board_code, source=source, include_quote=include_quote)
     else:
-        stocks = []
+        stocks, fetcher_source = [], ""
 
     if stocks:
         update_cached_board_stocks(board_code, source, stocks)
         logger.info(f"[BoardCache] Refreshed {len(stocks)} stocks for board {board_code}/{source}")
 
-    return stocks
+    return stocks, fetcher_source
 
 
 def _get_board_type(board_code: str, source: str, manager) -> str | None:
