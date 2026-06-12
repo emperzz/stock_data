@@ -53,11 +53,14 @@ class TestZTPoolAPIRoutes:
         """Test GET /api/v1/pools with type=zt returns cached data."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
-            mock_mgr.get_zt_pool.return_value = [
-                {"code": "000001", "name": "平安银行", "price": 12.5, "change_pct": 10.05,
-                 "lb_count": 1, "first_seal_time": "09:25:00", "last_seal_time": "09:34:33",
-                 "seal_amount": 98243407, "seal_count": 0, "zt_count": "1/1", "pool_date": "2024-05-10"},
-            ]
+            mock_mgr.get_zt_pool.return_value = (
+                [
+                    {"code": "000001", "name": "平安银行", "price": 12.5, "change_pct": 10.05,
+                     "lb_count": 1, "first_seal_time": "09:25:00", "last_seal_time": "09:34:33",
+                     "seal_amount": 98243407, "seal_count": 0, "zt_count": "1/1", "pool_date": "2024-05-10"},
+                ],
+                "akshare",
+            )
             mock_manager.return_value = mock_mgr
 
             response = client.get("/api/v1/pools?type=zt&date=2024-05-10")
@@ -71,15 +74,19 @@ class TestZTPoolAPIRoutes:
             assert data["stocks"][0]["name"] == "平安银行"
             assert data["stocks"][0]["price"] == 12.5
             assert data["stocks"][0]["change_pct"] == 10.05
+            assert data["source"] == "akshare"
 
     def test_get_dt_pools(self, client):
         """Test GET /api/v1/pools with type=dt returns cached data."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
-            mock_mgr.get_zt_pool.return_value = [
-                {"code": "000002", "name": "万科A", "price": 8.8, "change_pct": -9.95,
-                 "lb_count": 1, "pool_date": "2024-05-10"},
-            ]
+            mock_mgr.get_zt_pool.return_value = (
+                [
+                    {"code": "000002", "name": "万科A", "price": 8.8, "change_pct": -9.95,
+                     "lb_count": 1, "pool_date": "2024-05-10"},
+                ],
+                "persistence",
+            )
             mock_manager.return_value = mock_mgr
 
             response = client.get("/api/v1/pools?type=dt&date=2024-05-10")
@@ -88,15 +95,19 @@ class TestZTPoolAPIRoutes:
             assert data["type"] == "dt"
             assert data["total"] == 1
             assert data["stocks"][0]["change_pct"] == -9.95
+            assert data["source"] == "persistence"
 
     def test_get_zbgc_pools(self, client):
         """Test GET /api/v1/pools with type=zbgc returns cached data."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
-            mock_mgr.get_zt_pool.return_value = [
-                {"code": "000003", "name": "炸板股", "price": 10.0, "change_pct": 9.95,
-                 "seal_count": 2, "lb_count": 1, "pool_date": "2024-05-10"},
-            ]
+            mock_mgr.get_zt_pool.return_value = (
+                [
+                    {"code": "000003", "name": "炸板股", "price": 10.0, "change_pct": 9.95,
+                     "seal_count": 2, "lb_count": 1, "pool_date": "2024-05-10"},
+                ],
+                "akshare",
+            )
             mock_manager.return_value = mock_mgr
 
             response = client.get("/api/v1/pools?type=zbgc&date=2024-05-10")
@@ -127,9 +138,10 @@ class TestZTPoolAPIRoutes:
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             # When refresh=True, manager returns data (forces fetch)
-            mock_mgr.get_zt_pool.return_value = [
-                {"code": "000001", "name": "测试股票", "price": 10.0, "change_pct": 5.0},
-            ]
+            mock_mgr.get_zt_pool.return_value = (
+                [{"code": "000001", "name": "测试股票", "price": 10.0, "change_pct": 5.0}],
+                "akshare",
+            )
             mock_manager.return_value = mock_mgr
 
             response = client.get("/api/v1/pools?type=zt&refresh=true&date=2024-05-10")
@@ -145,7 +157,7 @@ class TestZTPoolAPIRoutes:
         """Test GET /api/v1/pools when no data returns 404."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
-            mock_mgr.get_zt_pool.return_value = []
+            mock_mgr.get_zt_pool.return_value = ([], "")
             mock_manager.return_value = mock_mgr
 
             response = client.get("/api/v1/pools?type=zt&date=2024-05-10")
@@ -155,7 +167,7 @@ class TestZTPoolAPIRoutes:
         """Test GET /api/v1/pools passes date to manager correctly."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
-            mock_mgr.get_zt_pool.return_value = []
+            mock_mgr.get_zt_pool.return_value = ([], "")
             mock_manager.return_value = mock_mgr
 
             client.get("/api/v1/pools?type=zt&date=2024-06-15")
@@ -188,9 +200,10 @@ class TestZTPoolAPIRoutes:
             patch("stock_data.api.routes.get_manager") as mock_manager,
         ):
             mock_mgr = MagicMock()
-            mock_mgr.get_zt_pool.return_value = [
-                {"code": "000099", "name": "最近交易日股", "price": 1.0},
-            ]
+            mock_mgr.get_zt_pool.return_value = (
+                [{"code": "000099", "name": "最近交易日股", "price": 1.0}],
+                "akshare",
+            )
             mock_manager.return_value = mock_mgr
 
             response = client.get("/api/v1/pools?type=zt")
@@ -406,9 +419,10 @@ class TestZTFetcherManager:
         real_mgr = DataFetcherManager()
         real_mgr._filter_by_capability = MagicMock(return_value=[FakeFetcher()])
 
-        stocks = real_mgr.get_zt_pool("zt", today_str, refresh=False, is_current_day=True)
+        stocks, origin = real_mgr.get_zt_pool("zt", today_str, refresh=False, is_current_day=True)
         assert len(stocks) == 1
         assert stocks[0]["code"] == "FAKE001"
+        assert origin == "FakeFetcher"
 
         # Persistence MUST NOT have been written for today's date
         persisted = get_pool_cached("zt", today_str)

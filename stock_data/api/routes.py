@@ -1055,7 +1055,7 @@ def get_trade_calendar(
         logger.info(f"[calendar] Fetching fresh data from upstream, refresh={refresh}")
         try:
             manager = get_manager()
-            dates = manager.get_trade_calendar()
+            dates, _origin = manager.get_trade_calendar()
             if dates:
                 logger.info(f"[calendar] Updated {len(dates)} dates from manager")
         except Exception as e:
@@ -1116,11 +1116,12 @@ def list_boards(
         # handles daily-refresh logic. No TTLCache needed — SQLite lookups
         # on indexed columns are sub-millisecond.
         manager = get_manager()
-        boards, _ = stock_board_cache.get_board_list(
+        boards, origin = stock_board_cache.get_board_list(
             type, source, refresh=refresh, include_quote=include_quote, manager=manager
         )
 
         result = BoardListResponse(
+            source=origin,
             data=[
                 BoardInfo(
                     code=b["code"],
@@ -1187,7 +1188,7 @@ def get_board_stocks(
         # handles refresh logic. No TTLCache needed — SQLite queries on
         # indexed columns are sub-millisecond.
         manager = get_manager()
-        stocks, _ = stock_board_cache.get_board_stocks(
+        stocks, origin = stock_board_cache.get_board_stocks(
             board_code, source, refresh=refresh, include_quote=include_quote, manager=manager
         )
 
@@ -1221,7 +1222,8 @@ def get_board_stocks(
         result = BoardStocksResponse(
             board=BoardInfo(code=board_code, name=board_name),
             stocks=stock_list,
-            source=source,
+            query_source=source,
+            data_source=origin,
         )
 
         return result
@@ -1327,7 +1329,7 @@ def get_pools(
         # The persistence layer now owns the volatile/historical policy
         # via pool_daily.is_volatile_date(); no need to pass is_current_day
         # down anymore.
-        stocks = manager.get_zt_pool(
+        stocks, origin = manager.get_zt_pool(
             pool_type=type,
             date=query_date,
             refresh=refresh,
@@ -1367,6 +1369,7 @@ def get_pools(
             type=type,
             total=len(pool_stocks),
             stocks=pool_stocks,
+            source=origin,
         )
 
         # Only cache current-day results in TTLCache (historical goes to SQLite).

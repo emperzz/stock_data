@@ -311,7 +311,7 @@ class DataFetcherManager:
 
     # ---------- trade calendar (with persistence) ----------
 
-    def get_trade_calendar(self) -> list[str]:
+    def get_trade_calendar(self) -> tuple[list[str], str]:
         """Get A-share trade calendar with automatic failover.
 
         Tries each fetcher's get_trade_calendar() in priority order.
@@ -320,7 +320,11 @@ class DataFetcherManager:
         returned (or DataFetchError if no cache either).
 
         Returns:
-            List of trade dates as YYYY-MM-DD strings, sorted ascending.
+            Tuple of ``(dates, origin)`` where ``origin`` is the
+            fetcher name (e.g. ``"akshare"``) when the data was
+            freshly fetched, or ``"persistence"`` when the cached
+            value was used as the upstream-failure fallback.
+            ``dates`` is a list of YYYY-MM-DD strings, sorted ascending.
 
         Raises:
             DataFetchError: When all fetchers fail and no cache available.
@@ -335,12 +339,14 @@ class DataFetcherManager:
             return None
 
         try:
-            return self._with_failover(
+            dates, fetcher_source = self._with_failover(
                 DataCapability.TRADE_CALENDAR,
                 "csi",
                 "trade calendar",
                 _fetch_and_persist,
+                return_source=True,
             )
+            return dates, fetcher_source
         except DataFetchError:
             # Fallback: return cached data if upstream fails
             cached, _ = get_cached_calendar()
@@ -348,7 +354,7 @@ class DataFetcherManager:
                 logger.warning(
                     f"[Manager] All fetchers failed calendar, using {len(cached)} cached dates"
                 )
-                return cached
+                return cached, "persistence"
             raise
 
     # ---------- ZT/DT/ZBGC pool (with persistence) ----------
@@ -388,7 +394,7 @@ class DataFetcherManager:
         date: str | None = None,
         refresh: bool = False,
         is_current_day: bool = False,
-    ) -> list[dict]:
+    ) -> tuple[list[dict], str]:
         """Get ZT (涨跌停) pool data with date-keyed persistence.
 
         Convenience wrapper that resolves the query date and delegates
@@ -398,10 +404,12 @@ class DataFetcherManager:
         ignored — the persistence layer computes volatility from the
         date itself.
 
-        The persistence layer returns ``(stocks, origin)``; this
-        wrapper unpacks and discards ``origin`` (the API layer reaches
-        the same data via ``get_zt_pool_raw``'s ``return_source`` path
-        in Task 6, not through this convenience wrapper).
+        Returns:
+            Tuple of ``(stocks, origin)`` forwarded straight from
+            ``persistence.pool_daily.get_pool``. ``origin`` is the
+            fetcher name (e.g. ``"akshare"``) when the data was
+            served from the upstream, or ``"persistence"`` when the
+            data was read from the SQLite cache.
         """
         from .persistence.pool_daily import (
             get_latest_cached_date,
@@ -418,13 +426,13 @@ class DataFetcherManager:
                 from datetime import date as date_cls
                 query_date = date_cls.today().strftime("%Y-%m-%d")
 
-        stocks, _ = get_pool(
+        stocks, origin = get_pool(
             pool_type=pool_type,
             date=query_date,
             manager=self,
             refresh=refresh,
         )
-        return stocks
+        return stocks, origin
 
     # ---------- index methods ----------
 

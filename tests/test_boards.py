@@ -349,10 +349,13 @@ class TestBoardSchemas:
 
         board = BoardInfo(code="BK1048", name="互联网服务")
         stocks = [BoardStockInfo(code="600519", name="贵州茅台")]
-        response = BoardStocksResponse(board=board, stocks=stocks, source="akshare")
+        response = BoardStocksResponse(
+            board=board, stocks=stocks, query_source="eastmoney", data_source="akshare"
+        )
         assert response.board.code == "BK1048"
         assert len(response.stocks) == 1
-        assert response.source == "akshare"
+        assert response.query_source == "eastmoney"
+        assert response.data_source == "akshare"
 
     def test_board_stock_info_with_quote(self):
         """Test BoardStockInfo with quote data."""
