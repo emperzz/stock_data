@@ -175,11 +175,13 @@ endpoints. Mounted by `stock_data.server` via `explorer.mount(app)`.
   `@endpoint_meta` and (b) route tags not present in `TAG_TO_TITLE`.
 - **`explorer/manifest.py`** — `build_manifest(app)` reflects `app.routes`,
   merges each route's `route.endpoint` lookup into `REGISTRY`, and returns a
-  JSON tree (`{meta, sections[]}`). Rebuilt on every request to
-  `/control/api-manifest` (no caching — ~5 KB payload, sub-millisecond build).
+  JSON tree (`{meta, sections[]}` where each endpoint node has a `fetchers[]`
+  field describing the fetcher backends; see "Stage 1/2 Fetcher Drill-down"
+  below). Rebuilt on every request to `/control/api-manifest` (no caching —
+  ~5 KB payload, sub-millisecond build).
 - **`explorer/routes.py`** — `/control/*` APIRouter. Endpoints: `/config`,
-  `/server/status`, `/api-manifest`. All tagged `control` → excluded from
-  the manifest.
+  `/server/status`, `/api-manifest`, `/fetcher-test`. All tagged `control`
+  → excluded from the manifest.
 - **`explorer/tags.py`** — `TAG_TO_TITLE` (route tag → sidebar section title). The section id is the tag name itself (just a stable DOM anchor / URL hash; no business meaning).
   and `CAPABILITY_LABELS` (DataCapability flag → `{label, icon}`).
 - **`explorer/static/index.html`** — Single-page interactive docs. Fetches
@@ -296,6 +298,54 @@ IndicatorCatalogEntry(
 | 板块成分股 | 用户传入 source → `query_source`; 实际数据源 → `data_source` | `data_source = "persistence"` (缓存命中) |
 
 > **注意**: `/stocks` 和 `/calendar` 当前响应**不暴露** source 字段 (其 response model 没有 source 字段), 持久化层 origin 仍被透传但被丢弃。这是 YAGNI 决策——如果未来要暴露, 给对应 response model 加 `source: str` 字段即可, 路由层已准备好。
+
+## Stage 1/2 Fetcher Drill-down (Explorer)
+
+The `/explorer/` UI shows, under each endpoint card, a collapsible
+"Fetcher backends" section listing every fetcher that can serve the
+endpoint along with its internal method signature. Each row has a
+`Test` button that opens an inline form posting to `POST /control/fetcher-test`
+to invoke the fetcher method directly (bypassing manager failover).
+
+### Data flow
+
+1. `GET /control/api-manifest` returns endpoints with a new `fetchers[]`
+   field. Each entry is `{name, method, priority, capabilities, signature}`
+   where `name` is the fetcher class name (e.g. `BaostockFetcher`).
+2. The manifest builder uses `data_provider.base.CAPABILITY_TO_METHOD`
+   (and `EndpointMeta.fetcher_method` override) to figure out the right
+   method per fetcher.
+3. HTML renders the rows under a `<details>`-based collapse.
+4. Clicking Test → POST `/control/fetcher-test` body
+   `{fetcher, method, kwargs}` → **always HTTP 200**; success/failure in
+   the body's `ok` field. Errors classified as
+   `UnknownFetcher / UnknownMethod / FetcherUnavailable / TypeError / <ExceptionName>`,
+   each with optional traceback.
+
+### `fetcher_method` overrides (3 known)
+
+`@endpoint_meta(fetcher_method=...)` pins the method when the capability's
+default isn't right:
+
+| Endpoint | Capability | Override method |
+|----------|------------|-----------------|
+| `/boards/{board_code}/stocks` | `STOCK_BOARD` | `get_concept_board_stocks` |
+| `/dragon-tiger/daily` | `DRAGON_TIGER` | `get_daily_dragon_tiger` |
+| `/stocks/{stock_code}/fund-flow/daily` | `FUND_FLOW` | `get_fund_flow_120d` |
+
+**`/boards` (single endpoint, `?type=concept|industry` dispatch) Stage 2
+tests the concept variant by default**; industry variant is not exposed
+in the UI (the user can change the method name in the mini-form manually).
+
+### Anti-patterns
+
+- **Don't** add a `DataCapability` without putting it in either
+  `CAPABILITY_TO_METHOD` or `_NO_FETCHER_METHOD`. Both startup sanity
+  checks and `tests/test_capability_method_map.py` will refuse silently.
+- **Don't** assume Stage 2 result is "production-equivalent" — it bypasses
+  the manager's circuit breaker and the capability filter.
+- **Don't** rely on `/control/fetcher-test` from external networks — it's
+  127.0.0.1-only via the control router.
 
 ## Provider API Documentation
 
@@ -699,3 +749,5 @@ Environment variables (see `.env.example`):
 - **Don't** write `options.get(key) or default` for numeric/float option keys — when `key=0` is a valid value, the `or` treats it as missing. Use `options.get(key, default)` so `0` flows through.
 - **Don't** re-introduce inline MA/EMA/WMA calculations in the fetcher path. If you need a moving average on K-line data, ask the indicator service via `?indicators=ma` (or compute it downstream of the API).
 - **Don't** reorder decorators on a route so `@endpoint_meta` sits OUTSIDE `@router.get` (i.e. `@endpoint_meta(...) @router.get(...) def f`). The contract requires `@endpoint_meta` to be the INNER decorator so FastAPI captures the same function object that `REGISTRY[f]` was keyed on. Reversing the order silently drops the route from the explorer manifest (a startup warning is logged, but the endpoint still works as an API). The runtime sanity check in `explorer/__init__.py` catches this on boot.
+- **Don't** add a `DataCapability` flag without declaring intent — every flag must be in either `CAPABILITY_TO_METHOD` (maps to a fetcher method) or `_NO_FETCHER_METHOD` (explicit "no method"). `tests/test_capability_method_map.py` enforces this; the explorer startup sanity check also warns about violations.
+- **Don't** override `@endpoint_meta(fetcher_method=...)` with a method name that doesn't exist on any fetcher class — startup sanity check warns but the manifest will silently produce a misleading Stage 2 entry.
