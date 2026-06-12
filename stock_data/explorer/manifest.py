@@ -19,6 +19,7 @@ from fastapi.routing import APIRoute
 
 from .. import __version__
 from ..api.endpoint_meta import REGISTRY, EndpointMeta
+from ..data_provider.base import CAPABILITY_TO_METHOD, DataCapability
 from .tags import _INTERNAL_TAGS, CAPABILITY_LABELS, TAG_TO_TITLE
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,56 @@ def _jsonify_default(value):
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return repr(value)
+
+
+def _resolve_fetchers(meta, manager) -> list[dict]:
+    """Enumerate fetchers eligible for an endpoint, deduped by (name, method).
+
+    Returns a list of {name, method, priority, capabilities, signature} dicts
+    sorted by priority ascending (matches actual failover order).
+    See spec Section 4 for the full resolution rules.
+    """
+    if not meta.capabilities or not meta.markets:
+        return []
+
+    # (fetcher_name, method_name) → entry dict (single source of dedup)
+    entries: dict[tuple[str, str], dict] = {}
+
+    for cap_name in meta.capabilities:
+        # Resolve string → enum; skip unknown gracefully (warning lives in sanity check)
+        try:
+            cap = DataCapability[cap_name]
+        except KeyError:
+            continue
+
+        # Determine method name: override > capability default
+        if meta.fetcher_method is not None:
+            method_name = meta.fetcher_method
+        else:
+            method_name = CAPABILITY_TO_METHOD.get(cap)
+            if method_name is None:
+                continue  # capability has no mapped method (or is in _NO_FETCHER_METHOD)
+
+        for market in meta.markets:
+            for fetcher in manager._filter_by_capability(market, cap):
+                key = (fetcher.name, method_name)
+                if key in entries:
+                    # Merge capability into existing entry
+                    if cap_name not in entries[key]["capabilities"]:
+                        entries[key]["capabilities"].append(cap_name)
+                    continue
+                method = getattr(fetcher, method_name, None)
+                if method is None:
+                    continue  # fetcher doesn't actually expose this method
+                entries[key] = {
+                    "name": fetcher.name,
+                    "method": method_name,
+                    "priority": fetcher.priority,
+                    "capabilities": [cap_name],
+                    "signature": _reflect_signature(method),
+                }
+
+    return sorted(entries.values(), key=lambda e: e["priority"])
 
 
 def _build_meta() -> dict:
