@@ -998,7 +998,7 @@ def list_stocks(
 
     # Get stock list with automatic refresh (cache layer handles daily refresh logic)
     manager = get_manager()
-    stocks = stock_cache.get_stock_list(market, refresh=refresh, manager=manager)
+    stocks, _origin = stock_cache.get_stock_list(market, refresh=refresh, manager=manager)
     logger.info(f"[list_stocks] Returned {len(stocks)} stocks for market={market}")
     page = stocks[offset : offset + limit]
     return [StockInfo(code=s["code"], name=s["name"], market=market) for s in page]

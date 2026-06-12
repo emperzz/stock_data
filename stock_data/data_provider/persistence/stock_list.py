@@ -18,19 +18,12 @@ _refresh_tracker = DailyRefreshTracker()
 
 # Public → fetcher market-tag conversion. The external API (routes.py)
 # exposes A-shares as ``csi``; the fetcher's ``get_all_stocks`` API uses
-# the legacy ``cn`` tag. ``csi → cn`` happens here at the single
-# call site to the fetcher, so the rest of the codebase can use the
-# public ``csi`` tag consistently (DB key, response, logs, etc.).
+# the legacy ``cn`` tag. The ``csi -> cn`` translation is now applied
+# inside ``manager.get_all_stocks`` at the call boundary, so this
+# mapping is documented here as the single source of truth for the
+# public-to-fetcher tag boundary (in case future boundary tags are
+# added and need cross-referencing).
 PUBLIC_TO_FETCHER_MARKET = {"csi": "cn"}
-
-
-def _to_fetcher_market(public_market: str) -> str:
-    """Translate a public-facing market tag to the fetcher's internal tag.
-
-    Currently a 1:1 mapping except for A-shares (csi → cn). Kept as a
-    helper so future boundary tags can be added in one place.
-    """
-    return PUBLIC_TO_FETCHER_MARKET.get(public_market, public_market)
 
 
 def init_schema() -> None:
@@ -58,33 +51,32 @@ def init_schema() -> None:
         conn.close()
 
 
-def _fetch_from_upstream(public_market: str, manager) -> list:
-    """Fetch stock list from upstream fetchers.
+def _fetch_from_upstream(public_market: str, manager) -> tuple[list, str]:
+    """Fetch stock list from upstream fetchers via the manager wrapper.
 
-    The public_market (csi/hk/us) is converted to the fetcher's
-    internal tag (cn/hk/us) at the call site. Capability-based
-    filtering still uses the public tag so fetcher market declarations
-    (e.g. ``supported_markets={"csi", "hk"}``) match correctly.
+    The public_market (``csi``/``hk``/``us``) is passed to
+    ``manager.get_all_stocks`` as-is, since capability-based routing
+    in the manager uses the fetcher's ``supported_markets`` (which
+    declares ``"csi"`` for A-shares). The fetcher itself is
+    responsible for translating to its own internal tag if its
+    underlying API needs it (e.g. akshare's ``ak.stock_info_a_code_name``
+    treats the call as A-share without a market param).
+
+    Returns:
+        Tuple of ``(stocks, fetcher_name)``. ``fetcher_name`` is the
+        name of the fetcher that returned the data (e.g. ``"akshare"``),
+        or ``""`` if every fetcher returned an empty list. ``stocks``
+        is always a list (never ``None``) — the manager wrapper
+        returns ``None`` to signal total failure, which we normalize
+        to an empty list here for the persistence layer.
     """
-    from ..base import DataCapability
-
-    fetchers = manager._filter_by_capability(public_market, DataCapability.STOCK_LIST)
-    fetcher_market = _to_fetcher_market(public_market)
-
-    for fetcher in fetchers:
-        try:
-            stocks = fetcher.get_all_stocks(fetcher_market)
-            if stocks:
-                return stocks
-        except Exception as e:
-            logger.warning(f"[StockCache] {fetcher.name} failed to fetch {public_market}: {e}")
-            continue
-
-    logger.warning(f"[StockCache] No fetcher available for market={public_market}")
-    return []
+    stocks, fetcher_source = manager.get_all_stocks(public_market)
+    if stocks is None:
+        stocks = []
+    return stocks, fetcher_source
 
 
-def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
+def get_stock_list(market: str, refresh: bool = False, manager=None) -> tuple[list, str]:
     """
     Get stock list with automatic refresh.
 
@@ -101,7 +93,13 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
         manager: DataFetcherManager instance. If None, creates one lazily.
 
     Returns:
-        List of stock dicts: [{"code": "600519", "name": "贵州茅台"}, ...]
+        Tuple of ``(stocks, origin)`` where ``origin`` is:
+          - the fetcher name (e.g. ``"akshare"``) when the data was
+            freshly fetched from a fetcher,
+          - ``"persistence"`` when the data was read from the SQLite
+            cache.
+        ``stocks`` is a list of stock dicts:
+        ``[{"code": "600519", "name": "贵州茅台"}, ...]``
     """
     init_schema()
 
@@ -113,7 +111,7 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
     if not needs_refresh:
         cached = _read_from_db(public_market)
         if cached:
-            return cached
+            return cached, "persistence"
 
     # Need refresh: fetch from upstream and update cache
     if manager is None:
@@ -121,12 +119,12 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> list:
 
         manager = create_default_manager()
 
-    stocks = _fetch_from_upstream(public_market, manager)
+    stocks, fetcher_source = _fetch_from_upstream(public_market, manager)
     if stocks:
         update_cached_stocks(public_market, stocks)
         logger.info(f"[StockCache] Refreshed {len(stocks)} stocks for market={public_market}")
 
-    return stocks
+    return stocks, fetcher_source
 
 
 def get_stock_name(code: str, market: str | None = None, manager=None) -> str:
@@ -153,7 +151,7 @@ def get_stock_name(code: str, market: str | None = None, manager=None) -> str:
         return name
 
     # Fallback to full list load (for backward compat)
-    stocks = get_stock_list(market, refresh=False, manager=manager)
+    stocks, _origin = get_stock_list(market, refresh=False, manager=manager)
     for s in stocks:
         if s["code"] == normalized:
             return s["name"]

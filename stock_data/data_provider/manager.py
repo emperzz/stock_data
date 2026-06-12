@@ -250,6 +250,52 @@ class DataFetcherManager:
             return_source=True,
         )
 
+    # ---------- stock list ----------
+
+    def get_all_stocks(self, market: str) -> tuple[list[dict], str]:
+        """Get the full stock list for *market* via STOCK_LIST-capable fetchers.
+
+        Args:
+            market: Public market tag (csi/hk/us). The manager uses this
+                for capability-based routing (fetcher ``supported_markets``).
+                The public tag is translated to the fetcher's internal
+                tag (``csi`` -> ``cn``) at the call boundary so the rest
+                of the persistence layer can keep using the public
+                ``csi`` tag consistently (DB key, response, logs).
+
+        Returns:
+            Tuple of ``(stocks, fetcher_name)``. ``fetcher_name`` is the
+            name of the first STOCK_LIST-capable fetcher that returned
+            a non-empty list (e.g. ``"akshare"``); ``""`` when no
+            fetcher produced data.
+
+        Raises:
+            DataFetchError: When all fetchers raise (none returned
+                data AND all raised). An empty result from every
+                fetcher is returned as ``([], "")`` rather than
+                raising — distinguishing "the upstream truly has no
+                list for this market" from "the upstream is broken".
+        """
+        # ``_is_meaningful`` short-circuits on empty DataFrame but not
+        # on empty list. Wrap the call to (a) translate ``[]`` -> ``None``
+        # for the meaningfulness check (so the failover loop keeps
+        # trying fetchers when one returns an empty list), and (b) apply
+        # the public->fetcher market-tag conversion so the fetcher's
+        # internal branch (e.g. ``if market == "cn":``) still matches.
+        public_to_fetcher = {"csi": "cn"}
+        fetcher_market = public_to_fetcher.get(market, market)
+
+        def _call(fetcher: BaseFetcher):
+            result = fetcher.get_all_stocks(fetcher_market)
+            return None if result == [] else result
+
+        return self._with_failover(
+            DataCapability.STOCK_LIST, market, f"all_stocks {market}",
+            _call,
+            return_source=True,
+            allow_none=True,
+        )
+
     # ---------- realtime quotes (with circuit breaker) ----------
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:

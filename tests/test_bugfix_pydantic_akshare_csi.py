@@ -125,7 +125,7 @@ class TestPersistenceMarketConversion:
             "akshare.stock_info_a_code_name", return_value=fake_df
         ) as mock_ak:
             # force refresh so we hit the upstream path
-            stocks = stock_cache.get_stock_list(
+            stocks, _origin = stock_cache.get_stock_list(
                 "csi", refresh=True, manager=manager
             )
             assert len(stocks) == 1

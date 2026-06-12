@@ -1,6 +1,6 @@
 """验证 persistence 方法返回 (data, origin) 元组。
 
-Tasks 2 & 3 of the source-tracking implementation plan: the persistence
+Tasks 2, 3 & 4 of the source-tracking implementation plan: the persistence
 layer methods must return ``(data, origin)`` tuples so the API layer
 can report whether a response came from cache ("persistence") or was
 freshly fetched from a fetcher (fetcher name, e.g. "akshare").
@@ -10,6 +10,7 @@ This file covers:
 - ``pool_daily.get_pool`` — returns ``(stocks, origin)``
 - ``board.get_board_list`` — returns ``(boards, origin)``
 - ``board.get_board_stocks`` — returns ``(stocks, origin)``
+- ``stock_list.get_stock_list`` — returns ``(stocks, origin)``
 
 Reference: ``docs/superpowers/plans/2026-06-12-source-tracking.md``
 """
@@ -84,6 +85,27 @@ def test_get_board_stocks_returns_tuple(monkeypatch):
     )
     stocks, origin = board.get_board_stocks(
         "BK0001", "eastmoney", refresh=True, manager=_MockManager()
+    )
+    assert isinstance(stocks, list)
+    assert origin == "mock_fetcher"
+
+
+def test_get_stock_list_returns_tuple(monkeypatch):
+    """stock_list.get_stock_list 应该返回 (stocks, origin)."""
+    from stock_data.data_provider.persistence import stock_list
+
+    class _MockManager:
+        def get_all_stocks(self, market):
+            return ([{"code": "000001", "name": "测试"}], "mock_fetcher")
+
+    # 强制走 fetcher 路径
+    monkeypatch.setattr(
+        stock_list,
+        "_refresh_tracker",
+        type("T", (), {"is_first_call": lambda *a: True})(),
+    )
+    stocks, origin = stock_list.get_stock_list(
+        "csi", refresh=True, manager=_MockManager()
     )
     assert isinstance(stocks, list)
     assert origin == "mock_fetcher"
