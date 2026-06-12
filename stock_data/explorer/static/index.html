@@ -201,12 +201,6 @@
     .try-it .field input, .try-it .field select { flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); font: inherit; }
     .try-it button { background: var(--accent); color: #fff; border: 0; padding: 8px 16px; border-radius: 6px; cursor: pointer; font: inherit; }
     .try-it button:hover { filter: brightness(1.1); }
-    /* === Test Instance card === */
-    .test-instance { padding: 12px; border-radius: 8px; background: var(--bg-card); }
-    .test-instance .status { font-size: 13px; color: var(--text-muted); margin: 4px 0; }
-    .test-instance .status.running { color: var(--accent-post); }
-    .test-instance .status.error { color: #c00; }
-    .test-instance button { font-size: 12px; padding: 4px 10px; margin-right: 4px; }
     /* === Banner === */
     .banner { background: #fff3cd; color: #856404; padding: 12px 24px; border-bottom: 1px solid #ffeeba; font-size: 14px; }
     [data-theme="dark"] .banner { background: #3a2f00; color: #ffd966; border-bottom-color: #5a4900; }
@@ -223,13 +217,12 @@
     <span class="spacer"></span>
     <label style="font-size:13px;color:var(--text-muted)">Base URL:</label>
     <input type="text" id="baseUrl" style="width:240px" placeholder="http://127.0.0.1:8888">
-    <button id="useTestInstance" title="Use Test Instance as base URL">Use Test</button>
     <span id="serverStatus" class="status" style="font-size:13px;color:var(--text-muted)">…</span>
     <button class="icon-btn" id="themeToggle" title="Toggle theme">🌗</button>
   </header>
 
   <div id="banner" class="banner" style="display:none">
-    Detected file:// protocol — interactive features (Try it, Start/Stop) are disabled.
+    Detected file:// protocol — interactive features (Try it) are disabled.
     Open via <code>http://localhost:8888/explorer/</code> instead.
   </div>
 
@@ -251,13 +244,6 @@
         <label><input type="checkbox" value="flows" checked> 资金流向 (Flows)</label>
         <label><input type="checkbox" value="notices" checked> 公告研报 (Notices/Reports)</label>
         <label><input type="checkbox" value="pools" checked> 特殊池 (Pools/Topics)</label>
-      </div>
-      <h3>Test Instance</h3>
-      <div class="test-instance">
-        <div class="status" id="testStatus">Stopped</div>
-        <button id="testStart">Start</button>
-        <button id="testStop">Stop</button>
-        <button id="testRefresh">↻</button>
       </div>
     </nav>
     <main class="main">
@@ -750,8 +736,6 @@
       $("#baseUrl").value = state.baseUrl;
       $("#captionBaseUrl").textContent = state.baseUrl;
       refreshServerStatus();
-      refreshTestStatus();
-      setInterval(refreshTestStatus, 5000);
       renderSidebar();
       renderContent();
     }
@@ -820,27 +804,6 @@
         safeSetItem("capabilityFilter", JSON.stringify(checked));
         renderContent();
       };
-      $("#testStart").onclick = async () => {
-        await fetch("/control/test-instance/start", { method: "POST" });
-        await refreshTestStatus();
-      };
-      $("#testStop").onclick = async () => {
-        await fetch("/control/test-instance/stop", { method: "POST" });
-        await refreshTestStatus();
-      };
-      $("#testRefresh").onclick = refreshTestStatus;
-      $("#useTestInstance").onclick = async () => {
-        const s = await fetch("/control/test-instance/status").then(r => r.json());
-        if (s.running) {
-          // Derive the test-instance baseUrl from the page's own origin to
-          // avoid the localhost vs 127.0.0.1 (IPv4/IPv6) DNS ambiguity on
-          // Windows. The user can still override via the Base URL input.
-          state.baseUrl = `${location.protocol}//${location.hostname}:${s.port}`;
-          $("#baseUrl").value = state.baseUrl;
-          safeSetItem("baseUrl", state.baseUrl);
-          $("#captionBaseUrl").textContent = state.baseUrl;
-        }
-      };
     }
 
     async function refreshServerStatus() {
@@ -852,22 +815,6 @@
       } catch (e) {
         $("#serverStatus").textContent = "Server: unreachable";
         $("#serverStatus").style.color = "#c00";
-      }
-    }
-
-    async function refreshTestStatus() {
-      try {
-        const s = await fetch("/control/test-instance/status").then(r => r.json());
-        const el = $("#testStatus");
-        if (s.running) {
-          el.textContent = `Running on :${s.port} (pid ${s.pid})`;
-          el.className = "status running";
-        } else {
-          el.textContent = s.error ? `Stopped (${s.error})` : "Stopped";
-          el.className = s.error ? "status error" : "status";
-        }
-      } catch (e) {
-        $("#testStatus").textContent = "Status unavailable";
       }
     }
 

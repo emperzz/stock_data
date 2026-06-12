@@ -55,12 +55,11 @@ stock_data/
 │   └── endpoint_meta.py            # @endpoint_meta decorator + REGISTRY (explorer manifest)
 ├── explorer/                       # /explorer/ HTML UI + /control/* management endpoints
 │   ├── __init__.py                 # mount(app) entry point; also runs startup sanity checks
-│   ├── control.py                  # Test Instance subprocess management
 │   ├── manifest.py                 # build_manifest(app) — reflects app.routes + REGISTRY
-│   ├── routes.py                   # /control/* FastAPI router (config, status, api-manifest, test-instance/*)
-│   ├── tags.py                     # TAG_TO_TITLE + CAPABILITY_LABELS
+│   ├── routes.py                   # /control/* FastAPI router (config, status, api-manifest)
+│   ├── tags.py                     # TAG_TO_TITLE + CAPABILITY_LABELS + _INTERNAL_TAGS
 │   └── static/
-│       └── index.html              # Single-page interactive docs (1014 lines, vanilla JS)
+│       └── index.html              # Single-page interactive docs (vanilla JS)
 └── data_provider/
     ├── __init__.py                  # Public API re-exports
     ├── base.py                      # BaseFetcher (ABC), DataCapability, DataFetchError
@@ -179,8 +178,8 @@ endpoints. Mounted by `stock_data.server` via `explorer.mount(app)`.
   JSON tree (`{meta, sections[]}`). Rebuilt on every request to
   `/control/api-manifest` (no caching — ~5 KB payload, sub-millisecond build).
 - **`explorer/routes.py`** — `/control/*` APIRouter. Endpoints: `/config`,
-  `/server/status`, `/api-manifest`, `/test-instance/{status,start,stop}`. All
-  tagged `control` → excluded from the manifest.
+  `/server/status`, `/api-manifest`. All tagged `control` → excluded from
+  the manifest.
 - **`explorer/tags.py`** — `TAG_TO_TITLE` (route tag → sidebar section title). The section id is the tag name itself (just a stable DOM anchor / URL hash; no business meaning).
   and `CAPABILITY_LABELS` (DataCapability flag → `{label, icon}`).
 - **`explorer/static/index.html`** — Single-page interactive docs. Fetches

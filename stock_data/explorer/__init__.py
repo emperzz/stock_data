@@ -16,12 +16,9 @@ from fastapi.staticfiles import StaticFiles
 
 from ..api.endpoint_meta import REGISTRY
 from .routes import build_control_router
-from .tags import TAG_TO_TITLE
+from .tags import _INTERNAL_TAGS, TAG_TO_TITLE
 
 logger = logging.getLogger(__name__)
-
-# explorer 不展示的 tag(manifest 过滤用 + startup 校验用)
-_INTERNAL_TAGS = frozenset({"control"})
 
 
 def mount(app: FastAPI) -> None:

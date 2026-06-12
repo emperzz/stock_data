@@ -16,14 +16,12 @@ from typing import Any, Union, get_args, get_origin
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
+from .. import __version__
 from ..api.endpoint_meta import REGISTRY, EndpointMeta
-from .tags import CAPABILITY_LABELS, TAG_TO_TITLE
+from .tags import _INTERNAL_TAGS, CAPABILITY_LABELS, TAG_TO_TITLE
 
 logger = logging.getLogger(__name__)
 
-
-# explorer 不展示的 tag(只走 /control/*,UI 跟它无关)
-_INTERNAL_TAGS = frozenset({"control"})
 
 # manifest schema version——schema 字段有 breaking 变化时递增
 MANIFEST_VERSION = "1.1"
@@ -100,8 +98,6 @@ def _pick_method(methods: frozenset) -> str:
     """多 method 时优先 GET,否则第一个。FastAPI 不会构造空 methods。"""
     if "GET" in methods:
         return "GET"
-    if not methods:
-        return "GET"  # 防御性兜底,实际不会触发
     return next(iter(methods))
 
 
@@ -125,7 +121,6 @@ def _python_type_to_str(annotation) -> str:
 
 
 def _build_meta() -> dict:
-    from .. import __version__
     return {
         "version": MANIFEST_VERSION,
         "generated_at": None,  # 服务端在响应时填 ISO 8601

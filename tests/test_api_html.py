@@ -50,10 +50,6 @@ class TestHtmlStructure:
     def test_has_search_input(self, soup):
         assert soup.select_one("#search") is not None
 
-    def test_has_test_instance_card(self, soup):
-        assert soup.select_one("#testStart") is not None
-        assert soup.select_one("#testStop") is not None
-
     def test_has_capability_filter(self, soup):
         """Capability filter UI: 6 grouped checkboxes."""
         cf = soup.select_one("#capabilityFilter")

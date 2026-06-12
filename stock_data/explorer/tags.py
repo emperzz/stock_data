@@ -9,6 +9,11 @@ section id 直接用 tag 名（不再有"4.1"这种编号）——id 仅作 DOM
 """
 from __future__ import annotations
 
+# explorer 不展示的 tag——manifest 过滤用 + mount() 启动期 sanity-check 用。
+# 单一真相,explorer 任何地方需要 "这是内部 tag 吗" 都查这里。
+_INTERNAL_TAGS: frozenset[str] = frozenset({"control"})
+
+
 # tag -> 中文 title
 TAG_TO_TITLE: dict[str, str] = {
     "health":        "健康检查",
