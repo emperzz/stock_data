@@ -15,10 +15,32 @@ from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 
 from ..api.endpoint_meta import REGISTRY
+from ..data_provider.base import (
+    BaseFetcher,
+    CAPABILITY_TO_METHOD,
+    DataCapability,
+    _NO_FETCHER_METHOD,
+)
 from .routes import build_control_router
 from .tags import _INTERNAL_TAGS, TAG_TO_TITLE
 
 logger = logging.getLogger(__name__)
+
+
+def _collect_concrete_fetcher_classes() -> list[type]:
+    """Find all concrete BaseFetcher subclasses for the sanity check.
+
+    Walks BaseFetcher.__subclasses__() recursively. Returns only classes
+    that have been imported by the time this is called (relies on
+    fetcher modules having been imported during manager init).
+    """
+    found: list[type] = []
+    stack = list(BaseFetcher.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        found.append(cls)
+        stack.extend(cls.__subclasses__())
+    return found
 
 
 def mount(app: FastAPI) -> None:
@@ -90,3 +112,38 @@ def _validate_manifest_invariants(app: FastAPI) -> None:
             f"[Explorer] tag(s) not in TAG_TO_TITLE (sidebar will use tag name "
             f"as fallback title): {sorted(untitled_tags)}"
         )
+
+    # ----- CAPABILITY_TO_METHOD invariants -----
+    # Concrete fetchers may define methods not on the abstract BaseFetcher
+    # (e.g. get_dragon_tiger only exists on EastMoneyFetcher). Check both.
+    _concrete_fetcher_classes = _collect_concrete_fetcher_classes()
+
+    def _method_exists_anywhere(method_name: str) -> bool:
+        if hasattr(BaseFetcher, method_name):
+            return True
+        return any(hasattr(cls, method_name) for cls in _concrete_fetcher_classes)
+
+    for cap, method_name in CAPABILITY_TO_METHOD.items():
+        if not _method_exists_anywhere(method_name):
+            logger.warning(
+                f"[explorer/sanity] CAPABILITY_TO_METHOD[{cap.name}] = "
+                f"{method_name!r} but no fetcher class has such attribute. "
+                f"Manifest will silently skip this capability."
+            )
+
+    for cap in DataCapability:
+        if cap not in CAPABILITY_TO_METHOD and cap not in _NO_FETCHER_METHOD:
+            logger.warning(
+                f"[explorer/sanity] DataCapability.{cap.name} is neither in "
+                f"CAPABILITY_TO_METHOD nor in _NO_FETCHER_METHOD. Add it to one "
+                f"of them to declare intent."
+            )
+
+    # ----- @endpoint_meta(fetcher_method=...) sanity -----
+    for func, meta in REGISTRY.items():
+        if meta.fetcher_method is not None and not _method_exists_anywhere(meta.fetcher_method):
+            logger.warning(
+                f"[explorer/sanity] {func.__qualname__} declares "
+                f"fetcher_method={meta.fetcher_method!r}, but no fetcher class has "
+                f"such attribute. Stage 2 testing for this endpoint will fail."
+            )
