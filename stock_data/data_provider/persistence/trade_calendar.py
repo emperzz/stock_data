@@ -58,14 +58,25 @@ def get_cached_calendar() -> tuple[list, str]:
 
 
 def update_cached_calendar(dates: list) -> int:
-    """
-    Update cached trade calendar.
+    """Upsert trade dates into the cached trade calendar.
+
+    For each date in ``dates``, inserts a new row if absent, or refreshes
+    ``updated_at`` if already present (via ``INSERT OR REPLACE`` on the
+    UNIQUE ``trade_date`` column). Dates **not** in the input list are
+    left untouched — this function is intentionally a pure upsert, not
+    an atomic full-replace.
+
+    The only production caller (``manager.get_trade_calendar``) passes
+    the full set returned by the upstream, so its observable behavior is
+    unchanged. The upsert semantics make the function safe for any
+    caller that wants to add dates incrementally without clobbering
+    unrelated state (e.g. tests, future per-day refresh paths).
 
     Args:
         dates: List of trade dates as strings (YYYY-MM-DD)
 
     Returns:
-        Number of dates inserted/updated
+        Number of dates inserted or updated.
     """
     if not dates:
         return 0
@@ -78,13 +89,13 @@ def update_cached_calendar(dates: list) -> int:
             cursor = conn.cursor()
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            cursor.execute("DELETE FROM trade_calendar")
             cursor.executemany(
-                "INSERT INTO trade_calendar (trade_date, updated_at) VALUES (?, ?)",
+                "INSERT OR REPLACE INTO trade_calendar "
+                "(trade_date, updated_at) VALUES (?, ?)",
                 [(date, now) for date in dates],
             )
 
-            logger.info(f"[StockCache] Updated {len(dates)} trade calendar dates")
+            logger.info(f"[StockCache] Upserted {len(dates)} trade calendar dates")
             return len(dates)
     except Exception as e:
         logger.error(f"[StockCache] Calendar update failed: {e}")

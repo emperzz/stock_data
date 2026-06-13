@@ -396,8 +396,8 @@ class TestZTFetcherManager:
         trading day. The pre-c40d108 ``is_current_day`` kwarg is now ignored.
 
         To exercise the volatile branch, we seed today into the trade_calendar
-        table directly (additive INSERT, so other tests' calendar state is
-        untouched) and clean up our own row in finally.
+        via ``update_cached_calendar`` (a pure upsert, safe to call from tests
+        without clobbering unrelated state) and clean up our own row in finally.
         """
         from datetime import date as date_cls
 
@@ -410,6 +410,9 @@ class TestZTFetcherManager:
         from stock_data.data_provider.persistence.trade_calendar import (
             init_schema as init_calendar_schema,
         )
+        from stock_data.data_provider.persistence.trade_calendar import (
+            update_cached_calendar,
+        )
 
         init_schema()
         init_calendar_schema()
@@ -417,15 +420,12 @@ class TestZTFetcherManager:
         today_str = date_cls.today().strftime("%Y-%m-%d")
 
         # Seed trade_calendar with today so is_volatile_date(today) -> True.
-        # Use INSERT OR IGNORE (additive) instead of update_cached_calendar,
-        # which does a blanket DELETE before insert and would clobber any
-        # pre-existing calendar state other tests depend on.
+        # update_cached_calendar is a pure upsert (post-fix), so this is safe
+        # to call from a test without wiping pre-existing calendar state.
+        update_cached_calendar([today_str])
+
         conn = get_connection()
         try:
-            conn.execute(
-                "INSERT OR IGNORE INTO trade_calendar (trade_date) VALUES (?)",
-                (today_str,),
-            )
             conn.execute(
                 "DELETE FROM pool_daily WHERE pool_type = 'zt' AND pool_date = ?",
                 (today_str,),
