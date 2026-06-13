@@ -199,3 +199,42 @@ class TestStocksBlocksIndices:
     def test_stocks_intraday_blocks_index(self, client):
         response = client.get("/api/v1/stocks/000300/intraday?period=5")
         assert response.status_code == 400
+
+
+class TestIndicesBlocksStocks:
+    """Tests that /indices/{code}/* endpoints reject stock codes (and other non-index codes).
+
+    Symmetric to TestStocksBlocksIndices above. Regression coverage for the bug
+    where `/indices/600519/intraday` returned 503 with a leaked
+    ``[MyquantFetcher] ... Not an index code: 600519`` message instead of a
+    clean 400.
+    """
+
+    def test_indices_quote_blocks_stock(self, client):
+        """600519 is Kweichow Moutai (A-share), not an index."""
+        response = client.get("/api/v1/indices/600519/quote")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["error"] == "invalid_request"
+        assert "stocks" in detail["message"]
+
+    def test_indices_history_blocks_stock(self, client):
+        response = client.get("/api/v1/indices/600519/history?period=daily&days=5")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["error"] == "invalid_request"
+        assert "stocks" in detail["message"]
+
+    def test_indices_intraday_blocks_stock(self, client):
+        """The original bug report: 600519 → /indices/{code}/intraday should be 400, not 503."""
+        response = client.get("/api/v1/indices/600519/intraday?period=5")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["error"] == "invalid_request"
+        assert "stocks" in detail["message"]
+
+    def test_indices_intraday_blocks_garbage(self, client):
+        """Non-index, non-stock gibberish should also be 400 (clearer than 503)."""
+        response = client.get("/api/v1/indices/NOTACODE/intraday?period=5")
+        assert response.status_code == 400
+        assert response.json()["detail"]["error"] == "invalid_request"

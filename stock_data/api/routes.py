@@ -704,6 +704,23 @@ def get_index_quote(index_code: str = Path(max_length=20, description="Index cod
         index_code: Index code (e.g., 000300, 399006, HSI, SPX)
     """
     try:
+        # Reject non-index codes (stock codes, garbage) at the route boundary.
+        # Symmetric to /stocks/{code}/* endpoints which reject index codes
+        # with the same 400 contract — keeps the input contract clean and
+        # prevents the manager from cascading bad input through every fetcher
+        # only to surface a leaky "Myquant does not support 600519" error.
+        if not is_index_code(index_code):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_request",
+                    "message": (
+                        f"{index_code} is not a recognized index code. "
+                        "Use /stocks/{stock_code}/quote for stocks."
+                    ),
+                },
+            )
+
         if is_cache_enabled():
             cache = get_index_quote_cache()
             key = make_index_quote_cache_key(index_code)
@@ -797,6 +814,23 @@ def get_index_history(
         indicators: Comma-separated indicator names, e.g. "ma,macd,kdj"
     """
     try:
+        # Reject non-index codes (stock codes, garbage) at the route boundary.
+        # Symmetric to /stocks/{code}/* endpoints. Without this, tushare/
+        # baostock silently treat the code as an index and return a 200 with
+        # whatever data the upstream surfaces — which for a stock code means
+        # a K-line labeled as an index, much worse than a clean 400.
+        if not is_index_code(index_code):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_request",
+                    "message": (
+                        f"{index_code} is not a recognized index code. "
+                        "Use /stocks/{stock_code}/history for stocks."
+                    ),
+                },
+            )
+
         period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
         frequency = period_map.get(period, "d")
 
@@ -895,6 +929,24 @@ def get_index_intraday(
         period: Minute period - 1, 5, 15, 30, 60
     """
     try:
+        # Reject non-index codes (stock codes, garbage) at the route boundary.
+        # Symmetric to /stocks/{code}/* endpoints. Without this guard, a stock
+        # code like 600519 cascades through every INDEX_INTRADAY fetcher and
+        # surfaces a leaky ``[MyquantFetcher] Myquant does not support 600519:
+        # Not an index code: 600519`` 503 — bad input dressed as upstream
+        # failure. Catching it here gives the caller a clean 400.
+        if not is_index_code(index_code):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_request",
+                    "message": (
+                        f"{index_code} is not a recognized index code. "
+                        "Use /stocks/{stock_code}/intraday for stocks."
+                    ),
+                },
+            )
+
         if is_cache_enabled():
             cache = get_index_intraday_cache()
             key = make_index_intraday_cache_key(index_code, period)
@@ -954,6 +1006,8 @@ def get_index_intraday(
                 "message": f"Intraday data not currently available for {index_code}: {e}",
             },
         ) from e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Index intraday error: {e}", exc_info=True)
         raise HTTPException(
