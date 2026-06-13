@@ -208,9 +208,12 @@ class TestZTPoolAPIRoutes:
 
             response = client.get("/api/v1/pools?type=zt")
             assert response.status_code == 200
-            # is_current_day=False because we forced today to look like a non-trade day
+            # Post-c40d108: the route no longer passes is_current_day down to the
+            # manager — that flag is ignored and the persistence layer computes
+            # volatility from the date itself (see pool_daily.is_volatile_date).
+            # We only assert the kwargs the route still actually sends.
             mock_mgr.get_zt_pool.assert_called_once_with(
-                pool_type="zt", date=latest, refresh=False, is_current_day=False,
+                pool_type="zt", date=latest, refresh=False,
             )
 
 
@@ -383,8 +386,19 @@ class TestZTFetcherManager:
         stocks = mgr.get_zt_pool("zt", "2024-05-10", refresh=False, is_current_day=False)
         assert len(stocks) >= 1
 
-    def test_manager_get_zt_pool_skips_persistence_on_current_day(self):
-        """Test that is_current_day=True bypasses persistence read AND write."""
+    def test_manager_get_zt_pool_skips_persistence_on_volatile_date(self):
+        """Persistence is bypassed on a volatile date (today AND is_trade_date(today)).
+
+        Post-c40d108 contract: the persistence layer is the single source of truth
+        for the volatile/historical split (see pool_daily.is_volatile_date). When
+        ``is_volatile_date(date)`` is True, the manager performs a pure upstream
+        pass-through — no read, no write — to avoid freezing an in-progress
+        trading day. The pre-c40d108 ``is_current_day`` kwarg is now ignored.
+
+        To exercise the volatile branch, we seed today into the trade_calendar
+        table directly (additive INSERT, so other tests' calendar state is
+        untouched) and clean up our own row in finally.
+        """
         from datetime import date as date_cls
 
         from stock_data.data_provider.base import DataFetcherManager
@@ -393,15 +407,25 @@ class TestZTFetcherManager:
             get_pool_cached,
             init_schema,
         )
+        from stock_data.data_provider.persistence.trade_calendar import (
+            init_schema as init_calendar_schema,
+        )
 
         init_schema()
+        init_calendar_schema()
 
-        # Even if a row exists in persistence for "today", the manager must
-        # NOT read it when is_current_day=True. And it must not write either.
         today_str = date_cls.today().strftime("%Y-%m-%d")
-        # Make sure the table is clean for today's date
+
+        # Seed trade_calendar with today so is_volatile_date(today) -> True.
+        # Use INSERT OR IGNORE (additive) instead of update_cached_calendar,
+        # which does a blanket DELETE before insert and would clobber any
+        # pre-existing calendar state other tests depend on.
         conn = get_connection()
         try:
+            conn.execute(
+                "INSERT OR IGNORE INTO trade_calendar (trade_date) VALUES (?)",
+                (today_str,),
+            )
             conn.execute(
                 "DELETE FROM pool_daily WHERE pool_type = 'zt' AND pool_date = ?",
                 (today_str,),
@@ -410,23 +434,38 @@ class TestZTFetcherManager:
         finally:
             conn.close()
 
-        # Stub the upstream call so we don't hit the network
-        class FakeFetcher:
-            name = "FakeFetcher"
-            def get_zt_pool(self, pool_type, date):
-                return [{"code": "FAKE001", "name": "Fake", "price": 1.0}]
+        try:
+            # Stub the upstream call so we don't hit the network
+            class FakeFetcher:
+                name = "FakeFetcher"
+                def get_zt_pool(self, pool_type, date):
+                    return [{"code": "FAKE001", "name": "Fake", "price": 1.0}]
 
-        real_mgr = DataFetcherManager()
-        real_mgr._filter_by_capability = MagicMock(return_value=[FakeFetcher()])
+            real_mgr = DataFetcherManager()
+            real_mgr._filter_by_capability = MagicMock(return_value=[FakeFetcher()])
 
-        stocks, origin = real_mgr.get_zt_pool("zt", today_str, refresh=False, is_current_day=True)
-        assert len(stocks) == 1
-        assert stocks[0]["code"] == "FAKE001"
-        assert origin == "FakeFetcher"
+            # is_current_day kwarg is intentionally omitted: it's been ignored
+            # since c40d108. Volatility is now derived from the date + calendar.
+            stocks, origin = real_mgr.get_zt_pool("zt", today_str, refresh=False)
+            assert len(stocks) == 1
+            assert stocks[0]["code"] == "FAKE001"
+            assert origin == "FakeFetcher"
 
-        # Persistence MUST NOT have been written for today's date
-        persisted = get_pool_cached("zt", today_str)
-        assert persisted == []
+            # Persistence MUST NOT have been written for today's date
+            persisted = get_pool_cached("zt", today_str)
+            assert persisted == []
+        finally:
+            # Clean up the seeded calendar row so we don't leak state to
+            # other tests in the same session.
+            conn = get_connection()
+            try:
+                conn.execute(
+                    "DELETE FROM trade_calendar WHERE trade_date = ?",
+                    (today_str,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
 
     def test_manager_get_zt_pool_normalizes_code(self):
         """Test that manager.get_zt_pool normalizes the pool type code."""
