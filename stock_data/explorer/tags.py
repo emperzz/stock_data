@@ -42,6 +42,7 @@ CAPABILITY_LABELS: dict[str, dict[str, str]] = {
     "INDEX_HISTORICAL": {"label": "指数历史",         "icon": "📉"},
     "INDEX_INTRADAY":   {"label": "指数分时",         "icon": "⏰"},
     "STOCK_ZT_POOL":    {"label": "涨跌停股池",       "icon": "🚦"},
+    "STOCK_INFO":       {"label": "公司画像",         "icon": "🏢"},
     "DRAGON_TIGER":     {"label": "龙虎榜",           "icon": "🐉"},
     "MARGIN_TRADING":   {"label": "融资融券",         "icon": "💰"},
     "BLOCK_TRADE":      {"label": "大宗交易",         "icon": "🤝"},

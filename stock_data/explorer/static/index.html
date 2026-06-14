@@ -251,6 +251,15 @@
       background: var(--bg); color: var(--text); cursor: pointer;
     }
     .fetcher-test-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+    /* Dim rows whose backing fetcher isn't currently registered (e.g. Zhitu
+       when ZHITU_TOKEN is unset). The reason is rendered as a hint chip
+       below the method signature so users learn what to set. */
+    .fetcher-row-unavailable { opacity: 0.55; background: var(--bg-sidebar); }
+    .fetcher-row-unavailable .fetcher-name { color: var(--text-muted); }
+    .fetcher-unavailable-hint {
+      font-size: 12px; color: var(--accent-warn); margin-top: 4px;
+      font-style: italic;
+    }
     /* === Fetcher mini-form (Stage 2) === */
     .fetcher-miniform {
       grid-column: 1 / -1;
@@ -752,7 +761,7 @@
     const CAPABILITY_GROUPS = {
       quotes:   ["REALTIME_QUOTE", "INDEX_QUOTE"],
       history:  ["HISTORICAL_DWM", "HISTORICAL_MIN", "INDEX_HISTORICAL", "INDEX_INTRADAY"],
-      metadata: ["STOCK_LIST", "TRADE_CALENDAR", "STOCK_BOARD"],
+      metadata: ["STOCK_LIST", "TRADE_CALENDAR", "STOCK_BOARD", "STOCK_INFO"],
       flows:    ["MARGIN_TRADING", "BLOCK_TRADE", "FUND_FLOW", "NORTH_FLOW"],
       notices:  ["DRAGON_TIGER", "HOLDER_NUM", "DIVIDEND", "RESEARCH_REPORT", "ANNOUNCEMENT"],
       pools:    ["STOCK_ZT_POOL", "HOT_TOPICS"],
@@ -965,18 +974,26 @@
     }
 
     // Build one fetcher row: priority badge, fetcher name + method signature,
-    // capability chips, and an inert Test button (Stage 2 in Task 11 will
-    // wire the click handler).
+    // capability chips, availability hint, and an inert Test button
+    // (Stage 2 in Task 11 wires the click handler).
     function renderFetcherRow(f) {
       const sigArgs = (f.signature || []).map(p => p.name).join(", ");
       const capChips = (f.capabilities || [])
         .map(c => `<span class="chip cap-chip">${escapeHTML(c)}</span>`)
         .join("");
       const sigTitle = `${f.method}(${sigArgs})`;
-      const row = el("div", { className: "fetcher-row" });
+      // Default to available: true for older manifests / clients that don't
+      // surface availability (back-compat).
+      const available = f.available !== false;
+      const row = el("div", {
+        className: `fetcher-row${available ? "" : " fetcher-row-unavailable"}`,
+      });
       row.dataset.fetcher = f.name;
       row.dataset.method = f.method;
-      row.title = sigTitle;
+      row.dataset.available = available ? "true" : "false";
+      row.title = available
+        ? sigTitle
+        : `${sigTitle}\n⚠ unavailable: ${f.reason || "is_available() returned False"}`;
       row.appendChild(el("span", {
         className: "fetcher-priority", textContent: `P${f.priority}`,
       }));
@@ -985,6 +1002,15 @@
       const sigLine = el("div", { className: "fetcher-method" });
       sigLine.appendChild(document.createTextNode(`.${f.method}(${sigArgs})`));
       body.appendChild(sigLine);
+      // Availability hint (only shown for unavailable fetchers). Tells the
+      // user WHY this row is dimmed — typically an env var they can set.
+      if (!available && f.reason) {
+        const hint = el("div", {
+          className: "fetcher-unavailable-hint",
+          textContent: `⚠ ${f.reason}`,
+        });
+        body.appendChild(hint);
+      }
       if (capChips) {
         const caps = el("div", { className: "fetcher-caps" });
         caps.innerHTML = capChips;
