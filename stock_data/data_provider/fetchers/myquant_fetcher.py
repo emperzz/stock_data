@@ -135,6 +135,7 @@ class MyquantFetcher(BaseFetcher):
     def __init__(self):
         self._token = os.getenv("MYQUANT_TOKEN", "").strip()
         self._initialized = False
+        self._init_error: str | None = None  # captured reason if SDK init fails
 
     def _ensure_initialized(self) -> None:
         """Lazily import ``gm.api`` and call ``set_token``.
@@ -158,12 +159,15 @@ class MyquantFetcher(BaseFetcher):
 
             set_token(self._token)
             logger.info("[MyquantFetcher] Initialized (token configured)")
-        except ImportError:
+            self._init_error = None
+        except ImportError as e:
             logger.warning("[MyquantFetcher] gm package not installed")
             self._initialized = False
+            self._init_error = "gm SDK not importable"
         except Exception as e:
             logger.warning(f"[MyquantFetcher] Failed to set token: {e}")
             self._initialized = False
+            self._init_error = f"set_token failed: {e}"
 
     def is_available(self) -> bool:
         """True iff MYQUANT_TOKEN is set AND ``gm`` SDK initializes successfully.
@@ -173,6 +177,21 @@ class MyquantFetcher(BaseFetcher):
         """
         self._ensure_initialized()
         return self._initialized
+
+    def unavailable_reason(self) -> str | None:
+        """Return a human-readable reason this fetcher is unavailable, or None.
+
+        Derived from the same state ``is_available()`` inspects. Captures
+        the specific failure mode (token missing vs. SDK missing vs.
+        set_token rejection) into ``_init_error`` during init so this
+        method can surface it without re-running init.
+        """
+        if self.is_available():
+            return None
+        if not self._token:
+            return f"MYQUANT_TOKEN environment variable not set (required by {self.name})"
+        # Token is set but init didn't complete. _init_error captures why.
+        return f"{self.name} unavailable: {self._init_error or 'unknown initialization error'}"
 
     def _map_adjust(self, adjust: str) -> int:
         """Map unified adjust to myquant integer constant.

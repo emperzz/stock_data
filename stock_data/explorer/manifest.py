@@ -19,7 +19,7 @@ from fastapi.routing import APIRoute
 
 from .. import __version__
 from ..api.endpoint_meta import REGISTRY, EndpointMeta
-from ..data_provider.base import CAPABILITY_TO_METHOD, DataCapability
+from ..data_provider.base import BaseFetcher, CAPABILITY_TO_METHOD, DataCapability
 from .tags import _INTERNAL_TAGS, CAPABILITY_LABELS, TAG_TO_TITLE
 
 logger = logging.getLogger(__name__)
@@ -176,12 +176,34 @@ def _jsonify_default(value):
 def _resolve_fetchers(meta, manager) -> list[dict]:
     """Enumerate fetchers eligible for an endpoint, deduped by (name, method).
 
-    Returns a list of {name, method, priority, capabilities, signature} dicts
-    sorted by priority ascending (matches actual failover order).
-    See spec Section 4 for the full resolution rules.
+    Returns a list of {name, method, priority, capabilities, signature,
+    available, reason} dicts sorted by priority ascending (matches actual
+    failover order).
+
+    Walks **all** `BaseFetcher` subclasses that declare the capability for the
+    endpoint's market — not just those currently registered with the manager.
+    Unregistered fetchers (e.g. ZhituFetcher when ZHITU_TOKEN is unset) are
+    surfaced with `available: false` and a `reason` string from the fetcher's
+    own `unavailable_reason()` method (logic-driven, derived from real state
+    rather than a hardcoded label). The Test button still works for them:
+    /control/fetcher-test instantiates the class on demand and returns the
+    same `FetcherUnavailable` error path it would have hit at registration.
     """
     if not meta.capabilities or not meta.markets:
         return []
+
+    # Build two lookup maps from registered fetchers:
+    # - by_name: instance.name → instance (production path — manager registers
+    #   fetchers keyed by their own name attribute)
+    # - by_class: id(cls) → instance (test path — when tests inject fake
+    #   classes without going through manager.add_fetcher(), the only way to
+    #   tell "this fetcher_cls has a registered instance" is by class identity)
+    registered_by_name: dict[str, BaseFetcher] = {
+        f.name: f for f in manager._fetchers
+    }
+    registered_by_class: dict[int, BaseFetcher] = {
+        id(type(f)): f for f in manager._fetchers
+    }
 
     # (fetcher_name, method_name) → entry dict (single source of dedup)
     entries: dict[tuple[str, str], dict] = {}
@@ -201,26 +223,94 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
             if method_name is None:
                 continue  # capability has no mapped method (or is in _NO_FETCHER_METHOD)
 
-        for market in meta.markets:
-            for fetcher in manager._filter_by_capability(market, cap):
-                key = (fetcher.name, method_name)
-                if key in entries:
-                    # Merge capability into existing entry
-                    if cap_name not in entries[key]["capabilities"]:
-                        entries[key]["capabilities"].append(cap_name)
+        # Walk all concrete subclasses that declare this capability — even
+        # ones the manager didn't register (because is_available()==False).
+        # This is the difference vs. the prior implementation, which only
+        # iterated `manager._filter_by_capability(...)` (registered only).
+        candidate_classes = _classes_declaring_capability(cap)
+        for fetcher_cls in candidate_classes:
+            fetcher_name = getattr(fetcher_cls, "name", fetcher_cls.__name__)
+
+            # Use the registered instance if available (already initialized);
+            # otherwise instantiate a fresh one to query is_available() /
+            # unsupported_markets / unsupported_reason() and reflect the
+            # method signature. Construction is cheap — Zhitu/Tushare/
+            # Myquant only read env vars; no network calls happen here.
+            # Look up by `fetcher_name` first (production path); fall back
+            # to class identity (test path: fakes registered without
+            # matching name attribute).
+            instance = registered_by_name.get(fetcher_name)
+            if instance is None:
+                instance = registered_by_class.get(id(fetcher_cls))
+            if instance is None:
+                try:
+                    instance = fetcher_cls()
+                except Exception:
+                    # Cannot even construct — surface as unavailable with no reason.
+                    entries[(fetcher_name, method_name)] = {
+                        "name": fetcher_name,
+                        "method": method_name,
+                        "priority": getattr(fetcher_cls, "priority", 99),
+                        "capabilities": [cap_name],
+                        "signature": [],
+                        "available": False,
+                        "reason": f"{fetcher_name} could not be instantiated",
+                    }
                     continue
-                method = getattr(fetcher, method_name, None)
-                if method is None:
-                    continue  # fetcher doesn't actually expose this method
-                entries[key] = {
-                    "name": fetcher.name,
-                    "method": method_name,
-                    "priority": fetcher.priority,
-                    "capabilities": [cap_name],
-                    "signature": _reflect_signature(method),
-                }
+
+            # Filter by market: skip if no overlap with the endpoint's markets.
+            # Check instance (filled in by __init__) rather than class
+            # (test fakes leave class-level default empty).
+            instance_markets = getattr(instance, "supported_markets", set()) or set()
+            if not instance_markets or not (instance_markets & set(meta.markets)):
+                continue
+
+            key = (fetcher_name, method_name)
+            if key in entries:
+                if cap_name not in entries[key]["capabilities"]:
+                    entries[key]["capabilities"].append(cap_name)
+                continue
+
+            # Skip if the (instance) doesn't actually expose this method.
+            method = getattr(instance, method_name, None)
+            if method is None or not callable(method):
+                continue
+
+            available = bool(instance.is_available())
+            reason = (
+                None if available else instance.unavailable_reason()
+            )
+
+            entries[key] = {
+                "name": fetcher_name,
+                "method": method_name,
+                "priority": instance.priority,
+                "capabilities": [cap_name],
+                "signature": _reflect_signature(method),
+                "available": available,
+                "reason": reason,
+            }
 
     return sorted(entries.values(), key=lambda e: e["priority"])
+
+
+def _classes_declaring_capability(cap: DataCapability) -> list[type[BaseFetcher]]:
+    """Walk `BaseFetcher.__subclasses__()` and return those whose
+    `supported_data_types` includes `cap`.
+
+    Mirrors `_collect_concrete_fetcher_classes()` in `explorer/__init__.py`
+    but is scoped to a single capability and returns the raw classes (not
+    instantiated). Importing the fetchers module is the caller's
+    responsibility — we rely on the subclasses being importable by the time
+    the manifest is built (the manager init at server startup imports them).
+    """
+    found: list[type[BaseFetcher]] = []
+    stack: list[type] = list(BaseFetcher.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        found.append(cls)
+        stack.extend(cls.__subclasses__())
+    return [c for c in found if cap in (getattr(c, "supported_data_types", DataCapability(0)) or DataCapability(0))]
 
 
 def _build_meta() -> dict:

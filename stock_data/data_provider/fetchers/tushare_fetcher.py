@@ -65,6 +65,23 @@ class TushareFetcher(BaseFetcher):
         self._ensure_api()
         return self._api is not None
 
+    def unavailable_reason(self) -> str | None:
+        """Return a human-readable reason this fetcher is unavailable, or None.
+
+        Derived from the same state `is_available()` checks — `is_available()`
+        is invoked first to ensure `_ensure_api()` has run, then we inspect
+        the live state to pick the right message. No hardcoded "always wrong"
+        string: when the fetcher is actually available, this returns None.
+        """
+        if self.is_available():
+            return None
+        if not self._token:
+            return f"TUSHARE_TOKEN environment variable not set (required by {self.name})"
+        return (
+            f"tushare SDK could not initialize for {self.name} "
+            f"(token may be invalid, or the tushare package is not importable)"
+        )
+
     def _fetch_raw_data(
         self,
         stock_code: str,

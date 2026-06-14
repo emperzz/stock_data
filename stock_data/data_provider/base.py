@@ -146,6 +146,29 @@ class BaseFetcher(ABC):
     # Data capabilities via Flag enum
     supported_data_types: DataCapability = DataCapability(0)  # empty by default
 
+    def unavailable_reason(self) -> str | None:
+        """Return a human-readable reason this fetcher is unavailable, or None.
+
+        Default impl: if the fetcher reports available, no reason is needed;
+        otherwise return a generic message naming this fetcher. Token-gated
+        fetchers (Zhitu, Tushare, Myquant) override with a more specific
+        message derived from their actual gating logic (env var / SDK state).
+        The explorer's manifest calls this only when is_available() returns
+        False, so the "always None" path is hit for fetchers that pass.
+        """
+        if self.is_available():
+            return None
+        return f"{self.name} unavailable (is_available() returned False)"
+
+    def is_available(self) -> bool:
+        """Default: the fetcher is unconditionally available.
+
+        Concrete fetchers override this to check tokens (Tushare/Zhitu/Myquant)
+        or SDK importability (Akshare/Baostock/Yfinance). The default `True`
+        lets test fakes and "no-prereq" fetchers skip ceremony.
+        """
+        return True
+
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust parameter to provider-specific value.
 

@@ -62,6 +62,34 @@ class FetcherTestRequest(BaseModel):
     kwargs: dict = Field(default_factory=dict, description="kwargs unpacked into the method call")
 
 
+def _instantiate_unregistered_fetcher(fetcher_name: str):
+    """Instantiate a fetcher class by name even if the manager skipped it.
+
+    The explorer manifest surfaces ALL `BaseFetcher` subclasses that declare
+    the capability (so users see the full failover chain), including ones
+    the manager skipped at registration because ``is_available()`` returned
+    False (e.g. ZhituFetcher when ZHITU_TOKEN is unset). When the user clicks
+    Test on such a row, we still want the existing graceful
+    ``FetcherUnavailable`` error path to fire — so instantiate the class on
+    demand and let line 158's availability check reject it.
+
+    Returns None if no class matches the name (caller should still respond
+    with ``UnknownFetcher``).
+    """
+    from ..data_provider.base import BaseFetcher
+
+    stack: list[type] = list(BaseFetcher.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if getattr(cls, "name", None) == fetcher_name:
+            try:
+                return cls()
+            except Exception:
+                return None
+        stack.extend(cls.__subclasses__())
+    return None
+
+
 def build_control_router() -> APIRouter:
     """Build the /control/* APIRouter. Called once by explorer.mount()."""
     router = APIRouter(prefix="/control", tags=["control"])
@@ -141,11 +169,18 @@ def build_control_router() -> APIRouter:
         # 1. Unknown fetcher
         fetcher = manager.get_fetcher(req.fetcher)
         if fetcher is None:
-            loaded = sorted(f.name for f in manager._fetchers)
-            return _err(
-                "UnknownFetcher",
-                f"no fetcher named '{req.fetcher}'; loaded: {loaded}",
-            )
+            # The manifest now surfaces unregistered fetchers too (with
+            # available: false), so the user may legitimately Test a class
+            # the manager didn't register — try to instantiate on demand so
+            # the same `FetcherUnavailable` path fires instead of misleading
+            # "no fetcher named X; loaded: [...]".
+            fetcher = _instantiate_unregistered_fetcher(req.fetcher)
+            if fetcher is None:
+                loaded = sorted(f.name for f in manager._fetchers)
+                return _err(
+                    "UnknownFetcher",
+                    f"no fetcher named '{req.fetcher}'; loaded: {loaded}",
+                )
 
         # 2. Unknown method (not in whitelist)
         if req.method not in allowed_methods:

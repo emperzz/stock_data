@@ -58,6 +58,18 @@ class ZhituFetcher(BaseFetcher):
         """Check if Zhitu API token is configured."""
         return bool(self._token)
 
+    def unavailable_reason(self) -> str | None:
+        """Return a human-readable reason this fetcher is unavailable, or None.
+
+        Mirrors the actual availability check so the explorer's docs can
+        surface *why* the fetcher didn't register. Derived from real state
+        (no hardcoded "token not set" literal that could drift from
+        is_available()).
+        """
+        if not self._token:
+            return f"ZHITU_TOKEN environment variable not set (required by {self.name})"
+        return None
+
     def _convert_code(self, stock_code: str) -> str:
         """Convert to Zhitu format. Delegates to ``to_zhitu_format``."""
         return to_zhitu_format(stock_code)

@@ -175,3 +175,39 @@ class TestManifestFetchersField:
         assert code_param is not None
         assert code_param["required"] is True
         assert code_param["type"] == "string"
+
+    def test_unavailable_fetcher_surfaces_with_available_false_and_reason(self):
+        """ZhituFetcher declares STOCK_INFO but is unavailable without ZHITU_TOKEN.
+
+        The manifest must still list it under the STOCK_INFO endpoint with
+        `available: false` and a non-empty `reason` string so users learn how
+        to opt in. This is the test that would have caught the original gap
+        ("only registered fetchers show up") which silently hid Zhitu from
+        the explorer when its token wasn't set.
+        """
+        m = self._manifest()
+        ep = self._endpoint(m, "GET", "/stocks/{code}/info")
+        zhitu = next((f for f in ep["fetchers"] if f["name"] == "ZhituFetcher"), None)
+        assert zhitu is not None, (
+            "ZhituFetcher missing from /stocks/{code}/info fetchers[] — "
+            "the explorer should surface it with available=false so users "
+            "see the full failover chain even when ZHITU_TOKEN is unset."
+        )
+        assert zhitu.get("available") is False, (
+            f"ZhituFetcher should report available=false without ZHITU_TOKEN; "
+            f"got available={zhitu.get('available')!r}"
+        )
+        assert zhitu.get("reason"), (
+            "ZhituFetcher.unavailable_reason() returned no reason string — "
+            "users need actionable guidance ('set ZHITU_TOKEN to enable')"
+        )
+        assert "ZHITU_TOKEN" in zhitu["reason"], (
+            f"reason should mention the env var name; got {zhitu['reason']!r}"
+        )
+        assert zhitu["method"] == "get_stock_info"
+        # Myquant is currently the registered fallback for this endpoint —
+        # confirm it shows up as available so the row order isn't accidentally
+        # reversed (Zhitu's priority=4 must come before Myquant's 9).
+        myquant = next(f for f in ep["fetchers"] if f["name"] == "MyquantFetcher")
+        assert myquant.get("available") is True
+        assert ep["fetchers"].index(zhitu) < ep["fetchers"].index(myquant)
