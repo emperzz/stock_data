@@ -140,7 +140,7 @@ class StockInfoResponse(BaseModel):
     secretary_email: str = ""
 
     # 源
-    source: str = ""                   # "zhitu" | "myquant"
+    source: str = ""                   # "ZhituFetcher" | "MyquantFetcher" (manager 注入的 fetcher 类名)
 ```
 
 **单位约定**：

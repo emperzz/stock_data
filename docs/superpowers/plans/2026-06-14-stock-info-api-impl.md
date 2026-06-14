@@ -627,7 +627,7 @@ class StockInfoResponse(BaseModel):
     secretary_email: str = Field(default="", description="董秘邮箱 (Zhitu)")
 
     # 源
-    source: str = Field(default="", description="数据源: 'zhitu' | 'myquant'")
+    source: str = Field(default="", description="数据源: 'ZhituFetcher' | 'MyquantFetcher' (manager 注入的 fetcher 类名)")
 ```
 
 - [ ] **Step 2: Smoke test**
@@ -902,7 +902,7 @@ StockInfoResponse(
     registered_address, registered_capital, legal_representative,
     business_scope, established_date,
     secretary, secretary_phone, secretary_email,
-    source,                       # "zhitu" | "myquant"
+    source,                       # "ZhituFetcher" | "MyquantFetcher"
 )
 ```
 ```

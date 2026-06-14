@@ -91,3 +91,21 @@ class TestGetStockInfo:
 
         monkeypatch.setattr("gm.api.get_symbols", boom, raising=False)
         assert self.fetcher.get_stock_info("600519") is None
+
+    def test_handles_nat_dates_gracefully(self, monkeypatch):
+        """Edge case: upstream returns NaT/None for listed_date / delisted_date.
+
+        Verifies the helper coerces missing timestamps to "" instead of "NaT"
+        or a TypeError. This is the common case for *delisted* stocks where
+        myquant has no delisted_date yet (or vice versa).
+        """
+        from stock_data.data_provider.fetchers.myquant_fetcher import _ts_to_date
+
+        # None, NaT, and the empty Timestamp all coerce to "".
+        assert _ts_to_date(None) == ""
+        assert _ts_to_date(pd.NaT) == ""
+        assert _ts_to_date(pd.Timestamp("")) == ""
+        # A normal timestamp still works.
+        assert _ts_to_date(pd.Timestamp("2001-08-27")) == "2001-08-27"
+        # A non-Timestamp object that can be coerced also works.
+        assert _ts_to_date("2001-08-27") == "2001-08-27"

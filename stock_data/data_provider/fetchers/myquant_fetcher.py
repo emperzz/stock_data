@@ -585,7 +585,8 @@ class MyquantFetcher(BaseFetcher):
         try:
             from gm.api import get_symbols  # type: ignore  # lazy import
 
-            self._ensure_initialized()
+            # is_available() above already triggered _ensure_initialized(); no
+            # need to call it again here.
             symbol_full = self._convert_code(stock_code)  # "SHSE.600519" etc.
             df = get_symbols(sec_type1=1010, symbols=symbol_full, df=True)
             if df is None or df.empty:
