@@ -238,3 +238,41 @@ class TestIndicesBlocksStocks:
         response = client.get("/api/v1/indices/NOTACODE/intraday?period=5")
         assert response.status_code == 400
         assert response.json()["detail"]["error"] == "invalid_request"
+
+
+class TestStockInfoRoute:
+    """Tests for /api/v1/stocks/{code}/info endpoint."""
+
+    def test_info_rejects_hk_market(self, client):
+        # HK market is not csi → no fetcher handles STOCK_INFO → 503
+        response = client.get("/api/v1/stocks/HK00700/info")
+        assert response.status_code == 503
+
+    def test_info_returns_503_for_invalid_stock(self, client):
+        # Invalid code → all fetchers fail → 503
+        response = client.get("/api/v1/stocks/INVALID/info")
+        assert response.status_code == 503
+
+    def test_info_response_shape(self, client):
+        # 200 if any fetcher succeeds, 503 if all fail — accept either.
+        # We assert the response shape ONLY on 200, else assert 503.
+        response = client.get("/api/v1/stocks/600519/info")
+        if response.status_code == 200:
+            data = response.json()
+            # All 19 fields present
+            expected_fields = {
+                "code", "name", "ename", "market",
+                "listed_date", "delisted_date", "total_shares", "float_shares",
+                "industry", "concepts",
+                "registered_address", "registered_capital", "legal_representative",
+                "business_scope", "established_date",
+                "secretary", "secretary_phone", "secretary_email",
+                "source",
+            }
+            assert set(data.keys()) == expected_fields
+            assert data["code"] == "600519"
+            assert data["market"] == "csi"
+            assert isinstance(data["concepts"], list)
+            assert data["source"] in ("ZhituFetcher", "MyquantFetcher", "")
+        else:
+            assert response.status_code == 503

@@ -50,6 +50,7 @@ from .cache import (
     get_pools_cache,
     get_quote_cache,
     get_reports_cache,
+    get_stock_info_cache,
     get_stock_intraday_cache,
     is_cache_enabled,
     make_announcements_cache_key,
@@ -70,6 +71,7 @@ from .cache import (
     make_pools_cache_key,
     make_quote_cache_key,
     make_reports_cache_key,
+    make_stock_info_cache_key,
     make_stock_intraday_cache_key,
 )
 from .endpoint_meta import endpoint_meta
@@ -118,6 +120,7 @@ from .schemas import (
     SourceHealth,
     StockHistoryResponse,
     StockInfo,
+    StockInfoResponse,
     StockQuote,
     TradeCalendarResponse,
     ZTPoolResponse,
@@ -310,6 +313,52 @@ def health_check(details: bool = False) -> HealthResponse:
         status=status,
         sources=source_states if details else None,
     )
+
+
+@router.get(
+    "/stocks/{code}/info",
+    response_model=StockInfoResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "All fetchers failed"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["stocks"],
+)
+@endpoint_meta(
+    summary="公司画像",
+    markets=["csi"],
+    capabilities=["STOCK_INFO"],
+)
+def get_stock_info(code: str = Path(max_length=20)) -> StockInfoResponse:
+    """公司画像（Zhitu → Myquant failover）。A 股限定."""
+    try:
+        manager = get_manager()
+        data, source = manager.get_stock_info(code)
+        return StockInfoResponse(**data, source=source)
+    except DataFetchError as e:
+        logger.warning(f"Stock info unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "data_unavailable",
+                "message": f"Stock info not currently available: {e}",
+            },
+        ) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Stock info error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
+
+
+get_stock_info = cached_endpoint(
+    get_stock_info_cache,
+    make_stock_info_cache_key,
+    "stock_info",
+    "Stock info",
+)(get_stock_info)
 
 
 @router.get(
