@@ -604,6 +604,14 @@ class DataFetcherManager:
             return_source=True,
         )
 
+    def get_stock_info(self, code: str) -> tuple[dict, str]:
+        """拉取公司画像 (A 股). Failover: Zhitu (P4) → Myquant (P9)."""
+        return self._with_failover(
+            DataCapability.STOCK_INFO, "csi", f"stock_info {code}",
+            lambda f: f.get_stock_info(code),
+            return_source=True,
+        )
+
     def get_fund_flow_minute(self, code: str) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.FUND_FLOW, "csi", f"fund_flow_minute {code}",
