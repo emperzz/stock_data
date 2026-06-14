@@ -22,13 +22,34 @@ logger = logging.getLogger(__name__)
 ZHITU_API_BASE = "https://api.zhituapi.com"
 
 
+def _split_concepts(raw: object) -> list[str]:
+    """Split Zhitu's comma-separated ``idea`` string into a deduplicated list.
+
+    Returns ``[]`` for empty/None input. Items are stripped; empty items dropped.
+    """
+    if not raw:
+        return []
+    parts = [p.strip() for p in str(raw).split(",")]
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 class ZhituFetcher(BaseFetcher):
     """Zhitu API fetcher for A-share realtime quotes (no historical data)."""
 
     name = "ZhituFetcher"
     priority = int(os.getenv("ZHITU_PRIORITY", "4"))
     supported_markets: set[str] = {"csi"}
-    supported_data_types = DataCapability.REALTIME_QUOTE | DataCapability.STOCK_ZT_POOL
+    supported_data_types = (
+        DataCapability.REALTIME_QUOTE
+        | DataCapability.STOCK_ZT_POOL
+        | DataCapability.STOCK_INFO
+    )
 
     def __init__(self):
         self._token = os.getenv("ZHITU_TOKEN", "").strip()
@@ -318,3 +339,43 @@ class ZhituFetcher(BaseFetcher):
         keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
         df = df[[c for c in keep_cols if c in df.columns]]
         return df
+
+    def get_stock_info(self, stock_code: str) -> dict | None:
+        """公司画像 — Zhitu gs/gsjj 端点 (https://api.zhituapi.com/hs/gs/gsjj/{code}).
+
+        返回归一化的 18 user-data 字段 (source 由 manager 注入)。失败返 None 让 failover 工作。
+        """
+        if not self.is_available():
+            return None
+        url = f"{ZHITU_API_BASE}/hs/gs/gsjj/{stock_code}"
+        params = {"token": self._token}
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+        except (requests.RequestException, ValueError) as e:
+            logger.warning("[ZhituFetcher] get_stock_info %s failed: %s", stock_code, e)
+            return None
+        if not isinstance(data, dict) or "code" not in data:
+            logger.warning("[ZhituFetcher] get_stock_info %s: malformed payload", stock_code)
+            return None
+        return {
+            "code":              stock_code,
+            "name":              data.get("name", "") or "",
+            "ename":             data.get("ename", "") or "",
+            "market":            "csi",
+            "listed_date":       str(data.get("ldate", "") or ""),
+            "delisted_date":     "",
+            "total_shares":      safe_float(data.get("totalstock")),
+            "float_shares":      safe_float(data.get("flowstock")),
+            "industry":          "",
+            "concepts":          _split_concepts(data.get("idea", "")),
+            "registered_address": data.get("raddr", "") or "",
+            "registered_capital": data.get("rcapital", "") or "",
+            "legal_representative": data.get("rname", "") or "",
+            "business_scope":    data.get("bscope", "") or "",
+            "established_date":  str(data.get("rdate", "") or ""),
+            "secretary":         data.get("bsname", "") or "",
+            "secretary_phone":   data.get("bsphone", "") or "",
+            "secretary_email":   data.get("bsemail", "") or "",
+        }
