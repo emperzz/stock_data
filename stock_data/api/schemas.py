@@ -671,3 +671,45 @@ class AnnouncementResponse(BaseModel):
         default="",
         description="数据来源 fetcher 名 (e.g. eastmoney) 或 'persistence'",
     )
+
+
+class StockInfoResponse(BaseModel):
+    """公司画像 (A 股) — 来自 Zhitu (主) / Myquant (备) 的归一化结果.
+
+    `industry` 字段当前始终为空 (Zhitu 不提供; Myquant 该端点付费),
+    保留为未来扩展钩子.
+    """
+
+    # 基础识别
+    code: str = Field(description="股票代码 (e.g., 600519)")
+    name: str = Field(default="", description="中文名")
+    ename: str = Field(default="", description="英文名 (Zhitu only)")
+    market: str = Field(default="csi", description="市场: csi (本次仅 csi)")
+
+    # 上市与股本
+    listed_date: str = Field(default="", description="上市日期 YYYY-MM-DD")
+    delisted_date: str = Field(default="", description="退市日期 YYYY-MM-DD (Myquant only)")
+    total_shares: float | None = Field(default=None, description="总股本 (万股)")
+    float_shares: float | None = Field(default=None, description="流通股本 (万股)")
+
+    # 行业与概念
+    industry: str = Field(
+        default="",
+        description="行业. 当前始终为空 (Zhitu 不提供; Myquant 该端点付费 GmError 2001)",
+    )
+    concepts: list[str] = Field(default_factory=list, description="概念标签 (Zhitu)")
+
+    # 公司画像
+    registered_address: str = Field(default="", description="注册地址 (Zhitu)")
+    registered_capital: str = Field(default="", description="注册资本 (Zhitu, 字符串格式如 '9.82亿')")
+    legal_representative: str = Field(default="", description="法人代表 (Zhitu)")
+    business_scope: str = Field(default="", description="经营范围 (Zhitu)")
+    established_date: str = Field(default="", description="成立日期 YYYY-MM-DD (Zhitu)")
+
+    # 董秘联系
+    secretary: str = Field(default="", description="董秘姓名 (Zhitu)")
+    secretary_phone: str = Field(default="", description="董秘电话 (Zhitu)")
+    secretary_email: str = Field(default="", description="董秘邮箱 (Zhitu)")
+
+    # 源
+    source: str = Field(default="", description="数据源: 'zhitu' | 'myquant'")
