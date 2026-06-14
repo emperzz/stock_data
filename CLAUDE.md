@@ -279,6 +279,20 @@ IndicatorCatalogEntry(
 )
 ```
 
+**StockInfo response** (response of `/stocks/{code}/info`):
+```python
+StockInfoResponse(
+    code, name, ename, market,
+    listed_date, delisted_date,
+    total_shares, float_shares,  # 万股
+    industry, concepts,           # `industry` 当前始终为空; 保留为扩展钩子
+    registered_address, registered_capital, legal_representative,
+    business_scope, established_date,
+    secretary, secretary_phone, secretary_email,
+    source,                       # "ZhituFetcher" | "MyquantFetcher"
+)
+```
+
 ## Source Tracking (new)
 
 所有响应都包含 `source: str` 字段, 取值:
@@ -585,6 +599,7 @@ fetchers that support it.
 | `get_north_flow` | `NORTH_FLOW` |
 | `get_reports` | `RESEARCH_REPORT` |
 | `get_announcements` | `ANNOUNCEMENT` |
+| `get_stock_info` | `STOCK_INFO` |
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
 | `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `HISTORICAL_DWM` |
 
@@ -595,9 +610,9 @@ fetchers that support it.
 | BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR \| INDEX_HISTORICAL` |
 | AkshareFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_ZT_POOL` |
 | TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| INDEX_HISTORICAL` |
-| MyquantFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_HISTORICAL \| INDEX_INTRADAY` |
+| MyquantFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_INFO` |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
-| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL` |
+| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
 | EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT` |
 | ThsFetcher | `HOT_TOPICS \| NORTH_FLOW` |
@@ -735,6 +750,7 @@ Environment variables (see `.env.example`):
 - `CNINFO_PRIORITY` - Override Cninfo fetcher priority (default: 8)
 - `CACHE_TTL_STOCK_INTRADAY` - Stock intraday cache TTL in seconds (default: 30)
 - `CACHE_TTL_INDEX_INTRADAY` - Index intraday cache TTL in seconds (default: 30)
+- `CACHE_TTL_STOCK_INFO` - 公司画像缓存 TTL 秒 (default: 3600)
 
 ## Anti-Patterns to Avoid
 
