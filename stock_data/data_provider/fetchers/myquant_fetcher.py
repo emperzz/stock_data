@@ -71,6 +71,24 @@ def _decode_gm_name(raw: object) -> str:
         return s
 
 
+def _ts_to_date(ts: object) -> str:
+    """Convert pandas ``Timestamp`` to ``YYYY-MM-DD`` string.
+
+    Returns ``""`` for ``None``, ``NaT``, or unconvertible input.
+    """
+    if ts is None:
+        return ""
+    try:
+        if pd.isna(ts):
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    try:
+        return pd.Timestamp(ts).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
 # myquant adjust constants (see gm.api)
 ADJUST_NONE = 0  # 不复权
 ADJUST_PREV = 1  # 前复权
@@ -111,6 +129,7 @@ class MyquantFetcher(BaseFetcher):
         | DataCapability.TRADE_CALENDAR
         | DataCapability.INDEX_HISTORICAL
         | DataCapability.INDEX_INTRADAY
+        | DataCapability.STOCK_INFO
     )
 
     def __init__(self):
@@ -554,3 +573,45 @@ class MyquantFetcher(BaseFetcher):
             if c in df.columns
         ]
         return df[keep]
+
+    def get_stock_info(self, stock_code: str) -> dict | None:
+        """公司画像 (Myquant free tier) — 复用 get_symbols 加 symbols= 单只过滤.
+
+        Free tier 仅提供 3 个有效字段: name/listed_date/delisted_date. 其他字段
+        留空, 作为 Zhitu 失败的降级体验.
+        """
+        if not self.is_available():
+            return None
+        try:
+            from gm.api import get_symbols  # type: ignore  # lazy import
+
+            self._ensure_initialized()
+            symbol_full = self._convert_code(stock_code)  # "SHSE.600519" etc.
+            df = get_symbols(sec_type1=1010, symbols=symbol_full, df=True)
+            if df is None or df.empty:
+                logger.warning("[MyquantFetcher] get_symbols empty for %s", stock_code)
+                return None
+            row = df.iloc[0]
+            return {
+                "code":              stock_code,
+                "name":              _decode_gm_name(row.get("sec_name", "")),
+                "ename":             "",
+                "market":            "csi",
+                "listed_date":       _ts_to_date(row.get("listed_date")),
+                "delisted_date":     _ts_to_date(row.get("delisted_date")),
+                "total_shares":      None,  # free tier 不提供
+                "float_shares":      None,  # free tier 不提供
+                "industry":          "",    # paid 接口 (GmError 2001)
+                "concepts":          [],
+                "registered_address": "",
+                "registered_capital": "",
+                "legal_representative": "",
+                "business_scope":    "",
+                "established_date":  "",
+                "secretary":         "",
+                "secretary_phone":   "",
+                "secretary_email":   "",
+            }
+        except Exception as e:
+            logger.warning("[MyquantFetcher] get_stock_info %s failed: %s", stock_code, e)
+            return None
