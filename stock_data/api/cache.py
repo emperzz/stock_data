@@ -42,6 +42,7 @@ _TTL_NORTH_FLOW = int(os.getenv("CACHE_TTL_NORTH_FLOW", "60"))
 _TTL_REPORTS = int(os.getenv("CACHE_TTL_REPORTS", "1800"))
 _TTL_ANNOUNCEMENTS = int(os.getenv("CACHE_TTL_ANNOUNCEMENTS", "1800"))
 _TTL_POOLS = int(os.getenv("CACHE_TTL_POOLS", "60"))
+_TTL_STOCK_INFO = int(os.getenv("CACHE_TTL_STOCK_INFO", "3600"))  # 公司画像 (1h)
 
 # Cache instances
 _dragontiger_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_DRAGON_TIGER)
@@ -56,6 +57,7 @@ _north_flow_cache: TTLCache = TTLCache(maxsize=64, ttl=_TTL_NORTH_FLOW)
 _reports_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_REPORTS)
 _announcements_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_ANNOUNCEMENTS)
 _pools_cache: TTLCache = TTLCache(maxsize=128, ttl=_TTL_POOLS)
+_stock_info_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INFO)
 
 
 def get_quote_cache() -> TTLCache:
@@ -131,6 +133,10 @@ def get_announcements_cache() -> TTLCache:
 
 def get_pools_cache() -> TTLCache:
     return _pools_cache
+
+
+def get_stock_info_cache() -> TTLCache:
+    return _stock_info_cache
 
 
 def make_quote_cache_key(stock_code: str) -> str:
@@ -238,6 +244,10 @@ def make_announcements_cache_key(stock_code: str, page_size: int) -> str:
 def make_pools_cache_key(pool_type: str, date: str | None) -> str:
     d = date or ""
     return f"pool:{pool_type}:{d}"
+
+
+def make_stock_info_cache_key(stock_code: str) -> str:
+    return f"stock_info:{stock_code}"
 
 
 def is_cache_enabled() -> bool:
