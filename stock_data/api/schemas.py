@@ -219,6 +219,14 @@ class SourceHealth(BaseModel):
     last_success_time: float | None = Field(default=None, description="Unix timestamp of last successful call")
     last_failure_time: float | None = Field(default=None, description="Unix timestamp of last failure")
     failure_count: int = Field(default=0, description="Consecutive failure count")
+    # Set when the fetcher wasn't registered at startup (is_available()==False).
+    # Logic-driven message from `fetcher.unavailable_reason()` — e.g.
+    # "TUSHARE_TOKEN not set" or "ZHITU_TOKEN not set". Surfaces blind spots
+    # so operators can tell missing-config from a runtime outage.
+    unavailable_reason: str | None = Field(
+        default=None,
+        description="Why this fetcher is unavailable (env var / SDK missing). None when registered.",
+    )
 
 
 class HealthResponse(BaseModel):

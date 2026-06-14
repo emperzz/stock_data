@@ -44,6 +44,84 @@ class TestHealthCheck:
             assert "state" in s
             assert "available" in s
 
+    def test_health_includes_unregistered_fetchers(self, client):
+        """/health must surface ALL BaseFetcher subclasses, not just registered ones.
+
+        Without TUSHARE_TOKEN / ZHITU_TOKEN, those fetchers aren't registered
+        with the manager — but operators still need to see them in the health
+        report so they can tell missing-config from a runtime outage. The
+        field is `available: false` plus a logic-driven `unavailable_reason`.
+        """
+        from stock_data.data_provider.base import BaseFetcher
+
+        # Compute the full expected set of fetcher names.
+        expected: set[str] = set()
+        stack: list[type] = list(BaseFetcher.__subclasses__())
+        while stack:
+            c = stack.pop()
+            expected.add(getattr(c, "name", c.__name__))
+            stack.extend(c.__subclasses__())
+
+        response = client.get("/api/v1/health?details=true")
+        data = response.json()
+        actual_names = {s["name"] for s in data["sources"]}
+        # Must include every BaseFetcher subclass, registered or not.
+        missing = expected - actual_names
+        assert not missing, (
+            f"/health omitted these fetcher classes: {sorted(missing)}. "
+            f"Expected all BaseFetcher subclasses to appear in sources[]. "
+            f"Got: {sorted(actual_names)}"
+        )
+
+    def test_health_unavailable_fetchers_have_logic_driven_reason(self, client):
+        """For unregistered fetchers (Tushare/Zhitu without tokens),
+        `unavailable_reason` must be a non-empty string derived from real
+        state, not a hardcoded label. Tests the same logic-driven contract
+        enforced for /control/api-manifest's fetchers[].
+        """
+        response = client.get("/api/v1/health?details=true")
+        data = response.json()
+
+        unavailable = [s for s in data["sources"] if s["available"] is False]
+        assert unavailable, (
+            "Expected at least TushareFetcher or ZhituFetcher to appear with "
+            "available=False when their tokens aren't configured; otherwise "
+            "this test isn't exercising the unregistered path."
+        )
+        for s in unavailable:
+            reason = s.get("unavailable_reason")
+            assert reason, (
+                f"{s['name']} reported available=false but no "
+                f"unavailable_reason — operators need actionable guidance."
+            )
+            # The reason must mention the env var that gates this fetcher
+            # (logic-driven, derived from real _token state).
+            assert s["name"].upper().replace("FETCHER", "") in reason.upper() or \
+                   "TOKEN" in reason.upper() or \
+                   "SDK" in reason.upper(), (
+                f"{s['name']} reason {reason!r} doesn't name the env var or "
+                f"SDK that's missing — should be derived from real state."
+            )
+
+    def test_health_status_ignores_unregistered_fetchers(self, client):
+        """A missing optional token (Tushare/Zhitu) must NOT flip status to unhealthy.
+
+        Status determination only considers registered fetchers, so operators
+        running with no premium tokens still see status='ok' (or 'degraded'
+        if a registered fetcher's circuit is open). This matches the
+        original pre-refactor contract for k8s/lb probes.
+        """
+        # Sanity: we know TushareFetcher and ZhituFetcher are unregistered in
+        # the default test env (no tokens). Verify the probe isn't unhealthy.
+        response = client.get("/api/v1/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] != "unhealthy", (
+            f"status flipped to 'unhealthy' just because Tushare/Zhitu "
+            f"aren't registered — but those are optional (token-gated). "
+            f"The probe must stay 'ok' or 'degraded' for k8s/lb readiness."
+        )
+
 
 class TestListIndices:
     """Tests for /api/v1/indices endpoint."""

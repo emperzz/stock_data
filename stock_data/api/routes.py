@@ -283,31 +283,97 @@ def health_check(details: bool = False) -> HealthResponse:
     Both modes are READ-ONLY — they use ``CircuitBreaker.snapshot_state()`` which does
     not transition states or consume half-open probe budgets, so frequent probes
     cannot starve real fetches.
+
+    Coverage: enumerates **all** `BaseFetcher` subclasses (not just registered
+    ones) so missing-config fetchers (Tushare/Zhitu without their tokens) are
+    surfaced with `available: false` and an `unavailable_reason` from the
+    fetcher's own logic-driven method. k8s/lb probes see the same status as
+    before — only **registered** fetchers count toward `ok/degraded/unhealthy`,
+    so a missing optional token doesn't flip the probe to unhealthy.
     """
+    from ..data_provider.base import BaseFetcher
+
     manager = get_manager()
+    # Map registered fetcher instances by name so we can pull circuit-breaker
+    # state for those, and synthesize a "not registered" entry for the rest.
+    registered_by_name: dict[str, object] = {f.name: f for f in manager.fetchers}
+
+    # Walk every concrete subclass — same recursion shape as the manifest
+    # builder. Importing the fetchers package is the manager's job at
+    # startup; by the time health runs, all classes are importable.
+    all_classes: list[type] = []
+    stack: list[type] = list(BaseFetcher.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        all_classes.append(cls)
+        stack.extend(cls.__subclasses__())
+
     source_states: list[SourceHealth] = []
-    any_available = False
+    registered_available_count = 0
+    registered_open_count = 0
 
-    for fetcher in manager.fetchers:
-        snap = REALTIME_CIRCUIT_BREAKER.snapshot_state(fetcher.name)
-        if snap["available"]:
-            any_available = True
-        last_success = snap["last_success_time"] if snap["last_success_time"] > 0 else None
-        last_failure = snap["last_failure_time"] if snap["last_failure_time"] > 0 else None
-        source_states.append(SourceHealth(
-            name=fetcher.name,
-            state=snap["state"],
-            available=snap["available"],
-            last_success_time=last_success,
-            last_failure_time=last_failure,
-            failure_count=snap["failures"],
-        ))
+    for fetcher_cls in all_classes:
+        fetcher_name = getattr(fetcher_cls, "name", fetcher_cls.__name__)
+        registered = registered_by_name.get(fetcher_name)
 
-    if any_available:
-        open_count = sum(1 for s in source_states if s.state in ("open", "half_open"))
-        status = "degraded" if open_count > 0 else "ok"
-    else:
+        if registered is not None:
+            # Registered: pull live circuit-breaker state.
+            snap = REALTIME_CIRCUIT_BREAKER.snapshot_state(fetcher_name)
+            available = snap["available"]
+            if available:
+                registered_available_count += 1
+            if snap["state"] in ("open", "half_open"):
+                registered_open_count += 1
+            last_success = (
+                snap["last_success_time"] if snap["last_success_time"] > 0 else None
+            )
+            last_failure = (
+                snap["last_failure_time"] if snap["last_failure_time"] > 0 else None
+            )
+            source_states.append(SourceHealth(
+                name=fetcher_name,
+                state=snap["state"],
+                available=available,
+                last_success_time=last_success,
+                last_failure_time=last_failure,
+                failure_count=snap["failures"],
+                unavailable_reason=None,
+            ))
+        else:
+            # Not registered: instantiate on demand to read the same
+            # is_available()/unavailable_reason() the manifest uses. Construction
+            # is side-effect-free (env-var reads only).
+            try:
+                instance = fetcher_cls()
+            except Exception:
+                source_states.append(SourceHealth(
+                    name=fetcher_name,
+                    state="closed",
+                    available=False,
+                    unavailable_reason=f"{fetcher_name} could not be instantiated",
+                ))
+                continue
+            available = bool(instance.is_available())
+            reason = None if available else instance.unavailable_reason()
+            source_states.append(SourceHealth(
+                name=fetcher_name,
+                # Unregistered fetchers have no circuit-breaker state — use
+                # "closed" as a neutral default so the field stays consistent
+                # with registered entries.
+                state="closed",
+                available=available,
+                unavailable_reason=reason,
+            ))
+
+    # Status determination is intentionally driven ONLY by registered
+    # fetchers — missing optional tokens (Tushare/Zhitu) must not flip the
+    # probe to unhealthy.
+    if registered_available_count == 0:
         status = "unhealthy"
+    elif registered_open_count > 0:
+        status = "degraded"
+    else:
+        status = "ok"
 
     return HealthResponse(
         status=status,
