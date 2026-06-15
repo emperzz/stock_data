@@ -443,8 +443,12 @@ zf (amplitude), lb (volume_ratio), hs (turnover_rate), pe (pe_ratio),
 sjl (pb_ratio), sz (total_mv), lt (circ_mv)
 ```
 
-**Note**: Zhitu API returns rich realtime data but **does not support historical K-line data**.
-It is used as a fallback for realtime quotes only.
+**Note**: Zhitu API returns rich realtime data but **does not support historical D/W/M K-line data** —
+no `get_kline_data` and no `_fetch_raw_data` (raises `DataFetchError`). It also serves as a
+**minute-level K-line fallback** via `/hs/history/{symbol}.{sh|sz}/{period}/{adj}` (period ∈
+`5`/`15`/`30`/`60`; adjust ∈ `n`/`f`/`b` for 不复权/前复权/后复权; `period=1` rejected). When
+`HISTORICAL_MIN` is the requested capability, Zhitu joins the minute failover chain at
+priority 4 (after Baostock P1 / Akshare P2 / Yfinance P3).
 
 **Links**: https://www.zhituapi.com/hsstockapi.html
 
@@ -534,6 +538,7 @@ gm/pandas dependency warning) live in the `myquant_fetcher.py` module docstring
 | AkshareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | TushareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | YfinanceFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| ZhituFetcher | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 
 **Fallback**: Server queries providers in priority order. If provider doesn't support the requested frequency, it raises `DataFetchError` and the next provider is tried.
 
@@ -612,7 +617,7 @@ fetchers that support it.
 | TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| INDEX_HISTORICAL` |
 | MyquantFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_INFO` |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
-| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO` |
+| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| HISTORICAL_MIN` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
 | EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT` |
 | ThsFetcher | `HOT_TOPICS \| NORTH_FLOW` |

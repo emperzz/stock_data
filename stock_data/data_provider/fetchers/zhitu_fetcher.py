@@ -49,6 +49,7 @@ class ZhituFetcher(BaseFetcher):
         DataCapability.REALTIME_QUOTE
         | DataCapability.STOCK_ZT_POOL
         | DataCapability.STOCK_INFO
+        | DataCapability.HISTORICAL_MIN
     )
 
     def __init__(self):
