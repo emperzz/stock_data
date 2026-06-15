@@ -1,0 +1,82 @@
+# AKShare 公募基金 数据字典
+
+共 **76** 个接口。
+
+## 接口索引
+
+- [`fund_name_em`](./fund_public/fund_name_em.md): 东方财富网-天天基金网-基金数据-所有基金的基本信息数据
+- [`fund_info_ths`](./fund_public/fund_info_ths.md): 同花顺-基金数据-基金基本信息
+- [`fund_individual_basic_info_xq`](./fund_public/fund_individual_basic_info_xq.md): 雪球基金-基金详情
+- [`fund_info_index_em`](./fund_public/fund_info_index_em.md): 东方财富网-天天基金网-基金数据-基金基本信息-指数型
+- [`fund_purchase_em`](./fund_public/fund_purchase_em.md): 东方财富网站-天天基金网-基金数据-基金申购状态
+- [`fund_etf_spot_em`](./fund_public/fund_etf_spot_em.md): 东方财富-ETF 实时行情
+- [`fund_etf_category_ths`](./fund_public/fund_etf_category_ths.md): 同花顺理财-基金数据-每日净值-实时行情
+- [`fund_etf_spot_ths`](./fund_public/fund_etf_spot_ths.md): 同花顺理财-基金数据-每日净值-ETF-实时行情
+- [`fund_lof_spot_em`](./fund_public/fund_lof_spot_em.md): 东方财富-LOF 实时行情
+- [`fund_etf_category_sina`](./fund_public/fund_etf_category_sina.md): 新浪财经-基金列表及行情数据
+- [`fund_etf_hist_min_em`](./fund_public/fund_etf_hist_min_em.md): 东方财富-ETF 分时行情; 该接口只能获取近期的分时数据，注意时间周期的设置
+- [`fund_lof_hist_min_em`](./fund_public/fund_lof_hist_min_em.md): 东方财富-LOF 分时行情; 该接口只能获取近期的分时数据，注意时间周期的设置
+- [`fund_etf_hist_em`](./fund_public/fund_etf_hist_em.md): 东方财富-ETF 行情; 历史数据按日频率更新, 当日收盘价请在收盘后获取
+- [`fund_lof_hist_em`](./fund_public/fund_lof_hist_em.md): 东方财富-LOF 行情; 历史数据按日频率更新, 当日收盘价请在收盘后获取
+- [`fund_etf_hist_sina`](./fund_public/fund_etf_hist_sina.md): 新浪财经-基金行情的日频率行情数据
+- [`fund_open_fund_daily_em`](./fund_public/fund_open_fund_daily_em.md): 东方财富网-天天基金网-基金数据, 此接口在每个交易日 16:00-23:00 更新当日的最新开放式基金净值数据
+- [`fund_open_fund_info_em`](./fund_public/fund_open_fund_info_em.md): 东方财富网-天天基金网-基金数据-具体基金信息
+- [`fund_money_fund_daily_em`](./fund_public/fund_money_fund_daily_em.md): 东方财富网-天天基金网-基金数据-货币型基金收益, 此接口数据每个交易日 16:00～23:00
+- [`fund_money_fund_info_em`](./fund_public/fund_money_fund_info_em.md): 东方财富网-天天基金网-基金数据-货币型基金-历史净值
+- [`fund_financial_fund_daily_em`](./fund_public/fund_financial_fund_daily_em.md): 东方财富网-天天基金网-基金数据-理财型基金-实时数据, 此接口数据每个交易日 16:00～23:00 更新
+- [`fund_financial_fund_info_em`](./fund_public/fund_financial_fund_info_em.md): 东方财富网站-天天基金网-基金数据-理财型基金收益-历史净值明细
+- [`fund_graded_fund_daily_em`](./fund_public/fund_graded_fund_daily_em.md): 东方财富网-天天基金网-基金数据-分级基金-实时数据, 此接口数据每个交易日 16:00～23:00
+- [`fund_graded_fund_info_em`](./fund_public/fund_graded_fund_info_em.md): 东方财富网站-天天基金网-基金数据-分级基金-历史数据
+- [`fund_etf_fund_daily_em`](./fund_public/fund_etf_fund_daily_em.md): 东方财富网站-天天基金网-基金数据-场内交易基金-实时数据, 此接口数据每个交易日 16:00～23:00
+- [`fund_etf_fund_info_em`](./fund_public/fund_etf_fund_info_em.md): 东方财富网站-天天基金网-基金数据-场内交易基金-历史净值数据
+- [`fund_hk_fund_hist_em`](./fund_public/fund_hk_fund_hist_em.md): 东方财富网站-天天基金网-基金数据-香港基金-历史净值明细
+- [`fund_etf_dividend_sina`](./fund_public/fund_etf_dividend_sina.md): 新浪财经-基金-ETF 基金-累计分红
+- [`fund_fh_em`](./fund_public/fund_fh_em.md): 天天基金网-基金数据-分红送配-基金分红
+- [`fund_cf_em`](./fund_public/fund_cf_em.md): 天天基金网-基金数据-分红送配-基金拆分
+- [`fund_fh_rank_em`](./fund_public/fund_fh_rank_em.md): 天天基金网-基金数据-分红送配-基金分红排行
+- [`fund_open_fund_rank_em`](./fund_public/fund_open_fund_rank_em.md): 东方财富网-数据中心-开放式基金排行
+- [`fund_exchange_rank_em`](./fund_public/fund_exchange_rank_em.md): 东方财富网-数据中心-场内交易基金排行榜
+- [`fund_money_rank_em`](./fund_public/fund_money_rank_em.md): 东方财富网-数据中心-货币型基金排行
+- [`fund_lcx_rank_em`](./fund_public/fund_lcx_rank_em.md): 东方财富网-数据中心-理财基金排行, 每个交易日17点后更新, 货币基金的单位净值均为 1.0000 元，最新一年期定存…
+- [`fund_hk_rank_em`](./fund_public/fund_hk_rank_em.md): 东方财富网-数据中心-基金排行-香港基金排行
+- [`fund_individual_achievement_xq`](./fund_public/fund_individual_achievement_xq.md): 雪球基金-基金详情-基金业绩-详情
+- [`fund_value_estimation_em`](./fund_public/fund_value_estimation_em.md): 东方财富网-数据中心-净值估算
+- [`fund_individual_analysis_xq`](./fund_public/fund_individual_analysis_xq.md): 雪球基金-基金详情-数据分析
+- [`fund_individual_profit_probability_xq`](./fund_public/fund_individual_profit_probability_xq.md): 雪球基金-基金详情-盈利概率；历史任意时点买入，持有满X时间，盈利概率，以及平均收益
+- [`fund_individual_detail_hold_xq`](./fund_public/fund_individual_detail_hold_xq.md): 雪球基金-基金详情-基金持仓-详情
+- [`fund_overview_em`](./fund_public/fund_overview_em.md): 天天基金-基金档案-基本概况
+- [`fund_fee_em`](./fund_public/fund_fee_em.md): 天天基金-基金档案-购买信息
+- [`fund_individual_detail_info_xq`](./fund_public/fund_individual_detail_info_xq.md): 雪球基金-基金详情-基金交易规则
+- [`fund_portfolio_hold_em`](./fund_public/fund_portfolio_hold_em.md): 天天基金网-基金档案-投资组合-基金持仓
+- [`fund_portfolio_bond_hold_em`](./fund_public/fund_portfolio_bond_hold_em.md): 天天基金网-基金档案-投资组合-债券持仓
+- [`fund_portfolio_industry_allocation_em`](./fund_public/fund_portfolio_industry_allocation_em.md): 天天基金网-基金档案-投资组合-行业配置
+- [`fund_portfolio_change_em`](./fund_public/fund_portfolio_change_em.md): 天天基金网-基金档案-投资组合-重大变动
+- [`fund_rating_all`](./fund_public/fund_rating_all.md): 天天基金网-基金评级-基金评级总汇
+- [`fund_rating_sh`](./fund_public/fund_rating_sh.md): 天天基金网-基金评级-上海证券评级
+- [`fund_rating_zs`](./fund_public/fund_rating_zs.md): 天天基金网-基金评级-招商证券评级
+- [`fund_rating_ja`](./fund_public/fund_rating_ja.md): 天天基金网-基金评级-济安金信评级
+- [`fund_manager_em`](./fund_public/fund_manager_em.md): 天天基金网-基金数据-基金经理大全
+- [`fund_new_found_em`](./fund_public/fund_new_found_em.md): 天天基金网-基金数据-新发基金-新成立基金
+- [`fund_new_found_ths`](./fund_public/fund_new_found_ths.md): 同花顺-基金数据-新发基金
+- [`fund_scale_open_sina`](./fund_public/fund_scale_open_sina.md): 基金数据中心-基金规模-开放式基金
+- [`fund_scale_close_sina`](./fund_public/fund_scale_close_sina.md): 基金数据中心-基金规模-封闭式基金
+- [`fund_scale_structured_sina`](./fund_public/fund_scale_structured_sina.md): 基金数据中心-基金规模-分级子基金
+- [`fund_etf_scale_sse`](./fund_public/fund_etf_scale_sse.md): 上海证券交易所-产品-基金产品-ETF产品-ETF产品列表-基金规模
+- [`fund_etf_scale_szse`](./fund_public/fund_etf_scale_szse.md): 深圳证券交易所-基金产品-基金列表-ETF基金份额
+- [`fund_scale_daily_szse`](./fund_public/fund_scale_daily_szse.md): 深圳证券交易所-基金产品-基金规模-日频数据
+- [`fund_aum_em`](./fund_public/fund_aum_em.md): 天天基金网-基金数据-基金规模
+- [`fund_aum_trend_em`](./fund_public/fund_aum_trend_em.md): 天天基金网-基金数据-市场全部基金规模走势
+- [`fund_aum_hist_em`](./fund_public/fund_aum_hist_em.md): 天天基金网-基金数据-基金公司历年管理规模排行列表
+- [`reits_realtime_em`](./fund_public/reits_realtime_em.md): 东方财富网-行情中心-REITs-沪深 REITs-实时行情
+- [`reits_hist_em`](./fund_public/reits_hist_em.md): 东方财富网-行情中心-REITs-沪深 REITs-历史行情
+- [`fund_report_stock_cninfo`](./fund_public/fund_report_stock_cninfo.md): 巨潮资讯-数据中心-专题统计-基金报表-基金重仓股
+- [`fund_report_industry_allocation_cninfo`](./fund_public/fund_report_industry_allocation_cninfo.md): 巨潮资讯-数据中心-专题统计-基金报表-基金行业配置
+- [`fund_report_asset_allocation_cninfo`](./fund_public/fund_report_asset_allocation_cninfo.md): 巨潮资讯-数据中心-专题统计-基金报表-基金资产配置
+- [`fund_scale_change_em`](./fund_public/fund_scale_change_em.md): 天天基金网-基金数据-规模份额-规模变动
+- [`fund_hold_structure_em`](./fund_public/fund_hold_structure_em.md): 天天基金网-基金数据-规模份额-持有人结构
+- [`fund_stock_position_lg`](./fund_public/fund_stock_position_lg.md): 乐咕乐股-基金仓位-股票型基金仓位
+- [`fund_balance_position_lg`](./fund_public/fund_balance_position_lg.md): 乐咕乐股-基金仓位-平衡混合型基金仓位
+- [`fund_linghuo_position_lg`](./fund_public/fund_linghuo_position_lg.md): 乐咕乐股-基金仓位-灵活配置型基金仓位
+- [`fund_announcement_dividend_em`](./fund_public/fund_announcement_dividend_em.md): 东方财富网站-天天基金网-基金档案-基金公告-分红配送
+- [`fund_announcement_report_em`](./fund_public/fund_announcement_report_em.md): 东方财富网站-天天基金网-基金档案-基金公告-定期报告
+- [`fund_announcement_personnel_em`](./fund_public/fund_announcement_personnel_em.md): 东方财富网站-天天基金网-基金档案-基金公告-人事调整

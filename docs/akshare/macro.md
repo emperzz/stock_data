@@ -1,0 +1,221 @@
+# AKShare 宏观 数据字典
+
+共 **215** 个接口。
+
+## 接口索引
+
+- [`macro_cnbs`](./macro/macro_cnbs.md) — 中国宏观杠杆率: 中国国家金融与发展实验室-中国宏观杠杆率数据
+- [`macro_china_qyspjg`](./macro/macro_china_qyspjg.md) — 企业商品价格指数: 东方财富-经济数据一览-中国-企业商品价格指数, 数据区间从 20050101-至今
+- [`macro_china_fdi`](./macro/macro_china_fdi.md): 东方财富-经济数据一览-中国-外商直接投资数据, 数据区间从 200801-202307
+- [`macro_china_lpr`](./macro/macro_china_lpr.md): 中国 LPR 品种数据, 数据区间从 19910421-至今
+- [`macro_china_urban_unemployment`](./macro/macro_china_urban_unemployment.md): 国家统计局-月度数据-城镇调查失业率
+- [`macro_china_shrzgm`](./macro/macro_china_shrzgm.md): 商务数据中心-国内贸易-社会融资规模增量统计, 数据区间从 201501-至今
+- [`macro_china_gdp_yearly`](./macro/macro_china_gdp_yearly.md): 金十数据中心-中国 GDP 年率报告, 数据区间从 20110120-至今
+- [`macro_china_cpi_yearly`](./macro/macro_china_cpi_yearly.md): 中国年度 CPI 数据, 数据区间从 19860201-至今
+- [`macro_china_cpi_monthly`](./macro/macro_china_cpi_monthly.md): 中国月度 CPI 数据, 数据区间从 19960201-至今
+- [`macro_china_ppi_yearly`](./macro/macro_china_ppi_yearly.md): 中国年度 PPI 数据, 数据区间从 19950801-至今
+- [`macro_china_exports_yoy`](./macro/macro_china_exports_yoy.md): 中国以美元计算出口年率报告, 数据区间从 19820201-至今
+- [`macro_china_imports_yoy`](./macro/macro_china_imports_yoy.md): 中国以美元计算进口年率报告, 数据区间从 19960201-至今
+- [`macro_china_trade_balance`](./macro/macro_china_trade_balance.md): 中国以美元计算贸易帐报告, 数据区间从19810201-至今
+- [`macro_china_gyzjz`](./macro/macro_china_gyzjz.md): 东方财富-中国工业增加值增长, 数据区间从 2008 - 至今
+- [`macro_china_industrial_production_yoy`](./macro/macro_china_industrial_production_yoy.md): 中国规模以上工业增加值年率报告, 数据区间从 19900301-至今
+- [`macro_china_pmi_yearly`](./macro/macro_china_pmi_yearly.md): 中国年度PMI数据, 数据区间从 20050201-至今
+- [`macro_china_cx_pmi_yearly`](./macro/macro_china_cx_pmi_yearly.md): 中国年度财新 PMI 数据, 数据区间从 20120120-至今
+- [`macro_china_cx_services_pmi_yearly`](./macro/macro_china_cx_services_pmi_yearly.md): 中国财新服务业 PMI 报告, 数据区间从 20120405-至今
+- [`macro_china_non_man_pmi`](./macro/macro_china_non_man_pmi.md): 中国官方非制造业 PMI, 数据区间从 20160101-至今
+- [`macro_china_fx_reserves_yearly`](./macro/macro_china_fx_reserves_yearly.md): 中国年度外汇储备数据, 数据区间从 20140115-至今
+- [`macro_china_m2_yearly`](./macro/macro_china_m2_yearly.md): 中国年度 M2 数据, 数据区间从 19980201-至今
+- [`macro_china_new_house_price`](./macro/macro_china_new_house_price.md): 中国新房价指数月度数据, 数据区间从 201101-至今
+- [`macro_china_enterprise_boom_index`](./macro/macro_china_enterprise_boom_index.md): 中国企业景气及企业家信心指数数据, 数据区间从 2005 一季度-至今
+- [`macro_china_national_tax_receipts`](./macro/macro_china_national_tax_receipts.md): 中国全国税收收入数据, 数据区间从 2005 一季度-至今
+- [`macro_china_bank_financing`](./macro/macro_china_bank_financing.md): 银行理财产品发行数量, 数据区间从 2000 一月-至今
+- [`macro_china_insurance_income`](./macro/macro_china_insurance_income.md): 原保险保费收入, 数据区间从 200407-至今
+- [`macro_china_mobile_number`](./macro/macro_china_mobile_number.md): 手机出货量, 数据区间从 201201-至今
+- [`macro_china_vegetable_basket`](./macro/macro_china_vegetable_basket.md): 菜篮子产品批发价格指数, 数据区间从 20050927-至今
+- [`macro_china_agricultural_product`](./macro/macro_china_agricultural_product.md): 农产品批发价格总指数, 数据区间从 20050927-至今
+- [`macro_china_agricultural_index`](./macro/macro_china_agricultural_index.md): 农副指数数据, 数据区间从 20111205-至今
+- [`macro_china_energy_index`](./macro/macro_china_energy_index.md): 能源指数数据, 数据区间从 20111205-至今
+- [`macro_china_commodity_price_index`](./macro/macro_china_commodity_price_index.md): 大宗商品价格数据, 数据区间从 20111205-至今
+- [`macro_global_sox_index`](./macro/macro_global_sox_index.md): 费城半导体指数数据, 数据区间从 19940504-至今
+- [`macro_china_yw_electronic_index`](./macro/macro_china_yw_electronic_index.md): 义乌小商品指数-电子元器件数据, 数据区间从 20060911-至今
+- [`macro_china_construction_index`](./macro/macro_china_construction_index.md): 建材指数数据, 数据区间从 20111205-至今
+- [`macro_china_construction_price_index`](./macro/macro_china_construction_price_index.md): 建材价格指数数据, 数据区间从 20100615-至今
+- [`macro_china_lpi_index`](./macro/macro_china_lpi_index.md): 物流景气指数数据, 数据区间从 20130701-至今
+- [`macro_china_bdti_index`](./macro/macro_china_bdti_index.md): 原油运输指数数据, 数据区间从 20011227-至今
+- [`macro_china_bsi_index`](./macro/macro_china_bsi_index.md): 超灵便型船运价指数数据, 数据区间从 20060103-至今
+- [`macro_shipping_bci`](./macro/macro_shipping_bci.md): 海岬型运费指数, 数据区间从 19990430-至今
+- [`macro_shipping_bdi`](./macro/macro_shipping_bdi.md): 波罗的海干散货指数, 数据区间从 19881019-至今
+- [`macro_shipping_bpi`](./macro/macro_shipping_bpi.md): 巴拿马型运费指数, 数据区间从 19981231-至今
+- [`macro_shipping_bcti`](./macro/macro_shipping_bcti.md): 成品油运输指数, 数据区间从 20011217-至今
+- [`macro_china_new_financial_credit`](./macro/macro_china_new_financial_credit.md): 中国新增信贷数据数据, 数据区间从 200801 至今, 月度数据
+- [`macro_china_cpi`](./macro/macro_china_cpi.md): 中国居民消费价格指数, 数据区间从 200801 至今, 月度数据
+- [`macro_china_gdp`](./macro/macro_china_gdp.md): 中国国内生产总值, 数据区间从 200601 至今, 月度数据
+- [`macro_china_ppi`](./macro/macro_china_ppi.md): 工业品出厂价格指数, 数据区间从 200601 至今, 月度数据
+- [`macro_china_pmi`](./macro/macro_china_pmi.md): 采购经理人指数, 数据区间从 200801 至今, 月度数据
+- [`macro_china_gdzctz`](./macro/macro_china_gdzctz.md): 中国城镇固定资产投资, 数据区间从 200802 至今, 月度数据
+- [`macro_china_hgjck`](./macro/macro_china_hgjck.md): 中国海关进出口增减情况一览表, 数据区间从 200801 至今, 月度数据
+- [`macro_china_czsr`](./macro/macro_china_czsr.md): 中国财政收入, 数据区间从 200801 至今, 月度数据
+- [`macro_china_whxd`](./macro/macro_china_whxd.md): 外汇贷款数据, 数据区间从 200802 至今, 月度数据
+- [`macro_china_wbck`](./macro/macro_china_wbck.md): 本外币存款, 数据区间从 200802 至今, 月度数据
+- [`macro_china_bond_public`](./macro/macro_china_bond_public.md): 中国外汇交易中心暨全国银行间同业拆借中心-债券信息披露-新债发行; 近期债券发行数据
+- [`macro_china_xfzxx`](./macro/macro_china_xfzxx.md): 东方财富网-消费者信心指数
+- [`macro_china_reserve_requirement_ratio`](./macro/macro_china_reserve_requirement_ratio.md): 国家统计局-存款准备金率
+- [`macro_china_consumer_goods_retail`](./macro/macro_china_consumer_goods_retail.md): 东方财富-经济数据-社会消费品零售总额
+- [`macro_china_society_electricity`](./macro/macro_china_society_electricity.md): 国家统计局-全社会用电分类情况表
+- [`macro_china_society_traffic_volume`](./macro/macro_china_society_traffic_volume.md): 国家统计局-全社会客货运输量-非累计
+- [`macro_china_postal_telecommunicational`](./macro/macro_china_postal_telecommunicational.md): 国家统计局-邮电业务基本情况-非累计
+- [`macro_china_international_tourism_fx`](./macro/macro_china_international_tourism_fx.md): 国家统计局-国际旅游外汇收入构成
+- [`macro_china_passenger_load_factor`](./macro/macro_china_passenger_load_factor.md): 国家统计局-民航客座率及载运率
+- [`macro_china_freight_index`](./macro/macro_china_freight_index.md): 新浪财经-中国宏观经济数据-航贸运价指数
+- [`macro_china_central_bank_balance`](./macro/macro_china_central_bank_balance.md): 新浪财经-中国宏观经济数据-央行货币当局资产负债
+- [`macro_china_insurance`](./macro/macro_china_insurance.md): 新浪财经-中国宏观经济数据-保险业经营情况
+- [`macro_china_supply_of_money`](./macro/macro_china_supply_of_money.md): 新浪财经-中国宏观经济数据-货币供应量
+- [`macro_china_swap_rate`](./macro/macro_china_swap_rate.md): 国家统计局-FR007利率互换曲线历史数据
+- [`macro_china_foreign_exchange_gold`](./macro/macro_china_foreign_exchange_gold.md): 国家统计局-央行黄金和外汇储备, 比东财接口数据时间长
+- [`macro_china_retail_price_index`](./macro/macro_china_retail_price_index.md): 国家统计局-商品零售价格指数
+- [`macro_china_real_estate`](./macro/macro_china_real_estate.md): 国家统计局-国房景气指数
+- [`macro_china_fx_gold`](./macro/macro_china_fx_gold.md): 中国外汇和黄金储备, 数据区间从 200801 至今, 月度数据
+- [`macro_china_money_supply`](./macro/macro_china_money_supply.md): 东方财富-经济数据-中国宏观-中国货币供应量; 数据区间从 200801 至今, 月度数据
+- [`macro_china_stock_market_cap`](./macro/macro_china_stock_market_cap.md): 全国股票交易统计表, 数据区间从 200801 至今, 月度数据
+- [`macro_china_shibor_all`](./macro/macro_china_shibor_all.md): 上海银行业同业拆借报告, 数据区间从 20170317-至今
+- [`macro_china_hk_market_info`](./macro/macro_china_hk_market_info.md): 香港同业拆借报告, 数据区间从 20170320-至今
+- [`macro_china_daily_energy`](./macro/macro_china_daily_energy.md): 中国日度沿海六大电库存数据, 数据区间从20160101-至今, 不再更新, 只能获得历史数据
+- [`macro_china_rmb`](./macro/macro_china_rmb.md): 中国人民币汇率中间价报告, 数据区间从 20170103-20210513
+- [`macro_china_market_margin_sz`](./macro/macro_china_market_margin_sz.md): 深圳融资融券报告, 数据区间从 20100331-至今
+- [`macro_china_market_margin_sh`](./macro/macro_china_market_margin_sh.md): 上海融资融券报告, 数据区间从 20100331-至今
+- [`macro_china_au_report`](./macro/macro_china_au_report.md): 上海黄金交易所报告, 数据区间从 20140905-至今
+- [`macro_china_nbs_nation`](./macro/macro_china_nbs_nation.md): 国家统计局全国数据通用接口，包括月度数据、季度数据、年度数据，具体指标见数据官网。
+- [`macro_china_nbs_region`](./macro/macro_china_nbs_region.md): 国家统计局地区数据通用接口，包括分省月度数据、分省季度数据、分省年度数据、主要城市月度价格、主要城市年度数据、港澳台月度…
+- [`macro_stock_finance`](./macro/macro_stock_finance.md): 同花顺-数据中心-宏观数据-股票筹资
+- [`macro_rmb_loan`](./macro/macro_rmb_loan.md): 同花顺-数据中心-宏观数据-新增人民币贷款
+- [`macro_rmb_deposit`](./macro/macro_rmb_deposit.md): 同花顺-数据中心-宏观数据-人民币存款余额
+- [`macro_china_hk_cpi`](./macro/macro_china_hk_cpi.md): 东方财富-经济数据一览-中国香港-消费者物价指数
+- [`macro_china_hk_cpi_ratio`](./macro/macro_china_hk_cpi_ratio.md): 东方财富-经济数据一览-中国香港-消费者物价指数年率
+- [`macro_china_hk_rate_of_unemployment`](./macro/macro_china_hk_rate_of_unemployment.md): 东方财富-经济数据一览-中国香港-失业率
+- [`macro_china_hk_gbp`](./macro/macro_china_hk_gbp.md): 东方财富-经济数据一览-中国香港-香港 GDP
+- [`macro_china_hk_gbp_ratio`](./macro/macro_china_hk_gbp_ratio.md): 东方财富-经济数据一览-中国香港-香港 GDP 同比
+- [`macro_china_hk_building_volume`](./macro/macro_china_hk_building_volume.md): 东方财富-经济数据一览-中国香港-香港楼宇买卖合约数量
+- [`macro_china_hk_building_amount`](./macro/macro_china_hk_building_amount.md): 东方财富-经济数据一览-中国香港-香港楼宇买卖合约成交金额
+- [`macro_china_hk_trade_diff_ratio`](./macro/macro_china_hk_trade_diff_ratio.md): 东方财富-经济数据一览-中国香港-香港商品贸易差额年率
+- [`macro_china_hk_ppi`](./macro/macro_china_hk_ppi.md): 东方财富-经济数据一览-中国香港-香港制造业PPI年率
+- [`macro_usa_gdp_monthly`](./macro/macro_usa_gdp_monthly.md) — 美国GDP: 美国国内生产总值(GDP)报告, 数据区间从 20080228-至今
+- [`macro_usa_cpi_monthly`](./macro/macro_usa_cpi_monthly.md): 美国 CPI 月率报告, 数据区间从 19700101-至今
+- [`macro_usa_cpi_yoy`](./macro/macro_usa_cpi_yoy.md): 东方财富-经济数据一览-美国-CPI年率, 数据区间从2008-至今
+- [`macro_usa_core_cpi_monthly`](./macro/macro_usa_core_cpi_monthly.md): 美国核心 CPI 月率报告, 数据区间从 19700101-至今
+- [`macro_usa_personal_spending`](./macro/macro_usa_personal_spending.md): 美国个人支出月率报告, 数据区间从 19700101-至今
+- [`macro_usa_retail_sales`](./macro/macro_usa_retail_sales.md): 美国零售销售月率报告, 数据区间从 19920301-至今
+- [`macro_usa_import_price`](./macro/macro_usa_import_price.md): 美国进口物价指数报告, 数据区间从 19890201-至今
+- [`macro_usa_export_price`](./macro/macro_usa_export_price.md): 美国出口价格指数报告, 数据区间从 19890201-至今
+- [`macro_usa_lmci`](./macro/macro_usa_lmci.md): 美联储劳动力市场状况指数报告, 数据区间从 20141006-至今
+- [`macro_usa_unemployment_rate`](./macro/macro_usa_unemployment_rate.md): 美国失业率报告, 数据区间从 19700101-至今
+- [`macro_usa_job_cuts`](./macro/macro_usa_job_cuts.md): 美国挑战者企业裁员人数报告, 数据区间从 19940201-至今
+- [`macro_usa_non_farm`](./macro/macro_usa_non_farm.md): 美国非农就业人数报告, 数据区间从 19700102-至今
+- [`macro_usa_adp_employment`](./macro/macro_usa_adp_employment.md): 美国 ADP 就业人数报告, 数据区间从 20010601-至今
+- [`macro_usa_core_pce_price`](./macro/macro_usa_core_pce_price.md): 美国核心 PCE 物价指数年率报告, 数据区间从 19700101-至今
+- [`macro_usa_real_consumer_spending`](./macro/macro_usa_real_consumer_spending.md): 美国实际个人消费支出季率初值报告, 数据区间从 20131107-至今
+- [`macro_usa_trade_balance`](./macro/macro_usa_trade_balance.md): 美国贸易帐报告, 数据区间从 19700101-至今
+- [`macro_usa_current_account`](./macro/macro_usa_current_account.md): 美国经常帐报告, 数据区间从 20080317-至今
+- [`macro_usa_rig_count`](./macro/macro_usa_rig_count.md) — 贝克休斯钻井报告: 贝克休斯钻井报告, 数据区间从 19870717-至今
+- [`macro_usa_ppi`](./macro/macro_usa_ppi.md): 美国生产者物价指数(PPI)报告, 数据区间从 20080226-至今
+- [`macro_usa_core_ppi`](./macro/macro_usa_core_ppi.md): 美国核心生产者物价指数(PPI)报告, 数据区间从 20080318-至今
+- [`macro_usa_api_crude_stock`](./macro/macro_usa_api_crude_stock.md): 美国 API 原油库存报告, 数据区间从 20120328-至今
+- [`macro_usa_pmi`](./macro/macro_usa_pmi.md): 美国 Markit 制造业 PMI 初值报告, 数据区间从 20120601-至今
+- [`macro_usa_ism_pmi`](./macro/macro_usa_ism_pmi.md): 美国 ISM 制造业 PMI 报告, 数据区间从 19700101-至今
+- [`macro_usa_industrial_production`](./macro/macro_usa_industrial_production.md): 美国工业产出月率报告, 数据区间从 19700101-至今
+- [`macro_usa_durable_goods_orders`](./macro/macro_usa_durable_goods_orders.md): 美国耐用品订单月率报告, 数据区间从 20080227-至今
+- [`macro_usa_factory_orders`](./macro/macro_usa_factory_orders.md): 美国工厂订单月率报告, 数据区间从 19920401-至今
+- [`macro_usa_services_pmi`](./macro/macro_usa_services_pmi.md): 美国Markit服务业PMI初值报告, 数据区间从 20120701-至今
+- [`macro_usa_business_inventories`](./macro/macro_usa_business_inventories.md): 美国商业库存月率报告, 数据区间从 19920301-至今
+- [`macro_usa_ism_non_pmi`](./macro/macro_usa_ism_non_pmi.md): 美国 ISM 非制造业 PMI 报告, 数据区间从 19970801-至今
+- [`macro_usa_nahb_house_market_index`](./macro/macro_usa_nahb_house_market_index.md): 美国 NAHB 房产市场指数报告, 数据区间从 19850201-至今
+- [`macro_usa_house_starts`](./macro/macro_usa_house_starts.md): 美国新屋开工总数年化报告, 数据区间从 19700101-至今
+- [`macro_usa_new_home_sales`](./macro/macro_usa_new_home_sales.md): 美国新屋销售总数年化报告, 数据区间从 19700101-至今
+- [`macro_usa_building_permits`](./macro/macro_usa_building_permits.md): 美国营建许可总数报告, 数据区间从 20080220-至今
+- [`macro_usa_exist_home_sales`](./macro/macro_usa_exist_home_sales.md): 美国成屋销售总数年化报告, 数据区间从 19700101-至今
+- [`macro_usa_house_price_index`](./macro/macro_usa_house_price_index.md): 美国 FHFA 房价指数月率报告, 数据区间从 19910301-至今
+- [`macro_usa_spcs20`](./macro/macro_usa_spcs20.md): 美国S&P/CS20座大城市房价指数年率报告, 数据区间从 20010201-至今
+- [`macro_usa_pending_home_sales`](./macro/macro_usa_pending_home_sales.md): 美国成屋签约销售指数月率报告, 数据区间从 20010301-至今
+- [`macro_usa_phs`](./macro/macro_usa_phs.md): 东方财富-经济数据一览-美国-未决房屋销售月率, 数据区间从 20080201-至今
+- [`macro_usa_cb_consumer_confidence`](./macro/macro_usa_cb_consumer_confidence.md): 美国谘商会消费者信心指数报告, 数据区间从 19700101-至今
+- [`macro_usa_nfib_small_business`](./macro/macro_usa_nfib_small_business.md): 美国NFIB小型企业信心指数报告, 数据区间从 19750201-至今
+- [`macro_usa_michigan_consumer_sentiment`](./macro/macro_usa_michigan_consumer_sentiment.md): 美国密歇根大学消费者信心指数初值报告, 数据区间从 19700301-至今
+- [`macro_usa_eia_crude_rate`](./macro/macro_usa_eia_crude_rate.md): 美国EIA原油库存报告, 数据区间从 19950801-至今
+- [`macro_usa_initial_jobless`](./macro/macro_usa_initial_jobless.md): 美国初请失业金人数报告, 数据区间从 19700101-至今
+- [`macro_usa_crude_inner`](./macro/macro_usa_crude_inner.md): 美国原油产量报告, 数据区间从 19830107-至今, 每周三公布(美国节假日除外), 美国能源信息署(EIA)
+- [`macro_euro_gdp_yoy`](./macro/macro_euro_gdp_yoy.md) — 经济状况 / 欧元区季度GDP年率报告: 欧元区季度 GDP 年率报告, 数据区间从 20131114-至今
+- [`macro_euro_cpi_mom`](./macro/macro_euro_cpi_mom.md): 欧元区 CPI 月率报告, 数据区间从 19900301-至今
+- [`macro_euro_cpi_yoy`](./macro/macro_euro_cpi_yoy.md): 欧元区 CPI 年率报告, 数据区间从 19910201-至今
+- [`macro_euro_ppi_mom`](./macro/macro_euro_ppi_mom.md): 欧元区 PPI 月率报告, 数据区间从 19810301-至今
+- [`macro_euro_retail_sales_mom`](./macro/macro_euro_retail_sales_mom.md): 欧元区零售销售月率报告, 数据区间从 20000301-至今
+- [`macro_euro_employment_change_qoq`](./macro/macro_euro_employment_change_qoq.md): 欧元区季调后就业人数季率报告, 数据区间从 20083017-至今
+- [`macro_euro_unemployment_rate_mom`](./macro/macro_euro_unemployment_rate_mom.md): 欧元区失业率报告, 数据区间从 19980501-至今
+- [`macro_euro_trade_balance`](./macro/macro_euro_trade_balance.md): 欧元区未季调贸易帐报告, 数据区间从 19990201-至今
+- [`macro_euro_current_account_mom`](./macro/macro_euro_current_account_mom.md): 欧元区经常帐报告, 数据区间从 20080221-至今
+- [`macro_euro_industrial_production_mom`](./macro/macro_euro_industrial_production_mom.md): 欧元区工业产出月率报告, 数据区间从 19910301-至今
+- [`macro_euro_manufacturing_pmi`](./macro/macro_euro_manufacturing_pmi.md): 欧元区制造业 PMI 初值报告, 数据区间从 20080222-至今
+- [`macro_euro_services_pmi`](./macro/macro_euro_services_pmi.md): 欧元区服务业 PMI 终值报告, 数据区间从 20080222-至今
+- [`macro_euro_zew_economic_sentiment`](./macro/macro_euro_zew_economic_sentiment.md): 欧元区 ZEW 经济景气指数报告, 数据区间从 20080212-至今
+- [`macro_euro_sentix_investor_confidence`](./macro/macro_euro_sentix_investor_confidence.md): 欧元区 Sentix 投资者信心指数报告, 数据区间从 20020801-至今
+- [`macro_germany_ifo`](./macro/macro_germany_ifo.md): 东方财富-数据中心-经济数据一览-IFO商业景气指数
+- [`macro_germany_cpi_monthly`](./macro/macro_germany_cpi_monthly.md): 东方财富-数据中心-经济数据一览-德国-消费者物价指数月率终值
+- [`macro_germany_cpi_yearly`](./macro/macro_germany_cpi_yearly.md): 东方财富-数据中心-经济数据一览-德国-消费者物价指数年率终值
+- [`macro_germany_trade_adjusted`](./macro/macro_germany_trade_adjusted.md): 东方财富-数据中心-经济数据一览-德国-贸易帐(季调后)
+- [`macro_germany_gdp`](./macro/macro_germany_gdp.md): 东方财富-数据中心-经济数据一览-德国-GDP
+- [`macro_germany_retail_sale_monthly`](./macro/macro_germany_retail_sale_monthly.md): 东方财富-数据中心-经济数据一览-德国-实际零售销售月率
+- [`macro_germany_retail_sale_yearly`](./macro/macro_germany_retail_sale_yearly.md): 东方财富-数据中心-经济数据一览-德国-实际零售销售年率
+- [`macro_germany_zew`](./macro/macro_germany_zew.md): 东方财富-数据中心-经济数据一览-德国-ZEW 经济景气指数
+- [`macro_swiss_svme`](./macro/macro_swiss_svme.md): 东方财富-经济数据-瑞士-SVME采购经理人指数
+- [`macro_swiss_trade`](./macro/macro_swiss_trade.md): 东方财富-经济数据-瑞士-贸易帐
+- [`macro_swiss_cpi_yearly`](./macro/macro_swiss_cpi_yearly.md): 东方财富-经济数据-瑞士-消费者物价指数年率
+- [`macro_swiss_gdp_quarterly`](./macro/macro_swiss_gdp_quarterly.md): 东方财富-经济数据-瑞士-GDP 季率
+- [`macro_swiss_gbd_yearly`](./macro/macro_swiss_gbd_yearly.md): 东方财富-经济数据-瑞士-GDP 年率
+- [`macro_swiss_gbd_bank_rate`](./macro/macro_swiss_gbd_bank_rate.md): 东方财富-经济数据-瑞士-央行公布利率决议
+- [`macro_japan_bank_rate`](./macro/macro_japan_bank_rate.md): 东方财富-经济数据-日本-央行公布利率决议
+- [`macro_japan_cpi_yearly`](./macro/macro_japan_cpi_yearly.md): 东方财富-经济数据-日本-全国消费者物价指数年率
+- [`macro_japan_core_cpi_yearly`](./macro/macro_japan_core_cpi_yearly.md): 东方财富-经济数据-日本-全国核心消费者物价指数年率
+- [`macro_japan_unemployment_rate`](./macro/macro_japan_unemployment_rate.md): 东方财富-经济数据-日本-失业率
+- [`macro_japan_head_indicator`](./macro/macro_japan_head_indicator.md): 东方财富-经济数据-日本-领先指标终值
+- [`macro_uk_halifax_monthly`](./macro/macro_uk_halifax_monthly.md): 东方财富-经济数据-英国-Halifax 房价指数月率
+- [`macro_uk_halifax_yearly`](./macro/macro_uk_halifax_yearly.md): 东方财富-经济数据-英国-Halifax 房价指数年率
+- [`macro_uk_trade`](./macro/macro_uk_trade.md): 东方财富-经济数据-英国-贸易帐
+- [`macro_uk_bank_rate`](./macro/macro_uk_bank_rate.md): 东方财富-经济数据-英国-央行公布利率决议
+- [`macro_uk_core_cpi_yearly`](./macro/macro_uk_core_cpi_yearly.md): 东方财富-经济数据-英国-核心消费者物价指数年率
+- [`macro_uk_core_cpi_monthly`](./macro/macro_uk_core_cpi_monthly.md): 东方财富-经济数据-英国-核心消费者物价指数月率
+- [`macro_uk_cpi_yearly`](./macro/macro_uk_cpi_yearly.md): 东方财富-经济数据-英国-消费者物价指数年率
+- [`macro_uk_cpi_monthly`](./macro/macro_uk_cpi_monthly.md): 东方财富-经济数据-英国-消费者物价指数月率
+- [`macro_uk_retail_monthly`](./macro/macro_uk_retail_monthly.md): 东方财富-经济数据-英国-零售销售月率
+- [`macro_uk_retail_yearly`](./macro/macro_uk_retail_yearly.md): 东方财富-经济数据-英国-零售销售年率
+- [`macro_uk_rightmove_yearly`](./macro/macro_uk_rightmove_yearly.md): 东方财富-经济数据-英国-Rightmove 房价指数年率
+- [`macro_uk_rightmove_monthly`](./macro/macro_uk_rightmove_monthly.md): 东方财富-经济数据-英国-Rightmove 房价指数月率
+- [`macro_uk_gdp_quarterly`](./macro/macro_uk_gdp_quarterly.md): 东方财富-经济数据-英国-GDP 季率初值
+- [`macro_uk_gdp_yearly`](./macro/macro_uk_gdp_yearly.md): 东方财富-经济数据-英国-GDP 年率初值
+- [`macro_uk_unemployment_rate`](./macro/macro_uk_unemployment_rate.md): 东方财富-经济数据-英国-失业率
+- [`macro_australia_retail_rate_monthly`](./macro/macro_australia_retail_rate_monthly.md): 东方财富-经济数据-澳大利亚-零售销售月率
+- [`macro_australia_trade`](./macro/macro_australia_trade.md): 东方财富-经济数据-澳大利亚-贸易帐
+- [`macro_australia_unemployment_rate`](./macro/macro_australia_unemployment_rate.md): 东方财富-经济数据-澳大利亚-失业率
+- [`macro_australia_ppi_quarterly`](./macro/macro_australia_ppi_quarterly.md): 东方财富-经济数据-澳大利亚-生产者物价指数季率
+- [`macro_australia_cpi_quarterly`](./macro/macro_australia_cpi_quarterly.md): 东方财富-经济数据-澳大利亚-消费者物价指数季率
+- [`macro_australia_cpi_yearly`](./macro/macro_australia_cpi_yearly.md): 东方财富-经济数据-澳大利亚-消费者物价指数年率
+- [`macro_australia_bank_rate`](./macro/macro_australia_bank_rate.md): 东方财富-经济数据-澳大利亚-央行公布利率决议
+- [`macro_canada_new_house_rate`](./macro/macro_canada_new_house_rate.md): 东方财富-经济数据-加拿大-新屋开工
+- [`macro_canada_unemployment_rate`](./macro/macro_canada_unemployment_rate.md): 东方财富-经济数据-加拿大-失业率
+- [`macro_canada_trade`](./macro/macro_canada_trade.md): 东方财富-经济数据-加拿大-贸易帐
+- [`macro_canada_retail_rate_monthly`](./macro/macro_canada_retail_rate_monthly.md): 东方财富-经济数据-加拿大-零售销售月率
+- [`macro_canada_bank_rate`](./macro/macro_canada_bank_rate.md): 东方财富-经济数据-加拿大-央行公布利率决议
+- [`macro_canada_core_cpi_yearly`](./macro/macro_canada_core_cpi_yearly.md): 东方财富-经济数据-加拿大-核心消费者物价指数年率
+- [`macro_canada_core_cpi_monthly`](./macro/macro_canada_core_cpi_monthly.md): 东方财富-经济数据-加拿大-核心消费者物价指数月率
+- [`macro_canada_cpi_yearly`](./macro/macro_canada_cpi_yearly.md): 东方财富-经济数据-加拿大-消费者物价指数年率
+- [`macro_canada_cpi_monthly`](./macro/macro_canada_cpi_monthly.md): 东方财富-经济数据-加拿大-消费者物价指数月率
+- [`macro_canada_gdp_monthly`](./macro/macro_canada_gdp_monthly.md): 东方财富-经济数据-加拿大-GDP 月率
+- [`macro_cons_gold`](./macro/macro_cons_gold.md): 全球最大黄金 ETF—SPDR Gold Trust 持仓报告, 数据区间从 20041119-至今
+- [`macro_cons_silver`](./macro/macro_cons_silver.md): 全球最大白银 ETF--iShares Silver Trust 持仓报告, 数据区间从 20041202-至今
+- [`macro_cons_opec_month`](./macro/macro_cons_opec_month.md): 欧佩克报告, 数据区间从 20170118-至今
+- [`macro_euro_lme_holding`](./macro/macro_euro_lme_holding.md): 伦敦金属交易所(LME)-持仓报告, 数据区间从 20151022-至今
+- [`macro_euro_lme_stock`](./macro/macro_euro_lme_stock.md): 伦敦金属交易所(LME)-库存报告, 数据区间从 20140702-至今
+- [`macro_usa_cftc_nc_holding`](./macro/macro_usa_cftc_nc_holding.md): 美国商品期货交易委员会CFTC外汇类非商业持仓报告, 数据区间从 19830107-至今
+- [`macro_usa_cftc_c_holding`](./macro/macro_usa_cftc_c_holding.md): 美国商品期货交易委员会CFTC商品类非商业持仓报告, 数据区间从 19830107-至今
+- [`macro_usa_cftc_merchant_currency_holding`](./macro/macro_usa_cftc_merchant_currency_holding.md): 美国商品期货交易委员会CFTC外汇类商业持仓报告, 数据区间从 19860115-至今
+- [`macro_usa_cftc_merchant_goods_holding`](./macro/macro_usa_cftc_merchant_goods_holding.md): 美国商品期货交易委员会 CFTC 商品类商业持仓报告, 数据区间从 19860115-至今
+- [`macro_usa_cme_merchant_goods_holding`](./macro/macro_usa_cme_merchant_goods_holding.md): CME-贵金属, 数据区间从 20180405-至今
+- [`macro_info_ws`](./macro/macro_info_ws.md): 华尔街见闻-日历-宏观
+- [`news_economic_baidu`](./macro/news_economic_baidu.md): 全球宏观指标重大事件

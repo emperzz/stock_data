@@ -1,0 +1,378 @@
+# AKShare 股票 数据字典
+
+共 **372** 个接口。
+
+## 接口索引
+
+- [`stock_sse_summary`](./stock/stock_sse_summary.md) — 股票市场总貌 / 上海证券交易所: 上海证券交易所-股票数据总貌
+- [`stock_szse_summary`](./stock/stock_szse_summary.md): 深圳证券交易所-市场总貌-证券类别统计
+- [`stock_szse_area_summary`](./stock/stock_szse_area_summary.md): 深圳证券交易所-市场总貌-地区交易排序
+- [`stock_szse_sector_summary`](./stock/stock_szse_sector_summary.md): 深圳证券交易所-统计资料-股票行业成交数据
+- [`stock_sse_deal_daily`](./stock/stock_sse_deal_daily.md): 上海证券交易所-数据-股票数据-成交概况-股票成交概况-每日股票情况
+- [`stock_individual_info_em`](./stock/stock_individual_info_em.md): 东方财富-个股-股票信息
+- [`stock_individual_basic_info_xq`](./stock/stock_individual_basic_info_xq.md): 雪球财经-个股-公司概况-公司简介
+- [`stock_bid_ask_em`](./stock/stock_bid_ask_em.md): 东方财富-行情报价
+- [`stock_zh_a_spot_em`](./stock/stock_zh_a_spot_em.md) — 沪深京 A 股: 东方财富网-沪深京 A 股-实时行情数据
+- [`stock_sh_a_spot_em`](./stock/stock_sh_a_spot_em.md): 东方财富网-沪 A 股-实时行情数据
+- [`stock_sz_a_spot_em`](./stock/stock_sz_a_spot_em.md): 东方财富网-深 A 股-实时行情数据
+- [`stock_bj_a_spot_em`](./stock/stock_bj_a_spot_em.md): 东方财富网-京 A 股-实时行情数据
+- [`stock_new_a_spot_em`](./stock/stock_new_a_spot_em.md): 东方财富网-新股-实时行情数据
+- [`stock_cy_a_spot_em`](./stock/stock_cy_a_spot_em.md): 东方财富网-创业板-实时行情
+- [`stock_kc_a_spot_em`](./stock/stock_kc_a_spot_em.md): 东方财富网-科创板-实时行情
+- [`stock_zh_ab_comparison_em`](./stock/stock_zh_ab_comparison_em.md): 东方财富网-行情中心-沪深京个股-AB股比价-全部AB股比价
+- [`stock_zh_a_spot`](./stock/stock_zh_a_spot.md): 新浪财经-沪深京 A 股数据, 重复运行本函数会被新浪暂时封 IP, 建议增加时间间隔
+- [`stock_individual_spot_xq`](./stock/stock_individual_spot_xq.md): 雪球-行情中心-个股
+- [`stock_zh_a_hist`](./stock/stock_zh_a_hist.md): 东方财富-沪深京 A 股日频率数据; 历史数据按日频率更新, 当日收盘价请在收盘后获取
+- [`stock_zh_a_daily`](./stock/stock_zh_a_daily.md)
+- [`stock_zh_a_hist_tx`](./stock/stock_zh_a_hist_tx.md): 腾讯证券-日频-股票历史数据; 历史数据按日频率更新, 当日收盘价请在收盘后获取
+- [`stock_zh_a_minute`](./stock/stock_zh_a_minute.md): 新浪财经-沪深京 A 股股票或者指数的分时数据，目前可以获取 1, 5, 15, 30, 60 分钟的数据频率, 可以指…
+- [`stock_zh_a_hist_min_em`](./stock/stock_zh_a_hist_min_em.md): 东方财富网-行情首页-沪深京 A 股-每日分时行情; 该接口只能获取近期的分时数据，注意时间周期的设置
+- [`stock_intraday_em`](./stock/stock_intraday_em.md): 东方财富-分时数据
+- [`stock_intraday_sina`](./stock/stock_intraday_sina.md): 新浪财经-日内分时数据
+- [`stock_zh_a_hist_pre_min_em`](./stock/stock_zh_a_hist_pre_min_em.md): 东方财富-股票行情-盘前数据
+- [`stock_zh_a_tick_tx`](./stock/stock_zh_a_tick_tx.md): 每个交易日 16:00 提供当日数据; 如遇到数据缺失, 请使用 ak.stock_zh_a_tick_163() 接口…
+- [`stock_zh_growth_comparison_em`](./stock/stock_zh_growth_comparison_em.md): 东方财富-行情中心-同行比较-成长性比较
+- [`stock_zh_valuation_comparison_em`](./stock/stock_zh_valuation_comparison_em.md): 东方财富-行情中心-同行比较-估值比较
+- [`stock_zh_dupont_comparison_em`](./stock/stock_zh_dupont_comparison_em.md): 东方财富-行情中心-同行比较-杜邦分析比较
+- [`stock_zh_scale_comparison_em`](./stock/stock_zh_scale_comparison_em.md): 东方财富-行情中心-同行比较-公司规模
+- [`stock_zh_a_cdr_daily`](./stock/stock_zh_a_cdr_daily.md): 上海证券交易所-科创板-CDR
+- [`stock_zh_b_spot_em`](./stock/stock_zh_b_spot_em.md) — 实时行情数据-东财: 东方财富网-实时行情数据
+- [`stock_zh_b_spot`](./stock/stock_zh_b_spot.md): B 股数据是从新浪财经获取的数据, 重复运行本函数会被新浪暂时封 IP, 建议增加时间间隔
+- [`stock_zh_b_daily`](./stock/stock_zh_b_daily.md): B 股数据是从新浪财经获取的数据, 历史数据按日频率更新
+- [`stock_zh_b_minute`](./stock/stock_zh_b_minute.md): 新浪财经 B 股股票或者指数的分时数据，目前可以获取 1, 5, 15, 30, 60 分钟的数据频率, 可以指定是否复…
+- [`stock_zh_a_new`](./stock/stock_zh_a_new.md): 新浪财经-行情中心-沪深股市-次新股
+- [`stock_gsrl_gsdt_em`](./stock/stock_gsrl_gsdt_em.md): 东方财富网-数据中心-股市日历-公司动态
+- [`stock_zh_a_st_em`](./stock/stock_zh_a_st_em.md): 东方财富网-行情中心-沪深个股-风险警示板
+- [`stock_zh_a_new_em`](./stock/stock_zh_a_new_em.md): 东方财富网-行情中心-沪深个股-新股
+- [`stock_xgsr_ths`](./stock/stock_xgsr_ths.md): 同花顺-数据中心-新股数据-新股上市首日
+- [`stock_ipo_benefit_ths`](./stock/stock_ipo_benefit_ths.md): 同花顺-数据中心-新股数据-IPO受益股
+- [`stock_zh_a_stop_em`](./stock/stock_zh_a_stop_em.md): 东方财富网-行情中心-沪深个股-两网及退市
+- [`stock_zh_kcb_spot`](./stock/stock_zh_kcb_spot.md): 新浪财经-科创板股票实时行情数据
+- [`stock_zh_kcb_daily`](./stock/stock_zh_kcb_daily.md): 新浪财经-科创板股票历史行情数据
+- [`stock_zh_kcb_report_em`](./stock/stock_zh_kcb_report_em.md): 东方财富-科创板报告数据
+- [`stock_zh_ah_spot_em`](./stock/stock_zh_ah_spot_em.md): 东方财富网-行情中心-沪深港通-AH股比价-实时行情, 延迟 15 分钟更新
+- [`stock_zh_ah_spot`](./stock/stock_zh_ah_spot.md): A+H 股数据是从腾讯财经获取的数据, 延迟 15 分钟更新
+- [`stock_zh_ah_daily`](./stock/stock_zh_ah_daily.md): 腾讯财经-A+H 股数据
+- [`stock_zh_ah_name`](./stock/stock_zh_ah_name.md): A+H 股数据是从腾讯财经获取的数据, 历史数据按日频率更新
+- [`stock_us_spot_em`](./stock/stock_us_spot_em.md): 东方财富网-美股-实时行情
+- [`stock_us_spot`](./stock/stock_us_spot.md): 新浪财经-美股; 获取的数据有 15 分钟延迟; 建议使用 ak.stock_us_spot_em() 来获取数据
+- [`stock_us_hist`](./stock/stock_us_hist.md): 东方财富网-行情-美股-每日行情
+- [`stock_individual_basic_info_us_xq`](./stock/stock_individual_basic_info_us_xq.md): 雪球-个股-公司概况-公司简介
+- [`stock_us_hist_min_em`](./stock/stock_us_hist_min_em.md): 东方财富网-行情首页-美股-每日分时行情
+- [`stock_us_daily`](./stock/stock_us_daily.md): 美股历史行情数据，设定 adjust="qfq" 则返回前复权后的数据，默认 adjust="", 则返回未复权的数据，…
+- [`stock_us_pink_spot_em`](./stock/stock_us_pink_spot_em.md): 美股粉单市场的实时行情数据
+- [`stock_us_famous_spot_em`](./stock/stock_us_famous_spot_em.md): 美股-知名美股的实时行情数据
+- [`stock_hk_spot_em`](./stock/stock_hk_spot_em.md): 所有港股的实时行情数据; 该数据有 15 分钟延时
+- [`stock_hk_main_board_spot_em`](./stock/stock_hk_main_board_spot_em.md): 港股主板的实时行情数据; 该数据有 15 分钟延时
+- [`stock_hk_spot`](./stock/stock_hk_spot.md): 获取所有港股的实时行情数据 15 分钟延时
+- [`stock_individual_basic_info_hk_xq`](./stock/stock_individual_basic_info_hk_xq.md): 雪球-个股-公司概况-公司简介
+- [`stock_hk_hist_min_em`](./stock/stock_hk_hist_min_em.md): 东方财富网-行情首页-港股-每日分时行情
+- [`stock_hk_hist`](./stock/stock_hk_hist.md): 港股-历史行情数据, 可以选择返回复权后数据, 更新频率为日频
+- [`stock_hk_daily`](./stock/stock_hk_daily.md): 港股-历史行情数据, 可以选择返回复权后数据,更新频率为日频
+- [`stock_hk_famous_spot_em`](./stock/stock_hk_famous_spot_em.md): 东方财富网-行情中心-港股市场-知名港股实时行情数据
+- [`stock_hk_security_profile_em`](./stock/stock_hk_security_profile_em.md): 东方财富-港股-证券资料
+- [`stock_hk_company_profile_em`](./stock/stock_hk_company_profile_em.md): 东方财富-港股-公司资料
+- [`stock_hk_financial_indicator_em`](./stock/stock_hk_financial_indicator_em.md): 东方财富-港股-核心必读-最新指标
+- [`stock_hk_dividend_payout_em`](./stock/stock_hk_dividend_payout_em.md): 东方财富-港股-核心必读-分红派息
+- [`stock_hk_growth_comparison_em`](./stock/stock_hk_growth_comparison_em.md): 东方财富-港股-行业对比-成长性对比
+- [`stock_hk_valuation_comparison_em`](./stock/stock_hk_valuation_comparison_em.md): 东方财富-港股-行业对比-估值对比
+- [`stock_hk_scale_comparison_em`](./stock/stock_hk_scale_comparison_em.md): 东方财富-港股-行业对比-规模对比
+- [`stock_jgdy_tj_em`](./stock/stock_jgdy_tj_em.md): 东方财富网-数据中心-特色数据-机构调研-机构调研统计
+- [`stock_jgdy_detail_em`](./stock/stock_jgdy_detail_em.md): 东方财富网-数据中心-特色数据-机构调研-机构调研详细
+- [`stock_zyjs_ths`](./stock/stock_zyjs_ths.md): 同花顺-主营介绍
+- [`stock_zygc_em`](./stock/stock_zygc_em.md): 东方财富网-个股-主营构成
+- [`stock_gpzy_profile_em`](./stock/stock_gpzy_profile_em.md): 东方财富网-数据中心-特色数据-股权质押-股权质押市场概况
+- [`stock_gpzy_pledge_ratio_em`](./stock/stock_gpzy_pledge_ratio_em.md): 东方财富网-数据中心-特色数据-股权质押-上市公司质押比例
+- [`stock_gpzy_pledge_ratio_detail_em`](./stock/stock_gpzy_pledge_ratio_detail_em.md): 东方财富网-数据中心-特色数据-股权质押-重要股东股权质押明细
+- [`stock_gpzy_individual_pledge_ratio_detail_em`](./stock/stock_gpzy_individual_pledge_ratio_detail_em.md): 东方财富网-数据中心-股权质押-个股
+- [`stock_gpzy_distribute_statistics_company_em`](./stock/stock_gpzy_distribute_statistics_company_em.md): 东方财富网-数据中心-特色数据-股权质押-质押机构分布统计-证券公司
+- [`stock_gpzy_distribute_statistics_bank_em`](./stock/stock_gpzy_distribute_statistics_bank_em.md): 东方财富网-数据中心-特色数据-股权质押-质押机构分布统计-银行
+- [`stock_gpzy_industry_data_em`](./stock/stock_gpzy_industry_data_em.md): 东方财富网-数据中心-特色数据-股权质押-上市公司质押比例-行业数据
+- [`stock_sy_profile_em`](./stock/stock_sy_profile_em.md): 东方财富网-数据中心-特色数据-商誉-A股商誉市场概况
+- [`stock_sy_yq_em`](./stock/stock_sy_yq_em.md): 东方财富网-数据中心-特色数据-商誉-商誉减值预期明细
+- [`stock_sy_jz_em`](./stock/stock_sy_jz_em.md): 东方财富网-数据中心-特色数据-商誉-个股商誉减值明细
+- [`stock_sy_em`](./stock/stock_sy_em.md): 东方财富网-数据中心-特色数据-商誉-个股商誉明细
+- [`stock_sy_hy_em`](./stock/stock_sy_hy_em.md): 东方财富网-数据中心-特色数据-商誉-行业商誉
+- [`stock_account_statistics_em`](./stock/stock_account_statistics_em.md): 东方财富网-数据中心-特色数据-股票账户统计
+- [`stock_analyst_rank_em`](./stock/stock_analyst_rank_em.md): 东方财富网-数据中心-研究报告-东方财富分析师指数
+- [`stock_analyst_detail_em`](./stock/stock_analyst_detail_em.md): 东方财富网-数据中心-研究报告-东方财富分析师指数-分析师详情
+- [`stock_comment_em`](./stock/stock_comment_em.md): 东方财富网-数据中心-特色数据-千股千评
+- [`stock_comment_detail_zlkp_jgcyd_em`](./stock/stock_comment_detail_zlkp_jgcyd_em.md) — 机构参与度: 东方财富网-数据中心-特色数据-千股千评-主力控盘-机构参与度
+- [`stock_comment_detail_zhpj_lspf_em`](./stock/stock_comment_detail_zhpj_lspf_em.md): 东方财富网-数据中心-特色数据-千股千评-综合评价-历史评分
+- [`stock_comment_detail_scrd_focus_em`](./stock/stock_comment_detail_scrd_focus_em.md): 东方财富网-数据中心-特色数据-千股千评-市场热度-用户关注指数
+- [`stock_comment_detail_scrd_desire_em`](./stock/stock_comment_detail_scrd_desire_em.md): 东方财富网-数据中心-特色数据-千股千评-市场热度-市场参与意愿
+- [`stock_hsgt_fund_flow_summary_em`](./stock/stock_hsgt_fund_flow_summary_em.md): 东方财富网-数据中心-资金流向-沪深港通资金流向
+- [`stock_sgt_settlement_exchange_rate_szse`](./stock/stock_sgt_settlement_exchange_rate_szse.md): 深港通-港股通业务信息-结算汇率
+- [`stock_sgt_settlement_exchange_rate_sse`](./stock/stock_sgt_settlement_exchange_rate_sse.md): 沪港通-港股通信息披露-结算汇兑
+- [`stock_sgt_reference_exchange_rate_szse`](./stock/stock_sgt_reference_exchange_rate_szse.md): 深港通-港股通业务信息-参考汇率
+- [`stock_sgt_reference_exchange_rate_sse`](./stock/stock_sgt_reference_exchange_rate_sse.md): 沪港通-港股通信息披露-参考汇率
+- [`stock_hk_ggt_components_em`](./stock/stock_hk_ggt_components_em.md): 东方财富网-行情中心-港股市场-港股通成份股
+- [`stock_hsgt_fund_min_em`](./stock/stock_hsgt_fund_min_em.md): 东方财富-数据中心-沪深港通-市场概括-分时数据
+- [`stock_hsgt_board_rank_em`](./stock/stock_hsgt_board_rank_em.md): 东方财富网-数据中心-沪深港通持股-板块排行
+- [`stock_hsgt_hold_stock_em`](./stock/stock_hsgt_hold_stock_em.md): 东方财富网-数据中心-沪深港通持股-个股排行
+- [`stock_hsgt_stock_statistics_em`](./stock/stock_hsgt_stock_statistics_em.md): 东方财富网-数据中心-沪深港通-沪深港通持股-每日个股统计
+- [`stock_hsgt_institution_statistics_em`](./stock/stock_hsgt_institution_statistics_em.md): 东方财富网-数据中心-沪深港通-沪深港通持股-机构排行
+- [`stock_hsgt_sh_hk_spot_em`](./stock/stock_hsgt_sh_hk_spot_em.md): 东方财富网-行情中心-沪深港通-港股通(沪>港)-股票；按股票代码排序
+- [`stock_hsgt_hist_em`](./stock/stock_hsgt_hist_em.md): 东方财富网-数据中心-资金流向-沪深港通资金流向-沪深港通历史数据
+- [`stock_hsgt_individual_em`](./stock/stock_hsgt_individual_em.md): 东方财富网-数据中心-沪深港通-沪深港通持股-具体股票
+- [`stock_hsgt_individual_detail_em`](./stock/stock_hsgt_individual_detail_em.md): 东方财富网-数据中心-沪深港通-沪深港通持股-具体股票-个股详情
+- [`stock_tfp_em`](./stock/stock_tfp_em.md): 东方财富网-数据中心-特色数据-停复牌信息
+- [`news_trade_notify_suspend_baidu`](./stock/news_trade_notify_suspend_baidu.md): 百度股市通-交易提醒-停复牌
+- [`news_trade_notify_dividend_baidu`](./stock/news_trade_notify_dividend_baidu.md): 百度股市通-交易提醒-分红派息
+- [`stock_news_em`](./stock/stock_news_em.md): 东方财富指定个股的新闻资讯数据
+- [`stock_news_main_cx`](./stock/stock_news_main_cx.md): 财新网-财新数据通-最新
+- [`news_report_time_baidu`](./stock/news_report_time_baidu.md): 百度股市通-财报发行
+- [`stock_dxsyl_em`](./stock/stock_dxsyl_em.md): 东方财富网-数据中心-新股申购-打新收益率
+- [`stock_xgsglb_em`](./stock/stock_xgsglb_em.md): 东方财富网-数据中心-新股数据-新股申购-新股申购与中签查询
+- [`stock_ipo_ths`](./stock/stock_ipo_ths.md): 同花顺-数据中心-新股申购与中签
+- [`stock_ipo_hk_ths`](./stock/stock_ipo_hk_ths.md): 同花顺-数据中心-新股申购与中签-港股
+- [`stock_yjbb_em`](./stock/stock_yjbb_em.md): 东方财富-数据中心-年报季报-业绩报表
+- [`stock_yjkb_em`](./stock/stock_yjkb_em.md): 东方财富-数据中心-年报季报-业绩快报
+- [`stock_yjyg_em`](./stock/stock_yjyg_em.md): 东方财富-数据中心-年报季报-业绩预告
+- [`stock_yysj_em`](./stock/stock_yysj_em.md): 东方财富-数据中心-年报季报-预约披露时间
+- [`stock_report_disclosure`](./stock/stock_report_disclosure.md): 巨潮资讯-数据-预约披露的数据
+- [`stock_zh_a_disclosure_report_cninfo`](./stock/stock_zh_a_disclosure_report_cninfo.md): 巨潮资讯-首页-公告查询-信息披露公告-沪深京
+- [`stock_zh_a_disclosure_relation_cninfo`](./stock/stock_zh_a_disclosure_relation_cninfo.md): 巨潮资讯-首页-公告查询-信息披露调研-沪深京
+- [`stock_industry_category_cninfo`](./stock/stock_industry_category_cninfo.md): 巨潮资讯-数据-行业分类数据
+- [`stock_industry_change_cninfo`](./stock/stock_industry_change_cninfo.md): 巨潮资讯-数据-上市公司行业归属的变动情况
+- [`stock_share_change_cninfo`](./stock/stock_share_change_cninfo.md): 巨潮资讯-数据-公司股本变动
+- [`stock_allotment_cninfo`](./stock/stock_allotment_cninfo.md): 巨潮资讯-个股-配股实施方案
+- [`stock_profile_cninfo`](./stock/stock_profile_cninfo.md): 巨潮资讯-个股-公司概况
+- [`stock_ipo_summary_cninfo`](./stock/stock_ipo_summary_cninfo.md): 巨潮资讯-个股-上市相关
+- [`stock_zcfz_em`](./stock/stock_zcfz_em.md): 东方财富-数据中心-年报季报-业绩快报-资产负债表
+- [`stock_zcfz_bj_em`](./stock/stock_zcfz_bj_em.md): 东方财富-数据中心-年报季报-业绩快报-资产负债表
+- [`stock_lrb_em`](./stock/stock_lrb_em.md): 东方财富-数据中心-年报季报-业绩快报-利润表
+- [`stock_xjll_em`](./stock/stock_xjll_em.md): 东方财富-数据中心-年报季报-业绩快报-现金流量表
+- [`stock_ggcg_em`](./stock/stock_ggcg_em.md): 东方财富网-数据中心-特色数据-高管持股
+- [`stock_fhps_em`](./stock/stock_fhps_em.md): 东方财富-数据中心-年报季报-分红配送
+- [`stock_fhps_detail_em`](./stock/stock_fhps_detail_em.md): 东方财富网-数据中心-分红送配-分红送配详情
+- [`stock_fhps_detail_ths`](./stock/stock_fhps_detail_ths.md): 同花顺-分红情况
+- [`stock_hk_fhpx_detail_ths`](./stock/stock_hk_fhpx_detail_ths.md): 同花顺-港股-分红派息
+- [`stock_fund_flow_individual`](./stock/stock_fund_flow_individual.md) — 个股资金流: 同花顺-数据中心-资金流向-个股资金流
+- [`stock_fund_flow_concept`](./stock/stock_fund_flow_concept.md): 同花顺-数据中心-资金流向-概念资金流
+- [`stock_fund_flow_industry`](./stock/stock_fund_flow_industry.md): 同花顺-数据中心-资金流向-行业资金流
+- [`stock_fund_flow_big_deal`](./stock/stock_fund_flow_big_deal.md): 同花顺-数据中心-资金流向-大单追踪
+- [`stock_individual_fund_flow`](./stock/stock_individual_fund_flow.md): 东方财富网-数据中心-个股资金流向
+- [`stock_individual_fund_flow_rank`](./stock/stock_individual_fund_flow_rank.md): 东方财富网-数据中心-资金流向-排名
+- [`stock_market_fund_flow`](./stock/stock_market_fund_flow.md): 东方财富网-数据中心-资金流向-大盘
+- [`stock_sector_fund_flow_rank`](./stock/stock_sector_fund_flow_rank.md): 东方财富网-数据中心-资金流向-板块资金流-排名
+- [`stock_main_fund_flow`](./stock/stock_main_fund_flow.md): 东方财富网-数据中心-资金流向-主力净流入排名
+- [`stock_sector_fund_flow_summary`](./stock/stock_sector_fund_flow_summary.md): 东方财富网-数据中心-资金流向-行业资金流-xx行业个股资金流
+- [`stock_sector_fund_flow_hist`](./stock/stock_sector_fund_flow_hist.md): 东方财富网-数据中心-资金流向-行业资金流-行业历史资金流
+- [`stock_concept_fund_flow_hist`](./stock/stock_concept_fund_flow_hist.md): 东方财富网-数据中心-资金流向-概念资金流-概念历史资金流
+- [`stock_cyq_em`](./stock/stock_cyq_em.md): 东方财富网-概念板-行情中心-日K-筹码分布
+- [`stock_gddh_em`](./stock/stock_gddh_em.md): 东方财富网-数据中心-股东大会
+- [`stock_zdhtmx_em`](./stock/stock_zdhtmx_em.md): 东方财富网-数据中心-重大合同-重大合同明细
+- [`stock_research_report_em`](./stock/stock_research_report_em.md): 东方财富网-数据中心-研究报告-个股研报
+- [`stock_notice_report`](./stock/stock_notice_report.md): 东方财富网-数据中心-公告大全-沪深京 A 股公告
+- [`stock_individual_notice_report`](./stock/stock_individual_notice_report.md): 东方财富网-数据中心-公告大全-个股
+- [`stock_financial_report_sina`](./stock/stock_financial_report_sina.md): 新浪财经-财务报表-三大报表
+- [`stock_balance_sheet_by_report_em`](./stock/stock_balance_sheet_by_report_em.md): 东方财富-股票-财务分析-资产负债表-按报告期
+- [`stock_balance_sheet_by_yearly_em`](./stock/stock_balance_sheet_by_yearly_em.md): 东方财富-股票-财务分析-资产负债表-按年度
+- [`stock_profit_sheet_by_report_em`](./stock/stock_profit_sheet_by_report_em.md): 东方财富-股票-财务分析-利润表-报告期
+- [`stock_profit_sheet_by_yearly_em`](./stock/stock_profit_sheet_by_yearly_em.md): 东方财富-股票-财务分析-利润表-按年度
+- [`stock_profit_sheet_by_quarterly_em`](./stock/stock_profit_sheet_by_quarterly_em.md): 东方财富-股票-财务分析-利润表-按单季度
+- [`stock_cash_flow_sheet_by_report_em`](./stock/stock_cash_flow_sheet_by_report_em.md): 东方财富-股票-财务分析-现金流量表-按报告期
+- [`stock_cash_flow_sheet_by_yearly_em`](./stock/stock_cash_flow_sheet_by_yearly_em.md): 东方财富-股票-财务分析-现金流量表-按年度
+- [`stock_cash_flow_sheet_by_quarterly_em`](./stock/stock_cash_flow_sheet_by_quarterly_em.md): 东方财富-股票-财务分析-现金流量表-按单季度
+- [`stock_financial_debt_new_ths`](./stock/stock_financial_debt_new_ths.md): 同花顺-财务指标-资产负债表；替换 stock_financial_debt_ths 接口
+- [`stock_financial_benefit_new_ths`](./stock/stock_financial_benefit_new_ths.md): 同花顺-财务指标-利润表；替换 stock_financial_benefit_ths 接口
+- [`stock_financial_cash_new_ths`](./stock/stock_financial_cash_new_ths.md): 同花顺-财务指标-现金流量表；替换 stock_financial_cash_ths 接口
+- [`stock_balance_sheet_by_report_delisted_em`](./stock/stock_balance_sheet_by_report_delisted_em.md): 东方财富-股票-财务分析-资产负债表-已退市股票-按报告期
+- [`stock_profit_sheet_by_report_delisted_em`](./stock/stock_profit_sheet_by_report_delisted_em.md): 东方财富-股票-财务分析-利润表-已退市股票-按报告期
+- [`stock_cash_flow_sheet_by_report_delisted_em`](./stock/stock_cash_flow_sheet_by_report_delisted_em.md): 东方财富-股票-财务分析-现金流量表-已退市股票-按报告期
+- [`stock_financial_hk_report_em`](./stock/stock_financial_hk_report_em.md): 东方财富-港股-财务报表-三大报表
+- [`stock_financial_us_report_em`](./stock/stock_financial_us_report_em.md): 东方财富-美股-财务分析-三大报表
+- [`stock_financial_abstract`](./stock/stock_financial_abstract.md): 新浪财经-财务报表-关键指标
+- [`stock_financial_abstract_new_ths`](./stock/stock_financial_abstract_new_ths.md): 同花顺-财务指标-重要指标；替换 stock_financial_abstract_ths 接口
+- [`stock_financial_analysis_indicator_em`](./stock/stock_financial_analysis_indicator_em.md): 东方财富-A股-财务分析-主要指标
+- [`stock_financial_analysis_indicator`](./stock/stock_financial_analysis_indicator.md): 新浪财经-财务分析-财务指标
+- [`stock_financial_hk_analysis_indicator_em`](./stock/stock_financial_hk_analysis_indicator_em.md): 东方财富-港股-财务分析-主要指标
+- [`stock_financial_us_analysis_indicator_em`](./stock/stock_financial_us_analysis_indicator_em.md): 东方财富-美股-财务分析-主要指标
+- [`stock_history_dividend`](./stock/stock_history_dividend.md): 新浪财经-发行与分配-历史分红
+- [`stock_gdfx_free_top_10_em`](./stock/stock_gdfx_free_top_10_em.md): 东方财富网-个股-十大流通股东
+- [`stock_gdfx_top_10_em`](./stock/stock_gdfx_top_10_em.md): 东方财富网-个股-十大股东
+- [`stock_gdfx_free_holding_change_em`](./stock/stock_gdfx_free_holding_change_em.md): 东方财富网-数据中心-股东分析-股东持股变动统计-十大流通股东
+- [`stock_gdfx_holding_change_em`](./stock/stock_gdfx_holding_change_em.md): 东方财富网-数据中心-股东分析-股东持股变动统计-十大股东
+- [`stock_management_change_ths`](./stock/stock_management_change_ths.md): 同花顺-公司大事-高管持股变动
+- [`stock_shareholder_change_ths`](./stock/stock_shareholder_change_ths.md): 同花顺-公司大事-股东持股变动
+- [`stock_gdfx_free_holding_analyse_em`](./stock/stock_gdfx_free_holding_analyse_em.md): 东方财富网-数据中心-股东分析-股东持股分析-十大流通股东
+- [`stock_gdfx_holding_analyse_em`](./stock/stock_gdfx_holding_analyse_em.md): 东方财富网-数据中心-股东分析-股东持股分析-十大股东
+- [`stock_gdfx_free_holding_detail_em`](./stock/stock_gdfx_free_holding_detail_em.md): 东方财富网-数据中心-股东分析-股东持股明细-十大流通股东
+- [`stock_gdfx_holding_detail_em`](./stock/stock_gdfx_holding_detail_em.md): 东方财富网-数据中心-股东分析-股东持股明细-十大股东
+- [`stock_gdfx_free_holding_statistics_em`](./stock/stock_gdfx_free_holding_statistics_em.md): 东方财富网-数据中心-股东分析-股东持股统计-十大股东
+- [`stock_gdfx_holding_statistics_em`](./stock/stock_gdfx_holding_statistics_em.md): 东方财富网-数据中心-股东分析-股东持股统计-十大股东
+- [`stock_gdfx_free_holding_teamwork_em`](./stock/stock_gdfx_free_holding_teamwork_em.md): 东方财富网-数据中心-股东分析-股东协同-十大流通股东
+- [`stock_gdfx_holding_teamwork_em`](./stock/stock_gdfx_holding_teamwork_em.md): 东方财富网-数据中心-股东分析-股东协同-十大股东
+- [`stock_zh_a_gdhs`](./stock/stock_zh_a_gdhs.md): 东方财富网-数据中心-特色数据-股东户数数据
+- [`stock_zh_a_gdhs_detail_em`](./stock/stock_zh_a_gdhs_detail_em.md): 东方财富网-数据中心-特色数据-股东户数详情
+- [`stock_history_dividend_detail`](./stock/stock_history_dividend_detail.md): 新浪财经-发行与分配-分红配股
+- [`stock_dividend_cninfo`](./stock/stock_dividend_cninfo.md): 巨潮资讯-个股-历史分红
+- [`stock_ipo_info`](./stock/stock_ipo_info.md): 新浪财经-发行与分配-新股发行
+- [`stock_ipo_review_em`](./stock/stock_ipo_review_em.md): 东方财富网-数据中心-新股申购-新股上会信息
+- [`stock_ipo_tutor_em`](./stock/stock_ipo_tutor_em.md): 东方财富网-数据中心-新股申购-IPO辅导信息
+- [`stock_add_stock`](./stock/stock_add_stock.md): 新浪财经-发行与分配-增发
+- [`stock_restricted_release_queue_sina`](./stock/stock_restricted_release_queue_sina.md): 新浪财经-发行分配-限售解禁
+- [`stock_restricted_release_summary_em`](./stock/stock_restricted_release_summary_em.md): 东方财富网-数据中心-特色数据-限售股解禁
+- [`stock_restricted_release_detail_em`](./stock/stock_restricted_release_detail_em.md): 东方财富网-数据中心-限售股解禁-解禁详情一览
+- [`stock_restricted_release_queue_em`](./stock/stock_restricted_release_queue_em.md): 东方财富网-数据中心-个股限售解禁-解禁批次
+- [`stock_restricted_release_stockholder_em`](./stock/stock_restricted_release_stockholder_em.md): 东方财富网-数据中心-个股限售解禁-解禁股东
+- [`stock_circulate_stock_holder`](./stock/stock_circulate_stock_holder.md): 新浪财经-股东股本-流通股东
+- [`stock_sector_spot`](./stock/stock_sector_spot.md): 新浪行业-板块行情
+- [`stock_sector_detail`](./stock/stock_sector_detail.md): 新浪行业-板块行情-成份详情, 由于新浪网页提供的统计数据有误, 部分行业数量大于统计数
+- [`stock_info_a_code_name`](./stock/stock_info_a_code_name.md): 沪深京 A 股股票代码和股票简称数据
+- [`stock_info_sh_name_code`](./stock/stock_info_sh_name_code.md): 上海证券交易所股票代码和简称数据
+- [`stock_info_sz_name_code`](./stock/stock_info_sz_name_code.md): 深证证券交易所股票代码和股票简称数据
+- [`stock_info_bj_name_code`](./stock/stock_info_bj_name_code.md): 北京证券交易所股票代码和简称数据
+- [`stock_info_sz_delist`](./stock/stock_info_sz_delist.md): 深证证券交易所终止/暂停上市股票
+- [`stock_staq_net_stop`](./stock/stock_staq_net_stop.md): 东方财富网-行情中心-沪深个股-两网及退市
+- [`stock_info_sh_delist`](./stock/stock_info_sh_delist.md): 上海证券交易所暂停/终止上市股票
+- [`stock_info_change_name`](./stock/stock_info_change_name.md): 新浪财经-股票曾用名
+- [`stock_info_sz_change_name`](./stock/stock_info_sz_change_name.md): 深证证券交易所-市场数据-股票数据-名称变更
+- [`stock_fund_stock_holder`](./stock/stock_fund_stock_holder.md): 新浪财经-股本股东-基金持股
+- [`stock_main_stock_holder`](./stock/stock_main_stock_holder.md): 新浪财经-股本股东-主要股东
+- [`stock_institute_hold`](./stock/stock_institute_hold.md): 新浪财经-机构持股-机构持股一览表
+- [`stock_institute_hold_detail`](./stock/stock_institute_hold_detail.md): 新浪财经-机构持股-机构持股详情
+- [`stock_institute_recommend`](./stock/stock_institute_recommend.md): 新浪财经-机构推荐池-具体指标的数据
+- [`stock_institute_recommend_detail`](./stock/stock_institute_recommend_detail.md): 新浪财经-机构推荐池-股票评级记录
+- [`stock_rank_forecast_cninfo`](./stock/stock_rank_forecast_cninfo.md): 巨潮资讯-数据中心-评级预测-投资评级
+- [`stock_industry_clf_hist_sw`](./stock/stock_industry_clf_hist_sw.md): 申万宏源研究-行业分类-全部行业分类
+- [`stock_industry_pe_ratio_cninfo`](./stock/stock_industry_pe_ratio_cninfo.md): 巨潮资讯-数据中心-行业分析-行业市盈率
+- [`stock_new_gh_cninfo`](./stock/stock_new_gh_cninfo.md): 巨潮资讯-数据中心-新股数据-新股过会
+- [`stock_new_ipo_cninfo`](./stock/stock_new_ipo_cninfo.md): 巨潮资讯-数据中心-新股数据-新股发行
+- [`stock_share_hold_change_sse`](./stock/stock_share_hold_change_sse.md): 上海证券交易所-披露-监管信息公开-公司监管-董董监高人员股份变动
+- [`stock_share_hold_change_szse`](./stock/stock_share_hold_change_szse.md): 深圳证券交易所-信息披露-监管信息公开-董监高人员股份变动
+- [`stock_share_hold_change_bse`](./stock/stock_share_hold_change_bse.md): 北京证券交易所-信息披露-监管信息-董监高及相关人员持股变动
+- [`stock_hold_num_cninfo`](./stock/stock_hold_num_cninfo.md): 巨潮资讯-数据中心-专题统计-股东股本-股东人数及持股集中度
+- [`stock_hold_change_cninfo`](./stock/stock_hold_change_cninfo.md): 巨潮资讯-数据中心-专题统计-股东股本-股本变动
+- [`stock_hold_control_cninfo`](./stock/stock_hold_control_cninfo.md): 巨潮资讯-数据中心-专题统计-股东股本-实际控制人持股变动
+- [`stock_hold_management_detail_cninfo`](./stock/stock_hold_management_detail_cninfo.md): 巨潮资讯-数据中心-专题统计-股东股本-高管持股变动明细
+- [`stock_hold_management_detail_em`](./stock/stock_hold_management_detail_em.md): 东方财富网-数据中心-特色数据-高管持股-董监高及相关人员持股变动明细
+- [`stock_hold_management_person_em`](./stock/stock_hold_management_person_em.md): 东方财富网-数据中心-特色数据-高管持股-人员增减持股变动明细
+- [`stock_cg_guarantee_cninfo`](./stock/stock_cg_guarantee_cninfo.md): 巨潮资讯-数据中心-专题统计-公司治理-对外担保
+- [`stock_cg_lawsuit_cninfo`](./stock/stock_cg_lawsuit_cninfo.md): 巨潮资讯-数据中心-专题统计-公司治理-公司诉讼
+- [`stock_cg_equity_mortgage_cninfo`](./stock/stock_cg_equity_mortgage_cninfo.md): 巨潮资讯-数据中心-专题统计-公司治理-股权质押
+- [`stock_price_js`](./stock/stock_price_js.md): 美港电讯-美港目标价数据
+- [`stock_qsjy_em`](./stock/stock_qsjy_em.md): 东方财富网-数据中心-特色数据-券商业绩月报
+- [`stock_a_gxl_lg`](./stock/stock_a_gxl_lg.md): 乐咕乐股-股息率-A 股股息率
+- [`stock_hk_gxl_lg`](./stock/stock_hk_gxl_lg.md): 乐咕乐股-股息率-恒生指数股息率
+- [`stock_a_congestion_lg`](./stock/stock_a_congestion_lg.md): 乐咕乐股-大盘拥挤度
+- [`stock_ebs_lg`](./stock/stock_ebs_lg.md): 乐咕乐股-股债利差
+- [`stock_buffett_index_lg`](./stock/stock_buffett_index_lg.md): 乐估乐股-底部研究-巴菲特指标
+- [`stock_a_ttm_lyr`](./stock/stock_a_ttm_lyr.md): 乐咕乐股-A 股等权重市盈率与中位数市盈率
+- [`stock_a_all_pb`](./stock/stock_a_all_pb.md): 乐咕乐股-A 股等权重与中位数市净率
+- [`stock_market_pe_lg`](./stock/stock_market_pe_lg.md): 乐咕乐股-主板市盈率
+- [`stock_index_pe_lg`](./stock/stock_index_pe_lg.md): 乐咕乐股-指数市盈率
+- [`stock_market_pb_lg`](./stock/stock_market_pb_lg.md): 乐咕乐股-主板市净率
+- [`stock_index_pb_lg`](./stock/stock_index_pb_lg.md): 乐咕乐股-指数市净率
+- [`stock_zh_valuation_baidu`](./stock/stock_zh_valuation_baidu.md): 百度股市通-A 股-财务报表-估值数据
+- [`stock_value_em`](./stock/stock_value_em.md): 东方财富网-数据中心-估值分析-每日互动-每日互动-估值分析
+- [`stock_zh_vote_baidu`](./stock/stock_zh_vote_baidu.md): 百度股市通- A 股或指数-股评-投票
+- [`stock_hk_indicator_eniu`](./stock/stock_hk_indicator_eniu.md): 亿牛网-港股个股指标: 市盈率, 市净率, 股息率, ROE, 市值
+- [`stock_hk_valuation_baidu`](./stock/stock_hk_valuation_baidu.md): 百度股市通-港股-财务报表-估值数据
+- [`stock_us_valuation_baidu`](./stock/stock_us_valuation_baidu.md): 百度股市通-美股-财务报表-估值数据
+- [`stock_a_high_low_statistics`](./stock/stock_a_high_low_statistics.md): 不同市场的创新高和新低的股票数量
+- [`stock_a_below_net_asset_statistics`](./stock/stock_a_below_net_asset_statistics.md): 乐咕乐股-A 股破净股统计数据
+- [`stock_report_fund_hold`](./stock/stock_report_fund_hold.md): 东方财富网-数据中心-主力数据-基金持仓
+- [`stock_report_fund_hold_detail`](./stock/stock_report_fund_hold_detail.md): 东方财富网-数据中心-主力数据-基金持仓-基金持仓明细表
+- [`stock_lhb_detail_em`](./stock/stock_lhb_detail_em.md) — 龙虎榜详情: 东方财富网-数据中心-龙虎榜单-龙虎榜详情
+- [`stock_lhb_stock_statistic_em`](./stock/stock_lhb_stock_statistic_em.md): 东方财富网-数据中心-龙虎榜单-个股上榜统计
+- [`stock_lhb_jgmmtj_em`](./stock/stock_lhb_jgmmtj_em.md): 东方财富网-数据中心-龙虎榜单-机构买卖每日统计
+- [`stock_lhb_jgstatistic_em`](./stock/stock_lhb_jgstatistic_em.md): 东方财富网-数据中心-龙虎榜单-机构席位追踪
+- [`stock_lhb_hyyyb_em`](./stock/stock_lhb_hyyyb_em.md): 东方财富网-数据中心-龙虎榜单-每日活跃营业部
+- [`stock_lhb_yyb_detail_em`](./stock/stock_lhb_yyb_detail_em.md): 东方财富网-数据中心-龙虎榜单-营业部历史交易明细-营业部交易明细
+- [`stock_lhb_yybph_em`](./stock/stock_lhb_yybph_em.md): 东方财富网-数据中心-龙虎榜单-营业部排行
+- [`stock_lhb_traderstatistic_em`](./stock/stock_lhb_traderstatistic_em.md): 东方财富网-数据中心-龙虎榜单-营业部统计
+- [`stock_lhb_stock_detail_em`](./stock/stock_lhb_stock_detail_em.md): 东方财富网-数据中心-龙虎榜单-个股龙虎榜详情
+- [`stock_lh_yyb_most`](./stock/stock_lh_yyb_most.md): 龙虎榜-营业部排行-上榜次数最多
+- [`stock_lh_yyb_capital`](./stock/stock_lh_yyb_capital.md): 龙虎榜-营业部排行-资金实力最强
+- [`stock_lh_yyb_control`](./stock/stock_lh_yyb_control.md): 龙虎榜-营业部排行-抱团操作实力
+- [`stock_lhb_detail_daily_sina`](./stock/stock_lhb_detail_daily_sina.md): 新浪财经-龙虎榜-每日详情
+- [`stock_lhb_ggtj_sina`](./stock/stock_lhb_ggtj_sina.md): 新浪财经-龙虎榜-个股上榜统计
+- [`stock_lhb_yytj_sina`](./stock/stock_lhb_yytj_sina.md): 新浪财经-龙虎榜-营业上榜统计
+- [`stock_lhb_jgzz_sina`](./stock/stock_lhb_jgzz_sina.md): 新浪财经-龙虎榜-机构席位追踪
+- [`stock_lhb_jgmx_sina`](./stock/stock_lhb_jgmx_sina.md): 新浪财经-龙虎榜-机构席位成交明细
+- [`stock_ipo_declare_em`](./stock/stock_ipo_declare_em.md): 东方财富网-数据中心-新股申购-首发申报信息-首发申报企业信息
+- [`stock_register_all_em`](./stock/stock_register_all_em.md): 东方财富网-数据中心-新股数据-IPO审核信息-全部
+- [`stock_register_kcb`](./stock/stock_register_kcb.md): 东方财富网-数据中心-新股数据-IPO审核信息-科创板
+- [`stock_register_cyb`](./stock/stock_register_cyb.md): 东方财富网-数据中心-新股数据-IPO审核信息-创业板
+- [`stock_register_sh`](./stock/stock_register_sh.md): 东方财富网-数据中心-新股数据-IPO审核信息-上海主板
+- [`stock_register_sz`](./stock/stock_register_sz.md): 东方财富网-数据中心-新股数据-IPO审核信息-深圳主板
+- [`stock_register_bj`](./stock/stock_register_bj.md): 东方财富网-数据中心-新股数据-IPO审核信息-北交所
+- [`stock_register_db`](./stock/stock_register_db.md): 东方财富网-数据中心-新股数据-注册制审核-达标企业
+- [`stock_qbzf_em`](./stock/stock_qbzf_em.md): 东方财富网-数据中心-新股数据-增发-全部增发
+- [`stock_pg_em`](./stock/stock_pg_em.md): 东方财富网-数据中心-新股数据-配股
+- [`stock_repurchase_em`](./stock/stock_repurchase_em.md): 东方财富网-数据中心-股票回购-股票回购数据
+- [`stock_zh_a_gbjg_em`](./stock/stock_zh_a_gbjg_em.md): 东方财富-A股数据-股本结构
+- [`stock_dzjy_sctj`](./stock/stock_dzjy_sctj.md): 东方财富网-数据中心-大宗交易-市场统计
+- [`stock_dzjy_mrmx`](./stock/stock_dzjy_mrmx.md): 东方财富网-数据中心-大宗交易-每日明细
+- [`stock_dzjy_mrtj`](./stock/stock_dzjy_mrtj.md): 东方财富网-数据中心-大宗交易-每日统计
+- [`stock_dzjy_hygtj`](./stock/stock_dzjy_hygtj.md): 东方财富网-数据中心-大宗交易-活跃 A 股统计
+- [`stock_dzjy_hyyybtj`](./stock/stock_dzjy_hyyybtj.md): 东方财富网-数据中心-大宗交易-活跃营业部统计
+- [`stock_dzjy_yybph`](./stock/stock_dzjy_yybph.md): 东方财富网-数据中心-大宗交易-营业部排行
+- [`stock_yzxdr_em`](./stock/stock_yzxdr_em.md): 东方财富网-数据中心-特色数据-一致行动人
+- [`stock_margin_ratio_pa`](./stock/stock_margin_ratio_pa.md): 融资融券-标的证券名单及保证金比例查询
+- [`stock_margin_account_info`](./stock/stock_margin_account_info.md): 东方财富网-数据中心-融资融券-融资融券账户统计-两融账户信息
+- [`stock_margin_sse`](./stock/stock_margin_sse.md): 上海证券交易所-融资融券数据-融资融券汇总数据
+- [`stock_margin_detail_sse`](./stock/stock_margin_detail_sse.md): 上海证券交易所-融资融券数据-融资融券明细数据
+- [`stock_margin_szse`](./stock/stock_margin_szse.md): 深圳证券交易所-融资融券数据-融资融券汇总数据
+- [`stock_margin_detail_szse`](./stock/stock_margin_detail_szse.md): 深证证券交易所-融资融券数据-融资融券交易明细数据
+- [`stock_margin_underlying_info_szse`](./stock/stock_margin_underlying_info_szse.md): 深圳证券交易所-融资融券数据-标的证券信息
+- [`stock_profit_forecast_em`](./stock/stock_profit_forecast_em.md): 东方财富网-数据中心-研究报告-盈利预测; 该数据源网页端返回数据有异常, 本接口已修复该异常
+- [`stock_hk_profit_forecast_et`](./stock/stock_hk_profit_forecast_et.md): 经济通-公司资料-盈利预测
+- [`stock_profit_forecast_ths`](./stock/stock_profit_forecast_ths.md): 同花顺-盈利预测
+- [`stock_board_concept_index_ths`](./stock/stock_board_concept_index_ths.md): 同花顺-板块-概念板块-指数日频率数据
+- [`stock_board_concept_info_ths`](./stock/stock_board_concept_info_ths.md): 同花顺-板块-概念板块-板块简介
+- [`stock_board_concept_name_em`](./stock/stock_board_concept_name_em.md): 东方财富网-行情中心-沪深京板块-概念板块
+- [`stock_board_concept_spot_em`](./stock/stock_board_concept_spot_em.md): 东方财富网-行情中心-沪深京板块-概念板块-实时行情
+- [`stock_board_concept_cons_em`](./stock/stock_board_concept_cons_em.md): 东方财富-沪深板块-概念板块-板块成份
+- [`stock_board_concept_hist_em`](./stock/stock_board_concept_hist_em.md): 东方财富-沪深板块-概念板块-历史行情数据
+- [`stock_board_concept_hist_min_em`](./stock/stock_board_concept_hist_min_em.md): 东方财富-沪深板块-概念板块-分时历史行情数据
+- [`stock_concept_cons_futu`](./stock/stock_concept_cons_futu.md): 富途牛牛-主题投资-概念板块-成分股
+- [`stock_board_industry_summary_ths`](./stock/stock_board_industry_summary_ths.md): 同花顺-同花顺行业一览表
+- [`stock_board_industry_index_ths`](./stock/stock_board_industry_index_ths.md): 同花顺-板块-行业板块-指数日频率数据
+- [`stock_board_industry_name_em`](./stock/stock_board_industry_name_em.md): 东方财富-沪深京板块-行业板块
+- [`stock_board_industry_spot_em`](./stock/stock_board_industry_spot_em.md): 东方财富网-沪深板块-行业板块-实时行情
+- [`stock_board_industry_cons_em`](./stock/stock_board_industry_cons_em.md): 东方财富-沪深板块-行业板块-板块成份
+- [`stock_board_industry_hist_em`](./stock/stock_board_industry_hist_em.md): 东方财富-沪深板块-行业板块-历史行情数据
+- [`stock_board_industry_hist_min_em`](./stock/stock_board_industry_hist_min_em.md): 东方财富-沪深板块-行业板块-分时历史行情数据
+- [`stock_hot_follow_xq`](./stock/stock_hot_follow_xq.md) — 关注排行榜: 雪球-沪深股市-热度排行榜-关注排行榜
+- [`stock_hot_tweet_xq`](./stock/stock_hot_tweet_xq.md): 雪球-沪深股市-热度排行榜-讨论排行榜
+- [`stock_hot_deal_xq`](./stock/stock_hot_deal_xq.md): 雪球-沪深股市-热度排行榜-交易排行榜
+- [`stock_hot_rank_em`](./stock/stock_hot_rank_em.md): 东方财富网站-股票热度
+- [`stock_hot_up_em`](./stock/stock_hot_up_em.md): 东方财富-个股人气榜-飙升榜
+- [`stock_hk_hot_rank_em`](./stock/stock_hk_hot_rank_em.md): 东方财富-个股人气榜-人气榜-港股市场
+- [`stock_hot_rank_detail_em`](./stock/stock_hot_rank_detail_em.md): 东方财富网-股票热度-历史趋势及粉丝特征
+- [`stock_hk_hot_rank_detail_em`](./stock/stock_hk_hot_rank_detail_em.md): 东方财富网-股票热度-历史趋势
+- [`stock_irm_cninfo`](./stock/stock_irm_cninfo.md): 互动易-提问
+- [`stock_irm_ans_cninfo`](./stock/stock_irm_ans_cninfo.md): 互动易-回答
+- [`stock_sns_sseinfo`](./stock/stock_sns_sseinfo.md): 上证e互动-提问与回答
+- [`stock_hot_rank_detail_realtime_em`](./stock/stock_hot_rank_detail_realtime_em.md): 东方财富网-个股人气榜-实时变动
+- [`stock_hk_hot_rank_detail_realtime_em`](./stock/stock_hk_hot_rank_detail_realtime_em.md): 东方财富网-个股人气榜-实时变动
+- [`stock_hot_keyword_em`](./stock/stock_hot_keyword_em.md): 东方财富-个股人气榜-热门关键词
+- [`stock_inner_trade_xq`](./stock/stock_inner_trade_xq.md): 雪球-行情中心-沪深股市-内部交易
+- [`stock_hot_rank_latest_em`](./stock/stock_hot_rank_latest_em.md): 东方财富-个股人气榜-最新排名
+- [`stock_hk_hot_rank_latest_em`](./stock/stock_hk_hot_rank_latest_em.md): 东方财富-个股人气榜-最新排名
+- [`stock_hot_search_baidu`](./stock/stock_hot_search_baidu.md): 百度股市通-热搜股票
+- [`stock_hot_rank_relate_em`](./stock/stock_hot_rank_relate_em.md): 东方财富-个股人气榜-相关股票
+- [`stock_changes_em`](./stock/stock_changes_em.md): 东方财富-行情中心-盘口异动数据
+- [`stock_board_change_em`](./stock/stock_board_change_em.md): 东方财富-行情中心-当日板块异动详情
+- [`stock_zt_pool_em`](./stock/stock_zt_pool_em.md): 东方财富网-行情中心-涨停板行情-涨停股池
+- [`stock_zt_pool_previous_em`](./stock/stock_zt_pool_previous_em.md): 东方财富网-行情中心-涨停板行情-昨日涨停股池
+- [`stock_zt_pool_strong_em`](./stock/stock_zt_pool_strong_em.md): 东方财富网-行情中心-涨停板行情-强势股池
+- [`stock_zt_pool_sub_new_em`](./stock/stock_zt_pool_sub_new_em.md): 东方财富网-行情中心-涨停板行情-次新股池
+- [`stock_zt_pool_zbgc_em`](./stock/stock_zt_pool_zbgc_em.md): 东方财富网-行情中心-涨停板行情-炸板股池
+- [`stock_zt_pool_dtgc_em`](./stock/stock_zt_pool_dtgc_em.md): 东方财富网-行情中心-涨停板行情-跌停股池
+- [`stock_market_activity_legu`](./stock/stock_market_activity_legu.md): 乐咕乐股网-赚钱效应分析数据
+- [`stock_rank_cxfl_ths`](./stock/stock_rank_cxfl_ths.md): 同花顺-数据中心-技术选股-持续放量
+- [`stock_rank_cxsl_ths`](./stock/stock_rank_cxsl_ths.md): 同花顺-数据中心-技术选股-持续缩量
+- [`stock_rank_xstp_ths`](./stock/stock_rank_xstp_ths.md): 同花顺-数据中心-技术选股-向上突破
+- [`stock_rank_xxtp_ths`](./stock/stock_rank_xxtp_ths.md): 同花顺-数据中心-技术选股-向下突破
+- [`stock_rank_ljqs_ths`](./stock/stock_rank_ljqs_ths.md): 同花顺-数据中心-技术选股-量价齐升
+- [`stock_rank_ljqd_ths`](./stock/stock_rank_ljqd_ths.md): 同花顺-数据中心-技术选股-量价齐跌
+- [`stock_rank_xzjp_ths`](./stock/stock_rank_xzjp_ths.md): 同花顺-数据中心-技术选股-险资举牌
+- [`stock_esg_rate_sina`](./stock/stock_esg_rate_sina.md): 新浪财经-ESG评级中心-ESG评级-ESG评级数据
+- [`stock_esg_msci_sina`](./stock/stock_esg_msci_sina.md): 新浪财经-ESG评级中心-ESG评级-MSCI
+- [`stock_esg_rft_sina`](./stock/stock_esg_rft_sina.md): 新浪财经-ESG评级中心-ESG评级-路孚特
+- [`stock_esg_zd_sina`](./stock/stock_esg_zd_sina.md): 新浪财经-ESG评级中心-ESG评级-秩鼎
+- [`stock_esg_hz_sina`](./stock/stock_esg_hz_sina.md): 新浪财经-ESG评级中心-ESG评级-华证指数

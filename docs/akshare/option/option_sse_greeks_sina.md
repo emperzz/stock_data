@@ -1,0 +1,49 @@
+# `option_sse_greeks_sina`
+
+**描述**: 新浪财经-期权希腊字母信息表
+
+**目标地址**: <https://stock.finance.sina.com.cn/futures/view/optionsCffexDP.php>
+
+**限量**: 单次返回当前交易日的期权希腊字母信息表
+
+
+## 输入参数
+
+| 名称 | 类型 | 描述 |
+| --- | --- | --- |
+| symbol | str | symbol="10002273" |
+
+## 输出参数
+
+| 名称 | 类型 | 描述 |
+| --- | --- | --- |
+| 字段 | object | - |
+| 值 | object | - |
+
+## 接口示例
+
+```python
+import akshare as ak
+option_sse_greeks_sina_df = ak.option_sse_greeks_sina(symbol="10002273")
+print(option_sse_greeks_sina_df)
+```
+
+## 数据示例
+
+```text
+ 字段 值
+0 期权合约简称 50ETF购2月2500
+1 成交量 626
+2 Delta 1
+3 Gamma 0
+4 Theta -0.1
+5 Vega 0
+6 隐含波动率 0.0008
+7 最高价 0.4799
+8 最低价 0.4477
+9 交易代码 510050C2002M02500
+10 行权价 2.5000
+11 最新价 0.4550
+12 理论价值 0.4591
+期权行情分钟数据
+```

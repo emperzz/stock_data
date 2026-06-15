@@ -1,0 +1,93 @@
+# AKShare 指数 数据字典
+
+共 **87** 个接口。
+
+## 接口索引
+
+- [`stock_zh_index_spot_em`](./index/stock_zh_index_spot_em.md) — 实时行情数据-东财: 东方财富网-行情中心-沪深京指数
+- [`stock_zh_index_spot_sina`](./index/stock_zh_index_spot_sina.md): 新浪财经-中国股票指数数据
+- [`stock_zh_index_daily`](./index/stock_zh_index_daily.md): 股票指数的历史数据按日频率更新
+- [`stock_zh_index_daily_tx`](./index/stock_zh_index_daily_tx.md): 股票指数(或者股票)历史行情数据, 支持自定义时间范围
+- [`stock_zh_index_daily_em`](./index/stock_zh_index_daily_em.md): 东方财富股票指数数据, 历史数据按日频率更新
+- [`index_zh_a_hist`](./index/index_zh_a_hist.md): 东方财富网-中国股票指数-行情数据
+- [`index_zh_a_hist_min_em`](./index/index_zh_a_hist_min_em.md): 东方财富网-指数数据-分时行情
+- [`stock_hk_index_spot_sina`](./index/stock_hk_index_spot_sina.md): 新浪财经-行情中心-港股指数
+- [`stock_hk_index_daily_sina`](./index/stock_hk_index_daily_sina.md): 新浪财经-港股指数-历史行情数据
+- [`stock_hk_index_spot_em`](./index/stock_hk_index_spot_em.md): 东方财富网-行情中心-港股-指数实时行情
+- [`stock_hk_index_daily_em`](./index/stock_hk_index_daily_em.md): 东方财富网-港股-股票指数数据
+- [`index_us_stock_sina`](./index/index_us_stock_sina.md): 新浪财经-美股指数行情
+- [`index_global_spot_em`](./index/index_global_spot_em.md): 东方财富网-行情中心-全球指数-实时行情数据
+- [`index_global_hist_em`](./index/index_global_hist_em.md): 东方财富网-行情中心-全球指数-历史行情数据
+- [`index_global_hist_sina`](./index/index_global_hist_sina.md): 新浪财经-行情中心-环球市场-历史行情
+- [`index_stock_cons`](./index/index_stock_cons.md): 指定指数的最新成份股票信息, 注意该接口返回的数据有部分是重复会导致数据缺失, 可以调用 ak.index_stock_…
+- [`index_stock_cons_csindex`](./index/index_stock_cons_csindex.md): 中证指数网站-成份股目录，可以通过 ak.index_csindex_all() 获取所有指数
+- [`index_stock_cons_weight_csindex`](./index/index_stock_cons_weight_csindex.md): 中证指数网站-成份股权重
+- [`index_all_cni`](./index/index_all_cni.md): 国证指数-最近交易日的所有指数的代码和基本信息
+- [`index_hist_cni`](./index/index_hist_cni.md): 国证指数-具体指数的日频率行情数据
+- [`index_detail_cni`](./index/index_detail_cni.md): 国证指数-指数样本详情数据；20251125 开始只能获取近期的数据
+- [`index_detail_hist_cni`](./index/index_detail_hist_cni.md): 国证指数-历史样本数据，返回所有历史数据
+- [`index_detail_hist_adjust_cni`](./index/index_detail_hist_adjust_cni.md): 国证指数-样本详情-历史调样
+- [`index_option_50etf_qvix`](./index/index_option_50etf_qvix.md): 50ETF 期权波动率指数 QVIX; 又称中国版的恐慌指数
+- [`index_option_50etf_min_qvix`](./index/index_option_50etf_min_qvix.md): 50ETF 期权波动率指数-分时
+- [`index_option_300etf_qvix`](./index/index_option_300etf_qvix.md): 300ETF 期权波动率指数 QVIX
+- [`index_option_300etf_min_qvix`](./index/index_option_300etf_min_qvix.md): 300ETF 期权波动率指数-分时
+- [`index_option_500etf_qvix`](./index/index_option_500etf_qvix.md): 500ETF 期权波动率指数 QVIX
+- [`index_option_500etf_min_qvix`](./index/index_option_500etf_min_qvix.md): 500ETF 期权波动率指数-分时
+- [`index_option_cyb_qvix`](./index/index_option_cyb_qvix.md): 创业板 期权波动率指数 QVIX
+- [`index_option_cyb_min_qvix`](./index/index_option_cyb_min_qvix.md): 创业板 期权波动率指数-分时
+- [`index_option_kcb_qvix`](./index/index_option_kcb_qvix.md): 科创板 期权波动率指数 QVIX
+- [`index_option_kcb_min_qvix`](./index/index_option_kcb_min_qvix.md): 科创板 期权波动率指数-分时
+- [`index_option_100etf_qvix`](./index/index_option_100etf_qvix.md): 深证100ETF 期权波动率指数 QVIX
+- [`index_option_100etf_min_qvix`](./index/index_option_100etf_min_qvix.md): 深证100ETF 期权波动率指数-分时
+- [`index_option_300index_qvix`](./index/index_option_300index_qvix.md): 中证300股指 期权波动率指数 QVIX
+- [`index_option_300index_min_qvix`](./index/index_option_300index_min_qvix.md): 中证300股指 期权波动率指数-分时
+- [`index_option_1000index_qvix`](./index/index_option_1000index_qvix.md): 中证1000股指 期权波动率指数 QVIX
+- [`index_option_1000index_min_qvix`](./index/index_option_1000index_min_qvix.md): 中证1000股指 期权波动率指数-分时
+- [`index_option_50index_qvix`](./index/index_option_50index_qvix.md): 上证50股指 期权波动率指数 QVIX
+- [`index_option_50index_min_qvix`](./index/index_option_50index_min_qvix.md): 上证50股指 期权波动率指数-分时
+- [`sw_index_first_info`](./index/sw_index_first_info.md): 申万一级行业信息
+- [`sw_index_second_info`](./index/sw_index_second_info.md): 申万二级行业信息
+- [`sw_index_third_info`](./index/sw_index_third_info.md): 申万三级行业信息
+- [`sw_index_third_cons`](./index/sw_index_third_cons.md): 申万三级行业成份
+- [`spot_goods`](./index/spot_goods.md): 新浪财经-商品现货价格指数
+- [`index_yw`](./index/index_yw.md): 指定 symbol 的义乌小商品指数的近期历史数据
+- [`index_kq_fz`](./index/index_kq_fz.md): 指定 symbol 的柯桥纺织品指数的所有历史数据
+- [`index_kq_fashion`](./index/index_kq_fashion.md): 指定 symbol 的柯桥时尚指数的所有数据
+- [`index_sugar_msweet`](./index/index_sugar_msweet.md): 沐甜科技数据中心-中国食糖指数
+- [`index_inner_quote_sugar_msweet`](./index/index_inner_quote_sugar_msweet.md): 沐甜科技数据中心-配额内进口糖估算指数
+- [`index_outer_quote_sugar_msweet`](./index/index_outer_quote_sugar_msweet.md): 沐甜科技数据中心-配额外进口糖估算指数
+- [`index_eri`](./index/index_eri.md): 浙江省排污权交易指数的数据
+- [`drewry_wci_index`](./index/drewry_wci_index.md): Drewry 集装箱指数的数据
+- [`index_price_cflp`](./index/index_price_cflp.md): 获取指定 symbol 的中国公路物流运价指数的数据
+- [`index_volume_cflp`](./index/index_volume_cflp.md): 指定 symbol 的中国公路物流运量指数的数据
+- [`stock_zh_index_hist_csindex`](./index/stock_zh_index_hist_csindex.md): 中证指数日频率的数据
+- [`index_pmi_com_cx`](./index/index_pmi_com_cx.md): 财新数据-指数报告-财新中国 PMI-综合 PMI
+- [`index_pmi_man_cx`](./index/index_pmi_man_cx.md): 财新数据-指数报告-财新中国 PMI-制造业 PMI
+- [`index_pmi_ser_cx`](./index/index_pmi_ser_cx.md): 财新数据-指数报告-财新中国 PMI-服务业 PMI
+- [`index_dei_cx`](./index/index_dei_cx.md): 财新指数-数字经济指数
+- [`index_ii_cx`](./index/index_ii_cx.md): 财新指数-产业指数
+- [`index_si_cx`](./index/index_si_cx.md): 财新指数-溢出指数
+- [`index_fi_cx`](./index/index_fi_cx.md): 财新指数-融合指数
+- [`index_bi_cx`](./index/index_bi_cx.md): 财新指数-基础指数
+- [`index_nei_cx`](./index/index_nei_cx.md): 财新指数-中国新经济指数
+- [`index_li_cx`](./index/index_li_cx.md): 财新指数-劳动力投入指数
+- [`index_ci_cx`](./index/index_ci_cx.md): 财新指数-资本投入指数
+- [`index_ti_cx`](./index/index_ti_cx.md): 财新指数-科技投入指数
+- [`index_neaw_cx`](./index/index_neaw_cx.md): 财新指数-新经济行业入职平均工资水平
+- [`index_awpr_cx`](./index/index_awpr_cx.md): 财新指数-新经济入职工资溢价水平
+- [`index_cci_cx`](./index/index_cci_cx.md): 财新指数-大宗商品指数
+- [`index_qli_cx`](./index/index_qli_cx.md): 财新指数-高质量因子
+- [`index_ai_cx`](./index/index_ai_cx.md): 财新指数-AI策略指数
+- [`index_bei_cx`](./index/index_bei_cx.md): 财新指数-基石经济指数
+- [`index_neei_cx`](./index/index_neei_cx.md): 财新指数-新动能指数
+- [`stock_zh_index_value_csindex`](./index/stock_zh_index_value_csindex.md): 中证指数-指数估值数据
+- [`index_realtime_fund_sw`](./index/index_realtime_fund_sw.md): 申万宏源研究-申万指数-指数发布-基金指数-实时行情
+- [`index_hist_fund_sw`](./index/index_hist_fund_sw.md): 申万宏源研究-申万指数-指数发布-基金指数-历史行情
+- [`index_realtime_sw`](./index/index_realtime_sw.md): 申万宏源研究-指数系列; 注意其中大类风格指数和金创指数的字段
+- [`index_hist_sw`](./index/index_hist_sw.md): 申万宏源研究-指数发布-指数详情-指数历史数据
+- [`index_min_sw`](./index/index_min_sw.md): 申万宏源研究-指数发布-指数详情-指数分时数据
+- [`index_component_sw`](./index/index_component_sw.md): 申万宏源研究-指数发布-指数详情-成分股
+- [`index_analysis_daily_sw`](./index/index_analysis_daily_sw.md): 申万宏源研究-指数分析-日报表
+- [`index_analysis_weekly_sw`](./index/index_analysis_weekly_sw.md): 申万宏源研究-指数分析-周报表
+- [`index_analysis_monthly_sw`](./index/index_analysis_monthly_sw.md): 申万宏源研究-指数分析-月报表
+- [`index_news_sentiment_scope`](./index/index_news_sentiment_scope.md): 数库-A股新闻情绪指数
