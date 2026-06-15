@@ -147,6 +147,11 @@ class TestListStocks:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
+        assert len(data) > 0
+        # Every record now has the exchange field (may be null)
+        for stock in data:
+            assert "exchange" in stock
+            assert stock["exchange"] is None or isinstance(stock["exchange"], str)
 
     def test_list_stocks_with_pagination(self, client):
         response = client.get("/api/v1/stocks?market=csi&offset=0&limit=5")

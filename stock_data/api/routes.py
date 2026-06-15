@@ -1172,7 +1172,15 @@ def list_stocks(
     stocks, _origin = stock_cache.get_stock_list(market, refresh=refresh, manager=manager)
     logger.info(f"[list_stocks] Returned {len(stocks)} stocks for market={market}")
     page = stocks[offset : offset + limit]
-    return [StockInfo(code=s["code"], name=s["name"], market=market) for s in page]
+    return [
+        StockInfo(
+            code=s["code"],
+            name=s["name"],
+            market=market,
+            exchange=s.get("exchange"),
+        )
+        for s in page
+    ]
 
 
 @router.get(

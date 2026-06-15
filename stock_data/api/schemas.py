@@ -251,6 +251,11 @@ class StockInfo(BaseModel):
     code: str = Field(description="Stock code (e.g., 600519, AAPL, HK00700)")
     name: str = Field(description="Stock name")
     market: str = Field(description="Market type: csi/hk/us")
+    exchange: str | None = Field(
+        default=None,
+        description="Exchange code (SH/SZ/BJ) when known; null otherwise. "
+        "Clients may derive from code prefix as a fallback.",
+    )
 
 
 class TradeCalendarResponse(BaseModel):
