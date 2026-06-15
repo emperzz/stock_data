@@ -293,6 +293,15 @@ StockInfoResponse(
 )
 ```
 
+**StockInfo response (list)** (response of `GET /stocks?market=csi|hk|us`):
+```python
+StockInfo(
+    code, name, market,
+    exchange: str|None,  # "SH" / "SZ" / "BJ" when known; null otherwise
+                        # (Zhitu / Myquant populate; Baostock / Akshare leave null)
+)
+```
+
 ## Source Tracking (new)
 
 所有响应都包含 `source: str` 字段, 取值:
@@ -451,6 +460,14 @@ no `get_kline_data` and no `_fetch_raw_data` (raises `DataFetchError`). It also 
 priority 4 (after Baostock P1 / Akshare P2 / Yfinance P3).
 
 **Links**: https://www.zhituapi.com/hsstockapi.html
+
+**Stock list endpoint**: `https://api.zhituapi.com/hs/list/all?token={token}` (P4 last-resort backup in STOCK_LIST failover chain)
+
+- Single HTTP call returns the full A-share list (~5000+ stocks)
+- Rate limit: 300/min (包量版), 1000/min (体验版/包月版), per Zhitu docs
+- Update frequency: 16:20 daily
+- Returns `{"dm": <code>, "mc": <name>, "jys": "sh"|"sz"}` — `jys` is passed through raw to the persistence layer, which normalizes via `_normalize_exchange` (zhitu `sh`/`sz`, myquant `SHSE`/`SZSE`, etc. all map to canonical `"SH"`/`"SZ"`/`"BJ"`).
+- Non-A-share markets return `[]` (Zhitu only covers csi).
 
 ---
 
@@ -617,7 +634,7 @@ fetchers that support it.
 | TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| INDEX_HISTORICAL` |
 | MyquantFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_INFO` |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
-| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| HISTORICAL_MIN` |
+| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| HISTORICAL_MIN \| STOCK_LIST` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
 | EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT` |
 | ThsFetcher | `HOT_TOPICS \| NORTH_FLOW` |
