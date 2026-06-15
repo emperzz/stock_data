@@ -6,12 +6,12 @@
 
 ## 1. 目标与范围
 
-让 Zhitu 接入 `STOCK_LIST` capability，作为 A 股股票列表的 last-resort 备份（紧跟在 Baostock / Akshare / Myquant 之后）；同时把各 fetcher 报告的"交易所"信息（Zhitu `jys`、Myquant `exchange`）以**归一化后**的可空 `exchange` 列持久化下来。
+让 Zhitu 接入 `STOCK_LIST` capability，作为 A 股股票列表的 last-resort 备份（紧跟在 Baostock / Akshare / Myquant 之后）；同时把各 fetcher 报告的"交易所"信息（Zhitu `jys`、Myquant `exchange`）以**归一化后**的可空 `exchange` 列持久化下来，并通过 `GET /stocks` 响应暴露 `exchange` 字段给客户端。
 
 **只做这一次**。不包含：
-- `/stocks` 响应模型加 `exchange` 字段（响应契约不变，避免客户端兼容负担）
 - 历史数据迁移（按 2026-06-15 决定：不写 ALTER TABLE；现有 DB 用 `STOCK_DB_INIT=true` 全量重置，新数据天然带 exchange）
 - HK / US 股票列表（Zhitu 不支持；与 `MyquantFetcher.get_all_stocks` 一致返回 `[]`）
+- `/stocks/{code}/info` 等其它端点（本次只动 `/stocks` 列表端点）
 
 ## 2. 使用的上游 API
 
@@ -104,10 +104,42 @@ def _normalize_exchange(value: str | None) -> str | None:
 ```
 返回 dict 多一个 `exchange` 键（DB 中为 NULL → Python `None`）。
 
-### 3.3 不改的东西
+### 3.3 API 契约变更（2026-06-15 决定）
 
-- `/stocks` 响应模型（`StockInfo`）— 暂不加 `exchange`，避免 API 契约变化
-- `routes.py` — 现有 `list_stocks` 已经从 persistence 读，再多一个字段不影响响应
+`GET /stocks` 响应新增 `exchange` 字段。
+
+**`StockInfo` 模型**（`api/schemas.py`）：
+```python
+class StockInfo(BaseModel):
+    code: str
+    name: str
+    market: str
+    exchange: str | None = None     # NEW
+```
+
+**`routes.py` `list_stocks`**：
+```python
+return [
+    StockInfo(
+        code=s["code"],
+        name=s["name"],
+        market=market,
+        exchange=s.get("exchange"),  # .get 兼容老 DB 行无此键
+    )
+    for s in page
+]
+```
+
+**语义**：
+- 新 fetch 的数据（Zhitu/Myquant 写入）→ `exchange` 是 `"SH"` / `"SZ"` / `"BJ"`
+- 老 DB 行 / Baostock / Akshare 写入 → `exchange` 是 `None` → JSON 中为 `null`
+- 客户端需要 fallback 时可用 `code` 推导（`to_zhitu_market_suffix` 风格）或自行查表
+
+**向后兼容**：新增可选字段不破坏已有 client；新增的 `null` 值是事实陈述（"我们不知道"），客户端可忽略。
+
+### 3.4 不改的东西
+
+- `/stocks/{code}/*`（quote / history / info / intraday 等）— 本次只动列表端点
 - MyquantFetcher — 不动它的输出格式；归一化在 persistence 层兜底
 - Baostock / Akshare — 两者不返回 exchange，自然落到 NULL，不需改动
 
@@ -134,12 +166,20 @@ def _normalize_exchange(value: str | None) -> str | None:
 - `update_cached_stocks` 写入后 round-trip 读出，验证 exchange 值正确归一化
 - 缺失 exchange 的输入 dict（Baostock/Akshare 风格）写入后读出为 `None`
 
+### 集成测试（`tests/test_routes.py`）
+
+- `GET /stocks?market=csi` 响应中每条 record 都包含 `exchange` 字段
+  - Zhitu-sourced 数据：exchange 是 `"SH"` 或 `"SZ"`
+  - 老 DB / Baostock-sourced 数据：exchange 是 `null`
+- 响应 JSON schema 校验（`StockInfo` model 接受 None / 缺省）
+
 ## 5. 文档更新（CLAUDE.md）
 
 1. **ZhituFetcher 行**（capability 表）：
    `ZhituFetcher | REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| HISTORICAL_MIN \| STOCK_LIST`
 2. **ZhituFetcher 章节**：加一行描述 `/hs/list/all` 端点、限频、字段映射、归一化约定
 3. **`STOCK_LIST` failover chain 表**：在"Source Tracking 覆盖矩阵"附近补一句 Zhitu 作为 last-resort backup
+4. **`StockInfo` 响应模型**：在 "Standardized Data Schema" 章节加 `exchange` 字段
 
 ## 6. 风险与缓解
 
