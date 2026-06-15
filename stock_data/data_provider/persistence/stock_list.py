@@ -16,6 +16,28 @@ logger = logging.getLogger(__name__)
 _refresh_tracker = DailyRefreshTracker()
 
 
+def _normalize_exchange(value: str | None) -> str | None:
+    """归一化各 fetcher 返回的交易所标识。
+
+    Zhitu 返回 ``"sh"``/``"sz"``；Myquant 返回 ``"SHSE"``/``"SZSE"``；
+    其它 fetcher 不返回该字段（入参 None）。
+
+    Returns:
+        归一化后的 2 字母大写代码 (``"SH"``/``"SZ"``/``"BJ"``)；
+        空 / None 返回 None；未知值返回 strip + upper 后原样。
+    """
+    if not value:
+        return None
+    v = value.strip().upper()
+    if v in ("SH", "SHSE", "SSE"):
+        return "SH"
+    if v in ("SZ", "SZSE"):
+        return "SZ"
+    if v in ("BJ", "BSE"):
+        return "BJ"
+    return v
+
+
 def init_schema() -> None:
     """Initialize the database schema."""
     conn = get_connection()
