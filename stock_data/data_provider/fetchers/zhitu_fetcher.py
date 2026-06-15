@@ -50,6 +50,7 @@ class ZhituFetcher(BaseFetcher):
         | DataCapability.STOCK_ZT_POOL
         | DataCapability.STOCK_INFO
         | DataCapability.HISTORICAL_MIN
+        | DataCapability.STOCK_LIST
     )
 
     def __init__(self):
@@ -352,6 +353,78 @@ class ZhituFetcher(BaseFetcher):
         keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
         df = df[[c for c in keep_cols if c in df.columns]]
         return df
+
+    def get_all_stocks(self, market: str = "csi") -> list:
+        """Get the full A-share stock list from Zhitu's ``/hs/list/all``.
+
+        Zhitu only supports A-share (``csi``); HK/US return ``[]`` so the
+        manager's failover keeps trying other fetchers. Each item is
+        ``{"code": <dm>, "name": <mc>, "exchange": <jys>}`` — the
+        ``exchange`` value is passed through raw (``"sh"``/``"sz"``);
+        persistence normalizes via ``_normalize_exchange``.
+
+        Returns:
+            List of stock dicts, or ``[]`` on token absence / HTTP
+            failure / parse error. Empty list (not raise) keeps the
+            failover loop alive so the next fetcher can try.
+        """
+        if market != "csi":
+            return []
+        if not self.is_available():
+            logger.warning("[ZhituFetcher] ZHITU_TOKEN not configured")
+            return []
+
+        try:
+            url = f"{ZHITU_API_BASE}/hs/list/all"
+            params = {"token": self._token}
+
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if isinstance(data, dict) and "detail" in data:
+                logger.warning(
+                    f"[ZhituFetcher] get_all_stocks API error: "
+                    f"{data.get('detail', 'unknown')[:80]}"
+                )
+                return []
+
+            if not isinstance(data, list):
+                logger.warning(
+                    f"[ZhituFetcher] get_all_stocks unexpected type: {type(data)}"
+                )
+                return []
+
+            result: list = []
+            for row in data:
+                if not isinstance(row, dict):
+                    continue
+                code = str(row.get("dm", "")).strip()
+                if not code:
+                    continue
+                result.append(
+                    {
+                        "code": code,
+                        "name": str(row.get("mc", "")).strip(),
+                        "exchange": str(row.get("jys", "")).strip().lower(),
+                    }
+                )
+            return result
+
+        except requests.exceptions.Timeout:
+            logger.warning("[ZhituFetcher] get_all_stocks timeout")
+            return []
+        except requests.exceptions.RequestException:
+            logger.warning(
+                "[ZhituFetcher] get_all_stocks request failed", exc_info=True
+            )
+            return []
+        except Exception:
+            logger.warning(
+                "[ZhituFetcher] get_all_stocks error", exc_info=True
+            )
+            return []
 
     def get_stock_info(self, stock_code: str) -> dict | None:
         """公司画像 — Zhitu gs/gsjj 端点 (https://api.zhituapi.com/hs/gs/gsjj/{code}).
