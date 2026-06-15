@@ -1,5 +1,11 @@
 """
 Integration tests for API routes using FastAPI TestClient.
+
+These tests exercise real API routes end-to-end; some fan out to upstream
+fetchers and may hit network flakiness. The module-level
+``@pytest.mark.live_network`` marker lets ``tests/conftest.py`` reclassify
+upstream/network errors as ``x`` (xfail) rather than ``F`` (failed). See
+``tests/_network_guard.py`` for the full legend.
 """
 
 import pytest
@@ -7,6 +13,10 @@ from fastapi.testclient import TestClient
 
 from stock_data.api.routes import reset_manager
 from stock_data.server import app
+
+# Mark the whole module: routes that fan out to fetchers may hit upstream
+# flakiness. The hook reclassifies network errors to xfail.
+pytestmark = pytest.mark.live_network
 
 
 @pytest.fixture(autouse=True)

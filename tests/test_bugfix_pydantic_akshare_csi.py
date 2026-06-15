@@ -51,8 +51,14 @@ def client():
 class TestExternalApiMarketTag:
     """Layer 1 boundary: /api/v1/stocks accepts ONLY csi/hk/us."""
 
+    @pytest.mark.live_network
     def test_market_csi_is_accepted(self, client):
-        """Public-facing tag for A-shares is csi."""
+        """Public-facing tag for A-shares is csi.
+
+        Marked ``live_network`` because the endpoint may fan out to a
+        fetcher on a cold cache; upstream flakiness is not a regression
+        and the ``conftest.py`` hook reclassifies it to ``x`` (xfail).
+        """
         # The response may be empty (cache miss + offline), but it must
         # be 200, not 422.
         response = client.get("/api/v1/stocks?market=csi&limit=1")

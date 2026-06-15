@@ -59,3 +59,9 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Custom markers — see tests/_network_guard.py for the full legend and
+# tests/conftest.py for the network-to-xfail hook that consumes them.
+markers = [
+    "live_network: test may hit real upstream APIs (network/API flakiness is expected, not a bug)",
+    "requires_token: test needs TUSHARE_TOKEN / ZHITU_TOKEN / MYQUANT_TOKEN in env to run",
+]
