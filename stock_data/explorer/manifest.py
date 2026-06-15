@@ -25,6 +25,33 @@ from .tags import _INTERNAL_TAGS, CAPABILITY_LABELS, TAG_TO_TITLE
 logger = logging.getLogger(__name__)
 
 
+# Per-fetcher method overrides for capabilities where the capability-level
+# default in `CAPABILITY_TO_METHOD` doesn't match what the specific fetcher
+# actually implements. Currently the only such case is Zhitu's minute-level
+# support: `CAPABILITY_TO_METHOD[HISTORICAL_MIN]` maps to ``get_kline_data``
+# (correct for Baostock/Akshare/Yfinance/Myquant, which all expose minutes
+# via ``get_kline_data``), but Zhitu's minutes live in ``get_intraday_data``
+# and its inherited ``get_kline_data`` raises DataFetchError. The Test
+# button uses this method name + signature verbatim, so getting it wrong
+# produces confusing 500s.
+_FETCHER_METHOD_OVERRIDES: dict[tuple[DataCapability, str], str] = {
+    (DataCapability.HISTORICAL_MIN, "ZhituFetcher"): "get_intraday_data",
+}
+
+
+def _resolve_fetcher_method(
+    cap: DataCapability, fetcher_name: str
+) -> str | None:
+    """Pick the right method name for ``fetcher_name`` under capability ``cap``.
+
+    Order: per-fetcher override → capability default → ``None`` (no mapping).
+    """
+    override = _FETCHER_METHOD_OVERRIDES.get((cap, fetcher_name))
+    if override is not None:
+        return override
+    return CAPABILITY_TO_METHOD.get(cap)
+
+
 # manifest schema version——schema 字段有 breaking 变化时递增
 MANIFEST_VERSION = "1.1"
 
@@ -215,7 +242,9 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
         except KeyError:
             continue
 
-        # Determine method name: override > capability default
+        # Determine method name: endpoint-level override > capability default.
+        # Per-fetcher overrides (e.g. Zhitu's intraday method) are applied
+        # *inside* the candidate-class loop below — see _resolve_fetcher_method.
         if meta.fetcher_method is not None:
             method_name = meta.fetcher_method
         else:
@@ -228,8 +257,37 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
         # This is the difference vs. the prior implementation, which only
         # iterated `manager._filter_by_capability(...)` (registered only).
         candidate_classes = _classes_declaring_capability(cap)
+        # Endpoint-level override (e.g. `@endpoint_meta(fetcher_method=...)`)
+        # wins for every fetcher on this endpoint — it's the strongest
+        # signal. Only when it's NOT set do we look at per-fetcher
+        # overrides (one-off cases like Zhitu's intraday, where one
+        # outlier fetcher implements a capability via a different
+        # method name than the rest of the failover chain).
+        endpoint_method_override = meta.fetcher_method is not None
         for fetcher_cls in candidate_classes:
             fetcher_name = getattr(fetcher_cls, "name", fetcher_cls.__name__)
+
+            if endpoint_method_override:
+                # Endpoint-level override applies uniformly — skip the
+                # per-fetcher resolver entirely.
+                effective_method = method_name
+            else:
+                # Per-fetcher method override: when the capability's
+                # default method name doesn't match what this particular
+                # fetcher actually implements (e.g. Zhitu's minutes live
+                # in `get_intraday_data`, not the default
+                # `get_kline_data`), swap to the per-fetcher mapping.
+                # Falls back to the loop-level `method_name` (which is
+                # the capability default) when no override exists.
+                # `method_name` stays the loop-level default;
+                # `effective_method` is per-iteration so the override
+                # doesn't leak to the next fetcher.
+                effective_method = _resolve_fetcher_method(cap, fetcher_name)
+                if effective_method is None:
+                    # Capability has no default mapping and no per-fetcher
+                    # override — leave the row off this endpoint (matches
+                    # the pre-override behavior).
+                    continue
 
             # Use the registered instance if available (already initialized);
             # otherwise instantiate a fresh one to query is_available() /
@@ -247,9 +305,9 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
                     instance = fetcher_cls()
                 except Exception:
                     # Cannot even construct — surface as unavailable with no reason.
-                    entries[(fetcher_name, method_name)] = {
+                    entries[(fetcher_name, effective_method)] = {
                         "name": fetcher_name,
-                        "method": method_name,
+                        "method": effective_method,
                         "priority": getattr(fetcher_cls, "priority", 99),
                         "capabilities": [cap_name],
                         "signature": [],
@@ -265,14 +323,14 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
             if not instance_markets or not (instance_markets & set(meta.markets)):
                 continue
 
-            key = (fetcher_name, method_name)
+            key = (fetcher_name, effective_method)
             if key in entries:
                 if cap_name not in entries[key]["capabilities"]:
                     entries[key]["capabilities"].append(cap_name)
                 continue
 
             # Skip if the (instance) doesn't actually expose this method.
-            method = getattr(instance, method_name, None)
+            method = getattr(instance, effective_method, None)
             if method is None or not callable(method):
                 continue
 
@@ -283,7 +341,7 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
 
             entries[key] = {
                 "name": fetcher_name,
-                "method": method_name,
+                "method": effective_method,
                 "priority": instance.priority,
                 "capabilities": [cap_name],
                 "signature": _reflect_signature(method),
