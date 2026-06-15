@@ -50,6 +50,7 @@ def init_schema() -> None:
                 market TEXT NOT NULL,
                 code TEXT NOT NULL,
                 name TEXT NOT NULL,
+                exchange TEXT,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(market, code)
             )
@@ -191,12 +192,18 @@ def _read_from_db(market: str) -> list:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT code, name, updated_at FROM stock_list WHERE market = ? ORDER BY code",
+            """SELECT code, name, exchange, updated_at
+               FROM stock_list WHERE market = ? ORDER BY code""",
             (market,),
         )
         rows = cursor.fetchall()
         return [
-            {"code": row["code"], "name": row["name"], "updated_at": row["updated_at"]}
+            {
+                "code": row["code"],
+                "name": row["name"],
+                "exchange": row["exchange"],
+                "updated_at": row["updated_at"],
+            }
             for row in rows
         ]
     finally:
@@ -216,12 +223,18 @@ def get_cached_stocks(market: str) -> list:
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT code, name, updated_at FROM stock_list WHERE market = ? ORDER BY code",
+            """SELECT code, name, exchange, updated_at
+               FROM stock_list WHERE market = ? ORDER BY code""",
             (market,),
         )
         rows = cursor.fetchall()
         return [
-            {"code": row["code"], "name": row["name"], "updated_at": row["updated_at"]}
+            {
+                "code": row["code"],
+                "name": row["name"],
+                "exchange": row["exchange"],
+                "updated_at": row["updated_at"],
+            }
             for row in rows
         ]
     finally:
@@ -229,15 +242,17 @@ def get_cached_stocks(market: str) -> list:
 
 
 def update_cached_stocks(market: str, stocks: list) -> int:
-    """
-    Update cached stocks for a market.
+    """Update cached stocks for a market.
 
     Args:
         market: Market type (csi/hk/us)
-        stocks: List of dicts [{"code": "600519", "name": "贵州茅台"}, ...]
+        stocks: List of dicts. Required keys: ``code``, ``name``.
+            Optional key ``exchange`` — passed through ``_normalize_exchange``
+            before write (so callers can pass Zhitu ``"sh"`` / Myquant
+            ``"SHSE"`` / etc. without pre-normalizing).
 
     Returns:
-        Number of stocks inserted/updated
+        Number of stocks inserted/updated.
     """
     if not stocks:
         return 0
@@ -251,8 +266,19 @@ def update_cached_stocks(market: str, stocks: list) -> int:
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             cursor.executemany(
-                "INSERT OR REPLACE INTO stock_list (market, code, name, updated_at) VALUES (?, ?, ?, ?)",
-                [(market, stock["code"], stock["name"], now) for stock in stocks],
+                """INSERT OR REPLACE INTO stock_list
+                   (market, code, name, exchange, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (
+                        market,
+                        stock["code"],
+                        stock["name"],
+                        _normalize_exchange(stock.get("exchange")),
+                        now,
+                    )
+                    for stock in stocks
+                ],
             )
 
             logger.info(f"[StockCache] Updated {len(stocks)} stocks for market={market}")
