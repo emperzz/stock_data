@@ -26,6 +26,7 @@ TAG_TO_TITLE: dict[str, str] = {
     "hot":           "热点题材",
     "north-flow":    "北向资金",
     "indicators":    "技术指标",
+    "news":          "新闻",
 }
 
 
