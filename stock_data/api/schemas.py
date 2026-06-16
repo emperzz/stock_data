@@ -726,3 +726,37 @@ class StockInfoResponse(BaseModel):
 
     # 源
     source: str = Field(default="", description="数据源: 'zhitu' | 'myquant'")
+
+
+class NewsItem(BaseModel):
+    """Single news search result."""
+    title: str = Field(default="", description="新闻标题 (已 strip <em>)")
+    url: str = Field(description="新闻详情页 URL")
+    source_domain: str = Field(default="", description="URL 的域名")
+    publish_date: str = Field(default="", description="发布日期 YYYY-MM-DD")
+    snippet: str = Field(default="", description="摘要 (已 strip <em>)")
+    media_name: str = Field(default="", description="来源媒体名 (e.g. 证券时报网)")
+
+
+class NewsSearchResponse(BaseModel):
+    """News search response."""
+    data: list[NewsItem] = Field(default_factory=list)
+    total: int = Field(default=0, description="上游 API 报告的命中总数")
+    limit: int = Field(default=20, description="请求的 limit")
+    query: str = Field(default="", description="请求的搜索词")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. EastMoneyFetcher)",
+    )
+
+
+class NewsContentResponse(BaseModel):
+    """News content extraction response."""
+    url: str = Field(description="被提取的 URL")
+    title: str | None = Field(default=None)
+    body: str = Field(default="", description="已清洗的正文纯文本")
+    publish_date: str | None = Field(default=None)
+    author: str | None = Field(default=None)
+    source_domain: str = Field(default="")
+    extractor: str = Field(default="default", description="使用的 handler 名")
+    byte_size: int = Field(default=0)
