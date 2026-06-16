@@ -3,6 +3,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.baidu_fetcher import BaiduFetcher
@@ -326,3 +327,101 @@ class TestSearchNewsValidation:
         fetcher = BaiduFetcher()
         with pytest.raises(DataFetchError, match="limit must be an integer"):
             fetcher.search_news(q="ok", limit=None)
+
+
+# ---------- Error handling contract ----------
+
+class TestSearchNewsErrors:
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_http_500_raises(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({}, status=500)
+        with pytest.raises(DataFetchError, match="HTTP 500"):
+            BaiduFetcher().search_news(q="ok", limit=10)
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_http_401_unauthorized_raises(self, mock_post, monkeypatch):
+        """Bad API key surfaces as DataFetchError so manager tries next fetcher."""
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/INVALID")
+        mock_post.return_value = _mock_post_returning({"error": "invalid token"}, status=401)
+        with pytest.raises(DataFetchError, match="HTTP 401"):
+            BaiduFetcher().search_news(q="ok", limit=10)
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_http_429_rate_limited_raises(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({}, status=429)
+        with pytest.raises(DataFetchError, match="HTTP 429"):
+            BaiduFetcher().search_news(q="ok", limit=10)
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_bad_json_raises(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.side_effect = ValueError("not json")
+        mock_response.text = "not json"
+        mock_post.return_value = mock_response
+        with pytest.raises(DataFetchError, match="bad JSON"):
+            BaiduFetcher().search_news(q="ok", limit=10)
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_baidu_api_code_nonzero_raises(self, mock_post, monkeypatch):
+        """Baidu's error envelope: {"code": 401, "message": "..."}."""
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        payload = {"code": 401, "message": "invalid api key", "request_id": "abc"}
+        mock_post.return_value = _mock_post_returning(payload, status=200)
+        with pytest.raises(DataFetchError, match="code=401"):
+            BaiduFetcher().search_news(q="ok", limit=10)
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_baidu_api_code_zero_string_ok(self, mock_post, monkeypatch):
+        """Some Baidu variants return code as string "0" — treat as success."""
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        payload = {"code": "0", "references": [], "request_id": "abc"}
+        mock_post.return_value = _mock_post_returning(payload, status=200)
+        results = BaiduFetcher().search_news(q="ok", limit=10)
+        assert results == []
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_network_error_raises(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.side_effect = requests.ConnectionError("dns fail")
+        with pytest.raises(DataFetchError, match="network error"):
+            BaiduFetcher().search_news(q="ok", limit=10)
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_records_missing_critical_fields_skipped(self, mock_post, monkeypatch):
+        """3 records: complete, missing url, missing date, missing title."""
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        payload = {
+            "references": [
+                {
+                    "title": "valid",
+                    "url": "https://a.com/1.html",
+                    "content": "snippet",
+                    "date": "2026-05-20 10:00:00",
+                },
+                {
+                    "title": "missing url",
+                    "content": "snippet",
+                    "date": "2026-05-20 10:00:00",
+                },
+                {
+                    "title": "missing date",
+                    "url": "https://a.com/3.html",
+                    "content": "snippet",
+                },
+                {
+                    "url": "https://a.com/4.html",
+                    "content": "snippet",
+                    "date": "2026-05-20 10:00:00",
+                    # missing title
+                },
+            ]
+        }
+        mock_post.return_value = _mock_post_returning(payload)
+
+        results = BaiduFetcher().search_news(q="ok", limit=10)
+        assert len(results) == 1
+        assert results[0]["title"] == "valid"
