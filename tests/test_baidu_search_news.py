@@ -1,4 +1,5 @@
 """Unit tests for BaiduFetcher.search_news() and gating."""
+
 import json
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +10,7 @@ from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.baidu_fetcher import BaiduFetcher
 
 # ---------- Availability gating ----------
+
 
 class TestIsAvailable:
     def test_returns_false_when_api_key_missing(self, monkeypatch):
@@ -36,6 +38,7 @@ class TestIsAvailable:
         import importlib
 
         from stock_data.data_provider.fetchers import baidu_fetcher
+
         importlib.reload(baidu_fetcher)
         assert baidu_fetcher.BaiduFetcher.priority == 5
 
@@ -48,6 +51,7 @@ class TestIsAvailable:
 
 
 # ---------- Base method stubs ----------
+
 
 class TestKLineMethodsRaise:
     def test_fetch_raw_data_raises(self):
@@ -62,6 +66,7 @@ class TestKLineMethodsRaise:
 
 
 # ---------- Helpers ----------
+
 
 def _mock_post_returning(payload: dict, status: int = 200):
     mock_response = MagicMock()
@@ -97,6 +102,7 @@ SAMPLE_BAIDU_RESPONSE = {
 
 
 # ---------- Happy path ----------
+
 
 class TestSearchNewsHappyPath:
     @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
@@ -156,6 +162,7 @@ class TestSearchNewsHappyPath:
 
 
 # ---------- Request body shape contract ----------
+
 
 class TestSearchNewsRequestBody:
     @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
@@ -225,6 +232,7 @@ class TestSearchNewsRequestBody:
 
         # from_date 3 days ago → "week"
         from datetime import date, timedelta
+
         recent = (date.today() - timedelta(days=3)).isoformat()
         BaiduFetcher().search_news(q="test", limit=10, from_date=recent)
 
@@ -237,6 +245,7 @@ class TestSearchNewsRequestBody:
         mock_post.return_value = _mock_post_returning({"references": []})
 
         from datetime import date, timedelta
+
         old = (date.today() - timedelta(days=365)).isoformat()
         BaiduFetcher().search_news(q="test", limit=10, from_date=old)
 
@@ -249,6 +258,7 @@ class TestSearchNewsRequestBody:
         mock_post.return_value = _mock_post_returning({"references": []})
 
         from datetime import date, timedelta
+
         thirty = (date.today() - timedelta(days=30)).isoformat()
         BaiduFetcher().search_news(q="test", limit=10, from_date=thirty)
 
@@ -261,6 +271,7 @@ class TestSearchNewsRequestBody:
         mock_post.return_value = _mock_post_returning({"references": []})
 
         from datetime import date, timedelta
+
         one_eighty = (date.today() - timedelta(days=180)).isoformat()
         BaiduFetcher().search_news(q="test", limit=10, from_date=one_eighty)
 
@@ -269,6 +280,7 @@ class TestSearchNewsRequestBody:
 
 
 # ---------- Input validation contract ----------
+
 
 class TestSearchNewsValidation:
     def test_empty_q_raises(self):
@@ -284,6 +296,7 @@ class TestSearchNewsValidation:
     def test_q_exactly_200_chars_ok(self, monkeypatch):
         """200 is the documented max — must be accepted (boundary)."""
         from unittest.mock import patch
+
         monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
         with patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post") as mock_post:
             mock_post.return_value = _mock_post_returning({"references": []})
@@ -309,6 +322,7 @@ class TestSearchNewsValidation:
     def test_limit_as_string_coerced(self, monkeypatch):
         """Explorer mini-form sends HTML input values as strings."""
         from unittest.mock import patch
+
         monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
         with patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post") as mock_post:
             mock_post.return_value = _mock_post_returning({"references": []})
@@ -330,6 +344,7 @@ class TestSearchNewsValidation:
 
 
 # ---------- Error handling contract ----------
+
 
 class TestSearchNewsErrors:
     @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
@@ -428,6 +443,7 @@ class TestSearchNewsErrors:
 
 
 # ---------- Date post-filter contract ----------
+
 
 class TestSearchNewsDateFilter:
     @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")

@@ -81,9 +81,7 @@ class BaiduFetcher(BaseFetcher):
                 f"[BaiduFetcher] search_news: limit must be an integer 1..100 (got {limit!r})"
             ) from e
         if not (1 <= limit <= 100):
-            raise DataFetchError(
-                f"[BaiduFetcher] search_news: limit must be 1..100 (got {limit})"
-            )
+            raise DataFetchError(f"[BaiduFetcher] search_news: limit must be 1..100 (got {limit})")
 
         # ---- request ----
         api_key = os.getenv(API_KEY_ENV, "").strip()
@@ -113,9 +111,7 @@ class BaiduFetcher(BaseFetcher):
             raise DataFetchError(f"[BaiduFetcher] search_news network error: {e}") from e
 
         if not (200 <= resp.status_code < 300):
-            raise DataFetchError(
-                f"[BaiduFetcher] search_news HTTP {resp.status_code}"
-            )
+            raise DataFetchError(f"[BaiduFetcher] search_news HTTP {resp.status_code}")
 
         try:
             payload = resp.json()

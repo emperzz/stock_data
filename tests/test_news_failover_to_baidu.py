@@ -1,4 +1,5 @@
 """Manager-level failover test: when EastMoney raises, manager tries Baidu."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -32,25 +33,26 @@ def test_eastmoney_failover_to_baidu(monkeypatch):
     """If EastMoney raises DataFetchError, manager.search_news falls back to BaiduFetcher."""
     monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
 
-    # EastMoney raises on every search_news call
-    with patch(
-        "stock_data.data_provider.fetchers.eastmoney_fetcher.EastMoneyFetcher.search_news",
-        side_effect=DataFetchError("[EastMoneyFetcher] simulated failure"),
-    ):
-        # Baidu returns a normal payload
-        with patch(
+    # EastMoney raises on every search_news call; Baidu returns a normal payload
+    with (
+        patch(
+            "stock_data.data_provider.fetchers.eastmoney_fetcher.EastMoneyFetcher.search_news",
+            side_effect=DataFetchError("[EastMoneyFetcher] simulated failure"),
+        ),
+        patch(
             "stock_data.data_provider.fetchers.baidu_fetcher.requests.post",
             return_value=_mock_post(_baidu_payload()),
-        ):
-            # Build a manager with both fetchers
-            from stock_data.data_provider import BaiduFetcher, EastMoneyFetcher
-            from stock_data.data_provider.manager import DataFetcherManager
+        ),
+    ):
+        # Build a manager with both fetchers
+        from stock_data.data_provider import BaiduFetcher, EastMoneyFetcher
+        from stock_data.data_provider.manager import DataFetcherManager
 
-            mgr = DataFetcherManager()
-            mgr.add_fetcher(EastMoneyFetcher())
-            mgr.add_fetcher(BaiduFetcher())
+        mgr = DataFetcherManager()
+        mgr.add_fetcher(EastMoneyFetcher())
+        mgr.add_fetcher(BaiduFetcher())
 
-            items, source = mgr.search_news(q="贵州茅台", limit=10)
+        items, source = mgr.search_news(q="贵州茅台", limit=10)
 
     assert source == "BaiduFetcher"
     assert len(items) == 1
@@ -71,21 +73,21 @@ def test_eastmoney_success_does_not_invoke_baidu(monkeypatch):
             "media_name": "证券时报网",
         }
     ]
-    with patch(
-        "stock_data.data_provider.fetchers.eastmoney_fetcher.EastMoneyFetcher.search_news",
-        return_value=eastmoney_items,
-    ) as em_mock:
-        with patch(
-            "stock_data.data_provider.fetchers.baidu_fetcher.requests.post"
-        ) as baidu_mock:
-            from stock_data.data_provider import BaiduFetcher, EastMoneyFetcher
-            from stock_data.data_provider.manager import DataFetcherManager
+    with (
+        patch(
+            "stock_data.data_provider.fetchers.eastmoney_fetcher.EastMoneyFetcher.search_news",
+            return_value=eastmoney_items,
+        ) as em_mock,
+        patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post") as baidu_mock,
+    ):
+        from stock_data.data_provider import BaiduFetcher, EastMoneyFetcher
+        from stock_data.data_provider.manager import DataFetcherManager
 
-            mgr = DataFetcherManager()
-            mgr.add_fetcher(EastMoneyFetcher())
-            mgr.add_fetcher(BaiduFetcher())
+        mgr = DataFetcherManager()
+        mgr.add_fetcher(EastMoneyFetcher())
+        mgr.add_fetcher(BaiduFetcher())
 
-            items, source = mgr.search_news(q="贵州茅台", limit=10)
+        items, source = mgr.search_news(q="贵州茅台", limit=10)
 
     assert source == "EastMoneyFetcher"
     assert items[0]["title"] == "from eastmoney"
@@ -97,20 +99,22 @@ def test_both_fail_yields_data_fetch_error(monkeypatch):
     """If both fetchers fail, manager raises DataFetchError."""
     monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
 
-    with patch(
-        "stock_data.data_provider.fetchers.eastmoney_fetcher.EastMoneyFetcher.search_news",
-        side_effect=DataFetchError("em fail"),
-    ):
-        with patch(
+    with (
+        patch(
+            "stock_data.data_provider.fetchers.eastmoney_fetcher.EastMoneyFetcher.search_news",
+            side_effect=DataFetchError("em fail"),
+        ),
+        patch(
             "stock_data.data_provider.fetchers.baidu_fetcher.requests.post",
             side_effect=Exception("network"),
-        ):
-            from stock_data.data_provider import BaiduFetcher, EastMoneyFetcher
-            from stock_data.data_provider.manager import DataFetcherManager
+        ),
+    ):
+        from stock_data.data_provider import BaiduFetcher, EastMoneyFetcher
+        from stock_data.data_provider.manager import DataFetcherManager
 
-            mgr = DataFetcherManager()
-            mgr.add_fetcher(EastMoneyFetcher())
-            mgr.add_fetcher(BaiduFetcher())
+        mgr = DataFetcherManager()
+        mgr.add_fetcher(EastMoneyFetcher())
+        mgr.add_fetcher(BaiduFetcher())
 
-            with pytest.raises(DataFetchError):
-                mgr.search_news(q="贵州茅台", limit=10)
+        with pytest.raises(DataFetchError):
+            mgr.search_news(q="贵州茅台", limit=10)
