@@ -43,6 +43,8 @@ _TTL_REPORTS = int(os.getenv("CACHE_TTL_REPORTS", "1800"))
 _TTL_ANNOUNCEMENTS = int(os.getenv("CACHE_TTL_ANNOUNCEMENTS", "1800"))
 _TTL_POOLS = int(os.getenv("CACHE_TTL_POOLS", "60"))
 _TTL_STOCK_INFO = int(os.getenv("CACHE_TTL_STOCK_INFO", "3600"))  # 公司画像 (1h)
+_TTL_NEWS_SEARCH = int(os.getenv("CACHE_TTL_NEWS_SEARCH", "300"))
+_TTL_NEWS_CONTENT = int(os.getenv("CACHE_TTL_NEWS_CONTENT", "3600"))
 
 # Cache instances
 _dragontiger_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_DRAGON_TIGER)
@@ -58,6 +60,8 @@ _reports_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_REPORTS)
 _announcements_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_ANNOUNCEMENTS)
 _pools_cache: TTLCache = TTLCache(maxsize=128, ttl=_TTL_POOLS)
 _stock_info_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INFO)
+_news_search_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_SEARCH)
+_news_content_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_CONTENT)
 
 
 def get_quote_cache() -> TTLCache:
@@ -137,6 +141,14 @@ def get_pools_cache() -> TTLCache:
 
 def get_stock_info_cache() -> TTLCache:
     return _stock_info_cache
+
+
+def get_news_search_cache() -> TTLCache:
+    return _news_search_cache
+
+
+def get_news_content_cache() -> TTLCache:
+    return _news_content_cache
 
 
 def make_quote_cache_key(stock_code: str) -> str:
@@ -248,6 +260,15 @@ def make_pools_cache_key(pool_type: str, date: str | None) -> str:
 
 def make_stock_info_cache_key(stock_code: str) -> str:
     return f"stock_info:{stock_code}"
+
+
+def make_news_search_cache_key(q: str, from_date: str | None, to_date: str | None, limit: int) -> str:
+    return f"news:search:{q}:{from_date or ''}:{to_date or ''}:{limit}"
+
+
+def make_news_content_cache_key(url: str) -> str:
+    import hashlib
+    return f"news:content:{hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]}"
 
 
 def is_cache_enabled() -> bool:

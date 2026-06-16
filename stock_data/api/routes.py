@@ -46,6 +46,8 @@ from .cache import (
     get_index_intraday_cache,
     get_index_quote_cache,
     get_margin_cache,
+    get_news_content_cache,
+    get_news_search_cache,
     get_north_flow_cache,
     get_pools_cache,
     get_quote_cache,
@@ -67,6 +69,8 @@ from .cache import (
     make_index_intraday_cache_key,
     make_index_quote_cache_key,
     make_margin_cache_key,
+    make_news_content_cache_key,
+    make_news_search_cache_key,
     make_north_flow_cache_key,
     make_pools_cache_key,
     make_quote_cache_key,
@@ -112,6 +116,9 @@ from .schemas import (
     KLineData,
     MarginTradingRecord,
     MarginTradingResponse,
+    NewsContentResponse,
+    NewsItem,
+    NewsSearchResponse,
     NorthFlowRecord,
     NorthFlowResponse,
     ReportPDFResponse,
@@ -2049,3 +2056,151 @@ get_announcements = cached_endpoint(
     "announcements",
     "Announcements",
 )(get_announcements)
+
+
+# ---------- News endpoints (mounted at root, NOT under /api/v1) ----------
+#
+# The /news/search and /news/content endpoints are intentionally exposed at
+# the root path (no /api/v1 prefix) so that the OpenAPI/explorer conventions
+# used by other stock-data tools can call them at the canonical /news/...
+# URLs without the versioned prefix. The router is defined here and mounted
+# by stock_data.server:app at root.
+
+news_router = APIRouter()
+
+
+@news_router.get(
+    "/news/search",
+    response_model=NewsSearchResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid request"},
+        502: {"model": ErrorResponse, "description": "All fetchers failed"},
+    },
+    tags=["news"],
+)
+@endpoint_meta(
+    summary="新闻搜索（关键词 / 股票代码 / 主题）",
+    markets=["csi"],
+    capabilities=["NEWS_SEARCH"],
+)
+def search_news(
+    q: str = Query(min_length=1, max_length=200, description="搜索词"),
+    from_: str | None = Query(default=None, alias="from", description="起始日期 YYYY-MM-DD"),
+    to: str | None = Query(default=None, description="结束日期 YYYY-MM-DD"),
+    limit: int = Query(default=20, ge=1, le=100, description="结果数上限 1-100"),
+) -> NewsSearchResponse:
+    """Search news via NEWS_SEARCH-capable fetchers."""
+    if from_ and to and from_ > to:
+        raise HTTPException(status_code=400, detail="from must be <= to")
+    try:
+        if is_cache_enabled():
+            cache = get_news_search_cache()
+            key = make_news_search_cache_key(q, from_, to, limit)
+            if key in cache:
+                logger.info(f"[APICache] news search hit: {key}")
+                return cache[key]
+
+        manager = get_manager()
+        items, source = manager.search_news(
+            q=q, from_date=from_, to_date=to, limit=limit
+        )
+
+        result = NewsSearchResponse(
+            data=[NewsItem(**it) for it in items],
+            total=len(items),
+            limit=limit,
+            query=q,
+            source=source,
+        )
+
+        if is_cache_enabled():
+            cache[key] = result
+        return result
+    except DataFetchError as e:
+        logger.warning(f"News search unavailable: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "data_unavailable", "message": str(e)},
+        ) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"News search error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
+
+
+@news_router.get(
+    "/news/content",
+    response_model=NewsContentResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid URL or SSRF rejection"},
+        502: {"model": ErrorResponse, "description": "Extraction failed"},
+    },
+    tags=["news"],
+)
+@endpoint_meta(
+    summary="新闻正文提取（给定 URL 抓取详情页）",
+    markets=["global"],
+    capabilities=[],
+)
+def get_news_content(
+    url: str = Query(min_length=1, description="新闻详情页 URL"),
+) -> NewsContentResponse:
+    """Fetch and extract news content from a URL."""
+    from stock_data.data_provider.utils.news_extractor import NewsContentExtractor
+
+    try:
+        if is_cache_enabled():
+            cache = get_news_content_cache()
+            key = make_news_content_cache_key(url)
+            if key in cache:
+                logger.info(f"[APICache] news content hit: {key}")
+                return cache[key]
+
+        result = NewsContentExtractor.extract(url)
+
+        # The extractor returns a NewsContent dataclass in production; tests
+        # may mock it with a plain dict. Coerce dicts to the dataclass so
+        # the rest of the handler can use attribute access uniformly.
+        from stock_data.data_provider.utils.news_extractor import NewsContent
+
+        if isinstance(result, dict):
+            result = NewsContent(
+                url=result.get("url", url),
+                title=result.get("title"),
+                body=result.get("body", ""),
+                publish_date=result.get("publish_date"),
+                author=result.get("author"),
+                source_domain=result.get("source_domain", ""),
+                extractor=result.get("extractor", "default"),
+                byte_size=result.get("byte_size", 0),
+            )
+
+        response = NewsContentResponse(
+            url=result.url,
+            title=result.title,
+            body=result.body,
+            publish_date=result.publish_date,
+            author=result.author,
+            source_domain=result.source_domain,
+            extractor=result.extractor,
+            byte_size=result.byte_size,
+        )
+
+        if is_cache_enabled():
+            cache[key] = response
+        return response
+    except ValueError as e:
+        # SSRF rejection and "could not extract" both raise ValueError;
+        # distinguish by message.
+        msg = str(e)
+        if "internal network" in msg or "http or https" in msg or "no host" in msg:
+            raise HTTPException(status_code=400, detail=msg) from e
+        raise HTTPException(status_code=502, detail=msg) from e
+    except Exception as e:
+        logger.error(f"News content error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=502, detail=f"news content extraction failed: {e}"
+        ) from e

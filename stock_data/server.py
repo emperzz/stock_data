@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
-from .api.routes import router
+from .api.routes import news_router, router
 
 # Load environment variables
 load_dotenv()
@@ -115,6 +115,10 @@ app.add_middleware(
 
 # Data routes (unchanged)
 app.include_router(router, prefix="/api/v1")
+
+# News endpoints (mounted at root, no /api/v1 prefix — see comment in
+# stock_data/api/routes.py above the `news_router` definition).
+app.include_router(news_router)
 
 # --- API Explorer (new) -------------------------------------------------
 # stock_data/explorer/ subpackage owns the /explorer/ static UI and the
