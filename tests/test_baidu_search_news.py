@@ -1,5 +1,6 @@
 """Unit tests for BaiduFetcher.search_news() and gating."""
-from unittest.mock import MagicMock
+import json
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -57,3 +58,97 @@ class TestKLineMethodsRaise:
         fetcher = BaiduFetcher()
         with pytest.raises(DataFetchError, match="does not support historical K-line"):
             fetcher._normalize_data(MagicMock(), "600519")
+
+
+# ---------- Helpers ----------
+
+def _mock_post_returning(payload: dict, status: int = 200):
+    mock_response = MagicMock()
+    mock_response.status_code = status
+    mock_response.json.return_value = payload
+    mock_response.text = json.dumps(payload)
+    return mock_response
+
+
+SAMPLE_BAIDU_RESPONSE = {
+    "request_id": "ca749cb1-26db-4ff6-9735-f7b472d59003",
+    "references": [
+        {
+            "id": 1,
+            "title": "贵州茅台前三季度业绩超预期",
+            "url": "https://www.example.com/news/maotai-q3.html",
+            "content": "贵州茅台发布公告,前三季度营收同比增长...",
+            "date": "2026-05-20 10:30:00",
+            "type": "web",
+            "web_anchor": "贵州茅台前三季度业绩超预期",
+        },
+        {
+            "id": 2,
+            "title": "白酒板块整体上涨",
+            "url": "https://finance.sina.com.cn/2026/baijiu.html",
+            "content": "今日白酒板块迎来普涨行情...",
+            "date": "2026-05-19 16:00:00",
+            "type": "web",
+            "web_anchor": "白酒板块整体上涨",
+        },
+    ],
+}
+
+
+# ---------- Happy path ----------
+
+class TestSearchNewsHappyPath:
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_returns_normalized_dicts(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning(SAMPLE_BAIDU_RESPONSE)
+
+        fetcher = BaiduFetcher()
+        results = fetcher.search_news(q="贵州茅台", limit=20)
+
+        assert len(results) == 2
+        first = results[0]
+        assert first["title"] == "贵州茅台前三季度业绩超预期"
+        assert first["url"] == "https://www.example.com/news/maotai-q3.html"
+        assert first["source_domain"] == "www.example.com"
+        assert first["publish_date"] == "2026-05-20"
+        assert first["snippet"] == "贵州茅台发布公告,前三季度营收同比增长..."
+        assert first["media_name"] == "www.example.com"  # Baidu 没有 mediaName 字段
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_uses_correct_endpoint(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        BaiduFetcher().search_news(q="test", limit=5)
+
+        called_url = mock_post.call_args.args[0]
+        assert called_url == "https://qianfan.baidubce.com/v2/ai_search/web_search"
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_sends_bearer_authorization_header(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/SECRET-XYZ")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        BaiduFetcher().search_news(q="test", limit=5)
+
+        headers = mock_post.call_args.kwargs["headers"]
+        assert headers["Authorization"] == "Bearer bce-v3/SECRET-XYZ"
+        assert headers["Content-Type"] == "application/json"
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_empty_references_returns_empty_list(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"request_id": "abc", "references": []})
+
+        results = BaiduFetcher().search_news(q="nothing-here", limit=20)
+        assert results == []
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_missing_references_key_returns_empty_list(self, mock_post, monkeypatch):
+        """Upstream may omit references on success — treat as empty, not error."""
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"request_id": "abc"})
+
+        results = BaiduFetcher().search_news(q="test", limit=20)
+        assert results == []
