@@ -186,8 +186,7 @@ def search_news(
 | `q` | string | ✅ | — | 搜索词（股票代码 / 主题 / 自由文本，max 200 chars） |
 | `from` | string (YYYY-MM-DD) | ❌ | — | 起始日期 |
 | `to` | string (YYYY-MM-DD) | ❌ | — | 结束日期 |
-| `limit` | int | ❌ | 20 | 结果数上限，1-100 |
-| `page` | int | ❌ | 1 | 分页（v1 占位，暂不实现分页 cursor） |
+| `limit` | int | ❌ | 20 | 结果数上限，1-100。v1 单次返回不超过 `limit` 条;分页不在 v1 范围 |
 
 **Response 200**:
 ```json
@@ -203,7 +202,6 @@ def search_news(
     }
   ],
   "total": 156,
-  "page": 1,
   "limit": 20,
   "query": "贵州茅台",
   "source": "EastmoneyFetcher"
@@ -267,7 +265,7 @@ async def get_news_content_endpoint(...): ...
 
 | 端点 | Cache key | TTL | 备注 |
 |---|---|---|---|
-| `/news/search` | `("news", "search", q, from_, to_, limit, page)` → sha256 hex prefix | 300s (5min) | 新闻实时性中等,5min 缓存合理 |
+| `/news/search` | `("news", "search", q, from_, to_, limit)` → sha256 hex prefix | 300s (5min) | 新闻实时性中等,5min 缓存合理 |
 | `/news/content` | `("news", "content", sha256(url))` → sha256 hex prefix | 3600s (1h) | URL hash 后存,避免 URL 注入 key |
 
 **URL hash 化**：原始 URL 可能含特殊字符（`?&=%`），直接做 cache key 既不优雅也有注入风险，统一先 sha256 再用前 16 字节 hex。
