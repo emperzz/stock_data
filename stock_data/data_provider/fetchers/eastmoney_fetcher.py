@@ -33,7 +33,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
-import requests
 from curl_cffi import requests as cffi_requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
@@ -197,9 +196,14 @@ class EastMoneyFetcher(BaseFetcher):
             "source": "WEB",
             "client": "WEB",
         }
+        # Use the shared curl_cffi Session (Chrome 120 impersonation) for
+        # the same JA3 / TLS-fingerprint defense we rely on for the news
+        # search endpoint. Per-call headers below override the news-search
+        # defaults (Referer / User-Agent) so each eastmoney subdomain sees
+        # the Origin/Referer the original code intended.
         headers = {"User-Agent": UA, "Referer": "https://data.eastmoney.com/"}
         try:
-            r = requests.get(DATACENTER_URL, params=params, headers=headers, timeout=15)
+            r = self._session.get(DATACENTER_URL, params=params, headers=headers, timeout=15)
             d = r.json()
             if d.get("result") and d["result"].get("data"):
                 return d["result"]["data"]
@@ -234,9 +238,13 @@ class EastMoneyFetcher(BaseFetcher):
         }
         if extra_params:
             params.update(extra_params)
+        # Same Session reuse rationale as _datacenter_query: Chrome 120
+        # impersonation + per-call Referer override for the quote subdomain.
         headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
         try:
-            r = requests.get(endpoint["url"], params=params, headers=headers, timeout=timeout)
+            r = self._session.get(
+                endpoint["url"], params=params, headers=headers, timeout=timeout
+            )
             d = r.json()
             return d.get("data", {}).get("klines") or []
         except Exception as e:
@@ -516,8 +524,11 @@ class EastMoneyFetcher(BaseFetcher):
     def get_reports(self, code: str, max_pages: int = 5) -> list[dict]:
         """Get research report list for a stock."""
         code = normalize_stock_code(code)
-        session = requests.Session()
-        session.headers.update({"User-Agent": UA, "Referer": "https://data.eastmoney.com/"})
+        # Reuse the shared curl_cffi Session; pass per-page headers to keep
+        # the Referer/UA per-page (the original code used a per-call local
+        # Session for connection reuse, which the shared Session also gives
+        # us — bonus, we get Chrome 120 fingerprint matching the rest of
+        # the fetcher).
         all_records = []
         for page in range(1, max_pages + 1):
             params = {
@@ -539,7 +550,12 @@ class EastMoneyFetcher(BaseFetcher):
                 "pageNumber": str(page),
             }
             try:
-                r = session.get(ENDPOINTS.REPORT_LIST_URL, params=params, timeout=30)
+                r = self._session.get(
+                    ENDPOINTS.REPORT_LIST_URL,
+                    params=params,
+                    headers={"User-Agent": UA, "Referer": "https://data.eastmoney.com/"},
+                    timeout=30,
+                )
                 d = r.json()
                 rows = d.get("data") or []
                 if not rows:
@@ -574,7 +590,7 @@ class EastMoneyFetcher(BaseFetcher):
         if not url:
             return None
         try:
-            r = requests.get(
+            r = self._session.get(
                 url,
                 headers={"User-Agent": UA, "Referer": "https://data.eastmoney.com/"},
                 timeout=60,

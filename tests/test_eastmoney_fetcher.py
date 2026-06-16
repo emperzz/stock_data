@@ -37,30 +37,33 @@ class TestDatacenterQuery:
 
     _TEST_EP = _DCEndpoint(report_name="RPT_TEST")
 
-    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
-    def test_query_returns_data(self, mock_get):
+    def test_query_returns_data(self):
+        # Production uses self._session.get (curl_cffi Session, Chrome 120
+        # impersonation) for the JA3 defense — mock at the session level
+        # rather than the legacy module-level requests.get.
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "result": {"data": [{"SECURITY_CODE": "600519", "SECURITY_NAME_ABBR": "Test"}]}
         }
-        mock_get.return_value = mock_response
-
-        result = self.fetcher._datacenter_query(self._TEST_EP, filter_str='(SECURITY_CODE="600519")')
+        with patch.object(self.fetcher._session, "get", return_value=mock_response):
+            result = self.fetcher._datacenter_query(
+                self._TEST_EP, filter_str='(SECURITY_CODE="600519")'
+            )
         assert len(result) == 1
         assert result[0]["SECURITY_CODE"] == "600519"
 
-    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
-    def test_query_returns_empty_on_error(self, mock_get):
-        mock_get.side_effect = Exception("Network error")
-        result = self.fetcher._datacenter_query(self._TEST_EP)
+    def test_query_returns_empty_on_error(self):
+        with patch.object(
+            self.fetcher._session, "get", side_effect=Exception("Network error")
+        ):
+            result = self.fetcher._datacenter_query(self._TEST_EP)
         assert result == []
 
-    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
-    def test_query_returns_empty_on_null_result(self, mock_get):
+    def test_query_returns_empty_on_null_result(self):
         mock_response = MagicMock()
         mock_response.json.return_value = {"result": None}
-        mock_get.return_value = mock_response
-        result = self.fetcher._datacenter_query(self._TEST_EP)
+        with patch.object(self.fetcher._session, "get", return_value=mock_response):
+            result = self.fetcher._datacenter_query(self._TEST_EP)
         assert result == []
 
 
@@ -164,22 +167,22 @@ class TestFundFlowMinute:
     def setup_method(self):
         self.fetcher = EastMoneyFetcher()
 
-    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
-    def test_returns_records(self, mock_get):
+    def test_returns_records(self):
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "data": {"klines": ["09:30,1000,200,300,400,600"]}
         }
-        mock_get.return_value = mock_response
-        result = self.fetcher.get_fund_flow_minute("600519")
+        with patch.object(self.fetcher._session, "get", return_value=mock_response):
+            result = self.fetcher.get_fund_flow_minute("600519")
         assert len(result) == 1
         assert result[0]["time"] == "09:30"
         assert result[0]["main_net"] == 1000
 
-    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
-    def test_returns_empty_on_error(self, mock_get):
-        mock_get.side_effect = Exception("Network error")
-        result = self.fetcher.get_fund_flow_minute("600519")
+    def test_returns_empty_on_error(self):
+        with patch.object(
+            self.fetcher._session, "get", side_effect=Exception("Network error")
+        ):
+            result = self.fetcher.get_fund_flow_minute("600519")
         assert result == []
 
 
@@ -187,14 +190,13 @@ class TestFundFlow120d:
     def setup_method(self):
         self.fetcher = EastMoneyFetcher()
 
-    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
-    def test_returns_records(self, mock_get):
+    def test_returns_records(self):
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "data": {"klines": ["2026-05-20,5000,1000,2000,3000,4000,6000,7000"]}
         }
-        mock_get.return_value = mock_response
-        result = self.fetcher.get_fund_flow_120d("600519")
+        with patch.object(self.fetcher._session, "get", return_value=mock_response):
+            result = self.fetcher.get_fund_flow_120d("600519")
         assert len(result) == 1
         assert result[0]["date"] == "2026-05-20"
         assert result[0]["main_net"] == 5000
