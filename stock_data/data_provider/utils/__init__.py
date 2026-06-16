@@ -1,2 +1,2 @@
 # Utility functions
-from .news_extractor import NewsContentExtractor, NewsContent  # noqa: F401
+from .news_extractor import NewsContent, NewsContentExtractor  # noqa: F401

@@ -3,7 +3,6 @@ Integration tests for /news/search and /news/content endpoints.
 """
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from stock_data.server import app

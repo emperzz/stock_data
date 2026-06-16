@@ -10,8 +10,8 @@ import ipaddress
 import logging
 import re
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from urllib.parse import urlparse
 
 import requests
@@ -152,7 +152,7 @@ class NewsContentExtractor:
         Raises ValueError on SSRF, protocol errors, or content extraction failure.
         """
         host = _validate_url(url)
-        domain = host.lstrip("www.")
+        domain = host.removeprefix("www.")
 
         if html is None:
             try:

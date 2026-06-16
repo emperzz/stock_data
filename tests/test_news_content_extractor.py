@@ -9,7 +9,6 @@ import pytest
 
 from stock_data.data_provider.utils.news_extractor import NewsContentExtractor
 
-
 # ---------------------- Default handler ----------------------
 
 class TestDefaultHandler:

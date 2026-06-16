@@ -6,8 +6,6 @@ order and returns (result, source) on the first success.
 """
 from unittest.mock import patch
 
-import pytest
-
 from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 from stock_data.data_provider.manager import DataFetcherManager
 
