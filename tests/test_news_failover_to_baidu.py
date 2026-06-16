@@ -13,7 +13,7 @@ def _baidu_payload():
         "references": [
             {
                 "title": "from baidu",
-                "url": "https://baidu.example.com/1.html",
+                "url": "https://finance.eastmoney.com/1.html",
                 "content": "snippet",
                 "date": "2026-05-20 10:00:00",
             }
