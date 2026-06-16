@@ -55,6 +55,7 @@ class DataCapability(Flag):
     RESEARCH_REPORT = auto()  # 研报
     ANNOUNCEMENT = auto()  # 公告
     STOCK_INFO = auto()  # 公司画像（上市日期/概念/经营范围/注册地/总股本等）
+    NEWS_SEARCH = auto()  # 新闻搜索（关键词 → 列表）
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -98,6 +99,7 @@ CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.RESEARCH_REPORT: "get_reports",
     DataCapability.ANNOUNCEMENT: "get_announcements",
     DataCapability.STOCK_INFO: "get_stock_info",
+    DataCapability.NEWS_SEARCH: "search_news",
 }
 
 # Explicit "this capability legitimately has no fetcher method" set.
