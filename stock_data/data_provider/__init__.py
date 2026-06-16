@@ -29,6 +29,7 @@ from .core.types import (
 
 # Fetcher classes
 from .fetchers.akshare import AkshareFetcher
+from .fetchers.baidu_fetcher import BaiduFetcher
 from .fetchers.baostock_fetcher import BaostockFetcher
 from .fetchers.cninfo_fetcher import CninfoFetcher
 from .fetchers.eastmoney_fetcher import EastMoneyFetcher
@@ -96,6 +97,7 @@ __all__ = [
     "create_default_manager",
     # Fetchers
     "AkshareFetcher",
+    "BaiduFetcher",
     "BaostockFetcher",
     "CninfoFetcher",
     "EastMoneyFetcher",
