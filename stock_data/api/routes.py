@@ -331,21 +331,19 @@ def health_check(details: bool = False) -> HealthResponse:
                 registered_available_count += 1
             if snap["state"] in ("open", "half_open"):
                 registered_open_count += 1
-            last_success = (
-                snap["last_success_time"] if snap["last_success_time"] > 0 else None
+            last_success = snap["last_success_time"] if snap["last_success_time"] > 0 else None
+            last_failure = snap["last_failure_time"] if snap["last_failure_time"] > 0 else None
+            source_states.append(
+                SourceHealth(
+                    name=fetcher_name,
+                    state=snap["state"],
+                    available=available,
+                    last_success_time=last_success,
+                    last_failure_time=last_failure,
+                    failure_count=snap["failures"],
+                    unavailable_reason=None,
+                )
             )
-            last_failure = (
-                snap["last_failure_time"] if snap["last_failure_time"] > 0 else None
-            )
-            source_states.append(SourceHealth(
-                name=fetcher_name,
-                state=snap["state"],
-                available=available,
-                last_success_time=last_success,
-                last_failure_time=last_failure,
-                failure_count=snap["failures"],
-                unavailable_reason=None,
-            ))
         else:
             # Not registered: instantiate on demand to read the same
             # is_available()/unavailable_reason() the manifest uses. Construction
@@ -353,24 +351,28 @@ def health_check(details: bool = False) -> HealthResponse:
             try:
                 instance = fetcher_cls()
             except Exception:
-                source_states.append(SourceHealth(
-                    name=fetcher_name,
-                    state="closed",
-                    available=False,
-                    unavailable_reason=f"{fetcher_name} could not be instantiated",
-                ))
+                source_states.append(
+                    SourceHealth(
+                        name=fetcher_name,
+                        state="closed",
+                        available=False,
+                        unavailable_reason=f"{fetcher_name} could not be instantiated",
+                    )
+                )
                 continue
             available = bool(instance.is_available())
             reason = None if available else instance.unavailable_reason()
-            source_states.append(SourceHealth(
-                name=fetcher_name,
-                # Unregistered fetchers have no circuit-breaker state — use
-                # "closed" as a neutral default so the field stays consistent
-                # with registered entries.
-                state="closed",
-                available=available,
-                unavailable_reason=reason,
-            ))
+            source_states.append(
+                SourceHealth(
+                    name=fetcher_name,
+                    # Unregistered fetchers have no circuit-breaker state — use
+                    # "closed" as a neutral default so the field stays consistent
+                    # with registered entries.
+                    state="closed",
+                    available=available,
+                    unavailable_reason=reason,
+                )
+            )
 
     # Status determination is intentionally driven ONLY by registered
     # fetchers — missing optional tokens (Tushare/Zhitu) must not flip the
@@ -996,7 +998,9 @@ def get_index_history(
         records = df.to_dict("records")
         data = [_build_kline_data(row, _format_date) for row in records]
 
-        result = IndexHistoryResponse(code=index_code, name=index_name, period=period, data=data, source=source)
+        result = IndexHistoryResponse(
+            code=index_code, name=index_name, period=period, data=data, source=source
+        )
 
         if is_cache_enabled():
             cache[key] = result
@@ -1323,7 +1327,7 @@ def list_boards(
                     leading_stock_pct=b.get("leading_stock_pct"),
                 )
                 for b in boards
-            ]
+            ],
         )
 
         return result
@@ -1687,9 +1691,9 @@ def get_margin(
     )
 
 
-get_margin = cached_endpoint(
-    get_margin_cache, make_margin_cache_key, "margin", "Margin trading"
-)(get_margin)
+get_margin = cached_endpoint(get_margin_cache, make_margin_cache_key, "margin", "Margin trading")(
+    get_margin
+)
 
 
 @router.get(
@@ -1791,9 +1795,9 @@ def get_dividend(
     )
 
 
-get_dividend = cached_endpoint(
-    get_dividend_cache, make_dividend_cache_key, "dividend", "Dividend"
-)(get_dividend)
+get_dividend = cached_endpoint(get_dividend_cache, make_dividend_cache_key, "dividend", "Dividend")(
+    get_dividend
+)
 
 
 @router.get(
@@ -1888,9 +1892,7 @@ def get_hot_topics(
     data, source = manager.get_hot_topics(date)
     topics = [HotTopicRecord(**r) for r in data]
     actual_date = date or datetime.now().strftime("%Y-%m-%d")
-    return HotTopicResponse(
-        date=actual_date, total=len(topics), topics=topics, source=source
-    )
+    return HotTopicResponse(date=actual_date, total=len(topics), topics=topics, source=source)
 
 
 get_hot_topics = cached_endpoint(
@@ -1956,9 +1958,9 @@ def get_reports(
     )
 
 
-get_reports = cached_endpoint(
-    get_reports_cache, make_reports_cache_key, "reports", "Reports"
-)(get_reports)
+get_reports = cached_endpoint(get_reports_cache, make_reports_cache_key, "reports", "Reports")(
+    get_reports
+)
 
 
 @router.get(
@@ -2101,9 +2103,7 @@ def search_news(
                 return cache[key]
 
         manager = get_manager()
-        items, source = manager.search_news(
-            q=q, from_date=from_, to_date=to, limit=limit
-        )
+        items, source = manager.search_news(q=q, from_date=from_, to_date=to, limit=limit)
 
         result = NewsSearchResponse(
             data=[NewsItem(**it) for it in items],
@@ -2142,7 +2142,9 @@ def search_news(
 )
 @endpoint_meta(
     summary="新闻正文提取（给定 URL 抓取详情页）",
-    markets=["global"],
+    # URL 提取器本身不限市场;声明三个真实市场而非 "global",
+    # 否则 UI 的 market 过滤(默认 ["csi","hk","us"])会把它隐藏掉
+    markets=["csi", "hk", "us"],
     capabilities=[],
 )
 def get_news_content(
@@ -2201,6 +2203,4 @@ def get_news_content(
         raise HTTPException(status_code=502, detail=msg) from e
     except Exception as e:
         logger.error(f"News content error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=502, detail=f"news content extraction failed: {e}"
-        ) from e
+        raise HTTPException(status_code=502, detail=f"news content extraction failed: {e}") from e

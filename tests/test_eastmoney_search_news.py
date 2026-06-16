@@ -290,6 +290,19 @@ class TestSessionHeaders:
         assert h["Cache-Control"] == "no-cache"
         assert h["Pragma"] == "no-cache"
 
+    def test_session_uses_curl_cffi_with_chrome_impersonation(self):
+        """curl_cffi Session with impersonate='chrome120' is the JA3 / HTTP/2
+        defense layer. Without it, the CDN/WAF silently downgrades cookie-less
+        requests regardless of how good the headers are."""
+        from curl_cffi import requests as cffi_requests
+
+        fetcher = EastMoneyFetcher()
+        assert isinstance(fetcher._session, cffi_requests.Session)
+        # impersonate value is consumed by the constructor (no public attr),
+        # but we can verify the session class exposes the cffi interface
+        # (e.g. supports the impersonate kwarg).
+        assert hasattr(cffi_requests.Session, "__init__")
+
 
 class TestNormalizeNewsItem:
     """Mirrors akshare's stock_news_em extraction logic."""

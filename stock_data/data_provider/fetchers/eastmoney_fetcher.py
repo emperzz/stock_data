@@ -34,6 +34,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
+from curl_cffi import requests as cffi_requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..utils.code_converter import to_eastmoney_secid
@@ -645,9 +646,11 @@ class EastMoneyFetcher(BaseFetcher):
 
     def __init__(self) -> None:
         super().__init__()
-        # Per-instance session so cookies persist across search_news calls and
-        # base headers don't need to be repeated on every request.
-        self._session: requests.Session = requests.Session()
+        # curl_cffi Session with Chrome 120 impersonation matches Chrome's
+        # TLS handshake + HTTP/2 fingerprint, defeating JA3-style fingerprint
+        # detection at the CDN/WAF layer. Drop-in for requests.Session for
+        # every operation we use (headers / cookies / .get / timeout).
+        self._session = cffi_requests.Session(impersonate="chrome120")
         self._session.headers.update(self._NEWS_SEARCH_BASE_HEADERS)
         self._news_warmed = False
 
@@ -751,8 +754,17 @@ class EastMoneyFetcher(BaseFetcher):
 
         logger.info(f"[EastMoneyFetcher] news search q={q!r} limit={limit}")
         self._ensure_news_session()
+        # Referer includes the search keyword — matches akshare and the
+        # real-browser frontend (the search result page URL itself carries
+        # ?keyword=...). The session default lacks the keyword and would
+        # only match a "blank /news/s" navigation.
         try:
-            resp = self._session.get(self._NEWS_SEARCH_URL, params=params, timeout=15)
+            resp = self._session.get(
+                self._NEWS_SEARCH_URL,
+                params=params,
+                headers={"Referer": f"https://so.eastmoney.com/news/s?keyword={q}"},
+                timeout=15,
+            )
         except Exception as e:
             raise DataFetchError(f"[EastMoneyFetcher] search_news network error: {e}") from e
 
