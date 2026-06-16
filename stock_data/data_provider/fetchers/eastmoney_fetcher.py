@@ -22,12 +22,16 @@ sort / filter strings inline.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import random
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -573,12 +577,7 @@ class EastMoneyFetcher(BaseFetcher):
         if not (1 <= limit <= 100):
             raise DataFetchError(f"[EastMoneyFetcher] search_news: limit must be 1..100 (got {limit})")
 
-        import json as _json
-        import os as _os
-        import random as _random
-        import re as _re
-
-        cb = f"jQuery_news_{_os.getpid()}_{_random.randint(0, 99999)}"
+        cb = f"jQuery_news_{os.getpid()}_{random.randint(0, 99999)}"
         inner = {
             "uid": "",
             "keyword": q,
@@ -597,7 +596,7 @@ class EastMoneyFetcher(BaseFetcher):
                 }
             },
         }
-        params = {"cb": cb, "param": _json.dumps(inner, ensure_ascii=False)}
+        params = {"cb": cb, "param": json.dumps(inner, ensure_ascii=False)}
         headers = {
             "User-Agent": self._NEWS_USER_AGENT,
             "Referer": self._NEWS_REFERER,
@@ -618,12 +617,12 @@ class EastMoneyFetcher(BaseFetcher):
 
         text = resp.text.strip()
         # Strip JSONP wrapper: "jQuery_cb_name({"...": ...})"
-        m = _re.match(r"^\w+\((.*)\)$", text, _re.DOTALL)
+        m = re.match(r"^\w+\((.*)\)$", text, re.DOTALL)
         if not m:
             raise DataFetchError("[EastMoneyFetcher] search_news: response not JSONP")
         try:
-            payload = _json.loads(m.group(1))
-        except _json.JSONDecodeError as e:
+            payload = json.loads(m.group(1))
+        except json.JSONDecodeError as e:
             raise DataFetchError(f"[EastMoneyFetcher] search_news: bad JSON: {e}") from e
 
         if payload.get("code") != 0:
@@ -653,8 +652,6 @@ class EastMoneyFetcher(BaseFetcher):
         Raises KeyError/TypeError/ValueError on missing critical fields,
         which the caller treats as a skip.
         """
-        from urllib.parse import urlparse
-
         url = rec["url"]
         date_str = rec["date"][:10]  # "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DD"
         return {
