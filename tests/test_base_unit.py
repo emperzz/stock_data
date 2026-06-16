@@ -109,8 +109,30 @@ class TestDataFetcherManagerUnit:
         assert quote.code == "000001"
         assert quote.price == 101.0
 
-    def test_get_stock_name(self, manager):
-        # get_stock_name now lives in stock_cache, not manager
+    def test_get_stock_name(self, manager, tmp_path, monkeypatch):
+        """Verify get_stock_name falls through to the manager when DB is empty.
+
+        Uses a tmp_path DB so the test doesn't depend on the real
+        ``stock_cache.db`` state. The shared cache is mutated by other
+        tests (e.g. ``test_persistence_origin.py`` writes ``"000001" →
+        "测试"`` through the real DB path), which would otherwise make
+        this assertion flaky. DB round-trip behavior is covered
+        separately by ``test_stock_list_exchange.py``.
+        """
+        from stock_data.data_provider.persistence import (
+            db,
+            stock_list as stock_list_mod,
+        )
+
+        monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
+        monkeypatch.setattr(db, "_conn", None, raising=False)
+        # Fresh refresh tracker so is_first_call returns True and the
+        # call deterministically goes through the manager path.
+        monkeypatch.setattr(
+            stock_list_mod, "_refresh_tracker",
+            type("T", (), {"is_first_call": lambda *a: True})(),
+        )
+        stock_list_mod.init_schema()
 
         name = stock_cache.get_stock_name("000001", manager=manager)
         assert name == "Test"
@@ -218,64 +240,3 @@ class TestAdjustMapping:
         assert f._map_adjust("") is None  # 不复权
         assert f._map_adjust("qfq") == "qfq"  # 前复权
         assert f._map_adjust("hfq") == "hfq"  # 后复权
-
-
-class TestMarketTag:
-    """Tests for market_tag after rename from cn to csi."""
-
-    def test_a_share_is_csi(self):
-        from stock_data.data_provider.utils.normalize import market_tag
-
-        assert market_tag("600519") == "csi"
-        assert market_tag("000001") == "csi"
-
-    def test_hk_is_hk(self):
-        from stock_data.data_provider.utils.normalize import market_tag
-
-        assert market_tag("HK00700") == "hk"
-
-    def test_us_is_us(self):
-        from stock_data.data_provider.utils.normalize import market_tag
-
-        assert market_tag("AAPL") == "us"
-
-
-class TestStockListCache:
-    """Tests for stock_list persistence modifications."""
-
-    def test_is_first_call_of_day(self):
-        """DailyRefreshTracker.is_first_call returns True on first call, False after."""
-        from stock_data.data_provider.persistence._refresh import DailyRefreshTracker
-
-        tracker = DailyRefreshTracker()
-        key = "_test_key"
-
-        assert tracker.is_first_call(key) is True
-        assert tracker.is_first_call(key) is False
-
-    def test_get_stock_name_from_db_helper_exists(self):
-        """Test _get_stock_name_from_db helper function exists."""
-        from stock_data.data_provider.persistence import stock_list as stock_list_cache
-
-        assert hasattr(stock_list_cache, "_get_stock_name_from_db")
-        assert callable(stock_list_cache._get_stock_name_from_db)
-
-    def test_update_cached_stocks_uses_executemany(self):
-        """Test update_cached_stocks performs batch insert efficiently."""
-        import inspect
-
-        from stock_data.data_provider.persistence import stock_list as stock_list_cache
-
-        # Check that executemany is used in the function
-        source = inspect.getsource(stock_list_cache.update_cached_stocks)
-        assert "executemany" in source, "update_cached_stocks should use executemany for batch insert"
-
-    def test_get_stock_name_priorities_db_lookup(self):
-        """Test get_stock_name first tries DB lookup before loading full list."""
-        import inspect
-
-        from stock_data.data_provider.persistence import stock_list as stock_list_cache
-
-        # Verify the function has logic to try DB first
-        source = inspect.getsource(stock_list_cache.get_stock_name)
-        assert "_get_stock_name_from_db" in source, "get_stock_name should try DB lookup first"

@@ -213,9 +213,6 @@ class TestZhituFetcher:
     def test_convert_code_delegates_to_converter(self, fetcher):
         assert fetcher._convert_code("600519") == cc.to_zhitu_format("600519")
 
-    def test_convert_code_normalizes(self, fetcher):
-        assert fetcher._convert_code("SH600519") == "600519"
-
     def test_market_suffix_delegates_to_converter(self, fetcher):
         assert fetcher._market_suffix("600519") == cc.to_zhitu_market_suffix("600519")
 

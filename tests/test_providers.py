@@ -87,18 +87,13 @@ class TestBaostockFetcher:
         assert "ma20" not in df.columns
         assert "volume_ratio" not in df.columns
 
-    def test_get_realtime_quote_method_exists(self, fetcher):
-        """Test get_realtime_quote method exists on fetcher."""
-        # BaostockFetcher.get_realtime_quote is NOT implemented
-        # (baostock has no query_realtime_quotes API)
-        # This test documents that reality
-        result = fetcher.get_realtime_quote("600519")
-        assert result is None  # Should return None, not crash
-
     def test_realtime_quote_returns_none(self, fetcher):
-        """Verify Baostock does NOT support realtime quotes."""
-        # Even though the method exists, it should return None
-        # because baostock doesn't have this API
+        """Verify Baostock does NOT support realtime quotes.
+
+        The base ``get_realtime_quote`` returns None (no upstream API),
+        and Baostock does not override it. Documented here so a
+        regression that re-introduces a stub implementation is caught.
+        """
         result = fetcher.get_realtime_quote("600519")
         assert result is None
 
@@ -169,11 +164,20 @@ class TestAkshareFetcher:
         assert result.price > 0
 
     def test_get_kline_data(self, fetcher):
-        """Test get_daily_data with indicators."""
+        """Test get_kline_data returns standard columns only (no inline indicators).
+
+        Indicators (MA/MACD/etc.) live behind the indicator layer and
+        the `?indicators=` query param — they must NOT appear in the
+        raw fetcher output. Mirrors ``TestBaostockFetcher.test_get_kline_data``.
+        """
         df = fetcher.get_kline_data("600519", days=10)
         assert df is not None
         assert len(df) > 0
-        assert "ma5" in df.columns
+        for col in ("date", "open", "high", "low", "close", "volume"):
+            assert col in df.columns
+        assert "ma5" not in df.columns
+        assert "ma10" not in df.columns
+        assert "ma20" not in df.columns
 
 
 class TestYfinanceFetcher:
@@ -234,11 +238,20 @@ class TestYfinanceFetcher:
         assert result.price is not None
 
     def test_get_kline_data(self, fetcher):
-        """Test get_daily_data with indicators."""
+        """Test get_kline_data returns standard columns only (no inline indicators).
+
+        Indicators (MA/MACD/etc.) live behind the indicator layer and
+        the `?indicators=` query param — they must NOT appear in the
+        raw fetcher output.
+        """
         df = fetcher.get_kline_data("AAPL", days=10)
         assert df is not None
         assert len(df) > 0
-        assert "ma5" in df.columns
+        for col in ("date", "open", "high", "low", "close", "volume"):
+            assert col in df.columns
+        assert "ma5" not in df.columns
+        assert "ma10" not in df.columns
+        assert "ma20" not in df.columns
 
 
 class TestYfinanceCodeConversion:
@@ -332,14 +345,23 @@ class TestTushareFetcher:
         assert "volume" in df.columns
 
     def test_get_kline_data(self, fetcher):
-        """Test get_daily_data returns DataFrame with indicators."""
+        """Test get_kline_data returns standard columns only (no inline indicators).
+
+        Indicators (MA/MACD/etc.) live behind the indicator layer and
+        the `?indicators=` query param — they must NOT appear in the
+        raw fetcher output.
+        """
         if not fetcher.is_available():
             pytest.skip("TUSHARE_TOKEN not set or invalid")
 
         df = fetcher.get_kline_data("600519", days=10)
         assert df is not None
         assert len(df) > 0
-        assert "ma5" in df.columns
+        for col in ("date", "open", "high", "low", "close", "volume"):
+            assert col in df.columns
+        assert "ma5" not in df.columns
+        assert "ma10" not in df.columns
+        assert "ma20" not in df.columns
 
     def test_get_realtime_quote(self, fetcher):
         """Test get_realtime_quote."""

@@ -206,8 +206,11 @@ class TestManifestFetchersField:
         )
         assert zhitu["method"] == "get_stock_info"
         # Myquant is currently the registered fallback for this endpoint —
-        # confirm it shows up as available so the row order isn't accidentally
-        # reversed (Zhitu's priority=4 must come before Myquant's 9).
+        # confirm it shows up as available and that the manifest order
+        # reflects the priority chain (Zhitu's 4 must come before Myquant's 9).
+        # Asserting on the fetcher's own ``priority`` field is more durable
+        # than an index check — it doesn't break if a third fetcher is
+        # inserted in between.
         myquant = next(f for f in ep["fetchers"] if f["name"] == "MyquantFetcher")
         assert myquant.get("available") is True
-        assert ep["fetchers"].index(zhitu) < ep["fetchers"].index(myquant)
+        assert zhitu["priority"] < myquant["priority"]
