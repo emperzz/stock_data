@@ -53,4 +53,5 @@ CAPABILITY_LABELS: dict[str, dict[str, str]] = {
     "NORTH_FLOW":       {"label": "北向资金",         "icon": "🌏"},
     "RESEARCH_REPORT":  {"label": "研报",             "icon": "📑"},
     "ANNOUNCEMENT":     {"label": "公告",             "icon": "📢"},
+    "NEWS_SEARCH":      {"label": "新闻搜索",         "icon": "🔍"},
 }
