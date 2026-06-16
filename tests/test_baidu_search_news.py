@@ -265,3 +265,64 @@ class TestSearchNewsRequestBody:
 
         body = mock_post.call_args.kwargs["json"]
         assert body["search_recency_filter"] == "semiyear"
+
+
+# ---------- Input validation contract ----------
+
+class TestSearchNewsValidation:
+    def test_empty_q_raises(self):
+        fetcher = BaiduFetcher()
+        with pytest.raises(DataFetchError, match="invalid q"):
+            fetcher.search_news(q="", limit=10)
+
+    def test_q_too_long_raises(self):
+        fetcher = BaiduFetcher()
+        with pytest.raises(DataFetchError, match="invalid q"):
+            fetcher.search_news(q="x" * 201, limit=10)
+
+    def test_q_exactly_200_chars_ok(self, monkeypatch):
+        """200 is the documented max — must be accepted (boundary)."""
+        from unittest.mock import patch
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        with patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post") as mock_post:
+            mock_post.return_value = _mock_post_returning({"references": []})
+            fetcher = BaiduFetcher()
+            # Should NOT raise
+            fetcher.search_news(q="x" * 200, limit=10)
+
+    def test_limit_zero_raises(self):
+        fetcher = BaiduFetcher()
+        with pytest.raises(DataFetchError, match="limit must be 1..100"):
+            fetcher.search_news(q="ok", limit=0)
+
+    def test_limit_too_large_raises(self):
+        fetcher = BaiduFetcher()
+        with pytest.raises(DataFetchError, match="limit must be 1..100"):
+            fetcher.search_news(q="ok", limit=101)
+
+    def test_limit_negative_raises(self):
+        fetcher = BaiduFetcher()
+        with pytest.raises(DataFetchError, match="limit must be 1..100"):
+            fetcher.search_news(q="ok", limit=-1)
+
+    def test_limit_as_string_coerced(self, monkeypatch):
+        """Explorer mini-form sends HTML input values as strings."""
+        from unittest.mock import patch
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        with patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post") as mock_post:
+            mock_post.return_value = _mock_post_returning({"references": []})
+            fetcher = BaiduFetcher()
+            results = fetcher.search_news(q="ok", limit="20")
+            assert results == []
+            body = mock_post.call_args.kwargs["json"]
+            assert body["resource_type_filter"][0]["top_k"] == 20
+
+    def test_limit_non_numeric_string_raises(self):
+        fetcher = BaiduFetcher()
+        with pytest.raises(DataFetchError, match="limit must be an integer"):
+            fetcher.search_news(q="ok", limit="abc")
+
+    def test_limit_none_raises(self):
+        fetcher = BaiduFetcher()
+        with pytest.raises(DataFetchError, match="limit must be an integer"):
+            fetcher.search_news(q="ok", limit=None)
