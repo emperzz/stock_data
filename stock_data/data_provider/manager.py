@@ -296,6 +296,28 @@ class DataFetcherManager:
             allow_none=True,
         )
 
+    # ---------- news search ----------
+
+    def search_news(
+        self,
+        q: str,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 20,
+    ) -> tuple[list[dict], str]:
+        """News search via NEWS_SEARCH-capable fetchers (priority-based failover).
+
+        Returns:
+            Tuple of (list_of_NewsItem, fetcher_name).
+        """
+        return self._with_failover(
+            DataCapability.NEWS_SEARCH,
+            "csi",
+            f"news search q={q!r}",
+            lambda f: f.search_news(q, from_date, to_date, limit),
+            return_source=True,
+        )
+
     # ---------- realtime quotes (with circuit breaker) ----------
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
