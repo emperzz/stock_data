@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from curl_cffi import requests as cffi_requests
@@ -758,11 +758,25 @@ class EastMoneyFetcher(BaseFetcher):
         # real-browser frontend (the search result page URL itself carries
         # ?keyword=...). The session default lacks the keyword and would
         # only match a "blank /news/s" navigation.
+        #
+        # The keyword MUST be percent-encoded before being interpolated
+        # into the header. Raw non-ASCII (e.g. Chinese) characters trip
+        # Python's latin-1 codec on the http.client layer and raise
+        # UnicodeEncodeError("'latin-1' codec can't encode characters in
+        # position 40-43") *before* the request goes out — i.e. the search
+        # fails with "Network error" on the very first Chinese character
+        # of the keyword. Akshare doesn't hit this because its default
+        # ``symbol`` is the ASCII stock code "603777"; we accept arbitrary
+        # Chinese queries from the explorer mini-form, so we encode
+        # explicitly. UTF-8 percent-encoding matches what a real browser
+        # sends for `?keyword=...` in the URL bar.
         try:
             resp = self._session.get(
                 self._NEWS_SEARCH_URL,
                 params=params,
-                headers={"Referer": f"https://so.eastmoney.com/news/s?keyword={q}"},
+                headers={
+                    "Referer": f"https://so.eastmoney.com/news/s?keyword={quote(q)}",
+                },
                 timeout=15,
             )
         except Exception as e:

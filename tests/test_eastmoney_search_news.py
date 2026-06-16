@@ -112,6 +112,53 @@ class TestSearchNewsHappyPath(_SearchNewsTestBase):
         cb_second = mock_get.call_args_list[1].kwargs["params"]["cb"]
         assert cb_first != cb_second
 
+    def test_referer_percent_encodes_chinese_keyword(self):
+        """Chinese keywords in the Referer URL must be percent-encoded.
+
+        Raw non-ASCII characters in an HTTP header trip Python's latin-1
+        codec on the http.client layer and raise UnicodeEncodeError
+        ("'latin-1' codec can't encode characters in position 40-43")
+        BEFORE the request goes out — i.e. the search fails with a
+        generic "Network error" on the very first Chinese character.
+
+        This was a regression introduced when the per-call Referer
+        override was added to mimic a real-browser keyword search. The
+        session-level Referer (ASCII-only) was safe, but f-string
+        interpolating the keyword into the per-call override was not.
+        UTF-8 percent-encoding matches what a real browser sends for
+        ``?keyword=...`` in the URL bar.
+        """
+        with patch.object(
+            self.fetcher._session, "get", return_value=_mock_response(_load_fixture())
+        ) as mock_get:
+            self.fetcher.search_news(q="白酒概念", limit=5)
+
+        referer = mock_get.call_args.kwargs["headers"]["Referer"]
+        # "白酒概念" in UTF-8 is E7 99 BD E9 85 92 E6 A6 82 E5 BF B5
+        assert referer == (
+            "https://so.eastmoney.com/news/s?"
+            "keyword=%E7%99%BD%E9%85%92%E6%A6%82%E5%BF%B5"
+        )
+        # And the raw non-ASCII bytes must NOT appear in the header.
+        assert "白酒" not in referer
+        assert "概念" not in referer
+
+    def test_search_with_chinese_keyword_does_not_raise(self):
+        """End-to-end regression for the latin-1 Network error.
+
+        Before the fix, ``search_news("白酒概念")`` raised DataFetchError
+        wrapping UnicodeEncodeError("'latin-1' codec can't encode
+        characters in position 40-43") from inside curl_cffi's
+        http.client layer — surfaced to the user as a generic
+        "Network error" with no useful detail.
+        """
+        with patch.object(
+            self.fetcher._session, "get", return_value=_mock_response(_load_fixture())
+        ):
+            # Must not raise.
+            results = self.fetcher.search_news(q="白酒概念", limit=5)
+        assert isinstance(results, list)
+
 
 class TestSearchNewsFilters(_SearchNewsTestBase):
     def test_from_date_filter(self):
