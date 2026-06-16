@@ -547,6 +547,34 @@ gm/pandas dependency warning) live in the `myquant_fetcher.py` module docstring
 
 ---
 
+### BaiduFetcher (Priority 7, news search backup, A股 only, Requires API Key)
+
+**API**: `POST https://qianfan.baidubce.com/v2/ai_search/web_search`
+
+**Authentication**: `Authorization: Bearer <API Key>` (token read from `BAIDU_API_KEY` env var)
+
+**Supported capability**: `NEWS_SEARCH` only — no K-line / quote / financial data. Functions as backup source when `EastMoneyFetcher.search_news` fails (saves Baidu's 1500/month free quota).
+
+**Request body**:
+```json
+{
+  "messages": [{"content": "query", "role": "user"}],
+  "search_source": "baidu_search_v2",
+  "resource_type_filter": [{"type": "web", "top_k": 20}],
+  "search_recency_filter": "year"
+}
+```
+
+**Response field**: `references[].{title, url, content, date, type, web_anchor}`
+
+**Pricing**: 1500 calls/month free (released daily), then pay-as-you-go.
+
+**Limitation**: `top_k` hard cap is 50; user-facing `limit` accepts 1..100 but is clamped internally to 50.
+
+**Links**: https://cloud.baidu.com/doc/qianfan-api/s/Wmbq4z7e5
+
+---
+
 ## Provider Frequency Support
 
 | Provider | d | w | m | 5m | 15m | 30m | 60m |
@@ -629,6 +657,7 @@ fetchers that support it.
 
 | Fetcher | Capabilities |
 |---------|-------------|
+| BaiduFetcher | `NEWS_SEARCH` |
 | BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR \| INDEX_HISTORICAL` |
 | AkshareFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_ZT_POOL` |
 | TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| INDEX_HISTORICAL` |
