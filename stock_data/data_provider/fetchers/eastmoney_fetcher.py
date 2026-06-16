@@ -148,6 +148,7 @@ class EastMoneyFetcher(BaseFetcher):
         | DataCapability.DIVIDEND
         | DataCapability.FUND_FLOW
         | DataCapability.RESEARCH_REPORT
+        | DataCapability.NEWS_SEARCH
     )
 
     def is_available(self) -> bool:
@@ -543,3 +544,124 @@ class EastMoneyFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[EastMoneyFetcher] PDF download failed: {e}")
         return None
+
+    # ------------------------------------------------------------------
+    # News search (https://search-api-web.eastmoney.com/search/jsonp)
+    # ------------------------------------------------------------------
+
+    _NEWS_SEARCH_URL = "https://search-api-web.eastmoney.com/search/jsonp"
+    _NEWS_USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    _NEWS_REFERER = "https://so.eastmoney.com/news/s"
+
+    def search_news(
+        self,
+        q: str,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Search EastMoney news by keyword.
+
+        Returns a list of normalized news-item dicts; see spec §6.1 for schema.
+        Raises DataFetchError on upstream failure.
+        """
+        if not q or len(q) > 200:
+            raise DataFetchError(f"[EastMoneyFetcher] search_news: invalid q (len={len(q) if q else 0})")
+        if not (1 <= limit <= 100):
+            raise DataFetchError(f"[EastMoneyFetcher] search_news: limit must be 1..100 (got {limit})")
+
+        import json as _json
+        import os as _os
+        import random as _random
+        import re as _re
+
+        cb = f"jQuery_news_{_os.getpid()}_{_random.randint(0, 99999)}"
+        inner = {
+            "uid": "",
+            "keyword": q,
+            "type": ["cmsArticleWebOld"],
+            "client": "web",
+            "clientType": "web",
+            "clientVersion": "curr",
+            "param": {
+                "cmsArticleWebOld": {
+                    "searchScope": "default",
+                    "sort": "default",
+                    "pageIndex": 1,
+                    "pageSize": limit,
+                    "preTag": "<em>",
+                    "postTag": "</em>",
+                }
+            },
+        }
+        params = {"cb": cb, "param": _json.dumps(inner, ensure_ascii=False)}
+        headers = {
+            "User-Agent": self._NEWS_USER_AGENT,
+            "Referer": self._NEWS_REFERER,
+        }
+
+        logger.info(f"[EastMoneyFetcher] news search q={q!r} limit={limit}")
+        try:
+            resp = requests.get(
+                self._NEWS_SEARCH_URL, params=params, headers=headers, timeout=15
+            )
+        except Exception as e:
+            raise DataFetchError(f"[EastMoneyFetcher] search_news network error: {e}") from e
+
+        if resp.status_code != 200:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] search_news HTTP {resp.status_code}"
+            )
+
+        text = resp.text.strip()
+        # Strip JSONP wrapper: "jQuery_cb_name({"...": ...})"
+        m = _re.match(r"^\w+\((.*)\)$", text, _re.DOTALL)
+        if not m:
+            raise DataFetchError("[EastMoneyFetcher] search_news: response not JSONP")
+        try:
+            payload = _json.loads(m.group(1))
+        except _json.JSONDecodeError as e:
+            raise DataFetchError(f"[EastMoneyFetcher] search_news: bad JSON: {e}") from e
+
+        if payload.get("code") != 0:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] search_news API code={payload.get('code')} msg={payload.get('msg')}"
+            )
+
+        records = (payload.get("result") or {}).get("cmsArticleWebOld") or []
+        out: list[dict] = []
+        for rec in records:
+            try:
+                item = self._normalize_news_item(rec)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning(f"[EastMoneyFetcher] skipping malformed record: {e}")
+                continue
+            if from_date and item["publish_date"] < from_date:
+                continue
+            if to_date and item["publish_date"] > to_date:
+                continue
+            out.append(item)
+        return out
+
+    @staticmethod
+    def _normalize_news_item(rec: dict) -> dict:
+        """Convert one upstream record to the spec's NewsItem dict.
+
+        Raises KeyError/TypeError/ValueError on missing critical fields,
+        which the caller treats as a skip.
+        """
+        from urllib.parse import urlparse
+
+        url = rec["url"]
+        date_str = rec["date"][:10]  # "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DD"
+        return {
+            "title": rec["title"].replace("<em>", "").replace("</em>", ""),
+            "url": url,
+            "source_domain": urlparse(url).netloc,
+            "publish_date": date_str,
+            "snippet": rec.get("content", "").replace("<em>", "").replace("</em>", ""),
+            "media_name": rec.get("mediaName", ""),
+        }
