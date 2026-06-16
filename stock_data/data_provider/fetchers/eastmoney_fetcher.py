@@ -25,8 +25,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import random
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -48,9 +48,11 @@ DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 # Per-endpoint metadata
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class _DCEndpoint:
     """Descriptor for a single datacenter-web API endpoint."""
+
     report_name: str
     sort_columns: str = ""
     sort_types: str = "-1"
@@ -137,6 +139,7 @@ ENDPOINTS = _Endpoints()
 # ---------------------------------------------------------------------------
 # Fetcher
 # ---------------------------------------------------------------------------
+
 
 class EastMoneyFetcher(BaseFetcher):
     """EastMoney data-centre API fetcher for financial data."""
@@ -255,24 +258,26 @@ class EastMoneyFetcher(BaseFetcher):
         code = normalize_stock_code(code)
         if not trade_date:
             trade_date = datetime.now().strftime("%Y-%m-%d")
-        start = (datetime.strptime(trade_date, "%Y-%m-%d")
-                 - timedelta(days=look_back)).strftime("%Y-%m-%d")
+        start = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=look_back)).strftime(
+            "%Y-%m-%d"
+        )
 
         ep = ENDPOINTS.DRAGON_TIGER
         filter_str = (
-            f"(TRADE_DATE>='{start}')(TRADE_DATE<='{trade_date}')"
-            f'(SECURITY_CODE="{code}")'
+            f"(TRADE_DATE>='{start}')(TRADE_DATE<='{trade_date}')(SECURITY_CODE=\"{code}\")"
         )
         data = self._datacenter_query(ep, filter_str=filter_str)
 
         records = []
         for row in data:
-            records.append({
-                "date": str(row.get("TRADE_DATE", ""))[:10],
-                "reason": row.get("EXPLANATION", ""),
-                "net_buy_wan": round((row.get("BILLBOARD_NET_AMT") or 0) / 10000, 1),
-                "turnover_pct": round(float(row.get("TURNOVERRATE") or 0), 2),
-            })
+            records.append(
+                {
+                    "date": str(row.get("TRADE_DATE", ""))[:10],
+                    "reason": row.get("EXPLANATION", ""),
+                    "net_buy_wan": round((row.get("BILLBOARD_NET_AMT") or 0) / 10000, 1),
+                    "turnover_pct": round(float(row.get("TURNOVERRATE") or 0), 2),
+                }
+            )
 
         seats: dict[str, list[dict]] = {"buy": [], "sell": []}
         institution: dict[str, float] = {"buy_amt": 0, "sell_amt": 0, "net_amt": 0}
@@ -281,25 +286,31 @@ class EastMoneyFetcher(BaseFetcher):
             code_filter = f"(TRADE_DATE='{latest_date}')(SECURITY_CODE=\"{code}\")"
 
             buy_data = self._datacenter_query(
-                ENDPOINTS.DRAGON_TIGER_BUY_SEATS, filter_str=code_filter,
+                ENDPOINTS.DRAGON_TIGER_BUY_SEATS,
+                filter_str=code_filter,
             )
             for row in buy_data[:5]:
-                seats["buy"].append({
-                    "name": row.get("OPERATEDEPT_NAME", ""),
-                    "buy_wan": round((row.get("BUY") or 0) / 10000, 1),
-                    "sell_wan": round((row.get("SELL") or 0) / 10000, 1),
-                    "net_wan": round((row.get("NET") or 0) / 10000, 1),
-                })
+                seats["buy"].append(
+                    {
+                        "name": row.get("OPERATEDEPT_NAME", ""),
+                        "buy_wan": round((row.get("BUY") or 0) / 10000, 1),
+                        "sell_wan": round((row.get("SELL") or 0) / 10000, 1),
+                        "net_wan": round((row.get("NET") or 0) / 10000, 1),
+                    }
+                )
             sell_data = self._datacenter_query(
-                ENDPOINTS.DRAGON_TIGER_SELL_SEATS, filter_str=code_filter,
+                ENDPOINTS.DRAGON_TIGER_SELL_SEATS,
+                filter_str=code_filter,
             )
             for row in sell_data[:5]:
-                seats["sell"].append({
-                    "name": row.get("OPERATEDEPT_NAME", ""),
-                    "buy_wan": round((row.get("BUY") or 0) / 10000, 1),
-                    "sell_wan": round((row.get("SELL") or 0) / 10000, 1),
-                    "net_wan": round((row.get("NET") or 0) / 10000, 1),
-                })
+                seats["sell"].append(
+                    {
+                        "name": row.get("OPERATEDEPT_NAME", ""),
+                        "buy_wan": round((row.get("BUY") or 0) / 10000, 1),
+                        "sell_wan": round((row.get("SELL") or 0) / 10000, 1),
+                        "net_wan": round((row.get("NET") or 0) / 10000, 1),
+                    }
+                )
             for detail_data, side in [(buy_data, "buy"), (sell_data, "sell")]:
                 for row in detail_data:
                     if str(row.get("OPERATEDEPT_CODE", "")) == "0":
@@ -334,17 +345,19 @@ class EastMoneyFetcher(BaseFetcher):
             net_buy = (row.get("BILLBOARD_NET_AMT") or 0) / 10000
             if min_net_buy is not None and net_buy < min_net_buy:
                 continue
-            stocks.append({
-                "code": row.get("SECURITY_CODE", ""),
-                "name": row.get("SECURITY_NAME_ABBR", ""),
-                "reason": row.get("EXPLANATION", ""),
-                "close": row.get("CLOSE_PRICE", 0),
-                "change_pct": round(float(row.get("CHANGE_RATE") or 0), 2),
-                "net_buy_wan": round(net_buy, 1),
-                "buy_wan": round((row.get("BILLBOARD_BUY_AMT") or 0) / 10000, 1),
-                "sell_wan": round((row.get("BILLBOARD_SELL_AMT") or 0) / 10000, 1),
-                "turnover_pct": round(float(row.get("TURNOVERRATE") or 0), 2),
-            })
+            stocks.append(
+                {
+                    "code": row.get("SECURITY_CODE", ""),
+                    "name": row.get("SECURITY_NAME_ABBR", ""),
+                    "reason": row.get("EXPLANATION", ""),
+                    "close": row.get("CLOSE_PRICE", 0),
+                    "change_pct": round(float(row.get("CHANGE_RATE") or 0), 2),
+                    "net_buy_wan": round(net_buy, 1),
+                    "buy_wan": round((row.get("BILLBOARD_BUY_AMT") or 0) / 10000, 1),
+                    "sell_wan": round((row.get("BILLBOARD_SELL_AMT") or 0) / 10000, 1),
+                    "turnover_pct": round(float(row.get("TURNOVERRATE") or 0), 2),
+                }
+            )
         return {"date": trade_date, "total": len(stocks), "stocks": stocks}
 
     # ------------------------------------------------------------------
@@ -359,16 +372,18 @@ class EastMoneyFetcher(BaseFetcher):
         data = self._datacenter_query(ep, filter_str=filter_str, page_size=page_size)
         rows = []
         for row in data:
-            rows.append({
-                "date": str(row.get("DATE", ""))[:10],
-                "rzye": row.get("RZYE", 0),
-                "rzmre": row.get("RZMRE", 0),
-                "rzche": row.get("RZCHE", 0),
-                "rqye": row.get("RQYE", 0),
-                "rqmcl": row.get("RQMCL", 0),
-                "rqchl": row.get("RQCHL", 0),
-                "rzrqye": row.get("RZRQYE", 0),
-            })
+            rows.append(
+                {
+                    "date": str(row.get("DATE", ""))[:10],
+                    "rzye": row.get("RZYE", 0),
+                    "rzmre": row.get("RZMRE", 0),
+                    "rzche": row.get("RZCHE", 0),
+                    "rqye": row.get("RQYE", 0),
+                    "rqmcl": row.get("RQMCL", 0),
+                    "rqchl": row.get("RQCHL", 0),
+                    "rzrqye": row.get("RZRQYE", 0),
+                }
+            )
         return rows
 
     # ------------------------------------------------------------------
@@ -386,16 +401,18 @@ class EastMoneyFetcher(BaseFetcher):
             close = row.get("CLOSE_PRICE") or 0
             deal_price = row.get("DEAL_PRICE") or 0
             premium = ((deal_price / close - 1) * 100) if close else 0
-            rows.append({
-                "date": str(row.get("TRADE_DATE", ""))[:10],
-                "price": deal_price,
-                "close": close,
-                "premium_pct": round(premium, 2),
-                "vol": row.get("DEAL_VOLUME", 0),
-                "amount": row.get("DEAL_AMT", 0),
-                "buyer": row.get("BUYER_NAME", ""),
-                "seller": row.get("SELLER_NAME", ""),
-            })
+            rows.append(
+                {
+                    "date": str(row.get("TRADE_DATE", ""))[:10],
+                    "price": deal_price,
+                    "close": close,
+                    "premium_pct": round(premium, 2),
+                    "vol": row.get("DEAL_VOLUME", 0),
+                    "amount": row.get("DEAL_AMT", 0),
+                    "buyer": row.get("BUYER_NAME", ""),
+                    "seller": row.get("SELLER_NAME", ""),
+                }
+            )
         return rows
 
     # ------------------------------------------------------------------
@@ -410,13 +427,15 @@ class EastMoneyFetcher(BaseFetcher):
         data = self._datacenter_query(ep, filter_str=filter_str, page_size=page_size)
         rows = []
         for row in data:
-            rows.append({
-                "date": str(row.get("END_DATE", ""))[:10],
-                "holder_num": row.get("HOLDER_NUM", 0),
-                "change_num": row.get("HOLDER_NUM_CHANGE", 0),
-                "change_ratio": row.get("HOLDER_NUM_RATIO", 0),
-                "avg_shares": row.get("AVG_FREE_SHARES", 0),
-            })
+            rows.append(
+                {
+                    "date": str(row.get("END_DATE", ""))[:10],
+                    "holder_num": row.get("HOLDER_NUM", 0),
+                    "change_num": row.get("HOLDER_NUM_CHANGE", 0),
+                    "change_ratio": row.get("HOLDER_NUM_RATIO", 0),
+                    "avg_shares": row.get("AVG_FREE_SHARES", 0),
+                }
+            )
         return rows
 
     # ------------------------------------------------------------------
@@ -431,13 +450,15 @@ class EastMoneyFetcher(BaseFetcher):
         data = self._datacenter_query(ep, filter_str=filter_str, page_size=page_size)
         rows = []
         for row in data:
-            rows.append({
-                "date": str(row.get("EX_DIVIDEND_DATE", ""))[:10],
-                "bonus_rmb": row.get("PRETAX_BONUS_RMB", 0),
-                "transfer_ratio": row.get("TRANSFER_RATIO", 0),
-                "bonus_ratio": row.get("BONUS_RATIO", 0),
-                "plan": row.get("ASSIGN_PROGRESS", ""),
-            })
+            rows.append(
+                {
+                    "date": str(row.get("EX_DIVIDEND_DATE", ""))[:10],
+                    "bonus_rmb": row.get("PRETAX_BONUS_RMB", 0),
+                    "transfer_ratio": row.get("TRANSFER_RATIO", 0),
+                    "bonus_ratio": row.get("BONUS_RATIO", 0),
+                    "plan": row.get("ASSIGN_PROGRESS", ""),
+                }
+            )
         return rows
 
     # ------------------------------------------------------------------
@@ -464,7 +485,14 @@ class EastMoneyFetcher(BaseFetcher):
             rows.append(row)
         return rows
 
-    _FUND_FLOW_MINUTE_FIELDS = ("time", "main_net", "small_net", "mid_net", "large_net", "super_net")
+    _FUND_FLOW_MINUTE_FIELDS = (
+        "time",
+        "main_net",
+        "small_net",
+        "mid_net",
+        "large_net",
+        "super_net",
+    )
 
     def get_fund_flow_minute(self, code: str) -> list[dict]:
         """Get minute-level capital flow (intraday)."""
@@ -492,12 +520,22 @@ class EastMoneyFetcher(BaseFetcher):
         all_records = []
         for page in range(1, max_pages + 1):
             params = {
-                "industryCode": "*", "pageSize": "100", "industry": "*",
-                "rating": "*", "ratingChange": "*",
-                "beginTime": "2000-01-01", "endTime": "2030-01-01",
-                "pageNo": str(page), "fields": "", "qType": "0",
-                "orgCode": "", "code": code, "rcode": "",
-                "p": str(page), "pageNum": str(page), "pageNumber": str(page),
+                "industryCode": "*",
+                "pageSize": "100",
+                "industry": "*",
+                "rating": "*",
+                "ratingChange": "*",
+                "beginTime": "2000-01-01",
+                "endTime": "2030-01-01",
+                "pageNo": str(page),
+                "fields": "",
+                "qType": "0",
+                "orgCode": "",
+                "code": code,
+                "rcode": "",
+                "p": str(page),
+                "pageNum": str(page),
+                "pageNumber": str(page),
             }
             try:
                 r = session.get(ENDPOINTS.REPORT_LIST_URL, params=params, timeout=30)
@@ -554,11 +592,101 @@ class EastMoneyFetcher(BaseFetcher):
     # ------------------------------------------------------------------
 
     _NEWS_SEARCH_URL = "https://search-api-web.eastmoney.com/search/jsonp"
-    _NEWS_USER_AGENT = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    # GET'd once per session so the search-api-web backend sees a request from
+    # a Session that has previously talked to eastmoney.com (some server-set
+    # cookies are expected; JS-set ones like qgqp_b_id won't be seeded).
+    _NEWS_WARMUP_URL = "https://so.eastmoney.com/news/s"
+    # Full Chrome 120 desktop fingerprint + cache-busting headers. The
+    # search backend fingerprints UA + sec-ch-* + sec-fetch-*; missing
+    # Cache-Control/Pragma no-cache signals "this is a cached/replay
+    # request" and triggers silent empty results.
+    _NEWS_SEARCH_BASE_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://so.eastmoney.com/news/s",
+        "Origin": "https://so.eastmoney.com",
+        "Accept": "*/*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "script",
+        "sec-fetch-mode": "no-cors",
+        "sec-fetch-site": "same-site",
+    }
+
+    # ---- DIAGNOSTIC ONLY ----
+    # Akshare's working cookie bundle, captured from a real-browser session.
+    # Used only when the warmup GET fails to seed enough cookies (which is
+    # the case — most eastmoney cookies are JS-set and a plain GET can't get
+    # them). These will expire; when results go empty again, capture a fresh
+    # bundle from DevTools and update this constant.
+    _NEWS_DIAGNOSTIC_COOKIES = (
+        "qgqp_b_id=652bf4c98a74e210088f372a17d4e27b; "
+        "st_nvi=ulN5JAj9FUocz3p4klMME9f20; "
+        "emshistory=%5B%22603777%22%5D; "
+        "nid18=010d039dd427dc4d187090491f47d7ad; "
+        "nid18_create_time=1764582801999; "
+        "gviem=gSdeY51VWSuTzM3kWaagtf560; "
+        "gviem_create_time=1764582801999; "
+        "st_si=55269775884615; "
+        "st_pvi=66803244437563; "
+        "st_sp=2025-11-19%2014%3A19%3A16; "
+        "st_inirUrl=https%3A%2F%2Fso.eastmoney.com%2Fnews%2Fs; "
+        "st_sn=2; "
+        "st_psi=20251201223210488-118000300905-0940816858; "
+        "st_asi=delete"
     )
-    _NEWS_REFERER = "https://so.eastmoney.com/news/s"
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Per-instance session so cookies persist across search_news calls and
+        # base headers don't need to be repeated on every request.
+        self._session: requests.Session = requests.Session()
+        self._session.headers.update(self._NEWS_SEARCH_BASE_HEADERS)
+        self._news_warmed = False
+
+    def _ensure_news_session(self) -> None:
+        """Seed cookies by GETting the public search page once per session.
+
+        The search-api-web backend silently downgrades cookie-less requests to
+        empty results, so we prime the session with a real-browser visit to
+        so.eastmoney.com before the first search. Failures are non-fatal
+        (we'd rather attempt the search than crash on the warmup).
+        """
+        if self._news_warmed:
+            return
+        # DIAGNOSTIC: seed akshare's known-working cookies first. If the
+        # backend is filtering on cookie presence/format, this gets us past
+        # the gate; if it still returns [], the real issue is JA3/TLS
+        # fingerprinting and we need curl_cffi.
+        for raw in self._NEWS_DIAGNOSTIC_COOKIES.split("; "):
+            if "=" in raw:
+                k, v = raw.split("=", 1)
+                self._session.cookies.set(k, v, domain="so.eastmoney.com")
+        try:
+            self._session.get(self._NEWS_WARMUP_URL, timeout=8)
+        except Exception as e:  # warmup is best-effort; we still attempt the search
+            logger.debug(f"[EastMoneyFetcher] news warmup failed (non-fatal): {e}")
+        self._news_warmed = True
+
+    @staticmethod
+    def _news_callback_name() -> str:
+        """Generate a jQuery-style JSONP callback name.
+
+        Pattern: ``jQuery<PID>_<millisecond-timestamp>``. Matches what
+        jQuery.ajax() produces in a real browser when jsonpCallback is left
+        unspecified — the per-call timestamp suffix also doubles as
+        cache-busting. EastMoneyFetcher is a singleton in DataFetcherManager,
+        so no locking is needed around the name.
+        """
+        timestamp_ms = int(time.time() * 1000)
+        return f"jQuery{os.getpid()}_{timestamp_ms}"
 
     def search_news(
         self,
@@ -573,7 +701,9 @@ class EastMoneyFetcher(BaseFetcher):
         Raises DataFetchError on upstream failure.
         """
         if not q or len(q) > 200:
-            raise DataFetchError(f"[EastMoneyFetcher] search_news: invalid q (len={len(q) if q else 0})")
+            raise DataFetchError(
+                f"[EastMoneyFetcher] search_news: invalid q (len={len(q) if q else 0})"
+            )
         # Coerce limit to int (the explorer mini-form sends HTML input values
         # as strings; without coercion the range check raises TypeError).
         try:
@@ -583,9 +713,15 @@ class EastMoneyFetcher(BaseFetcher):
                 f"[EastMoneyFetcher] search_news: limit must be an integer 1..100 (got {limit!r})"
             ) from e
         if not (1 <= limit <= 100):
-            raise DataFetchError(f"[EastMoneyFetcher] search_news: limit must be 1..100 (got {limit})")
+            raise DataFetchError(
+                f"[EastMoneyFetcher] search_news: limit must be 1..100 (got {limit})"
+            )
 
-        cb = f"jQuery_news_{os.getpid()}_{random.randint(0, 99999)}"
+        # JSONP callback name mimics jQuery's auto-generated pattern (e.g.
+        # ``jQuery35101792940631092459_1764599530176``) — the leading counter
+        # + per-call timestamp suffix is what a real browser produces when
+        # jsonpCallback is left unspecified.
+        cb = self._news_callback_name()
         inner = {
             "uid": "",
             "keyword": q,
@@ -604,24 +740,24 @@ class EastMoneyFetcher(BaseFetcher):
                 }
             },
         }
-        params = {"cb": cb, "param": json.dumps(inner, ensure_ascii=False)}
-        headers = {
-            "User-Agent": self._NEWS_USER_AGENT,
-            "Referer": self._NEWS_REFERER,
+        # The trailing ``_`` is a millisecond-timestamp cache-buster that
+        # akshare (and the real browser frontend) always send; the backend
+        # silently returns empty results when it's missing.
+        params = {
+            "cb": cb,
+            "param": json.dumps(inner, ensure_ascii=False),
+            "_": str(int(time.time() * 1000)),
         }
 
         logger.info(f"[EastMoneyFetcher] news search q={q!r} limit={limit}")
+        self._ensure_news_session()
         try:
-            resp = requests.get(
-                self._NEWS_SEARCH_URL, params=params, headers=headers, timeout=15
-            )
+            resp = self._session.get(self._NEWS_SEARCH_URL, params=params, timeout=15)
         except Exception as e:
             raise DataFetchError(f"[EastMoneyFetcher] search_news network error: {e}") from e
 
         if resp.status_code != 200:
-            raise DataFetchError(
-                f"[EastMoneyFetcher] search_news HTTP {resp.status_code}"
-            )
+            raise DataFetchError(f"[EastMoneyFetcher] search_news HTTP {resp.status_code}")
 
         text = resp.text.strip()
         # Strip JSONP wrapper: "jQuery_cb_name({"...": ...})"
@@ -654,19 +790,48 @@ class EastMoneyFetcher(BaseFetcher):
         return out
 
     @staticmethod
+    def _strip_em(s: str) -> str:
+        """Strip <em>/</em> highlight tags from a string.
+
+        Mirrors akshare's stock_news_em stripping pattern: it also removes
+        the ``(<em>...</em>)`` parenthesized variant which appears when the
+        upstream returns a parenthesized highlight inside title/content.
+        """
+        return s.replace("(<em>", "").replace("</em>)", "").replace("<em>", "").replace("</em>", "")
+
+    @staticmethod
     def _normalize_news_item(rec: dict) -> dict:
         """Convert one upstream record to the spec's NewsItem dict.
+
+        Mirrors akshare's stock_news_em extraction:
+        - URL is rebuilt from the ``code`` field (akshare trusts code as the
+          source of truth; the upstream's ``url`` field is sometimes stale).
+          Falls back to ``rec["url"]`` only when ``code`` is missing.
+        - ``content`` is cleaned of <em> tags, full-width spaces (``\\u3000``),
+          and ``\\r\\n`` (collapsed to single space).
+        - ``image`` and the raw ``code`` are not exposed in the output.
 
         Raises KeyError/TypeError/ValueError on missing critical fields,
         which the caller treats as a skip.
         """
-        url = rec["url"]
+        # URL: akshare always rebuilds from `code`. We do the same but fall
+        # back to rec["url"] when `code` is missing (defensive — has not been
+        # observed in production responses).
+        code = rec.get("code")
+        url = f"http://finance.eastmoney.com/a/{code}.html" if code else rec["url"]
+
         date_str = rec["date"][:10]  # "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DD"
+
+        # Snippet: akshare strips <em> tags, full-width space (\\u3000), and
+        # collapses \\r\\n to a single space.
+        raw_content = rec.get("content", "")
+        snippet = EastMoneyFetcher._strip_em(raw_content).replace("　", "").replace("\r\n", " ")
+
         return {
-            "title": rec["title"].replace("<em>", "").replace("</em>", ""),
+            "title": EastMoneyFetcher._strip_em(rec["title"]),
             "url": url,
             "source_domain": urlparse(url).netloc,
             "publish_date": date_str,
-            "snippet": rec.get("content", "").replace("<em>", "").replace("</em>", ""),
+            "snippet": snippet,
             "media_name": rec.get("mediaName", ""),
         }
