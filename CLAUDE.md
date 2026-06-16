@@ -11,108 +11,27 @@ A Python-based local stock data aggregation server that:
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    API Layer (FastAPI)                   │
-│   GET /stocks/{code}/quote   GET /stocks/{code}/history?indicators=ma,macd │
-│   GET /stocks/{code}/intraday GET /stocks/{code}/dragon-tiger │
-│   GET /stocks/{code}/margin   GET /stocks/{code}/block-trade │
-│   GET /stocks/{code}/fund-flow GET /stocks/{code}/reports   │
-│   GET /dragon-tiger/daily     GET /hot/topics              │
-│   GET /north-flow/realtime    GET /indices/{code}/quote     │
-│   GET /indicators/catalog                                  │
-├─────────────────────────────────────────────────────────┤
-│              IndicatorService (pure compute)              │
-│   MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR   │
-│   OBV · ROC · DMI · SAR · KC                              │
-│   Sits on top of the manager; no fetcher involvement       │
-├─────────────────────────────────────────────────────────┤
-│                 DataFetcherManager                        │
-│    Priority-based failover, circuit breaker, caching       │
-├─────────────────────────────────────────────────────────┤
-│                   Source Adapters                         │
-│  TushareFetcher  BaostockFetcher  AkshareFetcher  YfinanceFetcher ...    │
-│  TencentFetcher  EastMoneyFetcher  ThsFetcher  CninfoFetcher              │
-├─────────────────────────────────────────────────────────┤
-│              Upstream Stock Data APIs                    │
-```
+Four layers, top-down:
 
-Indicators are a **pure-compute** layer on top of `DataFetcherManager`
-(see `data_provider/indicators/` for the architectural details and the
-conventions that govern adding a new indicator).
+1. **API Layer (FastAPI)** — declarative routes; metadata-driven via `@endpoint_meta`.
+2. **IndicatorService (pure compute)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC`. Sits on top of the manager; no fetcher involvement. See `data_provider/indicators/` for the full descriptor registry and add-an-indicator conventions.
+3. **DataFetcherManager** — capability-routed, priority-based failover + circuit breaker + TTLCache. See `data_provider/manager.py`.
+4. **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Tencent · EastMoney · Ths · Cninfo · Myquant · Baidu` (11 fetchers; details in each module's docstring).
 
 ## Directory Structure
 
-```
-stock_data/
-├── __init__.py
-├── server.py
-├── api/
-│   ├── __init__.py
-│   ├── routes.py
-│   ├── schemas.py
-│   ├── cache.py                    # In-memory TTLCache for API responses
-│   └── endpoint_meta.py            # @endpoint_meta decorator + REGISTRY (explorer manifest)
-├── explorer/                       # /explorer/ HTML UI + /control/* management endpoints
-│   ├── __init__.py                 # mount(app) entry point; also runs startup sanity checks
-│   ├── manifest.py                 # build_manifest(app) — reflects app.routes + REGISTRY
-│   ├── routes.py                   # /control/* FastAPI router (config, status, api-manifest)
-│   ├── tags.py                     # TAG_TO_TITLE + CAPABILITY_LABELS + _INTERNAL_TAGS
-│   └── static/
-│       └── index.html              # Single-page interactive docs (vanilla JS)
-└── data_provider/
-    ├── __init__.py                  # Public API re-exports
-    ├── base.py                      # BaseFetcher (ABC), DataCapability, DataFetchError
-    ├── manager.py                   # DataFetcherManager (priority-based failover)
-    ├── core/
-    │   ├── __init__.py
-    │   └── types.py                # UnifiedRealtimeQuote, CircuitBreaker, safe_float/int
-    ├── fetchers/
-    │   ├── __init__.py
-    │   ├── index_symbols.py        # Index mappings (CSI/HK/US)
-    │   ├── akshare/
-    │   │   ├── __init__.py
-    │   │   ├── fetcher.py
-    │   │   ├── board.py
-    │   │   └── index_norm.py
-    │   ├── baostock_fetcher.py
-    │   ├── cninfo_fetcher.py
-    │   ├── eastmoney_fetcher.py
-    │   ├── tencent_fetcher.py
-    │   ├── ths_fetcher.py
-    │   ├── tushare_fetcher.py
-    │   ├── yfinance_fetcher.py
-    │   └── zhitu_fetcher.py
-    ├── persistence/                # Cross-process SQLite storage layer (on-disk; replaces legacy data_provider/cache/)
-    │   ├── __init__.py             # Top-level API: init_schema(), reset_all() (used by STOCK_DB_INIT); re-exports CRUD
-    │   ├── db.py                   # get_db_path() / get_connection() (public names)
-    │   ├── stock_list.py           # Stock listing metadata (init_schema, get_stock_list, ...)
-    │   ├── board.py                # Concept/industry board metadata
-    │   ├── trade_calendar.py       # A-share trade calendar + is_trade_date() / get_latest_trade_date_on_or_before()
-    │   └── pool_daily.py           # Unified pool_daily (zt | dt | zbgc) — single table, date-keyed
-    ├── indicators/                 # Pure-compute technical indicator layer
-    │   ├── __init__.py             # Public exports (IndicatorService + 14 calcs)
-    │   ├── types.py                # IndicatorKey, MAOptions, MACDOptions, ...
-    │   ├── registry.py             # INDICATOR_REGISTRY + estimate_lookback()
-    │   ├── indicator_service.py    # Orchestrator (K-line → indicators → df)
-    │   ├── ma.py                   # SMA / EMA / WMA + calcMA
-    │   ├── macd.py
-    │   ├── boll.py
-    │   ├── kdj.py
-    │   ├── rsi.py
-    │   ├── wr.py
-    │   ├── bias.py
-    │   ├── cci.py
-    │   ├── atr.py
-    │   ├── obv.py
-    │   ├── roc.py
-    │   ├── dmi.py
-    │   ├── sar.py
-    │   └── kc.py
-    └── utils/
-        ├── __init__.py
-        └── normalize.py            # normalize_stock_code, market_tag, etc.
-```
+Top-level (full layout — see `ls -R stock_data/` for the complete file list):
+
+- `stock_data/server.py` — FastAPI app entry point.
+- `stock_data/api/` — `routes.py` (all `/stocks/...` endpoints), `schemas.py` (Pydantic response models), `cache.py` (TTLCache), `endpoint_meta.py` (`@endpoint_meta` + `REGISTRY`).
+- `stock_data/explorer/` — `/explorer/` HTML UI + `/control/*` management router. `mount(app)` is the only entry point; see `__init__.py` for startup sanity checks.
+- `stock_data/data_provider/base.py` — `BaseFetcher` ABC, `DataCapability` flag enum, `DataFetchError`.
+- `stock_data/data_provider/manager.py` — `DataFetcherManager` (capability routing, circuit breaker, failover).
+- `stock_data/data_provider/fetchers/` — one file per data source: `tushare_fetcher.py`, `baostock_fetcher.py`, `akshare/` (package), `yfinance_fetcher.py`, `zhitu_fetcher.py`, `tencent_fetcher.py`, `eastmoney_fetcher.py`, `ths_fetcher.py`, `cninfo_fetcher.py`, `myquant_fetcher.py`, `baidu_fetcher.py`, plus `index_symbols.py` (CSI/HK/US index mappings).
+- `stock_data/data_provider/persistence/` — on-disk SQLite layer (replaces legacy `data_provider/cache/`). Sub-modules: `db.py` (shared connection), `stock_list.py`, `board.py`, `trade_calendar.py`, `pool_daily.py` (unified zt/dt/zbgc table).
+- `stock_data/data_provider/indicators/` — pure-compute indicator layer. One file per indicator: `ma.py`, `macd.py`, `boll.py`, `kdj.py`, `rsi.py`, `wr.py`, `bias.py`, `cci.py`, `atr.py`, `obv.py`, `roc.py`, `dmi.py`, `sar.py`, `kc.py`. Registry + orchestrator in `registry.py` / `indicator_service.py`.
+- `stock_data/data_provider/utils/normalize.py` — code/market normalization.
+- `stock_data/data_provider/core/types.py` — `UnifiedRealtimeQuote`, `CircuitBreaker`, `safe_float`/`safe_int`.
 
 ## Core Components
 
@@ -193,114 +112,21 @@ endpoints. Mounted by `stock_data.server` via `explorer.mount(app)`.
 Pure-compute technical-indicator layer. Sits **on top of** `DataFetcherManager`
 and never reaches down into fetchers or the network. Each indicator is a
 standalone pure function in its own file; `registry.py` and
-`indicator_service.py` provide the orchestration layer.
-
-- **`types.py`** — `IndicatorKey` enum, per-indicator options TypedDicts
-  (`MAOptions`, `MACDOptions`, `BOLLOptions`, ...), `OHLCV`, `IndicatorResult`
-- **`registry.py`** — `INDICATOR_REGISTRY` (key → `IndicatorDescriptor`),
-  `list_indicators()` (catalog for `/indicators/catalog`),
-  `estimate_lookback(spec)` (how many K-line bars to fetch to warm up
-  the requested indicators)
-- **`indicator_service.py`** — `IndicatorService.compute(df, spec)` is the
-  main entry point. It accepts either `["ma", "macd"]` (use defaults) or
-  a full `{"ma": {"periods": [5,20]}, "macd": {}}` spec, and returns a
-  copy of the K-line DataFrame with an added `indicators` column whose
-  values are per-bar dicts (e.g. `{"ma5": 12.34, "macd_dif": 0.23}`)
-- **One file per indicator** — `ma.py` (SMA/EMA/WMA), `macd.py`, `boll.py`,
-  `kdj.py`, `rsi.py`, `wr.py`, `bias.py`, `cci.py`, `atr.py`, `obv.py`,
-  `roc.py`, `dmi.py`, `sar.py`, `kc.py`. Each exports a `calcX(...)`
-  function with the same calling convention.
-
-**Conventions** (apply to all 14):
-- Inputs are `list[float | None]` (closes) or `list[OHLCV]` (bars needing
-  high/low/volume). `None` = "missing data", never 0.
-- Outputs are aligned to the input index. A value is `None` whenever the
-  indicator is not yet defined at that bar (insufficient lookback, NaN
-  in input, etc.) — never a forward-fill, never a 0 placeholder.
-- Outputs are rounded to 2 decimals at the boundary (not in inner loops,
-  to keep recursive indicators like EMA numerically clean).
-- NaN inputs in the input list are coerced to None by `_valid()` and
-  treated as missing.
-
-**Anti-patterns**:
-- Do NOT call fetchers from inside an indicator. Indicators are pure.
-- Do NOT add an indicator without registering it in `INDICATOR_REGISTRY`
-  AND adding a public export in `__init__.py`. The catalog endpoint and
-  the orchestrator both read the registry.
-- Do NOT bake an indicator's `min_periods=1` workaround into a calc
-  function to "produce a value sooner". Output `None` until the indicator
-  is properly defined — this is the convention.
+`indicator_service.py` provide the orchestration layer. See
+`data_provider/indicators/__init__.py` for the layer's public surface and
+the conventions / anti-patterns that govern adding a new indicator.
 
 ## Standardized Data Schema
 
-**Historical K-line columns** (`STANDARD_COLUMNS`):
-```
-date, open, high, low, close, volume, amount, pct_chg
-```
+Full Pydantic response models live in `api/schemas.py` — that is the source of truth.
+The non-obvious behaviors worth memorizing here are:
 
-**Realtime quote fields**:
-```
-code, name, source, price, change_pct, change_amount,
-volume, amount, volume_ratio, turnover_rate, amplitude,
-open_price, high, low, pre_close, pe_ratio, pb_ratio, total_mv, circ_mv
-```
-
-**K-line with indicators** (response of `/stocks/{code}/history?indicators=...`
-or `/indices/{code}/history?indicators=...`):
-```python
-KLineData(
-    date, open, high, low, close, volume,
-    amount: float|None,         # present in JSON as null when missing
-    change_percent: float|None, # present in JSON as null when missing
-    # ---- below: 4 fields OMITTED from JSON when their value is None/empty ----
-    ma5, ma10, ma20,   # back-compat: copied from indicators dict when "ma" requested
-    indicators: {     # per-bar dict; populated only when ?indicators= is set
-        "ma5": float|None,
-        "macd_dif": float|None, "macd_dea": float|None, "macd_hist": float|None,
-        "kdj_k": float|None, "kdj_d": float|None, "kdj_j": float|None,
-        "boll_mid": float|None, "boll_upper": float|None,
-        "boll_lower": float|None, "boll_bandwidth": float|None,
-        # ... one entry per output column of the requested indicators
-    },
-)
-# Without `?indicators=`, the 4 fields above are absent from the JSON
-# (KLineData._serialize uses @model_serializer to drop them when None/empty).
-# `amount` and `change_percent` keep their original "present-as-null-when-missing" behavior.
-```
-
-**Indicator catalog entry** (response of `/indicators/catalog`):
-```python
-IndicatorCatalogEntry(
-    key: str,                   # "ma" | "macd" | "boll" | ...
-    input_shape: str,           # "closes" or "ohlcv"
-    default_options: dict,      # e.g. {"short": 12, "long": 26, "signal": 9}
-    output_columns: list[str],  # e.g. ["macd_dif", "macd_dea", "macd_hist"]
-    default_lookback: int,      # bars of K-line needed to warm up with defaults
-)
-```
-
-**StockInfo response** (response of `/stocks/{code}/info`):
-```python
-StockInfoResponse(
-    code, name, ename, market,
-    listed_date, delisted_date,
-    total_shares, float_shares,  # 万股
-    industry, concepts,           # `industry` 当前始终为空; 保留为扩展钩子
-    registered_address, registered_capital, legal_representative,
-    business_scope, established_date,
-    secretary, secretary_phone, secretary_email,
-    source,                       # "ZhituFetcher" | "MyquantFetcher"
-)
-```
-
-**StockInfo response (list)** (response of `GET /stocks?market=csi|hk|us`):
-```python
-StockInfo(
-    code, name, market,
-    exchange: str|None,  # "SH" / "SZ" / "BJ" when known; null otherwise
-                        # (Zhitu / Myquant populate; Baostock / Akshare leave null)
-)
-```
+- **`KLineData` conditional serialization** (response of `/stocks/{code}/history?indicators=...` and `/indices/{code}/history?indicators=...`): `amount` / `change_percent` are emitted as JSON `null` when missing. The four indicator fields (`ma5`, `ma10`, `ma20`, `indicators`) are **omitted from the JSON entirely** when their value is None/empty (via `@model_serializer` on `KLineData._serialize`). Contract: clients can rely on "key exists ⇔ indicator was computed".
+- **`ma5`/`ma10`/`ma20` back-compat fields** are backfilled from the `ma` indicator's `ma5`/`ma10`/`ma20` output columns when the user requests `?indicators=ma`. Otherwise they (and the `indicators` dict) are absent.
+- **`KLineData.indicators`** is a per-bar dict populated only when `?indicators=` is set. One entry per output column of the requested indicators (e.g. `{"ma5": 12.34, "macd_dif": 0.23}`).
+- **Index indicators** share the same `KLineData` response shape as stocks — the orchestrator in `routes.py` (`_apply_indicators`, `_parse_indicators_param`) handles lookback expansion and truncation identically.
+- **Historical K-line** uses `STANDARD_COLUMNS` (`date, open, high, low, close, volume, amount, pct_chg`).
+- **`StockInfo.exchange`** is `"SH"` / `"SZ"` / `"BJ"` when known, else `null` (Zhitu / Myquant populate it; Baostock / Akshare do not).
 
 ## Source Tracking (new)
 
@@ -372,208 +198,27 @@ in the UI (the user can change the method name in the mini-form manually).
 
 ## Provider API Documentation
 
-### BaostockFetcher (Priority 1, A股 only, Free)
-
-**API**: `bs.query_history_k_data_plus(code, fields, start_date, end_date, frequency, adjustflag)`
-
-**Frequency**: `d`=日线, `w`=周线, `m`=月线, `5/15/30/60`=分钟线（不适用指数）
-
-**Fields (日线)**:
-```
-date, open, high, low, close, preclose, volume, amount, adjustflag, turn, tradestatus, pctChg, isST
-```
-
-**Note**: Baostock has **NO realtime quotes API** - only historical data.
-
-**Links**: https://baostock.com/mainContent?file=stockKData.md
-
----
-
-### AkshareFetcher (Priority 2, A股+HK, Free)
-
-**A-share API**: `ak.stock_zh_a_hist(symbol, period, start_date, end_date, adjust)`
-- `period`: `'daily'`, `'weekly'`, `'monthly'`
-- `adjust`: `''`=不复权, `'qfq'`=前复权, `'hfq'`=后复权
-
-**HK API**: `ak.stock_hk_hist(symbol, period, start_date, end_date, adjust)`
-- Same parameters as A-share
-
-**Output columns (中文)**:
-```
-日期, 股票代码, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
-```
-
-**Links**: https://akshare.akfamily.xyz/data/stock/stock.html
-
----
-
-### TushareFetcher (Priority 0, A股, Requires Token)
-
-**APIs**: `api.query('daily', ...)`, `api.query('weekly', ...)`, `api.query('monthly', ...)`
-
-**Output columns** (same for daily/weekly/monthly):
-```
-ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, amount
-```
-
-**Units**:
-- `vol`: 手 (1手=100股) → convert to shares
-- `amount`: 千元 → convert to yuan
-
-**Note**: All three interfaces return **未复权行情**. For 复权数据, use the 复权因子接口 separately.
-
-**Links**: https://tushare.pro/document/2?doc_id=27 (daily), doc_id=144 (weekly), doc_id=145 (monthly)
-
----
-
-### YfinanceFetcher (Priority 3, US+A股+HK, Free)
-
-**API**: `yf.download(tickers, start, end, auto_adjust=True)`
-
-**Supports**: US stocks, US indices (via `US_INDEX_MAP`), A-share (.SS/.SZ), HK (.HK)
-
-**Frequency**: Only daily (intervals via `interval` param: `'1d'`, `'1wk'`, `'1mo'`, `'5m'`, etc.)
-
----
-
-### ZhituFetcher (Priority 4, A股 realtime only, Requires Token)
-
-**API**: `https://api.zhituapi.com/hs/real/ssjy/{stock_code}?token={token}`
-
-**Supports**: A股 realtime quotes only (no historical K-line data)
-
-**Token**: Set via `ZHITU_TOKEN` environment variable
-
-**Output fields**:
-```
-p (price), pc (change_pct), ud (change_amount), v (volume),
-cje (amount), o (open), h (high), l (low), yc (pre_close),
-zf (amplitude), lb (volume_ratio), hs (turnover_rate), pe (pe_ratio),
-sjl (pb_ratio), sz (total_mv), lt (circ_mv)
-```
-
-**Note**: Zhitu API returns rich realtime data but **does not support historical D/W/M K-line data** —
-no `get_kline_data` and no `_fetch_raw_data` (raises `DataFetchError`). It also serves as a
-**minute-level K-line fallback** via `/hs/history/{symbol}.{sh|sz}/{period}/{adj}` (period ∈
-`5`/`15`/`30`/`60`; adjust ∈ `n`/`f`/`b` for 不复权/前复权/后复权; `period=1` rejected). When
-`HISTORICAL_MIN` is the requested capability, Zhitu joins the minute failover chain at
-priority 4 (after Baostock P1 / Akshare P2 / Yfinance P3).
-
-**Links**: https://www.zhituapi.com/hsstockapi.html
-
-**Stock list endpoint**: `https://api.zhituapi.com/hs/list/all?token={token}` (P4 last-resort backup in STOCK_LIST failover chain)
-
-- Single HTTP call returns the full A-share list (~5000+ stocks)
-- Rate limit: 300/min (包量版), 1000/min (体验版/包月版), per Zhitu docs
-- Update frequency: 16:20 daily
-- Returns `{"dm": <code>, "mc": <name>, "jys": "sh"|"sz"}` — `jys` is passed through raw to the persistence layer, which normalizes via `_normalize_exchange` (zhitu `sh`/`sz`, myquant `SHSE`/`SZSE`, etc. all map to canonical `"SH"`/`"SZ"`/`"BJ"`).
-- Non-A-share markets return `[]` (Zhitu only covers csi).
-
----
-
-### TencentFetcher (Priority 5, A股+HK, Free)
-
-**API**: `https://qt.gtimg.cn/q={prefix_code}` (HTTP GET, GBK encoding)
-
-**Supports**: A-share + HK realtime quotes with enhanced valuation fields
-
-**Key enhanced fields** (88-field `~` delimited response):
-- Index 39: PE(TTM), Index 46: PB, Index 44/45: 总市值/流通市值(亿)
-- Index 47/48: 涨停价/跌停价, Index 49: 量比, Index 52: PE(静)
-
-**Note**: Tencent财经 provides enhanced valuation data not available from other providers. Uses `urllib` for GBK response handling.
-
----
-
-### EastMoneyFetcher (Priority 6, A股, Free)
-
-**Datacenter domain** (datacenter-web.eastmoney.com):
-- 龙虎榜: `RPT_DAILYBILLBOARD_DETAILSNEW`, 席位: `RPT_BILLBOARD_DAILYDETAILSBUY/SELL`
-- 融资融券: `RPTA_WEB_RZRQ_GGMX`
-- 大宗交易: `RPT_DATA_BLOCKTRADE`
-- 股东户数: `RPT_HOLDERNUMLATEST`
-- 分红送转: `RPT_SHAREBONUS_DET`
-
-**push2 domain** (push2.eastmoney.com / push2his.eastmoney.com):
-- 资金流分钟级: `/api/qt/stock/fflow/kline/get?klt=1`
-- 资金流120日: `/api/qt/stock/fflow/daykline/get?lmt=120`
-
-**ReportAPI domain** (reportapi.eastmoney.com):
-- 研报列表: `/report/list`, PDF: `https://pdf.dfcfw.com/pdf/H3_{info_code}_1.pdf`
-
-**Note**: All domains share a unified `_datacenter_query()` helper. No authentication required.
-
----
-
-### ThsFetcher (Priority 7, A股, Free)
-
-**热点题材**: `http://zx.10jqka.com.cn/event/api/getharden/`
-- Returns daily hot stocks with reason tags (题材归因), zero-auth, ~73ms
-
-**北向资金**: `https://data.hexin.cn/market/hsgtApi/method/dayChart/`
-- Minute-level 沪股通/深股通 cumulative net buy data (262 time points per day)
-
-**Note**: No API key required. Simple HTTP GET with User-Agent header.
-
----
-
-### CninfoFetcher (Priority 8, A股, Free)
-
-**API**: `https://www.cninfo.com.cn/new/hisAnnouncement/query` (HTTP POST)
-
-**Supports**: Full-text announcement search and retrieval for A-share stocks
-
-**orgId format**: `gssh0{code}` (Shanghai), `gssz0{code}` (Shenzhen), `gsbj0{code}` (Beijing)
-
-**Note**: Returns announcement title, type, date, and detail page URL. PDF download not yet implemented.
-
----
-
-### MyquantFetcher (Priority 9 — last-resort backup, A股 only, Requires Token)
-
-**SDK**: `gm` (pip install gm>=3.0.180,<4) — https://www.myquant.cn/
-
-**Token**: Set via `MYQUANT_TOKEN` environment variable. `is_available()` calls
-`gm.api.set_token` on first invocation; if `gm` is unimportable, the fetcher is
-skipped at registration. A-share only (no HK/US); no weekly/monthly/1-minute
-K-line. Realtime `current_price` is price-only. Implementation details
-(field-by-field quirks, pct_chg derivation, defensive A-share filtering, the
-gm/pandas dependency warning) live in the `myquant_fetcher.py` module docstring
-— not duplicated here.
-
-**Priority 9 is intentional**: it ensures the REALTIME_QUOTE failover chain is
-`Tushare → Zhitu/Tencent/Akshare → Myquant` (richer-data first), matching the
-"richer source wins" convention used by every other fetcher.
-
----
-
-### BaiduFetcher (Priority 7, news search backup, A股 only, Requires API Key)
-
-**API**: `POST https://qianfan.baidubce.com/v2/ai_search/web_search`
-
-**Authentication**: `Authorization: Bearer <API Key>` (token read from `BAIDU_API_KEY` env var)
-
-**Supported capability**: `NEWS_SEARCH` only — no K-line / quote / financial data. Functions as backup source when `EastMoneyFetcher.search_news` fails (saves Baidu's 1500/month free quota).
-
-**Request body**:
-```json
-{
-  "messages": [{"content": "query", "role": "user"}],
-  "search_source": "baidu_search_v2",
-  "resource_type_filter": [{"type": "web", "top_k": 20}],
-  "search_recency_filter": "year"
-}
-```
-
-**Response field**: `references[].{title, url, content, date, type, web_anchor}`
-
-**Pricing**: 1500 calls/month free (released daily), then pay-as-you-go.
-
-**Limitation**: `top_k` hard cap is 50; user-facing `limit` accepts 1..100 but is clamped internally to 50.
-
-**Links**: https://cloud.baidu.com/doc/qianfan-api/s/Wmbq4z7e5
-
----
+Each fetcher's module docstring is the **canonical spec** (URL endpoints, request/response fields, units, rate limits, capability set). Read the docstring of the fetcher you're touching before changing its behavior. Per-provider official upstream references are mirrored under `docs/baostock/`, `docs/zhitu/`, `docs/myquant/`.
+
+Compact overview:
+
+| Fetcher | Priority | Markets | Capabilities (in addition to defaults) | Auth |
+|---|---|---|---|---|
+| `TushareFetcher` | 0 | csi | `HISTORICAL_DWM`, `REALTIME_QUOTE`, `INDEX_HISTORICAL` | `TUSHARE_TOKEN` |
+| `BaostockFetcher` | 1 | csi | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `TRADE_CALENDAR`, `INDEX_HISTORICAL` | none |
+| `AkshareFetcher` | 2 | csi, hk | `HISTORICAL_DWM`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `INDEX_*`, `STOCK_ZT_POOL` | none |
+| `YfinanceFetcher` | 3 | us, csi, hk | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `INDEX_HISTORICAL`, `INDEX_QUOTE` | none |
+| `ZhituFetcher` | 4 | csi | `REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `HISTORICAL_MIN` (minute fallback), `STOCK_LIST` (P4 backup) | `ZHITU_TOKEN` |
+| `TencentFetcher` | 5 | csi, hk | `REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
+| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT` | none |
+| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW` | none |
+| `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
+| `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
+| `MyquantFetcher` | 9 | csi | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_HISTORICAL`, `INDEX_INTRADAY`, `STOCK_INFO` (last-resort backup; richer sources win) | `MYQUANT_TOKEN` |
+
+**Default priority is overridable** via `*_PRIORITY` env vars (see [Configuration](#configuration)). The lower the priority number, the earlier the fetcher is tried in the failover chain.
+
+**`BaiduFetcher` (news-search only)**: POST to `https://qianfan.baidubce.com/v2/ai_search/web_search` with `Authorization: Bearer <BAIDU_API_KEY>`. Backup source for `EastMoneyFetcher.search_news`; details (request body schema, `top_k` ≤ 50 cap, 1500/month free quota) in `baidu_fetcher.py`'s docstring.
 
 ## Provider Frequency Support
 
@@ -589,31 +234,7 @@ gm/pandas dependency warning) live in the `myquant_fetcher.py` module docstring
 
 ## Capability-Based Routing
 
-Every fetcher declares its capabilities via `supported_data_types: DataCapability`, a `Flag` enum in `base.py`:
-
-```python
-class DataCapability(Flag):
-    HISTORICAL_DWM   # 日/周/月 K线 (d/w/m)
-    HISTORICAL_MIN   # 分钟 K线 (1/5/15/30/60m)
-    REALTIME_QUOTE   # 实时报价
-    STOCK_LIST       # 股票列表 (get_all_stocks)
-    TRADE_CALENDAR   # 交易日历
-    STOCK_BOARD      # 板块数据（概念/行业板块列表）
-    INDEX_QUOTE      # 指数实时行情
-    INDEX_HISTORICAL # 指数历史K线 (d/w/m)
-    INDEX_INTRADAY   # 指数日内分时 (1/5/15/30/60m)
-    STOCK_ZT_POOL    # 涨跌停股池
-    DRAGON_TIGER     # 龙虎榜（个股+全市场）
-    MARGIN_TRADING   # 融资融券
-    BLOCK_TRADE      # 大宗交易
-    HOLDER_NUM       # 股东户数变化
-    DIVIDEND         # 分红送转
-    FUND_FLOW        # 资金流（个股资金流分钟级+120日）
-    HOT_TOPICS       # 热点题材（同花顺当日强势股+题材归因）
-    NORTH_FLOW       # 北向资金（沪股通/深股通分钟流向）
-    RESEARCH_REPORT  # 研报
-    ANNOUNCEMENT     # 公告
-```
+Every fetcher declares its capabilities via `supported_data_types: DataCapability` (the `Flag` enum is defined in `data_provider/base.py`).
 
 **Hard rule**: EVERY data access method in `DataFetcherManager` MUST route through
 `_filter_by_capability(market, capability)`. Never hardcode a specific fetcher class
@@ -685,15 +306,12 @@ fetchers that support it.
 
 ## Key Design Patterns
 
-### Circuit Breaker
-Per-source circuit breakers prevent cascading failures:
-- CLOSED (normal) → OPEN (after N failures) → HALF_OPEN (probe) → CLOSED (recover)
-- Configurable failure threshold and cooldown
+Cross-cutting behaviors implemented in `data_provider/manager.py` / `data_provider/core/types.py` (one-liners, see source for details):
 
-### Rate Limiting / Anti-Banning
-- Random jitter between requests (1.5-3.0s default)
-- Random User-Agent rotation from pool
-- Exponential backoff retry on failure
+- **Circuit breaker** — per-source state machine: `CLOSED → OPEN (after N failures) → HALF_OPEN (probe) → CLOSED (recover)`. Threshold and cooldown configurable.
+- **Rate limiting / anti-banning** — random 1.5-3.0s jitter, rotating `User-Agent` pool, exponential backoff on retry (via `tenacity`).
+- **Market-aware routing** — request market is inferred from the stock code; A-share → Baostock → Akshare failover; US → Yfinance; HK → Akshare / Tencent / Yfinance. See [Capability-Based Routing](#capability-based-routing) for the capability side.
+- **Code normalization** — `normalize_stock_code()` accepts `SH600519` / `sz000001` / `HK00700` and returns the canonical 6-digit or `HK`-prefixed form (see `data_provider/utils/normalize.py`).
 
 ### Indicator Computation
 Pure DataFrame transformer at the orchestration boundary:
@@ -706,30 +324,11 @@ Pure DataFrame transformer at the orchestration boundary:
 4. `routes.py` then truncates the DataFrame back to the user's `days`
    (the extra lookback was only needed to warm the indicator).
 
-**Index indicators**: `/indices/{code}/history` accepts the same
-`?indicators=` query param as `/stocks/{code}/history`. The
-orchestrator in `routes.py` handles lookback expansion and truncation
-the same way for both endpoints (`_apply_indicators`, `_parse_indicators_param`
-are shared). Indices and stocks share the same `KLineData` response
-shape — the same conditional serialization applies.
-
-**`ma5`/`ma10`/`ma20` back-compat fields** on `KLineData` are backfilled
-from the `ma` indicator's `ma5/ma10/ma20` output columns when the user
-requests `?indicators=ma`. When no indicator is requested, the 4 indicator
-fields (`ma5`, `ma10`, `ma20`, `indicators`) are **omitted from the JSON
-response entirely** by `KLineData._serialize`'s `@model_serializer` —
-they are not present as `null`. Contract: clients can rely on "key exists
-⇔ indicator was computed".
-
-### Market-Aware Routing
-Manager routes requests based on stock code and capability:
-- US stocks → YfinanceFetcher (primary), Stooq fallback
-- A-shares → BaostockFetcher (primary), AkshareFetcher (fallback)
-- Each fetcher declares supported markets via `supported_markets` and capabilities via `supported_data_types: DataCapability`
-
-### Code Normalization
-`normalize_stock_code()` handles various input formats:
-- `SH600519` → `600519`, `sz000001` → `000001`, `HK00700` → `HK00700`
+**Index indicators**: `/indices/{code}/history` accepts the same `?indicators=`
+query param as `/stocks/{code}/history` and runs through the same
+`_apply_indicators` / `_parse_indicators_param` helpers in `routes.py`.
+The `KLineData` response shape and its conditional serialization behavior
+are the same as stocks (see [Standardized Data Schema](#standardized-data-schema)).
 
 ## Common Commands
 
@@ -782,26 +381,16 @@ The `/control/*` management endpoints live alongside at the same prefix.
 
 ## Configuration
 
-Environment variables (see `.env.example`):
-- `TUSHARE_TOKEN` - Tushare Pro API token
-- `BAOSTOCK_PRIORITY` - Override Baostock fetcher priority (default: 1)
-- `AKSHARE_PRIORITY` - Override Akshare fetcher priority (default: 2)
-- `YFINANCE_PRIORITY` - Override Yfinance fetcher priority (default: 3)
-- `ZHITU_TOKEN` - Zhitu API token for realtime quotes
-- `ZHITU_PRIORITY` - Override Zhitu fetcher priority (default: 4)
-- `ENABLE_API_CACHE` - Enable/disable API response caching (default: true)
-- `STOCK_CACHE_DB_PATH` - Path to the SQLite persistence file (default: `<repo>/stock_data/stock_cache.db`)
-- `STOCK_DB_INIT` - Startup hook. `true` → DROP + recreate all persistence tables on boot (full reset for dev/test). `false` → idempotent CREATE IF NOT EXISTS only (default). Any other value is treated as false. **WARNING: `true` wipes all cached metadata.**
-- `MYQUANT_TOKEN` - 掘金量化 myquant SDK token (https://www.myquant.cn/)
-- `MYQUANT_PRIORITY` - Override Myquant fetcher priority (default: 9 — last-resort backup)
-- `MYQUANT_CALENDAR_START_YEAR` - Override the start year for `get_trade_calendar` (default: 2010)
-- `TENCENT_PRIORITY` - Override Tencent fetcher priority (default: 5)
-- `EASTMONEY_PRIORITY` - Override EastMoney fetcher priority (default: 6)
-- `THS_PRIORITY` - Override ThsFetcher priority (default: 7)
-- `CNINFO_PRIORITY` - Override Cninfo fetcher priority (default: 8)
-- `CACHE_TTL_STOCK_INTRADAY` - Stock intraday cache TTL in seconds (default: 30)
-- `CACHE_TTL_INDEX_INTRADAY` - Index intraday cache TTL in seconds (default: 30)
-- `CACHE_TTL_STOCK_INFO` - 公司画像缓存 TTL 秒 (default: 3600)
+`.env.example` is the canonical reference (66 lines, all env vars + comments).
+The non-obvious knobs worth memorizing here:
+
+- `STOCK_DB_INIT=true` — **DROPs and recreates** all persistence tables on boot. Use only in dev/test. Any other value is treated as `false` (idempotent `CREATE IF NOT EXISTS`).
+- `STOCK_CACHE_DB_PATH` — SQLite persistence file. Default: `<repo>/stock_data/stock_cache.db`.
+- `ENABLE_API_CACHE` — toggle the in-memory `TTLCache` layer (default: `true`).
+- `*_PRIORITY` env vars — override any fetcher's default priority at startup. The lower the number, the earlier the fetcher is tried.
+- `MYQUANT_CALENDAR_START_YEAR` — start year for `get_trade_calendar` (default: `2010`).
+- `CACHE_TTL_STOCK_INTRADAY` / `CACHE_TTL_INDEX_INTRADAY` — minute-line cache TTL in seconds (default: `30`).
+- `CACHE_TTL_STOCK_INFO` — 公司画像 (`StockInfoResponse`) cache TTL in seconds (default: `3600`).
 
 ## Anti-Patterns to Avoid
 
