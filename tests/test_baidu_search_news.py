@@ -425,3 +425,97 @@ class TestSearchNewsErrors:
         results = BaiduFetcher().search_news(q="ok", limit=10)
         assert len(results) == 1
         assert results[0]["title"] == "valid"
+
+
+# ---------- Date post-filter contract ----------
+
+class TestSearchNewsDateFilter:
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_from_date_filters_out_older_records(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        payload = {
+            "references": [
+                {
+                    "title": "new",
+                    "url": "https://a.com/1.html",
+                    "content": "snippet",
+                    "date": "2026-06-09 10:00:00",
+                },
+                {
+                    "title": "old",
+                    "url": "https://a.com/2.html",
+                    "content": "snippet",
+                    "date": "2026-04-29 10:00:00",
+                },
+            ]
+        }
+        mock_post.return_value = _mock_post_returning(payload)
+
+        results = BaiduFetcher().search_news(q="ok", limit=10, from_date="2026-05-01")
+        assert len(results) == 1
+        assert results[0]["title"] == "new"
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_to_date_filters_out_newer_records(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        payload = {
+            "references": [
+                {
+                    "title": "new",
+                    "url": "https://a.com/1.html",
+                    "content": "snippet",
+                    "date": "2026-06-09 10:00:00",
+                },
+                {
+                    "title": "old",
+                    "url": "https://a.com/2.html",
+                    "content": "snippet",
+                    "date": "2026-04-29 10:00:00",
+                },
+            ]
+        }
+        mock_post.return_value = _mock_post_returning(payload)
+
+        results = BaiduFetcher().search_news(q="ok", limit=10, to_date="2026-05-01")
+        assert len(results) == 1
+        assert results[0]["title"] == "old"
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_from_and_to_date_range(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        payload = {
+            "references": [
+                {
+                    "title": "in_range",
+                    "url": "https://a.com/1.html",
+                    "content": "snippet",
+                    "date": "2026-05-20 10:00:00",
+                },
+                {
+                    "title": "before",
+                    "url": "https://a.com/2.html",
+                    "content": "snippet",
+                    "date": "2026-04-29 10:00:00",
+                },
+                {
+                    "title": "after",
+                    "url": "https://a.com/3.html",
+                    "content": "snippet",
+                    "date": "2026-06-09 10:00:00",
+                },
+            ]
+        }
+        mock_post.return_value = _mock_post_returning(payload)
+
+        results = BaiduFetcher().search_news(
+            q="ok", limit=10, from_date="2026-05-01", to_date="2026-05-31"
+        )
+        assert len(results) == 1
+        assert results[0]["title"] == "in_range"
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_no_date_filter_returns_all(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning(SAMPLE_BAIDU_RESPONSE)
+        results = BaiduFetcher().search_news(q="ok", limit=10)
+        assert len(results) == 2
