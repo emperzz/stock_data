@@ -152,3 +152,116 @@ class TestSearchNewsHappyPath:
 
         results = BaiduFetcher().search_news(q="test", limit=20)
         assert results == []
+
+
+# ---------- Request body shape contract ----------
+
+class TestSearchNewsRequestBody:
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_body_has_messages_with_role_user(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        BaiduFetcher().search_news(q="贵州茅台", limit=20)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["messages"] == [{"content": "贵州茅台", "role": "user"}]
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_body_has_search_source_baidu_search_v2(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        BaiduFetcher().search_news(q="test", limit=10)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["search_source"] == "baidu_search_v2"
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_body_has_resource_type_filter_web_with_top_k(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        BaiduFetcher().search_news(q="test", limit=15)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["resource_type_filter"] == [{"type": "web", "top_k": 15}]
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_top_k_clamped_to_50_when_limit_exceeds(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        BaiduFetcher().search_news(q="test", limit=100)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["resource_type_filter"] == [{"type": "web", "top_k": 50}]
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_top_k_passes_through_when_under_50(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        BaiduFetcher().search_news(q="test", limit=20)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["resource_type_filter"][0]["top_k"] == 20
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_no_recency_filter_when_from_date_none(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        BaiduFetcher().search_news(q="test", limit=10)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert "search_recency_filter" not in body
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_recency_filter_week_for_recent_from_date(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        # from_date 3 days ago → "week"
+        from datetime import date, timedelta
+        recent = (date.today() - timedelta(days=3)).isoformat()
+        BaiduFetcher().search_news(q="test", limit=10, from_date=recent)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["search_recency_filter"] == "week"
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_recency_filter_year_for_old_from_date(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        from datetime import date, timedelta
+        old = (date.today() - timedelta(days=365)).isoformat()
+        BaiduFetcher().search_news(q="test", limit=10, from_date=old)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["search_recency_filter"] == "year"
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_recency_filter_month_for_30_days(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        from datetime import date, timedelta
+        thirty = (date.today() - timedelta(days=30)).isoformat()
+        BaiduFetcher().search_news(q="test", limit=10, from_date=thirty)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["search_recency_filter"] == "month"
+
+    @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
+    def test_recency_filter_semiyear_for_180_days(self, mock_post, monkeypatch):
+        monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
+        mock_post.return_value = _mock_post_returning({"references": []})
+
+        from datetime import date, timedelta
+        one_eighty = (date.today() - timedelta(days=180)).isoformat()
+        BaiduFetcher().search_news(q="test", limit=10, from_date=one_eighty)
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["search_recency_filter"] == "semiyear"
