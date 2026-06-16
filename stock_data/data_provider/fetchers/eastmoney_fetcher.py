@@ -574,6 +574,14 @@ class EastMoneyFetcher(BaseFetcher):
         """
         if not q or len(q) > 200:
             raise DataFetchError(f"[EastMoneyFetcher] search_news: invalid q (len={len(q) if q else 0})")
+        # Coerce limit to int (the explorer mini-form sends HTML input values
+        # as strings; without coercion the range check raises TypeError).
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError) as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] search_news: limit must be an integer 1..100 (got {limit!r})"
+            ) from e
         if not (1 <= limit <= 100):
             raise DataFetchError(f"[EastMoneyFetcher] search_news: limit must be 1..100 (got {limit})")
 

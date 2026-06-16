@@ -138,6 +138,27 @@ class TestSearchNewsErrors:
             self.fetcher.search_news(q="ok", limit=101)
 
     @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
+    def test_limit_as_string_is_coerced(self, mock_get):
+        """limit is sent as a string from the explorer mini-form (HTML inputs
+        yield strings). The fetcher must coerce to int and accept a valid
+        numeric string, otherwise the comparison ``1 <= limit <= 100`` raises
+        a raw TypeError that the manager treats as a network failure."""
+        mock_get.return_value = _mock_get_returning(_load_fixture())
+
+        results = self.fetcher.search_news(q="603777", limit="20")
+
+        assert len(results) == 2
+        called_kwargs = mock_get.call_args.kwargs
+        assert called_kwargs["params"]["cb"].startswith("jQuery_")
+
+    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
+    def test_limit_non_numeric_string_raises(self, mock_get):
+        """A non-numeric string can't be coerced — surface a clear
+        DataFetchError rather than letting a TypeError leak out."""
+        with pytest.raises(DataFetchError):
+            self.fetcher.search_news(q="ok", limit="abc")
+
+    @patch("stock_data.data_provider.fetchers.eastmoney_fetcher.requests.get")
     def test_records_missing_critical_fields_are_skipped(self, mock_get):
         # First record OK, second missing 'url', third missing 'date'
         body = (
