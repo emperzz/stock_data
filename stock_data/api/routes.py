@@ -47,6 +47,7 @@ from .cache import (
     get_index_quote_cache,
     get_margin_cache,
     get_news_content_cache,
+    get_news_flash_cache,
     get_news_search_cache,
     get_north_flow_cache,
     get_pools_cache,
@@ -70,6 +71,7 @@ from .cache import (
     make_index_quote_cache_key,
     make_margin_cache_key,
     make_news_content_cache_key,
+    make_news_flash_cache_key,
     make_news_search_cache_key,
     make_north_flow_cache_key,
     make_pools_cache_key,
@@ -97,6 +99,8 @@ from .schemas import (
     DragonTigerResponse,
     DragonTigerSeat,
     ErrorResponse,
+    FlashNewsItem,
+    FlashNewsResponse,
     FundFlowDailyRecord,
     FundFlowMinuteRecord,
     FundFlowResponse,
@@ -2126,6 +2130,60 @@ def search_news(
         raise
     except Exception as e:
         logger.error(f"News search error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail={"error": "internal_error", "message": str(e)}
+        ) from e
+
+
+@news_router.get(
+    "/news/flash",
+    response_model=FlashNewsResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid limit"},
+        502: {"model": ErrorResponse, "description": "All fetchers failed"},
+    },
+    tags=["news"],
+)
+@endpoint_meta(
+    summary="全球财经快讯（7×24 实时推送）",
+    markets=["csi"],
+    capabilities=["NEWS_FLASH"],
+)
+def get_flash_news(
+    limit: int = Query(default=50, ge=1, le=200, description="条数 1-200, 默认 50"),
+) -> FlashNewsResponse:
+    """全球财经快讯（东财 7x24 实时流，60s 缓存）。"""
+    try:
+        if is_cache_enabled():
+            cache = get_news_flash_cache()
+            key = make_news_flash_cache_key(limit)
+            if key in cache:
+                logger.info(f"[APICache] news flash hit: limit={limit}")
+                return cache[key]
+
+        manager = get_manager()
+        items, source = manager.get_flash_news(limit=limit)
+
+        result = FlashNewsResponse(
+            data=[FlashNewsItem(**it) for it in items],
+            total=len(items),
+            limit=limit,
+            source=source,
+        )
+
+        if is_cache_enabled():
+            cache[key] = result
+        return result
+    except DataFetchError as e:
+        logger.warning(f"News flash unavailable: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "data_unavailable", "message": str(e)},
+        ) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"News flash error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500, detail={"error": "internal_error", "message": str(e)}
         ) from e
