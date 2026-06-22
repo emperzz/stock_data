@@ -45,6 +45,7 @@ _TTL_POOLS = int(os.getenv("CACHE_TTL_POOLS", "60"))
 _TTL_STOCK_INFO = int(os.getenv("CACHE_TTL_STOCK_INFO", "3600"))  # 公司画像 (1h)
 _TTL_NEWS_SEARCH = int(os.getenv("CACHE_TTL_NEWS_SEARCH", "300"))
 _TTL_NEWS_CONTENT = int(os.getenv("CACHE_TTL_NEWS_CONTENT", "3600"))
+_TTL_NEWS_FLASH = int(os.getenv("CACHE_TTL_NEWS_FLASH", "60"))  # 7x24 快讯 (60s)
 
 # Cache instances
 _dragontiger_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_DRAGON_TIGER)
@@ -62,6 +63,7 @@ _pools_cache: TTLCache = TTLCache(maxsize=128, ttl=_TTL_POOLS)
 _stock_info_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INFO)
 _news_search_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_SEARCH)
 _news_content_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_CONTENT)
+_news_flash_cache: TTLCache = TTLCache(maxsize=64, ttl=_TTL_NEWS_FLASH)
 
 
 def get_quote_cache() -> TTLCache:
@@ -149,6 +151,15 @@ def get_news_search_cache() -> TTLCache:
 
 def get_news_content_cache() -> TTLCache:
     return _news_content_cache
+
+
+def get_news_flash_cache() -> TTLCache:
+    return _news_flash_cache
+
+
+def make_news_flash_cache_key(limit: int) -> tuple:
+    """Cache key for /news/flash?limit=N. Single-param, opaque tuple."""
+    return ("news_flash", limit)
 
 
 def make_quote_cache_key(stock_code: str) -> str:
