@@ -1,0 +1,37 @@
+{
+  "req_trace": "1710315450384",
+  "code": 0,
+  "message": "success",
+  "data": {
+    "sortEnd": "",
+    "index": 1,
+    "total": null,
+    "size": 2,
+    "fastNewsList": [
+      {
+        "summary": "某科技公司全资子公司近日业务调整公告内容。",
+        "code": "202606223778033979",
+        "titleColor": 0,
+        "realSort": 1782116639033979,
+        "showTime": "2026-06-22 16:23:59",
+        "title": "某科技全资子公司业务调整",
+        "share": 1,
+        "pinglun_Num": 0,
+        "stockList": ["600519", "1.5"],
+        "image": []
+      },
+      {
+        "summary": "央行今日开展 1000 亿元 MLF 操作。",
+        "code": "202606223778033980",
+        "titleColor": 0,
+        "realSort": 1782116639033978,
+        "showTime": "2026-06-22 16:20:00",
+        "title": "央行开展 1000 亿 MLF 操作",
+        "share": 0,
+        "pinglun_Num": 5,
+        "stockList": [],
+        "image": []
+      }
+    ]
+  }
+}
