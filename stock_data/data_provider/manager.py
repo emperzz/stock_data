@@ -321,6 +321,36 @@ class DataFetcherManager:
             return_source=True,
         )
 
+    # ---------- news flash ----------
+
+    def get_flash_news(self, limit: int = 50) -> tuple[list[dict], str]:
+        """全球财经快讯 (7x24 实时推送),通过 NEWS_FLASH-capable fetcher 获取。
+
+        上游 pageSize 硬 cap 200;用户传超过 200 时,路由层 Query(le=200) 会先拦,
+        这里再二次防御。
+
+        Returns:
+            Tuple of (list_of_FlashNewsItem, fetcher_name)。空结果集视作
+            合法状态(上游可能当前无快讯),不抛错;但全部 fetcher 异常失败时
+            仍然抛 ``DataFetchError``。
+        """
+        try:
+            return self._with_failover(
+                DataCapability.NEWS_FLASH,
+                "csi",
+                f"news flash limit={limit}",
+                lambda f: f.fetch_flash_news(limit),
+                return_source=True,
+            )
+        except DataFetchError as e:
+            # _with_failover 把 "所有 fetcher 返回空" 和 "所有 fetcher 异常" 都包成
+            # DataFetchError。空结果时 errors 列表为空 → 消息里没有 "[<name>]" 行;
+            # 真失败时 errors 含 per-fetcher 行。区分二者的最稳方法:看消息里
+            # 是否有方括号包起来的 fetcher 名错误。
+            if "[" in str(e) and "]" in str(e):
+                raise
+            return ([], "")
+
     # ---------- realtime quotes (with circuit breaker) ----------
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
