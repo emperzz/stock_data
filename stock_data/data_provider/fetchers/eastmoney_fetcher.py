@@ -156,6 +156,7 @@ class EastMoneyFetcher(BaseFetcher):
         | DataCapability.FUND_FLOW
         | DataCapability.RESEARCH_REPORT
         | DataCapability.NEWS_SEARCH
+        | DataCapability.NEWS_FLASH
     )
 
     def is_available(self) -> bool:
@@ -613,6 +614,12 @@ class EastMoneyFetcher(BaseFetcher):
     # a Session that has previously talked to eastmoney.com (some server-set
     # cookies are expected; JS-set ones like qgqp_b_id won't be seeded).
     _NEWS_WARMUP_URL = "https://so.eastmoney.com/news/s"
+
+    # -- 7x24 全球财经快讯 ----------------------------------------------------
+    _FLASH_NEWS_URL = "https://np-weblist.eastmoney.com/comm/web/getFastNewsList"
+    # pageSize 上游硬 cap 200；超过就 cap；下限 1
+    _FLASH_NEWS_MAX_PAGE_SIZE = 200
+    _FLASH_NEWS_MIN_LIMIT = 1
     # Full Chrome 120 desktop fingerprint + cache-busting headers. The
     # search backend fingerprints UA + sec-ch-* + sec-fetch-*; missing
     # Cache-Control/Pragma no-cache signals "this is a cached/replay
@@ -877,3 +884,104 @@ class EastMoneyFetcher(BaseFetcher):
             "snippet": snippet,
             "media_name": rec.get("mediaName", ""),
         }
+
+    # ------------------------------------------------------------------
+    # 7×24 全球财经快讯 (Flash News)
+    # ------------------------------------------------------------------
+
+    def fetch_flash_news(self, limit: int = 50) -> list[dict]:
+        """Get 7x24 global financial flash news.
+
+        上游 URL: https://np-weblist.eastmoney.com/comm/web/getFastNewsList
+        上游 pageSize 硬 cap 200;超过就 cap 到 200。
+        响应: ``{"code": 0, "data": {"size": N, "fastNewsList": [...]}}``
+        每个 item 字段: title, summary, code (文章 ID), showTime, ...
+
+        Returns:
+            归一化后的 list[dict],每条形如:
+            ``{title, url, source_domain, publish_time, snippet}``
+            当上游 fastNewsList 缺失或为 null 时返回 ``[]``。
+
+        Raises:
+            DataFetchError: 网络异常 / HTTP 非 200 / 上游 code != 0 / limit 越界
+        """
+        # 参数防御: 路由层 FastAPI Query(ge=1, le=200) 会拦,但 fetcher 也独立校验
+        # (单一职责, 跨调用方安全)。
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError) as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] fetch_flash_news: limit must be int (got {limit!r})"
+            ) from e
+        if limit < self._FLASH_NEWS_MIN_LIMIT:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] fetch_flash_news: limit must be "
+                f"at least {self._FLASH_NEWS_MIN_LIMIT} (got {limit})"
+            )
+        # 上限不报错, 直接 cap 到 _FLASH_NEWS_MAX_PAGE_SIZE。
+        # 路由层 FastAPI Query(le=200) 会拦, 但 fetcher 也防御, 避免一条坏数据废整个 list。
+
+        page_size = min(limit, self._FLASH_NEWS_MAX_PAGE_SIZE)
+        params = {
+            "client": "web",
+            "biz": "web_724",
+            "fastColumn": "102",
+            "sortEnd": "",
+            "pageSize": str(page_size),
+            "req_trace": str(int(time.time() * 1000)),
+        }
+        headers = {
+            "User-Agent": UA,
+            "Referer": "https://kuaixun.eastmoney.com/",
+        }
+        try:
+            resp = self._session.get(
+                self._FLASH_NEWS_URL, params=params, headers=headers, timeout=15
+            )
+        except Exception as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] fetch_flash_news network error: {e}"
+            ) from e
+
+        if resp.status_code != 200:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] fetch_flash_news HTTP {resp.status_code}"
+            )
+
+        try:
+            payload = resp.json()
+        except (ValueError, json.JSONDecodeError) as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] fetch_flash_news: bad JSON: {e}"
+            ) from e
+
+        if payload.get("code") != 0:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] fetch_flash_news API code={payload.get('code')} "
+                f"msg={payload.get('message')}"
+            )
+
+        raw_list = (payload.get("data") or {}).get("fastNewsList")
+        if not raw_list:
+            return []
+
+        out: list[dict] = []
+        for rec in raw_list:
+            try:
+                code = rec["code"]
+                out.append(
+                    {
+                        "title": rec.get("title", ""),
+                        "url": f"https://finance.eastmoney.com/a/{code}.html",
+                        "source_domain": "finance.eastmoney.com",
+                        "publish_time": rec.get("showTime", ""),
+                        "snippet": rec.get("summary", ""),
+                    }
+                )
+            except (KeyError, TypeError) as e:
+                # 单条记录缺关键字段(article code)就跳过, 避免一条坏数据废整个 list
+                logger.warning(
+                    f"[EastMoneyFetcher] fetch_flash_news: skipping malformed record: {e}"
+                )
+                continue
+        return out
