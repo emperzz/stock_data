@@ -77,7 +77,7 @@ class TestFetchFlashNewsHappyPath:
 
     def test_limit_below_one_rejected(self):
         """limit=0 在 fetcher 层抛 DataFetchError。"""
-        with pytest.raises(DataFetchError):
+        with pytest.raises(DataFetchError, match="limit must be"):
             self.fetcher.fetch_flash_news(limit=0)
 
     def test_uses_chrome120_session_not_plain_requests(self):
@@ -127,3 +127,47 @@ class TestFetchFlashNewsErrors:
         ):
             results = self.fetcher.fetch_flash_news(limit=10)
         assert results == []
+
+    def test_record_missing_code_is_skipped(self):
+        """单条记录缺关键字段(article code)就跳过,不抛错。"""
+        fixture = {
+            "code": 0,
+            "message": "ok",
+            "data": {
+                "size": 2,
+                "fastNewsList": [
+                    {
+                        "summary": "缺 code 字段的坏数据",
+                        "titleColor": 0,
+                        "realSort": 100,
+                        "showTime": "2026-06-22 16:00:00",
+                        "title": "坏数据",
+                        "share": 0,
+                        "pinglun_Num": 0,
+                        "stockList": [],
+                        "image": [],
+                        # no "code" key
+                    },
+                    {
+                        "summary": "好数据",
+                        "code": "202606223778033999",
+                        "titleColor": 0,
+                        "realSort": 99,
+                        "showTime": "2026-06-22 15:59:00",
+                        "title": "好数据",
+                        "share": 0,
+                        "pinglun_Num": 0,
+                        "stockList": [],
+                        "image": [],
+                    },
+                ],
+            },
+        }
+        with patch.object(
+            self.fetcher._session, "get", return_value=_mock_response(fixture)
+        ):
+            results = self.fetcher.fetch_flash_news(limit=10)
+        # 只有 1 条正常数据,坏数据被跳过
+        assert len(results) == 1
+        assert results[0]["title"] == "好数据"
+        assert results[0]["url"] == "https://finance.eastmoney.com/a/202606223778033999.html"
