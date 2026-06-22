@@ -425,14 +425,11 @@ class TestZTFetcherManager:
         update_cached_calendar([today_str])
 
         conn = get_connection()
-        try:
-            conn.execute(
-                "DELETE FROM pool_daily WHERE pool_type = 'zt' AND pool_date = ?",
-                (today_str,),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn.execute(
+            "DELETE FROM pool_daily WHERE pool_type = 'zt' AND pool_date = ?",
+            (today_str,),
+        )
+        conn.commit()
 
         try:
             # Stub the upstream call so we don't hit the network
@@ -458,14 +455,11 @@ class TestZTFetcherManager:
             # Clean up the seeded calendar row so we don't leak state to
             # other tests in the same session.
             conn = get_connection()
-            try:
-                conn.execute(
-                    "DELETE FROM trade_calendar WHERE trade_date = ?",
-                    (today_str,),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            conn.execute(
+                "DELETE FROM trade_calendar WHERE trade_date = ?",
+                (today_str,),
+            )
+            conn.commit()
 
     def test_manager_get_zt_pool_normalizes_code(self):
         """Test that manager.get_zt_pool normalizes the pool type code."""

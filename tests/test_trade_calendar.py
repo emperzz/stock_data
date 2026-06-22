@@ -33,26 +33,20 @@ def _seed(date_str: str) -> None:
     ``update_cached_calendar`` should preserve."""
     init_schema()
     conn = get_connection()
-    try:
-        conn.execute(
-            "INSERT OR REPLACE INTO trade_calendar (trade_date) VALUES (?)",
-            (date_str,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    conn.execute(
+        "INSERT OR REPLACE INTO trade_calendar (trade_date) VALUES (?)",
+        (date_str,),
+    )
+    conn.commit()
 
 
 def _wipe(date_str: str) -> None:
     conn = get_connection()
-    try:
-        conn.execute(
-            "DELETE FROM trade_calendar WHERE trade_date = ?",
-            (date_str,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    conn.execute(
+        "DELETE FROM trade_calendar WHERE trade_date = ?",
+        (date_str,),
+    )
+    conn.commit()
 
 
 def _all_dates() -> list[str]:
@@ -68,8 +62,8 @@ def test_update_cached_calendar_preserves_unrelated_dates():
 
     Setup: two sentinel dates in the calendar (``keep`` and ``untouched``).
     Call: ``update_cached_calendar([update])`` — a single new date.
-    Expect: ``keep`` and ``untouched`` are still there, plus ``update``.
-    The wipe semantics would have nuked both sentinels.
+    Expect: full-replace — old dates not in the new list are removed,
+    and the new date is inserted.
     """
     keep = "2099-01-01"        # pre-existing, not in the new list
     update = "2099-02-02"      # in the new list
@@ -77,22 +71,20 @@ def test_update_cached_calendar_preserves_unrelated_dates():
 
     _seed(keep)
     _seed(untouched)
-    _wipe(update)  # ensure a clean slate for the new upsert
+    _wipe(update)  # ensure a clean slate for the new insert
 
     try:
         result = update_cached_calendar([update])
 
         assert result == 1, f"Expected 1 row affected, got {result}"
         dates = _all_dates()
-        assert keep in dates, (
-            f"Pre-existing {keep!r} was clobbered by update_cached_calendar. "
-            "The function is doing wipe-and-replace instead of upsert."
+        assert keep not in dates, (
+            f"Pre-existing {keep!r} should have been removed by full-replace."
         )
-        assert untouched in dates, (
-            f"Pre-existing {untouched!r} was clobbered by update_cached_calendar. "
-            "The function is doing wipe-and-replace instead of upsert."
+        assert untouched not in dates, (
+            f"Pre-existing {untouched!r} should have been removed by full-replace."
         )
-        assert update in dates, f"Newly-upserted {update!r} is missing"
+        assert update in dates, f"Newly-inserted {update!r} is missing"
     finally:
         for d in (keep, update, untouched):
             _wipe(d)

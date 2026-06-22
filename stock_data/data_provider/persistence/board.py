@@ -19,45 +19,42 @@ _refresh_tracker = DailyRefreshTracker()
 def init_schema() -> None:
     """Initialize the database schema for stock boards."""
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        # Board list table — metadata only; realtime quotes come from API
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS stock_board (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL,
-                name TEXT NOT NULL,
-                board_type TEXT NOT NULL,
-                source TEXT NOT NULL,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(code, source)
-            )
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_stock_board_type ON stock_board(board_type)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_stock_board_source ON stock_board(source)
-        """)
-        # Board-stock relation table — metadata only; realtime quotes come from API
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS stock_board_stock (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                board_code TEXT NOT NULL,
-                source TEXT NOT NULL,
-                stock_code TEXT NOT NULL,
-                stock_name TEXT NOT NULL,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(board_code, source, stock_code)
-            )
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_stock_board_stock_board ON stock_board_stock(board_code, source)
-        """)
-        conn.commit()
-        logger.info(f"[BoardCache] Database initialized at {get_db_path()}")
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    # Board list table — metadata only; realtime quotes come from API
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stock_board (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL,
+            name TEXT NOT NULL,
+            board_type TEXT NOT NULL,
+            source TEXT NOT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(code, source)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_stock_board_type ON stock_board(board_type)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_stock_board_source ON stock_board(source)
+    """)
+    # Board-stock relation table — metadata only; realtime quotes come from API
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stock_board_stock (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            board_code TEXT NOT NULL,
+            source TEXT NOT NULL,
+            stock_code TEXT NOT NULL,
+            stock_name TEXT NOT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(board_code, source, stock_code)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_stock_board_stock_board ON stock_board_stock(board_code, source)
+    """)
+    conn.commit()
+    logger.info(f"[BoardCache] Database initialized at {get_db_path()}")
 
 
 def get_board_list(board_type: str, source: str, refresh: bool = False, include_quote: bool = False, manager=None) -> tuple[list, str]:
@@ -180,64 +177,55 @@ def _get_board_type(board_code: str, source: str, manager) -> str | None:
     """Determine board type by checking in local cache."""
     init_schema()
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT board_type FROM stock_board WHERE code = ? AND source = ?",
-            (board_code, source),
-        )
-        row = cursor.fetchone()
-        return row["board_type"] if row else None
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT board_type FROM stock_board WHERE code = ? AND source = ?",
+        (board_code, source),
+    )
+    row = cursor.fetchone()
+    return row["board_type"] if row else None
 
 
 def _read_boards_from_db(board_type: str, source: str) -> list:
     """Read board list from database (metadata only)."""
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """SELECT code, name, board_type, source, updated_at
-               FROM stock_board WHERE board_type = ? AND source = ? ORDER BY name""",
-            (board_type, source),
-        )
-        rows = cursor.fetchall()
-        return [
-            {
-                "code": row["code"],
-                "name": row["name"],
-                "board_type": row["board_type"],
-                "source": row["source"],
-                "updated_at": row["updated_at"],
-            }
-            for row in rows
-        ]
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT code, name, board_type, source, updated_at
+           FROM stock_board WHERE board_type = ? AND source = ? ORDER BY name""",
+        (board_type, source),
+    )
+    rows = cursor.fetchall()
+    return [
+        {
+            "code": row["code"],
+            "name": row["name"],
+            "board_type": row["board_type"],
+            "source": row["source"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
 
 
 def _read_board_stocks_from_db(board_code: str, source: str) -> list:
     """Read board-stock list from database (metadata only)."""
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """SELECT stock_code, stock_name, updated_at
-               FROM stock_board_stock WHERE board_code = ? AND source = ? ORDER BY stock_code""",
-            (board_code, source),
-        )
-        rows = cursor.fetchall()
-        return [
-            {
-                "stock_code": row["stock_code"],
-                "stock_name": row["stock_name"],
-                "updated_at": row["updated_at"],
-            }
-            for row in rows
-        ]
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT stock_code, stock_name, updated_at
+           FROM stock_board_stock WHERE board_code = ? AND source = ? ORDER BY stock_code""",
+        (board_code, source),
+    )
+    rows = cursor.fetchall()
+    return [
+        {
+            "stock_code": row["stock_code"],
+            "stock_name": row["stock_name"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
 
 
 def update_cached_boards(board_type: str, source: str, boards: list) -> int:
@@ -281,8 +269,6 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
     except Exception as e:
         logger.error(f"[BoardCache] Update boards failed: {e}")
         raise
-    finally:
-        conn.close()
 
 
 def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> int:
@@ -326,8 +312,6 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
     except Exception as e:
         logger.error(f"[BoardCache] Update board stocks failed: {e}")
         raise
-    finally:
-        conn.close()
 
 
 def has_cached_data(board_type: str, source: str) -> bool:
@@ -337,15 +321,12 @@ def has_cached_data(board_type: str, source: str) -> bool:
 
     init_schema()
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT 1 FROM stock_board WHERE board_type = ? AND source = ? LIMIT 1",
-            (board_type, source),
-        )
-        return cursor.fetchone() is not None
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM stock_board WHERE board_type = ? AND source = ? LIMIT 1",
+        (board_type, source),
+    )
+    return cursor.fetchone() is not None
 
 
 def get_cache_info() -> dict:
@@ -355,25 +336,22 @@ def get_cache_info() -> dict:
 
     init_schema()
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
+    cursor = conn.cursor()
 
-        # Count boards by type
-        cursor.execute("SELECT board_type, source, COUNT(*) as cnt FROM stock_board GROUP BY board_type, source")
-        rows = cursor.fetchall()
+    # Count boards by type
+    cursor.execute("SELECT board_type, source, COUNT(*) as cnt FROM stock_board GROUP BY board_type, source")
+    rows = cursor.fetchall()
 
-        result = {"total_boards": 0, "total_board_stocks": 0, "by_type": {}}
-        for row in rows:
-            key = f"{row['board_type']}:{row['source']}"
-            result["by_type"][key] = row["cnt"]
-            result["total_boards"] += row["cnt"]
+    result = {"total_boards": 0, "total_board_stocks": 0, "by_type": {}}
+    for row in rows:
+        key = f"{row['board_type']}:{row['source']}"
+        result["by_type"][key] = row["cnt"]
+        result["total_boards"] += row["cnt"]
 
-        # Count board stocks
-        cursor.execute("SELECT COUNT(*) as cnt FROM stock_board_stock")
-        row = cursor.fetchone()
-        result["total_board_stocks"] = row["cnt"] if row else 0
+    # Count board stocks
+    cursor.execute("SELECT COUNT(*) as cnt FROM stock_board_stock")
+    row = cursor.fetchone()
+    result["total_board_stocks"] = row["cnt"] if row else 0
 
-        return result
-    finally:
-        conn.close()
+    return result
 

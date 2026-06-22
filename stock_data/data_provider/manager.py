@@ -20,10 +20,14 @@ T = TypeVar("T")
 
 
 def _is_meaningful(result: Any) -> bool:
-    """Treat None and empty DataFrames as 'no data' (skip fetcher)."""
+    """Treat None, empty DataFrames, and empty lists as 'no data' (skip fetcher)."""
     if result is None:
         return False
-    return not (isinstance(result, pd.DataFrame) and result.empty)
+    if isinstance(result, pd.DataFrame) and result.empty:
+        return False
+    if isinstance(result, list) and len(result) == 0:
+        return False
+    return True
 
 
 class DataFetcherManager:
@@ -286,8 +290,7 @@ class DataFetcherManager:
         fetcher_market = public_to_fetcher.get(market, market)
 
         def _call(fetcher: BaseFetcher):
-            result = fetcher.get_all_stocks(fetcher_market)
-            return None if result == [] else result
+            return fetcher.get_all_stocks(fetcher_market)
 
         return self._with_failover(
             DataCapability.STOCK_LIST, market, f"all_stocks {market}",
@@ -401,7 +404,7 @@ class DataFetcherManager:
             the fetcher name as the response's origin.
         """
         def _fetch(fetcher: BaseFetcher) -> list[dict] | None:
-            return fetcher.get_zt_pool(pool_type, date) or None
+            return fetcher.get_zt_pool(pool_type, date)
         return self._with_failover(
             DataCapability.STOCK_ZT_POOL,
             "csi",

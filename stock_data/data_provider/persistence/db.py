@@ -8,6 +8,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _db_path: Path | None = None
+_conn: sqlite3.Connection | None = None
 
 
 def get_db_path() -> Path:
@@ -22,8 +23,15 @@ def get_db_path() -> Path:
 
 
 def get_connection() -> sqlite3.Connection:
-    """Get a database connection with row factory."""
-    conn = sqlite3.connect(get_db_path(), timeout=30)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Get a shared database connection with row factory.
+
+    Returns a module-level singleton connection (check_same_thread=False).
+    Callers should NOT call conn.close() — the connection lives for the
+    process lifetime.
+    """
+    global _conn
+    if _conn is None:
+        _conn = sqlite3.connect(get_db_path(), timeout=30, check_same_thread=False)
+        _conn.row_factory = sqlite3.Row
+    return _conn
 

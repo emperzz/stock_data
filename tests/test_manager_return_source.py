@@ -58,34 +58,34 @@ class _MockFetcher:
         }
 
     def get_margin_trading(self, code, page_size):
-        return []
+        return [{"code": code, "margin_balance": 100.0}]
 
     def get_block_trade(self, code, page_size):
-        return []
+        return [{"code": code, "price": 10.0}]
 
     def get_holder_num_change(self, code, page_size):
-        return []
+        return [{"code": code, "holder_num": 1000}]
 
     def get_dividend(self, code, page_size):
-        return []
+        return [{"code": code, "dividend": 0.5}]
 
     def get_fund_flow_minute(self, code):
-        return []
+        return [{"code": code, "net_inflow": 100.0}]
 
     def get_fund_flow_120d(self, code):
-        return []
+        return [{"code": code, "net_inflow": 100.0}]
 
     def get_hot_topics(self, date_str):
-        return []
+        return [{"topic": "test", "heat": 100}]
 
     def get_north_flow(self):
-        return []
+        return [{"date": "2024-01-01", "net_buy": 100.0}]
 
     def get_reports(self, code, max_pages):
-        return []
+        return [{"code": code, "title": "test report"}]
 
     def get_announcements(self, code, page_size):
-        return []
+        return [{"code": code, "title": "test announcement"}]
 
 
 # ---------------------------------------------------------------------------

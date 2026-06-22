@@ -3,8 +3,6 @@ Base classes and manager for stock data fetchers.
 """
 
 import logging
-import random
-import time
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Flag, auto
@@ -317,13 +315,6 @@ class BaseFetcher(ABC):
 
         df = df.sort_values("date", ascending=True).reset_index(drop=True)
         return df
-
-    @staticmethod
-    def random_sleep(min_seconds: float = 1.0, max_seconds: float = 3.0) -> None:
-        """Sleep with random jitter to avoid rate limiting."""
-        sleep_time = random.uniform(min_seconds, max_seconds)
-        logger.debug(f"[{__name__}] Sleep {sleep_time:.2f}s")
-        time.sleep(sleep_time)
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote. Override in subclass if supported."""

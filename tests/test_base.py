@@ -203,5 +203,3 @@ class TestNormalizeAllExport:
         assert "market_tag" in normalize.__all__
         assert "is_us_market" in normalize.__all__
         assert "is_hk_market" in normalize.__all__
-        assert "ETF_PREFIXES" in normalize.__all__
-        assert "BSE_CODES" in normalize.__all__

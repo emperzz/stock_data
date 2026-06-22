@@ -33,8 +33,8 @@ def calcSAR(  # noqa: N802
     af_increment: float = float(options.get("afIncrement", 0.02))
     af_max: float = float(options.get("afMax", 0.20))
 
-    if af_start <= 0 or af_increment <= 0 or af_max <= af_start:
-        raise ValueError("afStart > 0, afIncrement > 0, afMax >= afStart required")
+    if af_start <= 0 or af_increment <= 0 or af_max < af_start:
+        raise ValueError("afStart > 0, afIncrement > 0, afMax > afStart required")
 
     if not bars:
         return []

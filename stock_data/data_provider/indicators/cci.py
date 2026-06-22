@@ -16,12 +16,14 @@ from typing import Any
 from .types import OHLCV
 
 
-def _sma(values: list[float], period: int) -> list[float | None]:
-    """Plain SMA (we already have calcSMA in ma.py, but it works on
-    list[float | None]; here we always have floats and want speed)."""
+def _sma(values: list[float | None], period: int) -> list[float | None]:
+    """Plain SMA that skips None values in the window."""
     out: list[float | None] = []
     window: list[float] = []
     for v in values:
+        if v is None:
+            out.append(None)
+            continue
         window.append(v)
         if len(window) > period:
             window.pop(0)
@@ -41,13 +43,13 @@ def calcCCI(  # noqa: N802
     if period <= 0:
         raise ValueError(f"period must be > 0, got {period}")
 
-    tp: list[float] = []
+    tp: list[float | None] = []
     for bar in bars:
         h = bar.get("high")
         low = bar.get("low")
         c = bar.get("close")
         if h is None or low is None or c is None:
-            tp.append(0.0)  # placeholder; the output for this bar will be None anyway
+            tp.append(None)
         else:
             tp.append((h + low + c) / 3.0)
 
@@ -61,7 +63,7 @@ def calcCCI(  # noqa: N802
             continue
 
         # Mean absolute deviation over the last `period` TPs
-        window = tp[max(0, i - period + 1) : i + 1]
+        window = [v for v in tp[max(0, i - period + 1) : i + 1] if v is not None]
         if len(window) < period:
             out.append({"cci": None})
             continue

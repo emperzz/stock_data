@@ -12,14 +12,8 @@ __all__ = [
     "is_hk_market",
     "is_index_code",
     "is_a_share_stock_code",
-    "ETF_PREFIXES",
-    "BSE_CODES",
     "A_SHARE_STOCK_PREFIXES",
 ]
-
-# Market tag constants
-ETF_PREFIXES = ("51", "52", "56", "58", "15", "16", "18")
-BSE_CODES = ("92", "43", "81", "82", "83", "87", "88")
 
 # A-share stock code prefixes (used to distinguish real stocks from
 # ETFs/funds/indices on the Shanghai, Shenzhen, and Beijing exchanges).

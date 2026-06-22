@@ -11,13 +11,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import OHLCV
+from .types import OHLCV, round2
 
-
-def _round2(v: float) -> float:
-    if v != v:
-        return 0.0
-    return round(float(v), 2)
+_round2 = round2  # local alias for backward compat
 
 
 def calcWR(  # noqa: N802

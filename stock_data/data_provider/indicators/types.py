@@ -60,8 +60,20 @@ class OHLCV(TypedDict, total=False):
     volume: float | None
 
 
+def round2(value: float) -> float:
+    """Round to 2 decimals. Returns 0.0 for NaN to keep JSON valid.
+
+    None and NaN are both treated as "no value"; callers should always
+    guard with `value is not None` before passing to this helper.
+    """
+    if value != value:  # NaN check
+        return 0.0
+    return round(float(value), 2)
+
+
 __all__ = [
     "MAType",
     "IndicatorKey",
     "OHLCV",
+    "round2",
 ]

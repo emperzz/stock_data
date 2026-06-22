@@ -32,8 +32,9 @@ class TestManagerSearchNews:
 
     def test_propagates_from_to_date(self):
         mgr = _make_manager_with_only_eastmoney()
+        fake_result = [{"title": "fake", "url": "http://x", "publish_date": "2026-06-09"}]
         with patch.object(
-            EastMoneyFetcher, "search_news", return_value=[]
+            EastMoneyFetcher, "search_news", return_value=fake_result
         ) as mock_search:
             mgr.search_news(
                 q="603777", from_date="2026-01-01", to_date="2026-06-30", limit=10
@@ -50,8 +51,9 @@ class TestManagerSearchNews:
         mgr = _make_manager_with_only_eastmoney()
         mgr.add_fetcher(CninfoFetcher())  # CNINFO does not declare NEWS_SEARCH
 
+        fake_result = [{"title": "fake", "url": "http://x", "publish_date": "2026-06-09"}]
         with patch.object(
-            EastMoneyFetcher, "search_news", return_value=[]
+            EastMoneyFetcher, "search_news", return_value=fake_result
         ) as mock_search:
             mgr.search_news(q="603777")
 

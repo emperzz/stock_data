@@ -538,7 +538,7 @@ class EastMoneyFetcher(BaseFetcher):
                 "rating": "*",
                 "ratingChange": "*",
                 "beginTime": "2000-01-01",
-                "endTime": "2030-01-01",
+                "endTime": datetime.now().strftime("%Y-%m-%d"),
                 "pageNo": str(page),
                 "fields": "",
                 "qType": "0",

@@ -7,31 +7,6 @@ from typing import Any
 from pydantic import BaseModel, Field, model_serializer, model_validator
 
 
-def _sanitize_upstream_dict(data: Any) -> Any:
-    """Sanitize upstream-supplied dict for pydantic v2 strict-input.
-
-    Two normalizations applied (driven by real upstream quirks in
-    EastMoneyFetcher and CninfoFetcher):
-
-    1. ``None`` for a non-Optional field → the field's declared default.
-       pydantic v2 rejects ``None`` for ``str`` / ``float`` even when the
-       field has a default. Falling back to the default preserves the
-       API contract (field is still non-null in JSON) while tolerating
-       the upstream quirk.
-
-    2. ``""`` for an Optional field → ``None``.
-       EastMoney sometimes returns an empty string instead of null for
-       numeric fields. pydantic v2 cannot parse ``""`` as ``float``, so
-       we coerce to ``None`` (the Optional field's default).
-
-    Only operates on dict inputs; passes other types through unchanged.
-    Real validators (see usages) call this with ``cls``-aware context.
-    """
-    if not isinstance(data, dict):
-        return data
-    return data
-
-
 class _UpstreamSanitizedModel(BaseModel):
     """Mixin: pydantic v2 strict-input handling for upstream data.
 

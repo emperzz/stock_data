@@ -32,7 +32,8 @@ def calcOBV(  # noqa: N802
         c = bar.get("close")
         v = bar.get("volume")
         if c is None or v is None:
-            obvs.append(obv if prev_close is not None else None)
+            # Missing data: carry forward obv only if we have both prev context and volume
+            obvs.append(obv if prev_close is not None and v is not None else None)
         elif prev_close is None:
             # First bar: OBV is conventionally 0
             obvs.append(0.0)

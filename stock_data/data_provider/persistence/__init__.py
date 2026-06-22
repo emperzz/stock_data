@@ -139,10 +139,7 @@ def reset_all() -> None:
       "风险 3" for the rationale.
     """
     conn = get_connection()
-    try:
-        with conn:
-            for table in _TABLES:
-                conn.execute(f"DROP TABLE IF EXISTS {table}")
-    finally:
-        conn.close()
+    with conn:
+        for table in _TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
     init_schema()

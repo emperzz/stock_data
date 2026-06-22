@@ -54,6 +54,9 @@ def calcRSI(  # noqa: N802
             if value is None or prev_close is None:
                 out[i][f"rsi_{period}"] = None
                 prev_close = value
+                # Reset seed accumulators — a gap invalidates prior partial window
+                gains.clear()
+                losses.clear()
                 continue
 
             change = value - prev_close

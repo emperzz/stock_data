@@ -24,36 +24,33 @@ _VALID_POOL_TYPES = ("zt", "dt", "zbgc")
 def init_schema() -> None:
     """Initialize the pool_daily table."""
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pool_daily (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pool_type TEXT NOT NULL,
-                pool_date TEXT NOT NULL,
-                code TEXT NOT NULL,
-                name TEXT NOT NULL,
-                price REAL,
-                change_pct REAL,
-                amount REAL,
-                circ_mv REAL,
-                total_mv REAL,
-                turnover_rate REAL,
-                lb_count INTEGER,
-                first_seal_time TEXT,
-                last_seal_time TEXT,
-                seal_amount REAL,
-                seal_count INTEGER,
-                zt_count TEXT,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(pool_type, pool_date, code)
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pool_daily_type_date ON pool_daily(pool_type, pool_date)")
-        conn.commit()
-        logger.info(f"[PoolDaily] Database initialized at {get_db_path()}")
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pool_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pool_type TEXT NOT NULL,
+            pool_date TEXT NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT NOT NULL,
+            price REAL,
+            change_pct REAL,
+            amount REAL,
+            circ_mv REAL,
+            total_mv REAL,
+            turnover_rate REAL,
+            lb_count INTEGER,
+            first_seal_time TEXT,
+            last_seal_time TEXT,
+            seal_amount REAL,
+            seal_count INTEGER,
+            zt_count TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(pool_type, pool_date, code)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pool_daily_type_date ON pool_daily(pool_type, pool_date)")
+    conn.commit()
+    logger.info(f"[PoolDaily] Database initialized at {get_db_path()}")
 
 
 def _validate_pool_type(pool_type: str) -> None:
@@ -78,16 +75,13 @@ def get_pool_cached(pool_type: str, date: str) -> list[dict]:
     init_schema()
 
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM pool_daily WHERE pool_type = ? AND pool_date = ? ORDER BY code",
-            (pool_type, date),
-        )
-        rows = cursor.fetchall()
-        return [_row_to_dict(row) for row in rows]
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM pool_daily WHERE pool_type = ? AND pool_date = ? ORDER BY code",
+        (pool_type, date),
+    )
+    rows = cursor.fetchall()
+    return [_row_to_dict(row) for row in rows]
 
 
 def save_pool(pool_type: str, date: str, stocks: list[dict]) -> int:
@@ -134,6 +128,13 @@ def save_pool(pool_type: str, date: str, stocks: list[dict]) -> int:
                 VALUES ({placeholders}, ?)
             """
 
+            # Delete stale rows for this (pool_type, date) before inserting fresh data
+            cursor.execute(
+                "DELETE FROM pool_daily WHERE pool_type = ? AND pool_date = ?",
+                (pool_type, date),
+            )
+
+            data_rows = []
             for stock in stocks:
                 values = [pool_type, date, stock.get("code"), stock.get("name")]
                 for col in ("price", "change_pct", "amount", "circ_mv", "total_mv",
@@ -142,7 +143,8 @@ def save_pool(pool_type: str, date: str, stocks: list[dict]) -> int:
                             "seal_count", "zt_count"):
                     values.append(stock.get(col))
                 values.append(now)
-                cursor.execute(insert_sql, values)
+                data_rows.append(values)
+            cursor.executemany(insert_sql, data_rows)
 
             logger.info(
                 f"[PoolDaily] Saved {len(stocks)} stocks to pool_daily "
@@ -152,8 +154,6 @@ def save_pool(pool_type: str, date: str, stocks: list[dict]) -> int:
     except Exception as e:
         logger.error(f"[PoolDaily] Save failed: {e}")
         raise
-    finally:
-        conn.close()
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
@@ -171,16 +171,13 @@ def get_latest_cached_date(pool_type: str) -> str | None:
     init_schema()
 
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT MAX(pool_date) FROM pool_daily WHERE pool_type = ?",
-            (pool_type,),
-        )
-        row = cursor.fetchone()
-        return row[0] if row and row[0] else None
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT MAX(pool_date) FROM pool_daily WHERE pool_type = ?",
+        (pool_type,),
+    )
+    row = cursor.fetchone()
+    return row[0] if row and row[0] else None
 
 
 def has_cached_data(pool_type: str, date: str) -> bool:
@@ -191,15 +188,12 @@ def has_cached_data(pool_type: str, date: str) -> bool:
 
     init_schema()
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT 1 FROM pool_daily WHERE pool_type = ? AND pool_date = ? LIMIT 1",
-            (pool_type, date),
-        )
-        return cursor.fetchone() is not None
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM pool_daily WHERE pool_type = ? AND pool_date = ? LIMIT 1",
+        (pool_type, date),
+    )
+    return cursor.fetchone() is not None
 
 
 def get_pool_count(pool_type: str, date: str) -> int:
@@ -207,16 +201,13 @@ def get_pool_count(pool_type: str, date: str) -> int:
     _validate_pool_type(pool_type)
     init_schema()
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM pool_daily WHERE pool_type = ? AND pool_date = ?",
-            (pool_type, date),
-        )
-        row = cursor.fetchone()
-        return row[0] if row else 0
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM pool_daily WHERE pool_type = ? AND pool_date = ?",
+        (pool_type, date),
+    )
+    row = cursor.fetchone()
+    return row[0] if row else 0
 
 
 # Backward-compat aliases for callers still using the old per-table names.

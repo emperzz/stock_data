@@ -17,7 +17,7 @@ miss and the route silently disappears from the explorer manifest.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Callable
 
 
 # Module-level registry: id(route_function) -> EndpointMeta

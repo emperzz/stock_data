@@ -20,20 +20,17 @@ logger = logging.getLogger(__name__)
 def init_schema() -> None:
     """Initialize the trade calendar table."""
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS trade_calendar (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                trade_date TEXT NOT NULL UNIQUE,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_date ON trade_calendar(trade_date)")
-        conn.commit()
-        logger.info("[StockCache] Trade calendar table initialized")
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trade_calendar (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL UNIQUE,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_date ON trade_calendar(trade_date)")
+    conn.commit()
+    logger.info("[StockCache] Trade calendar table initialized")
 
 
 def get_cached_calendar() -> tuple[list, str]:
@@ -47,36 +44,24 @@ def get_cached_calendar() -> tuple[list, str]:
     init_schema()
 
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT trade_date FROM trade_calendar ORDER BY trade_date ASC")
-        dates = [row["trade_date"] for row in cursor.fetchall()]
-        origin = "persistence" if dates else ""
-        return dates, origin
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute("SELECT trade_date FROM trade_calendar ORDER BY trade_date ASC")
+    dates = [row["trade_date"] for row in cursor.fetchall()]
+    origin = "persistence" if dates else ""
+    return dates, origin
 
 
 def update_cached_calendar(dates: list) -> int:
-    """Upsert trade dates into the cached trade calendar.
+    """Atomic full-replace of the trade calendar cache.
 
-    For each date in ``dates``, inserts a new row if absent, or refreshes
-    ``updated_at`` if already present (via ``INSERT OR REPLACE`` on the
-    UNIQUE ``trade_date`` column). Dates **not** in the input list are
-    left untouched — this function is intentionally a pure upsert, not
-    an atomic full-replace.
-
-    The only production caller (``manager.get_trade_calendar``) passes
-    the full set returned by the upstream, so its observable behavior is
-    unchanged. The upsert semantics make the function safe for any
-    caller that wants to add dates incrementally without clobbering
-    unrelated state (e.g. tests, future per-day refresh paths).
+    Deletes all existing rows, then inserts the provided dates.
+    This ensures stale dates (e.g. removed holidays) are cleaned up.
 
     Args:
         dates: List of trade dates as strings (YYYY-MM-DD)
 
     Returns:
-        Number of dates inserted or updated.
+        Number of dates inserted.
     """
     if not dates:
         return 0
@@ -89,19 +74,19 @@ def update_cached_calendar(dates: list) -> int:
             cursor = conn.cursor()
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            cursor.execute("DELETE FROM trade_calendar")
+
             cursor.executemany(
-                "INSERT OR REPLACE INTO trade_calendar "
+                "INSERT INTO trade_calendar "
                 "(trade_date, updated_at) VALUES (?, ?)",
                 [(date, now) for date in dates],
             )
 
-            logger.info(f"[StockCache] Upserted {len(dates)} trade calendar dates")
+            logger.info(f"[StockCache] Replaced trade calendar with {len(dates)} dates")
             return len(dates)
     except Exception as e:
         logger.error(f"[StockCache] Calendar update failed: {e}")
         raise
-    finally:
-        conn.close()
 
 
 def get_latest_cached_trade_date() -> str | None:
@@ -114,13 +99,10 @@ def get_latest_cached_trade_date() -> str | None:
     init_schema()
 
     conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT trade_date FROM trade_calendar ORDER BY trade_date DESC LIMIT 1")
-        row = cursor.fetchone()
-        return row["trade_date"] if row else None
-    finally:
-        conn.close()
+    cursor = conn.cursor()
+    cursor.execute("SELECT trade_date FROM trade_calendar ORDER BY trade_date DESC LIMIT 1")
+    row = cursor.fetchone()
+    return row["trade_date"] if row else None
 
 
 # ---------------------------------------------------------------------------
@@ -135,14 +117,11 @@ def is_trade_date(date_str: str) -> bool:
     """
     init_schema()
     conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM trade_calendar WHERE trade_date = ? LIMIT 1",
-            (date_str,),
-        ).fetchone()
-        return row is not None
-    finally:
-        conn.close()
+    row = conn.execute(
+        "SELECT 1 FROM trade_calendar WHERE trade_date = ? LIMIT 1",
+        (date_str,),
+    ).fetchone()
+    return row is not None
 
 
 def get_latest_trade_date_on_or_before(date_str: str) -> str | None:
@@ -153,14 +132,11 @@ def get_latest_trade_date_on_or_before(date_str: str) -> str | None:
     """
     init_schema()
     conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT MAX(trade_date) FROM trade_calendar WHERE trade_date <= ?",
-            (date_str,),
-        ).fetchone()
-        if row is None:
-            return None
-        return row[0] if row[0] else None
-    finally:
-        conn.close()
+    row = conn.execute(
+        "SELECT MAX(trade_date) FROM trade_calendar WHERE trade_date <= ?",
+        (date_str,),
+    ).fetchone()
+    if row is None:
+        return None
+    return row[0] if row[0] else None
 
