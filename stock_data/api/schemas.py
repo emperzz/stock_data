@@ -735,3 +735,32 @@ class NewsContentResponse(BaseModel):
     source_domain: str = Field(default="")
     extractor: str = Field(default="default", description="使用的 handler 名")
     byte_size: int = Field(default=0)
+
+
+class FlashNewsItem(BaseModel):
+    """单条全球财经快讯。
+
+    字段命名刻意和 ``NewsItem`` 保持风格一致(英文 snake_case),
+    区别:
+    - ``publish_time`` (含时分秒) vs ``NewsItem.publish_date`` (只到日)
+    - ``snippet`` (摘要) vs ``NewsItem.snippet`` (同名)
+    - 没有 ``media_name``: 快讯本身不区分发布媒体
+    """
+
+    title: str = Field(default="", description="标题 (原文)")
+    url: str = Field(description="详情页 URL (https://finance.eastmoney.com/a/{code}.html)")
+    source_domain: str = Field(default="finance.eastmoney.com", description="URL 域名")
+    publish_time: str = Field(default="", description="发布时间 YYYY-MM-DD HH:MM:SS")
+    snippet: str = Field(default="", description="摘要")
+
+
+class FlashNewsResponse(BaseModel):
+    """全球财经快讯响应。"""
+
+    data: list[FlashNewsItem] = Field(default_factory=list, description="快讯列表")
+    total: int = Field(default=0, description="实际返回条数 (= len(data))")
+    limit: int = Field(default=50, description="请求的 limit (1..200)")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. EastMoneyFetcher)",
+    )
