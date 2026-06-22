@@ -1,20 +1,30 @@
 """
 Baidu Qianfan Web Search API fetcher — news search only.
 
-Provides: NEWS_SEARCH (Baidu 千帆 v2 ai_search/web_search)
+Provides: NEWS_SEARCH (Baidu 千帆 v2 ai_search/web_search). Registered
+as the failover target for `EastMoneyFetcher.search_news`: when
+EastMoney's primary `/news/s` endpoint raises, the manager falls back
+to Baidu. The query results are scoped to the 3 authoritative Chinese
+financial-news sources' canonical news subdomains.
 
 API: POST https://qianfan.baidubce.com/v2/ai_search/web_search
 Auth: Authorization: Bearer <BAIDU_API_KEY>
 
 Reference: https://cloud.baidu.com/doc/qianfan-api/s/Wmbq4z7e5
 
-Domain restriction: by default `search_news` only returns results from three
-authoritative Chinese financial-news sources (东方财富 / 财联社 / 同花顺). The
-list is sent upstream inside the `search_filter.match.site` body field (the
-API's official whitelist mechanism) and is also enforced client-side as a
-safety net (records outside the whitelist are dropped). Override via the
-`BAIDU_NEWS_DOMAINS` env var (comma-separated), or set it to an empty
-string to disable the filter entirely.
+Domain restriction: by default `search_news` only returns results from
+the canonical news subdomain of 东方财富 / 财联社 / 同花顺 — i.e.
+`finance.eastmoney.com`, `www.cls.cn`, and `news.10jqka.com.cn`. Each
+entry is the specific subdomain (NOT the parent `eastmoney.com` /
+`cls.cn` / `10jqka.com.cn`) so non-news entry points like guba / quote
+/ fund / m-cls are not reachable in the first place. The list is sent
+upstream inside the `search_filter.match.site` body field (the API's
+official whitelist mechanism) and is also enforced client-side as a
+safety net (records outside the whitelist are dropped). Override via
+the `BAIDU_NEWS_DOMAINS` env var (comma-separated), or set it to an
+empty string to disable the filter entirely. To use the older
+parent-domain style whitelist, set
+`BAIDU_NEWS_DOMAINS=eastmoney.com,cls.cn,10jqka.com.cn`.
 
 Domain denylist: a curated list of subdomains is sent upstream in the
 `block_websites` body field (the API's official denylist mechanism) AND
@@ -23,7 +33,11 @@ sub-par eastmoney.com entry points — `emwap` (mobile WAP), `quote`
 (quote pages, not news articles), `guba` (user forum) — and (b) all
 known mobile subdomains of the 3 whitelisted sources. Override via the
 `BAIDU_NEWS_BLOCKED_DOMAINS` env var (comma-separated); empty string
-disables the filter entirely.
+disables the filter entirely. These entries are defense-in-depth — the
+specific-subdomain whitelist already filters out most of the
+non-news entry points, so the denylist mainly catches edge cases from
+the env-var override (e.g. when the user widens the whitelist to a
+parent domain).
 
 Mobile-prefix safety net: in addition to the explicit denylist above,
 records served from a mobile subdomain (`m.`, `wap.`, `mobile.`, `mb.`)
@@ -58,16 +72,37 @@ BAIDU_MAX_TOP_K = 50
 # Cap on user-provided q length (matches EastMoneyFetcher convention)
 MAX_Q_LEN = 200
 
-# Default whitelist of authoritative Chinese financial-news domains.
-# Matched as a suffix on the URL host (covers all subdomains, e.g. finance.eastmoney.com
-# is allowed by "eastmoney.com"). These are passed to Baidu inside the
+# Default whitelist: BaiduFetcher is the NEWS_SEARCH backup for
+# EastMoneyFetcher. The whitelist uses the **canonical news subdomain**
+# for each of the 3 authoritative Chinese financial-news sources, not
+# the parent domain. This is critical because the parent domain suffix
+# (e.g. `eastmoney.com`, `cls.cn`, `10jqka.com.cn`) covers many
+# non-news entry points — guba (user forum), quote (quote pages), m-fund
+# (fund pages), m-cls (mobile), etc. — and Baidu's `block_websites`
+# denylist can only blacklist exact hosts, not prefix globs. Picking the
+# specific subdomain up-front avoids most of that surface area.
+#
+# Each entry verified by Playwright probe of the live homepage + an
+# article page on 2026-06-22:
+#   - 东方财富: `finance.eastmoney.com` is the only news host (sibling
+#     subdomains `guba` / `quote` / `fund` / `data` are non-news).
+#   - 财联社: `www.cls.cn` is CLS's only web-front-end entry point
+#     (other subdomains like `wwwjs.` / `cdnjs.` / `api3.` are static
+#     or API hosts with no article body).
+#   - 同花顺: `news.10jqka.com.cn` hosts 22 of 35 article links on the
+#     homepage (`stock.` is just HK/US-stock nav, not a news host;
+#     `fund.` / `goodsfu.` / `t.` / `download.` / `job.` / `vote.` are
+#     non-news).
+#
+# Matched as a suffix on the URL host, so a record served from any
+# deeper subdomain of these (e.g. `news.finance.eastmoney.com`) is
+# also allowed. The list is sent upstream inside Baidu's
 # `search_filter.match.site` body field (the API's official whitelist
-# mechanism); see search_news() for the client-side post-filter that
-# mirrors it as a safety net.
+# mechanism) and is also enforced client-side as a safety net.
 DEFAULT_NEWS_DOMAINS: tuple[str, ...] = (
-    "eastmoney.com",  # 东方财富 (finance.eastmoney.com, stock.eastmoney.com, ...)
-    "cls.cn",  # 财联社 (www.cls.cn, m.cls.cn, ...)
-    "10jqka.com.cn",  # 同花顺 (stock.10jqka.com.cn, news.10jqka.com.cn, ...)
+    "finance.eastmoney.com",  # 东方财富 (finance.eastmoney.com/a/<code>.html)
+    "www.cls.cn",             # 财联社 (www.cls.cn/detail/<id>)
+    "news.10jqka.com.cn",     # 同花顺 (news.10jqka.com.cn/<YYYYMMDD>/c<id>.shtml)
 )
 
 # Env-var override (comma-separated). Empty string disables the filter.
@@ -157,17 +192,25 @@ class BaiduFetcher(BaseFetcher):
         to_date: str | None = None,
         limit: int = 20,
     ) -> list[dict]:
-        """Search Baidu news by keyword.
+        """Search news via Baidu (EastMoney-fetcher backup).
 
-        Returns a list of normalized news-item dicts matching the NewsItem schema.
-        Raises DataFetchError on upstream failure.
+        BaiduFetcher is registered as a NEWS_SEARCH-capable backup for
+        `EastMoneyFetcher.search_news`. The search is scoped by default to
+        the canonical news subdomains of 东方财富 / 财联社 / 同花顺 (i.e.
+        `finance.eastmoney.com`, `www.cls.cn`, `news.10jqka.com.cn`) — this
+        fetcher is not a generic news search backend.
+
+        Returns a list of normalized news-item dicts matching the NewsItem
+        schema. Raises DataFetchError on upstream failure.
 
         Search results are filtered in three layers (see module docstring for
         the full design rationale):
 
         1. **Whitelist** (upstream + client-side mirror). Sent to Baidu as
            `search_filter.match.site`; client-side drops any record whose
-           `source_domain` doesn't suffix-match a whitelisted domain.
+           `source_domain` doesn't suffix-match a whitelisted domain. The
+           default whitelist is the 3 canonical subdomains — override via
+           the `BAIDU_NEWS_DOMAINS` env var.
         2. **Denylist** (upstream + client-side mirror). Sent to Baidu as
            `block_websites`; client-side drops any record whose `source_domain`
            is in the explicit denylist (e.g. `guba.eastmoney.com`, mobile
