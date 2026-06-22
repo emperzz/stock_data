@@ -55,4 +55,5 @@ CAPABILITY_LABELS: dict[str, dict[str, str]] = {
     "RESEARCH_REPORT":  {"label": "研报",             "icon": "📑"},
     "ANNOUNCEMENT":     {"label": "公告",             "icon": "📢"},
     "NEWS_SEARCH":      {"label": "新闻搜索",         "icon": "🔍"},
+    "NEWS_FLASH":       {"label": "全球财经快讯",     "icon": "📡"},
 }
