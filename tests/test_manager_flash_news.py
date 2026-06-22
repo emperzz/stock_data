@@ -38,7 +38,7 @@ class TestManagerFlashNews:
     def test_propagates_limit(self):
         mgr = _make_manager_with_only_eastmoney()
         with patch.object(
-            EastMoneyFetcher, "fetch_flash_news", return_value=[]
+            EastMoneyFetcher, "fetch_flash_news", return_value=[{"title": "fake"}]
         ) as mock_fetch:
             mgr.get_flash_news(limit=200)
 
@@ -52,7 +52,7 @@ class TestManagerFlashNews:
         mgr.add_fetcher(CninfoFetcher())  # CNINFO 不声明 NEWS_FLASH
 
         with patch.object(
-            EastMoneyFetcher, "fetch_flash_news", return_value=[]
+            EastMoneyFetcher, "fetch_flash_news", return_value=[{"title": "fake"}]
         ) as mock_fetch:
             mgr.get_flash_news(limit=10)
 

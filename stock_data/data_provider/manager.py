@@ -330,26 +330,15 @@ class DataFetcherManager:
         这里再二次防御。
 
         Returns:
-            Tuple of (list_of_FlashNewsItem, fetcher_name)。空结果集视作
-            合法状态(上游可能当前无快讯),不抛错;但全部 fetcher 异常失败时
-            仍然抛 ``DataFetchError``。
+            Tuple of (list_of_FlashNewsItem, fetcher_name)。
         """
-        try:
-            return self._with_failover(
-                DataCapability.NEWS_FLASH,
-                "csi",
-                f"news flash limit={limit}",
-                lambda f: f.fetch_flash_news(limit),
-                return_source=True,
-            )
-        except DataFetchError as e:
-            # _with_failover 把 "所有 fetcher 返回空" 和 "所有 fetcher 异常" 都包成
-            # DataFetchError。空结果时 errors 列表为空 → 消息里没有 "[<name>]" 行;
-            # 真失败时 errors 含 per-fetcher 行。区分二者的最稳方法:看消息里
-            # 是否有方括号包起来的 fetcher 名错误。
-            if "[" in str(e) and "]" in str(e):
-                raise
-            return ([], "")
+        return self._with_failover(
+            DataCapability.NEWS_FLASH,
+            "csi",
+            f"news flash limit={limit}",
+            lambda f: f.fetch_flash_news(limit),
+            return_source=True,
+        )
 
     # ---------- realtime quotes (with circuit breaker) ----------
 
