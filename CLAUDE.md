@@ -210,7 +210,7 @@ Compact overview:
 | `YfinanceFetcher` | 3 | us, csi, hk | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `INDEX_HISTORICAL`, `INDEX_QUOTE` | none |
 | `ZhituFetcher` | 4 | csi | `REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `HISTORICAL_MIN` (minute fallback), `STOCK_LIST` (P4 backup) | `ZHITU_TOKEN` |
 | `TencentFetcher` | 5 | csi, hk | `REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
-| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT` | none |
+| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH` | none |
 | `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW` | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
@@ -270,6 +270,7 @@ fetchers that support it.
 | `get_north_flow` | `NORTH_FLOW` |
 | `get_reports` | `RESEARCH_REPORT` |
 | `get_announcements` | `ANNOUNCEMENT` |
+| `get_flash_news` | `NEWS_FLASH` |
 | `get_stock_info` | `STOCK_INFO` |
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
 | `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `HISTORICAL_DWM` |
@@ -286,7 +287,7 @@ fetchers that support it.
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
 | ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| HISTORICAL_MIN \| STOCK_LIST` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
-| EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT` |
+| EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH` |
 | ThsFetcher | `HOT_TOPICS \| NORTH_FLOW` |
 | CninfoFetcher | `ANNOUNCEMENT` |
 
