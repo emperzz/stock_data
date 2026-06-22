@@ -955,7 +955,9 @@ class EastMoneyFetcher(BaseFetcher):
                 f"[EastMoneyFetcher] fetch_flash_news: bad JSON: {e}"
             ) from e
 
-        if payload.get("code") != 0:
+        # 上游 code 在成功时是字符串 "1" (有时是 int 0/1, 视端点而异);
+        # 接受所有"成功"指示符。仅当 code 是已知失败值(-1 等)时才报错。
+        if payload.get("code") not in (0, "0", 1, "1"):
             raise DataFetchError(
                 f"[EastMoneyFetcher] fetch_flash_news API code={payload.get('code')} "
                 f"msg={payload.get('message')}"
