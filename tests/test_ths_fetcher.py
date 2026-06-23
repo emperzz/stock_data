@@ -100,8 +100,11 @@ class TestFetchFlashNewsNormalize:
         assert result["title"] == "南向资金成交额超 1.7 万亿港元"
         assert result["url"] == "https://news.10jqka.com.cn/20260623/c677638595.shtml"
         assert result["source_domain"] == "news.10jqka.com.cn"
-        # rtime=1782181568 → 2026-06-22 16:26:08 UTC (local tz may differ; verify just structure)
-        assert result["publish_time"].startswith("2026-")
+        # rtime=1782181568 → 2026-06-22 16:26:08 UTC; verify dynamically so the
+        # test doesn't break in 2027+ (year-coupled assertions rot on Jan 1).
+        from datetime import datetime
+        expected_year = datetime.utcfromtimestamp(1782181568).year
+        assert result["publish_time"].startswith(f"{expected_year}-")
         assert len(result["publish_time"]) == 19  # "YYYY-MM-DD HH:MM:SS"
         assert result["snippet"] == "南向资金成交额超 1.7 万亿港元。"
 
@@ -141,7 +144,8 @@ class TestFetchFlashNewsSinglePage:
     def test_fetch_one_page_uses_correct_url(self, monkeypatch):
         """Verify the upstream URL, params, and headers."""
         import json
-        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
+            fixture = json.load(_f)
         captured = {}
 
         def fake_get(url, params=None, headers=None, timeout=None):
@@ -168,7 +172,8 @@ class TestFetchFlashNewsSinglePage:
 
     def test_returns_normalized_dicts_from_fixture(self, monkeypatch):
         import json
-        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
+            fixture = json.load(_f)
 
         def fake_get(url, params=None, headers=None, timeout=None):
             class R:
@@ -189,8 +194,11 @@ class TestFetchFlashNewsSinglePage:
         assert first["url"] == upstream_first["url"]
         assert first["source_domain"] == "news.10jqka.com.cn"
         assert first["snippet"] == upstream_first["digest"]
-        # rtime=1782181568 → 2026-06-22 in UTC (any local tz still year 2026)
-        assert first["publish_time"].startswith("2026-")
+        # rtime=1782181568 → 2026-06-22 in UTC; verify dynamically (year-coupled
+        # assertions rot on Jan 1, see test_normalize_flash_item_full).
+        from datetime import datetime
+        expected_year = datetime.utcfromtimestamp(1782181568).year
+        assert first["publish_time"].startswith(f"{expected_year}-")
 
 
 class TestFetchFlashNewsMultiPage:
@@ -202,7 +210,8 @@ class TestFetchFlashNewsMultiPage:
     def test_paginates_to_3_pages_for_limit_50(self, monkeypatch):
         """limit=50 → 3 pages requested (3*20=60 >= 50), returns 50 items."""
         import json
-        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
+            fixture = json.load(_f)
         page_calls = []
 
         def fake_get(url, params=None, headers=None, timeout=None):
@@ -224,7 +233,8 @@ class TestFetchFlashNewsMultiPage:
     def test_paginates_to_10_pages_for_limit_200(self, monkeypatch):
         """limit=200 -> 10 pages, returns 200 items (max)."""
         import json
-        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
+            fixture = json.load(_f)
         page_calls = []
 
         def fake_get(url, params=None, headers=None, timeout=None):
@@ -246,7 +256,8 @@ class TestFetchFlashNewsMultiPage:
     def test_stops_on_empty_page(self, monkeypatch):
         """If upstream returns an empty list, stop paginating immediately."""
         import json
-        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
+            fixture = json.load(_f)
         empty = {"code": "200", "msg": "ok", "data": {"list": []}}
         page_calls = []
 
@@ -289,7 +300,8 @@ class TestFetchFlashNewsLimits:
     def test_limit_string_coerced(self, monkeypatch):
         """Route layer sends str; fetcher should coerce to int."""
         import json
-        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
+            fixture = json.load(_f)
 
         def fake_get(url, params=None, headers=None, timeout=None):
             class R:
@@ -311,7 +323,8 @@ class TestFetchFlashNewsLimits:
     def test_limit_above_200_capped_not_raised(self, monkeypatch):
         """limit=500 doesn't raise; capped to 200 (10 pages)."""
         import json
-        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
+            fixture = json.load(_f)
         page_calls = []
 
         def fake_get(url, params=None, headers=None, timeout=None):

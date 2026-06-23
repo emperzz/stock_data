@@ -10,8 +10,9 @@ APIs:
 """
 
 import logging
+import math
 import os
-from datetime import date as _date
+from datetime import date as _date, datetime
 
 import requests
 
@@ -152,7 +153,6 @@ class ThsFetcher(BaseFetcher):
         publish_time = ""
         if rtime_raw:
             try:
-                from datetime import datetime
                 publish_time = datetime.fromtimestamp(int(rtime_raw)).strftime(
                     "%Y-%m-%d %H:%M:%S"
                 )
@@ -182,7 +182,6 @@ class ThsFetcher(BaseFetcher):
         Raises:
             DataFetchError: 网络异常 / HTTP 非 200 / 上游 code != 200 / limit 越界
         """
-        import math
         # limit 防御(路由层 Query(ge=1,le=200) 会拦,这里二次防御)
         try:
             limit = int(limit)
