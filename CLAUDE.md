@@ -211,7 +211,7 @@ Compact overview:
 | `ZhituFetcher` | 4 | csi | `REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `HISTORICAL_MIN` (minute fallback), `STOCK_LIST` (P4 backup) | `ZHITU_TOKEN` |
 | `TencentFetcher` | 5 | csi, hk | `REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
 | `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH` | none |
-| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW` | none |
+| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH` | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
 | `MyquantFetcher` | 9 | csi | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_HISTORICAL`, `INDEX_INTRADAY`, `STOCK_INFO` (last-resort backup; richer sources win) | `MYQUANT_TOKEN` |
@@ -270,7 +270,7 @@ fetchers that support it.
 | `get_north_flow` | `NORTH_FLOW` |
 | `get_reports` | `RESEARCH_REPORT` |
 | `get_announcements` | `ANNOUNCEMENT` |
-| `get_flash_news` | `NEWS_FLASH` |
+| `get_flash_news` | `NEWS_FLASH` (EastMoney P6 → ThsFetcher P7) |
 | `get_stock_info` | `STOCK_INFO` |
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
 | `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `HISTORICAL_DWM` |
@@ -288,7 +288,7 @@ fetchers that support it.
 | ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| HISTORICAL_MIN \| STOCK_LIST` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
 | EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH` |
-| ThsFetcher | `HOT_TOPICS \| NORTH_FLOW` |
+| ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH` |
 | CninfoFetcher | `ANNOUNCEMENT` |
 
 **Index routing design**: Each fetcher that declares an INDEX_* capability must implement the corresponding public method (`get_index_realtime_quote`, `get_index_historical`, `get_index_intraday`). The Manager calls these methods directly — no `hasattr` checks, no fallback to stock methods. Internally, a fetcher may delegate to shared data processing logic (e.g. `get_index_historical` → `get_kline_data`), but the public interface is always the dedicated index method.
