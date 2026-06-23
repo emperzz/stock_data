@@ -328,3 +328,108 @@ class TestFetchFlashNewsLimits:
         results = self.fetcher.fetch_flash_news(limit=500)
         assert page_calls == [str(i) for i in range(1, 11)]  # 10 pages
         assert len(results) == 200  # capped
+
+
+class TestFetchFlashNewsErrors:
+    """Error handling for fetch_flash_news."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_http_error_raises(self, monkeypatch):
+        class R:
+            status_code = 500
+            def json(self_inner):
+                return {}
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        with pytest.raises(DataFetchError, match="HTTP 500"):
+            self.fetcher.fetch_flash_news(limit=10)
+
+    def test_network_error_raises(self, monkeypatch):
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        def boom(*a, **kw):
+            raise ConnectionError("refused")
+        monkeypatch.setattr(mod.requests, "get", boom)
+        with pytest.raises(DataFetchError, match="network error"):
+            self.fetcher.fetch_flash_news(limit=10)
+
+    def test_bad_json_raises(self, monkeypatch):
+        class R:
+            status_code = 200
+            def json(self_inner):
+                raise ValueError("bad json")
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        with pytest.raises(DataFetchError, match="bad JSON"):
+            self.fetcher.fetch_flash_news(limit=10)
+
+    def test_upstream_error_code_raises(self, monkeypatch):
+        bad = {"code": -1, "msg": "rate limited", "data": None}
+        class R:
+            status_code = 200
+            def json(self_inner):
+                return bad
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        with pytest.raises(DataFetchError, match="code=-1"):
+            self.fetcher.fetch_flash_news(limit=10)
+
+    def test_empty_list_returns_empty(self, monkeypatch):
+        empty = {"code": "200", "msg": "ok", "data": {"list": []}}
+        class R:
+            status_code = 200
+            def json(self_inner):
+                return empty
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        results = self.fetcher.fetch_flash_news(limit=10)
+        assert results == []
+
+    def test_null_list_returns_empty(self, monkeypatch):
+        """data.list is null (not []) -> return [] (not raise)."""
+        null_list = {"code": "200", "msg": "ok", "data": {"list": None}}
+        class R:
+            status_code = 200
+            def json(self_inner):
+                return null_list
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        results = self.fetcher.fetch_flash_news(limit=10)
+        assert results == []
+
+    def test_missing_data_returns_empty(self, monkeypatch):
+        """data key entirely missing -> return []."""
+        no_data = {"code": "200", "msg": "ok"}
+        class R:
+            status_code = 200
+            def json(self_inner):
+                return no_data
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        results = self.fetcher.fetch_flash_news(limit=10)
+        assert results == []
+
+    def test_malformed_record_skipped(self, monkeypatch):
+        """One record with missing url → skipped, others kept."""
+        fixture = {
+            "code": "200",
+            "msg": "ok",
+            "data": {
+                "list": [
+                    {"id": "1", "title": "good", "url": "https://x", "digest": "d", "rtime": "1782181568"},
+                    {"id": "2", "title": "bad"},  # missing url → skipped
+                    {"id": "3", "title": "also good", "url": "https://y", "digest": "d2", "rtime": "1782181567"},
+                ]
+            },
+        }
+        class R:
+            status_code = 200
+            def json(self_inner):
+                return fixture
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        results = self.fetcher.fetch_flash_news(limit=10)
+        assert len(results) == 2
+        assert results[0]["title"] == "good"
+        assert results[1]["title"] == "also good"
