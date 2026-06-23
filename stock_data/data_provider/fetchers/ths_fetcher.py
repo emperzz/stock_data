@@ -1,11 +1,12 @@
 """
 同花顺 HTTP API fetcher for signal layer data.
 
-Provides: 热点题材(hot-topics), 北向资金(north-flow)
+Provides: 热点题材(hot-topics), 北向资金(north-flow), 全球财经快讯(news-flash)
 
 APIs:
 - 热点: zx.10jqka.com.cn/event/api/getharden/
 - 北向: data.hexin.cn/market/hsgtApi/method/dayChart/
+- 快讯: news.10jqka.com.cn/tapp/news/push/stock  (pageSize 硬编码 20/页, 内部翻页)
 """
 
 import logging
@@ -39,6 +40,7 @@ class ThsFetcher(BaseFetcher):
     supported_data_types = (
         DataCapability.HOT_TOPICS
         | DataCapability.NORTH_FLOW
+        | DataCapability.NEWS_FLASH
     )
 
     def is_available(self) -> bool:
