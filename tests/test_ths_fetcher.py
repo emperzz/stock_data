@@ -191,3 +191,82 @@ class TestFetchFlashNewsSinglePage:
         assert first["snippet"] == upstream_first["digest"]
         # rtime=1782181568 → 2026-06-22 in UTC (any local tz still year 2026)
         assert first["publish_time"].startswith("2026-")
+
+
+class TestFetchFlashNewsMultiPage:
+    """Tests for fetch_flash_news(limit>20): paginates until enough items."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_paginates_to_3_pages_for_limit_50(self, monkeypatch):
+        """limit=50 → 3 pages requested (3*20=60 >= 50), returns 50 items."""
+        import json
+        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        page_calls = []
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            page_calls.append(params["page"])
+            class R:
+                status_code = 200
+                def json(self_inner):
+                    return fixture
+            return R()
+
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", fake_get)
+
+        results = self.fetcher.fetch_flash_news(limit=50)
+
+        assert page_calls == ["1", "2", "3"]  # 3 pages
+        assert len(results) == 50  # 3 pages of 20, truncated to limit
+
+    def test_paginates_to_10_pages_for_limit_200(self, monkeypatch):
+        """limit=200 -> 10 pages, returns 200 items (max)."""
+        import json
+        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        page_calls = []
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            page_calls.append(params["page"])
+            class R:
+                status_code = 200
+                def json(self_inner):
+                    return fixture
+            return R()
+
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", fake_get)
+
+        results = self.fetcher.fetch_flash_news(limit=200)
+
+        assert page_calls == [str(i) for i in range(1, 11)]  # 10 pages
+        assert len(results) == 200
+
+    def test_stops_on_empty_page(self, monkeypatch):
+        """If upstream returns an empty list, stop paginating immediately."""
+        import json
+        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        empty = {"code": "200", "msg": "ok", "data": {"list": []}}
+        page_calls = []
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            page_calls.append(params["page"])
+            if params["page"] == "1":
+                payload = fixture
+            else:
+                payload = empty
+            class R:
+                status_code = 200
+                def json(self_inner, p=payload):
+                    return p
+            return R()
+
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", fake_get)
+
+        results = self.fetcher.fetch_flash_news(limit=200)
+
+        # page 1 has data (20 items), page 2 is empty -> stop
+        assert page_calls == ["1", "2"]
+        assert len(results) == 20
