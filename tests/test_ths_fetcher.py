@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from stock_data.data_provider.base import DataCapability
+from stock_data.data_provider.base import DataCapability, DataFetchError
 from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
 
@@ -270,3 +270,61 @@ class TestFetchFlashNewsMultiPage:
         # page 1 has data (20 items), page 2 is empty -> stop
         assert page_calls == ["1", "2"]
         assert len(results) == 20
+
+
+class TestFetchFlashNewsLimits:
+    """Limit validation and clamping."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_limit_zero_raises(self):
+        with pytest.raises(DataFetchError, match="limit must be"):
+            self.fetcher.fetch_flash_news(limit=0)
+
+    def test_limit_negative_raises(self):
+        with pytest.raises(DataFetchError, match="limit must be"):
+            self.fetcher.fetch_flash_news(limit=-5)
+
+    def test_limit_string_coerced(self, monkeypatch):
+        """Route layer sends str; fetcher should coerce to int."""
+        import json
+        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            class R:
+                status_code = 200
+                def json(self_inner):
+                    return fixture
+            return R()
+
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", fake_get)
+
+        results = self.fetcher.fetch_flash_news(limit="10")
+        assert len(results) == 10
+
+    def test_limit_non_numeric_raises(self):
+        with pytest.raises(DataFetchError, match="limit must be int"):
+            self.fetcher.fetch_flash_news(limit="abc")
+
+    def test_limit_above_200_capped_not_raised(self, monkeypatch):
+        """limit=500 doesn't raise; capped to 200 (10 pages)."""
+        import json
+        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        page_calls = []
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            page_calls.append(params["page"])
+            class R:
+                status_code = 200
+                def json(self_inner):
+                    return fixture
+            return R()
+
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", fake_get)
+
+        results = self.fetcher.fetch_flash_news(limit=500)
+        assert page_calls == [str(i) for i in range(1, 11)]  # 10 pages
+        assert len(results) == 200  # capped
