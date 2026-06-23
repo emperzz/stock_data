@@ -35,7 +35,7 @@ class EndpointMeta:
     `fetcher_method` (optional): overrides the default method derived from
     CAPABILITY_TO_METHOD. Use when the endpoint's capability is shared by
     multiple endpoints calling different fetcher methods (e.g.
-    /dragon-tiger/daily declares DRAGON_TIGER but calls
+    /api/v1/dragon-tiger declares DRAGON_TIGER but calls
     get_daily_dragon_tiger, not the default get_dragon_tiger).
     """
     summary: str

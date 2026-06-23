@@ -1,5 +1,5 @@
 """
-Integration tests for /news/search and /news/content endpoints.
+Integration tests for /api/v1/news/search and /api/v1/news/content endpoints.
 """
 from unittest.mock import patch
 
@@ -10,7 +10,7 @@ from stock_data.server import app
 client = TestClient(app)
 
 
-# ---------------------- /news/search ----------------------
+# ---------------------- /api/v1/news/search ----------------------
 
 class TestNewsSearchEndpoint:
     def test_search_200_returns_schema(self):
@@ -25,7 +25,7 @@ class TestNewsSearchEndpoint:
             "stock_data.data_provider.manager.DataFetcherManager.search_news",
             return_value=(fake_items, "EastMoneyFetcher"),
         ):
-            resp = client.get("/news/search", params={"q": "603777", "limit": 5})
+            resp = client.get("/api/v1/news/search", params={"q": "603777", "limit": 5})
 
         assert resp.status_code == 200
         body = resp.json()
@@ -35,16 +35,16 @@ class TestNewsSearchEndpoint:
         assert body["limit"] == 5
 
     def test_search_missing_q_returns_422(self):
-        resp = client.get("/news/search")
+        resp = client.get("/api/v1/news/search")
         assert resp.status_code == 422  # FastAPI validation rejects missing required param
 
     def test_search_limit_too_high_returns_422(self):
-        resp = client.get("/news/search", params={"q": "ok", "limit": 999})
+        resp = client.get("/api/v1/news/search", params={"q": "ok", "limit": 999})
         assert resp.status_code == 422
 
     def test_search_from_after_to_returns_400_or_502(self):
         resp = client.get(
-            "/news/search",
+            "/api/v1/news/search",
             params={"q": "ok", "from": "2026-06-30", "to": "2026-01-01"},
         )
         # Either 400 (handler rejects at the boundary) or 502 (handler raises DataFetchError)
@@ -56,12 +56,12 @@ class TestNewsSearchEndpoint:
             "stock_data.data_provider.manager.DataFetcherManager.search_news",
             side_effect=DataFetchError("all failed"),
         ):
-            resp = client.get("/news/search", params={"q": "ok"})
+            resp = client.get("/api/v1/news/search", params={"q": "ok"})
 
         assert resp.status_code == 502
 
 
-# ---------------------- /news/content ----------------------
+# ---------------------- /api/v1/news/content ----------------------
 
 class TestNewsContentEndpoint:
     def test_content_200_returns_schema(self):
@@ -79,22 +79,22 @@ class TestNewsContentEndpoint:
             "stock_data.data_provider.utils.news_extractor.NewsContentExtractor.extract",
             return_value=fake,
         ):
-            resp = client.get("/news/content", params={"url": fake["url"]})
+            resp = client.get("/api/v1/news/content", params={"url": fake["url"]})
 
         assert resp.status_code == 200
         assert resp.json()["title"] == "Test Title"
 
     def test_content_missing_url_returns_422(self):
-        resp = client.get("/news/content")
+        resp = client.get("/api/v1/news/content")
         assert resp.status_code == 422
 
     def test_content_ssrf_localhost_returns_400(self):
-        resp = client.get("/news/content", params={"url": "http://localhost/"})
+        resp = client.get("/api/v1/news/content", params={"url": "http://localhost/"})
         assert resp.status_code == 400
         assert "internal" in resp.json()["detail"].lower()
 
     def test_content_non_http_scheme_returns_400(self):
-        resp = client.get("/news/content", params={"url": "file:///etc/passwd"})
+        resp = client.get("/api/v1/news/content", params={"url": "file:///etc/passwd"})
         assert resp.status_code == 400
 
     def test_content_extraction_failure_returns_502(self):
@@ -103,6 +103,6 @@ class TestNewsContentEndpoint:
             side_effect=ValueError("could not extract main content"),
         ):
             resp = client.get(
-                "/news/content", params={"url": "https://example.com/x"}
+                "/api/v1/news/content", params={"url": "https://example.com/x"}
             )
         assert resp.status_code == 502

@@ -70,7 +70,7 @@ def client(monkeypatch):
 
 
 def test_catalog_endpoint_lists_all_indicators(client):
-    r = client.get("/api/v1/indicators/catalog")
+    r = client.get("/api/v1/indicators")
     assert r.status_code == 200
     body = r.json()
     assert "indicators" in body

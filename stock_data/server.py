@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
-from .api.routes import news_router, router
+from .api.routes import health_router, news_router, router
 
 # Load environment variables
 load_dotenv()
@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
         logger.info("[Startup] Persistence schema ensured (STOCK_DB_INIT=false)")
 
     # ----- Trade-calendar warm-up (non-fatal) -----
-    # The /pools endpoint needs is_trade_date() and
+    # The /zt-pools endpoint needs is_trade_date() and
     # get_latest_trade_date_on_or_before() to work, and both depend on the
     # trade_calendar table being populated. If it's empty on startup, kick
     # off a one-shot fetch. Failure here is non-fatal: the /calendar
@@ -113,12 +113,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Data routes (unchanged)
+# Data routes (versioned under /api/v1)
 app.include_router(router, prefix="/api/v1")
 
-# News endpoints (mounted at root, no /api/v1 prefix — see comment in
-# stock_data/api/routes.py above the `news_router` definition).
-app.include_router(news_router)
+# News endpoints (also versioned under /api/v1 — the router's own paths start
+# with `/news/...`, so the final URL is `/api/v1/news/...`).
+app.include_router(news_router, prefix="/api/v1")
+
+# Health check (mounted at root, k8s/lb convention — `/healthz`).
+app.include_router(health_router)
 
 # --- API Explorer (new) -------------------------------------------------
 # stock_data/explorer/ subpackage owns the /explorer/ static UI and the

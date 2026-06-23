@@ -142,6 +142,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Separate router for the /healthz endpoint so it can be mounted at the root
+# path (k8s/lb convention) instead of under /api/v1. Migrated from
+# /api/v1/health on 2026-06-23 (see docs/api-naming-review-2026-06-23.md).
+health_router = APIRouter()
+
 
 # ---------- shared helpers for the two history endpoints ----------
 
@@ -275,8 +280,8 @@ def reset_manager() -> None:
     logger.info("Manager reset")
 
 
-@router.get(
-    "/health",
+@health_router.get(
+    "/healthz",
     response_model=HealthResponse,
     tags=["health"],
 )
@@ -1431,14 +1436,14 @@ def get_board_stocks(
 
 
 @router.get(
-    "/pools",
+    "/zt-pools",
     response_model=ZTPoolResponse,
     responses={
         400: {"model": ErrorResponse, "description": "Invalid pool type"},
         404: {"model": ErrorResponse, "description": "No data found for date"},
         500: {"model": ErrorResponse, "description": "Server error"},
     },
-    tags=["pools"],
+    tags=["zt-pools"],
 )
 @endpoint_meta(
     summary="涨跌停股池",
@@ -1630,7 +1635,7 @@ get_dragon_tiger = cached_endpoint(
 
 
 @router.get(
-    "/dragon-tiger/daily",
+    "/dragon-tiger",
     response_model=DailyDragonTigerResponse,
     responses={
         503: {"model": ErrorResponse, "description": "Data unavailable"},
@@ -1875,13 +1880,13 @@ get_fund_flow_daily = cached_endpoint(
 
 
 @router.get(
-    "/hot/topics",
+    "/hot-topics",
     response_model=HotTopicResponse,
     responses={
         503: {"model": ErrorResponse, "description": "Data unavailable"},
         500: {"model": ErrorResponse, "description": "Server error"},
     },
-    tags=["hot"],
+    tags=["hot-topics"],
 )
 @endpoint_meta(
     summary="热点题材",
@@ -1999,7 +2004,7 @@ def get_report_pdf(
 
 
 @router.get(
-    "/indicators/catalog",
+    "/indicators",
     response_model=IndicatorCatalogResponse,
     tags=["indicators"],
 )
@@ -2064,13 +2069,12 @@ get_announcements = cached_endpoint(
 )(get_announcements)
 
 
-# ---------- News endpoints (mounted at root, NOT under /api/v1) ----------
+# ---------- News endpoints (mounted under /api/v1 by stock_data.server) ----------
 #
-# The /news/search and /news/content endpoints are intentionally exposed at
-# the root path (no /api/v1 prefix) so that the OpenAPI/explorer conventions
-# used by other stock-data tools can call them at the canonical /news/...
-# URLs without the versioned prefix. The router is defined here and mounted
-# by stock_data.server:app at root.
+# The router's own paths start with `/news/...`; stock_data.server mounts this
+# router with `prefix="/api/v1"`, so the final URLs are `/api/v1/news/...`.
+# Migrated from root mount (2026-06-23, see docs/api-naming-review-2026-06-23.md)
+# to keep all business endpoints under a single versioned namespace.
 
 news_router = APIRouter()
 

@@ -32,10 +32,10 @@ def client():
 
 
 class TestHealthCheck:
-    """Tests for /api/v1/health endpoint."""
+    """Tests for /healthz endpoint (k8s/lb convention; root path, not under /api/v1)."""
 
     def test_health_returns_ok(self, client):
-        response = client.get("/api/v1/health")
+        response = client.get("/healthz")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
@@ -44,7 +44,7 @@ class TestHealthCheck:
         assert data["sources"] is None
 
     def test_health_with_details_returns_sources(self, client):
-        response = client.get("/api/v1/health?details=true")
+        response = client.get("/healthz?details=true")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] in ("ok", "degraded", "unhealthy")
@@ -55,7 +55,7 @@ class TestHealthCheck:
             assert "available" in s
 
     def test_health_includes_unregistered_fetchers(self, client):
-        """/health must surface ALL BaseFetcher subclasses, not just registered ones.
+        """/healthz must surface ALL BaseFetcher subclasses, not just registered ones.
 
         Without TUSHARE_TOKEN / ZHITU_TOKEN, those fetchers aren't registered
         with the manager — but operators still need to see them in the health
@@ -72,13 +72,13 @@ class TestHealthCheck:
             expected.add(getattr(c, "name", c.__name__))
             stack.extend(c.__subclasses__())
 
-        response = client.get("/api/v1/health?details=true")
+        response = client.get("/healthz?details=true")
         data = response.json()
         actual_names = {s["name"] for s in data["sources"]}
         # Must include every BaseFetcher subclass, registered or not.
         missing = expected - actual_names
         assert not missing, (
-            f"/health omitted these fetcher classes: {sorted(missing)}. "
+            f"/healthz omitted these fetcher classes: {sorted(missing)}. "
             f"Expected all BaseFetcher subclasses to appear in sources[]. "
             f"Got: {sorted(actual_names)}"
         )
@@ -89,7 +89,7 @@ class TestHealthCheck:
         state, not a hardcoded label. Tests the same logic-driven contract
         enforced for /control/api-manifest's fetchers[].
         """
-        response = client.get("/api/v1/health?details=true")
+        response = client.get("/healthz?details=true")
         data = response.json()
 
         unavailable = [s for s in data["sources"] if s["available"] is False]
@@ -123,7 +123,7 @@ class TestHealthCheck:
         """
         # Sanity: we know TushareFetcher and ZhituFetcher are unregistered in
         # the default test env (no tokens). Verify the probe isn't unhealthy.
-        response = client.get("/api/v1/health")
+        response = client.get("/healthz")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] != "unhealthy", (

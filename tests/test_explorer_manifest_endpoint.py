@@ -143,12 +143,12 @@ class TestManifestFetchersField:
 
     def test_indicators_catalog_has_no_fetchers(self):
         m = self._manifest()
-        ep = self._endpoint(m, "GET", "/indicators/catalog")
+        ep = self._endpoint(m, "GET", "/indicators")
         assert ep["fetchers"] == []
 
     def test_dragon_tiger_daily_overrides_method(self):
         m = self._manifest()
-        ep = self._endpoint(m, "GET", "/dragon-tiger/daily")
+        ep = self._endpoint(m, "GET", "/dragon-tiger")
         methods = {f["method"] for f in ep["fetchers"]}
         assert methods == {"get_daily_dragon_tiger"}, (
             f"expected only get_daily_dragon_tiger, got {methods}"

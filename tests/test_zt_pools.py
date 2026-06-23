@@ -50,7 +50,7 @@ class TestZTPoolAPIRoutes:
     """Tests for ZT pool API routes."""
 
     def test_get_zt_pools_success(self, client):
-        """Test GET /api/v1/pools with type=zt returns cached data."""
+        """Test GET /api/v1/zt-pools with type=zt returns cached data."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
@@ -63,7 +63,7 @@ class TestZTPoolAPIRoutes:
             )
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/pools?type=zt&date=2024-05-10")
+            response = client.get("/api/v1/zt-pools?type=zt&date=2024-05-10")
             assert response.status_code == 200
             data = response.json()
             assert data["type"] == "zt"
@@ -77,7 +77,7 @@ class TestZTPoolAPIRoutes:
             assert data["source"] == "akshare"
 
     def test_get_dt_pools(self, client):
-        """Test GET /api/v1/pools with type=dt returns cached data."""
+        """Test GET /api/v1/zt-pools with type=dt returns cached data."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
@@ -89,7 +89,7 @@ class TestZTPoolAPIRoutes:
             )
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/pools?type=dt&date=2024-05-10")
+            response = client.get("/api/v1/zt-pools?type=dt&date=2024-05-10")
             assert response.status_code == 200
             data = response.json()
             assert data["type"] == "dt"
@@ -98,7 +98,7 @@ class TestZTPoolAPIRoutes:
             assert data["source"] == "persistence"
 
     def test_get_zbgc_pools(self, client):
-        """Test GET /api/v1/pools with type=zbgc returns cached data."""
+        """Test GET /api/v1/zt-pools with type=zbgc returns cached data."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
@@ -110,24 +110,24 @@ class TestZTPoolAPIRoutes:
             )
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/pools?type=zbgc&date=2024-05-10")
+            response = client.get("/api/v1/zt-pools?type=zbgc&date=2024-05-10")
             assert response.status_code == 200
             data = response.json()
             assert data["type"] == "zbgc"
             assert data["stocks"][0]["seal_count"] == 2
 
     def test_get_pools_missing_type(self, client):
-        """Test GET /api/v1/pools without type parameter returns 422."""
-        response = client.get("/api/v1/pools")
+        """Test GET /api/v1/zt-pools without type parameter returns 422."""
+        response = client.get("/api/v1/zt-pools")
         assert response.status_code == 422
 
     def test_get_pools_invalid_type(self, client):
-        """Test GET /api/v1/pools with invalid type parameter returns 422."""
-        response = client.get("/api/v1/pools?type=invalid")
+        """Test GET /api/v1/zt-pools with invalid type parameter returns 422."""
+        response = client.get("/api/v1/zt-pools?type=invalid")
         assert response.status_code == 422
 
     def test_get_pools_with_refresh(self, client):
-        """Test GET /api/v1/pools?refresh=true forces refresh.
+        """Test GET /api/v1/zt-pools?refresh=true forces refresh.
 
         The route resolves a missing `date` to either today (if today is
         a trade day) or the latest trade date <= today. The volatile/
@@ -144,7 +144,7 @@ class TestZTPoolAPIRoutes:
             )
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/pools?type=zt&refresh=true&date=2024-05-10")
+            response = client.get("/api/v1/zt-pools?type=zt&refresh=true&date=2024-05-10")
             assert response.status_code == 200
             # date pinned to 2024-05-10 (a historical Friday) — the
             # route no longer passes is_current_day; the persistence
@@ -154,23 +154,23 @@ class TestZTPoolAPIRoutes:
             )
 
     def test_get_pools_no_data_returns_404(self, client):
-        """Test GET /api/v1/pools when no data returns 404."""
+        """Test GET /api/v1/zt-pools when no data returns 404."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = ([], "")
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/pools?type=zt&date=2024-05-10")
+            response = client.get("/api/v1/zt-pools?type=zt&date=2024-05-10")
             assert response.status_code == 404
 
     def test_get_pools_passes_date_to_manager(self, client):
-        """Test GET /api/v1/pools passes date to manager correctly."""
+        """Test GET /api/v1/zt-pools passes date to manager correctly."""
         with patch("stock_data.api.routes.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = ([], "")
             mock_manager.return_value = mock_mgr
 
-            client.get("/api/v1/pools?type=zt&date=2024-06-15")
+            client.get("/api/v1/zt-pools?type=zt&date=2024-06-15")
             # Should pass date to manager
             mock_mgr.get_zt_pool.assert_called_once()
             args, kwargs = mock_mgr.get_zt_pool.call_args
@@ -206,7 +206,7 @@ class TestZTPoolAPIRoutes:
             )
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/pools?type=zt")
+            response = client.get("/api/v1/zt-pools?type=zt")
             assert response.status_code == 200
             # Post-c40d108: the route no longer passes is_current_day down to the
             # manager — that flag is ignored and the persistence layer computes

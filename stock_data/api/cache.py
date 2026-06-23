@@ -158,7 +158,7 @@ def get_news_flash_cache() -> TTLCache:
 
 
 def make_news_flash_cache_key(limit: int) -> tuple:
-    """Cache key for /news/flash?limit=N. Single-param, opaque tuple."""
+    """Cache key for /api/v1/news/flash?limit=N. Single-param, opaque tuple."""
     return ("news_flash", limit)
 
 
