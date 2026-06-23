@@ -1,40 +1,57 @@
 # Stock Data Server
 
-A local stock data aggregation server that integrates multiple upstream APIs into a unified REST API for AI agents.
+A local stock data aggregation server that integrates 11 upstream stock data APIs into a unified REST API for AI agents.
 
-**Two layers in one server:**
+**Four layers in one server:**
 
-- **Data layer** — aggregates 9 upstream APIs (Tushare / Baostock / Akshare / Yfinance / Zhitu / Tencent / EastMoney / THS / Cninfo) with priority-based failover, circuit breaker, and persistent cache.
-- **Compute layer** — 14 technical indicators (MA / MACD / BOLL / KDJ / RSI / WR / BIAS / CCI / ATR / OBV / ROC / DMI / SAR / KC) attached to K-line via `?indicators=...`. Pure-compute, no upstream calls.
+- **API Layer (FastAPI)** — declarative routes; metadata-driven via `@endpoint_meta`.
+- **IndicatorService (pure compute)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC` (14 built-in). Sits on top of the manager; no fetcher involvement.
+- **DataFetcherManager** — capability-routed, priority-based failover + circuit breaker + TTLCache.
+- **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Tencent · EastMoney · THS · Cninfo · Myquant · Baidu` (11 fetchers).
+
+Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / ZT pools) is owned by `data_provider/persistence/` and seeded transparently by the manager. An interactive API Explorer is served at `/explorer/`.
 
 ## Features
 
-- **Multi-source aggregation**: Tushare, Baostock, Akshare, Yfinance, Zhitu, Tencent, EastMoney, THS, Cninfo
-- **Automatic failover**: Priority-based source selection with fallback
-- **Circuit breaker**: Prevents cascading failures from unavailable sources
-- **Unified data format**: Consistent schema across all sources
-- **Market support**: A-shares, Hong Kong stocks, US stocks and indices
-- **Enhanced quotes**: PE/PB/市值/涨跌停价 via Tencent财经
+- **Multi-source aggregation** (11 fetchers): Tushare, Baostock, Akshare, Yfinance, Zhitu, Tencent, EastMoney, THS, Cninfo, Myquant, Baidu
+- **Automatic failover**: priority-based source selection with capability-routed fallback
+- **Circuit breaker**: prevents cascading failures from unavailable sources
+- **Persistent metadata cache**: SQLite for stock lists, board metadata, trade calendar, ZT/DT/ZBGC pools (separate from in-process TTLCache)
+- **Unified data format**: consistent schema across all sources
+- **Market support**: A-shares, Hong Kong stocks, US stocks and indices (CSI / HK / US)
+- **Enhanced quotes**: PE/PB/市值/换手率/振幅 via Tencent财经
 - **Signal layer**: 龙虎榜/融资融券/大宗交易/股东户数/分红/资金流/热点题材/北向资金
-- **Fundamentals**: 研报检索+PDF下载 / 公告检索
+- **News**: 关键词搜索 (EastMoney → Baidu 备份) / 7×24 快讯 (EastMoney → THS 备份) / 正文提取
+- **Fundamentals**: 公司画像 (Zhitu → Myquant) / 研报检索+PDF下载 / 公告检索
 - **Technical indicators** (pure compute, 14 built-in): MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC — attach to K-line via `?indicators=ma,macd,kdj`
+- **API Explorer** (`/explorer/`): interactive docs, search, market/capability filters, Stage 2 fetcher drill-down
 
 ## Quick Start
 
+> **Always use the project venv.** `akshare` / `yfinance` / `gm` are
+> installed in `.venv/`, not the system Python. Running the bare
+> `python` binary will hit `ModuleNotFoundError` and break every
+> endpoint that routes through those packages. Use
+> `.venv/Scripts/python.exe` (Windows) / `.venv/bin/python` (Linux/macOS)
+> directly, or `source .venv/Scripts/activate` first.
+
 ```bash
-# Install dependencies
-pip install -e ".[dev]"
+# Install dependencies (into the venv)
+.venv/Scripts/python.exe -m pip install -e ".[dev]"
 
 # Configure (copy and edit .env)
 cp .env.example .env
-# Edit .env and add your TUSHARE_TOKEN if available
+# Edit .env and add your TUSHARE_TOKEN (and optionally ZHITU_TOKEN /
+# MYQUANT_TOKEN / BAIDU_API_KEY)
 
 # Run the server
-python -m stock_data.server
+.venv/Scripts/python.exe -m stock_data.server
 
 # Or with uvicorn directly
-uvicorn stock_data.server:app --host 0.0.0.0 --port 8888
+.venv/Scripts/python.exe -m uvicorn stock_data.server:app --host 127.0.0.1 --port 8888
 ```
+
+After startup, open `http://localhost:8888/explorer/` for the interactive API explorer.
 
 **One-liner with technical indicators:**
 
@@ -44,14 +61,21 @@ curl 'http://localhost:8888/api/v1/stocks/600519/history?days=120&indicators=mac
 
 # What indicators are available?
 curl 'http://localhost:8888/api/v1/indicators/catalog'
+
+# Health check (root-mounted, k8s/lb convention)
+curl 'http://localhost:8888/healthz?details=true'
 ```
 
 ## API Endpoints
 
+All endpoints are versioned under `/api/v1/...` **except** `/healthz`,
+which is mounted at the root (k8s/lb convention). The `/explorer/` UI
+and `/control/*` management API are described under [API Explorer](#api-explorer).
+
 ### Health Check
 
 ```bash
-GET /api/v1/health
+GET /healthz
 ```
 
 Response (lightweight, default):
@@ -65,7 +89,11 @@ Response (lightweight, default):
 Append `?details=true` to receive per-fetcher circuit-breaker state (a
 list of `SourceHealth` objects). When all sources are unavailable the
 status field is `"unhealthy"`; when at least one is open/half-open
-it's `"degraded"`.
+it's `"degraded"`. The probe enumerates **all** `BaseFetcher` subclasses
+(not just registered ones), so missing-config fetchers (Tushare/Zhitu
+without their tokens) are surfaced with `available: false` and an
+`unavailable_reason` — but only registered fetchers count toward
+`ok/degraded/unhealthy`.
 
 ---
 
@@ -275,6 +303,37 @@ GET /api/v1/stocks/{code}/quote
 
 ---
 
+### Company Profile (公司画像)
+
+```bash
+GET /api/v1/stocks/{code}/info
+```
+
+A-share only. Fetches rich company profile (industry, listing date,
+registered capital, executives, business scope, etc.) via
+`STOCK_INFO` capability — Zhitu (P4) → Myquant (P9) failover.
+Cached in-process for `CACHE_TTL_STOCK_INFO` (default 3600s).
+
+**Response (excerpt):**
+```json
+{
+  "code": "600519",
+  "name": "贵州茅台",
+  "exchange": "SH",
+  "industry": "白酒",
+  "listing_date": "2001-08-27",
+  "total_share": 1256000000,
+  "float_share": 1256000000,
+  "reg_capital": 1256000000,
+  "source": "ZhituFetcher"
+}
+```
+
+`exchange` is `"SH"` / `"SZ"` / `"BJ"` when known (Zhitu / Myquant
+populate it) and `null` otherwise (Baostock / Akshare do not).
+
+---
+
 ### Get Stock Intraday Data
 
 ```bash
@@ -419,31 +478,39 @@ GET /api/v1/indices
 ### List All Stocks (with local cache)
 
 ```bash
-GET /api/v1/stocks?market=cn
-GET /api/v1/stocks?market=cn&refresh=true
+GET /api/v1/stocks?market=csi
+GET /api/v1/stocks?market=csi&refresh=true
+GET /api/v1/stocks?market=csi&offset=0&limit=100
 ```
 
 **Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `market` | string | Required | Market: `cn` (A股), `hk` (港股), `us` (美股) |
+| `market` | string | Required | Market: `csi` (A股), `hk` (港股), `us` (美股) |
 | `refresh` | bool | `false` | If `true`, fetch latest from upstream and update cache |
+| `offset` | int | 0 | Pagination offset |
+| `limit` | int | 100 | Page size (1-1000) |
+
+> **Note:** A-shares are exposed as `csi`. The legacy `cn` tag is an
+> internal fetcher convention and is NOT a valid value here.
 
 **Response:**
 ```json
 [
-  {"code": "000001", "name": "平安银行", "market": "cn"},
-  {"code": "000002", "name": "万科A", "market": "cn"},
-  {"code": "600519", "name": "贵州茅台", "market": "cn"}
+  {"code": "000001", "name": "平安银行", "market": "csi", "exchange": "SZ"},
+  {"code": "000002", "name": "万科A", "market": "csi", "exchange": "SZ"},
+  {"code": "600519", "name": "贵州茅台", "market": "csi", "exchange": "SH"}
 ]
 ```
+
+`exchange` is `"SH"` / `"SZ"` / `"BJ"` when known, else `null`.
 
 **Caching behavior:**
 - First call fetches from upstream (Tushare for A-share if token, otherwise Akshare)
 - Subsequent calls return cached data (~50ms)
 - Use `refresh=true` to force update from upstream
 
-**Cached data location:** `stock_data/stock_cache.db` (SQLite). Override via `STOCK_CACHE_DB_PATH` environment variable.
+**Cached data location:** `stock_data/stock_cache.db` (SQLite). Override via `STOCK_CACHE_DB_PATH` environment variable. See [Persistence](#persistence-on-disk-sqlite-store) below.
 
 ---
 
@@ -802,6 +869,101 @@ GET /api/v1/stocks/{code}/announcements?page_size=30
 
 ---
 
+### News Search (关键词 / 股票代码 / 主题)
+
+```bash
+GET /api/v1/news/search?q=茅台&from=2026-05-01&to=2026-05-20&limit=20
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` | string | required | Search query (1-200 chars, Chinese supported) |
+| `from` | string | null | Start date `YYYY-MM-DD` |
+| `to` | string | null | End date `YYYY-MM-DD` |
+| `limit` | int | 20 | Result count (1-100) |
+
+Routed via `NEWS_SEARCH` capability. **EastMoney** (P6) is primary;
+**BaiduFetcher** (P7, requires `BAIDU_API_KEY`) is the failover. Both
+sources are restricted to canonical news subdomains (`finance.eastmoney.com`,
+`www.cls.cn`, `news.10jqka.com.cn`); Baidu also honors `BAIDU_NEWS_DOMAINS`
+overrides.
+
+```json
+{
+  "data": [
+    {
+      "title": "贵州茅台一季度营收...",
+      "url": "https://finance.eastmoney.com/news/...",
+      "publish_date": "2026-05-15",
+      "source_domain": "finance.eastmoney.com",
+      "summary": "..."
+    }
+  ],
+  "total": 20,
+  "limit": 20,
+  "query": "茅台",
+  "source": "EastMoneyFetcher"
+}
+```
+
+### Flash News (全球财经 7×24 实时推送)
+
+```bash
+GET /api/v1/news/flash?limit=50
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | 50 | Item count (1-200) |
+
+Routed via `NEWS_FLASH` capability. **EastMoney** (P6) is primary,
+**THS** (P7) is the failover. Cached 60s. `code` in each item is the
+**article ID**, not the stock code.
+
+```json
+{
+  "data": [
+    {
+      "title": "央行宣布降准0.5个百分点",
+      "publish_time": "2026-05-20 09:31:00",
+      "url": "https://finance.eastmoney.com/news/...",
+      "code": "202605200931000123",
+      "source_domain": "finance.eastmoney.com"
+    }
+  ],
+  "total": 50,
+  "limit": 50,
+  "source": "EastMoneyFetcher"
+}
+```
+
+### News Content (URL → 正文)
+
+```bash
+GET /api/v1/news/content?url=https://finance.eastmoney.com/news/...
+```
+
+Given a news detail-page URL, fetches and extracts the article body.
+Pure utility endpoint (no fetcher routing). URL is rejected when it
+points at internal networks (`127.0.0.1`, `10.0.0.0/8`, etc.).
+
+```json
+{
+  "url": "https://finance.eastmoney.com/news/...",
+  "title": "贵州茅台一季度营收...",
+  "body": "...",
+  "publish_date": "2026-05-15T08:00:00",
+  "author": "财经早知道",
+  "source_domain": "finance.eastmoney.com",
+  "extractor": "default",
+  "byte_size": 4321
+}
+```
+
+---
+
 ## API Response Caching
 
 The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to avoid repeated upstream API calls when multiple users request the same data within a short window.
@@ -832,13 +994,51 @@ The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to 
 | `CACHE_TTL_INDEX_QUOTE` | TTL for index realtime quotes (seconds) | `60` |
 | `CACHE_TTL_INDEX_INTRADAY` | TTL for index intraday (seconds) | `30` |
 | `CACHE_TTL_STOCK_INTRADAY` | TTL for stock intraday (seconds) | `30` |
+| `CACHE_TTL_STOCK_INFO` | TTL for 公司画像 (`StockInfoResponse`, seconds) | `3600` |
 
 ### Persistence (on-disk SQLite store)
+
+The persistence layer caches stock lists, board metadata, trade calendar, and ZT/DT/ZBGC pool history across processes. It lives in `stock_data/data_provider/persistence/` and is separate from the in-process TTLCache above.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `STOCK_CACHE_DB_PATH` | Path to the SQLite file used by the persistence layer | `<repo>/stock_data/stock_cache.db` |
-| `STOCK_DB_INIT` | Startup hook: `true` → DROP + recreate all persistence tables on boot; `false` → idempotent CREATE IF NOT EXISTS only. **WARNING: `true` wipes all cached stock lists, board metadata, trade calendar, and ZT/DT/ZBGC pool history.** | `false` |
+| `STOCK_DB_INIT` | `true` → DROP + recreate all persistence tables on boot; `false` → idempotent CREATE IF NOT EXISTS only. **WARNING: `true` wipes all cached stock lists, board metadata, trade calendar, and ZT/DT/ZBGC pool history.** | `false` |
+
+### Source Tracking (new)
+
+All responses carrying fetched data include a `source: str` field with one of these values:
+
+- **fetcher name** (e.g. `tushare`, `akshare`, `eastmoney`): live fetch from upstream, OR API TTLCache hit (the cache stores the original fetcher name, so cache hits report the same source as the original call).
+- **`"persistence"`**: served from the SQLite persistence layer (historical K-line / board lists / trade calendar / etc.).
+
+`source` is optional in the schema and defaults to `""`. Older clients may ignore it.
+
+`/stocks` and `/calendar` currently do NOT expose `source` (their response models have no such field) — the persistence origin is still computed and discarded. This is a YAGNI choice; if needed later, add `source: str` to those response models and the route layer is already wired to pass it through.
+
+---
+
+## API Explorer
+
+An interactive docs UI is mounted at `/explorer/` (after `python -m stock_data.server`, open `http://localhost:8888/explorer/`). It is generated server-side from `app.routes` + the `@endpoint_meta` decorator on each route — the page fetches `GET /control/api-manifest` on load and renders a sidebar with search, market filter, capability filter, and a right-side response panel.
+
+**Features:**
+
+- **Search** — filter by endpoint path / summary
+- **Market filter** — `csi` / `hk` / `us`
+- **Capability filter** — `REALTIME_QUOTE` / `HISTORICAL_DWM` / `NEWS_FLASH` / etc.
+- **Fetcher drill-down** (Stage 2) — collapsible section under each endpoint showing every fetcher that can serve it, with method signature + a `Test` button that posts to `POST /control/fetcher-test` to invoke the fetcher directly (bypassing the manager's circuit breaker / capability filter)
+
+**Management endpoints (`/control/*`):**
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /control/config` | Current server config |
+| `GET /control/server/status` | Runtime status |
+| `GET /control/api-manifest` | JSON manifest consumed by the explorer UI |
+| `POST /control/fetcher-test` | Stage 2 fetcher drill-down (always 127.0.0.1) |
+
+> `/control/*` is bound to `127.0.0.1` only (the new `SERVER_HOST` default). To enable remote access, set `SERVER_HOST=0.0.0.0` explicitly. Stage 2 results bypass the manager's circuit breaker and are not production-equivalent.
 
 ---
 
@@ -946,21 +1146,23 @@ GET /api/v1/stocks/IXIC/history       # 纳斯达克综合
 
 ## Data Source Routing
 
-The server automatically routes requests to the appropriate data source based on the stock/index code:
+The server automatically routes requests to the appropriate data source based on the stock/index code and the capability required. Default priorities are overridable via `*_PRIORITY` env vars (see [Configuration](#configuration)).
 
 ### A-share Stocks
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 0 | Tushare | Requires API token |
+| 0 | Tushare | Requires `TUSHARE_TOKEN` |
 | 1 | Baostock | Free, no token |
 | 2 | Akshare | Fallback |
 | 3 | Yfinance | Fallback |
-| 4 | Zhitu | Realtime only, requires token |
+| 4 | Zhitu | Realtime quotes + 公司画像, requires `ZHITU_TOKEN` |
 | 5 | Tencent | Enhanced quotes (PE/PB/市值/涨跌停价), HTTP only |
-| 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报 |
-| 7 | THS | 热点题材/北向资金 |
+| 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报/快讯/新闻 |
+| 7 | THS | 热点题材/北向资金/快讯 (backup) |
+| 7 | Baidu | 新闻搜索 (backup for EastMoney), requires `BAIDU_API_KEY` |
 | 8 | Cninfo | 公告检索 |
+| 9 | Myquant | Last-resort backup (d/w/m/minute/quote/index), requires `MYQUANT_TOKEN` |
 
 ### A-share Indices (CSI)
 
@@ -970,6 +1172,7 @@ The server automatically routes requests to the appropriate data source based on
 | 1 | Baostock | Uses `sh.XXXXXX` / `sz.XXXXXX` format |
 | 2 | Akshare | Uses `index_zh_a_hist` API |
 | 3 | Yfinance | Uses `.SS` / `.SZ` suffix |
+| 9 | Myquant | Last-resort backup |
 
 ### US Stocks
 
@@ -989,6 +1192,7 @@ The server automatically routes requests to the appropriate data source based on
 |----------|--------|------|
 | 0 | Akshare | Primary, uses `stock_hk_hist` API |
 | 1 | Yfinance | Fallback, uses `.HK` suffix |
+| 9 | Myquant | Last-resort backup |
 
 ### HK Indices
 
@@ -1001,14 +1205,19 @@ The server automatically routes requests to the appropriate data source based on
 
 ## Frequency Support
 
-| Provider | Daily (d) | Weekly (w) | Monthly (m) | Minute (5/15/30/60) |
-|----------|-----------|------------|-------------|---------------------|
-| Baostock | ✅ | ✅ | ✅ | ✅ (stocks only, NOT indices) |
+| Provider | Daily (d) | Weekly (w) | Monthly (m) | Minute (1/5/15/30/60) |
+|----------|-----------|------------|-------------|------------------------|
+| Baostock | ✅ | ✅ | ✅ | ✅ (5/15/30/60, stocks only) |
 | Tushare | ✅ | ✅ | ✅ | ❌ |
 | Akshare | ✅ | ✅ | ✅ | ❌ |
 | Yfinance | ✅ | ✅ | ✅ | ✅ |
+| Zhitu | ❌ | ❌ | ❌ | ✅ (5/15/30/60; no 1-min) |
+| Myquant | ✅ | ✅ | ✅ | ✅ |
 
-**Note:** Baostock does NOT support minute frequency for indices (only for stocks).
+**Notes:**
+- Baostock does NOT support minute frequency for indices (only for stocks).
+- `period=1` (1-minute) is only served by Akshare; Zhitu does not support 1-minute data.
+- Minute-line K-line is only available for A-share stocks (not US/HK stocks or indices — use `/indices/{code}/intraday` for indices).
 
 ---
 
@@ -1023,14 +1232,25 @@ The server automatically routes requests to the appropriate data source based on
 | `BAOSTOCK_PRIORITY` | Override Baostock priority | 1 |
 | `AKSHARE_PRIORITY` | Override Akshare priority | 2 |
 | `YFINANCE_PRIORITY` | Override Yfinance priority | 3 |
-| `ZHITU_TOKEN` | Zhitu API token (for realtime quotes) | - |
+| `ZHITU_TOKEN` | Zhitu API token (realtime + 公司画像) | - |
 | `ZHITU_PRIORITY` | Override Zhitu priority | 4 |
 | `TENCENT_PRIORITY` | Override Tencent priority | 5 |
 | `EASTMONEY_PRIORITY` | Override EastMoney priority | 6 |
 | `THS_PRIORITY` | Override THS priority | 7 |
 | `CNINFO_PRIORITY` | Override Cninfo priority | 8 |
+| `MYQUANT_TOKEN` | Myquant (掘金) API token | - |
+| `MYQUANT_PRIORITY` | Override Myquant priority (default is 9, last-resort) | 9 |
+| `BAIDU_API_KEY` | Baidu Qianfan API key (NEWS_SEARCH backup for EastMoney) | - |
+| `BAIDU_PRIORITY` | Override Baidu priority | 7 |
+| `BAIDU_NEWS_DOMAINS` | Comma-separated host whitelist for Baidu news search | canonical news subdomains |
 | `SERVER_PORT` | Server port | 8888 |
-| `SERVER_HOST` | Server host | 0.0.0.0 |
+| `SERVER_HOST` | Server host (default changed to loopback; control API must not be public) | 127.0.0.1 |
+
+### Trade Calendar
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MYQUANT_CALENDAR_START_YEAR` | Start year for `get_trade_calendar` | 2010 |
 
 ### Circuit Breaker Configuration (Advanced)
 
