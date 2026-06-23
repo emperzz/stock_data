@@ -130,3 +130,64 @@ class TestFetchFlashNewsNormalize:
         }
         result = self.fetcher._normalize_flash_item(item)
         assert result["publish_time"] == "not-a-number"  # graceful fallback
+
+
+class TestFetchFlashNewsSinglePage:
+    """Tests for fetch_flash_news(limit<=20): single upstream page."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_fetch_one_page_uses_correct_url(self, monkeypatch):
+        """Verify the upstream URL, params, and headers."""
+        import json
+        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+        captured = {}
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            captured["url"] = url
+            captured["params"] = params
+            captured["headers"] = headers
+            captured["timeout"] = timeout
+            class R:
+                status_code = 200
+                def json(self_inner):
+                    return fixture
+            return R()
+
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", fake_get)
+
+        self.fetcher.fetch_flash_news(limit=10)
+
+        assert captured["url"] == "https://news.10jqka.com.cn/tapp/news/push/stock"
+        assert captured["params"] == {"page": "1", "tag": "", "track": "website"}
+        assert "Chrome" in captured["headers"]["User-Agent"]
+        assert "10jqka.com.cn" in captured["headers"]["Referer"]
+        assert captured["timeout"] == 10
+
+    def test_returns_normalized_dicts_from_fixture(self, monkeypatch):
+        import json
+        fixture = json.load(open("tests/fixtures/ths_flash_news.json", encoding="utf-8"))
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            class R:
+                status_code = 200
+                def json(self_inner):
+                    return fixture
+            return R()
+
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "get", fake_get)
+
+        results = self.fetcher.fetch_flash_news(limit=20)
+
+        assert len(results) == 20  # fixture has 20 items
+        first = results[0]
+        upstream_first = fixture["data"]["list"][0]
+        assert first["title"] == upstream_first["title"]
+        assert first["url"] == upstream_first["url"]
+        assert first["source_domain"] == "news.10jqka.com.cn"
+        assert first["snippet"] == upstream_first["digest"]
+        # rtime=1782181568 → 2026-06-22 in UTC (any local tz still year 2026)
+        assert first["publish_time"].startswith("2026-")

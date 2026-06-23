@@ -164,3 +164,111 @@ class ThsFetcher(BaseFetcher):
             "publish_time": publish_time,
             "snippet": item.get("digest", ""),
         }
+
+    def fetch_flash_news(self, limit: int = 50) -> list[dict]:
+        """Get THS 7x24 global financial flash news.
+
+        上游 URL: https://news.10jqka.com.cn/tapp/news/push/stock
+        上游 pageSize 硬编码 20/页;本方法内部翻 ceil(limit/20) 页
+        直到拿到 limit 条或上游返回空 list。
+
+        Returns:
+            归一化后的 list[dict],每条形如
+            {title, url, source_domain, publish_time, snippet}。
+            上游 list 缺失/null/空 → 返回 []。
+
+        Raises:
+            DataFetchError: 网络异常 / HTTP 非 200 / 上游 code != 200 / limit 越界
+        """
+        import math
+        # limit 防御(路由层 Query(ge=1,le=200) 会拦,这里二次防御)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError) as e:
+            raise DataFetchError(
+                f"[ThsFetcher] fetch_flash_news: limit must be int (got {limit!r})"
+            ) from e
+        if limit < self._FLASH_NEWS_MIN_LIMIT:
+            raise DataFetchError(
+                f"[ThsFetcher] fetch_flash_news: limit must be "
+                f">= {self._FLASH_NEWS_MIN_LIMIT} (got {limit})"
+            )
+        # 上限不报错,直接 cap,与 EastMoneyFetcher 行为一致
+        effective_limit = min(limit, self._FLASH_NEWS_MAX_LIMIT)
+        max_pages = math.ceil(effective_limit / self._FLASH_NEWS_PAGE_SIZE)
+
+        out: list[dict] = []
+        for page in range(1, max_pages + 1):
+            rows = self._fetch_flash_news_page(page)
+            if not rows:
+                break  # 翻到末页 / 越界,立即停
+            out.extend(rows)
+            if len(out) >= effective_limit:
+                break
+
+        return out[:effective_limit]
+
+    def _fetch_flash_news_page(self, page: int) -> list[dict]:
+        """Fetch one upstream page; return normalized list (empty on no-data)."""
+        params = {"page": str(page), "tag": "", "track": "website"}
+        headers = {
+            "User-Agent": THS_UA,
+            "Referer": "https://news.10jqka.com.cn/realtimenews.html",
+        }
+        try:
+            r = requests.get(
+                self._FLASH_NEWS_URL,
+                params=params,
+                headers=headers,
+                timeout=self._FLASH_NEWS_TIMEOUT,
+            )
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] fetch_flash_news network error: {e}"
+            ) from e
+
+        if r.status_code != 200:
+            raise DataFetchError(
+                f"[ThsFetcher] fetch_flash_news HTTP {r.status_code}"
+            )
+
+        try:
+            payload = r.json()
+        except (ValueError,) as e:
+            raise DataFetchError(
+                f"[ThsFetcher] fetch_flash_news: bad JSON: {e}"
+            ) from e
+
+        # 上游成功时 code 是字符串 "200"(实测,不是 int 200)。
+        # 与 EastMoneyFetcher.fetch_flash_news 一致,接受 str 和 int 两种"成功"
+        # 指示符。仅当 code 是已知失败值(-1、"0"、None)时才报错。
+        # 参考 commit 3ae6dfa "fix(eastmoney): accept real upstream code values"。
+        if payload.get("code") not in (200, "200"):
+            raise DataFetchError(
+                f"[ThsFetcher] fetch_flash_news API code={payload.get('code')} "
+                f"msg={payload.get('msg')}"
+            )
+
+        raw_list = (payload.get("data") or {}).get("list")
+        if not raw_list:
+            return []
+
+        out: list[dict] = []
+        for rec in raw_list:
+            # url 是必填字段(对应 EastMoney 校验 rec["code"] 的模式);
+            # 缺失视为坏数据,跳过但不抛错。
+            if not rec.get("url"):
+                logger.warning(
+                    f"[ThsFetcher] fetch_flash_news: skipping record without url: "
+                    f"id={rec.get('id', '?')}"
+                )
+                continue
+            try:
+                out.append(self._normalize_flash_item(rec))
+            except (KeyError, TypeError, ValueError) as e:
+                # 单条记录缺关键字段就跳过,避免一条坏数据废整个 list
+                logger.warning(
+                    f"[ThsFetcher] fetch_flash_news: skipping malformed record: {e}"
+                )
+                continue
+        return out
