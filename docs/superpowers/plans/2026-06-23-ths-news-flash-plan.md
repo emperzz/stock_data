@@ -141,7 +141,7 @@ class TestFetchFlashNewsNormalize:
 
 - [ ] **Step 2: Run the test and verify it fails**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsNormalize -v`
+Run: `python -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsNormalize -v`
 Expected: FAIL with `AttributeError: 'ThsFetcher' object has no attribute '_normalize_flash_item'` (or similar import-time error).
 
 - [ ] **Step 3: Implement the helper**
@@ -192,7 +192,7 @@ Add to `stock_data/data_provider/fetchers/ths_fetcher.py` (append at end of file
 
 - [ ] **Step 4: Run the test and verify it passes**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsNormalize -v`
+Run: `python -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsNormalize -v`
 Expected: 3 passed.
 
 - [ ] **Step 5: Commit**
@@ -286,7 +286,7 @@ class TestFetchFlashNewsSinglePage:
 
 - [ ] **Step 2: Run the tests and verify they fail**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsSinglePage -v`
+Run: `python -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsSinglePage -v`
 Expected: FAIL with `AttributeError: 'ThsFetcher' object has no attribute 'fetch_flash_news'`.
 
 - [ ] **Step 3: Implement `fetch_flash_news` (single-page path only)**
@@ -368,8 +368,11 @@ Add to `stock_data/data_provider/fetchers/ths_fetcher.py` (after `_normalize_fla
                 f"[ThsFetcher] fetch_flash_news: bad JSON: {e}"
             ) from e
 
-        # 上游成功时 code=200(整数)。其他视为失败。
-        if payload.get("code") != 200:
+        # 上游成功时 code 是字符串 "200"(实测,不是 int 200)。
+        # 与 EastMoneyFetcher.fetch_flash_news 一致,接受 str 和 int 两种"成功"
+        # 指示符。仅当 code 是已知失败值(-1、"0"、None)时才报错。
+        # 参考 commit 3ae6dfa "fix(eastmoney): accept real upstream code values"。
+        if payload.get("code") not in (200, "200"):
             raise DataFetchError(
                 f"[ThsFetcher] fetch_flash_news API code={payload.get('code')} "
                 f"msg={payload.get('msg')}"
@@ -402,7 +405,7 @@ Add to `stock_data/data_provider/fetchers/ths_fetcher.py` (after `_normalize_fla
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsSinglePage -v`
+Run: `python -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsSinglePage -v`
 Expected: 2 passed.
 
 - [ ] **Step 5: Commit**
@@ -519,7 +522,7 @@ class TestFetchFlashNewsMultiPage:
 
 - [ ] **Step 2: Run the tests and verify they pass (they should — the implementation is already in Task 3)**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsMultiPage -v`
+Run: `python -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsMultiPage -v`
 Expected: 3 passed. (Implementation already supports pagination; these tests are the contract.)
 
 If any fails, debug: the loop in `fetch_flash_news` is `for page in range(1, max_pages + 1)` and breaks on empty rows or `len(out) >= effective_limit`.
@@ -617,7 +620,7 @@ class TestFetchFlashNewsLimits:
 
 - [ ] **Step 2: Run the tests and verify they pass (all should — Task 3's implementation handles these)**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsLimits -v`
+Run: `python -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsLimits -v`
 Expected: 5 passed. If `test_limit_string_coerced` fails, the `int(limit)` call in `fetch_flash_news` is the fix.
 
 - [ ] **Step 3: Commit**
@@ -761,7 +764,7 @@ class TestFetchFlashNewsErrors:
 
 - [ ] **Step 2: Run the tests and verify they pass (all 8 should — Task 3's implementation handles these)**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsErrors -v`
+Run: `python -m pytest tests/test_ths_fetcher.py::TestFetchFlashNewsErrors -v`
 Expected: 8 passed. The "malformed record" test relies on Task 3's `if not rec.get("url"): continue` guard, which skips records without a url before calling `_normalize_flash_item`.
 
 - [ ] **Step 3: Commit**
@@ -845,10 +848,10 @@ APIs:
 
 - [ ] **Step 3: Run the capability method map test to verify**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_capability_method_map.py -v`
+Run: `python -m pytest tests/test_capability_method_map.py -v`
 Expected: PASS. The test asserts every `DataCapability` flag is either in `CAPABILITY_TO_METHOD` or `_NO_FETCHER_METHOD`. `NEWS_FLASH → "fetch_flash_news"` is already in the map; adding it to ThsFetcher.supported_data_types doesn't change the map, but `tests/test_fetcher_structure.py` (if it walks every fetcher and checks `fetch_<method>` exists) will validate that ThsFetcher actually implements `fetch_flash_news`.
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_structure.py -v`
+Run: `python -m pytest tests/test_fetcher_structure.py -v`
 Expected: PASS. If this fails with "ThsFetcher has no method fetch_flash_news", re-check Task 3's implementation.
 
 - [ ] **Step 4: Commit**
@@ -957,7 +960,7 @@ class TestFlashNewsFailover:
 
 - [ ] **Step 2: Run the tests and verify they pass**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_manager_flash_news.py::TestFlashNewsFailover -v`
+Run: `python -m pytest tests/test_manager_flash_news.py::TestFlashNewsFailover -v`
 Expected: 4 passed. The manager's `_with_failover` is the contract; these tests pin the priority order (P6 before P7) and the empty-result failover semantics.
 
 If `test_eastmoney_returns_empty_falls_back_to_ths` fails, double-check that `_is_meaningful` in `manager.py` returns False for `[]` (it does — confirmed at line 28 of `manager.py`).
@@ -1061,7 +1064,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ```bash
 cd "D:/GitRepo/skills/stock_data"
-.venv/Scripts/python.exe -m pytest \
+python -m pytest \
   tests/test_ths_fetcher.py \
   tests/test_manager_flash_news.py \
   tests/test_eastmoney_flash_news.py \
@@ -1077,7 +1080,7 @@ Expected: all pass. If any fail, debug and fix (the tasks are designed so failur
 
 ```bash
 cd "D:/GitRepo/skills/stock_data"
-.venv/Scripts/python.exe -c "
+python -c "
 from stock_data.server import app
 import json
 from stock_data.explorer.manifest import build_manifest
@@ -1100,7 +1103,7 @@ Expected output: prints `ThsFetcher (priority=7, ...)` and ends with `OK: ThsFet
 
 ```bash
 cd "D:/GitRepo/skills/stock_data"
-.venv/Scripts/python.exe -c "
+python -c "
 from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 import logging
 logging.basicConfig(level=logging.WARNING)
