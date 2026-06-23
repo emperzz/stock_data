@@ -67,3 +67,83 @@ class TestManagerFlashNews:
         ):
             with pytest.raises(DataFetchError, match="All fetchers failed"):
                 mgr.get_flash_news(limit=10)
+
+
+# -----------------------------------------------------------------------------
+# EastMoney (P6) → ThsFetcher (P7) failover
+# -----------------------------------------------------------------------------
+
+
+class TestFlashNewsFailover:
+    """When EastMoneyFetcher raises, the manager should fall back to ThsFetcher."""
+
+    def _mgr(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        self._ThsFetcher = ThsFetcher
+
+        mgr = DataFetcherManager()
+        mgr.reset()
+        mgr.add_fetcher(EastMoneyFetcher())  # priority 6
+        mgr.add_fetcher(ThsFetcher())        # priority 7
+        return mgr
+
+    def test_eastmoney_succeeds_no_failover(self):
+        """Happy path: EastMoney returns, ThsFetcher never called."""
+        mgr = self._mgr()
+        ThsFetcher = self._ThsFetcher
+        with patch.object(
+            EastMoneyFetcher, "fetch_flash_news",
+            return_value=[{"title": "from em"}],
+        ) as em, patch.object(
+            ThsFetcher, "fetch_flash_news",
+        ) as ths:
+            data, source = mgr.get_flash_news(limit=20)
+
+        assert data == [{"title": "from em"}]
+        assert source == "EastMoneyFetcher"
+        em.assert_called_once_with(20)
+        ths.assert_not_called()
+
+    def test_eastmoney_raises_falls_back_to_ths(self):
+        """EastMoney raises → ThsFetcher is called next."""
+        mgr = self._mgr()
+        ThsFetcher = self._ThsFetcher
+        with patch.object(
+            EastMoneyFetcher, "fetch_flash_news",
+            side_effect=Exception("em broken"),
+        ), patch.object(
+            ThsFetcher, "fetch_flash_news",
+            return_value=[{"title": "from ths"}],
+        ) as ths:
+            data, source = mgr.get_flash_news(limit=20)
+
+        assert data == [{"title": "from ths"}]
+        assert source == "ThsFetcher"
+        ths.assert_called_once_with(20)
+
+    def test_eastmoney_returns_empty_falls_back_to_ths(self):
+        """EastMoney returns [] (e.g. upstream 0 items) → ThsFetcher tried next.
+
+        _is_meaningful treats [] as 'no data', so failover continues.
+        """
+        mgr = self._mgr()
+        ThsFetcher = self._ThsFetcher
+        with patch.object(
+            EastMoneyFetcher, "fetch_flash_news", return_value=[],
+        ), patch.object(
+            ThsFetcher, "fetch_flash_news",
+            return_value=[{"title": "from ths"}],
+        ) as ths:
+            data, source = mgr.get_flash_news(limit=20)
+
+        assert source == "ThsFetcher"
+        ths.assert_called_once_with(20)
+
+    def test_both_fail_raises(self):
+        """Both fetchers raise → DataFetchError, source empty."""
+        mgr = self._mgr()
+        ThsFetcher = self._ThsFetcher
+        with patch.object(EastMoneyFetcher, "fetch_flash_news", side_effect=Exception("em")), \
+             patch.object(ThsFetcher, "fetch_flash_news", side_effect=Exception("ths")):
+            with pytest.raises(DataFetchError, match="All fetchers failed"):
+                mgr.get_flash_news(limit=20)
