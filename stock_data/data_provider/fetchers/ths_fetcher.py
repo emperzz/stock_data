@@ -124,3 +124,43 @@ class ThsFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[ThsFetcher] north flow failed: {e}")
             return []
+
+    # ------------------------------------------------------------------
+    # 全球财经快讯 (Flash News) — 同花顺 7x24 实时流
+    # ------------------------------------------------------------------
+
+    _FLASH_NEWS_URL = "https://news.10jqka.com.cn/tapp/news/push/stock"
+    # 上游 pageSize 硬编码 20/页(实测: pageSize/limit/num/size 等参数均无效)
+    _FLASH_NEWS_PAGE_SIZE = 20
+    # 与 EastMoneyFetcher.fetch_flash_news 对齐;路由层 Query(le=200) 也会拦
+    _FLASH_NEWS_MAX_LIMIT = 200
+    _FLASH_NEWS_MIN_LIMIT = 1
+    # 单页 HTTP 超时(秒)
+    _FLASH_NEWS_TIMEOUT = 10
+
+    @staticmethod
+    def _normalize_flash_item(item: dict) -> dict:
+        """Convert one upstream record to the FlashNewsItem dict shape.
+
+        与 EastMoneyFetcher.fetch_flash_news 输出 schema 对齐:
+        {title, url, source_domain, publish_time, snippet}
+        """
+        # 防御: rtime 可能是 10 位 Unix timestamp、字符串数字、或脏数据
+        rtime_raw = item.get("rtime", "")
+        publish_time = ""
+        if rtime_raw:
+            try:
+                from datetime import datetime
+                publish_time = datetime.fromtimestamp(int(rtime_raw)).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            except (TypeError, ValueError, OSError):
+                publish_time = str(rtime_raw)  # graceful fallback
+
+        return {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "source_domain": "news.10jqka.com.cn",
+            "publish_time": publish_time,
+            "snippet": item.get("digest", ""),
+        }
