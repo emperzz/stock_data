@@ -147,3 +147,90 @@ class TestFromYyyymmdd:
     def test_other_format_passthrough(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _from_yyyymmdd
         assert _from_yyyymmdd("garbage") == "garbage"
+
+
+# ====================================================================
+# K-line (HISTORICAL_DWM)
+# ====================================================================
+
+class TestDailyKline:
+    def _fetcher_with_api(self, fake_daily):
+        """Helper: return fetcher with DataApi.daily mocked."""
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.daily = MagicMock(return_value=fake_daily)
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_daily_normalizes_columns(self):
+        import pandas as pd
+        raw = pd.DataFrame({
+            "ts_code": ["600519.SH"] * 3,
+            "trade_date": ["20260501", "20260502", "20260503"],
+            "open": [1700.0, 1710.0, 1720.0],
+            "high": [1715.0, 1725.0, 1735.0],
+            "low": [1695.0, 1705.0, 1715.0],
+            "close": [1710.0, 1720.0, 1730.0],
+            "pre_close": [1700.0, 1710.0, 1720.0],
+            "change": [10.0, 10.0, 10.0],
+            "pct_chg": [0.59, 0.58, 0.58],
+            "vol": [1e6, 1.1e6, 1.2e6],
+            "amount": [1e9, 1.1e9, 1.2e9],
+        })
+        fetcher = self._fetcher_with_api(raw)
+        df = fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
+        # Required STANDARD_COLUMNS present
+        for col in ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]:
+            assert col in df.columns, f"missing {col}"
+        # vol -> volume rename
+        assert "vol" not in df.columns
+        # trade_date -> date (YYYY-MM-DD format)
+        assert str(df.iloc[0]["date"])[:10] == "2026-05-01"
+        # code column added
+        assert "code" in df.columns
+        assert df.iloc[0]["code"] == "600519"
+        # pct_chg passed through
+        assert abs(df.iloc[0]["pct_chg"] - 0.59) < 0.01
+
+    def test_daily_passes_yyyymmdd_to_sdk(self):
+        import pandas as pd
+        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_date": ["20260501"],
+                            "open": [1700.0], "high": [1715.0], "low": [1695.0],
+                            "close": [1710.0], "vol": [1e6], "amount": [1e9],
+                            "pct_chg": [0.59]})
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
+        call = fetcher._api.daily.call_args
+        # start_date/end_date converted to YYYYMMDD
+        assert call.kwargs["start_date"] == "20260501"
+        assert call.kwargs["end_date"] == "20260503"
+        # ts_code formatted with .SH suffix
+        assert call.kwargs["ts_code"] == "600519.SH"
+
+    def test_daily_qfq_adjust_passes_through(self):
+        import pandas as pd
+        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_date": ["20260501"],
+                            "open": [1700.0], "high": [1715.0], "low": [1695.0],
+                            "close": [1710.0], "vol": [1e6], "amount": [1e9],
+                            "pct_chg": [0.59]})
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03", adjust="qfq")
+        call = fetcher._api.daily.call_args
+        assert call.kwargs.get("adj") == "qfq"
+
+    def test_daily_no_adjust_does_not_pass_adj(self):
+        import pandas as pd
+        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_date": ["20260501"],
+                            "open": [1700.0], "high": [1715.0], "low": [1695.0],
+                            "close": [1710.0], "vol": [1e6], "amount": [1e9],
+                            "pct_chg": [0.59]})
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
+        call = fetcher._api.daily.call_args
+        assert "adj" not in call.kwargs
+
+    def test_daily_empty_df_raises(self):
+        import pandas as pd
+        fetcher = self._fetcher_with_api(pd.DataFrame())
+        with pytest.raises(DataFetchError, match="No data"):
+            fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
