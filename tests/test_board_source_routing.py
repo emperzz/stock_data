@@ -368,3 +368,41 @@ def test_with_source_slug_takes_precedence_over_full_name():
     )
     # At minimum, the test should succeed without raising — accept either fetcher.
     assert captured["name"] in ("ZhituFetcher", "zhitu")
+
+
+# ===== Signature compatibility: Manager kwargs → ZhituFetcher =====
+
+
+def test_zhitu_fetcher_board_methods_accept_manager_kwargs():
+    """Verify ZhituFetcher's board methods accept the kwargs Manager passes.
+
+    The Manager calls:
+      - f.get_board_stocks(code, source=source, include_quote=include_quote)
+      - f.get_stock_boards(code, source=source)
+      - f.get_board_history(code, source=source, frequency=freq, days=days)
+
+    ZhituFetcher uses **kwargs to absorb these (Zhitu API doesn't support
+    include_quote). If **kwargs is missing, Python raises TypeError at runtime.
+    This test calls the real methods with the same kwargs to catch that.
+    """
+    from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
+
+    # We can't call the real API, but we can verify the signatures accept
+    # the kwargs without TypeError by calling with is_available()=False
+    # (which returns [] immediately without network I/O).
+    fetcher = object.__new__(ZhituFetcher)
+    fetcher._token = ""
+
+    # get_board_stocks: Manager passes source=, include_quote=
+    result = fetcher.get_board_stocks("sw_mt", source="zhitu", include_quote=False)
+    assert result == []
+
+    # get_stock_boards: Manager passes source=
+    result = fetcher.get_stock_boards("000001", source="zhitu")
+    assert result is None
+
+    # get_board_history: Manager passes source=, frequency=, days=
+    try:
+        fetcher.get_board_history("sw_mt", source="zhitu", frequency="d", days=30)
+    except NotImplementedError:
+        pass  # expected — board K-line not implemented

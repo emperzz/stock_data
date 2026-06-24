@@ -135,15 +135,15 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
     - Otherwise -> return cached data
 
     Args:
-        board_type: "concept" or "industry"
-        source: Data source (e.g., "eastmoney")
+        board_type: one of "concept" / "industry" / "index" / "special"
+        source: Data source (e.g., "eastmoney", "zhitu")
         refresh: If True, force refresh from upstream
         include_quote: If True, include realtime price/change/market data and skip cache
         manager: DataFetcherManager instance. Required for fetching from upstream.
 
     Returns:
         Tuple of (boards, origin) where origin is:
-          - the fetcher name (e.g. "akshare") when the data was freshly fetched
+          - the fetcher name (e.g. "eastmoney") when the data was freshly fetched
           - "persistence" when the data was read from the SQLite cache
         List of board dicts: [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}, ...]
             May include quote fields when include_quote=True.
@@ -161,15 +161,13 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
     if manager is None:
         raise ValueError("manager is required when refresh=True or cache miss")
 
-    # Fetch based on board_type — unified entry point (see manager.get_all_boards).
+    # Fetch via unified entry point (see manager.get_all_boards).
     # We pass board_type to the fetcher so it can dispatch internally (EastMoney
-    # handles concept/industry; Zhitu also accepts these labels).
-    if board_type in ("concept", "industry"):
-        boards, fetcher_source = manager.get_all_boards(
-            source=source, board_type=board_type, include_quote=include_quote,
-        )
-    else:
-        boards, fetcher_source = [], ""
+    # handles concept/industry; Zhitu also handles index/special). The fetcher
+    # returns [] for unsupported types — no need for persistence-layer guards.
+    boards, fetcher_source = manager.get_all_boards(
+        source=source, board_type=board_type, include_quote=include_quote,
+    )
 
     if boards:
         # Always cache the base board data (without quote if include_quote=False)

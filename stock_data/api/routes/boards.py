@@ -3,7 +3,6 @@
 ``source`` query parameter is REQUIRED and selects the fetcher:
 - ``eastmoney``: EastMoneyFetcher (akshare EM backend)
 - ``zhitu``: ZhituFetcher (zhituapi.com)
-- ``zzshare``: ZzshareFetcher (not yet implemented)
 
 Each source has its own board classification system; failover between
 sources is intentionally not supported (different code systems).
@@ -44,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 # source 合法值集合（防止任意 source 触发 _with_source 任意调用）
-_VALID_SOURCES = {"eastmoney", "zhitu", "zzshare"}
+_VALID_SOURCES = {"eastmoney", "zhitu"}
 
 # type 合法值
 _VALID_TYPES = {"concept", "industry", "index", "special"}
@@ -95,7 +94,7 @@ def list_boards(
     type: Literal["concept", "industry", "index", "special"] = Query(
         ..., description="Board type"
     ),
-    source: Literal["eastmoney", "zhitu", "zzshare"] = Query(
+    source: Literal["eastmoney", "zhitu"] = Query(
         ..., description="Data source (REQUIRED)"
     ),
     subtype: str | None = Query(
@@ -198,7 +197,7 @@ def list_boards(
 @map_errors
 def get_board_stocks(
     board_code: str = Path(max_length=30, description="Board code"),
-    source: Literal["eastmoney", "zhitu", "zzshare"] = Query(
+    source: Literal["eastmoney", "zhitu"] = Query(
         ..., description="Data source (REQUIRED)"
     ),
     include_quote: bool = Query(False, description="Include realtime quote data"),
@@ -372,7 +371,7 @@ def get_stock_boards(
 @map_errors
 def get_board_history(
     board_code: str = Path(max_length=30, description="Board code"),
-    source: Literal["zhitu", "eastmoney", "zzshare"] = Query(
+    source: Literal["zhitu", "eastmoney"] = Query(
         ..., description="Data source"
     ),
     frequency: Literal["d", "w", "m"] = Query("d", description="K-line frequency"),
@@ -387,7 +386,7 @@ def get_board_history(
         detail={
             "error": "not_implemented",
             "message": f"Board K-line for source='{source}' is not yet implemented. "
-            f"Consider contributing via zzshare's plate_kline or EastMoney's board index.",
+            f"Consider contributing via EastMoney's board index.",
         },
     )
 

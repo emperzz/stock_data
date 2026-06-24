@@ -567,10 +567,14 @@ class ZhituFetcher(BaseFetcher):
             })
         return out
 
-    def get_board_stocks(self, board_code: str) -> list[dict]:
+    def get_board_stocks(self, board_code: str, **kwargs) -> list[dict]:
         """Get stocks belonging to a Zhitu board via /hs/index/stock/{code}.
 
         Returns ``[{stock_code, stock_name, exchange}]`` or ``[]`` on failure.
+
+        ``**kwargs`` absorbs ``source``/``include_quote`` passed by the Manager
+        for interface symmetry — Zhitu's board-stock endpoint does not expose
+        realtime quote fields, so ``include_quote`` is ignored.
         """
         if not self.is_available():
             return []
@@ -604,11 +608,13 @@ class ZhituFetcher(BaseFetcher):
             )
             return []
 
-    def get_stock_boards(self, stock_code: str) -> list[dict] | None:
+    def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict] | None:
         """Get boards a stock belongs to via /hs/index/index/{stock_code}.
 
         Returns ``[{code, name, type, subtype}]`` or ``None`` on failure.
         ``None`` (not ``[]``) so callers can distinguish "no data" from "no match".
+
+        ``**kwargs`` absorbs ``source`` passed by the Manager for interface symmetry.
         """
         if not self.is_available():
             return None
@@ -671,7 +677,7 @@ class ZhituFetcher(BaseFetcher):
         return ""
 
     def get_board_history(
-        self, board_code: str, frequency: str = "d", days: int = 30
+        self, board_code: str, frequency: str = "d", days: int = 30, **kwargs
     ) -> list[dict]:
         """Get K-line for a Zhitu board.
 

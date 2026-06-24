@@ -44,6 +44,7 @@ Top-level (full layout — see `ls -R stock_data/` for the complete file list):
 ### `data_provider/manager.py`
 - `DataFetcherManager`: Orchestrates fetchers with priority-based failover, circuit breakers, and capability-based routing
 - All data access methods route through `_filter_by_capability(market, capability)`
+- **Board methods** (`get_all_boards`, `get_board_stocks`, `get_stock_boards`, `get_board_history`) use `_with_source()` routing (source-routed, no failover) instead of `_with_failover()`, because different sources have incompatible board classification systems
 
 ### `data_provider/fetchers/`
 - Each source has its own fetcher: `baostock_fetcher.py`, `akshare/` (package), `yfinance_fetcher.py`, `tushare_fetcher.py`, `zhitu_fetcher.py`, `tencent_fetcher.py`, `eastmoney_fetcher.py`, `ths_fetcher.py`, `cninfo_fetcher.py`
@@ -61,7 +62,7 @@ Top-level (full layout — see `ls -R stock_data/` for the complete file list):
 ### `data_provider/persistence/`
 - `db.py`: Shared `get_db_path()` and `get_connection()` used by all persistence submodules
 - `stock_list.py`: Persistent stock list with auto-refresh (first call of day)
-- `board.py`: Concept/industry board metadata
+- `board.py`: Board metadata (concept/industry/index/special), source-keyed persistence
 - `pool_daily.py`: Unified ZT/DT/ZBGC pool table (single `pool_daily` table, `pool_type` column discriminator)
 - `trade_calendar.py`: A-share trade calendar + `is_trade_date()` / `get_latest_trade_date_on_or_before()` helpers
 
@@ -143,8 +144,9 @@ The non-obvious behaviors worth memorizing here are:
 |---|---|---|
 | K线 / 分时 / 实时行情 / 指数 | fetcher 名 (e.g. `tushare`, `akshare`) | n/a |
 | 龙虎榜 / 融资融券 / 大宗交易 / 资金流 / 研报 / 公告 等 | fetcher 名 (e.g. `eastmoney`, `cninfo`, `ths`) | n/a (每次 fetch) |
-| 板块 / 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
-| 板块成分股 | 用户传入 source → `query_source`; 实际数据源 → `data_source` | `data_source = "persistence"` (缓存命中) |
+| 板块清单 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
+| 板块成分股 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
+| 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
 
 > **注意**: `/stocks` 和 `/calendar` 当前响应**不暴露** source 字段 (其 response model 没有 source 字段), 持久化层 origin 仍被透传但被丢弃。这是 YAGNI 决策——如果未来要暴露, 给对应 response model 加 `source: str` 字段即可, 路由层已准备好。
 
@@ -178,13 +180,17 @@ default isn't right:
 
 | Endpoint | Capability | Override method |
 |----------|------------|-----------------|
-| `/boards/{board_code}/stocks` | `STOCK_BOARD` | `get_concept_board_stocks` |
+| `/boards/{board_code}/stocks` | `STOCK_BOARD` | `get_board_stocks` |
+| `/stocks/{stock_code}/boards` | `STOCK_BOARD` | `get_stock_boards` |
+| `/boards/{board_code}/history` | `STOCK_BOARD` | `get_board_history` |
 | `/dragon-tiger/daily` | `DRAGON_TIGER` | `get_daily_dragon_tiger` |
 | `/stocks/{stock_code}/fund-flow/daily` | `FUND_FLOW` | `get_fund_flow_120d` |
 
-**`/boards` (single endpoint, `?type=concept|industry` dispatch) Stage 2
-tests the concept variant by default**; industry variant is not exposed
-in the UI (the user can change the method name in the mini-form manually).
+**Board endpoints are source-routed**: the `?source=` query parameter selects
+the fetcher (e.g. `eastmoney`, `zhitu`). Different sources use incompatible
+board classification systems, so failover between sources is intentionally
+not supported. The Manager uses `_with_source()` (not `_with_failover()`)
+for all board methods.
 
 ### Anti-patterns
 
@@ -206,11 +212,11 @@ Compact overview:
 |---|---|---|---|---|
 | `TushareFetcher` | 0 | csi | `HISTORICAL_DWM`, `REALTIME_QUOTE`, `INDEX_HISTORICAL` | `TUSHARE_TOKEN` |
 | `BaostockFetcher` | 1 | csi | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `TRADE_CALENDAR`, `INDEX_HISTORICAL` | none |
-| `AkshareFetcher` | 2 | csi, hk | `HISTORICAL_DWM`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `INDEX_*`, `STOCK_ZT_POOL` | none |
+| `AkshareFetcher` | 2 | csi, hk | `HISTORICAL_DWM`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_*`, `STOCK_ZT_POOL` | none |
 | `YfinanceFetcher` | 3 | us, csi, hk | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `INDEX_HISTORICAL`, `INDEX_QUOTE` | none |
-| `ZhituFetcher` | 4 | csi | `REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `HISTORICAL_MIN` (minute fallback), `STOCK_LIST` (P4 backup) | `ZHITU_TOKEN` |
+| `ZhituFetcher` | 4 | csi | `REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `HISTORICAL_MIN` (minute fallback), `STOCK_LIST` (P4 backup), `STOCK_BOARD` | `ZHITU_TOKEN` |
 | `TencentFetcher` | 5 | csi, hk | `REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
-| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH` | none |
+| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `STOCK_BOARD` | none |
 | `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH` | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
@@ -254,8 +260,10 @@ fetchers that support it.
 | `get_intraday_data` | `HISTORICAL_MIN` |
 | `get_stock_name` | n/a — handled by `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
 | `get_trade_calendar` | `TRADE_CALENDAR` |
-| `get_all_concept_boards` / `get_all_industry_boards` | `STOCK_BOARD` |
-| `get_concept_board_stocks` / `get_industry_board_stocks` | `STOCK_BOARD` |
+| `get_all_boards` | `STOCK_BOARD` (source-routed, no failover) |
+| `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover) |
+| `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover) |
+| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; currently stub) |
 | `get_index_realtime_quote` | `INDEX_QUOTE` |
 | `get_index_historical` | `INDEX_HISTORICAL` |
 | `get_index_intraday` | `INDEX_INTRADAY` |
@@ -283,13 +291,13 @@ fetchers that support it.
 |---------|-------------|
 | BaiduFetcher | `NEWS_SEARCH` |
 | BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR \| INDEX_HISTORICAL` |
-| AkshareFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| STOCK_BOARD \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_ZT_POOL` |
+| AkshareFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_ZT_POOL` |
 | TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| INDEX_HISTORICAL` |
 | MyquantFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_INFO` |
 | YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
-| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| HISTORICAL_MIN \| STOCK_LIST` |
+| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| HISTORICAL_MIN \| STOCK_LIST \| STOCK_BOARD` |
 | TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
-| EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH` |
+| EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD` |
 | ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH` |
 | CninfoFetcher | `ANNOUNCEMENT` |
 

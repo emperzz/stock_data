@@ -9,7 +9,7 @@ A local stock data aggregation server that integrates 11 upstream stock data API
 - **DataFetcherManager** — capability-routed, priority-based failover + circuit breaker + TTLCache.
 - **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Tencent · EastMoney · THS · Cninfo · Myquant · Baidu` (11 fetchers).
 
-Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / ZT pools) is owned by `data_provider/persistence/` and seeded transparently by the manager. An interactive API Explorer is served at `/explorer/`.
+Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / ZT pools) is owned by `data_provider/persistence/` and seeded transparently by the manager. Board persistence supports all types (concept/industry/index/special), keyed by (board_type, source). An interactive API Explorer is served at `/explorer/`.
 
 ## Features
 
@@ -514,26 +514,50 @@ GET /api/v1/stocks?market=csi&offset=0&limit=100
 
 ---
 
-### Board Data (Concept / Industry)
+### Board Data (Concept / Industry / Index / Special)
+
+Board endpoints are **source-routed** — the `source` query parameter is
+**required** and selects the fetcher backend. Different sources use
+incompatible board classification systems (EastMoney: concept/industry;
+Zhitu: type × subtype), so failover between sources is intentionally
+not supported.
+
+Available sources: `eastmoney`, `zhitu`.
 
 ```bash
-GET /api/v1/boards?type=concept
-GET /api/v1/boards?type=industry&include_quote=true
-GET /api/v1/boards/BK1048/stocks
-GET /api/v1/boards/BK1048/stocks?include_quote=true
+# Board list (concept / industry / index / special)
+GET /api/v1/boards?type=concept&source=eastmoney
+GET /api/v1/boards?type=industry&source=eastmoney&include_quote=true
+GET /api/v1/boards?type=industry&source=zhitu&subtype=申万行业
+
+# Board stocks
+GET /api/v1/boards/BK1048/stocks?source=eastmoney
+GET /api/v1/boards/BK1048/stocks?source=eastmoney&include_quote=true
+
+# Stock → boards mapping (Zhitu only)
+GET /api/v1/stocks/000001/boards?source=zhitu
+GET /api/v1/stocks/000001/boards?source=zhitu&type=concept&subtype=热门概念
+
+# Board K-line (stub — 501 Not Implemented)
+GET /api/v1/boards/BK1048/history?source=eastmoney
 ```
 
 **Parameters for `GET /boards`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `type` | string | Required | Board type: `concept` (概念板块) or `industry` (行业板块) |
-| `include_quote` | bool | `false` | If `true`, include realtime price/change/market data |
-| `source` | string | `eastmoney` | Data source |
+| `type` | string | Required | Board type: `concept`, `industry`, `index`, `special` |
+| `source` | string | Required | Data source: `eastmoney` or `zhitu` |
+| `subtype` | string | null | Source-specific subtype (e.g. `申万行业` for zhitu). Validated per (source, type) pair. |
+| `include_quote` | bool | `false` | Include realtime price/change/market data (EastMoney only; Zhitu ignores) |
+| `sort_by` | string | null | Sort by: `change_pct`, `volume`, `amount`, `price` (requires `include_quote=true`) |
+| `sort_order` | string | `desc` | Sort order: `asc` or `desc` |
+| `limit` | int | null | Max items (1-500) |
 | `refresh` | bool | `false` | Force fetch latest from upstream |
 
 **Response (with `include_quote=false`, default):**
 ```json
 {
+  "source": "EastMoneyFetcher",
   "data": [
     {"code": "BK1048", "name": "互联网服务"},
     {"code": "BK0891", "name": "云计算"}
@@ -544,6 +568,7 @@ GET /api/v1/boards/BK1048/stocks?include_quote=true
 **Response (with `include_quote=true`):**
 ```json
 {
+  "source": "EastMoneyFetcher",
   "data": [
     {
       "code": "BK1048",
@@ -567,9 +592,26 @@ GET /api/v1/boards/BK1048/stocks?include_quote=true
 **Parameters for `GET /boards/{board_code}/stocks`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `include_quote` | bool | `false` | If `true`, include realtime price/change/volume data for each stock |
-| `source` | string | `eastmoney` | Data source |
+| `source` | string | Required | Data source: `eastmoney` or `zhitu` |
+| `include_quote` | bool | `false` | Include realtime price/change/volume data for each stock |
 | `refresh` | bool | `false` | Force fetch latest from upstream |
+
+**Parameters for `GET /stocks/{stock_code}/boards`:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `source` | string | Required | Data source (currently only `zhitu` supported; `eastmoney` returns 501) |
+| `type` | string | null | Filter by board type |
+| `subtype` | string | null | Filter by source-specific subtype |
+
+**Source-specific subtype values (zhitu):**
+| Type | Valid subtypes |
+|------|---------------|
+| `industry` | `申万行业`, `申万二级`, `证监会行业` |
+| `concept` | `热门概念`, `概念板块`, `地域板块` |
+| `index` | `分类`, `指数成分`, `大盘指数` |
+| `special` | `风险警示`, `次新股`, `沪港通`, `深港通` |
+
+**EastMoney** subtype is a mirror of type (`concept`, `industry`, `index`, `special`).
 
 **Caching behavior for board endpoints:**
 - Results are cached in `stock_data/stock_cache.db` (SQLite)
@@ -1000,6 +1042,13 @@ The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to 
 
 The persistence layer caches stock lists, board metadata, trade calendar, and ZT/DT/ZBGC pool history across processes. It lives in `stock_data/data_provider/persistence/` and is separate from the in-process TTLCache above.
 
+**Board persistence**: boards are cached per `(board_type, source)` pair.
+The persistence layer calls the fetcher via `manager.get_all_boards()` for
+all types (concept/industry/index/special); fetchers return `[]` for types
+they don't support (e.g. EastMoney returns `[]` for `index`/`special`).
+Board metadata (code, name, type, source, timestamp) is stored in SQLite;
+realtime quote data is always fetched live and never persisted.
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `STOCK_CACHE_DB_PATH` | Path to the SQLite file used by the persistence layer | `<repo>/stock_data/stock_cache.db` |
@@ -1013,6 +1062,12 @@ All responses carrying fetched data include a `source: str` field with one of th
 - **`"persistence"`**: served from the SQLite persistence layer (historical K-line / board lists / trade calendar / etc.).
 
 `source` is optional in the schema and defaults to `""`. Older clients may ignore it.
+
+**Board endpoints**: the `source` field in the response echoes the fetcher
+name (e.g. `"EastMoneyFetcher"`, `"ZhituFetcher"`). Board data is
+source-routed — different sources use incompatible classification
+systems, so the source in the response always matches the `source`
+query parameter.
 
 `/stocks` and `/calendar` currently do NOT expose `source` (their response models have no such field) — the persistence origin is still computed and discarded. This is a YAGNI choice; if needed later, add `source: str` to those response models and the route layer is already wired to pass it through.
 
@@ -1156,9 +1211,9 @@ The server automatically routes requests to the appropriate data source based on
 | 1 | Baostock | Free, no token |
 | 2 | Akshare | Fallback |
 | 3 | Yfinance | Fallback |
-| 4 | Zhitu | Realtime quotes + 公司画像, requires `ZHITU_TOKEN` |
+| 4 | Zhitu | Realtime quotes + 公司画像 + 板块 (含 stock→boards), requires `ZHITU_TOKEN` |
 | 5 | Tencent | Enhanced quotes (PE/PB/市值/涨跌停价), HTTP only |
-| 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报/快讯/新闻 |
+| 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报/快讯/新闻/板块 |
 | 7 | THS | 热点题材/北向资金/快讯 (backup) |
 | 7 | Baidu | 新闻搜索 (backup for EastMoney), requires `BAIDU_API_KEY` |
 | 8 | Cninfo | 公告检索 |
