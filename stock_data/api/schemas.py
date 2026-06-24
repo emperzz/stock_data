@@ -315,6 +315,33 @@ class BoardStocksResponse(BaseModel):
     data_source: str = Field(default="", description="实际数据来源 fetcher 名 或 'persistence'")
 
 
+class StockBoardInfo(BaseModel):
+    """A board that a stock belongs to."""
+
+    code: str = Field(description="Board code (source-specific, e.g. 'sw_yx' for Zhitu)")
+    name: str = Field(description="Board full name (e.g. 'A股-申万行业-银行')")
+    type: str = Field(description="Board type: concept / industry / index / special")
+    subtype: str = Field(
+        default="",
+        description="Source-specific subtype (e.g. '申万行业' for Zhitu, "
+        "'concept' for EastMoney)",
+    )
+
+
+class StockBoardsResponse(BaseModel):
+    """Response for /stocks/{stock_code}/boards endpoint."""
+
+    stock_code: str = Field(description="Stock code queried")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (e.g. 'zhitu')",
+    )
+    data: list[StockBoardInfo] = Field(
+        default_factory=list,
+        description="Boards the stock belongs to",
+    )
+
+
 class IndexQuote(BaseModel):
     """Index realtime quote response."""
 
