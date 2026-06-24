@@ -234,3 +234,79 @@ class TestDailyKline:
         fetcher = self._fetcher_with_api(pd.DataFrame())
         with pytest.raises(DataFetchError, match="No data"):
             fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
+
+
+# ====================================================================
+# K-line (HISTORICAL_MIN) — get_intraday_data
+# ====================================================================
+
+class TestIntradayKline:
+    def _fetcher_with_api(self, fake_stk_mins):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(return_value=fake_stk_mins)
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_intraday_normalizes_time(self):
+        import pandas as pd
+        raw = pd.DataFrame({
+            "ts_code": ["600519.SH"] * 3,
+            "trade_time": ["202605200935", "202605200940", "202605200945"],
+            "open": [1700.0, 1705.0, 1710.0],
+            "high": [1708.0, 1712.0, 1717.0],
+            "low": [1698.0, 1702.0, 1708.0],
+            "close": [1705.0, 1710.0, 1715.0],
+            "vol": [1e5, 1.1e5, 1.2e5],
+            "amount": [1e8, 1.1e8, 1.2e8],
+        })
+        fetcher = self._fetcher_with_api(raw)
+        df = fetcher.get_intraday_data("600519", period="5")
+        assert "time" in df.columns
+        assert list(df["time"]) == ["09:35:00", "09:40:00", "09:45:00"]
+        assert "vol" not in df.columns
+        assert "volume" in df.columns
+
+    def test_intraday_period_to_freq(self):
+        import pandas as pd
+        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_time": ["202605200935"],
+                            "open": [1700.0], "high": [1708.0], "low": [1698.0],
+                            "close": [1705.0], "vol": [1e5], "amount": [1e8]})
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_intraday_data("600519", period="15")
+        call = fetcher._api.stk_mins.call_args
+        assert call.kwargs.get("freq") == "15min"
+
+    def test_intraday_adjust_ignored(self):
+        """Minute K has no adjust — adjust param should not be passed."""
+        import pandas as pd
+        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_time": ["202605200935"],
+                            "open": [1700.0], "high": [1708.0], "low": [1698.0],
+                            "close": [1705.0], "vol": [1e5], "amount": [1e8]})
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_intraday_data("600519", period="5", adjust="qfq")
+        call = fetcher._api.stk_mins.call_args
+        assert "adj" not in call.kwargs
+        assert "adjust" not in call.kwargs
+
+    def test_intraday_date_is_yyyymmdd_format(self):
+        """trade_time passed to SDK should be YYYYMMDD (no dashes)."""
+        import pandas as pd
+        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_time": ["202605200935"],
+                            "open": [1700.0], "high": [1708.0], "low": [1698.0],
+                            "close": [1705.0], "vol": [1e5], "amount": [1e8]})
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_intraday_data("600519", period="5")
+        call = fetcher._api.stk_mins.call_args
+        # trade_time is the date in YYYYMMDD format (8 digits, no dashes)
+        trade_time = call.kwargs.get("trade_time", "")
+        assert len(trade_time) == 8
+        assert "-" not in trade_time
+        assert trade_time.isdigit()
+
+    def test_intraday_sdk_unavailable_returns_none(self, monkeypatch):
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=None):
+            fetcher = ZzshareFetcher()
+            result = fetcher.get_intraday_data("600519", period="5")
+            assert result is None

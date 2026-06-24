@@ -181,3 +181,49 @@ class ZzshareFetcher(BaseFetcher):
             "volume", "amount", "pct_chg",
         ] if c in df.columns]
         return df[[c for c in keep if c in df.columns]]
+
+    # Minute-period -> zzshare freq mapping
+    _PERIOD_TO_FREQ: dict[str, str] = {
+        "1": "1min",
+        "5": "5min",
+        "15": "15min",
+        "30": "30min",
+        "60": "60min",
+    }
+
+    def get_intraday_data(
+        self, stock_code: str, period: str = "5", adjust: str = ""
+    ) -> pd.DataFrame | None:
+        """Fetch minute K-line from zzshare (period=1/5/15/30/60).
+
+        Note: zzshare minute K does not support adjust — the ``adjust`` param
+        is accepted for interface symmetry but is not forwarded to the SDK.
+        """
+        from datetime import datetime, timedelta
+
+        api = self._ensure_api()
+        if api is None:
+            return None
+        ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
+        # Determine the date to query (latest trade date or today).
+        trade_time = (datetime.now() - timedelta(days=2)).strftime("%Y%m%d")
+        freq = self._PERIOD_TO_FREQ.get(period, "5min")
+        try:
+            df = api.stk_mins(ts_code=ts_code, trade_time=trade_time, freq=freq)
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] stk_mins({ts_code}, {freq}) failed: {e}")
+            return None
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        if "vol" in df.columns:
+            df = df.rename(columns={"vol": "volume"})
+        if "trade_time" in df.columns:
+            # YYYYMMDDHHMM (12 digits) -> HH:MM:SS (positions 8..12 = HHMM, pad SS=00)
+            df["time"] = df["trade_time"].astype(str).str.slice(8, 12).apply(
+                lambda s: f"{s[:2]}:{s[2:4]}:00" if len(s) == 4 else s
+            )
+            df = df.drop(columns=["trade_time"])
+        keep = ["time", "open", "high", "low", "close", "volume", "amount"]
+        df = df[[c for c in keep if c in df.columns]]
+        return df
