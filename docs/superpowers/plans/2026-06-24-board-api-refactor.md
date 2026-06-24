@@ -646,7 +646,7 @@ from .eastmoney.board import fetch_board_list, fetch_board_stocks, get_ak as _ak
     )
 ```
 
-在文件中新增 4 个方法：
+在文件中新增 8 个方法（4 个 EastMoney 风格旧方法 + 4 个 Manager 统一入口 + 1 个 `_enrich_stock_from_realtime` helper）。**4 个旧方法保留作为向后兼容**（现有测试已就绪），但 Manager 不再调用它们——Manager 调用新增的 `get_all_boards` / `get_board_stocks` / `get_stock_boards` / `get_board_history`：
 
 ```python
     def get_all_concept_boards(
@@ -695,6 +695,69 @@ from .eastmoney.board import fetch_board_list, fetch_board_stocks, get_ak as _ak
             include_quote=include_quote,
             fallback_enricher=self._enrich_stock_from_realtime,
             fetcher_label=self.name,
+        )
+
+    # ----- Manager 统一入口方法（与 ZhituFetcher 对齐） -----
+
+    def get_all_boards(
+        self,
+        board_type: str,
+        subtype: str | None = None,
+        source: str = "eastmoney",
+        include_quote: bool = False,
+    ) -> list[dict]:
+        """Get boards of a given type and optional subtype (unified entry).
+
+        EastMoney doesn't expose subtype information — its boards are
+        categorized purely by ``concept`` vs ``industry``. We map:
+        - ``type=concept``: any subtype (EastMoney only has concept boards)
+        - ``type=industry``: any subtype (EastMoney only has industry boards)
+        - ``type=index`` / ``type=special``: not supported → return ``[]``
+        """
+        if board_type == "concept":
+            return self.get_all_concept_boards(
+                source=source, include_quote=include_quote,
+            )
+        if board_type == "industry":
+            return self.get_all_industry_boards(
+                source=source, include_quote=include_quote,
+            )
+        # index / special: EastMoney has no such classification
+        return []
+
+    def get_board_stocks(
+        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
+        """Get stocks in a board (unified entry — EastMoney doesn't distinguish
+        concept/industry at the board level, both share the ``BK`` prefix).
+
+        Try concept first, fall back to industry (matches previous behavior).
+        """
+        stocks = self.get_concept_board_stocks(
+            board_code, source=source, include_quote=include_quote,
+        )
+        if stocks:
+            return stocks
+        return self.get_industry_board_stocks(
+            board_code, source=source, include_quote=include_quote,
+        )
+
+    def get_stock_boards(self, stock_code: str, source: str = "eastmoney") -> list[dict] | None:
+        """Get boards a stock belongs to. EastMoney does NOT expose this
+        lookup, so return ``None`` to signal "source doesn't support this".
+        """
+        return None
+
+    def get_board_history(
+        self, board_code: str, source: str = "eastmoney",
+        frequency: str = "d", days: int = 30,
+    ) -> list[dict]:
+        """Board K-line. EastMoney does NOT expose board-level K-line,
+        so raise NotImplementedError (consistent with ZhituFetcher's stub)."""
+        raise NotImplementedError(
+            f"EastMoneyFetcher does not provide board-level K-line data "
+            f"(board_code={board_code!r}). "
+            f"Consider zzshare plate_kline as future implementation."
         )
 
     def _enrich_stock_from_realtime(self, stock_code: str) -> dict | None:
@@ -1207,12 +1270,19 @@ git commit -m "refactor(akshare): remove STOCK_BOARD capability (migrated to Eas
 **Files:**
 - Modify: `stock_data/data_provider/manager.py:560-610`（改写 board 方法）
 
-- [ ] **Step 1: 写失败的测试 — Manager.board 方法使用 `_with_source`**
+> **设计调整**：原计划让 Manager 调 fetcher 的 `get_all_concept_boards` / `get_all_industry_boards` / `get_concept_board_stocks` / `get_industry_board_stocks` 这 4 个 EastMoney 风格方法。但 Zhitu 的数据形状是 `board_type × subtype` 二维（13 个 subtype），强行适配 EastMoney 的 4 个方法会让 Zhitu 丢失 subtype 区分度。
+>
+> **正确做法**：Manager 提供 4 个**统一入口**（`get_all_boards` / `get_board_stocks` / `get_stock_boards` / `get_board_history`），由每个 fetcher 自行实现：
+> - `EastMoneyFetcher` 新增 `get_all_boards(board_type, subtype)` 内部 if-else 分发到 concept/industry；保留 4 个旧方法向后兼容
+> - `ZhituFetcher` 已有 `get_board_tree(board_type, subtype)`，把方法名直接作为 Manager 入口（一致化方法名）
+> - EastMoney 也新增 `get_stock_boards` / `get_board_history` stub（暂未支持 → 抛 NotImplementedError）
+
+- [ ] **Step 1: 写失败的测试 — Manager.board 统一入口方法使用 `_with_source`**
 
 ```python
 # tests/test_board_source_routing.py 末尾追加：
-"""Tests for Manager.board methods using _with_source routing."""
-from unittest.mock import patch, MagicMock
+"""Tests for Manager.board unified-entry methods using _with_source routing."""
+from unittest.mock import MagicMock, patch
 import pytest
 
 from stock_data.data_provider.base import DataCapability, DataFetchError
@@ -1227,145 +1297,224 @@ def _make_fetcher(name, capability, markets={"csi"}):
     return f
 
 
-def test_manager_get_all_concept_boards_uses_source_routing():
-    """Manager.get_all_concept_boards routes via _with_source, not failover."""
+def test_manager_get_all_boards_uses_source_routing():
+    """Manager.get_all_boards routes via _with_source, not failover."""
     em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
     manager = DataFetcherManager([em])
 
     with patch.object(manager, "_with_source", wraps=manager._with_source) as spy:
-        manager.get_all_concept_boards(source="eastmoney")
-        # Must have invoked _with_source exactly once
+        manager.get_all_boards(source="eastmoney", board_type="concept")
         assert spy.call_count == 1
-        # Call kwargs: source="eastmoney", capability=STOCK_BOARD
         kwargs = spy.call_args.kwargs
         assert kwargs["source"] == "eastmoney"
         assert kwargs["capability"] == DataCapability.STOCK_BOARD
 
 
-def test_manager_get_concept_board_stocks_passes_board_code():
+def test_manager_get_all_boards_passes_type_and_subtype():
+    """Manager.get_all_boards forwards board_type/subtype to fetcher call."""
     em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
     manager = DataFetcherManager([em])
 
     captured = {}
     real = manager._with_source
 
-    def spy_with_source(*args, **kwargs):
-        captured["call_args"] = kwargs["call"]
+    def spy(*args, **kwargs):
+        captured["call"] = kwargs["call"]
         return real(*args, **kwargs)
 
-    with patch.object(manager, "_with_source", side_effect=spy_with_source):
-        manager.get_concept_board_stocks("BK0001", source="eastmoney")
+    with patch.object(manager, "_with_source", side_effect=spy):
+        manager.get_all_boards(source="eastmoney", board_type="concept", subtype="concept")
 
-    # The call lambda should invoke fetcher.get_concept_board_stocks("BK0001", ...)
-    fetcher = em
-    fetcher.get_concept_board_stocks.return_value = []
-    captured["call"](fetcher)
-    fetcher.get_concept_board_stocks.assert_called_once()
-    # First positional arg should be the board code
-    call_args = fetcher.get_concept_board_stocks.call_args
-    assert call_args.args[0] == "BK0001"
+    em.get_all_boards.assert_called_once_with(
+        board_type="concept", subtype="concept", source="eastmoney",
+    )
+
+
+def test_manager_get_board_stocks_passes_board_code():
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+
+    captured = {}
+    real = manager._with_source
+
+    def spy(*args, **kwargs):
+        captured["call"] = kwargs["call"]
+        return real(*args, **kwargs)
+
+    with patch.object(manager, "_with_source", side_effect=spy):
+        manager.get_board_stocks("BK0001", source="eastmoney")
+
+    em.get_board_stocks.assert_called_once_with("BK0001", source="eastmoney")
+
+
+def test_manager_get_stock_boards_passes_stock_code():
+    em = _make_fetcher("ZhituFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+
+    captured = {}
+    real = manager._with_source
+
+    def spy(*args, **kwargs):
+        captured["call"] = kwargs["call"]
+        return real(*args, **kwargs)
+
+    with patch.object(manager, "_with_source", side_effect=spy):
+        manager.get_stock_boards("000001", source="zhitu")
+
+    em.get_stock_boards.assert_called_once_with("000001", source="zhitu")
+
+
+def test_manager_get_board_history_passes_args():
+    em = _make_fetcher("ZhituFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+
+    with patch.object(manager, "_with_source", wraps=manager._with_source) as spy:
+        manager.get_board_history("sw_mt", source="zhitu", frequency="d", days=30)
+        assert spy.call_count == 1
 
 
 def test_manager_unknown_source_raises_value_error():
     em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
     manager = DataFetcherManager([em])
     with pytest.raises(ValueError, match="No fetcher named 'unknown'"):
-        manager.get_all_concept_boards(source="unknown")
+        manager.get_all_boards(source="unknown", board_type="concept")
+
+
+def test_manager_returns_source_name_in_tuple():
+    """Each board method returns ``(result, source_name)`` so API can echo it."""
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
+    em.get_all_boards.return_value = [{"code": "BK0001"}]
+    manager = DataFetcherManager([em])
+
+    boards, source = manager.get_all_boards(source="eastmoney", board_type="concept")
+    assert boards == [{"code": "BK0001"}]
+    assert source == "EastMoneyFetcher"
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_board_source_routing.py -v`
-Expected: FAIL — Manager 仍然走 `_with_failover`
+Run: `python -m pytest tests/test_board_source_routing.py -v`
+Expected: FAIL — `Manager.get_all_boards` / `get_board_stocks` / `get_stock_boards` / `get_board_history` not exist
 
-- [ ] **Step 3: 改写 Manager.board 公开方法**
+- [ ] **Step 3: 改写 Manager.board 公开方法（4 个统一入口）**
 
-在 `stock_data/data_provider/manager.py` 中，将 4 个 board 方法（约 560-610 行）替换为：
+在 `stock_data/data_provider/manager.py` 中，将原 4 个 board 方法（约 560-610 行）替换为：
 
 ```python
-    # ---------- boards (concept / industry) ----------
+    # ---------- boards (unified entry points) ----------
     #
     # 板块方法使用 _with_source 路由（按 source 名定位 fetcher），不做 failover。
-    # 不同数据源的板块分类体系和代码体系不兼容，failover 会产生误导性结果。
-    def get_all_concept_boards(self, source: str, include_quote: bool = False) -> tuple[list[dict], str]:
-        """Get all concept boards via the named source's fetcher.
+    # 不同数据源的板块分类体系不兼容（EastMoney 用 concept/industry 二分，
+    # Zhitu 用 board_type × subtype 二维），failover 会产生误导性结果。
+    #
+    # 每个 fetcher 必须实现 4 个统一入口方法：
+    #   - get_all_boards(board_type, subtype, source) → list[{code, name, type, subtype, ...quote}]
+    #   - get_board_stocks(board_code, source) → list[{stock_code, stock_name, exchange}]
+    #   - get_stock_boards(stock_code, source) → list[{code, name, type, subtype}] | None
+    #   - get_board_history(board_code, source, frequency, days) → 暂未实现（raise NotImplementedError）
+
+    def get_all_boards(
+        self,
+        source: str,
+        board_type: str,
+        subtype: str | None = None,
+        include_quote: bool = False,
+    ) -> tuple[list[dict], str]:
+        """Get boards of a given type and optional subtype from the named source.
 
         Args:
             source: fetcher name (e.g. ``"eastmoney"``, ``"zhitu"``).
+            board_type: one of ``concept / industry / index / special``.
+            subtype: source-specific subtype filter (validated by persistence).
             include_quote: forward to fetcher — include realtime quote fields.
 
         Returns:
-            ``(boards, source_name)`` tuple.
+            ``(boards, fetcher_name)`` tuple.
         """
         boards, name = self._with_source(
             source=source,
             capability=DataCapability.STOCK_BOARD,
             market="csi",
-            op_label=f"concept boards ({source})",
+            op_label=f"{board_type}/{subtype or '*'} boards ({source})",
             call=lambda f: (
-                f.get_all_concept_boards(source=source, include_quote=include_quote),
+                f.get_all_boards(
+                    board_type=board_type,
+                    subtype=subtype,
+                    source=source,
+                    include_quote=include_quote,
+                ),
                 f.name,
             ),
         )
         return boards, name
 
-    def get_all_industry_boards(self, source: str, include_quote: bool = False) -> tuple[list[dict], str]:
-        """Get all industry boards via the named source's fetcher."""
-        boards, name = self._with_source(
-            source=source,
-            capability=DataCapability.STOCK_BOARD,
-            market="csi",
-            op_label=f"industry boards ({source})",
-            call=lambda f: (
-                f.get_all_industry_boards(source=source, include_quote=include_quote),
-                f.name,
-            ),
-        )
-        return boards, name
-
-    def get_concept_board_stocks(
+    def get_board_stocks(
         self, board_code: str, source: str, include_quote: bool = False
     ) -> tuple[list[dict], str]:
-        """Get stocks in a concept board via the named source's fetcher."""
+        """Get stocks belonging to a board from the named source."""
         boards, name = self._with_source(
             source=source,
             capability=DataCapability.STOCK_BOARD,
             market="csi",
-            op_label=f"concept board stocks {board_code} ({source})",
+            op_label=f"board stocks {board_code} ({source})",
             call=lambda f: (
-                f.get_concept_board_stocks(board_code, source=source, include_quote=include_quote),
+                f.get_board_stocks(
+                    board_code, source=source, include_quote=include_quote,
+                ),
                 f.name,
             ),
         )
         return boards, name
 
-    def get_industry_board_stocks(
-        self, board_code: str, source: str, include_quote: bool = False
-    ) -> tuple[list[dict], str]:
-        """Get stocks in an industry board via the named source's fetcher."""
-        boards, name = self._with_source(
+    def get_stock_boards(
+        self, stock_code: str, source: str
+    ) -> tuple[list[dict] | None, str]:
+        """Get boards a stock belongs to from the named source.
+
+        Returns ``(None, name)`` if the fetcher signals "no data" (vs empty list).
+        """
+        result, name = self._with_source(
             source=source,
             capability=DataCapability.STOCK_BOARD,
             market="csi",
-            op_label=f"industry board stocks {board_code} ({source})",
+            op_label=f"stock boards {stock_code} ({source})",
+            call=lambda f: (f.get_stock_boards(stock_code, source=source), f.name),
+        )
+        return result, name
+
+    def get_board_history(
+        self,
+        board_code: str,
+        source: str,
+        frequency: str = "d",
+        days: int = 30,
+    ) -> tuple[list[dict], str]:
+        """Get K-line for a board from the named source (currently stub on all fetchers)."""
+        result, name = self._with_source(
+            source=source,
+            capability=DataCapability.STOCK_BOARD,
+            market="csi",
+            op_label=f"board K-line {board_code} ({source})",
             call=lambda f: (
-                f.get_industry_board_stocks(board_code, source=source, include_quote=include_quote),
+                f.get_board_history(
+                    board_code, source=source, frequency=frequency, days=days,
+                ),
                 f.name,
             ),
         )
-        return boards, name
+        return result, name
 ```
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_board_source_routing.py -v`
-Expected: PASS (8 tests total = 5 from Task 1 + 3 new)
+Run: `python -m pytest tests/test_board_source_routing.py -v`
+Expected: PASS (5 from Task 1 + 7 new = 12 tests)
 
 - [ ] **Step 5: 提交**
 
 ```bash
 git add stock_data/data_provider/manager.py tests/test_board_source_routing.py
-git commit -m "refactor(manager): board methods use _with_source routing (no failover)"
+git commit -m "refactor(manager): unified board entry points via _with_source routing"
 ```
 
 ---
@@ -1516,7 +1665,7 @@ def test_list_boards_zhitu_returns_zhitu_boards(client):
          "type": "industry", "subtype": "申万行业"},
     ]
     with patch(
-        "stock_data.data_provider.manager.DataFetcherManager.get_all_concept_boards",
+        "stock_data.data_provider.manager.DataFetcherManager.get_all_boards",
         return_value=(fake_boards, "ZhituFetcher"),
     ):
         r = client.get("/api/v1/boards?type=concept&source=zhitu")
@@ -1538,7 +1687,7 @@ def test_list_boards_eastmoney_default_subtype_ok(client):
     """source=eastmoney&type=concept&subtype=concept is valid (mirrored)."""
     fake = [{"code": "BK0001", "name": "测试"}]
     with patch(
-        "stock_data.data_provider.manager.DataFetcherManager.get_all_concept_boards",
+        "stock_data.data_provider.manager.DataFetcherManager.get_all_boards",
         return_value=(fake, "EastMoneyFetcher"),
     ):
         r = client.get(
@@ -1559,7 +1708,7 @@ def test_list_boards_limit_truncates_results(client):
     """limit=2 truncates the data array to 2 items."""
     fake = [{"code": f"BK{i:04d}", "name": f"测试{i}"} for i in range(5)]
     with patch(
-        "stock_data.data_provider.manager.DataFetcherManager.get_all_concept_boards",
+        "stock_data.data_provider.manager.DataFetcherManager.get_all_boards",
         return_value=(fake, "EastMoneyFetcher"),
     ):
         r = client.get(
@@ -1757,34 +1906,19 @@ def list_boards(
 
     manager = get_manager()
 
-    # EastMoney uses concept/industry split; Zhitu uses type/subtype split.
-    # We delegate to source-specific persistence helpers to keep caches separated.
-    if type == "concept":
-        boards, origin = stock_board_cache.get_board_list(
-            board_type="concept", source=source, refresh=refresh,
-            include_quote=include_quote, manager=manager,
+    # Manager.get_all_boards 通过 _with_source 路由到 source 对应的 fetcher，
+    # 统一调用其 get_all_boards(board_type, subtype) 方法。
+    # 注意：本实现**绕过** persistence 缓存层（Task 8 范围外），
+    # 直接走 Manager 统一入口。后续可把 persistence/board.py 适配到 Manager 新接口。
+    try:
+        boards, origin = manager.get_all_boards(
+            source=source,
+            board_type=type,
+            subtype=subtype,
+            include_quote=include_quote,
         )
-    elif type == "industry":
-        boards, origin = stock_board_cache.get_board_list(
-            board_type="industry", source=source, refresh=refresh,
-            include_quote=include_quote, manager=manager,
-        )
-    else:
-        # index / special — Zhitu only for now; EastMoney boards.py doesn't have these.
-        # Call ZhituFetcher.get_board_tree directly via manager.
-        try:
-            boards, origin = manager._with_source(
-                source=source,
-                capability=DataCapability.STOCK_BOARD,
-                market="csi",
-                op_label=f"{type} boards ({source})",
-                call=lambda f: (
-                    f.get_board_tree(board_type=type, subtype=subtype),
-                    f.name,
-                ),
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail={"error": str(e)})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
 
     # Filter by subtype if specified (EastMoney path — Zhitu path is pre-filtered).
     if subtype is not None:
@@ -1854,9 +1988,12 @@ def get_board_stocks(
     _resolve_source(source)
 
     manager = get_manager()
-    stocks, origin = stock_board_cache.get_board_stocks(
-        board_code, source, refresh=refresh, include_quote=include_quote, manager=manager
-    )
+    try:
+        stocks, origin = manager.get_board_stocks(
+            board_code, source=source, include_quote=include_quote,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
 
     if not stocks:
         raise HTTPException(
@@ -1864,16 +2001,24 @@ def get_board_stocks(
             detail={"error": "not_found", "message": f"No stocks found for board {board_code}"},
         )
 
-    # Best-effort board name resolution (cache lookup, not an extra fetcher call)
+    # Best-effort board name resolution (single concept fetch, lightweight)
     board_name = board_code
-    for bt in ("concept", "industry"):
-        boards, _ = stock_board_cache.get_board_list(
-            bt, source, refresh=False, manager=manager
+    try:
+        boards, _ = manager.get_all_boards(
+            source=source, board_type="concept", subtype=None,
         )
         match = next((b["name"] for b in boards if b["code"] == board_code), None)
         if match:
             board_name = match
-            break
+        else:
+            boards, _ = manager.get_all_boards(
+                source=source, board_type="industry", subtype=None,
+            )
+            match = next((b["name"] for b in boards if b["code"] == board_code), None)
+            if match:
+                board_name = match
+    except ValueError:
+        pass
 
     stock_list = [
         BoardStockInfo(
@@ -1948,15 +2093,8 @@ def get_stock_boards(
 
     manager = get_manager()
     try:
-        boards, origin = manager._with_source(
-            source=source,
-            capability=DataCapability.STOCK_BOARD,
-            market="csi",
-            op_label=f"stock boards {stock_code} ({source})",
-            call=lambda f: (
-                f.get_stock_boards(stock_code) or [],
-                f.name,
-            ),
+        boards, origin = manager.get_stock_boards(
+            stock_code, source=source,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)})
