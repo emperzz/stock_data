@@ -65,33 +65,6 @@ def _from_yyyymmdd(date: str) -> str:
     return date
 
 
-def _ensure_api(self_ref) -> Any:
-    """Lazy-init the DataApi SDK; caches in self_ref._api.
-
-    Returns the DataApi instance, or None if SDK is missing. Records
-    the specific init failure into self_ref._init_error for
-    unavailable_reason() reporting.
-    """
-    if self_ref._api is not None:
-        return self_ref._api
-    if importlib.util.find_spec("DataApi") is None:
-        self_ref._init_error = "DataApi SDK not importable"
-        return None
-    try:
-        from DataApi import DataApi  # type: ignore
-
-        if self_ref._token:
-            self_ref._api = DataApi(token=self_ref._token)
-        else:
-            self_ref._api = DataApi()
-        self_ref._init_error = None
-        return self_ref._api
-    except Exception as e:
-        self_ref._init_error = f"DataApi init failed: {e}"
-        logger.warning("[ZzshareFetcher] %s", self_ref._init_error)
-        return None
-
-
 class ZzshareFetcher(BaseFetcher):
     """zzshare SDK fetcher — A-share multi-capability (priority 5)."""
 
@@ -130,6 +103,32 @@ class ZzshareFetcher(BaseFetcher):
             return None
         return f"{self.name} unavailable: DataApi SDK not installed (pip install DataApi)"
 
+    def _ensure_api(self) -> Any:
+        """Lazy-init the DataApi SDK; caches in self._api.
+
+        Returns the DataApi instance, or None if SDK is missing. Records
+        the specific init failure into self._init_error for
+        unavailable_reason() reporting.
+        """
+        if self._api is not None:
+            return self._api
+        if importlib.util.find_spec("DataApi") is None:
+            self._init_error = "DataApi SDK not importable"
+            return None
+        try:
+            from DataApi import DataApi  # type: ignore
+
+            if self._token:
+                self._api = DataApi(token=self._token)
+            else:
+                self._api = DataApi()
+            self._init_error = None
+            return self._api
+        except Exception as e:
+            self._init_error = f"DataApi init failed: {e}"
+            logger.warning("[ZzshareFetcher] %s", self._init_error)
+            return None
+
     def _fetch_raw_data(
         self,
         stock_code: str,
@@ -143,7 +142,7 @@ class ZzshareFetcher(BaseFetcher):
             raise DataFetchError(
                 f"ZzshareFetcher 不支持周线/月线 (frequency={frequency}, 仅日线 daily)"
             )
-        api = _ensure_api(self)
+        api = self._ensure_api()
         if api is None:
             raise DataFetchError(
                 f"ZzshareFetcher DataApi SDK 不可用: {self._init_error}"
