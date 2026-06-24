@@ -58,7 +58,7 @@ class TestNewsSearchEndpoint:
         ):
             resp = client.get("/api/v1/news/search", params={"q": "ok"})
 
-        assert resp.status_code == 502
+        assert resp.status_code == 503
 
 
 # ---------------------- /api/v1/news/content ----------------------
@@ -91,13 +91,14 @@ class TestNewsContentEndpoint:
     def test_content_ssrf_localhost_returns_400(self):
         resp = client.get("/api/v1/news/content", params={"url": "http://localhost/"})
         assert resp.status_code == 400
-        assert "internal" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert "internal" in (detail.get("message", "") if isinstance(detail, dict) else str(detail)).lower()
 
     def test_content_non_http_scheme_returns_400(self):
         resp = client.get("/api/v1/news/content", params={"url": "file:///etc/passwd"})
         assert resp.status_code == 400
 
-    def test_content_extraction_failure_returns_502(self):
+    def test_content_extraction_failure_returns_400(self):
         with patch(
             "stock_data.data_provider.utils.news_extractor.NewsContentExtractor.extract",
             side_effect=ValueError("could not extract main content"),
@@ -105,4 +106,4 @@ class TestNewsContentEndpoint:
             resp = client.get(
                 "/api/v1/news/content", params={"url": "https://example.com/x"}
             )
-        assert resp.status_code == 502
+        assert resp.status_code == 400

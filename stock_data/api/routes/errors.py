@@ -41,6 +41,12 @@ def map_errors(func):
                 status_code=503,
                 detail={"error": "data_unavailable", "message": str(e)},
             ) from e
+        except ValueError as e:
+            logger.warning(f"Bad request: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "bad_request", "message": str(e)},
+            ) from e
         except HTTPException:
             raise
         except Exception as e:

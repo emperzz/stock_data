@@ -23,9 +23,9 @@ real problems lived in that file:
 What's in this package
 ----------------------
 
-- ``router``: the main ``/api/v1`` data APIRouter. Domain modules import
-  ``__init__`` and use this shared router via ``@router.get(...)``. The
-  shared-router pattern keeps URL prefixes and tag-based routing identical
+- ``router``: the main ``/api/v1`` data APIRouter. Domain modules do
+  ``from ._router import router`` and register routes via ``@router.get(...)``.
+  The shared-router pattern keeps URL prefixes and tag-based routing identical
   to the pre-refactor behaviour.
 - ``news_router``: mounted at ``/api/v1/news/*``. Declared by ``news.py``.
 - ``health_router``: mounted at root ``/healthz`` (k8s convention). Declared
@@ -44,21 +44,19 @@ Public re-exports
 Import ordering note
 --------------------
 
-Each domain module does ``from . import __init__ as _routes_pkg`` to pick
-up the shared ``router``. That's a circular import — it works because
-``router = APIRouter()`` is declared BEFORE any submodule is imported
-below. Submodule decorator code runs against the shared router during
+Each domain module does ``from ._router import router`` to pick up the
+shared ``APIRouter`` instance. ``_router.py`` is a leaf module (no
+imports from the routes package), so there is no circular import.
+Submodule decorator code runs against the shared router during
 ``__init__.py``'s own initialisation, so by the time ``server.py`` calls
 ``include_router(router, prefix="/api/v1")``, every endpoint is already
 registered.
 """
 
-from fastapi import (
-    APIRouter,  # noqa: F401  (re-exported for callers; ruff doesn't track re-exports)
-)
+# ---- domain module side-effect imports ----
 
 # Each import is a side-effect import: we don't need the names, only for the
-# decorators to register. ``# noqa: F401`` suppresses the unused-import warning.
+# decorators to register. The noqa comments suppress the unused-import warning.
 from . import (
     boards,  # noqa: F401
     calendar,  # noqa: F401
