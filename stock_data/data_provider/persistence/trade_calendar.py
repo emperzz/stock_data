@@ -12,13 +12,28 @@ NEW helpers (added during persistence refactor):
 import logging
 from datetime import datetime
 
+from . import db
 from .db import get_connection
 
 logger = logging.getLogger(__name__)
 
+_schema_initialized_paths: set[str] = set()
+
 
 def init_schema() -> None:
-    """Initialize the trade calendar table."""
+    """Initialize the trade calendar table.
+
+    Idempotent — DDL is skipped for DB paths we've already initialized
+    in this process. ``reset_all()`` clears the set so a full reset
+    re-runs the DDL against the current path.
+    """
+    # Call via `db.get_db_path` (module attribute) rather than the local
+    # `from .db import get_db_path` binding, so monkeypatching `db.get_db_path`
+    # in tests actually takes effect here.
+    path = str(db.get_db_path())
+    if path in _schema_initialized_paths:
+        return
+    _schema_initialized_paths.add(path)
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""

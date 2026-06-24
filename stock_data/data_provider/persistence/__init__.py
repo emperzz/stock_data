@@ -120,4 +120,9 @@ def reset_all() -> None:
     with conn:
         for table in _TABLES:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
+    # Clear each submodule's init-schema guard so init_schema() below
+    # actually re-runs the DDL (otherwise the dropped tables won't be
+    # recreated).
+    for submodule in (stock_list, board, trade_calendar, pool_daily):
+        submodule._schema_initialized_paths.clear()
     init_schema()

@@ -8,12 +8,14 @@ upstream API calls which are slow and may fail.
 import logging
 from datetime import datetime
 
+from . import db
 from ._refresh import DailyRefreshTracker
 from .db import get_connection, get_db_path
 
 logger = logging.getLogger(__name__)
 
 _refresh_tracker = DailyRefreshTracker()
+_schema_initialized_paths: set[str] = set()
 
 
 def _normalize_exchange(value: str | None) -> str | None:
@@ -39,7 +41,21 @@ def _normalize_exchange(value: str | None) -> str | None:
 
 
 def init_schema() -> None:
-    """Initialize the database schema."""
+    """Initialize the database schema.
+
+    Idempotent — DDL is skipped for DB paths we've already initialized
+    in this process. Tests that swap the DB path via ``db.get_db_path``
+    therefore trigger a fresh init against the new path (rather than
+    hitting ``no such table: stock_list``). ``reset_all()`` clears the
+    set so a full reset re-runs the DDL against the current path.
+    """
+    # Call via `db.get_db_path` (module attribute) rather than the local
+    # `from .db import get_db_path` binding, so monkeypatching `db.get_db_path`
+    # in tests actually takes effect here.
+    path = str(db.get_db_path())
+    if path in _schema_initialized_paths:
+        return
+    _schema_initialized_paths.add(path)
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
