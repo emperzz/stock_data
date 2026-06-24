@@ -38,7 +38,7 @@ Top-level (full layout — see `ls -R stock_data/` for the complete file list):
 ### `data_provider/base.py`
 - `BaseFetcher`: Abstract base defining `_fetch_raw_data()`, `_normalize_data()`, `get_kline_data()`, `get_realtime_quote()`
 - `DataCapability`: Flag enum for fetcher capability declarations (see below)
-- `DataFetchError`, `RateLimitError`: Exception classes
+- `DataFetchError`: Exception class
 - `STANDARD_COLUMNS`: Standardized K-line column names
 
 ### `data_provider/manager.py`

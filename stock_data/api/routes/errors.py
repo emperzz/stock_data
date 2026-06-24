@@ -1,10 +1,19 @@
-"""Centralised DataFetchError / HTTPException / Exception → HTTPException translator.
+"""Centralised DataFetchError / ValueError / HTTPException / Exception → HTTPException translator.
 
 Apply to every FastAPI route handler so the server has a uniform error contract:
-``DataFetchError → 503`` (upstream failure, retryable), ``HTTPException`` is
-re-raised unchanged (lets route-level validation surface its own status code),
-and any other exception is wrapped as a 500 (with ``logger.error(..., exc_info=True)``
-so the traceback lands in the log).
+``DataFetchError → 503`` (upstream failure, retryable), ``ValueError → 400``
+(user-input validation — e.g. SSRF / URL-scheme rejection from
+``news_extractor._validate_url``), ``HTTPException`` is re-raised unchanged
+(lets route-level validation surface its own status code), and any other
+exception is wrapped as a 500 (with ``logger.error(..., exc_info=True)`` so
+the traceback lands in the log).
+
+**Contract on ``ValueError``**: since this clause will swallow *any*
+``ValueError`` reaching the handler, handler bodies must only raise it for
+client-input errors. Upstream failure modes must use ``DataFetchError``.
+Pydantic ``ValidationError`` is a ``ValueError`` subclass, so model
+construction failures inside a handler body will also map to 400 — keep
+such construction behind FastAPI's request-validation layer where possible.
 
 Usage:
     @router.get('/path', ...)

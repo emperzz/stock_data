@@ -50,7 +50,7 @@ class TestNewsSearchEndpoint:
         # Either 400 (handler rejects at the boundary) or 502 (handler raises DataFetchError)
         assert resp.status_code in (400, 502)
 
-    def test_search_upstream_failure_returns_502(self):
+    def test_search_upstream_failure_returns_503(self):
         from stock_data.data_provider.base import DataFetchError
         with patch(
             "stock_data.data_provider.manager.DataFetcherManager.search_news",
