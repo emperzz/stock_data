@@ -927,6 +927,20 @@ class TestDragonTiger:
         # records should have at least 1 entry from history
         assert len(data["records"]) >= 1
 
+    def test_daily_dragon_tiger_uses_trade_calendar_when_date_empty(self, monkeypatch):
+        """When trade_date is empty, fall back to the latest trade date <= today."""
+        # Mock the trade calendar helper
+        import stock_data.data_provider.fetchers.zzshare_fetcher as zf
+        monkeypatch.setattr(
+            zf, "get_latest_trade_date_on_or_before",
+            lambda d: "2026-05-22",
+        )
+        fetcher = self._fetcher_with_api(lhb_list=[])
+        fetcher.get_daily_dragon_tiger("", None)
+        call = fetcher._api.lhb_list.call_args
+        # Should be 20260522 (from mocked trade calendar)
+        assert call.kwargs.get("date1") == "20260522"
+
 
 # ====================================================================
 # HOT_TOPICS

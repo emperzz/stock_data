@@ -13,12 +13,14 @@ SDK is importable, even without a token.
 import importlib.util
 import logging
 import os
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
+from ..persistence.trade_calendar import get_latest_trade_date_on_or_before
 from ..utils.normalize import normalize_stock_code
 
 logger = logging.getLogger(__name__)
@@ -207,7 +209,6 @@ class ZzshareFetcher(BaseFetcher):
         Note: zzshare minute K does not support adjust — the ``adjust`` param
         is accepted for interface symmetry but is not forwarded to the SDK.
         """
-        from datetime import datetime, timedelta
 
         api = self._ensure_api()
         if api is None:
@@ -339,7 +340,7 @@ class ZzshareFetcher(BaseFetcher):
         Returns 18-field dict matching ZhituFetcher.get_stock_info's shape.
         info_type=1 is the company-profile enum (README 探测确认可用).
         """
-        from .zhitu_fetcher import _split_concepts  # reuse dedup helper
+        from ..utils.normalize import split_concepts as _split_concepts
 
         api = self._ensure_api()
         if api is None:
@@ -552,7 +553,9 @@ class ZzshareFetcher(BaseFetcher):
         date_str = (
             _to_yyyymmdd(trade_date)
             if trade_date
-            else _to_yyyymmdd(__import__("datetime").date.today().strftime("%Y-%m-%d"))
+            else _to_yyyymmdd(
+                get_latest_trade_date_on_or_before(date.today().strftime("%Y-%m-%d")) or ""
+            )
         )
         try:
             rows = api.lhb_list(date1=date_str)
@@ -648,12 +651,11 @@ class ZzshareFetcher(BaseFetcher):
         Returns list of normalized {code, name, change_pct, rank, ...} dicts.
         date_str empty -> today.
         """
-        from datetime import date as _date
 
         api = self._ensure_api()
         if api is None:
             return []
-        d = _to_yyyymmdd(date_str) if date_str else _date.today().strftime("%Y%m%d")
+        d = _to_yyyymmdd(date_str) if date_str else date.today().strftime("%Y%m%d")
         try:
             rows = api.ths_hot_top(date1=d, top_n=100)
         except Exception as e:

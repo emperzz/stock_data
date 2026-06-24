@@ -43,7 +43,7 @@ dev = [
     "httpx>=0.27.0",
     "beautifulsoup4>=4.12.0",
 ]
-zzshare = ["DataApi>=0.1.0"]   # Verify availability: pip index versions DataApi
+zzshare = ["DataApi>=0.7.0,<0.9"]   # Verified on PyPI; latest 0.8.2
 
 [build-system]
 requires = ["hatchling"]

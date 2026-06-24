@@ -15,6 +15,7 @@ import requests
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 from ..utils.code_converter import to_zhitu_format, to_zhitu_market_suffix
+from ..utils.normalize import split_concepts as _split_concepts
 
 logger = logging.getLogger(__name__)
 
@@ -45,23 +46,6 @@ ZHITU_SUBTYPES_BY_TYPE: dict[str, set[str]] = {
     "index": {"分类", "指数成分", "大盘指数"},
     "special": {"风险警示", "次新股", "沪港通", "深港通"},
 }
-
-
-def _split_concepts(raw: object) -> list[str]:
-    """Split Zhitu's comma-separated ``idea`` string into a deduplicated list.
-
-    Returns ``[]`` for empty/None input. Items are stripped; empty items dropped.
-    """
-    if not raw:
-        return []
-    parts = [p.strip() for p in str(raw).split(",")]
-    seen: set[str] = set()
-    out: list[str] = []
-    for p in parts:
-        if p and p not in seen:
-            seen.add(p)
-            out.append(p)
-    return out
 
 
 class ZhituFetcher(BaseFetcher):
