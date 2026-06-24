@@ -37,6 +37,7 @@ from .fetchers.ths_fetcher import ThsFetcher
 from .fetchers.tushare_fetcher import TushareFetcher
 from .fetchers.yfinance_fetcher import YfinanceFetcher
 from .fetchers.zhitu_fetcher import ZhituFetcher
+from .fetchers.zzshare_fetcher import ZzshareFetcher
 
 # Manager factory
 from .manager import create_default_manager
@@ -96,4 +97,5 @@ __all__ = [
     "TushareFetcher",
     "YfinanceFetcher",
     "ZhituFetcher",
+    "ZzshareFetcher",
 ]
