@@ -38,6 +38,7 @@ from curl_cffi import requests as cffi_requests
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..utils.code_converter import to_eastmoney_secid
 from ..utils.normalize import normalize_stock_code
+from .eastmoney.board import fetch_board_list, fetch_board_stocks, get_ak as _ak_module
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,7 @@ class EastMoneyFetcher(BaseFetcher):
         | DataCapability.RESEARCH_REPORT
         | DataCapability.NEWS_SEARCH
         | DataCapability.NEWS_FLASH
+        | DataCapability.STOCK_BOARD  # NEW: migrated from AkshareFetcher
     )
 
     def is_available(self) -> bool:
@@ -987,3 +989,83 @@ class EastMoneyFetcher(BaseFetcher):
                 )
                 continue
         return out
+
+    # ------------------------------------------------------------------
+    # 板块 (Stock Boards: concept / industry) — EastMoney via akshare EM API
+    # ------------------------------------------------------------------
+
+    def get_all_concept_boards(
+        self, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
+        """Get all concept boards (EastMoney via akshare EM API)."""
+        ak = _ak_module()
+        return fetch_board_list(
+            ak.stock_board_concept_name_em,
+            include_quote=include_quote,
+            fetcher_label=self.name,
+        )
+
+    def get_all_industry_boards(
+        self, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
+        """Get all industry boards (EastMoney via akshare EM API)."""
+        ak = _ak_module()
+        return fetch_board_list(
+            ak.stock_board_industry_name_em,
+            include_quote=include_quote,
+            fetcher_label=self.name,
+        )
+
+    def get_concept_board_stocks(
+        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
+        """Get stocks within a concept board (EastMoney via akshare EM API)."""
+        ak = _ak_module()
+        return fetch_board_stocks(
+            ak.stock_board_concept_cons_em,
+            board_code,
+            include_quote=include_quote,
+            fallback_enricher=self._enrich_stock_from_realtime,
+            fetcher_label=self.name,
+        )
+
+    def get_industry_board_stocks(
+        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
+        """Get stocks within an industry board (EastMoney via akshare EM API)."""
+        ak = _ak_module()
+        return fetch_board_stocks(
+            ak.stock_board_industry_cons_em,
+            board_code,
+            include_quote=include_quote,
+            fallback_enricher=self._enrich_stock_from_realtime,
+            fetcher_label=self.name,
+        )
+
+    def _enrich_stock_from_realtime(self, stock_code: str) -> dict | None:
+        """Enrich a stock dict with realtime quote fields via akshare EM API."""
+        try:
+            ak = _ak_module()
+            df = ak.stock_zh_a_spot_em()
+            if df is None or df.empty:
+                return None
+            match = df[df["代码"] == stock_code]
+            if match.empty:
+                return None
+            row = match.iloc[0]
+            return {
+                "price": row.get("最新价"),
+                "change_pct": row.get("涨跌幅"),
+                "change_amount": row.get("涨跌额"),
+                "volume": row.get("成交量"),
+                "amount": row.get("成交额"),
+                "turnover_rate": row.get("换手率"),
+                "pe_ratio": row.get("市盈率-动态"),
+                "pb_ratio": row.get("市净率"),
+            }
+        except Exception:
+            logger.warning(
+                f"[{self.name}] _enrich_stock_from_realtime failed for {stock_code}",
+                exc_info=True,
+            )
+            return None
