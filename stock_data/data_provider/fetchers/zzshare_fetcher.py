@@ -356,3 +356,51 @@ class ZzshareFetcher(BaseFetcher):
             "secretary_phone": str(data.get("bsphone", "") or ""),
             "secretary_email": str(data.get("bsemail", "") or ""),
         }
+
+    # Pool type -> zzshare endpoint name
+    _POOL_TYPE_MAP: dict[str, str] = {
+        "zt": "uplimit_stocks",  # primary
+    }
+
+    def get_zt_pool(self, pool_type: str, date: str) -> list[dict] | None:
+        """Fetch ZT pool from zzshare uplimit_stocks (token-gated).
+
+        Falls back gracefully: if uplimit_stocks returns empty (no token or
+        no data), returns None so the manager failover chain can try the
+        next fetcher.
+        """
+        if pool_type not in self._POOL_TYPE_MAP:
+            return None
+        api = self._ensure_api()
+        if api is None:
+            return None
+        date_yyyymmdd = _to_yyyymmdd(date)
+        try:
+            rows = api.uplimit_stocks(date1=date_yyyymmdd)
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] uplimit_stocks({date_yyyymmdd}) failed: {e}")
+            return None
+        if not rows:
+            return None
+        out: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ts_code = str(row.get("ts_code", ""))
+            out.append({
+                "code": ts_code.split(".")[0] if ts_code else "",
+                "name": str(row.get("name", "")),
+                "price": safe_float(row.get("price") or row.get("p")),
+                "change_pct": safe_float(row.get("pct_chg")),
+                "amount": safe_float(row.get("amount")),
+                "circ_mv": safe_float(row.get("circ_mv") or row.get("lt")),
+                "total_mv": safe_float(row.get("total_mv") or row.get("zsz")),
+                "turnover_rate": safe_float(row.get("turnover_rate")),
+                "lb_count": safe_int(row.get("lb_count")),
+                "first_seal_time": str(row.get("first_seal_time", "")),
+                "last_seal_time": str(row.get("last_seal_time", "")),
+                "seal_amount": safe_float(row.get("seal_amount")),
+                "seal_count": safe_int(row.get("seal_count")),
+                "zt_count": safe_int(row.get("zt_count")),
+            })
+        return out

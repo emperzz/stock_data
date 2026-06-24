@@ -533,3 +533,60 @@ class TestStockInfo:
         assert info["concepts"] == []
 
 
+# ====================================================================
+# STOCK_ZT_POOL
+# ====================================================================
+
+class TestZtPool:
+    def _fetcher_with_api(self, stocks=None, hot_raises=False):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        if hot_raises:
+            fake_api.uplimit_hot = MagicMock(side_effect=Exception("upstream error"))
+        else:
+            fake_api.uplimit_hot = MagicMock(return_value={})
+        fake_api.uplimit_stocks = MagicMock(return_value=stocks if stocks is not None else [])
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_zt_pool_returns_stocks(self):
+        stocks = [
+            {"ts_code": "600519.SH", "name": "贵州茅台", "pct_chg": 10.0,
+             "amount": 1e9, "circ_mv": 2e12, "total_mv": 2.2e12,
+             "turnover_rate": 0.5, "lb_count": 1, "first_seal_time": "10:30",
+             "last_seal_time": "14:55", "seal_amount": 5e8, "seal_count": 3,
+             "zt_count": 1},
+        ]
+        fetcher = self._fetcher_with_api(stocks=stocks)
+        result = fetcher.get_zt_pool("zt", "2026-05-20")
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["code"] == "600519"
+        assert result[0]["name"] == "贵州茅台"
+        assert result[0]["change_pct"] == 10.0
+
+    def test_zt_pool_empty_stocks_returns_none(self):
+        """If uplimit_stocks returns empty (no token or no data), return None."""
+        fetcher = self._fetcher_with_api(stocks=[])
+        result = fetcher.get_zt_pool("zt", "2026-05-20")
+        assert result is None
+
+    def test_zt_pool_dt_returns_none(self):
+        """zzshare only supports zt via uplimit_* — dt/zbgc return None."""
+        fetcher = self._fetcher_with_api()
+        assert fetcher.get_zt_pool("dt", "2026-05-20") is None
+        assert fetcher.get_zt_pool("zbgc", "2026-05-20") is None
+
+    def test_zt_pool_sdk_unavailable_returns_none(self, monkeypatch):
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=None):
+            fetcher = ZzshareFetcher()
+            assert fetcher.get_zt_pool("zt", "2026-05-20") is None
+
+    def test_zt_pool_date_converted_to_yyyymmdd(self):
+        stocks = [{"ts_code": "600519.SH", "name": "茅台"}]
+        fetcher = self._fetcher_with_api(stocks=stocks)
+        fetcher.get_zt_pool("zt", "2026-05-20")
+        call = fetcher._api.uplimit_stocks.call_args
+        # date1 should be YYYYMMDD format
+        assert call.kwargs.get("date1") == "20260520"
