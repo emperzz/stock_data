@@ -21,6 +21,31 @@ logger = logging.getLogger(__name__)
 # API base URL
 ZHITU_API_BASE = "https://api.zhituapi.com"
 
+# Zhitu /hs/index/tree type2 → (type, subtype) mapping
+ZHITU_TYPE2_MAPPING: dict[int, tuple[str, str]] = {
+    0: ("industry", "申万行业"),
+    1: ("industry", "申万二级"),
+    2: ("concept", "热门概念"),
+    3: ("concept", "概念板块"),
+    4: ("concept", "地域板块"),
+    5: ("industry", "证监会行业"),
+    6: ("index", "分类"),
+    7: ("index", "指数成分"),
+    8: ("special", "风险警示"),
+    9: ("index", "大盘指数"),
+    10: ("special", "次新股"),
+    11: ("special", "沪港通"),
+    12: ("special", "深港通"),
+}
+
+# type → 合法 subtype 集合（与 persistence/board.py 保持同步）
+ZHITU_SUBTYPES_BY_TYPE: dict[str, set[str]] = {
+    "industry": {"申万行业", "申万二级", "证监会行业"},
+    "concept": {"热门概念", "概念板块", "地域板块"},
+    "index": {"分类", "指数成分", "大盘指数"},
+    "special": {"风险警示", "次新股", "沪港通", "深港通"},
+}
+
 
 def _split_concepts(raw: object) -> list[str]:
     """Split Zhitu's comma-separated ``idea`` string into a deduplicated list.
@@ -51,6 +76,7 @@ class ZhituFetcher(BaseFetcher):
         | DataCapability.STOCK_INFO
         | DataCapability.HISTORICAL_MIN
         | DataCapability.STOCK_LIST
+        | DataCapability.STOCK_BOARD
     )
 
     def __init__(self):
@@ -465,3 +491,176 @@ class ZhituFetcher(BaseFetcher):
             "secretary_phone":   data.get("bsphone", "") or "",
             "secretary_email":   data.get("bsemail", "") or "",
         }
+
+    # ---------- board methods ----------
+
+    def _fetch_board_tree(self) -> list[dict] | None:
+        """Fetch raw /hs/index/tree response leaves. Returns list or None on failure."""
+        if not self.is_available():
+            return None
+        try:
+            url = f"{ZHITU_API_BASE}/hs/index/tree"
+            params = {"token": self._token}
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if isinstance(data, dict) and "detail" in data:
+                logger.warning(
+                    f"[ZhituFetcher] _fetch_board_tree API error: "
+                    f"{data.get('detail', '')[:80]}"
+                )
+                return None
+            if not isinstance(data, list):
+                return None
+            return [r for r in data if isinstance(r, dict) and r.get("isleaf") == 1]
+        except Exception:
+            logger.warning("[ZhituFetcher] _fetch_board_tree failed", exc_info=True)
+            return None
+
+    def get_board_tree(
+        self, board_type: str, subtype: str | None = None
+    ) -> list[dict]:
+        """Get boards filtered by type and optionally subtype.
+
+        Returns list of ``{code, name, type, subtype}`` dicts.
+        Returns ``[]`` on failure or no match.
+        """
+        leaves = self._fetch_board_tree()
+        if leaves is None:
+            return []
+
+        out: list[dict] = []
+        for row in leaves:
+            type2 = row.get("type2")
+            mapped = ZHITU_TYPE2_MAPPING.get(type2)
+            if mapped is None:
+                continue
+            row_type, row_subtype = mapped
+            if row_type != board_type:
+                continue
+            if subtype is not None and row_subtype != subtype:
+                continue
+            out.append({
+                "code": str(row.get("code", "")),
+                "name": str(row.get("name", "")),
+                "type": row_type,
+                "subtype": row_subtype,
+            })
+        return out
+
+    def get_board_stocks(self, board_code: str) -> list[dict]:
+        """Get stocks belonging to a Zhitu board via /hs/index/stock/{code}.
+
+        Returns ``[{stock_code, stock_name, exchange}]`` or ``[]`` on failure.
+        """
+        if not self.is_available():
+            return []
+        try:
+            url = f"{ZHITU_API_BASE}/hs/index/stock/{board_code}"
+            params = {"token": self._token}
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if isinstance(data, dict) and "detail" in data:
+                logger.warning(
+                    f"[ZhituFetcher] get_board_stocks({board_code}) API error"
+                )
+                return []
+            if not isinstance(data, list):
+                return []
+            return [
+                {
+                    "stock_code": str(r.get("dm", "")).strip(),
+                    "stock_name": str(r.get("mc", "")).strip(),
+                    "exchange": str(r.get("jys", "")).strip().lower(),
+                }
+                for r in data
+                if isinstance(r, dict) and r.get("dm")
+            ]
+        except Exception:
+            logger.warning(
+                f"[ZhituFetcher] get_board_stocks({board_code}) failed",
+                exc_info=True,
+            )
+            return []
+
+    def get_stock_boards(self, stock_code: str) -> list[dict] | None:
+        """Get boards a stock belongs to via /hs/index/index/{stock_code}.
+
+        Returns ``[{code, name, type, subtype}]`` or ``None`` on failure.
+        ``None`` (not ``[]``) so callers can distinguish "no data" from "no match".
+        """
+        if not self.is_available():
+            return None
+        try:
+            url = f"{ZHITU_API_BASE}/hs/index/index/{stock_code}"
+            params = {"token": self._token}
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if isinstance(data, dict) and "detail" in data:
+                logger.warning(
+                    f"[ZhituFetcher] get_stock_boards({stock_code}) API error"
+                )
+                return None
+            if not isinstance(data, list):
+                return None
+
+            out: list[dict] = []
+            for r in data:
+                if not isinstance(r, dict):
+                    continue
+                code = str(r.get("code", "")).strip()
+                name = str(r.get("name", "")).strip()
+                if not code:
+                    continue
+                subtype = self._infer_subtype_from_name(name)
+                row_type = self._infer_type_from_subtype(subtype)
+                out.append({
+                    "code": code,
+                    "name": name,
+                    "type": row_type,
+                    "subtype": subtype,
+                })
+            return out
+        except Exception:
+            logger.warning(
+                f"[ZhituFetcher] get_stock_boards({stock_code}) failed",
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
+    def _infer_subtype_from_name(name: str) -> str:
+        """Extract subtype from Zhitu's ``A股-{大类}-{细分}`` name format.
+
+        Example: "A股-申万行业-银行" → "申万行业"
+        """
+        parts = name.split("-")
+        if len(parts) >= 2 and parts[0] == "A股":
+            return parts[1]
+        return ""
+
+    @staticmethod
+    def _infer_type_from_subtype(subtype: str) -> str:
+        """Map subtype back to type."""
+        for board_type, subtypes in ZHITU_SUBTYPES_BY_TYPE.items():
+            if subtype in subtypes:
+                return board_type
+        return ""
+
+    def get_board_history(
+        self, board_code: str, frequency: str = "d", days: int = 30
+    ) -> list[dict]:
+        """Get K-line for a Zhitu board.
+
+        NOT IMPLEMENTED — Zhitu's /hs/history/ endpoints are stock-level only.
+        """
+        raise NotImplementedError(
+            f"ZhituFetcher does not provide board-level K-line data "
+            f"(board_code={board_code!r}, frequency={frequency!r}, days={days!r}). "
+            f"No upstream Zhitu API exposes this."
+        )
