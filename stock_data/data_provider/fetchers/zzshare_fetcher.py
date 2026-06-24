@@ -1,7 +1,9 @@
 """
 zzshare fetcher for A-share multi-capability (Priority 5, default).
 
-API: DataApi Python SDK (https://github.com/zzquant/zzshare)
+API: zzshare Python SDK (https://github.com/zzquant/zzshare, PyPI: ``zzshare``).
+The client class lives at ``zzshare.client.DataApi`` — import as
+``from zzshare.client import DataApi``.
 Token configured via ZZSHARE_TOKEN environment variable (anonymous also works
 for most endpoints — see docs/zzshare/10-rate-limits.md).
 
@@ -103,10 +105,10 @@ class ZzshareFetcher(BaseFetcher):
     def unavailable_reason(self) -> str | None:
         if self.is_available():
             return None
-        return f"{self.name} unavailable: DataApi SDK not installed (pip install DataApi)"
+        return f"{self.name} unavailable: zzshare SDK not installed (pip install zzshare)"
 
     def _ensure_api(self) -> Any:
-        """Lazy-init the DataApi SDK; caches in self._api.
+        """Lazy-init the zzshare SDK; caches in self._api.
 
         Returns the DataApi instance, or None if SDK is missing. Records
         the specific init failure into self._init_error for
@@ -114,11 +116,13 @@ class ZzshareFetcher(BaseFetcher):
         """
         if self._api is not None:
             return self._api
-        if importlib.util.find_spec("DataApi") is None:
-            self._init_error = "DataApi SDK not importable"
+        # The PyPI package is `zzshare`; the client class lives at `zzshare.client.DataApi`.
+        # (There is a separate unrelated PyPI package called `DataApi` — do not confuse.)
+        if importlib.util.find_spec("zzshare") is None:
+            self._init_error = "zzshare SDK not importable (pip install zzshare)"
             return None
         try:
-            from DataApi import DataApi  # type: ignore
+            from zzshare.client import DataApi  # type: ignore
 
             if self._token:
                 self._api = DataApi(token=self._token)
@@ -127,7 +131,7 @@ class ZzshareFetcher(BaseFetcher):
             self._init_error = None
             return self._api
         except Exception as e:
-            self._init_error = f"DataApi init failed: {e}"
+            self._init_error = f"zzshare SDK init failed: {e}"
             logger.warning("[ZzshareFetcher] %s", self._init_error)
             return None
 

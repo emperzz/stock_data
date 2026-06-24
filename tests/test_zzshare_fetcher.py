@@ -1,6 +1,6 @@
 """Unit tests for ZzshareFetcher — structural + per-capability.
 
-All tests mock the DataApi SDK (no real network/token).
+All tests mock the zzshare SDK (no real network/token).
 """
 
 import importlib
@@ -81,7 +81,7 @@ class TestZzshareFetcherAvailability:
             fetcher = ZzshareFetcher()
             reason = fetcher.unavailable_reason()
             assert reason is not None
-            assert "DataApi" in reason or "SDK" in reason
+            assert "zzshare" in reason or "SDK" in reason
 
 
 class TestKLineMethodsRaise:
@@ -169,7 +169,7 @@ class TestFromYyyymmdd:
 
 class TestDailyKline:
     def _fetcher_with_api(self, fake_daily):
-        """Helper: return fetcher with DataApi.daily mocked."""
+        """Helper: return fetcher with zzshare SDK .daily mocked."""
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.daily = MagicMock(return_value=fake_daily)
