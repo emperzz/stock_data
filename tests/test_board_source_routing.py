@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import pytest
 
+from unittest.mock import patch
+
 from stock_data.data_provider.base import DataCapability
 from stock_data.data_provider.manager import DataFetcherManager
 
@@ -177,3 +179,117 @@ def test_with_source_matches_case_insensitive():
         call=lambda f: sentinel,
     )
     assert result2 is sentinel
+
+
+# ===== Task 6: Manager unified board entry points =====
+
+
+def _make_fetcher(name: str, capabilities: DataCapability):
+    """Build a Mock fetcher with the given name + capability declarations.
+
+    The Mock provides MagicMock for the 4 unified board entry methods
+    (get_all_boards / get_board_stocks / get_stock_boards / get_board_history)
+    so that Manager wrappers can invoke them without raising AttributeError.
+    """
+    from unittest.mock import MagicMock
+
+    fetcher = MagicMock()
+    fetcher.name = name
+    fetcher.priority = 1
+    fetcher.supported_data_types = capabilities
+    fetcher.supported_markets = {"csi"}
+    return fetcher
+
+
+def test_manager_get_all_boards_uses_source_routing():
+    """Manager.get_all_boards routes via _with_source, not failover."""
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+
+    with patch.object(manager, "_with_source", wraps=manager._with_source) as spy:
+        manager.get_all_boards(source="EastMoneyFetcher", board_type="concept")
+        assert spy.call_count == 1
+        kwargs = spy.call_args.kwargs
+        assert kwargs["source"] == "EastMoneyFetcher"
+        assert kwargs["capability"] == DataCapability.STOCK_BOARD
+
+
+def test_manager_get_all_boards_passes_type_and_subtype_to_fetcher():
+    """Manager.get_all_boards forwards board_type/subtype to fetcher call."""
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+
+    captured = {}
+    real = manager._with_source
+
+    def spy(*args, **kwargs):
+        captured["call"] = kwargs["call"]
+        return real(*args, **kwargs)
+
+    with patch.object(manager, "_with_source", side_effect=spy):
+        manager.get_all_boards(source="EastMoneyFetcher", board_type="concept", subtype="concept")
+
+    em.get_all_boards.assert_called_once_with(
+        board_type="concept", subtype="concept", source="EastMoneyFetcher", include_quote=False,
+    )
+
+
+def test_manager_get_board_stocks_passes_board_code_to_fetcher():
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+
+    captured = {}
+    real = manager._with_source
+
+    def spy(*args, **kwargs):
+        captured["call"] = kwargs["call"]
+        return real(*args, **kwargs)
+
+    with patch.object(manager, "_with_source", side_effect=spy):
+        manager.get_board_stocks("BK0001", source="EastMoneyFetcher")
+
+    em.get_board_stocks.assert_called_once_with("BK0001", source="EastMoneyFetcher", include_quote=False)
+
+
+def test_manager_get_stock_boards_passes_stock_code_to_fetcher():
+    em = _make_fetcher("ZhituFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+
+    captured = {}
+    real = manager._with_source
+
+    def spy(*args, **kwargs):
+        captured["call"] = kwargs["call"]
+        return real(*args, **kwargs)
+
+    with patch.object(manager, "_with_source", side_effect=spy):
+        manager.get_stock_boards("000001", source="ZhituFetcher")
+
+    em.get_stock_boards.assert_called_once_with("000001", source="ZhituFetcher")
+
+
+def test_manager_get_board_history_passes_args_to_fetcher():
+    em = _make_fetcher("ZhituFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+
+    with patch.object(manager, "_with_source", wraps=manager._with_source) as spy:
+        manager.get_board_history("sw_mt", source="ZhituFetcher", frequency="d", days=30)
+        assert spy.call_count == 1
+
+
+def test_manager_unknown_source_raises_value_error():
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+    with pytest.raises(ValueError, match="No fetcher with name 'unknown'"):
+        manager.get_all_boards(source="unknown", board_type="concept")
+
+
+def test_manager_returns_source_name_in_tuple():
+    """Each board method returns ``(result, source_name)`` so API can echo it."""
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
+    em.get_all_boards.return_value = [{"code": "BK0001"}]
+    manager = DataFetcherManager([em])
+
+    boards, source = manager.get_all_boards(source="EastMoneyFetcher", board_type="concept")
+    assert boards == [{"code": "BK0001"}]
+    assert source == "EastMoneyFetcher"

@@ -619,51 +619,108 @@ class DataFetcherManager:
             return_source=True,
         )
 
-    # ---------- boards (concept / industry) ----------
+    # ---------- boards (unified entry points) ----------
+    #
+    # 板块方法使用 _with_source 路由（按 source 名定位 fetcher），不做 failover。
+    # 不同数据源的板块分类体系不兼容（EastMoney 用 concept/industry 二分，
+    # Zhitu 用 board_type × subtype 二维），failover 会产生误导性结果。
+    #
+    # 每个 fetcher 必须实现 4 个统一入口方法：
+    #   - get_all_boards(board_type, subtype, source) → list[{code, name, type, subtype, ...quote}]
+    #   - get_board_stocks(board_code, source) → list[{stock_code, stock_name, exchange}]
+    #   - get_stock_boards(stock_code, source) → list[{code, name, type, subtype}] | None
+    #   - get_board_history(board_code, source, frequency, days) → 暂未实现（raise NotImplementedError）
 
-    def get_all_concept_boards(self, source: str = "eastmoney", include_quote: bool = False) -> tuple[list[dict], str]:
-        """Get all concept boards. See _with_failover docstring for behavior."""
-        return self._with_failover(
-            DataCapability.STOCK_BOARD,
-            "csi",
-            "concept boards",
-            lambda f: f.get_all_concept_boards(source=source, include_quote=include_quote),
-            return_source=True,
-        )
-
-    def get_all_industry_boards(self, source: str = "eastmoney", include_quote: bool = False) -> tuple[list[dict], str]:
-        """Get all industry boards. See _with_failover docstring for behavior."""
-        return self._with_failover(
-            DataCapability.STOCK_BOARD,
-            "csi",
-            "industry boards",
-            lambda f: f.get_all_industry_boards(source=source, include_quote=include_quote),
-            return_source=True,
-        )
-
-    def get_concept_board_stocks(
-        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
+    def get_all_boards(
+        self,
+        source: str,
+        board_type: str,
+        subtype: str | None = None,
+        include_quote: bool = False,
     ) -> tuple[list[dict], str]:
-        """Get stocks belonging to a concept board."""
-        return self._with_failover(
-            DataCapability.STOCK_BOARD,
-            "csi",
-            f"concept board stocks {board_code}",
-            lambda f: f.get_concept_board_stocks(board_code, source=source, include_quote=include_quote),
-            return_source=True,
-        )
+        """Get boards of a given type and optional subtype from the named source.
 
-    def get_industry_board_stocks(
-        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
-    ) -> tuple[list[dict], str]:
-        """Get stocks belonging to an industry board."""
-        return self._with_failover(
-            DataCapability.STOCK_BOARD,
-            "csi",
-            f"industry board stocks {board_code}",
-            lambda f: f.get_industry_board_stocks(board_code, source=source, include_quote=include_quote),
-            return_source=True,
+        Args:
+            source: fetcher name (e.g. ``"eastmoney"``, ``"zhitu"``).
+            board_type: one of ``concept / industry / index / special``.
+            subtype: source-specific subtype filter (validated by persistence).
+            include_quote: forward to fetcher — include realtime quote fields.
+
+        Returns:
+            ``(boards, fetcher_name)`` tuple.
+        """
+        boards, name = self._with_source(
+            source=source,
+            capability=DataCapability.STOCK_BOARD,
+            market="csi",
+            op_label=f"{board_type}/{subtype or '*'} boards ({source})",
+            call=lambda f: (
+                f.get_all_boards(
+                    board_type=board_type,
+                    subtype=subtype,
+                    source=source,
+                    include_quote=include_quote,
+                ),
+                f.name,
+            ),
         )
+        return boards, name
+
+    def get_board_stocks(
+        self, board_code: str, source: str, include_quote: bool = False
+    ) -> tuple[list[dict], str]:
+        """Get stocks belonging to a board from the named source."""
+        stocks, name = self._with_source(
+            source=source,
+            capability=DataCapability.STOCK_BOARD,
+            market="csi",
+            op_label=f"board stocks {board_code} ({source})",
+            call=lambda f: (
+                f.get_board_stocks(
+                    board_code, source=source, include_quote=include_quote,
+                ),
+                f.name,
+            ),
+        )
+        return stocks, name
+
+    def get_stock_boards(
+        self, stock_code: str, source: str
+    ) -> tuple[list[dict] | None, str]:
+        """Get boards a stock belongs to from the named source.
+
+        Returns ``(None, name)`` if the fetcher signals "no data" (vs empty list).
+        """
+        result, name = self._with_source(
+            source=source,
+            capability=DataCapability.STOCK_BOARD,
+            market="csi",
+            op_label=f"stock boards {stock_code} ({source})",
+            call=lambda f: (f.get_stock_boards(stock_code, source=source), f.name),
+        )
+        return result, name
+
+    def get_board_history(
+        self,
+        board_code: str,
+        source: str,
+        frequency: str = "d",
+        days: int = 30,
+    ) -> tuple[list[dict], str]:
+        """Get K-line for a board from the named source (currently stub on all fetchers)."""
+        result, name = self._with_source(
+            source=source,
+            capability=DataCapability.STOCK_BOARD,
+            market="csi",
+            op_label=f"board K-line {board_code} ({source})",
+            call=lambda f: (
+                f.get_board_history(
+                    board_code, source=source, frequency=frequency, days=days,
+                ),
+                f.name,
+            ),
+        )
+        return result, name
 
     # ---------- eastmoney datacenter endpoints ----------
 

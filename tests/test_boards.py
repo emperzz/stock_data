@@ -243,14 +243,19 @@ class TestDataFetcherManagerBoards:
     """Tests for DataFetcherManager board methods."""
 
     def test_manager_has_board_methods(self):
-        """Test DataFetcherManager has board methods."""
+        """Test DataFetcherManager has the unified board entry points."""
         from stock_data.data_provider.base import DataFetcherManager
 
         manager = DataFetcherManager()
-        assert hasattr(manager, "get_all_concept_boards")
-        assert hasattr(manager, "get_all_industry_boards")
-        assert hasattr(manager, "get_concept_board_stocks")
-        assert hasattr(manager, "get_industry_board_stocks")
+        assert hasattr(manager, "get_all_boards")
+        assert hasattr(manager, "get_board_stocks")
+        assert hasattr(manager, "get_stock_boards")
+        assert hasattr(manager, "get_board_history")
+        # Legacy concept/industry split methods should be removed
+        assert not hasattr(manager, "get_all_concept_boards")
+        assert not hasattr(manager, "get_all_industry_boards")
+        assert not hasattr(manager, "get_concept_board_stocks")
+        assert not hasattr(manager, "get_industry_board_stocks")
 
 
 class TestBoardSchemas:
