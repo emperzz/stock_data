@@ -227,3 +227,41 @@ class ZzshareFetcher(BaseFetcher):
         keep = ["time", "open", "high", "low", "close", "volume", "amount"]
         df = df[[c for c in keep if c in df.columns]]
         return df
+
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
+        """Fetch realtime snapshot from zzshare rt_k(fields='all').
+
+        Returns None if SDK unavailable or upstream returns empty.
+        """
+        api = self._ensure_api()
+        if api is None:
+            return None
+        ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
+        try:
+            df = api.rt_k(ts_code=ts_code, fields="all")
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] rt_k({ts_code}) failed: {e}")
+            return None
+        if df is None or df.empty:
+            return None
+        row = df.iloc[0].to_dict()
+        pre_close = safe_float(row.get("pre_close"))
+        close = safe_float(row.get("close"))
+        return UnifiedRealtimeQuote(
+            code=normalize_stock_code(stock_code),
+            name=str(row.get("name", "")),
+            source=RealtimeSource.ZZSHARE,
+            price=close,
+            change_pct=safe_float(row.get("quote_rate")),
+            change_amount=(close - pre_close) if (close is not None and pre_close is not None) else None,
+            volume=safe_int(row.get("vol")),
+            amount=safe_float(row.get("amount")),
+            open_price=safe_float(row.get("open")),
+            high=safe_float(row.get("high")),
+            low=safe_float(row.get("low")),
+            pre_close=pre_close,
+            turnover_rate=safe_float(row.get("turnover_rate")),
+            total_mv=safe_float(row.get("market_value")),
+            circ_mv=safe_float(row.get("circulation_value")),
+            pe_ratio=safe_float(row.get("ttm_pe_rate")),
+        )

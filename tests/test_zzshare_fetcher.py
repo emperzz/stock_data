@@ -310,3 +310,71 @@ class TestIntradayKline:
             fetcher = ZzshareFetcher()
             result = fetcher.get_intraday_data("600519", period="5")
             assert result is None
+
+
+# ====================================================================
+# REALTIME_QUOTE
+# ====================================================================
+
+class TestRealtimeQuote:
+    def _fetcher_with_api(self, fake_rt_k):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.rt_k = MagicMock(return_value=fake_rt_k)
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_realtime_basic_fields(self):
+        import pandas as pd
+        raw = pd.DataFrame([{
+            "ts_code": "600519.SH",
+            "name": "贵州茅台",
+            "pre_close": 1700.0,
+            "open": 1710.0, "high": 1725.0, "low": 1695.0, "close": 1720.0,
+            "vol": 1e6, "amount": 1e9,
+            "quote_rate": 1.18,
+            "turnover_rate": 0.5,
+            "high_limit": 1870.0, "low_limit": 1530.0,
+            "market_value": 2.16e12,
+            "circulation_value": 2.16e12,
+            "ttm_pe_rate": 25.5,
+        }])
+        fetcher = self._fetcher_with_api(raw)
+        quote = fetcher.get_realtime_quote("600519")
+        assert quote is not None
+        assert quote.code == "600519"
+        assert quote.name == "贵州茅台"
+        assert quote.source.value == "zzshare"
+        assert quote.price == 1720.0
+        assert quote.change_pct == 1.18
+        assert quote.pre_close == 1700.0
+        assert quote.open_price == 1710.0
+        assert quote.total_mv == 2.16e12
+        assert quote.circ_mv == 2.16e12
+        assert quote.pe_ratio == 25.5
+        assert quote.turnover_rate == 0.5
+
+    def test_realtime_uses_fields_all(self):
+        import pandas as pd
+        raw = pd.DataFrame([{"ts_code": "600519.SH", "name": "茅台", "close": 1720.0,
+                             "pre_close": 1700.0, "open": 1710.0, "high": 1725.0,
+                             "low": 1695.0, "vol": 1e6, "amount": 1e9,
+                             "quote_rate": 1.18, "turnover_rate": 0.5,
+                             "market_value": 2.16e12, "circulation_value": 2.16e12,
+                             "ttm_pe_rate": 25.5}])
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_realtime_quote("600519")
+        call = fetcher._api.rt_k.call_args
+        # Enhanced fields mode requested
+        assert call.kwargs.get("fields") == "all"
+
+    def test_realtime_empty_df_returns_none(self):
+        import pandas as pd
+        fetcher = self._fetcher_with_api(pd.DataFrame())
+        assert fetcher.get_realtime_quote("600519") is None
+
+    def test_realtime_sdk_unavailable_returns_none(self, monkeypatch):
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=None):
+            fetcher = ZzshareFetcher()
+            assert fetcher.get_realtime_quote("600519") is None
