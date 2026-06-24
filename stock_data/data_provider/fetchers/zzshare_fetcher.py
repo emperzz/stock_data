@@ -317,3 +317,42 @@ class ZzshareFetcher(BaseFetcher):
         if not dates:
             return None
         return list(dates)
+
+    def get_stock_info(self, stock_code: str) -> dict | None:
+        """公司画像 — zzshare stock_info(stock_id, info_type=1).
+
+        Returns 18-field dict matching ZhituFetcher.get_stock_info's shape.
+        info_type=1 is the company-profile enum (README 探测确认可用).
+        """
+        from .zhitu_fetcher import _split_concepts  # reuse dedup helper
+        api = self._ensure_api()
+        if api is None:
+            return None
+        code = normalize_stock_code(stock_code)
+        try:
+            data = api.stock_info(stock_id=code, info_type=1)
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] stock_info({code}) failed: {e}")
+            return None
+        if not isinstance(data, dict):
+            return None
+        return {
+            "code": code,
+            "name": str(data.get("name", "") or ""),
+            "ename": str(data.get("ename", "") or ""),
+            "market": "csi",
+            "listed_date": str(data.get("ldate", "") or ""),
+            "delisted_date": "",
+            "total_shares": safe_float(data.get("totalstock")),
+            "float_shares": safe_float(data.get("flowstock")),
+            "industry": "",
+            "concepts": _split_concepts(data.get("idea", "")),
+            "registered_address": str(data.get("raddr", "") or ""),
+            "registered_capital": str(data.get("rcapital", "") or ""),
+            "legal_representative": str(data.get("rname", "") or ""),
+            "business_scope": str(data.get("bscope", "") or ""),
+            "established_date": str(data.get("rdate", "") or ""),
+            "secretary": str(data.get("bsname", "") or ""),
+            "secretary_phone": str(data.get("bsphone", "") or ""),
+            "secretary_email": str(data.get("bsemail", "") or ""),
+        }

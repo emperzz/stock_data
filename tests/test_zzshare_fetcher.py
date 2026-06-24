@@ -461,3 +461,75 @@ class TestTradeCalendar:
         with patch("importlib.util.find_spec", return_value=None):
             fetcher = ZzshareFetcher()
             assert fetcher.get_trade_calendar() is None
+
+
+# ====================================================================
+# STOCK_INFO
+# ====================================================================
+
+class TestStockInfo:
+    def _fetcher_with_api(self, fake_info):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stock_info = MagicMock(return_value=fake_info)
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_stock_info_returns_normalized_dict(self):
+        raw = {
+            "name": "贵州茅台",
+            "ename": "Kweichow Moutai Co.,Ltd.",
+            "ldate": "2001-08-27",
+            "totalstock": 1256197800,
+            "flowstock": 1256197800,
+            "idea": "白酒, 消费, 蓝筹",
+            "raddr": "贵州省遵义市",
+            "rcapital": "100000万人民币",
+            "rname": "丁雄军",
+            "bscope": "酒类生产与销售...",
+            "rdate": "1999-11-20",
+            "bsname": "蒋焰",
+            "bsphone": "0851-22386000",
+            "bsemail": "mt@maotaichina.com",
+        }
+        fetcher = self._fetcher_with_api(raw)
+        info = fetcher.get_stock_info("600519")
+        assert info is not None
+        assert info["code"] == "600519"
+        assert info["name"] == "贵州茅台"
+        assert info["market"] == "csi"
+        assert info["listed_date"] == "2001-08-27"
+        assert info["total_shares"] == 1256197800
+        assert "白酒" in info["concepts"]
+
+    def test_stock_info_concepts_deduped(self):
+        raw = {
+            "name": "Test", "ename": "", "ldate": "", "totalstock": 0, "flowstock": 0,
+            "idea": "白酒, 消费, 白酒, 消费",
+            "raddr": "", "rcapital": "", "rname": "", "bscope": "",
+            "rdate": "", "bsname": "", "bsphone": "", "bsemail": "",
+        }
+        fetcher = self._fetcher_with_api(raw)
+        info = fetcher.get_stock_info("000001")
+        # Duplicates removed, order preserved
+        assert info["concepts"] == ["白酒", "消费"]
+
+    def test_stock_info_no_token_returns_none(self, monkeypatch):
+        """Without token, stock_info() returns None (other fetchers will cover)."""
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=None):
+            fetcher = ZzshareFetcher()
+            assert fetcher.get_stock_info("600519") is None
+
+    def test_stock_info_empty_idea_yields_empty_concepts(self):
+        raw = {
+            "name": "Test", "ename": "", "ldate": "", "totalstock": 0, "flowstock": 0,
+            "idea": "",
+            "raddr": "", "rcapital": "", "rname": "", "bscope": "",
+            "rdate": "", "bsname": "", "bsphone": "", "bsemail": "",
+        }
+        fetcher = self._fetcher_with_api(raw)
+        info = fetcher.get_stock_info("000001")
+        assert info["concepts"] == []
+
+
