@@ -144,9 +144,7 @@ class ZzshareFetcher(BaseFetcher):
             )
         api = self._ensure_api()
         if api is None:
-            raise DataFetchError(
-                f"ZzshareFetcher DataApi SDK 不可用: {self._init_error}"
-            )
+            raise DataFetchError(f"ZzshareFetcher DataApi SDK 不可用: {self._init_error}")
         ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
         kwargs: dict = {
             "ts_code": ts_code,
@@ -176,10 +174,20 @@ class ZzshareFetcher(BaseFetcher):
             df["date"] = pd.to_datetime(df["date"])
         if "code" not in df.columns:
             df["code"] = normalize_stock_code(stock_code)
-        keep = ["code"] + [c for c in [
-            "date", "open", "high", "low", "close",
-            "volume", "amount", "pct_chg",
-        ] if c in df.columns]
+        keep = ["code"] + [
+            c
+            for c in [
+                "date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "amount",
+                "pct_chg",
+            ]
+            if c in df.columns
+        ]
         return df[[c for c in keep if c in df.columns]]
 
     # Minute-period -> zzshare freq mapping
@@ -220,8 +228,11 @@ class ZzshareFetcher(BaseFetcher):
             df = df.rename(columns={"vol": "volume"})
         if "trade_time" in df.columns:
             # YYYYMMDDHHMM (12 digits) -> HH:MM:SS (positions 8..12 = HHMM, pad SS=00)
-            df["time"] = df["trade_time"].astype(str).str.slice(8, 12).apply(
-                lambda s: f"{s[:2]}:{s[2:4]}:00" if len(s) == 4 else s
+            df["time"] = (
+                df["trade_time"]
+                .astype(str)
+                .str.slice(8, 12)
+                .apply(lambda s: f"{s[:2]}:{s[2:4]}:00" if len(s) == 4 else s)
             )
             df = df.drop(columns=["trade_time"])
         keep = ["time", "open", "high", "low", "close", "volume", "amount"]
@@ -253,7 +264,9 @@ class ZzshareFetcher(BaseFetcher):
             source=RealtimeSource.ZZSHARE,
             price=close,
             change_pct=safe_float(row.get("quote_rate")),
-            change_amount=(close - pre_close) if (close is not None and pre_close is not None) else None,
+            change_amount=(close - pre_close)
+            if (close is not None and pre_close is not None)
+            else None,
             volume=safe_int(row.get("vol")),
             amount=safe_float(row.get("amount")),
             open_price=safe_float(row.get("open")),
@@ -293,11 +306,13 @@ class ZzshareFetcher(BaseFetcher):
                 continue
             # ts_code like "600519.SH" -> bare "600519"
             code = ts_code.split(".")[0]
-            out.append({
-                "code": code,
-                "name": str(row.get("name", "")),
-                "exchange": str(row.get("exchange", "")),
-            })
+            out.append(
+                {
+                    "code": code,
+                    "name": str(row.get("name", "")),
+                    "exchange": str(row.get("exchange", "")),
+                }
+            )
         return out
 
     def get_trade_calendar(self) -> list[str] | None:
@@ -325,6 +340,7 @@ class ZzshareFetcher(BaseFetcher):
         info_type=1 is the company-profile enum (README 探测确认可用).
         """
         from .zhitu_fetcher import _split_concepts  # reuse dedup helper
+
         api = self._ensure_api()
         if api is None:
             return None
@@ -387,22 +403,24 @@ class ZzshareFetcher(BaseFetcher):
             if not isinstance(row, dict):
                 continue
             ts_code = str(row.get("ts_code", ""))
-            out.append({
-                "code": ts_code.split(".")[0] if ts_code else "",
-                "name": str(row.get("name", "")),
-                "price": safe_float(row.get("price") or row.get("p")),
-                "change_pct": safe_float(row.get("pct_chg")),
-                "amount": safe_float(row.get("amount")),
-                "circ_mv": safe_float(row.get("circ_mv") or row.get("lt")),
-                "total_mv": safe_float(row.get("total_mv") or row.get("zsz")),
-                "turnover_rate": safe_float(row.get("turnover_rate")),
-                "lb_count": safe_int(row.get("lb_count")),
-                "first_seal_time": str(row.get("first_seal_time", "")),
-                "last_seal_time": str(row.get("last_seal_time", "")),
-                "seal_amount": safe_float(row.get("seal_amount")),
-                "seal_count": safe_int(row.get("seal_count")),
-                "zt_count": safe_int(row.get("zt_count")),
-            })
+            out.append(
+                {
+                    "code": ts_code.split(".")[0] if ts_code else "",
+                    "name": str(row.get("name", "")),
+                    "price": safe_float(row.get("price") or row.get("p")),
+                    "change_pct": safe_float(row.get("pct_chg")),
+                    "amount": safe_float(row.get("amount")),
+                    "circ_mv": safe_float(row.get("circ_mv") or row.get("lt")),
+                    "total_mv": safe_float(row.get("total_mv") or row.get("zsz")),
+                    "turnover_rate": safe_float(row.get("turnover_rate")),
+                    "lb_count": safe_int(row.get("lb_count")),
+                    "first_seal_time": str(row.get("first_seal_time", "")),
+                    "last_seal_time": str(row.get("last_seal_time", "")),
+                    "seal_amount": safe_float(row.get("seal_amount")),
+                    "seal_count": safe_int(row.get("seal_count")),
+                    "zt_count": safe_int(row.get("zt_count")),
+                }
+            )
         return out
 
     # Board type/subtype -> zzshare plate_type
@@ -435,8 +453,7 @@ class ZzshareFetcher(BaseFetcher):
             return []
         out: list[dict] = []
         target_plate_types = [
-            pt for pt, (bt, st) in self._BOARD_TYPE_BY_PLATE_TYPE.items()
-            if bt == board_type
+            pt for pt, (bt, st) in self._BOARD_TYPE_BY_PLATE_TYPE.items() if bt == board_type
         ]
         for pt in target_plate_types:
             try:
@@ -455,12 +472,14 @@ class ZzshareFetcher(BaseFetcher):
                     continue
                 if subtype is not None and mapped_subtype != subtype:
                     continue
-                out.append({
-                    "code": str(row.get("plate_code", "")),
-                    "name": str(row.get("plate_name", "")),
-                    "type": mapped_type,
-                    "subtype": mapped_subtype,
-                })
+                out.append(
+                    {
+                        "code": str(row.get("plate_code", "")),
+                        "name": str(row.get("plate_name", "")),
+                        "type": mapped_type,
+                        "subtype": mapped_subtype,
+                    }
+                )
         return out
 
     def get_board_stocks(self, board_code: str, **kwargs) -> list[dict]:
@@ -493,11 +512,13 @@ class ZzshareFetcher(BaseFetcher):
             stock_code = str(row.get("stock_code", "")).strip()
             if not stock_code:
                 continue
-            out.append({
-                "stock_code": _add_exchange_suffix(stock_code),
-                "stock_name": str(row.get("stock_name", "")).strip(),
-                "exchange": str(row.get("exchange", "")).strip().lower(),
-            })
+            out.append(
+                {
+                    "stock_code": _add_exchange_suffix(stock_code),
+                    "stock_name": str(row.get("stock_name", "")).strip(),
+                    "exchange": str(row.get("exchange", "")).strip().lower(),
+                }
+            )
         return out
 
     def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict] | None:
@@ -528,8 +549,10 @@ class ZzshareFetcher(BaseFetcher):
         api = self._ensure_api()
         if api is None:
             raise DataFetchError("ZzshareFetcher DataApi SDK 不可用")
-        date_str = _to_yyyymmdd(trade_date) if trade_date else _to_yyyymmdd(
-            __import__("datetime").date.today().strftime("%Y-%m-%d")
+        date_str = (
+            _to_yyyymmdd(trade_date)
+            if trade_date
+            else _to_yyyymmdd(__import__("datetime").date.today().strftime("%Y-%m-%d"))
         )
         try:
             rows = api.lhb_list(date1=date_str)
@@ -544,28 +567,28 @@ class ZzshareFetcher(BaseFetcher):
             if min_net_buy is not None and buy_in < min_net_buy:
                 continue
             stock_code = str(row.get("stock_code", "")).strip()
-            out_stocks.append({
-                "code": _add_exchange_suffix(stock_code) if stock_code else "",
-                "name": str(row.get("stock_name", "")),
-                "net_buy": buy_in,
-                "amplitude": safe_float(row.get("amplitude")),
-                "change_pct": safe_float(row.get("quote_change")),
-                "turnover": safe_float(row.get("turnover")),
-                "turnover_rate": safe_float(row.get("turnover_ratio")),
-                "join_num": safe_int(row.get("join_num")),
-                "reason": str(row.get("up_reason", "")),
-                "t_type": safe_int(row.get("t_type")),
-                "d3": safe_float(row.get("d3")),
-            })
+            out_stocks.append(
+                {
+                    "code": _add_exchange_suffix(stock_code) if stock_code else "",
+                    "name": str(row.get("stock_name", "")),
+                    "net_buy": buy_in,
+                    "amplitude": safe_float(row.get("amplitude")),
+                    "change_pct": safe_float(row.get("quote_change")),
+                    "turnover": safe_float(row.get("turnover")),
+                    "turnover_rate": safe_float(row.get("turnover_ratio")),
+                    "join_num": safe_int(row.get("join_num")),
+                    "reason": str(row.get("up_reason", "")),
+                    "t_type": safe_int(row.get("t_type")),
+                    "d3": safe_float(row.get("d3")),
+                }
+            )
         return {
             "date": _from_yyyymmdd(date_str),
             "total": len(out_stocks),
             "stocks": out_stocks,
         }
 
-    def get_dragon_tiger(
-        self, code: str, trade_date: str = "", look_back: int = 30
-    ) -> dict:
+    def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> dict:
         """个股龙虎榜 via zzshare lhb_detail, fallback lhb_stock_history.
 
         Returns ``{records[], seats{buy, sell}, institution}`` matching
@@ -591,7 +614,6 @@ class ZzshareFetcher(BaseFetcher):
                 trader = str(row.get("trader_name", ""))
                 buy_amt = safe_float(row.get("buy")) or 0.0
                 sell_amt = safe_float(row.get("sell")) or 0.0
-                net = safe_float(row.get("net")) or (buy_amt - sell_amt)
                 if buy_amt > 0:
                     seats["buy"].append({"name": trader, "amount": buy_amt})
                 if sell_amt > 0:
@@ -607,11 +629,13 @@ class ZzshareFetcher(BaseFetcher):
                 for row in history:
                     if not isinstance(row, dict):
                         continue
-                    records.append({
-                        "date": str(row.get("trade_date", "")),
-                        "net_buy": safe_float(row.get("buy_in")),
-                        "reason": str(row.get("reason", "")),
-                    })
+                    records.append(
+                        {
+                            "date": str(row.get("trade_date", "")),
+                            "net_buy": safe_float(row.get("buy_in")),
+                            "reason": str(row.get("reason", "")),
+                        }
+                    )
         return {
             "records": records,
             "seats": seats,
@@ -640,14 +664,16 @@ class ZzshareFetcher(BaseFetcher):
             if not isinstance(row, dict):
                 continue
             symbol = str(row.get("symbol_code", "")).strip()
-            out.append({
-                "code": _add_exchange_suffix(symbol) if symbol else "",
-                "name": str(row.get("symbol_name", "")),
-                "rank": safe_int(row.get("rank")),
-                "rank_diff": safe_int(row.get("rank_diff")),
-                "change_pct": safe_float(row.get("last_pct")),
-                "price": safe_float(row.get("last_price")),
-                "circ_mv": safe_float(row.get("circulation_value")),
-                "date": str(row.get("collect_date", "")),
-            })
+            out.append(
+                {
+                    "code": _add_exchange_suffix(symbol) if symbol else "",
+                    "name": str(row.get("symbol_name", "")),
+                    "rank": safe_int(row.get("rank")),
+                    "rank_diff": safe_int(row.get("rank_diff")),
+                    "change_pct": safe_float(row.get("last_pct")),
+                    "price": safe_float(row.get("last_price")),
+                    "circ_mv": safe_float(row.get("circulation_value")),
+                    "date": str(row.get("collect_date", "")),
+                }
+            )
         return out

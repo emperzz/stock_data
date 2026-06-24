@@ -2,8 +2,8 @@
 
 All tests mock the DataApi SDK (no real network/token).
 """
+
 import importlib
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,10 +11,10 @@ import pytest
 from stock_data.data_provider.base import DataCapability, DataFetchError
 from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
 
-
 # ====================================================================
 # Metadata + availability
 # ====================================================================
+
 
 class TestZzshareFetcherMetadata:
     def test_name(self):
@@ -27,6 +27,7 @@ class TestZzshareFetcherMetadata:
     def test_priority_env_override(self, monkeypatch):
         monkeypatch.setenv("ZZSHARE_PRIORITY", "3")
         from stock_data.data_provider.fetchers import zzshare_fetcher
+
         importlib.reload(zzshare_fetcher)
         try:
             assert zzshare_fetcher.ZzshareFetcher.priority == 3
@@ -99,59 +100,72 @@ class TestKLineMethodsRaise:
 # Helpers
 # ====================================================================
 
+
 class TestToZzshareTsCode:
     def test_shanghai_main(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _to_zzshare_ts_code
+
         assert _to_zzshare_ts_code("600519") == "600519.SH"
 
     def test_shanghai_star(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _to_zzshare_ts_code
+
         assert _to_zzshare_ts_code("688981") == "688981.SH"
 
     def test_shenzhen_main(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _to_zzshare_ts_code
+
         assert _to_zzshare_ts_code("000001") == "000001.SZ"
 
     def test_chinext(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _to_zzshare_ts_code
+
         assert _to_zzshare_ts_code("300750") == "300750.SZ"
 
     def test_beijing(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _to_zzshare_ts_code
+
         assert _to_zzshare_ts_code("830799") == "830799.BJ"
 
     def test_passthrough_unrecognized(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _to_zzshare_ts_code
+
         assert _to_zzshare_ts_code("XYZ") == "XYZ"
 
 
 class TestToYyyymmdd:
     def test_with_dashes(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _to_yyyymmdd
+
         assert _to_yyyymmdd("2026-05-20") == "20260520"
 
     def test_passthrough_yyyymmdd(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _to_yyyymmdd
+
         assert _to_yyyymmdd("20260520") == "20260520"
 
 
 class TestFromYyyymmdd:
     def test_eight_digits(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _from_yyyymmdd
+
         assert _from_yyyymmdd("20260520") == "2026-05-20"
 
     def test_passthrough_with_dashes(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _from_yyyymmdd
+
         assert _from_yyyymmdd("2026-05-20") == "2026-05-20"
 
     def test_other_format_passthrough(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import _from_yyyymmdd
+
         assert _from_yyyymmdd("garbage") == "garbage"
 
 
 # ====================================================================
 # K-line (HISTORICAL_DWM)
 # ====================================================================
+
 
 class TestDailyKline:
     def _fetcher_with_api(self, fake_daily):
@@ -164,19 +178,22 @@ class TestDailyKline:
 
     def test_daily_normalizes_columns(self):
         import pandas as pd
-        raw = pd.DataFrame({
-            "ts_code": ["600519.SH"] * 3,
-            "trade_date": ["20260501", "20260502", "20260503"],
-            "open": [1700.0, 1710.0, 1720.0],
-            "high": [1715.0, 1725.0, 1735.0],
-            "low": [1695.0, 1705.0, 1715.0],
-            "close": [1710.0, 1720.0, 1730.0],
-            "pre_close": [1700.0, 1710.0, 1720.0],
-            "change": [10.0, 10.0, 10.0],
-            "pct_chg": [0.59, 0.58, 0.58],
-            "vol": [1e6, 1.1e6, 1.2e6],
-            "amount": [1e9, 1.1e9, 1.2e9],
-        })
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"] * 3,
+                "trade_date": ["20260501", "20260502", "20260503"],
+                "open": [1700.0, 1710.0, 1720.0],
+                "high": [1715.0, 1725.0, 1735.0],
+                "low": [1695.0, 1705.0, 1715.0],
+                "close": [1710.0, 1720.0, 1730.0],
+                "pre_close": [1700.0, 1710.0, 1720.0],
+                "change": [10.0, 10.0, 10.0],
+                "pct_chg": [0.59, 0.58, 0.58],
+                "vol": [1e6, 1.1e6, 1.2e6],
+                "amount": [1e9, 1.1e9, 1.2e9],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         df = fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
         # Required STANDARD_COLUMNS present
@@ -194,10 +211,20 @@ class TestDailyKline:
 
     def test_daily_passes_yyyymmdd_to_sdk(self):
         import pandas as pd
-        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_date": ["20260501"],
-                            "open": [1700.0], "high": [1715.0], "low": [1695.0],
-                            "close": [1710.0], "vol": [1e6], "amount": [1e9],
-                            "pct_chg": [0.59]})
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"],
+                "trade_date": ["20260501"],
+                "open": [1700.0],
+                "high": [1715.0],
+                "low": [1695.0],
+                "close": [1710.0],
+                "vol": [1e6],
+                "amount": [1e9],
+                "pct_chg": [0.59],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
         call = fetcher._api.daily.call_args
@@ -209,10 +236,20 @@ class TestDailyKline:
 
     def test_daily_qfq_adjust_passes_through(self):
         import pandas as pd
-        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_date": ["20260501"],
-                            "open": [1700.0], "high": [1715.0], "low": [1695.0],
-                            "close": [1710.0], "vol": [1e6], "amount": [1e9],
-                            "pct_chg": [0.59]})
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"],
+                "trade_date": ["20260501"],
+                "open": [1700.0],
+                "high": [1715.0],
+                "low": [1695.0],
+                "close": [1710.0],
+                "vol": [1e6],
+                "amount": [1e9],
+                "pct_chg": [0.59],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03", adjust="qfq")
         call = fetcher._api.daily.call_args
@@ -220,10 +257,20 @@ class TestDailyKline:
 
     def test_daily_no_adjust_does_not_pass_adj(self):
         import pandas as pd
-        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_date": ["20260501"],
-                            "open": [1700.0], "high": [1715.0], "low": [1695.0],
-                            "close": [1710.0], "vol": [1e6], "amount": [1e9],
-                            "pct_chg": [0.59]})
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"],
+                "trade_date": ["20260501"],
+                "open": [1700.0],
+                "high": [1715.0],
+                "low": [1695.0],
+                "close": [1710.0],
+                "vol": [1e6],
+                "amount": [1e9],
+                "pct_chg": [0.59],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
         call = fetcher._api.daily.call_args
@@ -231,6 +278,7 @@ class TestDailyKline:
 
     def test_daily_empty_df_raises(self):
         import pandas as pd
+
         fetcher = self._fetcher_with_api(pd.DataFrame())
         with pytest.raises(DataFetchError, match="No data"):
             fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
@@ -239,6 +287,7 @@ class TestDailyKline:
 # ====================================================================
 # K-line (HISTORICAL_MIN) — get_intraday_data
 # ====================================================================
+
 
 class TestIntradayKline:
     def _fetcher_with_api(self, fake_stk_mins):
@@ -250,16 +299,19 @@ class TestIntradayKline:
 
     def test_intraday_normalizes_time(self):
         import pandas as pd
-        raw = pd.DataFrame({
-            "ts_code": ["600519.SH"] * 3,
-            "trade_time": ["202605200935", "202605200940", "202605200945"],
-            "open": [1700.0, 1705.0, 1710.0],
-            "high": [1708.0, 1712.0, 1717.0],
-            "low": [1698.0, 1702.0, 1708.0],
-            "close": [1705.0, 1710.0, 1715.0],
-            "vol": [1e5, 1.1e5, 1.2e5],
-            "amount": [1e8, 1.1e8, 1.2e8],
-        })
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"] * 3,
+                "trade_time": ["202605200935", "202605200940", "202605200945"],
+                "open": [1700.0, 1705.0, 1710.0],
+                "high": [1708.0, 1712.0, 1717.0],
+                "low": [1698.0, 1702.0, 1708.0],
+                "close": [1705.0, 1710.0, 1715.0],
+                "vol": [1e5, 1.1e5, 1.2e5],
+                "amount": [1e8, 1.1e8, 1.2e8],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         df = fetcher.get_intraday_data("600519", period="5")
         assert "time" in df.columns
@@ -269,9 +321,19 @@ class TestIntradayKline:
 
     def test_intraday_period_to_freq(self):
         import pandas as pd
-        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_time": ["202605200935"],
-                            "open": [1700.0], "high": [1708.0], "low": [1698.0],
-                            "close": [1705.0], "vol": [1e5], "amount": [1e8]})
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"],
+                "trade_time": ["202605200935"],
+                "open": [1700.0],
+                "high": [1708.0],
+                "low": [1698.0],
+                "close": [1705.0],
+                "vol": [1e5],
+                "amount": [1e8],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_intraday_data("600519", period="15")
         call = fetcher._api.stk_mins.call_args
@@ -280,9 +342,19 @@ class TestIntradayKline:
     def test_intraday_adjust_ignored(self):
         """Minute K has no adjust — adjust param should not be passed."""
         import pandas as pd
-        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_time": ["202605200935"],
-                            "open": [1700.0], "high": [1708.0], "low": [1698.0],
-                            "close": [1705.0], "vol": [1e5], "amount": [1e8]})
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"],
+                "trade_time": ["202605200935"],
+                "open": [1700.0],
+                "high": [1708.0],
+                "low": [1698.0],
+                "close": [1705.0],
+                "vol": [1e5],
+                "amount": [1e8],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_intraday_data("600519", period="5", adjust="qfq")
         call = fetcher._api.stk_mins.call_args
@@ -292,9 +364,19 @@ class TestIntradayKline:
     def test_intraday_date_is_yyyymmdd_format(self):
         """trade_time passed to SDK should be YYYYMMDD (no dashes)."""
         import pandas as pd
-        raw = pd.DataFrame({"ts_code": ["600519.SH"], "trade_time": ["202605200935"],
-                            "open": [1700.0], "high": [1708.0], "low": [1698.0],
-                            "close": [1705.0], "vol": [1e5], "amount": [1e8]})
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"],
+                "trade_time": ["202605200935"],
+                "open": [1700.0],
+                "high": [1708.0],
+                "low": [1698.0],
+                "close": [1705.0],
+                "vol": [1e5],
+                "amount": [1e8],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_intraday_data("600519", period="5")
         call = fetcher._api.stk_mins.call_args
@@ -316,6 +398,7 @@ class TestIntradayKline:
 # REALTIME_QUOTE
 # ====================================================================
 
+
 class TestRealtimeQuote:
     def _fetcher_with_api(self, fake_rt_k):
         fetcher = ZzshareFetcher()
@@ -326,19 +409,29 @@ class TestRealtimeQuote:
 
     def test_realtime_basic_fields(self):
         import pandas as pd
-        raw = pd.DataFrame([{
-            "ts_code": "600519.SH",
-            "name": "贵州茅台",
-            "pre_close": 1700.0,
-            "open": 1710.0, "high": 1725.0, "low": 1695.0, "close": 1720.0,
-            "vol": 1e6, "amount": 1e9,
-            "quote_rate": 1.18,
-            "turnover_rate": 0.5,
-            "high_limit": 1870.0, "low_limit": 1530.0,
-            "market_value": 2.16e12,
-            "circulation_value": 2.16e12,
-            "ttm_pe_rate": 25.5,
-        }])
+
+        raw = pd.DataFrame(
+            [
+                {
+                    "ts_code": "600519.SH",
+                    "name": "贵州茅台",
+                    "pre_close": 1700.0,
+                    "open": 1710.0,
+                    "high": 1725.0,
+                    "low": 1695.0,
+                    "close": 1720.0,
+                    "vol": 1e6,
+                    "amount": 1e9,
+                    "quote_rate": 1.18,
+                    "turnover_rate": 0.5,
+                    "high_limit": 1870.0,
+                    "low_limit": 1530.0,
+                    "market_value": 2.16e12,
+                    "circulation_value": 2.16e12,
+                    "ttm_pe_rate": 25.5,
+                }
+            ]
+        )
         fetcher = self._fetcher_with_api(raw)
         quote = fetcher.get_realtime_quote("600519")
         assert quote is not None
@@ -356,12 +449,27 @@ class TestRealtimeQuote:
 
     def test_realtime_uses_fields_all(self):
         import pandas as pd
-        raw = pd.DataFrame([{"ts_code": "600519.SH", "name": "茅台", "close": 1720.0,
-                             "pre_close": 1700.0, "open": 1710.0, "high": 1725.0,
-                             "low": 1695.0, "vol": 1e6, "amount": 1e9,
-                             "quote_rate": 1.18, "turnover_rate": 0.5,
-                             "market_value": 2.16e12, "circulation_value": 2.16e12,
-                             "ttm_pe_rate": 25.5}])
+
+        raw = pd.DataFrame(
+            [
+                {
+                    "ts_code": "600519.SH",
+                    "name": "茅台",
+                    "close": 1720.0,
+                    "pre_close": 1700.0,
+                    "open": 1710.0,
+                    "high": 1725.0,
+                    "low": 1695.0,
+                    "vol": 1e6,
+                    "amount": 1e9,
+                    "quote_rate": 1.18,
+                    "turnover_rate": 0.5,
+                    "market_value": 2.16e12,
+                    "circulation_value": 2.16e12,
+                    "ttm_pe_rate": 25.5,
+                }
+            ]
+        )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_realtime_quote("600519")
         call = fetcher._api.rt_k.call_args
@@ -370,6 +478,7 @@ class TestRealtimeQuote:
 
     def test_realtime_empty_df_returns_none(self):
         import pandas as pd
+
         fetcher = self._fetcher_with_api(pd.DataFrame())
         assert fetcher.get_realtime_quote("600519") is None
 
@@ -384,6 +493,7 @@ class TestRealtimeQuote:
 # STOCK_LIST
 # ====================================================================
 
+
 class TestStockList:
     def _fetcher_with_api(self, fake_basic):
         fetcher = ZzshareFetcher()
@@ -394,15 +504,18 @@ class TestStockList:
 
     def test_get_all_stocks_normalizes_exchange(self):
         import pandas as pd
-        raw = pd.DataFrame({
-            "ts_code": ["600519.SH", "000001.SZ", "830799.BJ"],
-            "symbol": ["600519", "000001", "830799"],
-            "name": ["贵州茅台", "平安银行", "殷图网联"],
-            "exchange": ["SSE", "SZSE", "BSE"],
-            "area": ["", "", ""],
-            "industry": ["", "", ""],
-            "list_date": ["", "", ""],
-        })
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH", "000001.SZ", "830799.BJ"],
+                "symbol": ["600519", "000001", "830799"],
+                "name": ["贵州茅台", "平安银行", "殷图网联"],
+                "exchange": ["SSE", "SZSE", "BSE"],
+                "area": ["", "", ""],
+                "industry": ["", "", ""],
+                "list_date": ["", "", ""],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         result = fetcher.get_all_stocks("csi")
         assert len(result) == 3
@@ -418,9 +531,18 @@ class TestStockList:
 
     def test_get_all_stocks_calls_stock_basic_all(self):
         import pandas as pd
-        raw = pd.DataFrame({"ts_code": ["600519.SH"], "symbol": ["600519"],
-                            "name": ["贵州茅台"], "exchange": ["SSE"],
-                            "area": [""], "industry": [""], "list_date": [""]})
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"],
+                "symbol": ["600519"],
+                "name": ["贵州茅台"],
+                "exchange": ["SSE"],
+                "area": [""],
+                "industry": [""],
+                "list_date": [""],
+            }
+        )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_all_stocks("csi")
         call = fetcher._api.stock_basic.call_args
@@ -437,6 +559,7 @@ class TestStockList:
 # ====================================================================
 # TRADE_CALENDAR
 # ====================================================================
+
 
 class TestTradeCalendar:
     def _fetcher_with_api(self, fake_days):
@@ -466,6 +589,7 @@ class TestTradeCalendar:
 # ====================================================================
 # STOCK_INFO
 # ====================================================================
+
 
 class TestStockInfo:
     def _fetcher_with_api(self, fake_info):
@@ -504,10 +628,20 @@ class TestStockInfo:
 
     def test_stock_info_concepts_deduped(self):
         raw = {
-            "name": "Test", "ename": "", "ldate": "", "totalstock": 0, "flowstock": 0,
+            "name": "Test",
+            "ename": "",
+            "ldate": "",
+            "totalstock": 0,
+            "flowstock": 0,
             "idea": "白酒, 消费, 白酒, 消费",
-            "raddr": "", "rcapital": "", "rname": "", "bscope": "",
-            "rdate": "", "bsname": "", "bsphone": "", "bsemail": "",
+            "raddr": "",
+            "rcapital": "",
+            "rname": "",
+            "bscope": "",
+            "rdate": "",
+            "bsname": "",
+            "bsphone": "",
+            "bsemail": "",
         }
         fetcher = self._fetcher_with_api(raw)
         info = fetcher.get_stock_info("000001")
@@ -523,10 +657,20 @@ class TestStockInfo:
 
     def test_stock_info_empty_idea_yields_empty_concepts(self):
         raw = {
-            "name": "Test", "ename": "", "ldate": "", "totalstock": 0, "flowstock": 0,
+            "name": "Test",
+            "ename": "",
+            "ldate": "",
+            "totalstock": 0,
+            "flowstock": 0,
             "idea": "",
-            "raddr": "", "rcapital": "", "rname": "", "bscope": "",
-            "rdate": "", "bsname": "", "bsphone": "", "bsemail": "",
+            "raddr": "",
+            "rcapital": "",
+            "rname": "",
+            "bscope": "",
+            "rdate": "",
+            "bsname": "",
+            "bsphone": "",
+            "bsemail": "",
         }
         fetcher = self._fetcher_with_api(raw)
         info = fetcher.get_stock_info("000001")
@@ -536,6 +680,7 @@ class TestStockInfo:
 # ====================================================================
 # STOCK_ZT_POOL
 # ====================================================================
+
 
 class TestZtPool:
     def _fetcher_with_api(self, stocks=None, hot_raises=False):
@@ -551,11 +696,21 @@ class TestZtPool:
 
     def test_zt_pool_returns_stocks(self):
         stocks = [
-            {"ts_code": "600519.SH", "name": "贵州茅台", "pct_chg": 10.0,
-             "amount": 1e9, "circ_mv": 2e12, "total_mv": 2.2e12,
-             "turnover_rate": 0.5, "lb_count": 1, "first_seal_time": "10:30",
-             "last_seal_time": "14:55", "seal_amount": 5e8, "seal_count": 3,
-             "zt_count": 1},
+            {
+                "ts_code": "600519.SH",
+                "name": "贵州茅台",
+                "pct_chg": 10.0,
+                "amount": 1e9,
+                "circ_mv": 2e12,
+                "total_mv": 2.2e12,
+                "turnover_rate": 0.5,
+                "lb_count": 1,
+                "first_seal_time": "10:30",
+                "last_seal_time": "14:55",
+                "seal_amount": 5e8,
+                "seal_count": 3,
+                "zt_count": 1,
+            },
         ]
         fetcher = self._fetcher_with_api(stocks=stocks)
         result = fetcher.get_zt_pool("zt", "2026-05-20")
@@ -596,6 +751,7 @@ class TestZtPool:
 # STOCK_BOARD (4 methods)
 # ====================================================================
 
+
 class TestBoards:
     def _fetcher_with_api(self, **mocks):
         fetcher = ZzshareFetcher()
@@ -611,7 +767,9 @@ class TestBoards:
             {"plate_code": "801660", "plate_name": "通信", "plate_type": 15, "rate": 0.8},
         ]
         fetcher = self._fetcher_with_api(plates_list=rows)
-        boards = fetcher.get_all_boards(board_type="concept", subtype="同花顺概念", source="zzshare")
+        boards = fetcher.get_all_boards(
+            board_type="concept", subtype="同花顺概念", source="zzshare"
+        )
         assert len(boards) == 2
         assert boards[0]["code"] == "801001"
         assert boards[0]["name"] == "芯片"
@@ -624,7 +782,9 @@ class TestBoards:
             {"plate_code": "881121", "plate_name": "半导体", "plate_type": 14, "rate": 0.5},
         ]
         fetcher = self._fetcher_with_api(plates_list=rows)
-        boards = fetcher.get_all_boards(board_type="concept", subtype="同花顺概念", source="zzshare")
+        boards = fetcher.get_all_boards(
+            board_type="concept", subtype="同花顺概念", source="zzshare"
+        )
         # Only plate_type=15 (concept) matches
         assert len(boards) == 1
         assert boards[0]["code"] == "801001"
@@ -634,7 +794,9 @@ class TestBoards:
             {"plate_code": "881121", "plate_name": "半导体", "plate_type": 14, "rate": 0.5},
         ]
         fetcher = self._fetcher_with_api(plates_list=rows)
-        boards = fetcher.get_all_boards(board_type="industry", subtype="同花顺行业", source="zzshare")
+        boards = fetcher.get_all_boards(
+            board_type="industry", subtype="同花顺行业", source="zzshare"
+        )
         assert len(boards) == 1
         assert boards[0]["type"] == "industry"
 
@@ -643,7 +805,9 @@ class TestBoards:
             {"plate_code": "881999", "plate_name": "题材", "plate_type": 17, "rate": 2.0},
         ]
         fetcher = self._fetcher_with_api(plates_list=rows)
-        boards = fetcher.get_all_boards(board_type="special", subtype="同花顺题材", source="zzshare")
+        boards = fetcher.get_all_boards(
+            board_type="special", subtype="同花顺题材", source="zzshare"
+        )
         assert len(boards) == 1
         assert boards[0]["type"] == "special"
 
@@ -684,6 +848,7 @@ class TestBoards:
 # DRAGON_TIGER
 # ====================================================================
 
+
 class TestDragonTiger:
     def _fetcher_with_api(self, **mocks):
         fetcher = ZzshareFetcher()
@@ -695,12 +860,22 @@ class TestDragonTiger:
 
     def test_daily_dragon_tiger_normalizes_stock_code(self):
         rows = [
-            {"stock_code": "000078", "stock_name": "海王生物",
-             "concepts": "801723:中药,801369:医美",
-             "amplitude": 5.2, "quote_change": 10.0, "turnover": 5e8,
-             "turnover_ratio": 8.5, "capitalization": 1e9, "circ_price": 5e8,
-             "buy_in": 1e8, "join_num": 5, "up_reason": "涨幅偏离值达7%",
-             "t_type": 0, "d3": 12.0},
+            {
+                "stock_code": "000078",
+                "stock_name": "海王生物",
+                "concepts": "801723:中药,801369:医美",
+                "amplitude": 5.2,
+                "quote_change": 10.0,
+                "turnover": 5e8,
+                "turnover_ratio": 8.5,
+                "capitalization": 1e9,
+                "circ_price": 5e8,
+                "buy_in": 1e8,
+                "join_num": 5,
+                "up_reason": "涨幅偏离值达7%",
+                "t_type": 0,
+                "d3": 12.0,
+            },
         ]
         fetcher = self._fetcher_with_api(lhb_list=rows)
         data = fetcher.get_daily_dragon_tiger("2026-05-20", None)
@@ -746,9 +921,7 @@ class TestDragonTiger:
         """When lhb_detail returns empty, try lhb_stock_history."""
         fetcher = self._fetcher_with_api(
             lhb_detail=[],  # empty
-            lhb_stock_history=[
-                {"trade_date": "2026-05-15", "buy_in": 5e7, "reason": "涨幅偏离"}
-            ],
+            lhb_stock_history=[{"trade_date": "2026-05-15", "buy_in": 5e7, "reason": "涨幅偏离"}],
         )
         data = fetcher.get_dragon_tiger("000078", "2026-05-20", 30)
         # records should have at least 1 entry from history
@@ -758,6 +931,7 @@ class TestDragonTiger:
 # ====================================================================
 # HOT_TOPICS
 # ====================================================================
+
 
 class TestHotTopics:
     def _fetcher_with_api(self, fake_top):
@@ -769,12 +943,30 @@ class TestHotTopics:
 
     def test_hot_topics_normalizes_symbol_code(self):
         rows = [
-            {"rank": 1, "rank_diff": 1, "symbol_code": "002342", "symbol_name": "巨力索具",
-             "last_price": 5.5, "last_pct": 10.0, "circulation_value": 50.0,
-             "collect_date": "2026-05-20", "update_time": "2026-05-20 15:00:00", "id": 1},
-            {"rank": 2, "rank_diff": -2, "symbol_code": "600519", "symbol_name": "贵州茅台",
-             "last_price": 1720.0, "last_pct": 1.18, "circulation_value": 21600.0,
-             "collect_date": "2026-05-20", "update_time": "2026-05-20 15:00:00", "id": 2},
+            {
+                "rank": 1,
+                "rank_diff": 1,
+                "symbol_code": "002342",
+                "symbol_name": "巨力索具",
+                "last_price": 5.5,
+                "last_pct": 10.0,
+                "circulation_value": 50.0,
+                "collect_date": "2026-05-20",
+                "update_time": "2026-05-20 15:00:00",
+                "id": 1,
+            },
+            {
+                "rank": 2,
+                "rank_diff": -2,
+                "symbol_code": "600519",
+                "symbol_name": "贵州茅台",
+                "last_price": 1720.0,
+                "last_pct": 1.18,
+                "circulation_value": 21600.0,
+                "collect_date": "2026-05-20",
+                "update_time": "2026-05-20 15:00:00",
+                "id": 2,
+            },
         ]
         fetcher = self._fetcher_with_api(rows)
         topics = fetcher.get_hot_topics("2026-05-20")
@@ -797,6 +989,7 @@ class TestHotTopics:
         call = fetcher._api.ths_hot_top.call_args
         # date1 should be today's YYYYMMDD
         from datetime import date
+
         expected = date.today().strftime("%Y%m%d")
         assert call.kwargs.get("date1") == expected
 
@@ -811,19 +1004,23 @@ class TestHotTopics:
 # Boards source-routing — persistence layer integration
 # ====================================================================
 
+
 class TestBoardSubtypeValidation:
     """Verify VALID_SUBTYPES_BY_SOURCE has zzshare entries."""
 
     def test_zzshare_industry_subtype(self):
         from stock_data.data_provider.persistence.board import VALID_SUBTYPES_BY_SOURCE
+
         assert "zzshare" in VALID_SUBTYPES_BY_SOURCE
         assert "industry" in VALID_SUBTYPES_BY_SOURCE["zzshare"]
         assert "同花顺行业" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["industry"]
 
     def test_zzshare_concept_subtype(self):
         from stock_data.data_provider.persistence.board import VALID_SUBTYPES_BY_SOURCE
+
         assert "同花顺概念" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["concept"]
 
     def test_zzshare_special_subtype(self):
         from stock_data.data_provider.persistence.board import VALID_SUBTYPES_BY_SOURCE
+
         assert "同花顺题材" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["special"]
