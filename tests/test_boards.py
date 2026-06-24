@@ -28,7 +28,7 @@ class TestBoardAPIRoutes:
 
     def test_get_concept_boards(self, client):
         """Test GET /api/v1/boards with type=concept."""
-        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
             mock_get.return_value = (
                 [
                     {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
@@ -45,7 +45,7 @@ class TestBoardAPIRoutes:
 
     def test_get_industry_boards(self, client):
         """Test GET /api/v1/boards with type=industry."""
-        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
             mock_get.return_value = (
                 [{"code": "BK0816", "name": "银行", "board_type": "industry", "source": "eastmoney"}],
                 "akshare",
@@ -73,8 +73,8 @@ class TestBoardAPIRoutes:
     def test_get_board_stocks(self, client):
         """Test GET /api/v1/boards/{board_code}/stocks."""
         with (
-            patch("stock_data.api.routes.stock_board_cache.get_board_stocks") as mock_get_stocks,
-            patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get_boards,
+            patch("stock_data.api.routes.boards.stock_board_cache.get_board_stocks") as mock_get_stocks,
+            patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get_boards,
         ):
             mock_get_stocks.return_value = (
                 [
@@ -98,8 +98,8 @@ class TestBoardAPIRoutes:
     def test_get_board_stocks_with_quote(self, client):
         """Test GET /api/v1/boards/{board_code}/stocks?include_quote=true."""
         with (
-            patch("stock_data.api.routes.stock_board_cache.get_board_stocks") as mock_get_stocks,
-            patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get_boards,
+            patch("stock_data.api.routes.boards.stock_board_cache.get_board_stocks") as mock_get_stocks,
+            patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get_boards,
         ):
             mock_get_stocks.return_value = (
                 [{"stock_code": "600519", "stock_name": "贵州茅台"}],
@@ -109,7 +109,7 @@ class TestBoardAPIRoutes:
                 [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
                 "akshare",
             )
-            with patch("stock_data.api.routes.get_manager") as mock_manager:
+            with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
                 mock_mgr = MagicMock()
                 mock_quote = MagicMock()
                 mock_quote.code = "600519"
@@ -129,7 +129,7 @@ class TestBoardAPIRoutes:
 
     def test_get_boards_with_refresh(self, client):
         """Test GET /api/v1/boards?refresh=true forces refresh."""
-        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
             mock_get.return_value = (
                 [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
                 "akshare",
@@ -142,7 +142,7 @@ class TestBoardAPIRoutes:
 
     def test_get_boards_with_source(self, client):
         """Test GET /api/v1/boards?source=tonghuashun."""
-        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
             mock_get.return_value = ([], "")
             response = client.get("/api/v1/boards?type=concept&source=tonghuashun")
             assert response.status_code == 200
@@ -153,7 +153,7 @@ class TestBoardAPIRoutes:
 
     def test_get_boards_with_include_quote(self, client):
         """Test GET /api/v1/boards?include_quote=true passes include_quote to cache layer."""
-        with patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get:
+        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
             mock_get.return_value = (
                 [
                     {
@@ -198,7 +198,7 @@ class TestBoardAPIRoutes:
     def test_get_boards_include_quote_still_hits_persistence(self, client):
         """Test GET /api/v1/boards?include_quote=true calls persistence (no TTLCache)."""
         with (
-            patch("stock_data.api.routes.stock_board_cache.get_board_list") as mock_get,
+            patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get,
         ):
             mock_get.return_value = (
                 [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],

@@ -273,12 +273,15 @@ def make_stock_info_cache_key(stock_code: str) -> str:
     return f"stock_info:{stock_code}"
 
 
-def make_news_search_cache_key(q: str, from_date: str | None, to_date: str | None, limit: int) -> str:
+def make_news_search_cache_key(
+    q: str, from_date: str | None, to_date: str | None, limit: int
+) -> str:
     return f"news:search:{q}:{from_date or ''}:{to_date or ''}:{limit}"
 
 
 def make_news_content_cache_key(url: str) -> str:
     import hashlib
+
     return f"news:content:{hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]}"
 
 
@@ -313,62 +316,51 @@ def cached_store(cache_fn, key: str, value: object) -> None:
     cache[key] = value
 
 
-def cached_endpoint(
+def cache_endpoint(
     cache_fn,
     key_builder,
     hit_label: str,
-    err_label: str,
 ):
-    """Decorator for routes that follow the stock-cached-endpoint pattern.
+    """Cache-only wrapper for routes where the cache key derives from raw args.
 
-    Wraps the route function with:
-      1. cache lookup (returns cached value on hit)
-      2. invocation of the wrapped function
-      3. cache store of the returned value
-      4. uniform 503/500/raise error translation
+    Composes with :func:`stock_data.api.routes.errors.map_errors` for the
+    uniform ``DataFetchError→503 / HTTPException passthrough / Exception→500``
+    error contract. Without that decorator, exceptions raised by the wrapped
+    function propagate unchanged.
 
     Args:
-        cache_fn: zero-arg callable returning the ``TTLCache`` to read/write.
-        key_builder: ``(*args, **kwargs) -> str`` mapping call args to a key.
-            Called twice (once for the lookup, once for the store) — the
-            wrapped function should be deterministic in its args.
-        hit_label: short label used in the "cache hit" log line.
-        err_label: prefix used in the 503 log line ("<err_label> unavailable").
+        cache_fn: ``(*args, **kwargs) -> TTLCache``. Both fixed-cache
+            endpoints (``cache_fn=lambda *a, **kw: get_quote_cache()``) and
+            per-frequency endpoints
+            (``cache_fn=lambda code, period, **kw: get_history_cache(_freq(period))``)
+            share the same signature.
+        key_builder: ``(*args, **kwargs) -> str``. The same args are forwarded.
+            May raise :class:`fastapi.HTTPException` for invalid input (e.g.
+            a 400 for an unknown indicator name) — the exception propagates
+            through ``@map_errors``.
+        hit_label: short label used in the ``[APICache] <label> hit: <key>``
+            log line on cache hits.
 
-    The wrapped function must raise ``DataFetchError`` on upstream failure
-    and may raise ``HTTPException`` (which is re-raised unchanged). Any
-    other exception is wrapped as a 500.
+    Usage:
+        @router.get('/path')
+        @map_errors
+        @cache_endpoint(get_x_cache, make_x_key, 'label')
+        @endpoint_meta(...)
+        def handler(...): ...
     """
     from functools import wraps
-
-    from fastapi import HTTPException
-
-    from stock_data.data_provider.base import DataFetchError
 
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            try:
-                cache_key = key_builder(*args, **kwargs)
-                hit = cached_lookup(cache_fn, cache_key, hit_label)
-                if hit is not None:
-                    return hit
-                result = func(*args, **kwargs)
-                cached_store(cache_fn, cache_key, result)
-                return result
-            except DataFetchError as e:
-                logger.warning(f"{err_label} unavailable: {e}")
-                raise HTTPException(
-                    status_code=503,
-                    detail={"error": "data_unavailable", "message": str(e)},
-                ) from e
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail={"error": "internal_error", "message": str(e)},
-                ) from e
+            cache = cache_fn(*args, **kwargs)
+            cache_key = key_builder(*args, **kwargs)
+            if cache_key in cache:
+                logger.info(f"[APICache] {hit_label} hit: {cache_key}")
+                return cache[cache_key]
+            result = func(*args, **kwargs)
+            cache[cache_key] = result
+            return result
 
         return wrapper
 

@@ -7,6 +7,7 @@
 不缓存:manifest 体量约 27 endpoint × ~200 字节 ≈ 5 KB,序列化无压力;
 缓存反而让"加 endpoint 不重启不生效"成为陷阱。
 """
+
 from __future__ import annotations
 
 import inspect
@@ -19,7 +20,7 @@ from fastapi.routing import APIRoute
 
 from .. import __version__
 from ..api.endpoint_meta import REGISTRY, EndpointMeta
-from ..data_provider.base import BaseFetcher, CAPABILITY_TO_METHOD, DataCapability
+from ..data_provider.base import CAPABILITY_TO_METHOD, BaseFetcher, DataCapability
 from .tags import _INTERNAL_TAGS, CAPABILITY_LABELS, TAG_TO_TITLE
 
 logger = logging.getLogger(__name__)
@@ -39,9 +40,7 @@ _FETCHER_METHOD_OVERRIDES: dict[tuple[DataCapability, str], str] = {
 }
 
 
-def _resolve_fetcher_method(
-    cap: DataCapability, fetcher_name: str
-) -> str | None:
+def _resolve_fetcher_method(cap: DataCapability, fetcher_name: str) -> str | None:
     """Pick the right method name for ``fetcher_name`` under capability ``cap``.
 
     Order: per-fetcher override → capability default → ``None`` (no mapping).
@@ -54,6 +53,28 @@ def _resolve_fetcher_method(
 
 # manifest schema version——schema 字段有 breaking 变化时递增
 MANIFEST_VERSION = "1.1"
+
+
+def _lookup_registry(endpoint: Any) -> EndpointMeta | None:
+    """Find the :class:`EndpointMeta` registered for ``endpoint``.
+
+    ``REGISTRY`` keys on the original function (the innermost function after
+    ``@endpoint_meta``). With the routes-package refactor, layers like
+    ``@cache_endpoint`` and ``@map_errors`` sit between ``@endpoint_meta``
+    and ``@router.get``; ``functools.wraps`` sets ``__wrapped__`` so we can
+    walk the chain to find the registered function.
+
+    Returns ``None`` when nothing in the chain (or any cycle) resolves to a
+    registry entry — callers treat that as "no @endpoint_meta, skip".
+    """
+    seen: set = set()
+    func = endpoint
+    while func is not None and func not in seen:
+        if func in REGISTRY:
+            return REGISTRY[func]
+        seen.add(func)
+        func = getattr(func, "__wrapped__", None)
+    return None
 
 
 def build_manifest(app: FastAPI) -> dict[str, Any]:
@@ -82,7 +103,7 @@ def build_manifest(app: FastAPI) -> dict[str, Any]:
             continue
         if not route.tags or any(t in _INTERNAL_TAGS for t in route.tags):
             continue
-        meta = REGISTRY.get(route.endpoint)
+        meta = _lookup_registry(route.endpoint)
         if meta is None:
             logger.warning(
                 f"[manifest] route {list(route.methods)[0]} {route.path} "
@@ -103,15 +124,23 @@ def build_manifest(app: FastAPI) -> dict[str, Any]:
 def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager) -> dict:
     params: list[dict] = []
     for p in route.dependant.path_params:
-        params.append({
-            "name": p.name, "in": "path", "required": True,
-            "type": _python_type_to_str(p.field_info.annotation),
-        })
+        params.append(
+            {
+                "name": p.name,
+                "in": "path",
+                "required": True,
+                "type": _python_type_to_str(p.field_info.annotation),
+            }
+        )
     for p in route.dependant.query_params:
-        params.append({
-            "name": p.name, "in": "query", "required": bool(p.field_info.is_required()),
-            "type": _python_type_to_str(p.field_info.annotation),
-        })
+        params.append(
+            {
+                "name": p.name,
+                "in": "query",
+                "required": bool(p.field_info.is_required()),
+                "type": _python_type_to_str(p.field_info.annotation),
+            }
+        )
     # 完整 URL: FastAPI 在 include_router(prefix=...) 时已把 prefix 合并到 route.path
     full_path = route.path
     # HTTP method: route.methods 是 frozenset, 例 {'GET'} 或 {'GET', 'HEAD'}
@@ -184,12 +213,14 @@ def _reflect_signature(method) -> list[dict]:
         else:
             required = False
             default_val = _jsonify_default(param.default)
-        out.append({
-            "name": name,
-            "type": type_str,
-            "required": required,
-            "default": default_val,
-        })
+        out.append(
+            {
+                "name": name,
+                "type": type_str,
+                "required": required,
+                "default": default_val,
+            }
+        )
     return out
 
 
@@ -225,12 +256,8 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
     # - by_class: id(cls) → instance (test path — when tests inject fake
     #   classes without going through manager.add_fetcher(), the only way to
     #   tell "this fetcher_cls has a registered instance" is by class identity)
-    registered_by_name: dict[str, BaseFetcher] = {
-        f.name: f for f in manager._fetchers
-    }
-    registered_by_class: dict[int, BaseFetcher] = {
-        id(type(f)): f for f in manager._fetchers
-    }
+    registered_by_name: dict[str, BaseFetcher] = {f.name: f for f in manager._fetchers}
+    registered_by_class: dict[int, BaseFetcher] = {id(type(f)): f for f in manager._fetchers}
 
     # (fetcher_name, method_name) → entry dict (single source of dedup)
     entries: dict[tuple[str, str], dict] = {}
@@ -335,9 +362,7 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
                 continue
 
             available = bool(instance.is_available())
-            reason = (
-                None if available else instance.unavailable_reason()
-            )
+            reason = None if available else instance.unavailable_reason()
 
             entries[key] = {
                 "name": fetcher_name,
@@ -368,7 +393,11 @@ def _classes_declaring_capability(cap: DataCapability) -> list[type[BaseFetcher]
         cls = stack.pop()
         found.append(cls)
         stack.extend(cls.__subclasses__())
-    return [c for c in found if cap in (getattr(c, "supported_data_types", DataCapability(0)) or DataCapability(0))]
+    return [
+        c
+        for c in found
+        if cap in (getattr(c, "supported_data_types", DataCapability(0)) or DataCapability(0))
+    ]
 
 
 def _build_meta() -> dict:

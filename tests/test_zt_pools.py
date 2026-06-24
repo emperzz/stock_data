@@ -51,7 +51,7 @@ class TestZTPoolAPIRoutes:
 
     def test_get_zt_pools_success(self, client):
         """Test GET /api/v1/zt-pools with type=zt returns cached data."""
-        with patch("stock_data.api.routes.get_manager") as mock_manager:
+        with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
                 [
@@ -78,7 +78,7 @@ class TestZTPoolAPIRoutes:
 
     def test_get_dt_pools(self, client):
         """Test GET /api/v1/zt-pools with type=dt returns cached data."""
-        with patch("stock_data.api.routes.get_manager") as mock_manager:
+        with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
                 [
@@ -99,7 +99,7 @@ class TestZTPoolAPIRoutes:
 
     def test_get_zbgc_pools(self, client):
         """Test GET /api/v1/zt-pools with type=zbgc returns cached data."""
-        with patch("stock_data.api.routes.get_manager") as mock_manager:
+        with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
                 [
@@ -135,7 +135,7 @@ class TestZTPoolAPIRoutes:
         just resolves the date and forwards it. Pin the date so the
         assertion is deterministic regardless of when the test runs.
         """
-        with patch("stock_data.api.routes.get_manager") as mock_manager:
+        with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             # When refresh=True, manager returns data (forces fetch)
             mock_mgr.get_zt_pool.return_value = (
@@ -155,7 +155,7 @@ class TestZTPoolAPIRoutes:
 
     def test_get_pools_no_data_returns_404(self, client):
         """Test GET /api/v1/zt-pools when no data returns 404."""
-        with patch("stock_data.api.routes.get_manager") as mock_manager:
+        with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = ([], "")
             mock_manager.return_value = mock_mgr
@@ -165,7 +165,7 @@ class TestZTPoolAPIRoutes:
 
     def test_get_pools_passes_date_to_manager(self, client):
         """Test GET /api/v1/zt-pools passes date to manager correctly."""
-        with patch("stock_data.api.routes.get_manager") as mock_manager:
+        with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = ([], "")
             mock_manager.return_value = mock_mgr
@@ -197,7 +197,7 @@ class TestZTPoolAPIRoutes:
         # Pretend today is not a trade day so the route falls back to `latest`.
         with (
             patch.object(trade_calendar, "is_trade_date", return_value=False),
-            patch("stock_data.api.routes.get_manager") as mock_manager,
+            patch("stock_data.api.routes.boards.get_manager") as mock_manager,
         ):
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
