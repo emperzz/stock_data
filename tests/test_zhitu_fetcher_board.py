@@ -20,7 +20,7 @@ def _make_fetcher(token: str = "test_token") -> ZhituFetcher:
 
 
 @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
-def test_get_board_tree_filters_by_type_and_subtype(mock_get):
+def test_get_all_boards_filters_by_type_and_subtype(mock_get):
     """Returns leaves matching requested type/subtype from /hs/index/tree."""
     mock_response = MagicMock()
     mock_response.json.return_value = [
@@ -37,7 +37,7 @@ def test_get_board_tree_filters_by_type_and_subtype(mock_get):
     mock_get.return_value = mock_response
 
     fetcher = _make_fetcher()
-    boards = fetcher.get_board_tree(board_type="industry", subtype="申万行业")
+    boards = fetcher.get_all_boards(board_type="industry", subtype="申万行业")
     assert boards == [
         {"code": "sw_mt", "name": "A股-申万行业-煤炭",
          "type": "industry", "subtype": "申万行业"}
@@ -45,7 +45,7 @@ def test_get_board_tree_filters_by_type_and_subtype(mock_get):
 
 
 @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
-def test_get_board_tree_returns_all_subtypes_when_none(mock_get):
+def test_get_all_boards_returns_all_subtypes_when_none(mock_get):
     mock_response = MagicMock()
     mock_response.json.return_value = [
         {"name": "A股-申万行业-煤炭", "code": "sw_mt", "type1": 0, "type2": 0,
@@ -57,7 +57,7 @@ def test_get_board_tree_returns_all_subtypes_when_none(mock_get):
     mock_get.return_value = mock_response
 
     fetcher = _make_fetcher()
-    boards = fetcher.get_board_tree(board_type="industry", subtype=None)
+    boards = fetcher.get_all_boards(board_type="industry", subtype=None)
     assert len(boards) == 2
     codes = {b["code"] for b in boards}
     assert codes == {"sw_mt", "csrc_jr"}

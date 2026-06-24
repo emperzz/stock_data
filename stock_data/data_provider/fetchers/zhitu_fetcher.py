@@ -518,18 +518,36 @@ class ZhituFetcher(BaseFetcher):
             logger.warning("[ZhituFetcher] _fetch_board_tree failed", exc_info=True)
             return None
 
-    def get_board_tree(
-        self, board_type: str, subtype: str | None = None
+    def get_all_boards(
+        self,
+        board_type: str,
+        subtype: str | None = None,
+        source: str = "zhitu",
+        include_quote: bool = False,
     ) -> list[dict]:
-        """Get boards filtered by type and optionally subtype.
+        """Get boards of a given type and optional subtype (unified entry).
+
+        Args:
+            board_type: one of ``concept / industry / index / special``.
+            subtype: source-specific subtype (validated by persistence).
+            source: fetcher name (accepted for Manager interface symmetry;
+                Zhitu is the only source here).
+            include_quote: accepted for interface symmetry but ignored —
+                Zhitu's ``/hs/index/tree`` doesn't expose realtime quote fields.
 
         Returns list of ``{code, name, type, subtype}`` dicts.
         Returns ``[]`` on failure or no match.
         """
+        # ``source`` and ``include_quote`` are accepted for Manager interface
+        # symmetry but unused here — Zhitu is the sole source for this method
+        # and its /hs/index/tree endpoint doesn't expose quote fields.
+        _ = source, include_quote
+
         leaves = self._fetch_board_tree()
         if leaves is None:
             return []
 
+        valid_subtypes = ZHITU_SUBTYPES_BY_TYPE.get(board_type, set())
         out: list[dict] = []
         for row in leaves:
             type2 = row.get("type2")
