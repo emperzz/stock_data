@@ -51,6 +51,15 @@ class DataFetcherManager:
             self._fetchers = sorted(fetchers, key=lambda f: f.priority)
             self._refresh_index()
 
+        # Slug → fetcher 路由索引。Slug 从 fetcher.name 派生（去掉 "Fetcher" 后缀，转小写）。
+        # 例如 "ZhituFetcher" → "zhitu", "EastMoneyFetcher" → "eastmoney"。
+        # 用于 _with_source() 的 source 参数（API 层传 slug 形式）。
+        self._slug_index: dict[str, BaseFetcher] = {}
+        for f in self._fetchers:
+            slug = self._derive_slug(f.name)
+            if slug:
+                self._slug_index[slug] = f
+
     # ---------- registration / lookup ----------
 
     def reset(self) -> None:
@@ -94,6 +103,25 @@ class DataFetcherManager:
                 result.append(f)
         return result
 
+    @staticmethod
+    def _derive_slug(fetcher_name: str) -> str:
+        """Derive source slug from fetcher class name.
+
+        Strips trailing "Fetcher" (case-insensitive) and lowercases.
+        Examples:
+            "ZhituFetcher" → "zhitu"
+            "EastMoneyFetcher" → "eastmoney"
+            "Zhitu" → "zhitu"  # already bare
+            "MyquantFetcher" → "myquant"
+        """
+        if not fetcher_name:
+            return ""
+        # Strip "Fetcher" suffix (case-insensitive)
+        name = fetcher_name
+        if name.lower().endswith("fetcher"):
+            name = name[:-7]
+        return name.lower()
+
     def _with_source(
         self,
         source: str,
@@ -113,8 +141,10 @@ class DataFetcherManager:
         failover would be misleading.
 
         Args:
-            source: Fetcher name to route to. Case-insensitive match
-                against ``fetcher.name``.
+            source: Fetcher name to route to. Accepts either the slug
+                form (e.g. ``"zhitu"``, case-insensitive) or the full
+                fetcher class name (e.g. ``"ZhituFetcher"``). Slug
+                match is preferred; full-name match is the fallback.
             capability: DataCapability the chosen fetcher must declare.
             market: Market tag the chosen fetcher must support.
             op_label: Short label for the log message.
@@ -132,12 +162,16 @@ class DataFetcherManager:
             Exception: any exception raised inside ``call`` propagates
                 unchanged — no failover is attempted.
         """
+        # 1. Slug match (preferred — API layer uses slug form)
+        # 2. Fallback to full name match (case-insensitive)
+        target: BaseFetcher | None = None
         with self._lock:
-            target: BaseFetcher | None = None
-            for f in self._fetchers:
-                if f.name.lower() == source.lower():
-                    target = f
-                    break
+            target = self._slug_index.get(source.lower())
+            if target is None:
+                for f in self._fetchers:
+                    if f.name.lower() == source.lower():
+                        target = f
+                        break
         if target is None:
             raise ValueError(
                 f"No fetcher with name {source!r} is registered"
