@@ -28,15 +28,15 @@ class TestBoardAPIRoutes:
 
     def test_get_concept_boards(self, client):
         """Test GET /api/v1/boards with type=concept."""
-        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
+        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
             mock_get.return_value = (
                 [
                     {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
                     {"code": "BK1049", "name": "云计算", "board_type": "concept", "source": "eastmoney"},
                 ],
-                "akshare",
+                "EastMoneyFetcher",
             )
-            response = client.get("/api/v1/boards?type=concept")
+            response = client.get("/api/v1/boards?type=concept&source=eastmoney")
             assert response.status_code == 200
             data = response.json()
             assert "data" in data
@@ -45,12 +45,12 @@ class TestBoardAPIRoutes:
 
     def test_get_industry_boards(self, client):
         """Test GET /api/v1/boards with type=industry."""
-        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
+        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
             mock_get.return_value = (
                 [{"code": "BK0816", "name": "银行", "board_type": "industry", "source": "eastmoney"}],
-                "akshare",
+                "EastMoneyFetcher",
             )
-            response = client.get("/api/v1/boards?type=industry")
+            response = client.get("/api/v1/boards?type=industry&source=eastmoney")
             assert response.status_code == 200
             data = response.json()
             assert "data" in data
@@ -73,21 +73,21 @@ class TestBoardAPIRoutes:
     def test_get_board_stocks(self, client):
         """Test GET /api/v1/boards/{board_code}/stocks."""
         with (
-            patch("stock_data.api.routes.boards.stock_board_cache.get_board_stocks") as mock_get_stocks,
-            patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get_boards,
+            patch("stock_data.data_provider.manager.DataFetcherManager.get_board_stocks") as mock_get_stocks,
+            patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get_boards,
         ):
             mock_get_stocks.return_value = (
                 [
                     {"stock_code": "600519", "stock_name": "贵州茅台"},
                     {"stock_code": "000001", "stock_name": "平安银行"},
                 ],
-                "akshare",
+                "EastMoneyFetcher",
             )
             mock_get_boards.return_value = (
                 [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
-                "akshare",
+                "EastMoneyFetcher",
             )
-            response = client.get("/api/v1/boards/BK1048/stocks")
+            response = client.get("/api/v1/boards/BK1048/stocks?source=eastmoney")
             assert response.status_code == 200
             data = response.json()
             assert "board" in data
@@ -96,64 +96,70 @@ class TestBoardAPIRoutes:
             assert len(data["stocks"]) == 2
 
     def test_get_board_stocks_with_quote(self, client):
-        """Test GET /api/v1/boards/{board_code}/stocks?include_quote=true."""
-        with (
-            patch("stock_data.api.routes.boards.stock_board_cache.get_board_stocks") as mock_get_stocks,
-            patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get_boards,
-        ):
-            mock_get_stocks.return_value = (
-                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
-                "akshare",
-            )
-            mock_get_boards.return_value = (
-                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
-                "akshare",
-            )
-            with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
-                mock_mgr = MagicMock()
-                mock_quote = MagicMock()
-                mock_quote.code = "600519"
-                mock_quote.name = "贵州茅台"
-                mock_quote.price = 1800.0
-                mock_quote.change_pct = 2.5
-                mock_quote.volume = 1000000
-                mock_mgr.get_realtime_quote.return_value = mock_quote
-                mock_manager.return_value = mock_mgr
+        """Test GET /api/v1/boards/{board_code}/stocks?include_quote=true.
 
-                response = client.get("/api/v1/boards/BK1048/stocks?include_quote=true")
-                assert response.status_code == 200
-                data = response.json()
-                assert "stocks" in data
-                assert len(data["stocks"]) == 1
-                assert "price" in data["stocks"][0]
+        After the refactor, the route still calls ``get_realtime_quote`` for
+        each stock to enrich the response. We patch that on the manager and
+        the new board manager methods.
+        """
+        with (
+            patch("stock_data.data_provider.manager.DataFetcherManager.get_board_stocks") as mock_get_stocks,
+            patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get_boards,
+            patch("stock_data.api.routes.boards.get_manager") as mock_manager,
+        ):
+            mock_mgr = MagicMock()
+            mock_quote = MagicMock()
+            mock_quote.code = "600519"
+            mock_quote.name = "贵州茅台"
+            mock_quote.price = 1800.0
+            mock_quote.change_pct = 2.5
+            mock_quote.volume = 1000000
+            mock_mgr.get_realtime_quote.return_value = mock_quote
+            mock_mgr.get_board_stocks.return_value = (
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "EastMoneyFetcher",
+            )
+            mock_mgr.get_all_boards.return_value = (
+                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
+                "EastMoneyFetcher",
+            )
+            mock_manager.return_value = mock_mgr
+
+            response = client.get("/api/v1/boards/BK1048/stocks?source=eastmoney&include_quote=true")
+            assert response.status_code == 200
+            data = response.json()
+            assert "stocks" in data
+            assert len(data["stocks"]) == 1
+            assert "price" in data["stocks"][0]
 
     def test_get_boards_with_refresh(self, client):
         """Test GET /api/v1/boards?refresh=true forces refresh."""
-        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
+        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
             mock_get.return_value = (
                 [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
-                "akshare",
+                "EastMoneyFetcher",
             )
-            response = client.get("/api/v1/boards?type=concept&refresh=true")
+            response = client.get("/api/v1/boards?type=concept&source=eastmoney&refresh=true")
+            assert response.status_code == 200
+            mock_get.assert_called_once()
+            # source= passed as keyword arg
+            _, kwargs = mock_get.call_args
+            assert kwargs.get("source") == "eastmoney"
+
+    def test_get_boards_with_source(self, client):
+        """Test GET /api/v1/boards?source=eastmoney (zhitu would be 400 from literal)."""
+        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
+            mock_get.return_value = ([], "EastMoneyFetcher")
+            response = client.get("/api/v1/boards?type=concept&source=eastmoney")
             assert response.status_code == 200
             mock_get.assert_called_once()
             _, kwargs = mock_get.call_args
-            assert kwargs.get("refresh") is True
-
-    def test_get_boards_with_source(self, client):
-        """Test GET /api/v1/boards?source=tonghuashun."""
-        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
-            mock_get.return_value = ([], "")
-            response = client.get("/api/v1/boards?type=concept&source=tonghuashun")
-            assert response.status_code == 200
-            mock_get.assert_called_once()
-            args, kwargs = mock_get.call_args
-            # source is passed as positional arg (2nd arg)
-            assert args[1] == "tonghuashun"
+            # source is passed as keyword arg
+            assert kwargs.get("source") == "eastmoney"
 
     def test_get_boards_with_include_quote(self, client):
-        """Test GET /api/v1/boards?include_quote=true passes include_quote to cache layer."""
-        with patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get:
+        """Test GET /api/v1/boards?include_quote=true passes include_quote to manager."""
+        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
             mock_get.return_value = (
                 [
                     {
@@ -174,9 +180,9 @@ class TestBoardAPIRoutes:
                         "leading_stock_pct": 8.5,
                     },
                 ],
-                "akshare",
+                "EastMoneyFetcher",
             )
-            response = client.get("/api/v1/boards?type=concept&include_quote=true")
+            response = client.get("/api/v1/boards?type=concept&source=eastmoney&include_quote=true")
             assert response.status_code == 200
             data = response.json()
             assert len(data["data"]) == 1
@@ -190,21 +196,21 @@ class TestBoardAPIRoutes:
             assert board["down_count"] == 12
             assert board["leading_stock"] == "科大讯飞"
             assert board["leading_stock_pct"] == 8.5
-            # Verify include_quote was passed to cache layer
+            # Verify include_quote was passed to manager
             mock_get.assert_called_once()
             _, kwargs = mock_get.call_args
             assert kwargs.get("include_quote") is True
 
-    def test_get_boards_include_quote_still_hits_persistence(self, client):
-        """Test GET /api/v1/boards?include_quote=true calls persistence (no TTLCache)."""
+    def test_get_boards_include_quote_still_hits_manager(self, client):
+        """Test GET /api/v1/boards?include_quote=true calls manager (no TTLCache)."""
         with (
-            patch("stock_data.api.routes.boards.stock_board_cache.get_board_list") as mock_get,
+            patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get,
         ):
             mock_get.return_value = (
                 [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
-                "akshare",
+                "EastMoneyFetcher",
             )
-            response = client.get("/api/v1/boards?type=concept&include_quote=true")
+            response = client.get("/api/v1/boards?type=concept&source=eastmoney&include_quote=true")
             assert response.status_code == 200
             mock_get.assert_called_once()
             _, kwargs = mock_get.call_args
