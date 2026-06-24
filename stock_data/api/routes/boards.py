@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 # source 合法值集合（防止任意 source 触发 _with_source 任意调用）
-_VALID_SOURCES = {"eastmoney", "zhitu"}
+_VALID_SOURCES = {"eastmoney", "zhitu", "zzshare"}
 
 # type 合法值
 _VALID_TYPES = {"concept", "industry", "index", "special"}
@@ -94,7 +94,7 @@ def list_boards(
     type: Literal["concept", "industry", "index", "special"] = Query(
         ..., description="Board type"
     ),
-    source: Literal["eastmoney", "zhitu"] = Query(
+    source: Literal["eastmoney", "zhitu", "zzshare"] = Query(
         ..., description="Data source (REQUIRED)"
     ),
     subtype: str | None = Query(
@@ -197,7 +197,7 @@ def list_boards(
 @map_errors
 def get_board_stocks(
     board_code: str = Path(max_length=30, description="Board code"),
-    source: Literal["eastmoney", "zhitu"] = Query(
+    source: Literal["eastmoney", "zhitu", "zzshare"] = Query(
         ..., description="Data source (REQUIRED)"
     ),
     include_quote: bool = Query(False, description="Include realtime quote data"),
@@ -273,7 +273,7 @@ def get_board_stocks(
 @map_errors
 def get_stock_boards(
     stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
-    source: Literal["zhitu", "eastmoney"] = Query(
+    source: Literal["zhitu", "eastmoney", "zzshare"] = Query(
         ..., description="Data source (currently only 'zhitu' supported)"
     ),
     type: Literal["concept", "industry", "index", "special"] | None = Query(
@@ -290,7 +290,7 @@ def get_stock_boards(
     """
     _resolve_source(source)
 
-    if source != "zhitu":
+    if source not in ("zhitu", "zzshare"):
         raise HTTPException(
             status_code=501,
             detail={

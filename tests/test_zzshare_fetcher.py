@@ -805,3 +805,25 @@ class TestHotTopics:
         fetcher.get_hot_topics("2026-05-20")
         call = fetcher._api.ths_hot_top.call_args
         assert call.kwargs.get("top_n") == 100
+
+
+# ====================================================================
+# Boards source-routing — persistence layer integration
+# ====================================================================
+
+class TestBoardSubtypeValidation:
+    """Verify VALID_SUBTYPES_BY_SOURCE has zzshare entries."""
+
+    def test_zzshare_industry_subtype(self):
+        from stock_data.data_provider.persistence.board import VALID_SUBTYPES_BY_SOURCE
+        assert "zzshare" in VALID_SUBTYPES_BY_SOURCE
+        assert "industry" in VALID_SUBTYPES_BY_SOURCE["zzshare"]
+        assert "同花顺行业" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["industry"]
+
+    def test_zzshare_concept_subtype(self):
+        from stock_data.data_provider.persistence.board import VALID_SUBTYPES_BY_SOURCE
+        assert "同花顺概念" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["concept"]
+
+    def test_zzshare_special_subtype(self):
+        from stock_data.data_provider.persistence.board import VALID_SUBTYPES_BY_SOURCE
+        assert "同花顺题材" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["special"]

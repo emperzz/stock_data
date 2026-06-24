@@ -31,6 +31,12 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
         "index": {"分类", "指数成分", "大盘指数"},
         "special": {"风险警示", "次新股", "沪港通", "深港通"},
     },
+    "zzshare": {   # NEW
+        "industry": {"同花顺行业"},
+        "concept": {"同花顺概念"},
+        "special": {"同花顺题材"},
+        # "index" — zzshare 不暴露大盘指数板块
+    },
 }
 
 
