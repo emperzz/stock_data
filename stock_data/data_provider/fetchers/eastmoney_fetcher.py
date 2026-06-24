@@ -1069,3 +1069,68 @@ class EastMoneyFetcher(BaseFetcher):
                 exc_info=True,
             )
             return None
+
+    # ----- Manager 统一入口方法（与 ZhituFetcher 对齐） -----
+
+    def get_all_boards(
+        self,
+        board_type: str,
+        subtype: str | None = None,
+        source: str = "eastmoney",
+        include_quote: bool = False,
+    ) -> list[dict]:
+        """Get boards of a given type and optional subtype (unified entry).
+
+        EastMoney doesn't expose subtype information — its boards are
+        categorized purely by ``concept`` vs ``industry``. We map:
+        - ``type=concept``: any subtype → returns concept boards
+        - ``type=industry``: any subtype → returns industry boards
+        - ``type=index`` / ``type=special``: not supported → return ``[]``
+        """
+        if board_type == "concept":
+            return self.get_all_concept_boards(
+                source=source, include_quote=include_quote,
+            )
+        if board_type == "industry":
+            return self.get_all_industry_boards(
+                source=source, include_quote=include_quote,
+            )
+        # index / special: EastMoney has no such classification
+        return []
+
+    def get_board_stocks(
+        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
+    ) -> list[dict]:
+        """Get stocks in a board (unified entry — EastMoney doesn't distinguish
+        concept/industry at the board level, both share the ``BK`` prefix).
+
+        Try concept first, fall back to industry (matches previous behavior
+        in ``persistence/board.py::get_board_stocks``).
+        """
+        stocks = self.get_concept_board_stocks(
+            board_code, source=source, include_quote=include_quote,
+        )
+        if stocks:
+            return stocks
+        return self.get_industry_board_stocks(
+            board_code, source=source, include_quote=include_quote,
+        )
+
+    def get_stock_boards(self, stock_code: str, source: str = "eastmoney") -> list[dict] | None:
+        """Get boards a stock belongs to. EastMoney does NOT expose this
+        lookup directly, so return ``None`` to signal "source doesn't support this".
+        """
+        return None
+
+    def get_board_history(
+        self, board_code: str, source: str = "eastmoney",
+        frequency: str = "d", days: int = 30,
+    ) -> list[dict]:
+        """Board K-line. EastMoney does NOT expose board-level K-line, so
+        raise NotImplementedError (consistent with ZhituFetcher's stub).
+        """
+        raise NotImplementedError(
+            f"EastMoneyFetcher does not provide board-level K-line data "
+            f"(board_code={board_code!r}). "
+            f"Consider zzshare plate_kline as future implementation."
+        )
