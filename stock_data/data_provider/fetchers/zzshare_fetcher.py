@@ -617,3 +617,37 @@ class ZzshareFetcher(BaseFetcher):
             "seats": seats,
             "institution": {},
         }
+
+    def get_hot_topics(self, date_str: str = "") -> list[dict]:
+        """同花顺热度 TopN via zzshare ths_hot_top.
+
+        Returns list of normalized {code, name, change_pct, rank, ...} dicts.
+        date_str empty -> today.
+        """
+        from datetime import date as _date
+
+        api = self._ensure_api()
+        if api is None:
+            return []
+        d = _to_yyyymmdd(date_str) if date_str else _date.today().strftime("%Y%m%d")
+        try:
+            rows = api.ths_hot_top(date1=d, top_n=100)
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] ths_hot_top({d}) failed: {e}")
+            return []
+        out: list[dict] = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol_code", "")).strip()
+            out.append({
+                "code": _add_exchange_suffix(symbol) if symbol else "",
+                "name": str(row.get("symbol_name", "")),
+                "rank": safe_int(row.get("rank")),
+                "rank_diff": safe_int(row.get("rank_diff")),
+                "change_pct": safe_float(row.get("last_pct")),
+                "price": safe_float(row.get("last_price")),
+                "circ_mv": safe_float(row.get("circulation_value")),
+                "date": str(row.get("collect_date", "")),
+            })
+        return out

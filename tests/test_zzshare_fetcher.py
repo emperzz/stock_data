@@ -753,3 +753,55 @@ class TestDragonTiger:
         data = fetcher.get_dragon_tiger("000078", "2026-05-20", 30)
         # records should have at least 1 entry from history
         assert len(data["records"]) >= 1
+
+
+# ====================================================================
+# HOT_TOPICS
+# ====================================================================
+
+class TestHotTopics:
+    def _fetcher_with_api(self, fake_top):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.ths_hot_top = MagicMock(return_value=fake_top)
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_hot_topics_normalizes_symbol_code(self):
+        rows = [
+            {"rank": 1, "rank_diff": 1, "symbol_code": "002342", "symbol_name": "巨力索具",
+             "last_price": 5.5, "last_pct": 10.0, "circulation_value": 50.0,
+             "collect_date": "2026-05-20", "update_time": "2026-05-20 15:00:00", "id": 1},
+            {"rank": 2, "rank_diff": -2, "symbol_code": "600519", "symbol_name": "贵州茅台",
+             "last_price": 1720.0, "last_pct": 1.18, "circulation_value": 21600.0,
+             "collect_date": "2026-05-20", "update_time": "2026-05-20 15:00:00", "id": 2},
+        ]
+        fetcher = self._fetcher_with_api(rows)
+        topics = fetcher.get_hot_topics("2026-05-20")
+        assert len(topics) == 2
+        # 002342 -> 002342.SZ
+        assert topics[0]["code"] == "002342.SZ"
+        assert topics[0]["name"] == "巨力索具"
+        assert topics[0]["change_pct"] == 10.0
+        assert topics[0]["rank"] == 1
+        # 600519 -> 600519.SH
+        assert topics[1]["code"] == "600519.SH"
+
+    def test_hot_topics_empty_returns_empty_list(self):
+        fetcher = self._fetcher_with_api([])
+        assert fetcher.get_hot_topics("2026-05-20") == []
+
+    def test_hot_topics_uses_today_when_date_empty(self):
+        fetcher = self._fetcher_with_api([])
+        fetcher.get_hot_topics("")  # empty -> today
+        call = fetcher._api.ths_hot_top.call_args
+        # date1 should be today's YYYYMMDD
+        from datetime import date
+        expected = date.today().strftime("%Y%m%d")
+        assert call.kwargs.get("date1") == expected
+
+    def test_hot_topics_default_top_n(self):
+        fetcher = self._fetcher_with_api([])
+        fetcher.get_hot_topics("2026-05-20")
+        call = fetcher._api.ths_hot_top.call_args
+        assert call.kwargs.get("top_n") == 100
