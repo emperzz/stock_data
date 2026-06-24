@@ -378,3 +378,57 @@ class TestRealtimeQuote:
         with patch("importlib.util.find_spec", return_value=None):
             fetcher = ZzshareFetcher()
             assert fetcher.get_realtime_quote("600519") is None
+
+
+# ====================================================================
+# STOCK_LIST
+# ====================================================================
+
+class TestStockList:
+    def _fetcher_with_api(self, fake_basic):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stock_basic = MagicMock(return_value=fake_basic)
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_get_all_stocks_normalizes_exchange(self):
+        import pandas as pd
+        raw = pd.DataFrame({
+            "ts_code": ["600519.SH", "000001.SZ", "830799.BJ"],
+            "symbol": ["600519", "000001", "830799"],
+            "name": ["贵州茅台", "平安银行", "殷图网联"],
+            "exchange": ["SSE", "SZSE", "BSE"],
+            "area": ["", "", ""],
+            "industry": ["", "", ""],
+            "list_date": ["", "", ""],
+        })
+        fetcher = self._fetcher_with_api(raw)
+        result = fetcher.get_all_stocks("csi")
+        assert len(result) == 3
+        assert result[0] == {"code": "600519", "name": "贵州茅台", "exchange": "SSE"}
+        assert result[1] == {"code": "000001", "name": "平安银行", "exchange": "SZSE"}
+        assert result[2] == {"code": "830799", "name": "殷图网联", "exchange": "BSE"}
+
+    def test_get_all_stocks_non_csi_returns_empty(self):
+        fetcher = ZzshareFetcher()
+        with patch("importlib.util.find_spec", return_value=MagicMock()):
+            assert fetcher.get_all_stocks("hk") == []
+            assert fetcher.get_all_stocks("us") == []
+
+    def test_get_all_stocks_calls_stock_basic_all(self):
+        import pandas as pd
+        raw = pd.DataFrame({"ts_code": ["600519.SH"], "symbol": ["600519"],
+                            "name": ["贵州茅台"], "exchange": ["SSE"],
+                            "area": [""], "industry": [""], "list_date": [""]})
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_all_stocks("csi")
+        call = fetcher._api.stock_basic.call_args
+        assert call.kwargs.get("exchange") == "ALL"
+        assert call.kwargs.get("list_status") == "L"
+
+    def test_get_all_stocks_sdk_unavailable_returns_empty(self, monkeypatch):
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=None):
+            fetcher = ZzshareFetcher()
+            assert fetcher.get_all_stocks("csi") == []

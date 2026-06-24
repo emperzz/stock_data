@@ -265,3 +265,37 @@ class ZzshareFetcher(BaseFetcher):
             circ_mv=safe_float(row.get("circulation_value")),
             pe_ratio=safe_float(row.get("ttm_pe_rate")),
         )
+
+    def get_all_stocks(self, market: str = "csi") -> list:
+        """Fetch the A-share stock list from zzshare stock_basic(exchange='ALL').
+
+        area/industry/list_date left empty (zzshare does not fill them; other
+        fetchers will backfill via persistence layer).
+
+        Returns [] on failure or non-csi market (manager failover keeps trying).
+        """
+        if market != "csi":
+            return []
+        api = self._ensure_api()
+        if api is None:
+            return []
+        try:
+            df = api.stock_basic(exchange="ALL", list_status="L")
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] stock_basic failed: {e}")
+            return []
+        if df is None or df.empty:
+            return []
+        out: list = []
+        for _, row in df.iterrows():
+            ts_code = str(row.get("ts_code", ""))
+            if not ts_code:
+                continue
+            # ts_code like "600519.SH" -> bare "600519"
+            code = ts_code.split(".")[0]
+            out.append({
+                "code": code,
+                "name": str(row.get("name", "")),
+                "exchange": str(row.get("exchange", "")),
+            })
+        return out
