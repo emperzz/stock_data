@@ -180,22 +180,6 @@ def get_latest_cached_date(pool_type: str) -> str | None:
     return row[0] if row and row[0] else None
 
 
-def has_cached_data(pool_type: str, date: str) -> bool:
-    """Check if there's cached data for the (pool_type, date) pair."""
-    _validate_pool_type(pool_type)
-    if not get_db_path().exists():
-        return False
-
-    init_schema()
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT 1 FROM pool_daily WHERE pool_type = ? AND pool_date = ? LIMIT 1",
-        (pool_type, date),
-    )
-    return cursor.fetchone() is not None
-
-
 def get_pool_count(pool_type: str, date: str) -> int:
     """Get the number of stocks in the pool for the given (pool_type, date)."""
     _validate_pool_type(pool_type)
@@ -208,11 +192,6 @@ def get_pool_count(pool_type: str, date: str) -> int:
     )
     row = cursor.fetchone()
     return row[0] if row else 0
-
-
-# Backward-compat aliases for callers still using the old per-table names.
-get_zt_pool_cached = get_pool_cached
-save_zt_pool = save_pool
 
 
 # ---------------------------------------------------------------------------
@@ -321,9 +300,5 @@ __all__ = [
     "get_pool_cached",
     "save_pool",
     "get_latest_cached_date",
-    "has_cached_data",
     "get_pool_count",
-    # Backward-compat
-    "get_zt_pool_cached",
-    "save_zt_pool",
 ]

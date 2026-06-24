@@ -30,24 +30,12 @@ from .pool_daily import (
     save_pool,
 )
 
-# Backward-compat aliases for callers still on the per-table names.
-from .pool_daily import get_pool_cached as get_zt_pool_cached
-from .pool_daily import save_pool as save_zt_pool
-from .stock_list import (
-    get_cache_info as get_stock_list_cache_info,
-)
-
-# Re-export the CRUD surface (1:1 superset of the old data_provider.cache.api_cache).
 # stock_list CRUD
 from .stock_list import (
     get_cached_stocks,
     get_stock_list,
     get_stock_name,
-    has_cached_data,
     update_cached_stocks,
-)
-from .stock_list import (
-    init_schema as init_stock_list_schema,
 )
 
 # trade_calendar CRUD + new helpers
@@ -57,9 +45,6 @@ from .trade_calendar import (
     get_latest_trade_date_on_or_before,
     is_trade_date,
     update_cached_calendar,
-)
-from .trade_calendar import (
-    init_schema as init_trade_calendar_schema,
 )
 
 __all__ = [
@@ -73,15 +58,11 @@ __all__ = [
     "get_db_path",
     # Schema management
     "init_schema",
-    "init_stock_list_schema",
-    "init_trade_calendar_schema",
     "reset_all",
     # Stock-list CRUD
     "get_cached_stocks",
     "get_stock_list",
     "get_stock_name",
-    "get_stock_list_cache_info",
-    "has_cached_data",
     "update_cached_stocks",
     # Trade calendar CRUD + helpers
     "get_cached_calendar",
@@ -99,9 +80,6 @@ __all__ = [
     "save_pool",
     "get_latest_cached_date",
     "get_pool_count",
-    # Backward-compat pool aliases
-    "get_zt_pool_cached",
-    "save_zt_pool",
 ]
 
 # Tables owned by the persistence layer. Used by reset_all() to know what

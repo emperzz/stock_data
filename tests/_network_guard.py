@@ -88,12 +88,8 @@ except Exception:  # pragma: no cover — defensive only
 # inside the package under test.
 try:
     from stock_data.data_provider.base import DataFetchError as _DataFetchError
-    from stock_data.data_provider.base import RateLimitError as _RateLimitError
 except Exception:  # pragma: no cover — defensive only
     class _DataFetchError(Exception):  # type: ignore[no-redef]
-        pass
-
-    class _RateLimitError(Exception):  # type: ignore[no-redef]
         pass
 
 
@@ -123,7 +119,6 @@ UPSTREAM_ERRORS: Final[tuple[type[BaseException], ...]] = (
     # DataFetchError as upstream is the right granularity for live_network
     # tests; true fetcher code bugs are caught by the mock-based unit tests.
     _DataFetchError,
-    _RateLimitError,
 )
 
 

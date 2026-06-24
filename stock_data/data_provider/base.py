@@ -113,18 +113,11 @@ class DataFetchError(Exception):
     pass
 
 
-class RateLimitError(DataFetchError):
-    """Raised when rate limited by data source."""
-
-    pass
-
-
 # Re-export utilities for backward compatibility
 __all__ = [
     "BaseFetcher",
     "DataCapability",
     "DataFetchError",
-    "RateLimitError",
     "STANDARD_COLUMNS",
     "CAPABILITY_TO_METHOD",
     "_NO_FETCHER_METHOD",

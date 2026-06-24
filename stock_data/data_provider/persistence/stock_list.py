@@ -262,31 +262,4 @@ def update_cached_stocks(market: str, stocks: list) -> int:
         raise
 
 
-def has_cached_data(market: str) -> bool:
-    """Check if there's cached data for a market."""
-    if not get_db_path().exists():
-        return False
-
-    init_schema()
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM stock_list WHERE market = ? LIMIT 1", (market,))
-    return cursor.fetchone() is not None
-
-
-def get_cache_info() -> dict:
-    """Get cache statistics."""
-    if not get_db_path().exists():
-        return {"total_stocks": 0, "markets": {}}
-
-    init_schema()
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT market, COUNT(*) as cnt FROM stock_list GROUP BY market")
-    rows = cursor.fetchall()
-    result = {"total_stocks": 0, "markets": {}}
-    for row in rows:
-        result["markets"][row["market"]] = row["cnt"]
-        result["total_stocks"] += row["cnt"]
-    return result
 

@@ -1,2 +1,1 @@
-# Utility functions
-from .news_extractor import NewsContent, NewsContentExtractor  # noqa: F401
+# Utility submodules — import specific helpers from each submodule directly.
