@@ -94,6 +94,67 @@ class DataFetcherManager:
                 result.append(f)
         return result
 
+    def _with_source(
+        self,
+        source: str,
+        capability: DataCapability,
+        market: str,
+        op_label: str,
+        call: Callable[[BaseFetcher], T],
+    ) -> T:
+        """Run ``call(fetcher)`` on the single fetcher whose name matches ``source``.
+
+        Unlike ``_with_failover``, this primitive does NOT iterate over a
+        capability-filtered list. It picks exactly one fetcher by name and
+        invokes ``call`` on it. This is required for endpoints where the
+        caller must be able to address a specific backend — e.g. board
+        endpoints, where different fetchers use incompatible sector
+        classification systems and board-code schemes, so transparent
+        failover would be misleading.
+
+        Args:
+            source: Fetcher name to route to. Case-insensitive match
+                against ``fetcher.name``.
+            capability: DataCapability the chosen fetcher must declare.
+            market: Market tag the chosen fetcher must support.
+            op_label: Short label for the log message.
+            call: Fetcher-bound function whose return value is forwarded
+                to the caller as-is.
+
+        Returns:
+            Whatever ``call(fetcher)`` returns.
+
+        Raises:
+            ValueError: when no fetcher matches the requested source,
+                or the matching fetcher does not declare ``capability`` /
+                does not support ``market``. The exception message names
+                the cause and the missing flag.
+            Exception: any exception raised inside ``call`` propagates
+                unchanged — no failover is attempted.
+        """
+        with self._lock:
+            target: BaseFetcher | None = None
+            for f in self._fetchers:
+                if f.name.lower() == source.lower():
+                    target = f
+                    break
+        if target is None:
+            raise ValueError(
+                f"No fetcher with name {source!r} is registered"
+            )
+        if market not in target.supported_markets:
+            raise ValueError(
+                f"Fetcher {target.name!r} does not support market {market!r} "
+                f"(supported: {sorted(target.supported_markets)})"
+            )
+        if capability not in target.supported_data_types:
+            raise ValueError(
+                f"Fetcher {target.name!r} does not declare capability {capability!r} "
+                f"required for {op_label}"
+            )
+        logger.info(f"[Manager] {target.name} {op_label} via explicit source routing")
+        return call(target)
+
     # ---------- the single failover helper ----------
     #
     # Every public `get_*` below is a thin wrapper around `_with_failover`,
