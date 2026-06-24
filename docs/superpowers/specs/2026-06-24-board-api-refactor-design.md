@@ -75,9 +75,14 @@ def _with_source(
 | `special` | `沪港通` | 11 | 沪港通标的 |
 | `special` | `深港通` | 12 | 深港通标的 |
 
-**`source=eastmoney`**：`subtype` 不支持——传入时返回 400 错误，只有 concept / industry 两层。
+**`source=eastmoney`**：`subtype` 始终接受。合法值集合 = `{concept, industry}`（等于 type 本身，因为没有更细分类）。传入其他值（如 `热门概念`）→ 400 错误，附有效值列表。
 
-**`source=zzshare`**（后续）：plate_type 14=行业, 15=概念, 17=题材。
+**`source=zzshare`**（后续）：合法值 = `{industry, concept}`。zzshare 的 plate_type 17（题材板块）映射到 `concept` 下的 `题材板块` subtype（暂不暴露，保持与 Zhitu subtype 一致）。
+
+**subtype 校验规则**：
+- 每个 source 在实现中声明 `VALID_SUBTYPES: set[str]`（按 type 分组）
+- 不传 subtype → 返回该 type 下所有合法 subtype 的并集
+- 传入 subtype 不在 source 合法集合中 → 400 错误 + 提示该 type 在该 source 下有哪些有效值
 
 ## 4. API 端点设计
 
