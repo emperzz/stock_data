@@ -114,3 +114,68 @@ def test_get_board_history_raises_not_implemented():
     fetcher = _make_fetcher()
     with pytest.raises(NotImplementedError, match="board-level K-line"):
         fetcher.get_board_history("sw_mt", frequency="d", days=30)
+
+
+@patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+def test_get_all_concept_boards_calls_board_tree(mock_get):
+    """get_all_concept_boards delegates to get_board_tree(type=concept)."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"name": "A股-热门概念-区块链", "code": "chgn_700231", "type1": 0, "type2": 2,
+         "level": 2, "pcode": "chgn", "pname": "A股-热门概念", "isleaf": 1},
+        {"name": "A股-申万行业-煤炭", "code": "sw_mt", "type1": 0, "type2": 0,
+         "level": 2, "pcode": "swhy", "pname": "A股-申万行业", "isleaf": 1},
+    ]
+    mock_response.raise_for_status = MagicMock()
+    mock_get.return_value = mock_response
+
+    fetcher = _make_fetcher()
+    boards = fetcher.get_all_concept_boards(source="zhitu")
+    assert len(boards) == 1
+    assert boards[0]["code"] == "chgn_700231"
+    assert boards[0]["type"] == "concept"
+
+
+@patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+def test_get_all_industry_boards_calls_board_tree(mock_get):
+    """get_all_industry_boards delegates to get_board_tree(type=industry)."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"name": "A股-申万行业-煤炭", "code": "sw_mt", "type1": 0, "type2": 0,
+         "level": 2, "pcode": "swhy", "pname": "A股-申万行业", "isleaf": 1},
+        {"name": "A股-热门概念-区块链", "code": "chgn_700231", "type1": 0, "type2": 2,
+         "level": 2, "pcode": "chgn", "pname": "A股-热门概念", "isleaf": 1},
+    ]
+    mock_response.raise_for_status = MagicMock()
+    mock_get.return_value = mock_response
+
+    fetcher = _make_fetcher()
+    boards = fetcher.get_all_industry_boards(source="zhitu")
+    assert len(boards) == 1
+    assert boards[0]["code"] == "sw_mt"
+    assert boards[0]["type"] == "industry"
+
+
+@patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+def test_get_concept_board_stocks_delegates_to_board_stocks(mock_get):
+    """get_concept_board_stocks calls get_board_stocks."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [{"dm": "600519", "mc": "贵州茅台", "jys": "sh"}]
+    mock_response.raise_for_status = MagicMock()
+    mock_get.return_value = mock_response
+
+    fetcher = _make_fetcher()
+    stocks = fetcher.get_concept_board_stocks("chgn_700231", source="zhitu")
+    assert stocks == [{"stock_code": "600519", "stock_name": "贵州茅台", "exchange": "sh"}]
+
+
+@patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+def test_get_industry_board_stocks_delegates_to_board_stocks(mock_get):
+    mock_response = MagicMock()
+    mock_response.json.return_value = [{"dm": "000001", "mc": "平安银行", "jys": "sz"}]
+    mock_response.raise_for_status = MagicMock()
+    mock_get.return_value = mock_response
+
+    fetcher = _make_fetcher()
+    stocks = fetcher.get_industry_board_stocks("sw_mt", source="zhitu")
+    assert stocks == [{"stock_code": "000001", "stock_name": "平安银行", "exchange": "sz"}]

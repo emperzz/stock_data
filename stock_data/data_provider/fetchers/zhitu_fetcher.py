@@ -664,3 +664,35 @@ class ZhituFetcher(BaseFetcher):
             f"(board_code={board_code!r}, frequency={frequency!r}, days={days!r}). "
             f"No upstream Zhitu API exposes this."
         )
+
+    # ---------- manager-aligned board methods (Task 6 compatibility) ----------
+
+    def get_all_concept_boards(
+        self, source: str = "zhitu", include_quote: bool = False
+    ) -> list[dict]:
+        """Get all concept boards (Zhitu: filters board_tree to concept type).
+
+        ``include_quote`` is accepted for symmetry with EastMoneyFetcher but
+        ignored — Zhitu's ``/hs/index/tree`` doesn't expose realtime quote
+        fields; for live board quotes the caller should fetch the realtime
+        snapshot separately.
+        """
+        return self.get_board_tree(board_type="concept", subtype=None)
+
+    def get_all_industry_boards(
+        self, source: str = "zhitu", include_quote: bool = False
+    ) -> list[dict]:
+        """Get all industry boards (Zhitu: filters board_tree to industry type)."""
+        return self.get_board_tree(board_type="industry", subtype=None)
+
+    def get_concept_board_stocks(
+        self, board_code: str, source: str = "zhitu", include_quote: bool = False
+    ) -> list[dict]:
+        """Get stocks in a concept board (Zhitu doesn't distinguish concept/industry)."""
+        return self.get_board_stocks(board_code)
+
+    def get_industry_board_stocks(
+        self, board_code: str, source: str = "zhitu", include_quote: bool = False
+    ) -> list[dict]:
+        """Get stocks in an industry board (Zhitu doesn't distinguish concept/industry)."""
+        return self.get_board_stocks(board_code)
