@@ -432,3 +432,32 @@ class TestStockList:
         with patch("importlib.util.find_spec", return_value=None):
             fetcher = ZzshareFetcher()
             assert fetcher.get_all_stocks("csi") == []
+
+
+# ====================================================================
+# TRADE_CALENDAR
+# ====================================================================
+
+class TestTradeCalendar:
+    def _fetcher_with_api(self, fake_days):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.trade_days = MagicMock(return_value=fake_days)
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_trade_calendar_passthrough(self):
+        dates = ["2026-05-20", "2026-05-21", "2026-05-22"]
+        fetcher = self._fetcher_with_api(dates)
+        result = fetcher.get_trade_calendar()
+        assert result == dates
+
+    def test_trade_calendar_empty_returns_none(self):
+        fetcher = self._fetcher_with_api([])
+        assert fetcher.get_trade_calendar() is None
+
+    def test_trade_calendar_sdk_unavailable_returns_none(self, monkeypatch):
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=None):
+            fetcher = ZzshareFetcher()
+            assert fetcher.get_trade_calendar() is None

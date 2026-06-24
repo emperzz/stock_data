@@ -299,3 +299,21 @@ class ZzshareFetcher(BaseFetcher):
                 "exchange": str(row.get("exchange", "")),
             })
         return out
+
+    def get_trade_calendar(self) -> list[str] | None:
+        """Fetch recent N trade dates from zzshare trade_days(days=10).
+
+        Returns list of YYYY-MM-DD strings (already formatted by SDK),
+        or None on failure.
+        """
+        api = self._ensure_api()
+        if api is None:
+            return None
+        try:
+            dates = api.trade_days(days=10)
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] trade_days failed: {e}")
+            return None
+        if not dates:
+            return None
+        return list(dates)
