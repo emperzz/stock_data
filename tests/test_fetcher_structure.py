@@ -52,12 +52,16 @@ class TestAkshareFetcher:
         caps = [
             DataCapability.HISTORICAL_DWM, DataCapability.HISTORICAL_MIN,
             DataCapability.REALTIME_QUOTE, DataCapability.STOCK_LIST,
-            DataCapability.TRADE_CALENDAR, DataCapability.STOCK_BOARD,
+            DataCapability.TRADE_CALENDAR,
             DataCapability.INDEX_QUOTE, DataCapability.INDEX_HISTORICAL,
             DataCapability.INDEX_INTRADAY, DataCapability.STOCK_ZT_POOL,
         ]
         for c in caps:
             assert c in fetcher.supported_data_types
+
+    def test_stock_board_capability_removed(self, fetcher):
+        """STOCK_BOARD migrated to EastMoney/Zhitu; Akshare no longer declares it."""
+        assert DataCapability.STOCK_BOARD not in fetcher.supported_data_types
 
     def test_convert_code_delegates_to_converter(self, fetcher):
         """_convert_code delegates to to_akshare_format."""
@@ -76,11 +80,12 @@ class TestAkshareFetcher:
         assert fetcher._map_adjust("qfq") == "qfq"
         assert fetcher._map_adjust("hfq") == "hfq"
 
-    def test_board_methods_exist(self, fetcher):
-        assert hasattr(fetcher, "get_all_concept_boards")
-        assert hasattr(fetcher, "get_all_industry_boards")
-        assert hasattr(fetcher, "get_concept_board_stocks")
-        assert hasattr(fetcher, "get_industry_board_stocks")
+    def test_board_methods_removed(self, fetcher):
+        """STOCK_BOARD migrated off AkshareFetcher; legacy methods should be gone."""
+        assert not hasattr(fetcher, "get_all_concept_boards")
+        assert not hasattr(fetcher, "get_all_industry_boards")
+        assert not hasattr(fetcher, "get_concept_board_stocks")
+        assert not hasattr(fetcher, "get_industry_board_stocks")
 
     def test_index_methods_exist(self, fetcher):
         assert hasattr(fetcher, "get_index_realtime_quote")

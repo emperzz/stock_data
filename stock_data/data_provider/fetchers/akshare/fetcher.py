@@ -19,7 +19,6 @@ from ...base import (
 from ...core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 from ...utils.code_converter import to_akshare_format
 from ...utils.normalize import get_index_type, is_index_code
-from .board import fetch_board_list, fetch_board_stocks
 from .index_norm import (
     _INDEX_EM_MAP,
     _INDEX_EM_NUMERIC,
@@ -47,7 +46,6 @@ class AkshareFetcher(BaseFetcher):
         | DataCapability.REALTIME_QUOTE
         | DataCapability.STOCK_LIST
         | DataCapability.TRADE_CALENDAR
-        | DataCapability.STOCK_BOARD
         | DataCapability.INDEX_QUOTE
         | DataCapability.INDEX_HISTORICAL
         | DataCapability.INDEX_INTRADAY
@@ -468,78 +466,6 @@ class AkshareFetcher(BaseFetcher):
         except Exception as e:
             logger.debug(f"[AkshareFetcher] Sina intraday failed: {e}")
             return None
-
-    def get_all_concept_boards(
-        self, source: str = "eastmoney", include_quote: bool = False
-    ) -> list[dict]:
-        """Get all concept boards. Delegates to the shared board helper."""
-        import akshare as ak
-        return fetch_board_list(
-            ak.stock_board_concept_name_em,
-            include_quote=include_quote,
-            fetcher_label=self.name,
-        )
-
-    def get_concept_board_stocks(
-        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
-    ) -> list[dict]:
-        """Get stocks within a concept board. Delegates to the shared board helper."""
-        import akshare as ak
-        return fetch_board_stocks(
-            ak.stock_board_concept_cons_em,
-            board_code,
-            include_quote=include_quote,
-            fallback_enricher=self._enrich_stock_from_realtime,
-            fetcher_label=self.name,
-        )
-
-    def get_all_industry_boards(
-        self, source: str = "eastmoney", include_quote: bool = False
-    ) -> list[dict]:
-        """Get all industry boards. Delegates to the shared board helper."""
-        import akshare as ak
-        return fetch_board_list(
-            ak.stock_board_industry_name_em,
-            include_quote=include_quote,
-            fetcher_label=self.name,
-        )
-
-    def get_industry_board_stocks(
-        self, board_code: str, source: str = "eastmoney", include_quote: bool = False
-    ) -> list[dict]:
-        """Get stocks within an industry board. Delegates to the shared board helper."""
-        import akshare as ak
-        return fetch_board_stocks(
-            ak.stock_board_industry_cons_em,
-            board_code,
-            include_quote=include_quote,
-            fallback_enricher=self._enrich_stock_from_realtime,
-            fetcher_label=self.name,
-        )
-
-    def _enrich_stock_from_realtime(self, stock_code: str) -> dict | None:
-        """Enrich a single stock dict with realtime quote fields.
-
-        Used as ``fallback_enricher`` by ``fetch_board_stocks`` when the
-        direct API quote enrichment fails.
-        """
-        quote = self.get_realtime_quote(stock_code)
-        if quote is None:
-            return None
-        return {
-            "price": quote.price,
-            "change_pct": quote.change_pct,
-            "change_amount": quote.change_amount,
-            "volume": quote.volume,
-            "amount": quote.amount,
-            "turnover_rate": quote.turnover_rate,
-            "pe_ratio": quote.pe_ratio,
-            "pb_ratio": quote.pb_ratio,
-            "high": quote.high,
-            "low": quote.low,
-            "open": quote.open_price,
-            "pre_close": quote.pre_close,
-        }
 
     def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote for a CSI index.

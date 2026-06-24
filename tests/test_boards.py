@@ -212,63 +212,31 @@ class TestBoardAPIRoutes:
 
 
 class TestAkshareFetcherBoards:
-    """Tests for AkshareFetcher board methods."""
+    """Tests that AkshareFetcher no longer claims STOCK_BOARD.
 
-    def test_get_all_concept_boards(self):
-        """Test get_all_concept_boards returns list of dicts."""
-        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
+    STOCK_BOARD was migrated to EastMoneyFetcher (commit 25b7819) and
+    ZhituFetcher (commit 9367351). AkshareFetcher should NOT declare the
+    capability or expose board methods.
+    """
 
-        fetcher = AkshareFetcher()
-        assert hasattr(fetcher, "get_all_concept_boards")
-
-    def test_get_all_industry_boards(self):
-        """Test get_all_industry_boards returns list of dicts."""
-        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
-
-        fetcher = AkshareFetcher()
-        assert hasattr(fetcher, "get_all_industry_boards")
-
-    def test_get_concept_board_stocks(self):
-        """Test get_concept_board_stocks method exists."""
-        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
-
-        fetcher = AkshareFetcher()
-        assert hasattr(fetcher, "get_concept_board_stocks")
-
-    def test_get_industry_board_stocks(self):
-        """Test get_industry_board_stocks method exists."""
-        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
-
-        fetcher = AkshareFetcher()
-        assert hasattr(fetcher, "get_industry_board_stocks")
-
-    def test_get_all_concept_boards_include_quote_parameter(self):
-        """Test get_all_concept_boards accepts include_quote parameter."""
-        import inspect
-
-        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
-
-        fetcher = AkshareFetcher()
-        sig = inspect.signature(fetcher.get_all_concept_boards)
-        assert "include_quote" in sig.parameters
-
-    def test_get_all_industry_boards_include_quote_parameter(self):
-        """Test get_all_industry_boards accepts include_quote parameter."""
-        import inspect
-
-        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
-
-        fetcher = AkshareFetcher()
-        sig = inspect.signature(fetcher.get_all_industry_boards)
-        assert "include_quote" in sig.parameters
-
-    def test_board_capability_declared(self):
-        """Test AkshareFetcher has STOCK_BOARD capability."""
+    def test_board_capability_not_declared(self):
+        """AkshareFetcher should NOT have STOCK_BOARD capability."""
         from stock_data.data_provider.base import DataCapability
         from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 
         fetcher = AkshareFetcher()
-        assert DataCapability.STOCK_BOARD in fetcher.supported_data_types
+        assert DataCapability.STOCK_BOARD not in fetcher.supported_data_types
+
+    def test_board_methods_removed(self):
+        """AkshareFetcher should NOT expose legacy board methods."""
+        from stock_data.data_provider.fetchers.akshare import AkshareFetcher
+
+        fetcher = AkshareFetcher()
+        assert not hasattr(fetcher, "get_all_concept_boards")
+        assert not hasattr(fetcher, "get_all_industry_boards")
+        assert not hasattr(fetcher, "get_concept_board_stocks")
+        assert not hasattr(fetcher, "get_industry_board_stocks")
+        assert not hasattr(fetcher, "_enrich_stock_from_realtime")
 
 
 class TestDataFetcherManagerBoards:
