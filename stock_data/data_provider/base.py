@@ -82,7 +82,7 @@ CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.REALTIME_QUOTE: "get_realtime_quote",
     DataCapability.STOCK_LIST: "get_all_stocks",
     DataCapability.TRADE_CALENDAR: "get_trade_calendar",
-    DataCapability.STOCK_BOARD: "get_all_concept_boards",   # default; industry/.stocks variants override
+    DataCapability.STOCK_BOARD: "get_all_boards",            # default; .stocks variant overrides
     DataCapability.INDEX_QUOTE: "get_index_realtime_quote",
     DataCapability.INDEX_HISTORICAL: "get_index_historical",
     DataCapability.INDEX_INTRADAY: "get_index_intraday",

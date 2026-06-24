@@ -94,7 +94,7 @@ def test_known_mappings():
     assert CAPABILITY_TO_METHOD[DataCapability.HISTORICAL_DWM] == "get_kline_data"
     assert CAPABILITY_TO_METHOD[DataCapability.HISTORICAL_MIN] == "get_kline_data"
     assert CAPABILITY_TO_METHOD[DataCapability.REALTIME_QUOTE] == "get_realtime_quote"
-    assert CAPABILITY_TO_METHOD[DataCapability.STOCK_BOARD] == "get_all_concept_boards"
+    assert CAPABILITY_TO_METHOD[DataCapability.STOCK_BOARD] == "get_all_boards"
     assert CAPABILITY_TO_METHOD[DataCapability.DRAGON_TIGER] == "get_dragon_tiger"
     assert CAPABILITY_TO_METHOD[DataCapability.FUND_FLOW] == "get_fund_flow_minute"
 

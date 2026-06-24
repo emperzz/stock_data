@@ -100,7 +100,7 @@ def list_boards(
     summary="板块成分股",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
-    fetcher_method="get_concept_board_stocks",  # default get_all_concept_boards is the list variant
+    fetcher_method="get_board_stocks",          # default get_all_boards is the list variant
 )
 @map_errors
 def get_board_stocks(

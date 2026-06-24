@@ -161,11 +161,13 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
     if manager is None:
         raise ValueError("manager is required when refresh=True or cache miss")
 
-    # Fetch based on board_type
-    if board_type == "concept":
-        boards, fetcher_source = manager.get_all_concept_boards(source=source, include_quote=include_quote)
-    elif board_type == "industry":
-        boards, fetcher_source = manager.get_all_industry_boards(source=source, include_quote=include_quote)
+    # Fetch based on board_type — unified entry point (see manager.get_all_boards).
+    # We pass board_type to the fetcher so it can dispatch internally (EastMoney
+    # handles concept/industry; Zhitu also accepts these labels).
+    if board_type in ("concept", "industry"):
+        boards, fetcher_source = manager.get_all_boards(
+            source=source, board_type=board_type, include_quote=include_quote,
+        )
     else:
         boards, fetcher_source = [], ""
 
@@ -215,23 +217,15 @@ def get_board_stocks(
     if manager is None:
         raise ValueError("manager is required when refresh=True or cache miss")
 
-    board_type = _get_board_type(board_code, source, manager)
-    if board_type is None:
-        # Cache miss: try concept first, fall back to industry.
-        # Both board types use "BK" prefix on EastMoney so code alone can't distinguish them.
-        stocks, fetcher_source = manager.get_concept_board_stocks(board_code, source=source, include_quote=include_quote)
-        if not stocks:
-            stocks, fetcher_source = manager.get_industry_board_stocks(board_code, source=source, include_quote=include_quote)
-        if stocks:
-            update_cached_board_stocks(board_code, source, stocks)
-        return stocks, fetcher_source
-
-    if board_type == "concept":
-        stocks, fetcher_source = manager.get_concept_board_stocks(board_code, source=source, include_quote=include_quote)
-    elif board_type == "industry":
-        stocks, fetcher_source = manager.get_industry_board_stocks(board_code, source=source, include_quote=include_quote)
-    else:
-        stocks, fetcher_source = [], ""
+    # Single unified entry point — the fetcher's get_board_stocks handles
+    # concept/industry disambiguation internally (EastMoney tries concept
+    # then falls back to industry; Zhitu is type-agnostic). We still consult
+    # the SQLite board_type cache above (in the cache-hit fast path) so a
+    # known concept/industry board avoids the fetcher's fallback cost.
+    _ = _get_board_type(board_code, source, manager)  # warms the board_type cache
+    stocks, fetcher_source = manager.get_board_stocks(
+        board_code, source=source, include_quote=include_quote,
+    )
 
     if stocks:
         update_cached_board_stocks(board_code, source, stocks)

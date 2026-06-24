@@ -45,10 +45,9 @@ def test_get_board_list_returns_tuple(monkeypatch):
     """board.get_board_list 应该返回 (boards, origin)."""
     # Mock manager
     class _MockManager:
-        def get_all_concept_boards(self, source="eastmoney", include_quote=False):
-            return ([{"code": "BK0001", "name": "测试板块"}], "mock_fetcher")
-
-        def get_all_industry_boards(self, source="eastmoney", include_quote=False):
+        def get_all_boards(self, source="eastmoney", board_type="concept", include_quote=False, **_):
+            if board_type == "concept":
+                return ([{"code": "BK0001", "name": "测试板块"}], "mock_fetcher")
             return ([], "")
 
     # 跳过 SQLite, 强制走 fetcher 路径
@@ -66,16 +65,10 @@ def test_get_board_list_returns_tuple(monkeypatch):
 
 def test_get_board_stocks_returns_tuple(monkeypatch):
     """board.get_board_stocks 应该返回 (stocks, origin)."""
-    # Mock manager — return_source 风格的 tuple
+    # Mock manager — unified entry point only.
     class _MockManager:
-        def _get_board_type(self, board_code, source):
-            return None  # 走 concept/industry 兜底路径
-
-        def get_concept_board_stocks(self, board_code, source="eastmoney", include_quote=False):
+        def get_board_stocks(self, board_code, source="eastmoney", include_quote=False):
             return ([{"stock_code": "600519", "stock_name": "贵州茅台"}], "mock_fetcher")
-
-        def get_industry_board_stocks(self, board_code, source="eastmoney", include_quote=False):
-            return ([], "")
 
     # 跳过 SQLite, 强制走 fetcher 路径
     monkeypatch.setattr(

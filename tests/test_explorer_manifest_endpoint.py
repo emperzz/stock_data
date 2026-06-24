@@ -164,7 +164,7 @@ class TestManifestFetchersField:
         m = self._manifest()
         ep = self._endpoint(m, "GET", "/boards/{board_code}/stocks")
         methods = {f["method"] for f in ep["fetchers"]}
-        assert methods == {"get_concept_board_stocks"}
+        assert methods == {"get_board_stocks"}
 
     def test_signature_has_code_field_for_kline(self):
         m = self._manifest()
