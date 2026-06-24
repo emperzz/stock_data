@@ -404,3 +404,115 @@ class ZzshareFetcher(BaseFetcher):
                 "zt_count": safe_int(row.get("zt_count")),
             })
         return out
+
+    # Board type/subtype -> zzshare plate_type
+    _PLATE_TYPE_BY_BOARD_TYPE: dict[str, int] = {
+        "industry": 14,
+        "concept": 15,
+        "special": 17,
+    }
+    _BOARD_TYPE_BY_PLATE_TYPE: dict[int, tuple[str, str]] = {
+        14: ("industry", "同花顺行业"),
+        15: ("concept", "同花顺概念"),
+        17: ("special", "同花顺题材"),
+    }
+
+    def get_all_boards(
+        self,
+        board_type: str,
+        subtype: str | None = None,
+        source: str = "zzshare",
+        include_quote: bool = False,
+    ) -> list[dict]:
+        """Get boards of a given (type, subtype) from zzshare plates_list.
+
+        include_quote is accepted for interface symmetry but ignored —
+        plates_list does not expose realtime quote fields.
+        """
+        _ = source, include_quote  # accepted for Manager interface
+        api = self._ensure_api()
+        if api is None:
+            return []
+        out: list[dict] = []
+        target_plate_types = [
+            pt for pt, (bt, st) in self._BOARD_TYPE_BY_PLATE_TYPE.items()
+            if bt == board_type
+        ]
+        for pt in target_plate_types:
+            try:
+                rows = api.plates_list(plate_type=pt)
+            except Exception as e:
+                logger.warning(f"[ZzshareFetcher] plates_list({pt}) failed: {e}")
+                continue
+            if not rows:
+                continue
+            mapped_type, mapped_subtype = self._BOARD_TYPE_BY_PLATE_TYPE[pt]
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_plate_type = row.get("plate_type")
+                if row_plate_type is not None and row_plate_type != pt:
+                    continue
+                if subtype is not None and mapped_subtype != subtype:
+                    continue
+                out.append({
+                    "code": str(row.get("plate_code", "")),
+                    "name": str(row.get("plate_name", "")),
+                    "type": mapped_type,
+                    "subtype": mapped_subtype,
+                })
+        return out
+
+    def get_board_stocks(self, board_code: str, **kwargs) -> list[dict]:
+        """Get stocks belonging to a board via plates_stocks.
+
+        Returns [{stock_code, stock_name, exchange}] or [] on failure.
+        ``**kwargs`` absorbs source/include_quote for interface symmetry.
+        """
+        source = kwargs.get("source", "zzshare")
+        _ = source  # currently always 'zzshare' for this fetcher
+        api = self._ensure_api()
+        if api is None:
+            return []
+        # Try each plate_type (14/15/17) until one returns data.
+        rows = None
+        for pt in self._BOARD_TYPE_BY_PLATE_TYPE:
+            try:
+                r = api.plates_stocks(plate_type=pt, plate_code=board_code)
+                if r:
+                    rows = r
+                    break
+            except Exception:
+                continue
+        if not rows:
+            return []
+        out: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            stock_code = str(row.get("stock_code", "")).strip()
+            if not stock_code:
+                continue
+            out.append({
+                "stock_code": _add_exchange_suffix(stock_code),
+                "stock_name": str(row.get("stock_name", "")).strip(),
+                "exchange": str(row.get("exchange", "")).strip().lower(),
+            })
+        return out
+
+    def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict] | None:
+        """Reverse lookup: boards a stock belongs to.
+
+        zzshare SDK does not provide a direct stock->boards endpoint. Return
+        None so the route layer can 404 (matches EastMoney behavior).
+        """
+        return None
+
+    def get_board_history(
+        self, board_code: str, frequency: str = "d", days: int = 30, **kwargs
+    ) -> list[dict]:
+        """K-line for a board — not yet implemented for zzshare."""
+        raise NotImplementedError(
+            f"ZzshareFetcher does not provide board-level K-line data "
+            f"(board_code={board_code!r}). v2 may use api.plate_kline()."
+        )

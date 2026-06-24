@@ -590,3 +590,91 @@ class TestZtPool:
         call = fetcher._api.uplimit_stocks.call_args
         # date1 should be YYYYMMDD format
         assert call.kwargs.get("date1") == "20260520"
+
+
+# ====================================================================
+# STOCK_BOARD (4 methods)
+# ====================================================================
+
+class TestBoards:
+    def _fetcher_with_api(self, **mocks):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        for name, value in mocks.items():
+            setattr(fake_api, name, MagicMock(return_value=value))
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_get_all_boards_concept_via_15(self):
+        rows = [
+            {"plate_code": "801001", "plate_name": "芯片", "plate_type": 15, "rate": 1.5},
+            {"plate_code": "801660", "plate_name": "通信", "plate_type": 15, "rate": 0.8},
+        ]
+        fetcher = self._fetcher_with_api(plates_list=rows)
+        boards = fetcher.get_all_boards(board_type="concept", subtype="同花顺概念", source="zzshare")
+        assert len(boards) == 2
+        assert boards[0]["code"] == "801001"
+        assert boards[0]["name"] == "芯片"
+        assert boards[0]["type"] == "concept"
+        assert boards[0]["subtype"] == "同花顺概念"
+
+    def test_get_all_boards_filters_by_subtype(self):
+        rows = [
+            {"plate_code": "801001", "plate_name": "芯片", "plate_type": 15, "rate": 1.5},
+            {"plate_code": "881121", "plate_name": "半导体", "plate_type": 14, "rate": 0.5},
+        ]
+        fetcher = self._fetcher_with_api(plates_list=rows)
+        boards = fetcher.get_all_boards(board_type="concept", subtype="同花顺概念", source="zzshare")
+        # Only plate_type=15 (concept) matches
+        assert len(boards) == 1
+        assert boards[0]["code"] == "801001"
+
+    def test_get_all_boards_industry_via_14(self):
+        rows = [
+            {"plate_code": "881121", "plate_name": "半导体", "plate_type": 14, "rate": 0.5},
+        ]
+        fetcher = self._fetcher_with_api(plates_list=rows)
+        boards = fetcher.get_all_boards(board_type="industry", subtype="同花顺行业", source="zzshare")
+        assert len(boards) == 1
+        assert boards[0]["type"] == "industry"
+
+    def test_get_all_boards_special_via_17(self):
+        rows = [
+            {"plate_code": "881999", "plate_name": "题材", "plate_type": 17, "rate": 2.0},
+        ]
+        fetcher = self._fetcher_with_api(plates_list=rows)
+        boards = fetcher.get_all_boards(board_type="special", subtype="同花顺题材", source="zzshare")
+        assert len(boards) == 1
+        assert boards[0]["type"] == "special"
+
+    def test_get_all_boards_no_subtype_returns_all_matching_type(self):
+        rows = [
+            {"plate_code": "801001", "plate_name": "芯片", "plate_type": 15, "rate": 1.5},
+            {"plate_code": "801002", "plate_name": "通信", "plate_type": 15, "rate": 0.8},
+            {"plate_code": "881121", "plate_name": "半导体", "plate_type": 14, "rate": 0.5},
+        ]
+        fetcher = self._fetcher_with_api(plates_list=rows)
+        boards = fetcher.get_all_boards(board_type="concept", subtype=None, source="zzshare")
+        # Only concept (plate_type=15) match
+        assert len(boards) == 2
+
+    def test_get_board_stocks_adds_exchange_suffix(self):
+        rows = [
+            {"stock_code": "600519", "stock_name": "贵州茅台", "exchange": "sh"},
+            {"stock_code": "000001", "stock_name": "平安银行", "exchange": "sz"},
+        ]
+        fetcher = self._fetcher_with_api(plates_stocks=rows)
+        stocks = fetcher.get_board_stocks("801001", source="zzshare")
+        assert stocks[0]["stock_code"] == "600519.SH"
+        assert stocks[1]["stock_code"] == "000001.SZ"
+        assert stocks[0]["stock_name"] == "贵州茅台"
+
+    def test_get_stock_boards_returns_none(self):
+        """SDK has no stock->boards reverse lookup; return None (route 404)."""
+        fetcher = ZzshareFetcher()
+        assert fetcher.get_stock_boards("600519", source="zzshare") is None
+
+    def test_get_board_history_raises_not_implemented(self):
+        fetcher = ZzshareFetcher()
+        with pytest.raises(NotImplementedError, match="ZzshareFetcher does not provide"):
+            fetcher.get_board_history("801001", source="zzshare", frequency="d", days=30)
