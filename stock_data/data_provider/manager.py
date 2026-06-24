@@ -911,6 +911,7 @@ def create_default_manager() -> DataFetcherManager:
     from .fetchers.tushare_fetcher import TushareFetcher
     from .fetchers.yfinance_fetcher import YfinanceFetcher
     from .fetchers.zhitu_fetcher import ZhituFetcher
+    from .fetchers.zzshare_fetcher import ZzshareFetcher   # NEW
 
     manager = DataFetcherManager()
     fetcher_classes = [
@@ -920,6 +921,7 @@ def create_default_manager() -> DataFetcherManager:
         AkshareFetcher,
         YfinanceFetcher,
         ZhituFetcher,
+        ZzshareFetcher,   # NEW (P5; placed after Zhitu for human-readable order)
         TencentFetcher,
         EastMoneyFetcher,
         BaiduFetcher,

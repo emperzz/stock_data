@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A Python-based local stock data aggregation server that:
-- Integrates 11 upstream stock data APIs (Tushare, Baostock, Akshare, Yfinance, Zhitu, Tencent, EastMoney, THS, Cninfo, Myquant, Baidu)
+- Integrates 12 upstream stock data APIs (Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Myquant, Baidu)
 - Normalizes data into a unified format across all capability groups (行情/资金面/基础数据/公告/研报/特殊池/etc.)
 - Provides a stable REST API for consumption by AI agents like OpenClaw
 
@@ -16,7 +16,7 @@ Four layers, top-down:
 1. **API Layer (FastAPI)** — declarative routes; metadata-driven via `@endpoint_meta`.
 2. **IndicatorService (pure compute)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC`. Sits on top of the manager; no fetcher involvement. See `data_provider/indicators/` for the full descriptor registry and add-an-indicator conventions.
 3. **DataFetcherManager** — capability-routed, priority-based failover + circuit breaker + TTLCache. See `data_provider/manager.py`.
-4. **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Tencent · EastMoney · Ths · Cninfo · Myquant · Baidu` (11 fetchers; details in each module's docstring).
+4. **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Zzshare · Tencent · EastMoney · Ths · Cninfo · Myquant · Baidu` (12 fetchers; details in each module's docstring).
 
 ## Directory Structure
 
@@ -215,7 +215,8 @@ Compact overview:
 | `AkshareFetcher` | 2 | csi, hk | `HISTORICAL_DWM`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_*`, `STOCK_ZT_POOL` | none |
 | `YfinanceFetcher` | 3 | us, csi, hk | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `INDEX_HISTORICAL`, `INDEX_QUOTE` | none |
 | `ZhituFetcher` | 4 | csi | `REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `HISTORICAL_MIN` (minute fallback), `STOCK_LIST` (P4 backup), `STOCK_BOARD` | `ZHITU_TOKEN` |
-| `TencentFetcher` | 5 | csi, hk | `REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
+| `ZzshareFetcher` | 5 | csi | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
+| `TencentFetcher` | 6 | csi, hk | `REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
 | `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `STOCK_BOARD` | none |
 | `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH` | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
@@ -235,6 +236,7 @@ Compact overview:
 | TushareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | YfinanceFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | ZhituFetcher | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| ZzshareFetcher | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 
 **Fallback**: Server queries providers in priority order. If provider doesn't support the requested frequency, it raises `DataFetchError` and the next provider is tried.
 
@@ -252,36 +254,36 @@ fetchers that support it.
 
 | API Method | Capability Used |
 |------------|----------------|
-| `get_kline_data` (d/w/m, stocks) | `HISTORICAL_DWM` |
-| `get_kline_data` (5/15/30/60, stocks) | `HISTORICAL_MIN` |
+| `get_kline_data` (d/w/m, stocks) | `HISTORICAL_DWM` (ZzshareFetcher P5) |
+| `get_kline_data` (5/15/30/60, stocks) | `HISTORICAL_MIN` (ZzshareFetcher P5) |
 | `get_kline_data` (d/w/m, indices) | `INDEX_HISTORICAL` (fallback: `HISTORICAL_DWM`) |
 | `get_kline_data` (5/15/30/60, indices) | `INDEX_INTRADAY` (fallback: `HISTORICAL_MIN`) |
-| `get_realtime_quote` | `REALTIME_QUOTE` |
-| `get_intraday_data` | `HISTORICAL_MIN` |
+| `get_realtime_quote` | `REALTIME_QUOTE` (ZzshareFetcher P5) |
+| `get_intraday_data` | `HISTORICAL_MIN` (ZzshareFetcher P5) |
 | `get_stock_name` | n/a — handled by `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
-| `get_trade_calendar` | `TRADE_CALENDAR` |
-| `get_all_boards` | `STOCK_BOARD` (source-routed, no failover) |
-| `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover) |
-| `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover) |
-| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; currently stub) |
+| `get_trade_calendar` | `TRADE_CALENDAR` (ZzshareFetcher P5) |
+| `get_all_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
+| `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
+| `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
+| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; currently stub) (ZzshareFetcher P5) |
 | `get_index_realtime_quote` | `INDEX_QUOTE` |
 | `get_index_historical` | `INDEX_HISTORICAL` |
 | `get_index_intraday` | `INDEX_INTRADAY` |
-| `get_zt_pool` | `STOCK_ZT_POOL` |
-| `get_dragon_tiger` | `DRAGON_TIGER` |
+| `get_zt_pool` | `STOCK_ZT_POOL` (ZzshareFetcher P5) |
+| `get_dragon_tiger` | `DRAGON_TIGER` (ZzshareFetcher P5) |
 | `get_margin_trading` | `MARGIN_TRADING` |
 | `get_block_trade` | `BLOCK_TRADE` |
 | `get_holder_num_change` | `HOLDER_NUM` |
 | `get_dividend` | `DIVIDEND` |
 | `get_fund_flow_minute` / `get_fund_flow_120d` | `FUND_FLOW` |
-| `get_hot_topics` | `HOT_TOPICS` |
+| `get_hot_topics` | `HOT_TOPICS` (ZzshareFetcher P5) |
 | `get_north_flow` | `NORTH_FLOW` |
 | `get_reports` | `RESEARCH_REPORT` |
 | `get_announcements` | `ANNOUNCEMENT` |
 | `get_flash_news` | `NEWS_FLASH` (EastMoney P6 → ThsFetcher P7) |
 | `search_news` | `NEWS_SEARCH` (EastMoney P6 → BaiduFetcher P7) |
 | `get_news_content` (URL extractor; no fetcher routing) | n/a — pure utility in `utils/news_extractor.py` |
-| `get_stock_info` | `STOCK_INFO` |
+| `get_stock_info` | `STOCK_INFO` (ZzshareFetcher P5) |
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
 | `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `HISTORICAL_DWM` |
 

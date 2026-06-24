@@ -10,6 +10,8 @@
 
 **Reference spec:** `docs/superpowers/specs/2026-06-24-zzshare-fetcher-design.md` (commit `ee0fa62`).
 
+**Implementation note (2026-06-24):** `BaseFetcher.get_kline_data` raises `DataFetchError("No data for {stock_code}")` on empty `api.daily(...)` returns (see `base.py:277-278`). Therefore `test_daily_empty_df_returns_empty` should be `test_daily_empty_df_raises` with `pytest.raises(DataFetchError)`. This only applies to the daily K-line path; other empty-data tests (intraday via `get_intraday_data`, realtime, list, etc.) still return `None`/`[]` as written because they don't route through `get_kline_data`.
+
 ---
 
 ## File Structure

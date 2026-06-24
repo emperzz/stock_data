@@ -34,6 +34,7 @@ from stock_data.data_provider import (
     TushareFetcher,
     YfinanceFetcher,
     ZhituFetcher,
+    ZzshareFetcher,   # NEW
 )
 from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
 
@@ -53,6 +54,7 @@ _CONCRETE_FETCHERS = (
     TushareFetcher,
     YfinanceFetcher,
     ZhituFetcher,
+    ZzshareFetcher,   # NEW
 )
 
 
