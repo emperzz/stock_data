@@ -17,6 +17,57 @@ logger = logging.getLogger(__name__)
 _refresh_tracker = DailyRefreshTracker()
 _schema_initialized_paths: set[str] = set()
 
+# Subtype 合法值表：source → type → {subtype 集合}
+VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
+    "eastmoney": {
+        "concept": {"concept"},
+        "industry": {"industry"},
+        "index": {"index"},
+        "special": {"special"},
+    },
+    "zhitu": {
+        "industry": {"申万行业", "申万二级", "证监会行业"},
+        "concept": {"热门概念", "概念板块", "地域板块"},
+        "index": {"分类", "指数成分", "大盘指数"},
+        "special": {"风险警示", "次新股", "沪港通", "深港通"},
+    },
+}
+
+
+def _validate_subtype(source: str, board_type: str, subtype: str | None) -> None:
+    """Validate subtype against the source's declared subtype set.
+
+    Args:
+        source: data source name (e.g. ``"zhitu"``).
+        board_type: one of ``concept / industry / index / special``.
+        subtype: optional subtype name; ``None`` means "all subtypes".
+
+    Raises:
+        ValueError: source unknown, type invalid for source, or subtype
+            not in the source's declared subtype set. Error message lists
+            the valid subtypes for the source/type pair.
+    """
+    if subtype is None:
+        return
+    source_table = VALID_SUBTYPES_BY_SOURCE.get(source)
+    if source_table is None:
+        raise ValueError(
+            f"Unknown source '{source}'. "
+            f"Known sources: {sorted(VALID_SUBTYPES_BY_SOURCE.keys())}"
+        )
+    valid_set = source_table.get(board_type)
+    if valid_set is None:
+        raise ValueError(
+            f"Invalid type '{board_type}' for source '{source}'. "
+            f"Valid types: {sorted(source_table.keys())}"
+        )
+    if subtype not in valid_set:
+        raise ValueError(
+            f"Invalid subtype '{subtype}' for type='{board_type}' "
+            f"source='{source}'. "
+            f"Valid subtypes: {sorted(valid_set)}"
+        )
+
 
 def init_schema() -> None:
     """Initialize the database schema for stock boards.
