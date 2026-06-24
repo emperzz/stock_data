@@ -678,3 +678,78 @@ class TestBoards:
         fetcher = ZzshareFetcher()
         with pytest.raises(NotImplementedError, match="ZzshareFetcher does not provide"):
             fetcher.get_board_history("801001", source="zzshare", frequency="d", days=30)
+
+
+# ====================================================================
+# DRAGON_TIGER
+# ====================================================================
+
+class TestDragonTiger:
+    def _fetcher_with_api(self, **mocks):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        for name, value in mocks.items():
+            setattr(fake_api, name, MagicMock(return_value=value))
+        fetcher._api = fake_api
+        return fetcher
+
+    def test_daily_dragon_tiger_normalizes_stock_code(self):
+        rows = [
+            {"stock_code": "000078", "stock_name": "海王生物",
+             "concepts": "801723:中药,801369:医美",
+             "amplitude": 5.2, "quote_change": 10.0, "turnover": 5e8,
+             "turnover_ratio": 8.5, "capitalization": 1e9, "circ_price": 5e8,
+             "buy_in": 1e8, "join_num": 5, "up_reason": "涨幅偏离值达7%",
+             "t_type": 0, "d3": 12.0},
+        ]
+        fetcher = self._fetcher_with_api(lhb_list=rows)
+        data = fetcher.get_daily_dragon_tiger("2026-05-20", None)
+        assert data["date"] == "2026-05-20"
+        assert data["total"] == 1
+        # 000078 -> 000078.SZ (ChiNext prefix 0/3 -> SZ)
+        assert data["stocks"][0]["code"] == "000078.SZ"
+        assert data["stocks"][0]["name"] == "海王生物"
+        assert data["stocks"][0]["net_buy"] == 1e8
+
+    def test_daily_dragon_tiger_min_net_buy_filter(self):
+        rows = [
+            {"stock_code": "000078", "stock_name": "A", "buy_in": 5e7},
+            {"stock_code": "600519", "stock_name": "B", "buy_in": 2e8},
+        ]
+        fetcher = self._fetcher_with_api(lhb_list=rows)
+        data = fetcher.get_daily_dragon_tiger("2026-05-20", 1e8)
+        # Only stock with buy_in >= 1e8 (100M) survives; 600519 starts with 6 -> .SH
+        assert data["total"] == 1
+        assert data["stocks"][0]["code"] == "600519.SH"
+
+    def test_daily_dragon_tiger_empty_returns_zeros(self):
+        fetcher = self._fetcher_with_api(lhb_list=[])
+        data = fetcher.get_daily_dragon_tiger("2026-05-20", None)
+        assert data["date"] == "2026-05-20"
+        assert data["total"] == 0
+        assert data["stocks"] == []
+
+    def test_dragon_tiger_uses_detail(self):
+        detail = [
+            {"trader_name": "东方证券绍兴解放南路营业部", "buy": 1e8, "sell": 5e7, "net": 5e7},
+            {"trader_name": "华泰证券深圳益田路荣超商务中心", "buy": 5e7, "sell": 3e7, "net": 2e7},
+        ]
+        fetcher = self._fetcher_with_api(lhb_detail=detail)
+        data = fetcher.get_dragon_tiger("000078", "2026-05-20", 30)
+        assert "seats" in data
+        # 2 buy seats and 2 sell seats
+        assert len(data["seats"]["buy"]) == 2
+        assert len(data["seats"]["sell"]) == 2
+        assert data["seats"]["buy"][0]["name"] == "东方证券绍兴解放南路营业部"
+
+    def test_dragon_tiger_falls_back_to_stock_history(self):
+        """When lhb_detail returns empty, try lhb_stock_history."""
+        fetcher = self._fetcher_with_api(
+            lhb_detail=[],  # empty
+            lhb_stock_history=[
+                {"trade_date": "2026-05-15", "buy_in": 5e7, "reason": "涨幅偏离"}
+            ],
+        )
+        data = fetcher.get_dragon_tiger("000078", "2026-05-20", 30)
+        # records should have at least 1 entry from history
+        assert len(data["records"]) >= 1

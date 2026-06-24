@@ -516,3 +516,104 @@ class ZzshareFetcher(BaseFetcher):
             f"ZzshareFetcher does not provide board-level K-line data "
             f"(board_code={board_code!r}). v2 may use api.plate_kline()."
         )
+
+    def get_daily_dragon_tiger(
+        self, trade_date: str = "", min_net_buy: float | None = None
+    ) -> dict:
+        """全市场龙虎榜 via zzshare lhb_list.
+
+        Returns ``{date, total, stocks[]}`` matching the manager's
+        contract. ``min_net_buy`` filters rows whose buy_in < threshold.
+        """
+        api = self._ensure_api()
+        if api is None:
+            raise DataFetchError("ZzshareFetcher DataApi SDK 不可用")
+        date_str = _to_yyyymmdd(trade_date) if trade_date else _to_yyyymmdd(
+            __import__("datetime").date.today().strftime("%Y-%m-%d")
+        )
+        try:
+            rows = api.lhb_list(date1=date_str)
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] lhb_list({date_str}) failed: {e}")
+            raise DataFetchError(f"lhb_list failed: {e}") from e
+        out_stocks: list[dict] = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            buy_in = safe_float(row.get("buy_in")) or 0.0
+            if min_net_buy is not None and buy_in < min_net_buy:
+                continue
+            stock_code = str(row.get("stock_code", "")).strip()
+            out_stocks.append({
+                "code": _add_exchange_suffix(stock_code) if stock_code else "",
+                "name": str(row.get("stock_name", "")),
+                "net_buy": buy_in,
+                "amplitude": safe_float(row.get("amplitude")),
+                "change_pct": safe_float(row.get("quote_change")),
+                "turnover": safe_float(row.get("turnover")),
+                "turnover_rate": safe_float(row.get("turnover_ratio")),
+                "join_num": safe_int(row.get("join_num")),
+                "reason": str(row.get("up_reason", "")),
+                "t_type": safe_int(row.get("t_type")),
+                "d3": safe_float(row.get("d3")),
+            })
+        return {
+            "date": _from_yyyymmdd(date_str),
+            "total": len(out_stocks),
+            "stocks": out_stocks,
+        }
+
+    def get_dragon_tiger(
+        self, code: str, trade_date: str = "", look_back: int = 30
+    ) -> dict:
+        """个股龙虎榜 via zzshare lhb_detail, fallback lhb_stock_history.
+
+        Returns ``{records[], seats{buy, sell}, institution}`` matching
+        the manager's per-stock contract.
+        """
+        api = self._ensure_api()
+        if api is None:
+            raise DataFetchError("ZzshareFetcher DataApi SDK 不可用")
+        bare_code = normalize_stock_code(code)
+        date_str = _to_yyyymmdd(trade_date) if trade_date else ""
+        records: list[dict] = []
+        seats: dict[str, list] = {"buy": [], "sell": []}
+        # 1) Try detail (per-day seats)
+        try:
+            detail = api.lhb_detail(date1=date_str, stock_code=bare_code) if date_str else None
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] lhb_detail failed: {e}")
+            detail = None
+        if detail and isinstance(detail, list):
+            for row in detail:
+                if not isinstance(row, dict):
+                    continue
+                trader = str(row.get("trader_name", ""))
+                buy_amt = safe_float(row.get("buy")) or 0.0
+                sell_amt = safe_float(row.get("sell")) or 0.0
+                net = safe_float(row.get("net")) or (buy_amt - sell_amt)
+                if buy_amt > 0:
+                    seats["buy"].append({"name": trader, "amount": buy_amt})
+                if sell_amt > 0:
+                    seats["sell"].append({"name": trader, "amount": sell_amt})
+        # 2) If detail empty, fall back to stock history
+        if not seats["buy"] and not seats["sell"]:
+            try:
+                history = api.lhb_stock_history(stock_code=bare_code)
+            except Exception as e:
+                logger.warning(f"[ZzshareFetcher] lhb_stock_history failed: {e}")
+                history = None
+            if history and isinstance(history, list):
+                for row in history:
+                    if not isinstance(row, dict):
+                        continue
+                    records.append({
+                        "date": str(row.get("trade_date", "")),
+                        "net_buy": safe_float(row.get("buy_in")),
+                        "reason": str(row.get("reason", "")),
+                    })
+        return {
+            "records": records,
+            "seats": seats,
+            "institution": {},
+        }
