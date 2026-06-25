@@ -78,7 +78,7 @@ def test_get_all_boards_concept_delegates(mock_ak):
     ])
     fetcher = EastMoneyFetcher()
     boards = fetcher.get_all_boards(board_type="concept", source="eastmoney")
-    assert boards == [{"code": "BK0001", "name": "测试"}]
+    assert boards == [{"code": "BK0001", "name": "测试", "subtype": "concept"}]
 
 
 @patch("stock_data.data_provider.fetchers.eastmoney.board._AKSHARE")
@@ -88,7 +88,7 @@ def test_get_all_boards_industry_delegates(mock_ak):
     ])
     fetcher = EastMoneyFetcher()
     boards = fetcher.get_all_boards(board_type="industry", source="eastmoney")
-    assert boards == [{"code": "BK1001", "name": "测试行业"}]
+    assert boards == [{"code": "BK1001", "name": "测试行业", "subtype": "industry"}]
 
 
 def test_get_all_boards_index_returns_empty():

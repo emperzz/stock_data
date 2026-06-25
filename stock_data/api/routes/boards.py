@@ -131,14 +131,20 @@ def list_boards(
 
     manager = get_manager()
 
-    # Manager.get_all_boards 通过 _with_source 路由到 source 对应的 fetcher，
-    # 统一调用其 get_all_boards(board_type, subtype) 方法。
+    # Route through the persistence layer so cache hits return origin="persistence"
+    # (per CLAUDE.md source-tracking matrix). The persistence module owns the
+    # "first call of day / refresh flag / include_quote flag" policy and only
+    # delegates to manager.get_all_boards when an upstream call is actually
+    # needed. sort_by / limit are still applied here in the route layer so
+    # both cache-hit and cache-miss paths share a single post-processing step.
     try:
-        boards, origin = manager.get_all_boards(
-            source=source,
+        boards, origin = stock_board_cache.get_board_list(
             board_type=type,
-            subtype=subtype,
+            source=source,
+            refresh=refresh,
             include_quote=include_quote,
+            subtype=subtype,
+            manager=manager,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)})

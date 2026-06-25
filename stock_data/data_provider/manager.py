@@ -45,20 +45,15 @@ class DataFetcherManager:
     def __init__(self, fetchers: list[BaseFetcher] | None = None):
         self._fetchers: list[BaseFetcher] = []
         self._fetchers_by_name: dict = {}
+        # Slug → fetcher 路由索引。Slug 从 fetcher.name 派生（去掉 "Fetcher" 后缀，转小写）。
+        # 例如 "ZhituFetcher" → "zhitu", "EastMoneyFetcher" → "eastmoney"。
+        # 用于 _with_source() 的 source 参数（API 层传 slug 形式）。
+        self._slug_index: dict[str, BaseFetcher] = {}
         self._lock = RLock()
 
         if fetchers:
             self._fetchers = sorted(fetchers, key=lambda f: f.priority)
             self._refresh_index()
-
-        # Slug → fetcher 路由索引。Slug 从 fetcher.name 派生（去掉 "Fetcher" 后缀，转小写）。
-        # 例如 "ZhituFetcher" → "zhitu", "EastMoneyFetcher" → "eastmoney"。
-        # 用于 _with_source() 的 source 参数（API 层传 slug 形式）。
-        self._slug_index: dict[str, BaseFetcher] = {}
-        for f in self._fetchers:
-            slug = self._derive_slug(f.name)
-            if slug:
-                self._slug_index[slug] = f
 
     # ---------- registration / lookup ----------
 
@@ -67,10 +62,24 @@ class DataFetcherManager:
         with self._lock:
             self._fetchers.clear()
             self._fetchers_by_name.clear()
+            self._slug_index.clear()
 
     def _refresh_index(self) -> None:
-        """Refresh fetcher name index."""
+        """Refresh name and slug indices from ``_fetchers``.
+
+        Both indices are derived state and must be rebuilt together whenever
+        ``_fetchers`` changes. Without the slug rebuild, source-routed
+        lookups (e.g. ``_with_source(source='zzshare')``) fail after
+        ``add_fetcher()`` even though ``add_fetcher`` is the production
+        registration path used by ``create_default_manager()``.
+        """
         self._fetchers_by_name = {f.name: f for f in self._fetchers}
+        self._slug_index = {
+            slug: f
+            for f in self._fetchers
+            for slug in [self._derive_slug(f.name)]
+            if slug
+        }
 
     def add_fetcher(self, fetcher: BaseFetcher) -> None:
         """Add a fetcher and re-sort by priority."""

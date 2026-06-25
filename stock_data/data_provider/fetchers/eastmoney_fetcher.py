@@ -1086,17 +1086,29 @@ class EastMoneyFetcher(BaseFetcher):
         - ``type=concept``: any subtype → returns concept boards
         - ``type=industry``: any subtype → returns industry boards
         - ``type=index`` / ``type=special``: not supported → return ``[]``
+
+        Each returned board is tagged with ``subtype=board_type`` (e.g.
+        ``subtype="concept"``) so the persistence layer can store a uniform
+        shape across sources. This matches the Zhitu / Zzshare convention
+        without inventing fake EM-specific subtypes.
         """
         if board_type == "concept":
-            return self.get_all_concept_boards(
+            boards = self.get_all_concept_boards(
                 source=source, include_quote=include_quote,
             )
-        if board_type == "industry":
-            return self.get_all_industry_boards(
+        elif board_type == "industry":
+            boards = self.get_all_industry_boards(
                 source=source, include_quote=include_quote,
             )
-        # index / special: EastMoney has no such classification
-        return []
+        else:
+            # index / special: EastMoney has no such classification
+            return []
+        # Tag every board with subtype=board_type so persistence layer has
+        # a uniform shape. setdefault preserves any subtype the inner helper
+        # already set (defensive — currently the helpers don't set it).
+        for b in boards:
+            b.setdefault("subtype", board_type)
+        return boards
 
     def get_board_stocks(
         self, board_code: str, source: str = "eastmoney", include_quote: bool = False

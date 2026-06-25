@@ -4,6 +4,9 @@ After the board-API refactor, the 4 board endpoints all share:
 - a required ``source`` query parameter
 - routing through the new ``DataFetcherManager.{get_all_boards, get_board_stocks,
   get_stock_boards, get_board_history}`` Manager methods
+- the ``/boards`` list endpoint additionally routes through the persistence
+  layer (``stock_board_cache.get_board_list``) so cache hits return
+  ``source="persistence"`` per CLAUDE.md's source-tracking matrix.
 """
 from unittest.mock import patch
 
@@ -17,6 +20,13 @@ def reset_before_test():
     """Reset manager state before each test."""
     reset_manager()
     yield
+
+
+# Module-level patch target for the /boards list endpoint. The route layer
+# delegates to the persistence module, so list_boards tests mock at that
+# boundary. /boards/{code}/stocks and /stocks/{code}/boards still go
+# directly through the manager and continue to mock there.
+_PERSISTENCE_LIST_PATCH = "stock_data.data_provider.persistence.board.get_board_list"
 
 
 # ===== list_boards =====
@@ -43,7 +53,7 @@ def test_list_boards_zhitu_returns_zhitu_boards(client):
          "type": "industry", "subtype": "申万行业"},
     ]
     with patch(
-        "stock_data.data_provider.manager.DataFetcherManager.get_all_boards",
+        _PERSISTENCE_LIST_PATCH,
         return_value=(fake_boards, "ZhituFetcher"),
     ):
         r = client.get("/api/v1/boards?type=concept&source=zhitu")
@@ -66,7 +76,7 @@ def test_list_boards_eastmoney_default_subtype_ok(client):
     """source=eastmoney&type=concept&subtype=concept is valid (mirrored)."""
     fake = [{"code": "BK0001", "name": "测试"}]
     with patch(
-        "stock_data.data_provider.manager.DataFetcherManager.get_all_boards",
+        _PERSISTENCE_LIST_PATCH,
         return_value=(fake, "EastMoneyFetcher"),
     ):
         r = client.get(
@@ -87,7 +97,7 @@ def test_list_boards_limit_truncates_results(client):
     """limit=2 truncates the data array to 2 items."""
     fake = [{"code": f"BK{i:04d}", "name": f"测试{i}"} for i in range(5)]
     with patch(
-        "stock_data.data_provider.manager.DataFetcherManager.get_all_boards",
+        _PERSISTENCE_LIST_PATCH,
         return_value=(fake, "EastMoneyFetcher"),
     ):
         r = client.get(
@@ -96,6 +106,88 @@ def test_list_boards_limit_truncates_results(client):
         )
     assert r.status_code == 200
     assert len(r.json()["data"]) == 2
+
+
+# ===== Regression: cache hit returns origin="persistence" =====
+#
+# Reproduces the user-reported bug: calling GET /api/v1/boards twice with
+# the same params used to return origin="ZzshareFetcher" both times because
+# the route bypassed the persistence layer. After wiring through the
+# persistence layer, the second call (cache hit) must return
+# origin="persistence" while the first call returns the fetcher name.
+
+
+def test_list_boards_cache_hit_returns_persistence(client):
+    """Second call with same (type, source) → origin='persistence'."""
+    fake_boards = [
+        {"code": "BK0001", "name": "测试", "type": "concept",
+         "subtype": "同花顺概念", "source": "zzshare"},
+    ]
+    # First call: persistence returns the fetcher-sourced result
+    with patch(
+        _PERSISTENCE_LIST_PATCH,
+        return_value=(fake_boards, "ZzshareFetcher"),
+    ) as mock_get:
+        r1 = client.get("/api/v1/boards?type=concept&source=zzshare")
+        assert r1.status_code == 200
+        assert r1.json()["source"] == "ZzshareFetcher"
+
+        # Second call (cache hit): persistence returns the cached result
+        # with origin="persistence" per CLAUDE.md source-tracking matrix.
+        mock_get.return_value = (fake_boards, "persistence")
+        r2 = client.get("/api/v1/boards?type=concept&source=zzshare")
+        assert r2.status_code == 200
+        assert r2.json()["source"] == "persistence"
+
+
+def test_list_boards_refresh_forces_fetcher_call(client):
+    """refresh=true → persistence is called with refresh=True (forces upstream)."""
+    fake = [{"code": "BK0001", "name": "测试"}]
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ZzshareFetcher")) as mock_get:
+        r = client.get("/api/v1/boards?type=concept&source=zzshare&refresh=true")
+    assert r.status_code == 200
+    mock_get.assert_called_once()
+    _, kwargs = mock_get.call_args
+    assert kwargs.get("refresh") is True
+    assert kwargs.get("source") == "zzshare"
+    assert kwargs.get("subtype") is None
+
+
+def test_list_boards_include_quote_forces_fetcher_call(client):
+    """include_quote=true → persistence is called with include_quote=True."""
+    fake = [{"code": "BK0001", "name": "测试"}]
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ZzshareFetcher")) as mock_get:
+        r = client.get("/api/v1/boards?type=concept&source=zzshare&include_quote=true")
+    assert r.status_code == 200
+    _, kwargs = mock_get.call_args
+    assert kwargs.get("include_quote") is True
+
+
+def test_list_boards_subtype_passed_to_persistence(client):
+    """subtype param is forwarded to persistence layer (validation + filter)."""
+    fake = [{"code": "BK0001", "name": "测试"}]
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ZzshareFetcher")) as mock_get:
+        r = client.get(
+            "/api/v1/boards?type=concept&source=zzshare&subtype=同花顺概念"
+        )
+    assert r.status_code == 200
+    _, kwargs = mock_get.call_args
+    assert kwargs.get("subtype") == "同花顺概念"
+    assert kwargs.get("source") == "zzshare"
+    assert kwargs.get("board_type") == "concept"
+
+
+def test_list_boards_persistence_validation_error_propagates(client):
+    """ValueError from persistence (e.g. unknown source) → 400, not 500."""
+    with patch(
+        _PERSISTENCE_LIST_PATCH,
+        side_effect=ValueError("No fetcher with name 'zzshare' is registered"),
+    ):
+        r = client.get("/api/v1/boards?type=concept&source=zzshare")
+    assert r.status_code == 400
+    body = r.json()
+    # FastAPI wraps HTTPException detail under "detail"
+    assert "No fetcher" in str(body)
 
 
 # ===== get_board_stocks =====

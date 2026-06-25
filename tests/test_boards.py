@@ -16,12 +16,19 @@ def reset_before_test():
     yield
 
 
+# Module-level patch target — the route layer delegates board-list reads
+# to the persistence module, so tests mock at that boundary to bypass the
+# SQL cache + daily-refresh tracker (which would otherwise leak state across
+# tests and turn ``mock.assert_called_once()`` into a flaky assertion).
+_PERSISTENCE_PATCH = "stock_data.data_provider.persistence.board.get_board_list"
+
+
 class TestBoardAPIRoutes:
     """Tests for board API routes."""
 
     def test_get_concept_boards(self, client):
         """Test GET /api/v1/boards with type=concept."""
-        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
+        with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = (
                 [
                     {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
@@ -38,7 +45,7 @@ class TestBoardAPIRoutes:
 
     def test_get_industry_boards(self, client):
         """Test GET /api/v1/boards with type=industry."""
-        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
+        with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = (
                 [{"code": "BK0816", "name": "银行", "board_type": "industry", "source": "eastmoney"}],
                 "EastMoneyFetcher",
@@ -127,7 +134,7 @@ class TestBoardAPIRoutes:
 
     def test_get_boards_with_refresh(self, client):
         """Test GET /api/v1/boards?refresh=true forces refresh."""
-        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
+        with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = (
                 [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
                 "EastMoneyFetcher",
@@ -141,7 +148,7 @@ class TestBoardAPIRoutes:
 
     def test_get_boards_with_source(self, client):
         """Test GET /api/v1/boards?source=eastmoney (zhitu would be 400 from literal)."""
-        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
+        with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = ([], "EastMoneyFetcher")
             response = client.get("/api/v1/boards?type=concept&source=eastmoney")
             assert response.status_code == 200
@@ -152,7 +159,7 @@ class TestBoardAPIRoutes:
 
     def test_get_boards_with_include_quote(self, client):
         """Test GET /api/v1/boards?include_quote=true passes include_quote to manager."""
-        with patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get:
+        with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = (
                 [
                     {
@@ -189,15 +196,15 @@ class TestBoardAPIRoutes:
             assert board["down_count"] == 12
             assert board["leading_stock"] == "科大讯飞"
             assert board["leading_stock_pct"] == 8.5
-            # Verify include_quote was passed to manager
+            # Verify include_quote was passed through to persistence
             mock_get.assert_called_once()
             _, kwargs = mock_get.call_args
             assert kwargs.get("include_quote") is True
 
-    def test_get_boards_include_quote_still_hits_manager(self, client):
-        """Test GET /api/v1/boards?include_quote=true calls manager (no TTLCache)."""
+    def test_get_boards_include_quote_still_hits_persistence(self, client):
+        """Test GET /api/v1/boards?include_quote=true calls persistence layer."""
         with (
-            patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get,
+            patch(_PERSISTENCE_PATCH) as mock_get,
         ):
             mock_get.return_value = (
                 [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],

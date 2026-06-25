@@ -373,6 +373,40 @@ def test_with_source_slug_takes_precedence_over_full_name():
 # ===== Signature compatibility: Manager kwargs → ZhituFetcher =====
 
 
+# ===== Regression: add_fetcher() must also populate _slug_index =====
+
+
+def test_add_fetcher_populates_slug_index_for_routing():
+    """Regression test: create_default_manager() registers fetchers via
+    add_fetcher() (one at a time, after construction), not via the
+    constructor's ``fetchers=`` list. The slug index MUST be kept in
+    sync by add_fetcher — otherwise source-routed lookups (source='zzshare')
+    would fail in production even though the constructor-path tests pass.
+
+    Reproduces the bug where GET /api/v1/boards?source=zzshare returned
+    "No fetcher with name 'zzshare' is registered" despite ZzshareFetcher
+    being available via the explorer's direct test button (which bypasses
+    the manager entirely).
+    """
+    # Simulate production: empty manager, then add_fetcher (mirrors
+    # create_default_manager() which does DataFetcherManager() + add_fetcher).
+    manager = DataFetcherManager()
+
+    fetcher = ProductionStyleFetcher(DataCapability.STOCK_BOARD)
+    fetcher.name = "ZzshareFetcher"  # the actual production name
+    manager.add_fetcher(fetcher)
+
+    # source='zzshare' is the slug form the API layer passes.
+    result = manager._with_source(
+        source="zzshare",
+        capability=DataCapability.STOCK_BOARD,
+        market="csi",
+        op_label="test",
+        call=lambda f: [{"code": "BK0001"}],
+    )
+    assert result == [{"code": "BK0001"}]
+
+
 def test_zhitu_fetcher_board_methods_accept_manager_kwargs():
     """Verify ZhituFetcher's board methods accept the kwargs Manager passes.
 

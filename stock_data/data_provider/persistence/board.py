@@ -100,6 +100,7 @@ def init_schema() -> None:
             code TEXT NOT NULL,
             name TEXT NOT NULL,
             board_type TEXT NOT NULL,
+            subtype TEXT,
             source TEXT NOT NULL,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(code, source)
@@ -110,6 +111,12 @@ def init_schema() -> None:
     """)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_stock_board_source ON stock_board(source)
+    """)
+    # Composite index for the common cache-hit read pattern
+    # ``WHERE board_type=? AND source=? [AND subtype=?]``.
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_stock_board_type_subtype_source
+        ON stock_board(board_type, subtype, source)
     """)
     # Board-stock relation table — metadata only; realtime quotes come from API
     cursor.execute("""
@@ -130,7 +137,14 @@ def init_schema() -> None:
     logger.info(f"[BoardCache] Database initialized at {get_db_path()}")
 
 
-def get_board_list(board_type: str, source: str, refresh: bool = False, include_quote: bool = False, manager=None) -> tuple[list, str]:
+def get_board_list(
+    board_type: str,
+    source: str,
+    refresh: bool = False,
+    include_quote: bool = False,
+    subtype: str | None = None,
+    manager=None,
+) -> tuple[list, str]:
     """
     Get board list with automatic refresh.
 
@@ -142,16 +156,24 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
 
     Args:
         board_type: one of "concept" / "industry" / "index" / "special"
-        source: Data source (e.g., "eastmoney", "zhitu")
+        source: Data source (e.g., "eastmoney", "zhitu", "zzshare")
         refresh: If True, force refresh from upstream
         include_quote: If True, include realtime price/change/market data and skip cache
+        subtype: optional source-specific subtype filter (validated by caller).
+            Cache key is always the full (board_type, source) tuple — the
+            subtype filter is applied at read time, so all subtypes for a
+            given (board_type, source) are stored together. This is safe
+            because every production fetcher fetches the full tree and
+            filters in-memory before returning (the upstream cost is the
+            same regardless of the subtype filter), so we don't lose
+            caching granularity by always fetching unfiltered.
         manager: DataFetcherManager instance. Required for fetching from upstream.
 
     Returns:
         Tuple of (boards, origin) where origin is:
           - the fetcher name (e.g. "eastmoney") when the data was freshly fetched
           - "persistence" when the data was read from the SQLite cache
-        List of board dicts: [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}, ...]
+        List of board dicts: [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "subtype": "热门概念", "source": "eastmoney"}, ...]
             May include quote fields when include_quote=True.
     """
     init_schema()
@@ -159,7 +181,7 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
     needs_refresh = refresh or include_quote or _refresh_tracker.is_first_call(f"{board_type}:{source}")
 
     if not needs_refresh:
-        cached = _read_boards_from_db(board_type, source)
+        cached = _read_boards_from_db(board_type, source, subtype)
         if cached:
             return cached, "persistence"
 
@@ -168,17 +190,23 @@ def get_board_list(board_type: str, source: str, refresh: bool = False, include_
         raise ValueError("manager is required when refresh=True or cache miss")
 
     # Fetch via unified entry point (see manager.get_all_boards).
-    # We pass board_type to the fetcher so it can dispatch internally (EastMoney
-    # handles concept/industry; Zhitu also handles index/special). The fetcher
-    # returns [] for unsupported types — no need for persistence-layer guards.
+    # Always fetch the full subtype set (subtype=None) — the cache stores
+    # all subtypes for a (board_type, source) so future subtype-filtered
+    # reads can be served from cache. The fetcher returns rows already
+    # tagged with their per-row subtype field.
     boards, fetcher_source = manager.get_all_boards(
-        source=source, board_type=board_type, include_quote=include_quote,
+        source=source, board_type=board_type, subtype=None, include_quote=include_quote,
     )
 
     if boards:
         # Always cache the base board data (without quote if include_quote=False)
         update_cached_boards(board_type, source, boards)
         logger.info(f"[BoardCache] Refreshed {len(boards)} boards for {board_type}/{source}")
+
+    # On cache miss with a subtype filter, narrow the in-memory result before
+    # returning. (On cache hit, the SQL WHERE clause already filtered.)
+    if subtype is not None:
+        boards = [b for b in boards if b.get("subtype") == subtype]
 
     return boards, fetcher_source
 
@@ -251,21 +279,38 @@ def _get_board_type(board_code: str, source: str, manager) -> str | None:
     return row["board_type"] if row else None
 
 
-def _read_boards_from_db(board_type: str, source: str) -> list:
-    """Read board list from database (metadata only)."""
+def _read_boards_from_db(board_type: str, source: str, subtype: str | None = None) -> list:
+    """Read board list from database (metadata only).
+
+    Args:
+        board_type: one of concept / industry / index / special.
+        source: data source slug (eastmoney / zhitu / zzshare).
+        subtype: optional subtype filter. ``None`` returns all subtypes for
+            the (board_type, source) pair.
+    """
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        """SELECT code, name, board_type, source, updated_at
-           FROM stock_board WHERE board_type = ? AND source = ? ORDER BY name""",
-        (board_type, source),
-    )
+    if subtype is None:
+        cursor.execute(
+            """SELECT code, name, board_type, subtype, source, updated_at
+               FROM stock_board WHERE board_type = ? AND source = ? ORDER BY name""",
+            (board_type, source),
+        )
+    else:
+        cursor.execute(
+            """SELECT code, name, board_type, subtype, source, updated_at
+               FROM stock_board
+               WHERE board_type = ? AND source = ? AND subtype = ?
+               ORDER BY name""",
+            (board_type, source, subtype),
+        )
     rows = cursor.fetchall()
     return [
         {
             "code": row["code"],
             "name": row["name"],
             "board_type": row["board_type"],
+            "subtype": row["subtype"],
             "source": row["source"],
             "updated_at": row["updated_at"],
         }
@@ -321,10 +366,10 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
 
             cursor.executemany(
                 """INSERT OR REPLACE INTO stock_board
-                (code, name, board_type, source, updated_at)
-                VALUES (?, ?, ?, ?, ?)""",
+                (code, name, board_type, subtype, source, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)""",
                 [
-                    (b["code"], b["name"], board_type, source, now)
+                    (b["code"], b["name"], board_type, b.get("subtype") or "", source, now)
                     for b in boards
                 ],
             )
