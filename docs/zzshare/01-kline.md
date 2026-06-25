@@ -147,6 +147,11 @@ df = api.stk_mins(ts_code='600519.SH', trade_time='20260520',
 
 > 用于查看「同花顺全 A」（代码 `883957`）等板块指数的全市场成交量走势。
 
+**⚠️ 上游限制（实测 2026-06-25）**：`plate_kline` 仅支持 board code `883957`（同花顺全A）。
+其他板块代码（概念/行业/题材，如 `710002`、`881101`、`881121`、`801001`、`801660`）均返回空 DataFrame。
+这是 zzshare 上游 API 的硬性约束，不是 fetcher 的 bug。
+替代方案：`plates_trend` 可获取板块每日涨跌幅/资金流向（非 OHLC K线）。
+
 ### 接口
 
 - **HTTP**: `GET /v3/market/kline/plate/{b_code}`

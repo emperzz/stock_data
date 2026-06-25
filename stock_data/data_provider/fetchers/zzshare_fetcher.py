@@ -551,6 +551,11 @@ class ZzshareFetcher(BaseFetcher):
         the manager's call shape (`manager.get_board_history` passes
         `source=` plus future-proof room) but ignored.
 
+        **Upstream limitation**: ``plate_kline`` only returns data for board
+        code ``883957`` (同花顺全A). All other board codes (concept, industry,
+        special) return an empty DataFrame from the upstream API. This is a
+        hard constraint of the zzshare platform, not a bug in this fetcher.
+
         Column rename map (probed 2026-06-25, see
         ``docs/zzshare/01-kline.md`` §3):
             p_open / p_high / p_low / p_close → open / high / low / close
@@ -590,6 +595,15 @@ class ZzshareFetcher(BaseFetcher):
             ) from e
 
         if df is None or df.empty:
+            # Upstream limitation: plate_kline only returns data for 883957
+            # (同花顺全A). Other board codes (concept/industry/special) return
+            # empty. See docs/zzshare/01-kline.md §3.
+            if board_code != "883957":
+                logger.warning(
+                    "[ZzshareFetcher] plate_kline(%s) returned empty — "
+                    "upstream only supports board code 883957 (同花顺全A)",
+                    board_code,
+                )
             return []
 
         df = df.copy()

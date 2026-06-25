@@ -294,7 +294,7 @@ def get_board_stocks(
 def get_stock_boards(
     stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
     source: Literal["zhitu", "eastmoney", "zzshare"] = Query(
-        ..., description="Data source (currently only 'zhitu' supported)"
+        ..., description="Data source (currently only 'zhitu' supported; zzshare has no stock→boards API)"
     ),
     type: Literal["concept", "industry", "index", "special"] | None = Query(
         None, description="Filter by board type"
@@ -306,17 +306,19 @@ def get_stock_boards(
     """Get boards a stock belongs to.
 
     Currently only ``source=zhitu`` is supported. EastMoney's API does not
-    expose a direct stock→boards mapping.
+    expose a direct stock→boards mapping. zzshare has no stock→boards
+    reverse-lookup endpoint either (returns 501).
     """
     _resolve_source(source)
 
-    if source not in ("zhitu", "zzshare"):
+    if source not in ("zhitu",):
         raise HTTPException(
             status_code=501,
             detail={
                 "error": "not_implemented",
                 "message": f"source='{source}' does not implement stock->boards lookup. "
-                f"Currently supported: 'zhitu'",
+                f"Currently supported: 'zhitu'. "
+                f"zzshare has no stock→boards reverse-lookup endpoint.",
             },
         )
 

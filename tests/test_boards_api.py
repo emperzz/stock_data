@@ -291,6 +291,14 @@ def test_get_stock_boards_eastmoney_returns_501(client):
     assert r.status_code == 501
 
 
+def test_get_stock_boards_zzshare_returns_501(client):
+    """source=zzshare has no stock→boards endpoint → 501."""
+    r = client.get("/api/v1/stocks/000001/boards?source=zzshare")
+    assert r.status_code == 501
+    body = r.json()
+    assert "zzshare" in body["detail"]["message"].lower()
+
+
 # ===== get_board_history (zzshare) =====
 
 
