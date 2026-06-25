@@ -1,19 +1,19 @@
 # Stock Data Server
 
-A local stock data aggregation server that integrates 11 upstream stock data APIs into a unified REST API for AI agents.
+A local stock data aggregation server that integrates 12 upstream stock data APIs into a unified REST API for AI agents.
 
 **Four layers in one server:**
 
 - **API Layer (FastAPI)** — declarative routes; metadata-driven via `@endpoint_meta`.
 - **IndicatorService (pure compute)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC` (14 built-in). Sits on top of the manager; no fetcher involvement.
 - **DataFetcherManager** — capability-routed, priority-based failover + circuit breaker + TTLCache.
-- **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Tencent · EastMoney · THS · Cninfo · Myquant · Baidu` (11 fetchers).
+- **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Zzshare · Tencent · EastMoney · THS · Cninfo · Myquant · Baidu` (12 fetchers).
 
 Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / ZT pools) is owned by `data_provider/persistence/` and seeded transparently by the manager. Board persistence supports all types (concept/industry/index/special), keyed by (board_type, source). An interactive API Explorer is served at `/explorer/`.
 
 ## Features
 
-- **Multi-source aggregation** (11 fetchers): Tushare, Baostock, Akshare, Yfinance, Zhitu, Tencent, EastMoney, THS, Cninfo, Myquant, Baidu
+- **Multi-source aggregation** (12 fetchers): Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Myquant, Baidu
 - **Automatic failover**: priority-based source selection with capability-routed fallback
 - **Circuit breaker**: prevents cascading failures from unavailable sources
 - **Persistent metadata cache**: SQLite for stock lists, board metadata, trade calendar, ZT/DT/ZBGC pools (separate from in-process TTLCache)
@@ -42,7 +42,7 @@ Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / 
 # Configure (copy and edit .env)
 cp .env.example .env
 # Edit .env and add your TUSHARE_TOKEN (and optionally ZHITU_TOKEN /
-# MYQUANT_TOKEN / BAIDU_API_KEY)
+# ZZSHARE_TOKEN / MYQUANT_TOKEN / BAIDU_API_KEY)
 
 # Run the server
 .venv/Scripts/python.exe -m stock_data.server
@@ -1212,7 +1212,8 @@ The server automatically routes requests to the appropriate data source based on
 | 2 | Akshare | Fallback |
 | 3 | Yfinance | Fallback |
 | 4 | Zhitu | Realtime quotes + 公司画像 + 板块 (含 stock→boards), requires `ZHITU_TOKEN` |
-| 5 | Tencent | Enhanced quotes (PE/PB/市值/涨跌停价), HTTP only |
+| 5 | Zzshare | A-share multi-capability (d/5/15/30/60/股票列表/交易日历/板块/龙虎榜/热点题材/公司画像); anonymous-capable, `ZZSHARE_TOKEN` optional (only `stock_info` + `uplimit_stocks` need it) |
+| 6 | Tencent | Enhanced quotes (PE/PB/市值/涨跌停价), HTTP only |
 | 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报/快讯/新闻/板块 |
 | 7 | THS | 热点题材/北向资金/快讯 (backup) |
 | 7 | Baidu | 新闻搜索 (backup for EastMoney), requires `BAIDU_API_KEY` |
@@ -1267,11 +1268,12 @@ The server automatically routes requests to the appropriate data source based on
 | Akshare | ✅ | ✅ | ✅ | ❌ |
 | Yfinance | ✅ | ✅ | ✅ | ✅ |
 | Zhitu | ❌ | ❌ | ❌ | ✅ (5/15/30/60; no 1-min) |
+| Zzshare | ✅ | ❌ | ❌ | ✅ (5/15/30/60; no 1-min) |
 | Myquant | ✅ | ✅ | ✅ | ✅ |
 
 **Notes:**
 - Baostock does NOT support minute frequency for indices (only for stocks).
-- `period=1` (1-minute) is only served by Akshare; Zhitu does not support 1-minute data.
+- `period=1` (1-minute) is only served by Akshare; Zhitu / Zzshare do not support 1-minute data.
 - Minute-line K-line is only available for A-share stocks (not US/HK stocks or indices — use `/indices/{code}/intraday` for indices).
 
 ---
@@ -1289,7 +1291,9 @@ The server automatically routes requests to the appropriate data source based on
 | `YFINANCE_PRIORITY` | Override Yfinance priority | 3 |
 | `ZHITU_TOKEN` | Zhitu API token (realtime + 公司画像) | - |
 | `ZHITU_PRIORITY` | Override Zhitu priority | 4 |
-| `TENCENT_PRIORITY` | Override Tencent priority | 5 |
+| `ZZSHARE_TOKEN` | Zzshare API token (optional — only `stock_info` + `uplimit_stocks` need it; everything else is anonymous-capable) | - |
+| `ZZSHARE_PRIORITY` | Override Zzshare priority | 5 |
+| `TENCENT_PRIORITY` | Override Tencent priority | 6 |
 | `EASTMONEY_PRIORITY` | Override EastMoney priority | 6 |
 | `THS_PRIORITY` | Override THS priority | 7 |
 | `CNINFO_PRIORITY` | Override Cninfo priority | 8 |
