@@ -862,16 +862,23 @@ class TestBoards:
         # Only concept (plate_type=15) match
         assert len(boards) == 2
 
-    def test_get_board_stocks_adds_exchange_suffix(self):
+    def test_get_board_stocks_returns_bare_6digit_codes(self):
+        """Inbound API response uses bare 6-digit code (e.g. '600519'), NOT
+        tushare-style '600519.SH' — same contract as EastMoney / Zhitu /
+        other Zzshare response methods. The tushare suffix is OUTBOUND only.
+        """
         rows = [
             {"stock_code": "600519", "stock_name": "贵州茅台", "exchange": "sh"},
             {"stock_code": "000001", "stock_name": "平安银行", "exchange": "sz"},
         ]
         fetcher = self._fetcher_with_api(plates_stocks=rows)
         stocks = fetcher.get_board_stocks("801001", source="zzshare")
-        assert stocks[0]["stock_code"] == "600519.SH"
-        assert stocks[1]["stock_code"] == "000001.SZ"
+        assert stocks[0]["stock_code"] == "600519"
+        assert stocks[1]["stock_code"] == "000001"
         assert stocks[0]["stock_name"] == "贵州茅台"
+        # exchange field is passed through (may be empty if upstream doesn't populate)
+        assert stocks[0]["exchange"] == "sh"
+        assert stocks[1]["exchange"] == "sz"
 
     def test_get_stock_boards_returns_none(self):
         """SDK has no stock->boards reverse lookup; return None (route 404)."""
@@ -898,7 +905,11 @@ class TestDragonTiger:
         fetcher._api = fake_api
         return fetcher
 
-    def test_daily_dragon_tiger_normalizes_stock_code(self):
+    def test_daily_dragon_tiger_returns_bare_6digit_codes(self):
+        """Inbound API response uses bare 6-digit code (e.g. '000078'), NOT
+        tushare-style '000078.SZ' — same contract as EastMoney / other
+        Zzshare response methods. The tushare suffix is OUTBOUND only.
+        """
         rows = [
             {
                 "stock_code": "000078",
@@ -921,8 +932,8 @@ class TestDragonTiger:
         data = fetcher.get_daily_dragon_tiger("2026-05-20", None)
         assert data["date"] == "2026-05-20"
         assert data["total"] == 1
-        # 000078 -> 000078.SZ (ChiNext prefix 0/3 -> SZ)
-        assert data["stocks"][0]["code"] == "000078.SZ"
+        # Bare 6-digit code (NOT '000078.SZ' — tushare suffix is outbound only)
+        assert data["stocks"][0]["code"] == "000078"
         assert data["stocks"][0]["name"] == "海王生物"
         assert data["stocks"][0]["net_buy"] == 1e8
 
@@ -933,9 +944,9 @@ class TestDragonTiger:
         ]
         fetcher = self._fetcher_with_api(lhb_list=rows)
         data = fetcher.get_daily_dragon_tiger("2026-05-20", 1e8)
-        # Only stock with buy_in >= 1e8 (100M) survives; 600519 starts with 6 -> .SH
+        # Only stock with buy_in >= 1e8 (100M) survives.
         assert data["total"] == 1
-        assert data["stocks"][0]["code"] == "600519.SH"
+        assert data["stocks"][0]["code"] == "600519"
 
     def test_daily_dragon_tiger_empty_returns_zeros(self):
         fetcher = self._fetcher_with_api(lhb_list=[])
@@ -995,7 +1006,11 @@ class TestHotTopics:
         fetcher._api = fake_api
         return fetcher
 
-    def test_hot_topics_normalizes_symbol_code(self):
+    def test_hot_topics_returns_bare_6digit_codes(self):
+        """Inbound API response uses bare 6-digit code (e.g. '002342'), NOT
+        tushare-style '002342.SZ' — same contract as ThsFetcher / other
+        Zzshare response methods. The tushare suffix is OUTBOUND only.
+        """
         rows = [
             {
                 "rank": 1,

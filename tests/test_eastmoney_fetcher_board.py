@@ -84,7 +84,17 @@ def _row_from_template(fields: list[str], template: dict, **overrides) -> list:
     return [merged[f] for f in fields]
 
 
-def _make_session_mock(rows: list[list], total: int | None = None):
+def _dict_row_from_template(template: dict, **overrides) -> dict:
+    """Materialize a fixture row as a dict keyed by field code.
+
+    This is the format the live EastMoney push2 API actually returns
+    (with ``np=1``, ``fltt=2``).  ``_row_from_template`` produces the
+    legacy positional-list format; both must be handled by the fetcher.
+    """
+    return {**template, **overrides}
+
+
+def _make_session_mock(rows: list, total: int | None = None):
     """Build a payload dict mimicking EastMoney clist response.
 
     Pass ``total=None`` to omit the total field (some responses skip it).
@@ -178,6 +188,86 @@ def test_get_all_industry_boards_does_not_pick_f15_as_name():
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_industry_boards(source="eastmoney")
     assert boards[0]["name"] == "小金属"  # 来自 f16, 不是 f15
+
+
+# ---------------------------------------------------------------------------
+# Dict-format rows (live API with np=1 returns dicts, not positional lists)
+# ---------------------------------------------------------------------------
+
+
+def test_get_all_concept_boards_handles_dict_format_rows():
+    """Live push2 API (np=1, fltt=2) returns diff as dicts keyed by field code."""
+    fetcher = EastMoneyFetcher()
+    row = _dict_row_from_template(_CONCEPT_ROW_TEMPLATE)
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        boards = fetcher.get_all_concept_boards(source="eastmoney", include_quote=False)
+    assert boards == [{"code": "BK0001", "name": "人形机器人"}]
+
+
+def test_get_all_concept_boards_dict_format_with_quote():
+    """Dict-format rows + include_quote=True maps field codes to human-readable keys."""
+    fetcher = EastMoneyFetcher()
+    row = _dict_row_from_template(_CONCEPT_ROW_TEMPLATE)
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        boards = fetcher.get_all_concept_boards(source="eastmoney", include_quote=True)
+    b = boards[0]
+    assert b["code"] == "BK0001"
+    assert b["name"] == "人形机器人"
+    assert b["price"] == 1234.56
+    assert b["change_pct"] == 2.35
+    assert b["turnover_rate"] == 1.23
+    assert b["leading_stock"] == "600519"
+
+
+def test_get_all_industry_boards_handles_dict_format_rows():
+    """Dict-format rows for industry boards — name comes from f16."""
+    fetcher = EastMoneyFetcher()
+    row = _dict_row_from_template(_INDUSTRY_ROW_TEMPLATE)
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        boards = fetcher.get_all_industry_boards(source="eastmoney")
+    assert boards == [{"code": "BK1001", "name": "小金属"}]
+
+
+def test_get_concept_board_stocks_handles_dict_format_rows():
+    """Dict-format rows for board components."""
+    fetcher = EastMoneyFetcher()
+    row = _dict_row_from_template(_COMPONENTS_ROW_TEMPLATE)
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        stocks = fetcher.get_concept_board_stocks("BK0001", source="eastmoney")
+    assert stocks == [{"stock_code": "600519", "stock_name": "贵州茅台"}]
+
+
+def test_get_concept_board_stocks_dict_format_with_quote():
+    """Dict-format rows + include_quote for components."""
+    fetcher = EastMoneyFetcher()
+    row = _dict_row_from_template(_COMPONENTS_ROW_TEMPLATE)
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        stocks = fetcher.get_concept_board_stocks(
+            "BK0001", source="eastmoney", include_quote=True
+        )
+    s = stocks[0]
+    assert s["stock_code"] == "600519"
+    assert s["stock_name"] == "贵州茅台"
+    assert s["price"] == 1234.56
+    assert s["change_pct"] == 2.35
+    assert s["volume"] == 12345678
+    assert s["pe_ratio"] == 25.6
+    assert s["pb_ratio"] == 8.9
+
+
+def test_get_all_boards_concept_dict_format_with_subtype():
+    """Manager entry point with dict-format rows — subtype tag applied."""
+    fetcher = EastMoneyFetcher()
+    row = _dict_row_from_template(_CONCEPT_ROW_TEMPLATE)
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        boards = fetcher.get_all_boards(board_type="concept", source="eastmoney")
+    assert boards == [{"code": "BK0001", "name": "人形机器人", "subtype": "concept"}]
 
 
 # ---------------------------------------------------------------------------

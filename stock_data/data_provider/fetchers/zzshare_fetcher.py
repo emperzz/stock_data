@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 def _to_zzshare_ts_code(code: str) -> str:
     """Convert 6-digit A-share code to tushare-style ts_code suffix.
 
+    OUTBOUND-ONLY: pass this result to zzshare SDK methods (rt_k / stk_mins /
+    stock_basic / etc.) which expect the tushare-style code. Never leak this
+    format into the API response — return the bare 6-digit form to clients
+    (see normalize_stock_code() for the canonical format).
+
     Rules (from docs/zzshare/README.md §「股票代码格式」):
         6/68/5 -> .SH
         0/3/1  -> .SZ
@@ -43,11 +48,6 @@ def _to_zzshare_ts_code(code: str) -> str:
     if c.startswith(("8", "4", "2", "9")):
         return f"{c}.BJ"
     return c  # 兜底: 无法识别时不加后缀
-
-
-def _add_exchange_suffix(stock_code: str) -> str:
-    """6-digit bare code -> '600519.SH' style (same rules as _to_zzshare_ts_code)."""
-    return _to_zzshare_ts_code(stock_code)
 
 
 def _to_yyyymmdd(date: str) -> str:
@@ -516,7 +516,7 @@ class ZzshareFetcher(BaseFetcher):
                 continue
             out.append(
                 {
-                    "stock_code": _add_exchange_suffix(stock_code),
+                    "stock_code": stock_code,
                     "stock_name": str(row.get("stock_name", "")).strip(),
                     "exchange": str(row.get("exchange", "")).strip().lower(),
                 }
@@ -573,7 +573,7 @@ class ZzshareFetcher(BaseFetcher):
             stock_code = str(row.get("stock_code", "")).strip()
             out_stocks.append(
                 {
-                    "code": _add_exchange_suffix(stock_code) if stock_code else "",
+                    "code": stock_code,
                     "name": str(row.get("stock_name", "")),
                     "net_buy": buy_in,
                     "amplitude": safe_float(row.get("amplitude")),
@@ -669,7 +669,7 @@ class ZzshareFetcher(BaseFetcher):
             symbol = str(row.get("symbol_code", "")).strip()
             out.append(
                 {
-                    "code": _add_exchange_suffix(symbol) if symbol else "",
+                    "code": symbol,
                     "name": str(row.get("symbol_name", "")),
                     "rank": safe_int(row.get("rank")),
                     "rank_diff": safe_int(row.get("rank_diff")),

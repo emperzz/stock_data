@@ -1129,7 +1129,7 @@ class EastMoneyFetcher(BaseFetcher):
         *,
         fs_override: str | None = None,
         page_size: int = 100,
-    ) -> list[list[Any]]:
+    ) -> list[dict[str, Any]]:
         """Fetch all pages of an EastMoney clist endpoint with retry + rate-limit delays.
 
         Args:
@@ -1139,9 +1139,11 @@ class EastMoneyFetcher(BaseFetcher):
             page_size: Rows per page (default 100, EastMoney practical max).
 
         Returns:
-            Flat list of rows. Each row is a positional list of values in
-            the same order as ``endpoint["fields"]``. Empty on persistent
-            failure (caller treats that as "no boards").
+            Flat list of row dicts (keyed by field code). The upstream API
+            may return rows as positional lists **or** dicts depending on
+            the ``np`` / ``fltt`` parameters; this method normalizes both
+            formats into dicts so consumers can always ``row.get("f14")``.
+            Empty on persistent failure (caller treats that as "no boards").
         """
         url = endpoint["url"]
         base_params: dict[str, Any] = {
@@ -1156,7 +1158,8 @@ class EastMoneyFetcher(BaseFetcher):
             "fields": endpoint["fields"],
         }
         referer = "https://quote.eastmoney.com/"
-        all_rows: list[list[Any]] = []
+        field_list = endpoint["fields"].split(",")
+        all_rows: list[dict[str, Any]] = []
         for page in range(1, self._BOARD_MAX_PAGES + 1):
             params = {**base_params, "pn": page}
             try:
@@ -1169,7 +1172,14 @@ class EastMoneyFetcher(BaseFetcher):
             rows = ((payload.get("data") or {}).get("diff")) or []
             if not rows:
                 break
-            all_rows.extend(rows)
+            # Normalize: upstream may return rows as dicts (np=1 push
+            # format) or positional lists (legacy).  Convert lists to
+            # dicts keyed by field code so consumers always get dicts.
+            for r in rows:
+                if isinstance(r, dict):
+                    all_rows.append(r)
+                else:
+                    all_rows.append(dict(zip(field_list, r)))
             total = ((payload.get("data") or {}).get("total")) or 0
             # 终止条件: 拉到的行数 >= total, 或者本页不满 (last page)
             if not total or page * page_size >= total or len(rows) < page_size:
@@ -1191,12 +1201,8 @@ class EastMoneyFetcher(BaseFetcher):
             return []
         if not rows:
             return []
-        fields = ep["fields"].split(",")
-        # 概念板块字段映射: 用 concept 专属的 name 字段 (f15) 覆盖 map 里的 f14
-        concept_map = {**_BOARD_LIST_FIELD_MAP, _CONCEPT_LIST_NAME_FIELD: "name"}
         out: list[dict] = []
-        for row in rows:
-            rec = dict(zip(fields, row))
+        for rec in rows:
             code = str(rec.get("f14", "")).strip()
             if not code:
                 continue
@@ -1224,10 +1230,8 @@ class EastMoneyFetcher(BaseFetcher):
             return []
         if not rows:
             return []
-        fields = ep["fields"].split(",")
         out: list[dict] = []
-        for row in rows:
-            rec = dict(zip(fields, row))
+        for rec in rows:
             code = str(rec.get("f14", "")).strip()
             if not code:
                 continue
@@ -1280,10 +1284,8 @@ class EastMoneyFetcher(BaseFetcher):
             return []
         if not rows:
             return []
-        fields = ep["fields"].split(",")
         out: list[dict] = []
-        for row in rows:
-            rec = dict(zip(fields, row))
+        for rec in rows:
             code = str(rec.get("f14", "")).strip()
             if not code:
                 continue
