@@ -57,31 +57,71 @@ class TestZzshareFetcherMetadata:
 
 
 class TestZzshareFetcherAvailability:
+    """``is_available()`` probes the ``zzshare`` package via ``find_spec``."""
+
+    # find_spec(name, package=None) takes 2 positional args; we ignore the second.
+    @staticmethod
+    def _sdk_present(name, *args, **kwargs):
+        return MagicMock() if name == "zzshare" else None
+
+    @staticmethod
+    def _sdk_absent(name, *args, **kwargs):
+        return None
+
     def test_is_available_false_when_sdk_missing(self, monkeypatch):
         monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
-        with patch("importlib.util.find_spec", return_value=None):
+        with patch("importlib.util.find_spec", side_effect=self._sdk_absent):
             fetcher = ZzshareFetcher()
             assert fetcher.is_available() is False
 
-    def test_is_available_true_when_sdk_present_no_token(self, monkeypatch):
+    def test_is_available_true_when_zzshare_package_present_no_token(self, monkeypatch):
         monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
-        with patch("importlib.util.find_spec", return_value=MagicMock()):
+        with patch("importlib.util.find_spec", side_effect=self._sdk_present):
             fetcher = ZzshareFetcher()
             assert fetcher.is_available() is True
 
-    def test_is_available_true_when_sdk_and_token(self, monkeypatch):
+    def test_is_available_true_when_zzshare_and_token(self, monkeypatch):
         monkeypatch.setenv("ZZSHARE_TOKEN", "test-token-123")
-        with patch("importlib.util.find_spec", return_value=MagicMock()):
+        with patch("importlib.util.find_spec", side_effect=self._sdk_present):
             fetcher = ZzshareFetcher()
             assert fetcher.is_available() is True
 
-    def test_unavailable_reason_mentions_sdk_when_missing(self, monkeypatch):
+    def test_is_available_probes_zzshare_package_not_dataapi(self, monkeypatch):
+        """Regression: ``is_available()`` must call find_spec('zzshare'),
+        not find_spec('DataApi'). With only the unrelated ``DataApi``
+        PyPI package installed, ``is_available()`` must return False.
+        """
         monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
-        with patch("importlib.util.find_spec", return_value=None):
+        # Simulate: unrelated DataApi package is present, but zzshare is NOT.
+
+        def only_dataapi(name, *args, **kwargs):
+            return MagicMock() if name == "DataApi" else None
+
+        with patch("importlib.util.find_spec", side_effect=only_dataapi):
+            fetcher = ZzshareFetcher()
+            assert fetcher.is_available() is False
+
+    def test_is_available_actually_calls_find_spec_with_zzshare(self, monkeypatch):
+        """Pin the spec name so a regression that swaps back to 'DataApi'
+        fails immediately rather than passing silently.
+        """
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=MagicMock()) as mock_find_spec:
+            fetcher = ZzshareFetcher()
+            fetcher.is_available()
+        assert mock_find_spec.called
+        called_with = mock_find_spec.call_args.args[0]
+        assert called_with == "zzshare", (
+            f"is_available() must probe the 'zzshare' package, not {called_with!r}"
+        )
+
+    def test_unavailable_reason_mentions_zzshare_when_missing(self, monkeypatch):
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", side_effect=self._sdk_absent):
             fetcher = ZzshareFetcher()
             reason = fetcher.unavailable_reason()
             assert reason is not None
-            assert "zzshare" in reason or "SDK" in reason
+            assert "zzshare" in reason, f"unavailable_reason should mention 'zzshare', got: {reason!r}"
 
 
 class TestKLineMethodsRaise:

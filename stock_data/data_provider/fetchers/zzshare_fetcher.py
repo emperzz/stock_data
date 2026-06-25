@@ -2,8 +2,7 @@
 zzshare fetcher for A-share multi-capability (Priority 5, default).
 
 API: zzshare Python SDK (https://github.com/zzquant/zzshare, PyPI: ``zzshare``).
-The client class lives at ``zzshare.client.DataApi`` — import as
-``from zzshare.client import DataApi``.
+Client class: ``zzshare.client.DataApi``.
 Token configured via ZZSHARE_TOKEN environment variable (anonymous also works
 for most endpoints — see docs/zzshare/10-rate-limits.md).
 
@@ -94,13 +93,13 @@ class ZzshareFetcher(BaseFetcher):
         self._init_error: str | None = None
 
     def is_available(self) -> bool:
-        """True iff DataApi SDK is importable. Token is optional.
+        """True iff the zzshare PyPI package is importable. Token is optional.
 
-        Mirrors the akshare pattern: probe via importlib.util.find_spec so
-        the manager can skip this fetcher cleanly when DataApi isn't
-        installed. Token is checked lazily inside per-method calls.
+        Mirrors the akshare pattern (probe via ``importlib.util.find_spec``
+        so the manager can skip this fetcher cleanly when the SDK isn't
+        installed). Token is checked lazily inside per-method calls.
         """
-        return importlib.util.find_spec("DataApi") is not None
+        return importlib.util.find_spec("zzshare") is not None
 
     def unavailable_reason(self) -> str | None:
         if self.is_available():
@@ -116,8 +115,6 @@ class ZzshareFetcher(BaseFetcher):
         """
         if self._api is not None:
             return self._api
-        # The PyPI package is `zzshare`; the client class lives at `zzshare.client.DataApi`.
-        # (There is a separate unrelated PyPI package called `DataApi` — do not confuse.)
         if importlib.util.find_spec("zzshare") is None:
             self._init_error = "zzshare SDK not importable (pip install zzshare)"
             return None
@@ -150,7 +147,7 @@ class ZzshareFetcher(BaseFetcher):
             )
         api = self._ensure_api()
         if api is None:
-            raise DataFetchError(f"ZzshareFetcher DataApi SDK 不可用: {self._init_error}")
+            raise DataFetchError(f"ZzshareFetcher zzshare SDK 不可用: {self._init_error}")
         ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
         kwargs: dict = {
             "ts_code": ts_code,
@@ -553,7 +550,7 @@ class ZzshareFetcher(BaseFetcher):
         """
         api = self._ensure_api()
         if api is None:
-            raise DataFetchError("ZzshareFetcher DataApi SDK 不可用")
+            raise DataFetchError("ZzshareFetcher zzshare SDK 不可用")
         date_str = (
             _to_yyyymmdd(trade_date)
             if trade_date
@@ -603,7 +600,7 @@ class ZzshareFetcher(BaseFetcher):
         """
         api = self._ensure_api()
         if api is None:
-            raise DataFetchError("ZzshareFetcher DataApi SDK 不可用")
+            raise DataFetchError("ZzshareFetcher zzshare SDK 不可用")
         bare_code = normalize_stock_code(code)
         date_str = _to_yyyymmdd(trade_date) if trade_date else ""
         records: list[dict] = []
