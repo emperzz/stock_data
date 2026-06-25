@@ -201,11 +201,66 @@ def test_get_board_stocks_source_required(client):
 def test_get_board_stocks_returns_404_on_empty(client):
     """Empty stocks → 404."""
     with patch(
-        "stock_data.data_provider.manager.DataFetcherManager.get_board_stocks",
+        "stock_data.data_provider.persistence.board.get_board_stocks",
         return_value=([], "EastMoneyFetcher"),
     ):
         r = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney")
     assert r.status_code == 404
+
+
+# ===== Regression: /boards/{code}/stocks cache hit returns "persistence" =====
+
+
+def test_get_board_stocks_cache_hit_returns_persistence(client):
+    """Second call with same (board_code, source) → origin='persistence'."""
+    fake = [{"stock_code": "600519", "stock_name": "贵州茅台"}]
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks",
+        ) as mock_get,
+        # Skip the fetcher-fallback name lookup (real network call)
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_name",
+            return_value="互联网服务",
+        ),
+    ):
+        # First call: fetcher-sourced
+        mock_get.return_value = (fake, "EastMoneyFetcher")
+        r1 = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney")
+        assert r1.status_code == 200
+        assert r1.json()["data_source"] == "EastMoneyFetcher"
+
+        # Second call: cache hit
+        mock_get.return_value = (fake, "persistence")
+        r2 = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney")
+        assert r2.status_code == 200
+        assert r2.json()["data_source"] == "persistence"
+
+
+def test_get_board_stocks_refresh_forces_persistence_refresh(client):
+    """refresh=true is forwarded to persistence layer (no longer silently dropped)."""
+    fake = [{"stock_code": "600519", "stock_name": "贵州茅台"}]
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks",
+            return_value=(fake, "EastMoneyFetcher"),
+        ) as mock_get,
+        # Fast-path: skip the fetcher-fallback board-name lookup (would
+        # otherwise trigger a real network call to EastMoney).
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_name",
+            return_value="互联网服务",
+        ),
+    ):
+        r = client.get(
+            "/api/v1/boards/BK0001/stocks?source=eastmoney&refresh=true"
+        )
+    assert r.status_code == 200
+    args, kwargs = mock_get.call_args
+    assert kwargs.get("refresh") is True
+    assert kwargs.get("source") == "eastmoney"
+    # board_code is positional (1st arg) in the persistence signature
+    assert args[0] == "BK0001"
 
 
 # ===== get_stock_boards (NEW) =====

@@ -214,8 +214,16 @@ def get_board_stocks(
 
     manager = get_manager()
     try:
-        stocks, origin = manager.get_board_stocks(
-            board_code, source=source, include_quote=include_quote,
+        # Route through the persistence layer so cache hits return
+        # origin="persistence" (per CLAUDE.md source-tracking matrix).
+        # refresh=true now actually forces an upstream refresh instead of
+        # being silently dropped.
+        stocks, origin = stock_board_cache.get_board_stocks(
+            board_code,
+            source=source,
+            refresh=refresh,
+            include_quote=include_quote,
+            manager=manager,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)})
@@ -226,19 +234,23 @@ def get_board_stocks(
             detail={"error": "not_found", "message": f"No stocks found for board {board_code}"},
         )
 
-    # Best-effort board name resolution (try concept + industry)
-    board_name = board_code
-    try:
-        for bt in ("concept", "industry"):
-            boards, _ = manager.get_all_boards(
-                source=source, board_type=bt, subtype=None,
-            )
-            match = next((b["name"] for b in boards if b["code"] == board_code), None)
-            if match:
-                board_name = match
-                break
-    except ValueError:
-        pass
+    # Best-effort board name resolution. Fast path: query the cached
+    # stock_board table directly (no upstream call) so a stock-list
+    # request served from cache doesn't trigger a board-list fetch.
+    # Fallback: ask the fetcher when the board-list cache is cold.
+    board_name = stock_board_cache.get_board_name(board_code, source) or board_code
+    if board_name == board_code:
+        try:
+            for bt in ("concept", "industry"):
+                boards, _ = manager.get_all_boards(
+                    source=source, board_type=bt, subtype=None,
+                )
+                match = next((b["name"] for b in boards if b["code"] == board_code), None)
+                if match:
+                    board_name = match
+                    break
+        except ValueError:
+            pass
 
     stock_list = [
         BoardStockInfo(

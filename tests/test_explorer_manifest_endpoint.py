@@ -176,7 +176,7 @@ class TestManifestFetchersField:
         assert code_param["required"] is True
         assert code_param["type"] == "string"
 
-    def test_unavailable_fetcher_surfaces_with_available_false_and_reason(self):
+    def test_unavailable_fetcher_surfaces_with_available_false_and_reason(self, monkeypatch):
         """ZhituFetcher declares STOCK_INFO but is unavailable without ZHITU_TOKEN.
 
         The manifest must still list it under the STOCK_INFO endpoint with
@@ -185,6 +185,16 @@ class TestManifestFetchersField:
         ("only registered fetchers show up") which silently hid Zhitu from
         the explorer when its token wasn't set.
         """
+        # Hermetic: simulate the "no token" scenario regardless of the
+        # developer's local .env. ZhituFetcher was already instantiated
+        # with the real ZHITU_TOKEN at app startup; patching os.getenv
+        # here is too late. Instead, locate the registered instance and
+        # blank its _token (ZhituFetcher.is_available() reads bool(_token)).
+        with TestClient(app) as _client:
+            _client.get("/control/server/status")  # trigger lifespan
+            _registered = _client.app.state.manager.get_fetcher("ZhituFetcher")
+            if _registered is not None:
+                monkeypatch.setattr(_registered, "_token", "")
         m = self._manifest()
         ep = self._endpoint(m, "GET", "/stocks/{code}/info")
         zhitu = next((f for f in ep["fetchers"] if f["name"] == "ZhituFetcher"), None)

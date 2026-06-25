@@ -279,6 +279,34 @@ def _get_board_type(board_code: str, source: str, manager) -> str | None:
     return row["board_type"] if row else None
 
 
+def get_board_name(board_code: str, source: str) -> str | None:
+    """Look up a board's name from the SQLite cache (no upstream fallback).
+
+    Used by ``/boards/{code}/stocks`` as a fast-path for resolving the
+    board name returned in the response: if the board list cache already
+    has a row for this (code, source), we read the name directly without
+    triggering a full upstream board-list fetch. Returns ``None`` when
+    the cache is cold — caller decides whether to fall back to a fetcher
+    call or accept the raw ``board_code`` as the name.
+
+    Args:
+        board_code: Board code (e.g. ``"BK1048"``).
+        source: Data source slug (``"eastmoney"``, ``"zhitu"``, ``"zzshare"``).
+
+    Returns:
+        The cached board name, or ``None`` if not found.
+    """
+    init_schema()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM stock_board WHERE code = ? AND source = ? LIMIT 1",
+        (board_code, source),
+    )
+    row = cursor.fetchone()
+    return row["name"] if row else None
+
+
 def _read_boards_from_db(board_type: str, source: str, subtype: str | None = None) -> list:
     """Read board list from database (metadata only).
 

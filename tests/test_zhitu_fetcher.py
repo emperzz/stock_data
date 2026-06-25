@@ -135,10 +135,16 @@ class TestGetAllStocks:
         self.fetcher = ZhituFetcher()
 
     def test_returns_empty_when_unavailable(self, monkeypatch):
+        import os as _os
+        _real_getenv = _os.getenv  # capture before patching (os is shared)
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
-            lambda *a, **k: "" if a and a[0] == "ZHITU_TOKEN" else "",
+            lambda *a, **k: "" if a and a[0] == "ZHITU_TOKEN" else _real_getenv(*a, **k),
         )
+        # Fetcher was constructed in setup_method before the monkeypatch,
+        # so self._token already holds the real env value. Blank it now so
+        # is_available() returns False (matches the "no token" scenario).
+        self.fetcher._token = ""
         result = self.fetcher.get_all_stocks("csi")
         assert result == []
 
