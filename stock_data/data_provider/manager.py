@@ -672,9 +672,9 @@ class DataFetcherManager:
     #   - get_all_boards(board_type, subtype, source) → list[{code, name, type, subtype, ...quote}]
     #   - get_board_stocks(board_code, source) → list[{stock_code, stock_name, exchange}]
     #   - get_stock_boards(stock_code, source) → list[{code, name, type, subtype}] | None
-    #   - get_board_history(board_code, source, frequency, days) → list[…]
-    #     当前 EastMoney / Zhitu fetcher 内部 raise NotImplementedError;
-    #     Manager 路由已就绪, 等 fetcher 实现.
+    #   - get_board_history(board_code, source, frequency, *, start_date, end_date, days) → list[…]
+    #     已实现于 ZzshareFetcher (zzshare plate_kline, daily-only).
+    #     EastMoney/Zhitu 无对应上游 API, 故不实现该方法 (manifest 不再列出它们).
 
     def get_all_boards(
         self,
