@@ -17,11 +17,10 @@ from stock_data.api.cache import (
     get_quote_cache,
 )
 from stock_data.api.routes import reset_manager
-from stock_data.server import app
 
 
 @pytest.fixture(autouse=True)
-def reset_before_test():
+def reset_state_and_caches():
     """Reset manager state and clear in-memory response caches before each test.
 
     Without clearing the in-memory `_pools_cache` (and friends), tests that
@@ -41,7 +40,10 @@ def reset_before_test():
 
 
 @pytest.fixture
-def client():
+def client(app):
+    # Function-scoped on purpose: each test mutates app.state via the
+    # mock-patched manager, so we want a fresh client per test even though
+    # `app` itself is shared (session-scoped in conftest.py).
     from fastapi.testclient import TestClient
     return TestClient(app)
 

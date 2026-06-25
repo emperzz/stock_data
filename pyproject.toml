@@ -39,6 +39,7 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-xdist>=3.0.0",
     "ruff>=0.4.0",
     "httpx>=0.27.0",
     "beautifulsoup4>=4.12.0",
@@ -60,6 +61,10 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Default `pytest` skips live_network tests (those hitting real upstream APIs)
+# so the dev loop is fast. CI / full-coverage runs use `pytest -m ""` to
+# deselect everything. See tests/_network_guard.py for the marker legend.
+addopts = ["-m", "not live_network"]
 # Custom markers — see tests/_network_guard.py for the full legend and
 # tests/conftest.py for the network-to-xfail hook that consumes them.
 markers = [

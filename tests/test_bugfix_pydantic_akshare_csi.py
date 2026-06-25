@@ -17,7 +17,6 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
 
 from stock_data.api.routes import reset_manager
 from stock_data.api.schemas import (
@@ -28,7 +27,6 @@ from stock_data.api.schemas import (
 from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
 from stock_data.data_provider.persistence import stock_list as stock_cache
-from stock_data.server import app
 
 
 @pytest.fixture(autouse=True)
@@ -36,11 +34,6 @@ def reset_before_test():
     """Reset manager state before each test."""
     reset_manager()
     yield
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
 
 
 # ============================================================================

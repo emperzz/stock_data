@@ -131,3 +131,53 @@ def sample_intraday_df():
             "amount": [500000, 600000, 550000, 700000, 650000],
         }
     )
+
+
+# ── Shared FastAPI app + TestClient fixtures ──────────────────────────────
+#
+# Five test files previously duplicated the same boilerplate:
+#
+#     from stock_data.server import app
+#     @pytest.fixture(autouse=True)
+#     def reset_before_test():
+#         reset_manager(); yield
+#     @pytest.fixture
+#     def client():
+#         from fastapi.testclient import TestClient
+#         return TestClient(app)
+#
+# Centralising `app` / `client` here avoids the 5× `from stock_data.server
+# import app` (which eagerly imports every fetcher and the SQLite schema
+# init) at test-collection time. Session scope is safe because:
+#   * `stock_data.server.app` is fully built at import (mounts + includes
+#     happen there, not in lifespan);
+#   * The lifespan body only sets `app.state.manager = get_manager()` and
+#     runs `persistence.init_schema()` — both idempotent;
+#   * Tests that mutate `app.state` (e.g. patching the manager) override
+#     via `with patch(...)` and don't rely on per-test re-import.
+#
+# Per-test state isolation is the responsibility of individual test files
+# (e.g. `test_zt_pools.py` clears the response TTLCaches locally; that
+# concern is intentionally NOT autouse here because most tests mock at
+# the manager layer and never touch the cache).
+
+from stock_data.server import app as _app  # noqa: E402
+from fastapi.testclient import TestClient   # noqa: E402
+
+
+@pytest.fixture(scope="session")
+def app():
+    """Session-scoped FastAPI app — shared across the whole pytest worker."""
+    return _app
+
+
+@pytest.fixture(scope="session")
+def client(app):
+    """Session-scoped TestClient.
+
+    Used as a context manager so the lifespan handler runs exactly once
+    (populates `app.state.manager`, runs `persistence.init_schema()`).
+    Per-test re-entry would be wasted work.
+    """
+    with TestClient(app) as c:
+        yield c

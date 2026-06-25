@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from stock_data.api.routes import reset_manager
-from stock_data.server import app
 
 
 @pytest.fixture(autouse=True)
@@ -15,12 +14,6 @@ def reset_before_test():
     """Reset manager state before each test."""
     reset_manager()
     yield
-
-
-@pytest.fixture
-def client():
-    from fastapi.testclient import TestClient
-    return TestClient(app)
 
 
 class TestBoardAPIRoutes:

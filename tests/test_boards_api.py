@@ -8,10 +8,8 @@ After the board-API refactor, the 4 board endpoints all share:
 from unittest.mock import patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 from stock_data.api.routes import reset_manager
-from stock_data.server import app
 
 
 @pytest.fixture(autouse=True)
@@ -19,11 +17,6 @@ def reset_before_test():
     """Reset manager state before each test."""
     reset_manager()
     yield
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
 
 
 # ===== list_boards =====
