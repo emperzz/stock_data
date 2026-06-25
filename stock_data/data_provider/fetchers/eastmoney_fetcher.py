@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -34,11 +35,17 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 from curl_cffi import requests as cffi_requests
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+)
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..utils.code_converter import to_eastmoney_secid
 from ..utils.normalize import normalize_stock_code
-from .eastmoney.board import fetch_board_list, fetch_board_stocks, get_ak as _ak_module
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +140,82 @@ class _Endpoints:
 
     PDF_URL_TPL = "https://pdf.dfcfw.com/pdf/H3_{info_code}_1.pdf"
 
+    # -- Board clist (概念 / 行业 板块清单与成分股) --------------------
+    # 直连 push2.eastmoney.com/api/qt/clist/get; 不再走 akshare (commit 25b7819
+    # 迁移时遗留)。fs / fid / fields 字段对齐 akshare 的 stock_board_*_em /
+    # stock_board_*_cons_em 的实际请求, 字段码 → 输出 key 见 _BOARD_*_FIELD_MAP。
+    BOARD_LIST_CONCEPT = {
+        "url": "https://push2.eastmoney.com/api/qt/clist/get",
+        "fs": "m:90+t:3+f:!50",
+        "fid": "f12",
+        "fields": "f2,f3,f4,f8,f14,f15,f20,f104,f105,f128,f136",
+    }
+    BOARD_LIST_INDUSTRY = {
+        "url": "https://push2.eastmoney.com/api/qt/clist/get",
+        "fs": "m:90+t:2+f:!50",
+        "fid": "f3",
+        "fields": "f2,f3,f4,f8,f14,f16,f20,f104,f105,f128,f136",
+    }
+    BOARD_COMPONENTS = {
+        "url": "https://push2.eastmoney.com/api/qt/clist/get",
+        "fs_template": "b:{board_code}+f:!50",
+        "fid": "f3",
+        "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f14,f16,f17,f18,f20,f21,f22",
+    }
+
 
 ENDPOINTS = _Endpoints()
+
+
+# ---------------------------------------------------------------------------
+# Board field-code → output key mappings
+# ---------------------------------------------------------------------------
+#
+# EastMoney 的 clist / push2 API 用 ``f1,f2,f3,...`` 字段码 (内部 opaque id)
+# 作为 ``fields`` 参数, 响应 ``data.diff`` 中每行是按 fields 顺序排列的值数组
+# (非 dict)。以下常量把字段码映射到 fetcher 公开方法的英文字段名, 与原 akshare
+# 迁移后行为对齐。
+#
+# 字段码语义基于 akshare 参考 (``docs/stock_board_concept_em.py`` /
+# ``docs/stock_board_industry_em.py``) 的列名映射:
+# - 概念板块清单: f14=板块代码, f15=板块名称
+# - 行业板块清单: f14=板块代码, f16=板块名称 (字段集含 f13 错位)
+# - 板块成分股:   f14=股票代码, f16=股票名称, f17=最高, f18=最低, f20=今开,
+#                 f21=昨收, f22=市净率 (与个股字段码语义不同, 不要按 ``f12=代码`` 假设)
+
+_BOARD_LIST_FIELD_MAP: dict[str, str] = {
+    "f2": "price",
+    "f3": "change_pct",
+    "f4": "change_amount",
+    "f8": "turnover_rate",
+    "f14": "code",
+    "f20": "total_mv",
+    "f104": "up_count",
+    "f105": "down_count",
+    "f128": "leading_stock",
+    "f136": "leading_stock_pct",
+}
+# 名称字段在 concept / industry endpoint 中位置不同, 不能并入上面的 dict。
+_CONCEPT_LIST_NAME_FIELD = "f15"
+_INDUSTRY_LIST_NAME_FIELD = "f16"
+
+_BOARD_COMPONENTS_FIELD_MAP: dict[str, str] = {
+    "f2": "price",
+    "f3": "change_pct",
+    "f4": "change_amount",
+    "f5": "volume",
+    "f6": "amount",
+    "f7": "amplitude",
+    "f8": "turnover_rate",
+    "f9": "pe_ratio",
+    "f14": "stock_code",
+    "f16": "stock_name",
+    "f17": "high",
+    "f18": "low",
+    "f20": "open",
+    "f21": "pre_close",
+    "f22": "pb_ratio",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -991,84 +1072,232 @@ class EastMoneyFetcher(BaseFetcher):
         return out
 
     # ------------------------------------------------------------------
-    # 板块 (Stock Boards: concept / industry) — EastMoney via akshare EM API
+    # 板块 (Stock Boards: concept / industry) — EastMoney push2 clist 直连
     # ------------------------------------------------------------------
+    #
+    # 历史: 该能力从 AkshareFetcher 迁过来时 (commit 25b7819) 直接复用了 akshare
+    # 的 stock_board_*_em 函数, 名义上挂在 EastMoneyFetcher 下但实际所有 HTTP
+    # 都走 akshare。本版本参考 akshare 实现逻辑重写, 直接调 push2.eastmoney.com
+    # 的 ``/api/qt/clist/get`` 端点, 不再 import akshare。
+    #
+    # 参考: docs/stock_board_concept_em.py / docs/stock_board_industry_em.py
+    # (akshare 源码中这些函数的真实 URL / params / fields 映射)。
+    #
+    # 限流处理: EastMoney push2 后端对高频请求很敏感, 短时间内多次请求会触发
+    # curl: (56) Connection closed abruptly / Connection aborted / RemoteDisconnected
+    # (本质是 TLS 重协商被掐)。本实现加了:
+    # - tenacity 指数退避重试 (ConnectionError 触发, 最多 3 次)
+    # - 页间 1.0-2.0s 随机延迟 (比 akshare 的 0.5-1.5s 略保守, 避开限流阈值)
+    # - 重试退避里也加 jitter (wait_random)
+    #
+    # 注意: EastMoney 的板块 clist 字段码语义与个股 clist **不同**:
+    # - 个股: f12=代码, f14=名称
+    # - 板块成分股: f14=代码, f16=名称
+    # 详见 ``_BOARD_*_FIELD_MAP`` 常量。
+
+    # 保护单次请求最多拉 10 页 (concept boards 实际 ~300, 10 页足够),
+    # 防止 total 字段异常时无限循环。
+    _BOARD_MAX_PAGES = 10
+    # 每次 page fetch 的重试次数 (tenacity stop_after_attempt)
+    _BOARD_RETRY_ATTEMPTS = 3
+    # 页间延迟 (秒) — 拉多页时降低频次避免触发 push2 限流
+    _BOARD_PAGE_DELAY_RANGE = (1.0, 2.0)
+
+    def _fetch_one_clist_page(self, url: str, params: dict, referer: str) -> Any:
+        """Fetch one page of a clist endpoint with tenacity retry.
+
+        把网络层 retry 单独抽出来, 便于单测 mock 一次"成功"或"限流失败"。
+        """
+        session = self._session
+
+        @retry(
+            retry=retry_if_exception_type(Exception),
+            stop=stop_after_attempt(self._BOARD_RETRY_ATTEMPTS),
+            wait=wait_exponential(multiplier=1, min=1, max=8) + wait_random(0, 1),
+            reraise=True,
+        )
+        def _do():
+            headers = {"User-Agent": UA, "Referer": referer}
+            r = session.get(url, params=params, headers=headers, timeout=15)
+            return r.json()
+
+        return _do()
+
+    def _fetch_clist_paginated(
+        self,
+        endpoint: dict[str, Any],
+        *,
+        fs_override: str | None = None,
+        page_size: int = 100,
+    ) -> list[list[Any]]:
+        """Fetch all pages of an EastMoney clist endpoint with retry + rate-limit delays.
+
+        Args:
+            endpoint: One of ``ENDPOINTS.BOARD_*`` dicts (url/fs/fid/fields).
+            fs_override: Override the ``fs`` query param. Used by the
+                components endpoint to inject the board code.
+            page_size: Rows per page (default 100, EastMoney practical max).
+
+        Returns:
+            Flat list of rows. Each row is a positional list of values in
+            the same order as ``endpoint["fields"]``. Empty on persistent
+            failure (caller treats that as "no boards").
+        """
+        url = endpoint["url"]
+        base_params: dict[str, Any] = {
+            "pz": page_size,
+            "po": 1,
+            "np": 1,
+            "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+            "fltt": 2,
+            "invt": 2,
+            "fid": endpoint["fid"],
+            "fs": fs_override if fs_override is not None else endpoint["fs"],
+            "fields": endpoint["fields"],
+        }
+        referer = "https://quote.eastmoney.com/"
+        all_rows: list[list[Any]] = []
+        for page in range(1, self._BOARD_MAX_PAGES + 1):
+            params = {**base_params, "pn": page}
+            try:
+                payload = self._fetch_one_clist_page(url, params, referer)
+            except Exception as e:
+                logger.warning(
+                    f"[{self.name}] clist page {page} failed after retries: {e}"
+                )
+                break
+            rows = ((payload.get("data") or {}).get("diff")) or []
+            if not rows:
+                break
+            all_rows.extend(rows)
+            total = ((payload.get("data") or {}).get("total")) or 0
+            # 终止条件: 拉到的行数 >= total, 或者本页不满 (last page)
+            if not total or page * page_size >= total or len(rows) < page_size:
+                break
+            # 页间延迟 — 防 push2 限流
+            if page < self._BOARD_MAX_PAGES:
+                time.sleep(random.uniform(*self._BOARD_PAGE_DELAY_RANGE))
+        return all_rows
 
     def get_all_concept_boards(
         self, source: str = "eastmoney", include_quote: bool = False
     ) -> list[dict]:
-        """Get all concept boards (EastMoney via akshare EM API)."""
-        ak = _ak_module()
-        return fetch_board_list(
-            ak.stock_board_concept_name_em,
-            include_quote=include_quote,
-            fetcher_label=self.name,
-        )
+        """Get all concept boards (EastMoney push2 clist 直连)."""
+        ep = ENDPOINTS.BOARD_LIST_CONCEPT
+        try:
+            rows = self._fetch_clist_paginated(ep)
+        except Exception as e:
+            logger.warning(f"[{self.name}] get_all_concept_boards failed: {e}")
+            return []
+        if not rows:
+            return []
+        fields = ep["fields"].split(",")
+        # 概念板块字段映射: 用 concept 专属的 name 字段 (f15) 覆盖 map 里的 f14
+        concept_map = {**_BOARD_LIST_FIELD_MAP, _CONCEPT_LIST_NAME_FIELD: "name"}
+        out: list[dict] = []
+        for row in rows:
+            rec = dict(zip(fields, row))
+            code = str(rec.get("f14", "")).strip()
+            if not code:
+                continue
+            board: dict[str, Any] = {
+                "code": code,
+                "name": str(rec.get(_CONCEPT_LIST_NAME_FIELD, "")).strip(),
+            }
+            if include_quote:
+                for fc, ok in _BOARD_LIST_FIELD_MAP.items():
+                    if fc == "f14":
+                        continue
+                    board[ok] = rec.get(fc)
+            out.append(board)
+        return out
 
     def get_all_industry_boards(
         self, source: str = "eastmoney", include_quote: bool = False
     ) -> list[dict]:
-        """Get all industry boards (EastMoney via akshare EM API)."""
-        ak = _ak_module()
-        return fetch_board_list(
-            ak.stock_board_industry_name_em,
-            include_quote=include_quote,
-            fetcher_label=self.name,
-        )
+        """Get all industry boards (EastMoney push2 clist 直连)."""
+        ep = ENDPOINTS.BOARD_LIST_INDUSTRY
+        try:
+            rows = self._fetch_clist_paginated(ep)
+        except Exception as e:
+            logger.warning(f"[{self.name}] get_all_industry_boards failed: {e}")
+            return []
+        if not rows:
+            return []
+        fields = ep["fields"].split(",")
+        out: list[dict] = []
+        for row in rows:
+            rec = dict(zip(fields, row))
+            code = str(rec.get("f14", "")).strip()
+            if not code:
+                continue
+            board: dict[str, Any] = {
+                "code": code,
+                "name": str(rec.get(_INDUSTRY_LIST_NAME_FIELD, "")).strip(),
+            }
+            if include_quote:
+                for fc, ok in _BOARD_LIST_FIELD_MAP.items():
+                    if fc == "f14":
+                        continue
+                    board[ok] = rec.get(fc)
+            out.append(board)
+        return out
 
     def get_concept_board_stocks(
         self, board_code: str, source: str = "eastmoney", include_quote: bool = False
     ) -> list[dict]:
-        """Get stocks within a concept board (EastMoney via akshare EM API)."""
-        ak = _ak_module()
-        return fetch_board_stocks(
-            ak.stock_board_concept_cons_em,
-            board_code,
-            include_quote=include_quote,
-            fallback_enricher=self._enrich_stock_from_realtime,
-            fetcher_label=self.name,
+        """Get stocks within a concept board (EastMoney push2 clist 直连)."""
+        return self._get_board_stocks_impl(
+            board_code, include_quote=include_quote, fetcher_kind="concept"
         )
 
     def get_industry_board_stocks(
         self, board_code: str, source: str = "eastmoney", include_quote: bool = False
     ) -> list[dict]:
-        """Get stocks within an industry board (EastMoney via akshare EM API)."""
-        ak = _ak_module()
-        return fetch_board_stocks(
-            ak.stock_board_industry_cons_em,
-            board_code,
-            include_quote=include_quote,
-            fallback_enricher=self._enrich_stock_from_realtime,
-            fetcher_label=self.name,
+        """Get stocks within an industry board (EastMoney push2 clist 直连)."""
+        return self._get_board_stocks_impl(
+            board_code, include_quote=include_quote, fetcher_kind="industry"
         )
 
-    def _enrich_stock_from_realtime(self, stock_code: str) -> dict | None:
-        """Enrich a stock dict with realtime quote fields via akshare EM API."""
+    def _get_board_stocks_impl(
+        self, board_code: str, *, include_quote: bool, fetcher_kind: str,
+    ) -> list[dict]:
+        """Shared logic for concept / industry board stock listing.
+
+        EastMoney does not differentiate concept vs industry in the cons
+        endpoint — both use the same ``fs=b:{board_code}+f:!50`` form and
+        return identical shape. ``fetcher_kind`` is kept for log labeling
+        and future divergence (currently unused beyond logs).
+        """
+        ep = ENDPOINTS.BOARD_COMPONENTS
+        fs = ep["fs_template"].format(board_code=board_code)
         try:
-            ak = _ak_module()
-            df = ak.stock_zh_a_spot_em()
-            if df is None or df.empty:
-                return None
-            match = df[df["代码"] == stock_code]
-            if match.empty:
-                return None
-            row = match.iloc[0]
-            return {
-                "price": row.get("最新价"),
-                "change_pct": row.get("涨跌幅"),
-                "change_amount": row.get("涨跌额"),
-                "volume": row.get("成交量"),
-                "amount": row.get("成交额"),
-                "turnover_rate": row.get("换手率"),
-                "pe_ratio": row.get("市盈率-动态"),
-                "pb_ratio": row.get("市净率"),
-            }
-        except Exception:
+            rows = self._fetch_clist_paginated(ep, fs_override=fs)
+        except Exception as e:
             logger.warning(
-                f"[{self.name}] _enrich_stock_from_realtime failed for {stock_code}",
-                exc_info=True,
+                f"[{self.name}] get_board_stocks({fetcher_kind}={board_code}) failed: {e}"
             )
-            return None
+            return []
+        if not rows:
+            return []
+        fields = ep["fields"].split(",")
+        out: list[dict] = []
+        for row in rows:
+            rec = dict(zip(fields, row))
+            code = str(rec.get("f14", "")).strip()
+            if not code:
+                continue
+            stock: dict[str, Any] = {
+                "stock_code": code,
+                "stock_name": str(rec.get("f16", "")).strip(),
+            }
+            if include_quote:
+                for fc, ok in _BOARD_COMPONENTS_FIELD_MAP.items():
+                    if fc in ("f14", "f16"):  # already emitted
+                        continue
+                    stock[ok] = rec.get(fc)
+            out.append(stock)
+        return out
 
     # ----- Manager 统一入口方法（与 ZhituFetcher 对齐） -----
 
