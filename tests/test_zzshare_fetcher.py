@@ -4,8 +4,10 @@ All tests mock the zzshare SDK (no real network/token).
 """
 
 import importlib
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from stock_data.data_provider.base import DataCapability, DataFetchError
@@ -885,10 +887,64 @@ class TestBoards:
         fetcher = ZzshareFetcher()
         assert fetcher.get_stock_boards("600519", source="zzshare") is None
 
-    def test_get_board_history_raises_not_implemented(self):
+    def test_get_board_history_calls_plate_kline_with_yyyymmdd_range(self):
+        """start_date/end_date win; YYYYMMDD conversion happens."""
+        df_mock = pd.DataFrame({
+            "date": ["2026-05-15", "2026-05-20"],
+            "p_open": [1.0, 2.0], "p_high": [1.1, 2.1], "p_low": [0.9, 1.9],
+            "p_close": [1.05, 2.05], "volume": [100, 200], "turnover": [105.0, 410.0],
+            "quote_rate": [5.0, 10.0],
+        })
+        fetcher = self._fetcher_with_api(plate_kline=df_mock)
+        fetcher.get_board_history(
+            "883957", start_date="2026-05-15", end_date="2026-05-20",
+        )
+        call = fetcher._api.plate_kline.call_args
+        assert call.kwargs.get("b_code") == "883957"
+        assert call.kwargs.get("date1") == "20260515"
+        assert call.kwargs.get("date2") == "20260520"
+
+
+    def test_get_board_history_uses_days_when_no_dates(self):
+        """When start_date is None, fall back to end_date - days."""
+        df_mock = pd.DataFrame({"date": ["2026-06-20"], "p_close": [1.0]})
+        fetcher = self._fetcher_with_api(plate_kline=df_mock)
+        fetcher.get_board_history("883957", days=7)
+        call = fetcher._api.plate_kline.call_args
+        today = date.today()
+        assert call.kwargs.get("date2") == today.strftime("%Y%m%d")
+        assert call.kwargs.get("date1") == (today - timedelta(days=7)).strftime("%Y%m%d")
+
+
+    def test_get_board_history_normalizes_to_standard_columns(self):
+        """Response rows use open/high/low/close/amount (not p_/turnover) + YYYY-MM-DD dates."""
+        df_mock = pd.DataFrame({
+            "date": ["2026-05-20"],
+            "p_open": [1.0], "p_high": [1.1], "p_low": [0.9], "p_close": [1.05],
+            "volume": [100], "turnover": [105.0], "quote_rate": [5.0],
+        })
+        fetcher = self._fetcher_with_api(plate_kline=df_mock)
+        rows = fetcher.get_board_history(
+            "883957", start_date="2026-05-20", end_date="2026-05-20",
+        )
+        assert len(rows) == 1
+        assert rows[0]["date"] == "2026-05-20"
+        assert rows[0]["open"] == 1.0
+        assert rows[0]["close"] == 1.05
+        assert rows[0]["amount"] == 105.0     # renamed from turnover
+        assert rows[0]["volume"] == 100       # already aligned
+        assert rows[0]["pct_chg"] == 5.0      # renamed from quote_rate
+        # Non-standard columns dropped:
+        assert "p_open" not in rows[0]
+        assert "turnover" not in rows[0]
+        assert "quote_rate" not in rows[0]
+
+
+    def test_get_board_history_rejects_non_daily_frequency(self):
+        """Non-daily frequency is a user-input error → DataFetchError."""
         fetcher = ZzshareFetcher()
-        with pytest.raises(NotImplementedError, match="ZzshareFetcher does not provide"):
-            fetcher.get_board_history("801001", source="zzshare", frequency="d", days=30)
+        with pytest.raises(DataFetchError, match="仅支持日线"):
+            fetcher.get_board_history("883957", frequency="w", days=30)
 
 
 # ====================================================================

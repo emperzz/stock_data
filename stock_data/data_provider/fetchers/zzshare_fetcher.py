@@ -532,13 +532,89 @@ class ZzshareFetcher(BaseFetcher):
         return None
 
     def get_board_history(
-        self, board_code: str, frequency: str = "d", days: int = 30, **kwargs
+        self,
+        board_code: str,
+        frequency: str = "d",
+        days: int = 30,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        source: str | None = None,
+        **kwargs,
     ) -> list[dict]:
-        """K-line for a board — not yet implemented for zzshare."""
-        raise NotImplementedError(
-            f"ZzshareFetcher does not provide board-level K-line data "
-            f"(board_code={board_code!r}). v2 may use api.plate_kline()."
+        """K-line for a board via zzshare ``plate_kline``.
+
+        Daily-only — upstream ``plate_kline`` has no weekly/monthly variant.
+        ``start_date`` / ``end_date`` (YYYY-MM-DD) take precedence over
+        ``days`` (which falls back to ``today - days`` when no end_date).
+        ``source`` and ``**kwargs`` are accepted for signature parity with
+        the manager's call shape (`manager.get_board_history` passes
+        `source=` plus future-proof room) but ignored.
+
+        Column rename map (probed 2026-06-25, see
+        ``docs/zzshare/01-kline.md`` §3):
+            p_open / p_high / p_low / p_close → open / high / low / close
+            quote_rate                         → pct_chg
+            turnover                           → amount
+            date (ISO)                         → date  (over `trade_date`)
+            volume                             → volume (no rename)
+            p_prev_close, b_id, b_name, id, platform, trade_date → dropped
+        """
+        if frequency != "d":
+            raise DataFetchError(
+                f"ZzshareFetcher 板块 K 线仅支持日线 (frequency={frequency!r})"
+            )
+        api = self._ensure_api()
+        if api is None:
+            raise DataFetchError(
+                f"ZzshareFetcher zzshare SDK 不可用: {self._init_error}"
+            )
+
+        # Date range: start_date/end_date win over days
+        end_d = (
+            datetime.strptime(end_date, "%Y-%m-%d").date()
+            if end_date else date.today()
         )
+        if start_date:
+            start_d = datetime.strptime(start_date, "%Y-%m-%d").date()
+        else:
+            start_d = end_d - timedelta(days=days)
+        date1 = start_d.strftime("%Y%m%d")
+        date2 = end_d.strftime("%Y%m%d")
+
+        try:
+            df = api.plate_kline(b_code=board_code, date1=date1, date2=date2)
+        except Exception as e:
+            raise DataFetchError(
+                f"plate_kline({board_code!r}, {date1}-{date2}) failed: {e}"
+            ) from e
+
+        if df is None or df.empty:
+            return []
+
+        df = df.copy()
+        # OHLC: upstream has p_ prefix
+        rename = {
+            "p_open": "open",
+            "p_high": "high",
+            "p_low": "low",
+            "p_close": "close",
+            "quote_rate": "pct_chg",
+            "turnover": "amount",
+        }
+        df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+
+        # Sort ascending by date so response is oldest -> newest (canonical K-line).
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+            df = df.sort_values("date").reset_index(drop=True)
+
+        keep = [
+            c for c in [
+                "date", "open", "high", "low", "close", "volume", "amount", "pct_chg",
+            ] if c in df.columns
+        ]
+        return df[keep].to_dict(orient="records")
 
     def get_daily_dragon_tiger(
         self, trade_date: str = "", min_net_buy: float | None = None
