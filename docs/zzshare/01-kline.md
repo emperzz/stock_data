@@ -160,9 +160,36 @@ df = api.stk_mins(ts_code='600519.SH', trade_time='20260520',
 | `date1` | `str` | 否 | 起始日期 `YYYYMMDD` |
 | `date2` | `str` | 否 | 截止日期 `YYYYMMDD` |
 
-### 返回
+### 返回（实测 2026-06-25）
 
-DataFrame，列由后端决定（`plate_kline_to_df` 兼容多种日期列名）。无显式 schema 文档。
+DataFrame 列（以 `plate_kline(b_code='883957', date1='20260515', date2='20260520')` 实测）:
+
+| 字段 | dtype | 说明 |
+|---|---|---|
+| `b_id` | int | 板块代码（同入参 `b_code`） |
+| `b_name` | str | 板块名称（UTF-8，gbk 编码需解码） |
+| `id` | int | 行 ID（板块日内递增序号，非日期） |
+| `platform` | int | 平台代码（恒为 `1`） |
+| `quote_rate` | float | 涨跌幅（%，与 stock `daily.pct_chg` 同义） |
+| `p_close` | float | 收盘价 |
+| `p_low` | float | 最低价 |
+| `p_prev_close` | float | 昨收 |
+| `turnover` | float | 成交额（元） |
+| `date` | str | 日期 `YYYY-MM-DD` |
+| `p_open` | float | 开盘价 |
+| `p_high` | float | 最高价 |
+| `volume` | float | 成交量（股） |
+| `trade_date` | str | 日期 `YYYYMMDD`（与 `date` 等价，另一种格式） |
+
+行数：返回区间内的实际交易日数；上例 4 天（5/15、5/18、5/19、5/20）。
+
+排序：**升序**（最早日期在前；与 stock `daily` 的降序相反）。
+
+索引：默认 `RangeIndex`（无 `DatetimeIndex`）。
+
+日期列说明：`date` 与 `trade_date` 同时存在且值一一对应（`YYYY-MM-DD` vs `YYYYMMDD`），下游需选其一即可。
+
+注意：OHLC 全部带 `p_` 前缀（与 stock `daily` 的 `open/high/low/close` 无前缀不同）；成交量是 `volume` 而非 `vol`；成交额是 `turnover` 而非 `amount`。归一化时需做列名映射。
 
 ### 示例
 
