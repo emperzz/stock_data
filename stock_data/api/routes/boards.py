@@ -26,10 +26,12 @@ from ..cache import (
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
     BoardInfo,
+    BoardKlineResponse,
     BoardListResponse,
     BoardStockInfo,
     BoardStocksResponse,
     ErrorResponse,
+    KLineData,
     StockBoardInfo,
     StockBoardsResponse,
     ZTPoolResponse,
@@ -374,39 +376,85 @@ def get_stock_boards(
 
 @router.get(
     "/boards/{board_code}/history",
+    response_model=BoardKlineResponse,
     responses={
-        400: {"model": ErrorResponse, "description": "Invalid source"},
-        501: {"model": ErrorResponse, "description": "Source does not yet support board K-line"},
+        400: {"model": ErrorResponse, "description": "Invalid source / frequency"},
+        500: {"model": ErrorResponse, "description": "Server error"},
     },
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块 K 线（新增, 占位 — 暂未实现）",
+    summary="板块 K 线（日线，ZZSHARE）",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_history",
 )
 @map_errors
 def get_board_history(
-    board_code: str = Path(max_length=30, description="Board code"),
-    source: Literal["zhitu", "eastmoney"] = Query(
-        ..., description="Data source"
-    ),
-    frequency: Literal["d", "w", "m"] = Query("d", description="K-line frequency"),
+    board_code: str = Path(max_length=30, description="Board code (zzshare format, e.g. '883957')"),
+    source: Literal["zzshare"] = Query(..., description="Data source (only 'zzshare' is supported)"),
+    frequency: Literal["d"] = Query("d", description="K-line frequency (daily only — zzshare plate_kline is daily-only)"),
     start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
-    days: int = Query(30, ge=1, le=365, description="Days (when start_date not given)"),
-) -> dict:
-    """Get historical K-line for a board. Currently a 501 stub."""
+    days: int = Query(30, ge=1, le=365, description="Days (used when start_date not given)"),
+) -> BoardKlineResponse:
+    """Get historical K-line for a board (zzshare plate_kline)."""
     _resolve_source(source)
-    raise HTTPException(
-        status_code=501,
-        detail={
-            "error": "not_implemented",
-            "message": f"Board K-line for source='{source}' is not yet implemented. "
-            f"Consider contributing via EastMoney's board index.",
-        },
+    manager = get_manager()
+    try:
+        rows, origin = manager.get_board_history(
+            board_code,
+            source=source,
+            frequency=frequency,
+            start_date=start_date,
+            end_date=end_date,
+            days=days,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
+
+    # Reshape manager rows (list[dict]) into KLineData list. Defensive —
+    # if a fetcher returns a partial row missing required fields, drop it
+    # rather than 500ing.
+    kline_data: list[KLineData] = []
+    for row in rows or []:
+        try:
+            kline_data.append(
+                KLineData(
+                    date=str(row.get("date", "")),
+                    open=float(row.get("open", 0.0)),
+                    high=float(row.get("high", 0.0)),
+                    low=float(row.get("low", 0.0)),
+                    close=float(row.get("close", 0.0)),
+                    volume=int(row.get("volume", 0)),
+                    amount=_safe_optional_float(row.get("amount")),
+                    change_percent=_safe_optional_float(row.get("pct_chg")),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+
+    # Best-effort board name lookup from the cached board list (no extra
+    # upstream call). Empty string when not cached.
+    board_name = stock_board_cache.get_board_name(board_code, source) or ""
+
+    return BoardKlineResponse(
+        board_code=board_code,
+        board_name=board_name,
+        period="daily",
+        data=kline_data,
+        source=origin,
     )
+
+
+def _safe_optional_float(v):
+    """Return None for None / non-numeric, else float(v). Used by the route layer."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 @router.get(

@@ -291,15 +291,45 @@ def test_get_stock_boards_eastmoney_returns_501(client):
     assert r.status_code == 501
 
 
-# ===== get_board_history (NEW, stub) =====
+# ===== get_board_history (zzshare) =====
 
 
-def test_get_board_history_returns_501_for_zhitu(client):
-    """Board K-line stub returns 501 Not Implemented."""
-    r = client.get("/api/v1/boards/sw_mt/history?source=zhitu")
-    assert r.status_code == 501
+def test_get_board_history_source_required(client):
+    """GET /boards/{code}/history without source → 422 (Pydantic Literal validation)."""
+    r = client.get("/api/v1/boards/883957/history")
+    assert r.status_code == 422
 
 
-def test_get_board_history_returns_501_for_eastmoney(client):
-    r = client.get("/api/v1/boards/BK0001/history?source=eastmoney")
-    assert r.status_code == 501
+def test_get_board_history_rejects_non_zzshare_source(client):
+    """source must be 'zzshare' (Literal validated by FastAPI)."""
+    r = client.get("/api/v1/boards/883957/history?source=eastmoney")
+    assert r.status_code == 422
+
+
+def test_get_board_history_rejects_non_daily_frequency(client):
+    """frequency must be 'd' (Literal validated by FastAPI)."""
+    r = client.get("/api/v1/boards/883957/history?source=zzshare&frequency=w")
+    assert r.status_code == 422
+
+
+def test_get_board_history_zzshare_returns_kline(client):
+    """Happy path: zzshare returns rows → 200 with BoardKlineResponse."""
+    fake_rows = [
+        {
+            "date": "2026-05-20", "open": 1.0, "high": 1.1, "low": 0.9,
+            "close": 1.05, "volume": 100, "amount": 105.0, "pct_chg": 5.0,
+        },
+    ]
+    with patch(
+        "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+        return_value=(fake_rows, "ZzshareFetcher"),
+    ):
+        r = client.get("/api/v1/boards/883957/history?source=zzshare&days=7")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["board_code"] == "883957"
+    assert body["period"] == "daily"
+    assert body["source"] == "ZzshareFetcher"
+    assert len(body["data"]) == 1
+    assert body["data"][0]["date"] == "2026-05-20"
+    assert body["data"][0]["close"] == 1.05
