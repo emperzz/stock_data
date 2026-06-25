@@ -361,11 +361,25 @@ are the same as stocks (see [Standardized Data Schema](#standardized-data-schema
 # Run the server
 .venv/Scripts/python.exe -m stock_data.server
 
-# Run tests
+# Run tests — DEFAULT skips live_network (fast dev loop, ~1 min)
 .venv/Scripts/python.exe -m pytest
 
-# Run a single test
+# Run a single test (markers also skipped unless deselected)
 .venv/Scripts/python.exe -m pytest tests/test_explorer_manifest_endpoint.py -v
+
+# Run FULL suite (incl. live_network/requires_token — CI use; 10+ min)
+.venv/Scripts/python.exe -m pytest -m ""
+
+# Run only live_network tests
+.venv/Scripts/python.exe -m pytest -m live_network
+
+# Run in parallel via pytest-xdist (OPT-IN; not recommended on Windows).
+# On this dev box xdist was 21× SLOWER than serial (57 s → 1196 s) because
+# each worker boots a fresh Python process and re-imports the entire
+# stock_data.server.app tree (akshare, yfinance, gm, baostock, ...). May
+# help on Linux CI where process startup is cheaper; benchmark before
+# relying on it. Requires explicit `-n auto` — never default.
+# .venv/Scripts/python.exe -m pytest -n auto
 
 # Lint
 ruff check .
@@ -373,6 +387,14 @@ ruff check .
 # Format
 ruff format .
 ```
+
+> **Default `pytest` skips `live_network` and `requires_token` tests** (set
+> via `addopts = ["-m", "not live_network"]` in `pyproject.toml`). These
+> tests hit real upstream APIs and can take 10+ minutes — they're meant
+> for CI / pre-release runs, not the dev loop. To run them locally, use
+> `pytest -m ""` (clear the default deselect). Tests marked `live_network`
+> also auto-downgrade network-class failures to `x` (xfail) via the hook
+> in `tests/conftest.py`; see `tests/_network_guard.py` for the legend.
 
 ## API Documentation
 
