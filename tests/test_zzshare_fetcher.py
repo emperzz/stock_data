@@ -1040,13 +1040,13 @@ class TestHotTopics:
         fetcher = self._fetcher_with_api(rows)
         topics = fetcher.get_hot_topics("2026-05-20")
         assert len(topics) == 2
-        # 002342 -> 002342.SZ
-        assert topics[0]["code"] == "002342.SZ"
+        # Bare 6-digit code (NOT '002342.SZ' — tushare suffix is outbound only)
+        assert topics[0]["code"] == "002342"
         assert topics[0]["name"] == "巨力索具"
         assert topics[0]["change_pct"] == 10.0
         assert topics[0]["rank"] == 1
-        # 600519 -> 600519.SH
-        assert topics[1]["code"] == "600519.SH"
+        # Bare 6-digit code (NOT '600519.SH' — tushare suffix is outbound only)
+        assert topics[1]["code"] == "600519"
 
     def test_hot_topics_empty_returns_empty_list(self):
         fetcher = self._fetcher_with_api([])
