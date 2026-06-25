@@ -344,3 +344,31 @@ class TestBoardSchemas:
         assert stock.price == 1800.0
         assert stock.change_pct == 2.5
         assert stock.volume == 1000000
+
+    def test_board_kline_response_serializes_zhongzheng_shape(self):
+        """BoardKlineResponse wraps KLineData[] and exposes source."""
+        from stock_data.api.schemas import BoardKlineResponse, KLineData
+
+        r = BoardKlineResponse(
+            board_code="883957",
+            board_name="同花顺全A",
+            period="daily",
+            data=[
+                KLineData(
+                    date="2026-05-20",
+                    open=100.0, high=105.0, low=99.0, close=104.0,
+                    volume=1_000_000, amount=104_000_000.0, change_percent=4.0,
+                ),
+            ],
+            source="ZzshareFetcher",
+        )
+        out = r.model_dump()
+        assert out["board_code"] == "883957"
+        assert out["board_name"] == "同花顺全A"
+        assert out["period"] == "daily"
+        assert out["source"] == "ZzshareFetcher"
+        assert len(out["data"]) == 1
+        assert out["data"][0]["date"] == "2026-05-20"
+        # KLineData conditional serialization: indicator keys absent when None
+        assert "ma5" not in out["data"][0]
+        assert "indicators" not in out["data"][0]  # type: ignore[index]  # fmt: skip

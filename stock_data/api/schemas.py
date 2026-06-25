@@ -315,6 +315,19 @@ class BoardStocksResponse(BaseModel):
     data_source: str = Field(default="", description="实际数据来源 fetcher 名 或 'persistence'")
 
 
+class BoardKlineResponse(BaseModel):
+    """Response for board K-line endpoint (`/boards/{board_code}/history`)."""
+
+    board_code: str = Field(description="Board code (source-specific, e.g. '883957' for zzshare)")
+    board_name: str = Field(default="", description="Board name (best-effort lookup; may be empty)")
+    period: str = Field(default="daily", description="K-line period (always 'daily' for now)")
+    data: list[KLineData] = Field(default_factory=list, description="K-line data points")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (目前固定为 'ZzshareFetcher')",
+    )
+
+
 class StockBoardInfo(BaseModel):
     """A board that a stock belongs to."""
 
