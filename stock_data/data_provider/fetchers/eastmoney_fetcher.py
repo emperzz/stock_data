@@ -1364,16 +1364,3 @@ class EastMoneyFetcher(BaseFetcher):
         lookup directly, so return ``None`` to signal "source doesn't support this".
         """
         return None
-
-    def get_board_history(
-        self, board_code: str, source: str = "eastmoney",
-        frequency: str = "d", days: int = 30,
-    ) -> list[dict]:
-        """Board K-line. EastMoney does NOT expose board-level K-line, so
-        raise NotImplementedError (consistent with ZhituFetcher's stub).
-        """
-        raise NotImplementedError(
-            f"EastMoneyFetcher does not provide board-level K-line data "
-            f"(board_code={board_code!r}). "
-            f"Consider zzshare plate_kline as future implementation."
-        )

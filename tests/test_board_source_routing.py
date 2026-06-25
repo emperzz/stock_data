@@ -413,7 +413,6 @@ def test_zhitu_fetcher_board_methods_accept_manager_kwargs():
     The Manager calls:
       - f.get_board_stocks(code, source=source, include_quote=include_quote)
       - f.get_stock_boards(code, source=source)
-      - f.get_board_history(code, source=source, frequency=freq, days=days)
 
     ZhituFetcher uses **kwargs to absorb these (Zhitu API doesn't support
     include_quote). If **kwargs is missing, Python raises TypeError at runtime.
@@ -434,9 +433,3 @@ def test_zhitu_fetcher_board_methods_accept_manager_kwargs():
     # get_stock_boards: Manager passes source=
     result = fetcher.get_stock_boards("000001", source="zhitu")
     assert result is None
-
-    # get_board_history: Manager passes source=, frequency=, days=
-    try:
-        fetcher.get_board_history("sw_mt", source="zhitu", frequency="d", days=30)
-    except NotImplementedError:
-        pass  # expected — board K-line not implemented

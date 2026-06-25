@@ -1,8 +1,6 @@
 """Tests for ZhituFetcher board methods."""
 from unittest.mock import patch, MagicMock
 
-import pytest
-
 from stock_data.data_provider.base import DataCapability
 from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
 
@@ -107,10 +105,3 @@ def test_get_stock_boards_calls_index_index_endpoint(mock_get):
 def test_get_stock_boards_returns_none_when_token_missing():
     fetcher = _make_fetcher(token="")
     assert fetcher.get_stock_boards("000001") is None
-
-
-def test_get_board_history_raises_not_implemented():
-    """Board K-line is unimplemented for Zhitu."""
-    fetcher = _make_fetcher()
-    with pytest.raises(NotImplementedError, match="board-level K-line"):
-        fetcher.get_board_history("sw_mt", frequency="d", days=30)

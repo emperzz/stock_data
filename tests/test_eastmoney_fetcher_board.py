@@ -402,13 +402,6 @@ def test_get_stock_boards_returns_none():
     assert fetcher.get_stock_boards("000001", source="eastmoney") is None
 
 
-def test_get_board_history_raises_not_implemented():
-    """EastMoney board K-line is unimplemented."""
-    fetcher = EastMoneyFetcher()
-    with pytest.raises(NotImplementedError, match="board-level K-line"):
-        fetcher.get_board_history("BK0001", source="eastmoney")
-
-
 # ---------------------------------------------------------------------------
 # 分页 + 错误处理
 # ---------------------------------------------------------------------------

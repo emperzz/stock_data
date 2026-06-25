@@ -659,16 +659,3 @@ class ZhituFetcher(BaseFetcher):
             if subtype in subtypes:
                 return board_type
         return ""
-
-    def get_board_history(
-        self, board_code: str, frequency: str = "d", days: int = 30, **kwargs
-    ) -> list[dict]:
-        """Get K-line for a Zhitu board.
-
-        NOT IMPLEMENTED — Zhitu's /hs/history/ endpoints are stock-level only.
-        """
-        raise NotImplementedError(
-            f"ZhituFetcher does not provide board-level K-line data "
-            f"(board_code={board_code!r}, frequency={frequency!r}, days={days!r}). "
-            f"No upstream Zhitu API exposes this."
-        )
