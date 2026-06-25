@@ -277,6 +277,30 @@ def test_manager_get_board_history_passes_args_to_fetcher():
         assert spy.call_count == 1
 
 
+def test_manager_passes_date_range_to_fetcher():
+    """start_date/end_date/days are forwarded verbatim to fetcher."""
+    em = _make_fetcher("ZzshareFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+
+    manager.get_board_history(
+        "883957",
+        source="ZzshareFetcher",
+        frequency="d",
+        start_date="2026-05-15",
+        end_date="2026-05-20",
+        days=30,
+    )
+
+    em.get_board_history.assert_called_once_with(
+        "883957",
+        frequency="d",
+        days=30,
+        start_date="2026-05-15",
+        end_date="2026-05-20",
+        source="ZzshareFetcher",
+    )
+
+
 def test_manager_unknown_source_raises_value_error():
     em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
     manager = DataFetcherManager([em])

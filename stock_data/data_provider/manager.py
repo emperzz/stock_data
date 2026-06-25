@@ -750,9 +750,17 @@ class DataFetcherManager:
         board_code: str,
         source: str,
         frequency: str = "d",
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
         days: int = 30,
     ) -> tuple[list[dict], str]:
-        """Get K-line for a board from the named source (currently stub on all fetchers)."""
+        """Get K-line for a board from the named source (zzshare only).
+
+        `start_date` / `end_date` (YYYY-MM-DD) take precedence over `days`.
+        Source-routed (no failover) per CLAUDE.md — board classification
+        systems differ across sources.
+        """
         result, name = self._with_source(
             source=source,
             capability=DataCapability.STOCK_BOARD,
@@ -760,7 +768,12 @@ class DataFetcherManager:
             op_label=f"board K-line {board_code} ({source})",
             call=lambda f: (
                 f.get_board_history(
-                    board_code, source=source, frequency=frequency, days=days,
+                    board_code,
+                    frequency=frequency,
+                    days=days,
+                    start_date=start_date,
+                    end_date=end_date,
+                    source=source,
                 ),
                 f.name,
             ),
