@@ -265,7 +265,7 @@ fetchers that support it.
 | `get_all_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
 | `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
 | `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
-| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; currently stub) (ZzshareFetcher P5) |
+| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; zzshare plate_kline daily-only) (ZzshareFetcher P5) |
 | `get_index_realtime_quote` | `INDEX_QUOTE` |
 | `get_index_historical` | `INDEX_HISTORICAL` |
 | `get_index_intraday` | `INDEX_INTRADAY` |
