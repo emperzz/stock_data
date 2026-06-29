@@ -249,23 +249,16 @@ class ZzshareFetcher(BaseFetcher):
     ) -> pd.DataFrame | None:
         """Fetch minute K-line from zzshare (period=1/5/15/30/60).
 
+        Single-day, latest available (today - 2 days as a safe trade-time
+        default — same heuristic the previous inline implementation used).
+
         Note: zzshare minute K does not support adjust — the ``adjust`` param
         is accepted for interface symmetry but is not forwarded to the SDK.
         """
-
-        api = self._ensure_api()
-        if api is None:
-            return None
-        ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
-        # Determine the date to query (latest trade date or today).
-        trade_time = (datetime.now() - timedelta(days=2)).strftime("%Y%m%d")
         freq = self._PERIOD_TO_FREQ.get(period, "5min")
-        try:
-            df = api.stk_mins(ts_code=ts_code, trade_time=trade_time, freq=freq)
-        except Exception as e:
-            logger.warning(f"[ZzshareFetcher] stk_mins({ts_code}, {freq}) failed: {e}")
-            return None
-        if df is None or df.empty:
+        trade_time = (datetime.now() - timedelta(days=2)).strftime("%Y%m%d")
+        df = self._fetch_minute_kline(stock_code, trade_time, freq)
+        if df is None:
             return None
         df = df.copy()
         if "vol" in df.columns:
