@@ -325,6 +325,81 @@ class TestDailyKline:
         with pytest.raises(DataFetchError, match="No data"):
             fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
 
+    def test_fetch_raw_data_minute_single_day(self):
+        """_fetch_raw_data(frequency="5") routes through api.stk_mins for a single day."""
+        import pandas as pd
+
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(return_value=pd.DataFrame({
+            "ts_code": ["600519.SH"] * 3,
+            "trade_time": ["202605200935", "202605200940", "202605200945"],
+            "open": [1700.0, 1705.0, 1710.0],
+            "high": [1708.0, 1712.0, 1717.0],
+            "low": [1698.0, 1702.0, 1708.0],
+            "close": [1705.0, 1710.0, 1715.0],
+            "vol": [1e5, 1.1e5, 1.2e5],
+            "amount": [1e8, 1.1e8, 1.2e8],
+        }))
+        fetcher._api = fake_api
+
+        df = fetcher._fetch_raw_data(
+            "600519", "2026-05-20", "2026-05-20", frequency="5"
+        )
+
+        # 验证走的是 stk_mins 而不是 daily
+        assert fake_api.stk_mins.called
+        assert not fake_api.daily.called
+        # 验证调用参数
+        call = fake_api.stk_mins.call_args
+        assert call.kwargs["freq"] == "5min"
+        assert call.kwargs["trade_time"] == "20260520"
+        assert call.kwargs["ts_code"] == "600519.SH"
+
+    def test_fetch_raw_data_minute_adjust_ignored(self):
+        """adjust='qfq' on minute frequency: must NOT be forwarded to stk_mins."""
+        import pandas as pd
+
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(return_value=pd.DataFrame({
+            "trade_time": ["202605200935"],
+            "open": [1700.0], "high": [1708.0], "low": [1698.0], "close": [1705.0],
+            "vol": [1e5], "amount": [1e8],
+        }))
+        fetcher._api = fake_api
+
+        fetcher._fetch_raw_data(
+            "600519", "2026-05-20", "2026-05-20", frequency="5", adjust="qfq"
+        )
+        call = fake_api.stk_mins.call_args
+        assert "adj" not in call.kwargs
+        assert "adjust" not in call.kwargs
+
+    def test_fetch_raw_data_minute_sdk_unavailable_raises(self, monkeypatch):
+        """SDK not installed → minute path raises DataFetchError."""
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=None):
+            fetcher = ZzshareFetcher()
+            with pytest.raises(DataFetchError, match="无分钟数据"):
+                fetcher.get_kline_data(
+                    "600519", "2026-05-20", "2026-05-20", frequency="5"
+                )
+
+    def test_fetch_raw_data_minute_all_days_empty_raises(self):
+        """When stk_mins returns empty for the only day, raise DataFetchError."""
+        import pandas as pd
+
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(return_value=pd.DataFrame())
+        fetcher._api = fake_api
+
+        with pytest.raises(DataFetchError, match="无分钟数据"):
+            fetcher.get_kline_data(
+                "600519", "2026-05-20", "2026-05-20", frequency="5"
+            )
+
 
 # ====================================================================
 # K-line (HISTORICAL_MIN) — get_intraday_data

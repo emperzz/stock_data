@@ -140,11 +140,48 @@ class ZzshareFetcher(BaseFetcher):
         frequency: str = "d",
         adjust: str | None = None,
     ) -> pd.DataFrame:
-        """Fetch daily K-line from zzshare. Raises for weekly/monthly."""
+        """Fetch K-line from zzshare.
+
+        Daily: api.daily (single call).
+        Minute (5/15/30/60): api.stk_mins is single-day only; loop over
+        the date range and pd.concat. adjust is ignored for minute
+        (zzshare upstream: minute K has no adjustment).
+        """
         if frequency in ("w", "m"):
             raise DataFetchError(
                 f"ZzshareFetcher 不支持周线/月线 (frequency={frequency}, 仅日线 daily)"
             )
+
+        # Minute-frequency branch — multi-day loop with concat
+        if frequency in ("5", "15", "30", "60"):
+            freq = self._PERIOD_TO_FREQ.get(frequency, f"{frequency}min")
+            try:
+                start_d = datetime.strptime(start_date, "%Y-%m-%d").date()
+                end_d = datetime.strptime(end_date, "%Y-%m-%d").date()
+            except ValueError as e:
+                raise DataFetchError(f"Invalid date for minute K: {e}") from e
+            day_count = (end_d - start_d).days + 1
+            if day_count > 14:
+                logger.warning(
+                    "[ZzshareFetcher] minute K over %d days for %s — %d SDK calls expected",
+                    day_count, stock_code, day_count,
+                )
+            dfs: list[pd.DataFrame] = []
+            cur = start_d
+            while cur <= end_d:
+                df_one = self._fetch_minute_kline(
+                    stock_code, cur.strftime("%Y%m%d"), freq
+                )
+                if df_one is not None:
+                    dfs.append(df_one)
+                cur += timedelta(days=1)
+            if not dfs:
+                raise DataFetchError(
+                    f"ZzshareFetcher 无分钟数据 for {stock_code} {start_date}~{end_date}"
+                )
+            return pd.concat(dfs, ignore_index=True)
+
+        # Daily branch (existing path)
         api = self._ensure_api()
         if api is None:
             raise DataFetchError(f"ZzshareFetcher zzshare SDK 不可用: {self._init_error}")
