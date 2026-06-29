@@ -436,6 +436,49 @@ class TestIntradayKline:
             assert result is None
 
 
+class TestFetchMinuteKline:
+    """Tests for the private _fetch_minute_kline helper (Task 2 prep)."""
+
+    def test_helper_dispatches_to_stk_mins(self):
+        """Helper calls api.stk_mins with correct ts_code / freq / trade_time."""
+        import pandas as pd
+
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(
+            return_value=pd.DataFrame({"trade_time": ["202605200935"]})
+        )
+        fetcher._api = fake_api
+        df = fetcher._fetch_minute_kline("600519", "20260520", "5min")
+        call = fake_api.stk_mins.call_args
+        assert call.kwargs["ts_code"] == "600519.SH"
+        assert call.kwargs["freq"] == "5min"
+        assert call.kwargs["trade_time"] == "20260520"
+        assert df is not None
+
+    def test_helper_sdk_unavailable_returns_none(self, monkeypatch):
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=None):
+            fetcher = ZzshareFetcher()
+            assert fetcher._fetch_minute_kline("600519", "20260520", "5min") is None
+
+    def test_helper_sdk_exception_returns_none(self):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(side_effect=RuntimeError("rate limit"))
+        fetcher._api = fake_api
+        assert fetcher._fetch_minute_kline("600519", "20260520", "5min") is None
+
+    def test_helper_empty_df_returns_none(self):
+        import pandas as pd
+
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(return_value=pd.DataFrame())
+        fetcher._api = fake_api
+        assert fetcher._fetch_minute_kline("600519", "20260520", "5min") is None
+
+
 # ====================================================================
 # REALTIME_QUOTE
 # ====================================================================

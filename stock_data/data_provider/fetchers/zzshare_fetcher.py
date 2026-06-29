@@ -241,6 +241,34 @@ class ZzshareFetcher(BaseFetcher):
         df = df[[c for c in keep if c in df.columns]]
         return df
 
+    def _fetch_minute_kline(
+        self, stock_code: str, trade_date_yyyymmdd: str, freq: str
+    ) -> pd.DataFrame | None:
+        """底层调 api.stk_mins,返回 DataFrame 或 None。
+
+        单日调用封装。统一供 _fetch_raw_data（多日循环）和
+        get_intraday_data（单日）使用。SDK 不可用、上游异常、
+        或返回空 df 时返回 None，调用方需自行决定下一步。
+        """
+        api = self._ensure_api()
+        if api is None:
+            return None
+        ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
+        try:
+            df = api.stk_mins(
+                ts_code=ts_code,
+                trade_time=trade_date_yyyymmdd,
+                freq=freq,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[ZzshareFetcher] stk_mins({ts_code}, {freq}) failed: {e}"
+            )
+            return None
+        if df is None or df.empty:
+            return None
+        return df
+
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Fetch realtime snapshot from zzshare rt_k(fields='all').
 
