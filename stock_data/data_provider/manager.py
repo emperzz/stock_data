@@ -275,6 +275,35 @@ class DataFetcherManager:
         raise DataFetchError(prefix + "\n" + "\n".join(errors))
 
     # ---------- K-line & intraday (stocks) ----------
+    #
+    # Per spec §4.4: two-stage filter (capability bit → supports_kline).
+    # Rev 3 explicitly removed fallback_cap (decorative dead code).
+
+    def _kline_candidates(
+        self,
+        market: str,
+        asset: str,
+        frequency: str,
+        adjust: str | None,
+    ) -> list[BaseFetcher]:
+        """Two-stage filter per spec §4.4: capability bit then supports_kline.
+
+        Stage 1 narrows by capability bit (STOCK_KLINE for stock code,
+        INDEX_KLINE for index code) plus market. Stage 2 narrows by
+        per-fetcher ``supports_kline(frequency, adjust, market, asset)``
+        so we never try a fetcher that will refuse this exact request.
+
+        Returns an unsorted list — caller sorts by priority and runs failover.
+        """
+        primary = (
+            DataCapability.INDEX_KLINE if asset == "index"
+            else DataCapability.STOCK_KLINE
+        )
+        candidates = self._filter_by_capability(market, primary)
+        return [
+            f for f in candidates
+            if f.supports_kline(frequency, adjust or "", market, asset)
+        ]
 
     def get_kline_data(
         self,
@@ -286,7 +315,7 @@ class DataFetcherManager:
         adjust: str | None = None,
     ) -> tuple[pd.DataFrame, str]:
         """
-        Get K-line data with automatic failover.
+        Get K-line data with automatic failover (spec §4.4 two-stage filter).
 
         Args:
             stock_code: Stock code
@@ -300,56 +329,60 @@ class DataFetcherManager:
             Tuple of (DataFrame, source_name)
 
         Raises:
-            DataFetchError: When all fetchers fail
+            DataFetchError: When no fetcher's supports_kline accepts the request
+                (e.g. 1m + qfq), or when every supporting fetcher fails.
         """
         stock_code = normalize_stock_code(stock_code)
         index_tag = index_market_tag(stock_code)
+        market = index_tag or market_tag(stock_code)
+        asset = "index" if index_tag else "stock"
 
-        # Capability routing is capability-only — "no declaration = no capability".
-        # When index_tag is set, require INDEX_KLINE; for stock codes, require STOCK_KLINE.
-        # A missing declaration surfaces as DataFetchError via _with_failover.
-        # (rev 3 collapsed HISTORICAL_DWM + HISTORICAL_MIN → STOCK_KLINE and
-        #  INDEX_HISTORICAL + INDEX_INTRADAY → INDEX_KLINE, so the per-frequency
-        #  branch is gone — both daily and minute K line route through the same flag.)
-        if index_tag:
-            market = index_tag
-            capability = DataCapability.INDEX_KLINE
-        else:
-            market = market_tag(stock_code)
-            capability = DataCapability.STOCK_KLINE
-
-        def _fetch(fetcher: BaseFetcher) -> pd.DataFrame:
-            return fetcher.get_kline_data(
-                stock_code, start_date, end_date, days, frequency, adjust
+        candidates = self._kline_candidates(market, asset, frequency, adjust)
+        if not candidates:
+            raise DataFetchError(
+                f"No fetcher supports asset={asset} period={frequency} "
+                f"adjust={adjust!r} market={market}"
             )
 
-        return self._with_failover(
-            capability, market, f"kline {frequency} {stock_code}",
-            _fetch, return_source=True,
-        )
+        # Sort by priority; existing failover loop preserved from old impl.
+        candidates = sorted(candidates, key=lambda f: f.priority)
+        errors: list[str] = []
+        for fetcher in candidates:
+            try:
+                df = fetcher.get_kline_data(
+                    stock_code, start_date, end_date, days, frequency, adjust
+                )
+                if _is_meaningful(df):
+                    return df, fetcher.name
+            except DataFetchError as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                continue
+        raise DataFetchError(f"All fetchers failed: {errors}")
 
     def get_intraday_data(
-        self, stock_code: str, period: str = "5", adjust: str = ""
+        self,
+        stock_code: str,
+        frequency: str = "5",
+        adjust: str | None = None,
+        days: int = 1,
     ) -> tuple[pd.DataFrame, str]:
-        """Get intraday minute-level data with automatic failover.
+        """Backwards-compat wrapper — period=分钟 path used by /intraday route.
 
-        Args:
-            stock_code: Stock code
-            period: Minute period - "1", "5", "15", "30", "60"
-            adjust: Adjustment type - ""=不复权, "qfq"=前复权, "hfq"=后复权
-
-        Returns:
-            Tuple of (DataFrame, source_name)
-
-        Raises:
-            DataFetchError: When all fetchers fail
+        Per spec §5.1 the route is replaced by /kline in P1 (Task 9-10);
+        this method stays because (a) legacy code may call it directly and
+        (b) helper routes consume it. Internally delegates to
+        ``get_kline_data`` with ``end_date=today`` and the same frequency,
+        so the two-stage filter (capability → supports_kline) decides the
+        candidate pool uniformly.
         """
-        stock_code = normalize_stock_code(stock_code)
-        market = market_tag(stock_code)
-        return self._with_failover(
-            DataCapability.STOCK_KLINE, market, f"intraday {stock_code}",
-            lambda f: f.get_intraday_data(stock_code, period, adjust),
-            return_source=True,
+        from datetime import date
+        return self.get_kline_data(
+            stock_code=stock_code,
+            start_date=None,
+            end_date=date.today().strftime("%Y-%m-%d"),
+            days=days,
+            frequency=frequency,
+            adjust=adjust,
         )
 
     # ---------- stock list ----------
