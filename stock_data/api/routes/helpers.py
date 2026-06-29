@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException, Request
 
 from ...data_provider import DataFetcherManager
-from ...data_provider.core.types import safe_float
+from ...data_provider.core.types import safe_float, safe_int
 from ...data_provider.fetchers.index_symbols import get_all_indices
 from ...data_provider.indicators import compute
 from ...data_provider.indicators.types import IndicatorKey
@@ -134,11 +134,11 @@ def _reject_non_index_code(code: str, *, endpoint_kind: str) -> None:
 def _forbid_quote_params(request: Request) -> None:
     """Reject query params that are meaningless for snapshot (``/quote``) endpoints.
 
-    Per spec 5.5: quote is a snapshot; ``period``, ``adjust``, ``days``,
-    ``start_date``, ``end_date`` have no meaning. Clients get a clear 422
-    with a hint to use ``/kline`` instead.
+    Per spec §5.5: quote is a snapshot; ``period``, ``adjust``, ``days``,
+    ``start_date``, ``end_date``, ``indicators`` have no meaning. Clients
+    get a clear 422 with a hint to use ``/kline`` instead.
     """
-    forbidden = {"period", "adjust", "days", "start_date", "end_date"}
+    forbidden = {"period", "adjust", "days", "start_date", "end_date", "indicators"}
     bad = forbidden & set(request.query_params.keys())
     if bad:
         raise HTTPException(
@@ -247,7 +247,7 @@ def _build_kline_data(row: dict, format_date) -> KLineData:
         high=safe_float(row.get("high"), 0.0) or 0.0,
         low=safe_float(row.get("low"), 0.0) or 0.0,
         close=safe_float(row.get("close"), 0.0) or 0.0,
-        volume=int(row.get("volume") or 0),
+        volume=safe_int(row.get("volume"), 0) or 0,
         amount=safe_float(row.get("amount")),
         change_percent=safe_float(row.get("pct_chg")),
         ma5=safe_float(ind.get("ma5")),

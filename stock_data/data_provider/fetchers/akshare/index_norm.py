@@ -157,12 +157,11 @@ def normalize_intraday_df(df: pd.DataFrame, time_col: str = "时间") -> pd.Data
     for col in _INTRADAY_NUMERIC_COLS:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
-    # 手 -> 股 (lots -> shares) per spec §3.4. Floor on int division
-    # ensures we never emit a fractional float (which would fail the
-    # `IntradayData.volume: int` schema invariant). NaN/None → 0.
+    # 手 -> 股 (lots -> shares) per spec §3.4.
+    # 1 手 = 100 股, so multiply by 100. NaN/None → 0.
     if "volume" in out.columns:
         out["volume"] = out["volume"].apply(
-            lambda v: int(v) // 100 if pd.notna(v) else 0
+            lambda v: int(v) * 100 if pd.notna(v) else 0
         )
     # Ensure all standard columns are present (None for missing) and
     # in canonical order.

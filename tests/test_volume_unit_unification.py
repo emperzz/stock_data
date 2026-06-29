@@ -2,9 +2,10 @@
 
 Akshare upstream returns lots (手 = 100 shares). KLineData/IntradayData
 schema declares volume_unit: Literal['share'] as an invariant. AkshareFetcher
-_normalize_data must /100 + int() floor to satisfy the invariant.
+_normalize_data must *100 to convert lots → shares.
 """
 
+import numpy as np
 import pandas as pd
 import pytest
 from pydantic import ValidationError
@@ -99,11 +100,11 @@ def _find_normalize_method(fetcher):
     return getattr(fetcher, "_normalize_data", None) or getattr(fetcher, "normalize", None)
 
 
-class TestAkshareKlineVolumeDivision:
-    """AkshareFetcher._normalize_data divides volume by 100 + int() floor.
+class TestAkshareKlineVolumeMultiplication:
+    """AkshareFetcher._normalize_data multiplies volume by 100.
 
-    Per spec §3.4 — Akshare upstream returns 手; canonical contract is 股.
-    `7` lots → `0` shares (NOT 0.07 → Pydantic int coercion failure).
+    Per spec §3.4 — Akshare upstream returns 手 (lots); canonical contract
+    is 股 (shares). 1 手 = 100 股, so multiply by 100.
     """
 
     def test_normalize_data_method_exists(self):
@@ -114,8 +115,8 @@ class TestAkshareKlineVolumeDivision:
             "AkshareFetcher has neither _normalize_data nor normalize method"
         )
 
-    def test_volume_is_divided_by_100_with_int_floor(self):
-        """Standard k-line normalize: 1234 lots → 12 shares; 7 lots → 0 shares."""
+    def test_volume_is_multiplied_by_100(self):
+        """Standard k-line normalize: 1234 lots → 123400 shares."""
         fetcher = AkshareFetcher.__new__(AkshareFetcher)
         # Akshare upstream: 中文 column names; "成交量" is volume in 手.
         raw_df = pd.DataFrame(
@@ -135,17 +136,13 @@ class TestAkshareKlineVolumeDivision:
 
         assert "volume" in out.columns
         volumes = out["volume"].tolist()
-        # 1234 // 100 = 12; 7 // 100 = 0; 25_000 // 100 = 250; 100 // 100 = 1
-        assert volumes == [12, 0, 250, 1], (
-            f"Expected [12, 0, 250, 1] (lots // 100 = shares), got {volumes}"
+        # 1234 * 100 = 123400; 7 * 100 = 700; 25000 * 100 = 2500000; 100 * 100 = 10000
+        assert volumes == [123_400, 700, 2_500_000, 10_000], (
+            f"Expected [123400, 700, 2500000, 10000] (lots * 100 = shares), got {volumes}"
         )
 
-    def test_volume_is_int_typed_not_fractional_float(self):
-        """After /100 + int() floor, volume must NOT be a fractional float.
-
-        `7` 手 → `0` shares (int), not `0.07` (float). The float would
-        either fail Pydantic int validation or silently truncate later.
-        """
+    def test_volume_is_int_typed(self):
+        """After *100, volume must be int-typed (not float)."""
         fetcher = AkshareFetcher.__new__(AkshareFetcher)
         raw_df = pd.DataFrame(
             {
@@ -163,18 +160,19 @@ class TestAkshareKlineVolumeDivision:
         out = normalize(raw_df, "600519")
 
         v = out["volume"].iloc[0]
-        # /100 of 7 is 0.07; without int() floor this is a float. After
-        # int() floor, the value is 0 (int) — never a fractional float.
-        assert float(v) == float(int(v)), (
-            f"volume should be int-typed after /100 + floor, got {v!r} (type {type(v).__name__})"
+        # numpy int64 is a subclass of numpy.integer, not Python int.
+        # The schema coerces via Pydantic, so integer-ness is what matters.
+        assert isinstance(v, (int, np.integer)), (
+            f"volume should be integer-typed, got {v!r} (type {type(v).__name__})"
         )
+        assert int(v) == 700
 
 
-class TestAkshareIntradayVolumeDivision:
-    """akshare/index_norm.normalize_intraday_df divides volume by 100 + int() floor."""
+class TestAkshareIntradayVolumeMultiplication:
+    """akshare/index_norm.normalize_intraday_df multiplies volume by 100."""
 
-    def test_intraday_volume_is_divided_by_100(self):
-        """Intraday normalize: 12_345 手 → 123 shares; 9 手 → 0 shares."""
+    def test_intraday_volume_is_multiplied_by_100(self):
+        """Intraday normalize: 12345 手 → 1234500 shares."""
         from stock_data.data_provider.fetchers.akshare.index_norm import (
             normalize_intraday_df,
         )
@@ -192,6 +190,6 @@ class TestAkshareIntradayVolumeDivision:
         )
         out = normalize_intraday_df(raw_df)
         volumes = out["volume"].tolist()
-        assert volumes == [123, 0], (
-            f"Expected [123, 0] (intraday 手 // 100 = shares), got {volumes}"
+        assert volumes == [1_234_500, 900], (
+            f"Expected [1234500, 900] (intraday 手 * 100 = shares), got {volumes}"
         )

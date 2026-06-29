@@ -212,10 +212,7 @@ class AkshareFetcher(BaseFetcher):
 
         Akshare upstream returns ``成交量`` in **手 (lots = 100 shares)**.
         Per spec §3.4 the canonical contract is **股 (shares)**, so we
-        divide by 100 + ``int()`` floor to satisfy
-        :class:`KLineData.volume_unit: Literal["share"]`. The floor
-        matters: ``7`` lots must become ``0`` shares (int), never
-        ``0.07`` (float that breaks Pydantic int coercion).
+        multiply by 100 to convert lots → shares.
         """
         out = self._normalize_dataframe(
             df,
@@ -232,11 +229,11 @@ class AkshareFetcher(BaseFetcher):
                 "股票代码": "code",
             },
         )
-        # 手 -> 股 (lots -> shares). Apply only when the column is
-        # present (a missing volume column shouldn't be invented here).
+        # 手 -> 股 (lots -> shares) per spec §3.4.
+        # 1 手 = 100 股, so multiply by 100.
         if "volume" in out.columns:
             out["volume"] = out["volume"].apply(
-                lambda v: int(v) // 100 if pd.notna(v) else 0
+                lambda v: int(v) * 100 if pd.notna(v) else 0
             )
         return out
 
