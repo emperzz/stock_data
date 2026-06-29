@@ -400,14 +400,6 @@
       }
     }
 
-    // Legacy compatibility shim: the existing render code reads
-    // `ENDPOINTS.sections`. We expose a getter so we don't have to rename
-    // every reference. Reading `window.ENDPOINTS` always returns the
-    // current MANIFEST (not a snapshot taken at startup).
-    Object.defineProperty(window, "ENDPOINTS", {
-      get() { return MANIFEST; },
-    });
-
     // Fire fetch immediately; the boot() function awaits it before rendering.
     window.loadManifest = loadManifest;
   })();
@@ -744,7 +736,7 @@
   })();
   </script>
   <script>
-  // === Main app (boots after ENDPOINTS) ===
+  // === Main app (boots after MANIFEST) ===
   (function() {
     "use strict";
 
@@ -920,7 +912,7 @@
     function renderSidebar() {
       const nav = $("#nav");
       nav.innerHTML = "";
-      ENDPOINTS.sections.forEach(sec => {
+      MANIFEST.sections.forEach(sec => {
         const a = el("a", { href: `#section-${sec.id}`, textContent: sec.title });
         a.onclick = (e) => {
           e.preventDefault();
@@ -933,7 +925,7 @@
     function renderContent() {
       const content = $("#content");
       content.innerHTML = "";
-      ENDPOINTS.sections.forEach(sec => {
+      MANIFEST.sections.forEach(sec => {
         const h2 = el("h2", { id: `section-${sec.id}`, textContent: `${sec.id} ${sec.title}` });
         content.appendChild(h2);
         sec.endpoints

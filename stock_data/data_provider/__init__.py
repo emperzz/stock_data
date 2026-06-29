@@ -4,17 +4,13 @@ Stock data fetchers with unified interface
 """
 
 # Core classes - main entry point
-# Backward compatibility: `stock_cache` is the on-disk persistence layer.
-# Kept as a public alias because external consumers (OpenClaw) and many
-# call sites in routes.py use `from data_provider import stock_cache`.
-from . import persistence as stock_cache
 from .base import (
     STANDARD_COLUMNS,
     BaseFetcher,
     DataCapability,
-    DataFetcherManager,
     DataFetchError,
 )
+from .manager import DataFetcherManager
 
 # Types
 from .core.types import (
@@ -82,8 +78,6 @@ __all__ = [
     "is_trade_date",
     "update_cached_calendar",
     "update_cached_stocks",
-    # Persistence module alias (legacy name preserved for back-compat)
-    "stock_cache",
     # Manager factory
     "create_default_manager",
     # Fetchers

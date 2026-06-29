@@ -19,8 +19,6 @@ from typing import Any
 
 from .types import OHLCV, round2
 
-_round2 = round2  # local alias for backward compat
-
 
 def calcKDJ(  # noqa: N802
     bars: list[OHLCV],
@@ -76,7 +74,7 @@ def calcKDJ(  # noqa: N802
         d = (d_period - 1) / d_period * d + (1 / d_period) * k
         j = 3 * k - 2 * d
 
-        out.append({"kdj_k": _round2(k), "kdj_d": _round2(d), "kdj_j": _round2(j)})
+        out.append({"kdj_k": round2(k), "kdj_d": round2(d), "kdj_j": round2(j)})
 
     return out
 

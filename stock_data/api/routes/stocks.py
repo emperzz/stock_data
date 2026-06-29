@@ -9,7 +9,7 @@ it's a list-level query, not per-stock.
 from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.indicators import compute_lookback
-from ...data_provider.persistence import stock_list as stock_cache
+from ...data_provider.persistence import stock_list
 from ..cache import (
     cache_endpoint,
     get_announcements_cache,
@@ -157,7 +157,7 @@ def get_quote(
 
     return StockQuote(
         code=quote.code,
-        stock_name=quote.name or stock_cache.get_stock_name(stock_code, manager=manager),
+        stock_name=quote.name or stock_list.get_stock_name(stock_code, manager=manager),
         source=quote.source.value,
         current_price=quote.price or 0.0,
         change=quote.change_amount,
@@ -256,7 +256,7 @@ def get_kline(
         adjust=adjust or None,
     )
     df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
-    name = stock_cache.get_stock_name(code, manager=manager)
+    name = stock_list.get_stock_name(code, manager=manager)
 
     records = df.to_dict("records")
     return StockHistoryResponse(
@@ -302,7 +302,7 @@ def get_dragon_tiger(
 ) -> DragonTigerResponse:
     manager = get_manager()
     data, source = manager.get_dragon_tiger(stock_code, trade_date, look_back)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     seats_data = data.get("seats", {})
     return DragonTigerResponse(
         code=stock_code,
@@ -348,7 +348,7 @@ def get_margin(
 ) -> MarginTradingResponse:
     manager = get_manager()
     data, source = manager.get_margin_trading(stock_code, page_size)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     return MarginTradingResponse(
         code=stock_code,
         name=stock_name or "",
@@ -383,7 +383,7 @@ def get_block_trade(
 ) -> BlockTradeResponse:
     manager = get_manager()
     data, source = manager.get_block_trade(stock_code, page_size)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     records = [BlockTradeRecord(**r) for r in data]
     return BlockTradeResponse(
         code=stock_code,
@@ -420,7 +420,7 @@ def get_holder_num(
 ) -> HolderNumResponse:
     manager = get_manager()
     data, source = manager.get_holder_num_change(stock_code, page_size)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     return HolderNumResponse(
         code=stock_code,
         name=stock_name or "",
@@ -455,7 +455,7 @@ def get_dividend(
 ) -> DividendResponse:
     manager = get_manager()
     data, source = manager.get_dividend(stock_code, page_size)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     return DividendResponse(
         code=stock_code,
         name=stock_name or "",
@@ -493,7 +493,7 @@ def get_fund_flow(stock_code: str = Path(max_length=20)) -> FundFlowResponse:
     """Get minute-level capital flow for a stock."""
     manager = get_manager()
     data, source = manager.get_fund_flow_minute(stock_code)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     return FundFlowResponse(
         code=stock_code,
         name=stock_name or "",
@@ -528,7 +528,7 @@ def get_fund_flow_daily(stock_code: str = Path(max_length=20)) -> FundFlowRespon
     """Get 120-day capital flow history for a stock."""
     manager = get_manager()
     data, source = manager.get_fund_flow_120d(stock_code)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     return FundFlowResponse(
         code=stock_code,
         name=stock_name or "",
@@ -570,7 +570,7 @@ def get_reports(
     """Get research reports for a stock."""
     manager = get_manager()
     data, source = manager.get_reports(stock_code, max_pages)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     reports = [ReportRecord(**r) for r in data]
     return ReportResponse(
         code=stock_code,
@@ -633,7 +633,7 @@ def get_announcements(
     """Get corporate announcements for a stock."""
     manager = get_manager()
     data, source = manager.get_announcements(stock_code, page_size)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     announcements = [AnnouncementRecord(**r) for r in data]
     return AnnouncementResponse(
         code=stock_code,

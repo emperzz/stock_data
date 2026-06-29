@@ -600,16 +600,8 @@ class DataFetcherManager:
         pool_type: str,
         date: str | None = None,
         refresh: bool = False,
-        is_current_day: bool = False,
     ) -> tuple[list[dict], str]:
         """Get ZT (涨跌停) pool data with date-keyed persistence.
-
-        Convenience wrapper that resolves the query date and delegates
-        to ``persistence.pool_daily.get_pool``, which owns the
-        "current day vs historical" policy. The ``is_current_day``
-        parameter is kept for backward compatibility but is now
-        ignored — the persistence layer computes volatility from the
-        date itself.
 
         Returns:
             Tuple of ``(stocks, origin)`` forwarded straight from

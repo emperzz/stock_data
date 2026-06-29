@@ -26,7 +26,7 @@ from stock_data.api.schemas import (
 )
 from stock_data.data_provider.fetchers.akshare import AkshareFetcher
 from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
-from stock_data.data_provider.persistence import stock_list as stock_cache
+from stock_data.data_provider.persistence import stock_list
 
 
 @pytest.fixture(autouse=True)
@@ -124,7 +124,7 @@ class TestPersistenceMarketConversion:
             "akshare.stock_info_a_code_name", return_value=fake_df
         ) as mock_ak:
             # force refresh so we hit the upstream path
-            stocks, _origin = stock_cache.get_stock_list(
+            stocks, _origin = stock_list.get_stock_list(
                 "csi", refresh=True, manager=manager
             )
             assert len(stocks) == 1

@@ -2,16 +2,12 @@
 
 This table is the single source of truth used by the explorer manifest to
 decide which fetcher method corresponds to which DataCapability.
-Every DataCapability flag MUST be either:
-  - in CAPABILITY_TO_METHOD (maps to a fetcher method name), OR
-  - in _NO_FETCHER_METHOD (explicit "this capability has no method").
-This forces every new capability author to declare intent.
+Every DataCapability flag MUST be in CAPABILITY_TO_METHOD.
 
 Also enforces the explorer-side mappings that every DataCapability flag MUST
 appear in: (a) `explorer.tags.CAPABILITY_LABELS` (decorative icon/label)
 and (b) `explorer/static/index.html` `CAPABILITY_GROUPS` (sidebar filter).
-Missing entries silently drop endpoints from the UI — same root cause as the
-STOCK_INFO gap that motivated this test.
+Missing entries silently drop endpoints from the UI.
 """
 import re
 from pathlib import Path
@@ -22,7 +18,6 @@ from stock_data.data_provider.base import (
     BaseFetcher,
     DataCapability,
     CAPABILITY_TO_METHOD,
-    _NO_FETCHER_METHOD,
 )
 from stock_data.data_provider import (
     AkshareFetcher,
@@ -60,13 +55,10 @@ _CONCRETE_FETCHERS = (
 
 @pytest.mark.parametrize("cap", list(DataCapability))
 def test_every_capability_has_intent_declared(cap):
-    """Every DataCapability MUST be either mapped to a method or explicitly excluded."""
-    in_map = cap in CAPABILITY_TO_METHOD
-    in_no_method = cap in _NO_FETCHER_METHOD
-    assert in_map ^ in_no_method, (
-        f"DataCapability.{cap.name} must be in CAPABILITY_TO_METHOD "
-        f"OR _NO_FETCHER_METHOD (not both, not neither). "
-        f"Currently: in_map={in_map}, in_no_method={in_no_method}"
+    """Every DataCapability MUST be mapped to a method in CAPABILITY_TO_METHOD."""
+    assert cap in CAPABILITY_TO_METHOD, (
+        f"DataCapability.{cap.name} is not in CAPABILITY_TO_METHOD. "
+        f"Add it to declare intent."
     )
 
 

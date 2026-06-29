@@ -30,8 +30,6 @@ from .types import MAType, round2
 
 # ---------- low-level helpers ----------
 
-_round2 = round2  # local alias for backward compat
-
 
 def _valid(value: float | None) -> bool:
     """A value is 'valid' if it is not None and not NaN."""
@@ -75,7 +73,7 @@ def calcSMA(  # noqa: N802
                 valid_count -= 1
 
         if valid_count == period:
-            result.append(_round2(rolling_sum / period))
+            result.append(round2(rolling_sum / period))
         else:
             result.append(None)
 
@@ -117,18 +115,18 @@ def calcEMA(  # noqa: N802
             if len(seed_window) == period:
                 ema = sum(seed_window) / period
                 seeded = True
-                result.append(_round2(ema))
+                result.append(round2(ema))
             else:
                 result.append(None)
             continue
 
         # Seeded — apply recursive formula
         if not _valid(value):
-            result.append(_round2(ema) if ema is not None else None)
+            result.append(round2(ema) if ema is not None else None)
             continue
 
         ema = alpha * value + (1.0 - alpha) * ema  # type: ignore[operator]
-        result.append(_round2(ema))
+        result.append(round2(ema))
 
     return result
 
@@ -169,7 +167,7 @@ def calcWMA(  # noqa: N802
             continue
 
         weighted = sum(w * v for w, v in zip(weights, window, strict=True))  # type: ignore[arg-type]
-        result.append(_round2(weighted / weight_sum))
+        result.append(round2(weighted / weight_sum))
 
     return result
 

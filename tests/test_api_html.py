@@ -84,8 +84,7 @@ class TestHtmlStructure:
         asserted in tests/test_manifest.py via the live /control/api-manifest
         response.
         """
-        # Sanity: the boot() entry point exists and the manifest shim wires
-        # ENDPOINTS -> MANIFEST transparently for the render code.
+        # Sanity: the boot() entry point exists and the manifest fetch is wired.
         assert "async function boot()" in html_text
         assert "await window.loadManifest()" in html_text
-        assert "Object.defineProperty(window, \"ENDPOINTS\"" in html_text
+        assert "MANIFEST.sections" in html_text

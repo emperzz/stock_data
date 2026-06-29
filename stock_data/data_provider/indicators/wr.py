@@ -13,8 +13,6 @@ from typing import Any
 
 from .types import OHLCV, round2
 
-_round2 = round2  # local alias for backward compat
-
 
 def calcWR(  # noqa: N802
     bars: list[OHLCV],
@@ -62,7 +60,7 @@ def calcWR(  # noqa: N802
                 continue
 
             wr = (high_n - close) / (high_n - low_n) * -100.0
-            row[f"wr_{period}"] = _round2(wr)
+            row[f"wr_{period}"] = round2(wr)
 
     return out
 

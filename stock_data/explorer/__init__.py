@@ -19,7 +19,6 @@ from ..data_provider.base import (
     BaseFetcher,
     CAPABILITY_TO_METHOD,
     DataCapability,
-    _NO_FETCHER_METHOD,
 )
 from .routes import build_control_router
 from .tags import _INTERNAL_TAGS, TAG_TO_TITLE
@@ -132,11 +131,10 @@ def _validate_manifest_invariants(app: FastAPI) -> None:
             )
 
     for cap in DataCapability:
-        if cap not in CAPABILITY_TO_METHOD and cap not in _NO_FETCHER_METHOD:
+        if cap not in CAPABILITY_TO_METHOD:
             logger.warning(
-                f"[explorer/sanity] DataCapability.{cap.name} is neither in "
-                f"CAPABILITY_TO_METHOD nor in _NO_FETCHER_METHOD. Add it to one "
-                f"of them to declare intent."
+                f"[explorer/sanity] DataCapability.{cap.name} is not in "
+                f"CAPABILITY_TO_METHOD. Add it to declare intent."
             )
 
     # ----- @endpoint_meta(fetcher_method=...) sanity -----

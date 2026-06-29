@@ -514,9 +514,8 @@ def get_pools(
             # the caller gets a clear upstream error rather than a silent 404.
             query_date = resolved or today_str
 
-    # `is_current_day` is the route-layer's volatile-data toggle only — it
-    # drives the in-process TTLCache. The persistence layer (pool_daily.get_pool)
-    # computes the same decision internally to control SQLite read/write/fallback.
+    # Volatile-data toggle: drives the in-process TTLCache only.
+    # The persistence layer computes the same decision internally.
     is_current_day = (query_date == today_str) and trade_calendar.is_trade_date(today_str)
 
     cache_key = make_pools_cache_key(type, query_date)

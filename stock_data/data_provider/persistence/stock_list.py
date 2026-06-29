@@ -171,17 +171,7 @@ def get_stock_name(code: str, market: str | None = None, manager=None) -> str:
     if market is None:
         market = market_tag(normalized)
 
-    # First try DB lookup (efficient for single stock)
-    name = _get_stock_name_from_db(normalized, market)
-    if name:
-        return name
-
-    # Fallback to full list load (for backward compat)
-    stocks, _origin = get_stock_list(market, refresh=False, manager=manager)
-    for s in stocks:
-        if s["code"] == normalized:
-            return s["name"]
-    return ""
+    return _get_stock_name_from_db(normalized, market) or ""
 
 
 def _get_stock_name_from_db(code: str, market: str) -> str:

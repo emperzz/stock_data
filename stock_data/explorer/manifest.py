@@ -277,7 +277,7 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
         else:
             method_name = CAPABILITY_TO_METHOD.get(cap)
             if method_name is None:
-                continue  # capability has no mapped method (or is in _NO_FETCHER_METHOD)
+                continue  # capability has no mapped method
 
         # Walk all concrete subclasses that declare this capability — even
         # ones the manager didn't register (because is_available()==False).
@@ -409,17 +409,9 @@ def _build_meta() -> dict:
     }
 
 
-def _section_sort_key(sec: dict) -> tuple:
-    """按 id 排序:目前 id 是 tag 名,字符串序即可。
-
-    保留 (int, ...) 元组 fallback 以兼容未来若 id 重新引入"段号.小节"
-    格式(避免 '4.10' 排在 '4.2' 前)。
-    """
-    parts = sec["id"].split(".")
-    try:
-        return tuple(int(p) for p in parts)
-    except ValueError:
-        return (sec["id"],)
+def _section_sort_key(sec: dict) -> str:
+    """按 id 字符串排序 (id 是 tag 名)."""
+    return sec["id"]
 
 
 def _slugify(s: str) -> str:

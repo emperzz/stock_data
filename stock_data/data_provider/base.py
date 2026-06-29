@@ -68,9 +68,8 @@ class DataCapability(Flag):
 # `fetcher.get_kline_data` directly). This table is reflection-only.
 #
 # Rule (enforced by tests/test_capability_method_map.py):
-#   Every DataCapability flag MUST be in CAPABILITY_TO_METHOD or
-#   _NO_FETCHER_METHOD. Adding a new capability without declaring
-#   intent breaks the test suite.
+#   Every DataCapability flag MUST be in CAPABILITY_TO_METHOD.
+#   Adding a new capability without declaring intent breaks the test suite.
 #
 # When a single capability is used by multiple endpoints that call
 # different fetcher methods (STOCK_BOARD, DRAGON_TIGER, FUND_FLOW),
@@ -100,10 +99,6 @@ CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.NEWS_FLASH: "fetch_flash_news",
 }
 
-# Explicit "this capability legitimately has no fetcher method" set.
-# Empty today — placeholder for future pure-compute capabilities.
-_NO_FETCHER_METHOD: frozenset[DataCapability] = frozenset()
-
 
 class DataFetchError(Exception):
     """Raised when data fetching fails."""
@@ -111,14 +106,12 @@ class DataFetchError(Exception):
     pass
 
 
-# Re-export utilities for backward compatibility
 __all__ = [
     "BaseFetcher",
     "DataCapability",
     "DataFetchError",
     "STANDARD_COLUMNS",
     "CAPABILITY_TO_METHOD",
-    "_NO_FETCHER_METHOD",
 ]
 
 
@@ -404,7 +397,3 @@ class BaseFetcher(ABC):
             DataCapability.STOCK_REALTIME_QUOTE in self.supported_data_types
             or DataCapability.INDEX_REALTIME_QUOTE in self.supported_data_types
         )
-
-
-# Backward-compatible re-export of DataFetcherManager (now in .manager)
-from .manager import DataFetcherManager  # noqa: E402, F401

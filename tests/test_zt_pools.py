@@ -369,7 +369,7 @@ class TestZTFetcherManager:
 
     def test_manager_get_zt_pool_uses_cache(self):
         """Test manager uses persistence when data available (historical date)."""
-        from stock_data.data_provider.base import DataFetcherManager
+        from stock_data.data_provider import DataFetcherManager
         from stock_data.data_provider.persistence.pool_daily import (
             init_schema,
             save_pool,
@@ -385,7 +385,7 @@ class TestZTFetcherManager:
 
         mgr = DataFetcherManager()
         # Without any fetchers, should fallback to persistence (historical date)
-        stocks = mgr.get_zt_pool("zt", "2024-05-10", refresh=False, is_current_day=False)
+        stocks = mgr.get_zt_pool("zt", "2024-05-10", refresh=False)
         assert len(stocks) >= 1
 
     def test_manager_get_zt_pool_skips_persistence_on_volatile_date(self):
@@ -403,7 +403,7 @@ class TestZTFetcherManager:
         """
         from datetime import date as date_cls
 
-        from stock_data.data_provider.base import DataFetcherManager
+        from stock_data.data_provider import DataFetcherManager
         from stock_data.data_provider.persistence.db import get_connection
         from stock_data.data_provider.persistence.pool_daily import (
             get_pool_cached,
@@ -465,7 +465,7 @@ class TestZTFetcherManager:
 
     def test_manager_get_zt_pool_normalizes_code(self):
         """Test that manager.get_zt_pool normalizes the pool type code."""
-        from stock_data.data_provider.base import DataFetcherManager
+        from stock_data.data_provider import DataFetcherManager
         from stock_data.data_provider.persistence.pool_daily import init_schema
 
         init_schema()
@@ -473,4 +473,4 @@ class TestZTFetcherManager:
         # _filter_by_capability returns no fetchers; the call should still
         # validate the pool type via the persistence layer helper.
         with pytest.raises(ValueError, match="Unknown pool_type"):
-            mgr.get_zt_pool("invalid", "2099-01-01", refresh=False, is_current_day=False)
+            mgr.get_zt_pool("invalid", "2099-01-01", refresh=False)

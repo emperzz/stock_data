@@ -250,7 +250,7 @@ class TestDataFetcherManagerBoards:
 
     def test_manager_has_board_methods(self):
         """Test DataFetcherManager has the unified board entry points."""
-        from stock_data.data_provider.base import DataFetcherManager
+        from stock_data.data_provider import DataFetcherManager
 
         manager = DataFetcherManager()
         assert hasattr(manager, "get_all_boards")
@@ -369,6 +369,5 @@ class TestBoardSchemas:
         assert out["source"] == "ZzshareFetcher"
         assert len(out["data"]) == 1
         assert out["data"][0]["date"] == "2026-05-20"
-        # KLineData conditional serialization: indicator keys absent when None
-        assert "ma5" not in out["data"][0]
+        # KLineData conditional serialization: indicators absent when None
         assert "indicators" not in out["data"][0]  # type: ignore[index]  # fmt: skip

@@ -78,15 +78,12 @@ class StockQuote(BaseModel):
 class KLineData(BaseModel):
     """Single K-line data point.
 
-    The 4 indicator fields (`ma5`, `ma10`, `ma20`, `indicators`) are
-    conditionally serialized: they are omitted from the JSON response
-    entirely when their value is None / empty. This keeps the response
-    clean when the caller did not pass `?indicators=...`, while still
-    surfacing them in full when the caller asked for indicator
-    computation. The `amount` and `change_percent` fields keep their
-    original "null when missing" semantics (always present, possibly
-    null) so consumers that distinguish "absent" from "explicitly
-    null" keep working.
+    The ``indicators`` field is conditionally serialized: it is omitted
+    from the JSON response entirely when its value is None / empty. This
+    keeps the response clean when the caller did not pass
+    ``?indicators=...``. The ``amount`` and ``change_percent`` fields
+    keep their "null when missing" semantics (always present, possibly
+    null).
     """
 
     date: str = Field(description="Date")
@@ -98,17 +95,13 @@ class KLineData(BaseModel):
     volume_unit: Literal["share"] = Field(
         default="share",
         description="Volume unit. Always 'share' (股) — invariant enforced by fetcher "
-        "normalization per spec §3.4. Akshare upstream returns 手 (lots = 100 shares); "
-        "the AkshareFetcher normalizer divides by 100 + int() floor to satisfy this.",
+        "normalization per spec §3.4.",
     )
     amount: float | None = Field(default=None, description="Amount")
     change_percent: float | None = Field(default=None, description="Change percent")
-    ma5: float | None = Field(default=None, description="5-day moving average")
-    ma10: float | None = Field(default=None, description="10-day moving average")
-    ma20: float | None = Field(default=None, description="20-day moving average")
     # Per-bar indicator values. Populated only when the request
     # supplies `?indicators=...` (or a JSON body with `indicators`).
-    # Keys are indicator-prefixed (e.g. macd_dif, kdj_k, boll_upper).
+    # Keys are indicator-prefixed (e.g. ma5, macd_dif, kdj_k, boll_upper).
     # Each value is the float value at this bar or null if the
     # indicator is not yet defined at this bar. Default None so the
     # model_serializer below can drop the key entirely.
@@ -131,15 +124,8 @@ class KLineData(BaseModel):
             "amount": self.amount,
             "change_percent": self.change_percent,
         }
-        # Indicator fields: only emit when populated. None / empty
-        # means the caller didn't ask for them — drop the key from
-        # the response entirely instead of leaving a noisy `null`.
-        if self.ma5 is not None:
-            data["ma5"] = self.ma5
-        if self.ma10 is not None:
-            data["ma10"] = self.ma10
-        if self.ma20 is not None:
-            data["ma20"] = self.ma20
+        # indicators: only emit when populated. None / empty means the
+        # caller didn't ask for them — drop the key from the response.
         if self.indicators:
             data["indicators"] = self.indicators
         return data
@@ -715,11 +701,7 @@ class AnnouncementResponse(BaseModel):
 
 
 class StockInfoResponse(BaseModel):
-    """公司画像 (A 股) — 来自 Zhitu (主) / Myquant (备) 的归一化结果.
-
-    `industry` 字段当前始终为空 (Zhitu 不提供; Myquant 该端点付费),
-    保留为未来扩展钩子.
-    """
+    """公司画像 (A 股) — 来自 Zhitu (主) / Myquant (备) 的归一化结果."""
 
     # 基础识别
     code: str = Field(description="股票代码 (e.g., 600519)")
@@ -733,11 +715,7 @@ class StockInfoResponse(BaseModel):
     total_shares: float | None = Field(default=None, description="总股本 (万股)")
     float_shares: float | None = Field(default=None, description="流通股本 (万股)")
 
-    # 行业与概念
-    industry: str = Field(
-        default="",
-        description="行业. 当前始终为空 (Zhitu 不提供; Myquant 该端点付费 GmError 2001)",
-    )
+    # 概念
     concepts: list[str] = Field(default_factory=list, description="概念标签 (Zhitu)")
 
     # 公司画像

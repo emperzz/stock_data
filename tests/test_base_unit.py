@@ -8,16 +8,16 @@ import pytest
 from stock_data.data_provider import (
     AkshareFetcher,
     BaostockFetcher,
+    DataFetcherManager,
     TushareFetcher,
     YfinanceFetcher,
-    stock_cache,
 )
 from stock_data.data_provider.base import (
     BaseFetcher,
     DataCapability,
-    DataFetcherManager,
     DataFetchError,
 )
+from stock_data.data_provider.persistence import stock_list
 from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
 
 
@@ -130,16 +130,8 @@ class TestDataFetcherManagerUnit:
         assert quote.code == "000001"
         assert quote.price == 101.0
 
-    def test_get_stock_name(self, manager, tmp_path, monkeypatch):
-        """Verify get_stock_name falls through to the manager when DB is empty.
-
-        Uses a tmp_path DB so the test doesn't depend on the real
-        ``stock_cache.db`` state. The shared cache is mutated by other
-        tests (e.g. ``test_persistence_origin.py`` writes ``"000001" →
-        "测试"`` through the real DB path), which would otherwise make
-        this assertion flaky. DB round-trip behavior is covered
-        separately by ``test_stock_list_exchange.py``.
-        """
+    def test_get_stock_name_empty_db_returns_empty(self, manager, tmp_path, monkeypatch):
+        """Verify get_stock_name returns '' when DB has no matching stock."""
         from stock_data.data_provider.persistence import (
             db,
             stock_list as stock_list_mod,
@@ -147,16 +139,10 @@ class TestDataFetcherManagerUnit:
 
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
         monkeypatch.setattr(db, "_conn", None, raising=False)
-        # Fresh refresh tracker so is_first_call returns True and the
-        # call deterministically goes through the manager path.
-        monkeypatch.setattr(
-            stock_list_mod, "_refresh_tracker",
-            type("T", (), {"is_first_call": lambda *a: True})(),
-        )
         stock_list_mod.init_schema()
 
-        name = stock_cache.get_stock_name("000001", manager=manager)
-        assert name == "Test"
+        name = stock_list.get_stock_name("000001", manager=manager)
+        assert name == ""
 
     def test_market_filtering_historical(self, manager):
         """Test that historical-only fetchers are excluded from realtime queries."""

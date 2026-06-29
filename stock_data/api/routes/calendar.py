@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import Query
 
-from ...data_provider.persistence import stock_list as stock_cache
+from ...data_provider.persistence import stock_list
 from ..endpoint_meta import endpoint_meta
 from ..schemas import StockInfo, TradeCalendarResponse
 from ._router import router
@@ -40,7 +40,7 @@ def list_stocks(
         ``csi`` is the single public-facing A-share tag.
     """
     manager = get_manager()
-    stocks, _origin = stock_cache.get_stock_list(market, refresh=refresh, manager=manager)
+    stocks, _origin = stock_list.get_stock_list(market, refresh=refresh, manager=manager)
     page = stocks[offset : offset + limit]
     return [
         StockInfo(

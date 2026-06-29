@@ -85,13 +85,10 @@ def test_history_default_no_indicators(client):
     body = r.json()
     assert body["code"] == "600519"
     assert len(body["data"]) == 30
-    # No indicators requested -> the 4 indicator fields are OMITTED from
-    # the response entirely (model_serializer drops them when None/empty).
+    # No indicators requested -> indicators field is OMITTED from
+    # the response entirely (model_serializer drops it when None/empty).
     for row in body["data"]:
         assert "indicators" not in row
-        assert "ma5" not in row
-        assert "ma10" not in row
-        assert "ma20" not in row
         # amount / change_percent keep the original "null when missing"
         # semantics — always present, possibly null.
         assert "amount" in row
@@ -103,16 +100,11 @@ def test_history_with_ma_indicator(client):
     assert r.status_code == 200
     body = r.json()
     assert len(body["data"]) == 30
-    # The last row should have all the MA columns
+    # The last row should have all the MA columns in the indicators dict
     last_inds = body["data"][-1]["indicators"]
     assert "ma5" in last_inds
     assert "ma10" in last_inds
     assert "ma20" in last_inds
-    # ma5/ma10/ma20 fields should be backfilled from the indicators dict
-    last = body["data"][-1]
-    assert last["ma5"] == last_inds["ma5"]
-    assert last["ma10"] == last_inds["ma10"]
-    assert last["ma20"] == last_inds["ma20"]
 
 
 def test_history_with_multiple_indicators(client):
@@ -163,29 +155,23 @@ def test_history_indicators_trigger_lookback_expansion(client):
 
 def test_index_history_supports_indicators(client):
     """The /indices/{code}/kline endpoint accepts the same `?indicators=`
-    query param as /stocks/{code}/kline. With it, the 4 indicator
-    fields appear; without it, they're omitted."""
+    query param as /stocks/{code}/kline. With it, the indicators dict
+    appears; without it, it's omitted."""
     # With indicators
     r = client.get("/api/v1/indices/000300/kline?days=30&indicators=ma")
     assert r.status_code == 200
     body = r.json()
     assert len(body["data"]) == 30
     last = body["data"][-1]
-    # ma indicator should be computed and surfaced
-    assert "ma5" in last and last["ma5"] is not None
-    assert "ma10" in last and last["ma10"] is not None
-    assert "ma20" in last and last["ma20"] is not None
+    # ma indicator should be computed and surfaced in indicators dict
     assert "indicators" in last
     assert "ma5" in last["indicators"]
     assert "ma30" in last["indicators"]
 
-    # Without indicators — same 4 fields must be omitted
+    # Without indicators — indicators field must be omitted
     r2 = client.get("/api/v1/indices/000300/kline?days=30")
     assert r2.status_code == 200
     last2 = r2.json()["data"][-1]
-    assert "ma5" not in last2
-    assert "ma10" not in last2
-    assert "ma20" not in last2
     assert "indicators" not in last2
     # amount/change_percent remain
     assert "amount" in last2

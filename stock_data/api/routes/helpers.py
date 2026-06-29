@@ -228,16 +228,7 @@ def _apply_indicators(
 
 
 def _build_kline_data(row: dict, format_date) -> KLineData:
-    """Build a :class:`KLineData` from a DataFrame row dict.
-
-    Centralises the back-compat fill for ``ma5``/``ma10``/``ma20`` from the
-    ``indicators`` dict (the legacy ``KLineData`` field surface). When
-    ``indicators`` wasn't computed, those fields are left as None — the
-    model's ``@model_serializer`` will then drop them from the JSON
-    response entirely. When ``indicators`` was computed, ``ma5/10/20`` are
-    populated from the dict (mirrors the pre-refactor shape) AND the full
-    ``indicators`` dict is preserved.
-    """
+    """Build a :class:`KLineData` from a DataFrame row dict."""
     ind = row.get("indicators") or {}
     return KLineData(
         date=format_date(row.get("date")),
@@ -248,9 +239,6 @@ def _build_kline_data(row: dict, format_date) -> KLineData:
         volume=safe_int(row.get("volume"), 0) or 0,
         amount=safe_float(row.get("amount")),
         change_percent=safe_float(row.get("pct_chg")),
-        ma5=safe_float(ind.get("ma5")),
-        ma10=safe_float(ind.get("ma10")),
-        ma20=safe_float(ind.get("ma20")),
         indicators=ind or None,
     )
 
