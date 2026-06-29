@@ -4,7 +4,7 @@
 
 **Goal:** Unify stock + index price data into two endpoint families (`/quote` snapshot + `/kline` 1m..m with qfq/hfq) by collapsing 4 K-line capability flags into 2, adding per-fetcher fine-grained support declarations, and deprecating legacy endpoints.
 
-**Architecture:** Two-phase rollout. **P0** = zero-API-risk internal refactor: flag collapse + `supports_kline()`/`supports_quote()` per-fetcher declarations + manager two-stage filter + Akshare volume normalization. **P1** = API surface: new `/kline` endpoints, drop route-layer reject rules, `/quote` explicit param rejection, cache key merge, 6-month deprecation of `/history` + `/intraday`.
+**Architecture:** Two-phase rollout. **P0** = zero-API-risk internal refactor: flag rename (no shim, direct deletion of old enum values) + `supports_kline()`/`supports_quote()` per-fetcher declarations + manager two-stage filter (no fallback_cap) + Akshare volume normalization + `Literal["share"]` schema invariant. **P1** = API surface: new `/kline` endpoints, **directly delete** old `/history` + `/intraday` routes (no deprecation timeline), `/quote` explicit param rejection, cache key merge.
 
 **Tech Stack:** Python 3.x, FastAPI, pandas, pytest, ruff. Default pytest skips `live_network` and `requires_token` (set via `addopts` in `pyproject.toml`).
 
@@ -69,67 +69,81 @@ Each task is a self-contained PR candidate. Plan ordering reflects the dependenc
 
 # Phase P0 — Internal Refactor (Zero API Risk)
 
-## Task 1: Collapse capability flags (4 → 2) with 6-month shim
+## Task 1: Rename capability flags (4 → 2) — direct, no shim
 
 **Files:**
 - Modify: `stock_data/data_provider/base.py:25-110`
 
-- [ ] **Step 1: Write failing test for new flag presence + shim**
+This task **directly renames** capability flags per spec rev 3. No `DEPRECATED_TO_CANONICAL` map. No 6-month backwards-compat window. All references in fetchers / tests / docs / manifest migrate in the same PR.
+
+- [ ] **Step 1: Write failing tests for both directions**
 
 Create `tests/test_capability_flag_collapse.py`:
 
 ```python
-"""Verify the spec §4.1 / §3.3 capability flag collapse with 6-month shim."""
+"""Verify the spec rev 3 capability flag rename.
+
+Old flag names should NOT exist (cleanly deleted); new names must exist.
+"""
 import pytest
 
 from stock_data.data_provider.base import DataCapability
 
 
 def test_new_kline_flags_exist():
-    """Rev 2 spec adds STOCK_KLINE + INDEX_KLINE + STOCK_REALTIME_QUOTE + INDEX_REALTIME_QUOTE."""
+    """Spec rev 3 adds STOCK_KLINE + INDEX_KLINE + STOCK_REALTIME_QUOTE + INDEX_REALTIME_QUOTE."""
     assert DataCapability.STOCK_KLINE
     assert DataCapability.INDEX_KLINE
     assert DataCapability.STOCK_REALTIME_QUOTE
     assert DataCapability.INDEX_REALTIME_QUOTE
 
 
-def test_old_flags_remain_parseable_for_shim():
-    """Old flag names must remain accessible for 6-month backwards compat."""
-    # The shim keeps old names as aliases — DataCapability.<old> stays accessible.
-    assert DataCapability.HISTORICAL_DWM is not None
-    assert DataCapability.HISTORICAL_MIN is not None
-    assert DataCapability.INDEX_HISTORICAL is not None
-    assert DataCapability.INDEX_INTRADAY is not None
-    assert DataCapability.REALTIME_QUOTE is not None
-    assert DataCapability.INDEX_QUOTE is not None
+def test_old_flags_deleted_no_shim():
+    """Old flag names are gone — no DEPRECATED_TO_CANONICAL shim (rev 3)."""
+    for old_name in (
+        "HISTORICAL_DWM", "HISTORICAL_MIN",
+        "INDEX_HISTORICAL", "INDEX_INTRADAY",
+        "REALTIME_QUOTE", "INDEX_QUOTE",
+    ):
+        with pytest.raises(AttributeError, match=old_name):
+            getattr(DataCapability, old_name)
+
+
+def test_no_deprecated_to_canonical_map_in_base():
+    """`DEPRECATED_TO_CANONICAL` was the shim — should not exist."""
+    from stock_data.data_provider import base as base_mod
+    assert not hasattr(base_mod, "DEPRECATED_TO_CANONICAL")
 ```
 
-- [ ] **Step 2: Run the test — expect AttributeError on new flag**
+- [ ] **Step 2: Run the tests — expect 3 FAILs (new flags missing + old flags still present + shim map existing)**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_capability_flag_collapse.py -v`
-Expected: FAIL with `AttributeError: <flag>` for the new flags.
+Expected:
+- `test_new_kline_flags_exist`: FAIL (AttributeError on new flag name)
+- `test_old_flags_deleted_no_shim`: FAIL on the inverse direction (no AttributeError today)
+- `test_no_deprecated_to_canonical_map_in_base`: FAIL (map exists)
 
-- [ ] **Step 3: Add new flags to enum**
+- [ ] **Step 3: Edit `DataCapability` enum — direct rename**
 
-Edit `stock_data/data_provider/base.py` lines 25-43. Append four new entries while keeping old ones (shim):
+Edit `stock_data/data_provider/base.py` lines 25-43. **Delete** the 4 old flag entries, **add** the new ones. Old entries to remove:
+- `HISTORICAL_DWM` → `STOCK_KLINE`
+- `HISTORICAL_MIN` → `STOCK_KLINE`
+- `INDEX_HISTORICAL` → `INDEX_KLINE`
+- `INDEX_INTRADAY` → `INDEX_KLINE`
+- `REALTIME_QUOTE` → `STOCK_REALTIME_QUOTE`
+- `INDEX_QUOTE` → `INDEX_REALTIME_QUOTE`
 
 ```python
 class DataCapability(Flag):
-    HISTORICAL_DWM = auto()  # DEPRECATED — aliased via _shim_old_to_new below; remove in 6 months
-    HISTORICAL_MIN = auto()  # DEPRECATED — aliased via _shim_old_to_new below; remove in 6 months
-    REALTIME_QUOTE = auto()  # DEPRECATED — aliased to STOCK_REALTIME_QUOTE; remove in 6 months
-    # --- rev 2 unified flags (Task 1) ---
+    # --- rev 3 unified flags (Task 1) ---
     STOCK_KLINE = auto()              # 股票 d/w/m + 1m/5m/15m/30m/60m
     INDEX_KLINE = auto()              # 指数 d/w/m + 1m/5m/15m/30m/60m
     STOCK_REALTIME_QUOTE = auto()     # 股票实时快照
     INDEX_REALTIME_QUOTE = auto()     # 指数实时快照
-    # --- existing flags (unchanged) ---
+    # --- unchanged ---
     STOCK_LIST = auto()
     TRADE_CALENDAR = auto()
     STOCK_BOARD = auto()
-    INDEX_QUOTE = auto()  # DEPRECATED — aliased to INDEX_REALTIME_QUOTE; remove in 6 months
-    INDEX_HISTORICAL = auto()  # DEPRECATED — aliased to INDEX_KLINE; remove in 6 months
-    INDEX_INTRADAY = auto()  # DEPRECATED — aliased to INDEX_KLINE; remove in 6 months
     STOCK_ZT_POOL = auto()
     DRAGON_TIGER = auto()
     MARGIN_TRADING = auto()
@@ -146,65 +160,67 @@ class DataCapability(Flag):
     STOCK_INFO = auto()
 ```
 
-- [ ] **Step 4: Wire `CAPABILITY_TO_METHOD` for new flags and add shim map**
+- [ ] **Step 4: Update `CAPABILITY_TO_METHOD` — replace old flag keys with new**
 
-Find the `CAPABILITY_TO_METHOD` dict (around line 79). Keep old entries working during shim, add new entries that point to the same fetcher method:
+Find the `CAPABILITY_TO_METHOD` dict (around line 79). Replace old flag keys with new:
 
 ```python
 CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
-    # --- old (shim, 6-month back-compat) ---
-    DataCapability.HISTORICAL_DWM: "get_kline_data",
-    DataCapability.HISTORICAL_MIN: "get_kline_data",
-    DataCapability.REALTIME_QUOTE: "get_realtime_quote",
-    DataCapability.INDEX_HISTORICAL: "get_index_historical",
-    DataCapability.INDEX_INTRADAY: "get_index_intraday",
-    DataCapability.INDEX_QUOTE: "get_index_realtime_quote",
-    # --- rev 2 (canonical) ---
     DataCapability.STOCK_KLINE: "get_kline_data",
     DataCapability.INDEX_KLINE: "get_index_historical",  # for d/w/m; minute via get_intraday_data
     DataCapability.STOCK_REALTIME_QUOTE: "get_realtime_quote",
     DataCapability.INDEX_REALTIME_QUOTE: "get_index_realtime_quote",
-    # --- unchanged ---
     DataCapability.STOCK_LIST: "get_all_stocks",
-    # ... (rest unchanged)
+    DataCapability.TRADE_CALENDAR: "get_trade_calendar",
+    DataCapability.STOCK_BOARD: "get_all_boards",
+    DataCapability.STOCK_ZT_POOL: "get_zt_pool",
+    DataCapability.DRAGON_TIGER: "get_dragon_tiger",
+    DataCapability.MARGIN_TRADING: "get_margin_trading",
+    DataCapability.BLOCK_TRADE: "get_block_trade",
+    DataCapability.HOLDER_NUM: "get_holder_num_change",
+    DataCapability.DIVIDEND: "get_dividend",
+    DataCapability.FUND_FLOW: "get_fund_flow_minute",
+    DataCapability.HOT_TOPICS: "get_hot_topics",
+    DataCapability.NORTH_FLOW: "get_north_flow",
+    DataCapability.RESEARCH_REPORT: "get_reports",
+    DataCapability.ANNOUNCEMENT: "get_announcements",
+    DataCapability.STOCK_INFO: "get_stock_info",
+    DataCapability.NEWS_SEARCH: "search_news",
+    DataCapability.NEWS_FLASH: "fetch_flash_news",
 }
 ```
 
-Add a shim function (immediately after `CAPABILITY_TO_METHOD`):
+**Also delete** the `DEPRECATED_TO_CANONICAL` map if it still exists in `base.py`.
 
-```python
-# 6-month backwards-compat shim: map deprecated flag → canonical flag.
-# Used by BaseFetcher.__init__ (Task 4) and tests/manifest until T+180d.
-DEPRECATED_TO_CANONICAL: dict[DataCapability, DataCapability] = {
-    DataCapability.HISTORICAL_DWM: DataCapability.STOCK_KLINE,
-    DataCapability.HISTORICAL_MIN: DataCapability.STOCK_KLINE,
-    DataCapability.INDEX_HISTORICAL: DataCapability.INDEX_KLINE,
-    DataCapability.INDEX_INTRADAY: DataCapability.INDEX_KLINE,
-    DataCapability.REALTIME_QUOTE: DataCapability.STOCK_REALTIME_QUOTE,
-    DataCapability.INDEX_QUOTE: DataCapability.INDEX_REALTIME_QUOTE,
-}
-```
-
-- [ ] **Step 5: Run test — expect PASS**
+- [ ] **Step 5: Run test — expect all 3 PASS**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_capability_flag_collapse.py -v`
-Expected: 2 passed.
+Expected: 3 passed.
 
-- [ ] **Step 6: Run pre-existing `test_capability_method_map.py` — expect PASS (old names still in map)**
+- [ ] **Step 6: Run pre-existing `test_capability_method_map.py` — expect FAIL (it references old flags)**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_capability_method_map.py -v`
-Expected: PASS (old flag names still resolve).
+Expected: FAIL on the parts that still reference old flag names. **This is expected.** Task 4 (later in the plan) migrates each fetcher; this test's manifest references must also be updated in that task.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Run ruff + smoke-import check**
+
+Run: `ruff check stock_data/`
+Expected: clean or only pre-existing violations.
+
+Run: `.venv/Scripts/python.exe -c "from stock_data.data_provider.base import DataCapability; print(DataCapability.STOCK_KLINE)"`
+Expected: prints the flag value without error.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add stock_data/data_provider/base.py tests/test_capability_flag_collapse.py
-git commit -m "feat(base): collapse 4 K-line flags to 2 + rename quote flags with 6-month shim
+git commit -m "refactor(base): rename 4 K-line + 2 quote capability flags (no shim)
 
-- new flags: STOCK_KLINE, INDEX_KLINE, STOCK_REALTIME_QUOTE, INDEX_REALTIME_QUOTE
-- old flags (HISTORICAL_DWM/MIN/INDEX_HISTORICAL/INTRADAY/REALTIME_QUOTE/INDEX_QUOTE)
-  remain as aliases for 6 months
-- DEPRECATED_TO_CANONICAL map keeps existing fetchers working without edits
+- HISTORICAL_DWM + HISTORICAL_MIN → STOCK_KLINE
+- INDEX_HISTORICAL + INDEX_INTRADAY → INDEX_KLINE
+- REALTIME_QUOTE → STOCK_REALTIME_QUOTE (asset class explicit)
+- INDEX_QUOTE → INDEX_REALTIME_QUOTE (asset class explicit)
+- Old flag values directly deleted (no DEPRECATED_TO_CANONICAL shim per rev 3)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -721,7 +737,7 @@ Expected: all parametrized cases PASS.
 - [ ] **Step 12: Run pre-existing tests that touched flag names — must still pass**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_capability_method_map.py tests/test_zzshare_fetcher.py tests/test_manager_zzshare_minute.py -v`
-Expected: all PASS (the 6-month shim + DEPRECATED_TO_CANONICAL will be hit by old tests that referenced old flag names; verify the shim layer keeps them routed correctly).
+Expected: all PASS — the migration to canonical flag names in this task should make these tests pass without shim. If any test still pins the old flag name (e.g. `assert DataCapability.HISTORICAL_DWM in fetcher.supported_data_types`), **update the test** to use the new flag. This task's commit must leave no references to old flag names in tests/.
 
 - [ ] **Step 13: Commit**
 
@@ -730,8 +746,8 @@ git add stock_data/data_provider/fetchers/ tests/test_supported_data_types_canon
 git commit -m "refactor(fetchers): migrate supported_data_types to canonical flags
 
 Each fetcher's capability bit is now STOCK_KLINE | INDEX_KLINE | STOCK_REALTIME_QUOTE |
-INDEX_REALTIME_QUOTE (per spec §3.3). Old flag names removed from fetcher bodies.
-Backwards compat is via DEPRECATED_TO_CANONICAL map in base.py.
+INDEX_REALTIME_QUOTE (per spec rev 3 §3.3). Old flag names removed from fetcher bodies
+in the same PR — no shim, no backwards-compat window.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1050,101 +1066,116 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-## Task 7: Akshare volume normalization (/100 + `volume_unit` field)
+## Task 7: Unify volume to shares across all fetchers (`Literal["share"]` invariant)
 
 **Files:**
-- Modify: `stock_data/data_provider/fetchers/akshare/fetcher.py` — `_normalize_data` (or the function that converts raw upstream data to `STANDARD_COLUMNS`)
+- Modify: `stock_data/data_provider/fetchers/akshare/fetcher.py` — `_normalize_data` (normalize lots → shares with `int()` floor)
+- Modify: `stock_data/api/schemas.py` — already done in this commit; `KLineData.volume_unit: Literal["share"]` and `IntradayData.volume_unit: Literal["share"]` enforce the schema invariant.
+- Create: `tests/test_volume_unit_unification.py`
 
-- [ ] **Step 1: Write failing test**
+**Why per spec §3.4**: All fetchers must produce `volume` in **shares (股)**. The `/kline` and `/intraday` response schemas declare `volume_unit: Literal["share"]` so any fetcher that returns the wrong unit breaks the schema validation at the route boundary, not in the data. Akshare upstream returns **lots (手 = 100 shares)** and is the only fetcher needing the `/100 + int() floor` conversion.
 
-Create `tests/test_akshare_volume_normalization.py`:
+- [ ] **Step 1: Write failing tests**
+
+Create `tests/test_volume_unit_unification.py`:
 
 ```python
-"""Akshare volume unit normalization per spec §3.4 / CLAUDE.md anti-pattern.
-
-Akshare returns `volume` in **lots (手 = 100 shares)** while every other
-fetcher returns shares. We normalize to shares + add `volume_unit` metadata
-to the output dict so clients can trust unit consistency.
-"""
+"""All fetchers must produce volume in shares per spec §3.4."""
 import pandas as pd
 import pytest
 
+from stock_data.api.schemas import KLineData, IntradayData
 from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
 
 
-def test_akshare_volume_normalized_to_shares():
-    """AkshareFetcher._normalize_data divides volume by 100 and tags volume_unit."""
+def test_kline_data_schema_declares_volume_unit_share():
+    """KLineData.volume_unit is Literal['share'] — invariant."""
+    row = KLineData(
+        date="2026-06-29", open=10.0, high=12.0, low=9.0, close=11.0,
+        volume=50_000,
+    )
+    out = row.model_dump()
+    assert out["volume"] == 50_000
+    assert out["volume_unit"] == "share"
+
+
+def test_intraday_data_schema_declares_volume_unit_share():
+    """IntradayData.volume_unit is Literal['share']."""
+    row = IntradayData(
+        time="10:00:00", open=10.0, high=12.0, low=9.0, close=11.0,
+        volume=50_000,
+    )
+    out = row.model_dump()
+    assert out["volume_unit"] == "share"
+
+
+def test_akshare_volume_normalized_to_shares_with_floor():
+    """AkshareFetcher._normalize_data divides volume by 100 and int()-floors.
+
+    500 lots → 5_000 shares (integer).
+    7 lots   → 0 shares (floor of 0.07) — Pydantic int accepts.
+    """
     fetcher = AkshareFetcher.__new__(AkshareFetcher)
 
+    # Adapt to whatever normalize signature the actual fetcher uses.
     raw_df = pd.DataFrame({
-        "日期":  ["2026-06-29"],
-        "开盘":  [10.0],
-        "收盘":  [11.0],
-        "最高":  [12.0],
-        "最低":  [9.0],
-        "成交量": [500],   # 500 lots = 50_000 shares
-        "成交额": [5_500_000.0],
-        "振幅":  [3.0],
-        "涨跌幅": [10.0],
-        "涨跌额": [1.0],
-        "换手率": [1.5],
+        "成交量": [500, 7],
+        # ...other columns minimal for normalize call
     })
-    # Adapt to whatever the actual normalize signature is.
+    raw_df["日期"] = ["2026-06-29", "2026-06-29"]
+
     out = fetcher._normalize_data(raw_df)  # type: ignore[attr-defined]
 
-    # The output must contain volume in shares and a unit field.
-    row = out.iloc[0] if hasattr(out, "iloc") else out[0]
-    assert row["volume"] == 5000  # 500 / 100 → wait actually it should be 50_000
-    # NOTE: actual impl may preserve raw + add volume_unit instead of dividing
-    # — see spec §3.4 footnote. Spec lists both options; pick the divide-and-tag
-    # if AkShareFetcher._normalize_data allows. If it currently preserves raw,
-    # the assertion becomes row["volume"] == 500 and row["volume_unit"] == "lot".
+    assert int(out.iloc[0]["volume"]) == 5_000   # 500 lots → 5_000 shares
+    assert int(out.iloc[1]["volume"]) == 0       # 7 lots → 0 shares (floor)
 ```
 
-(The test must match whichever normalization strategy the existing code allows. Adapt the assertion to "raw preserved + volume_unit field" if that's how the existing normalize_data is structured. The point is: after the patch, the response either (a) divides by 100 OR (b) carries `volume_unit: "lot"` so the API layer can document the unit choice.)
+(Adapt Step 1's column names to whatever the real Akshare upstream column names are. The signature `fetcher._normalize_data(df)` is the standard pattern in this codebase; if the actual method has a different name, the test must match.)
 
-- [ ] **Step 2: Run test — expect FAIL**
+- [ ] **Step 2: Run test — expect FAIL on the akshare volume test (and possibly on the Literal import if not yet active)**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_akshare_volume_normalization.py -v`
-Expected: FAIL — no `volume_unit` field or no /100 division.
+Run: `.venv/Scripts/python.exe -m pytest tests/test_volume_unit_unification.py -v`
+Expected: FAIL — Akshare `_normalize_data` does not yet divide lots.
 
-- [ ] **Step 3: Find `AkshareFetcher._normalize_data` and inspect its current behaviour**
+- [ ] **Step 3: Find `AkshareFetcher._normalize_data` and inspect current behaviour**
 
-Read the existing normalize. Confirm whether the current output dict (or DataFrame) carries a `volume` field in lots or in shares. Update the test from Step 1 to match the actual baseline.
+Read the existing normalize. Confirm the column name holding volume (typically `成交量`).
 
-- [ ] **Step 4: Add normalisation**
+- [ ] **Step 4: Add the `/100 + int()` floor normalisation**
 
-Either patch AkshareFetcher to divide and tag, OR add volume_unit field. Show the concrete change you make — typically:
+In `stock_data/data_provider/fetchers/akshare/fetcher.py`, inside `_normalize_data` (or the equivalent method that builds the standardized DataFrame), add at the point where `volume` is computed:
 
 ```python
-# In akshare/fetcher.py — locate _normalize_data (or equivalent) and add:
-def _normalize_data(self, df: pd.DataFrame) -> pd.DataFrame:
-    """...existing code... Add at the end before return:"""
-    if "volume" in df.columns:
-        df["volume"] = df["volume"] / 100.0  # 手 → 股
-        df["volume_unit"] = "share"
-    return df
+# Per spec §3.4 — Akshare upstream returns lots (手). Convert to shares (股).
+if "volume" in df.columns and df["volume"].dtype.kind in "fi":
+    df["volume"] = df["volume"].apply(lambda x: int(x // 100))  # 手 → 股, floor
+# No need to set volume_unit column — schema infers "share" invariant on response.
 ```
-
-(Adapt the field name to match what the rest of the normalize code already produces. The /100 is the divide-by-100 conversion since 1 lot = 100 shares.)
 
 - [ ] **Step 5: Re-run test — expect PASS**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_akshare_volume_normalization.py -v`
-Expected: PASS.
+Run: `.venv/Scripts/python.exe -m pytest tests/test_volume_unit_unification.py -v`
+Expected: 3 PASS.
 
 - [ ] **Step 6: Run pre-existing akshare tests**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_zzshare_fetcher.py tests/test_bugfix_pydantic_akshare_csi.py tests/test_akshare_fetcher.py -v 2>/dev/null || true`
-Expected: all PASS that were PASS before. If a pre-existing test pinned `volume == 500` (raw lots), update its assertion to `volume == 5000` after this change.
+Expected: all PASS that were PASS before. If a pre-existing test pinned `volume == 500` (raw lots), update that assertion to `volume == 5000` after this change.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Run full default suite as a smoke check**
+
+Run: `.venv/Scripts/python.exe -m pytest -q`
+Expected: all PASS.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add stock_data/data_provider/fetchers/akshare/fetcher.py tests/test_akshare_volume_normalization.py
-git commit -m "fix(akshare): normalize volume unit (lots → shares) per spec §3.4
+git add stock_data/data_provider/fetchers/akshare/fetcher.py stock_data/api/schemas.py tests/test_volume_unit_unification.py
+git commit -m "fix(akshare+schema): unify volume to shares per spec §3.4
 
-Adds /100 conversion + volume_unit='share' field to the response dict.
+- KLineData.volume_unit / IntradayData.volume_unit: Literal['share']
+- AkshareFetcher._normalize_data: lots / 100 + int() floor → shares
+- schema-level invariant catches future regressions at the route boundary
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1584,119 +1615,82 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-## Task 12: Deprecate `/stocks/{code}/history`, `/stocks/{code}/intraday`, `/indices/{code}/history`, `/indices/{code}/intraday`
+## Task 12: Delete legacy `/history` + `/intraday` endpoints (no deprecation)
 
 **Files:**
-- Modify: `stock_data/api/routes/stocks.py`
-- Modify: `stock_data/api/routes/indices.py`
-- Modify: `tests/test_stocks_api.py`
-- Modify: `tests/test_indices_api.py`
+- Modify: `stock_data/api/routes/stocks.py` (delete `get_history`, `get_intraday`)
+- Modify: `stock_data/api/routes/indices.py` (delete `get_index_history`, `get_index_intraday`)
+- Modify: `stock_data/api/routes/helpers.py` (drop `_legacy_period_to_modern` if added)
+- Modify: `tests/test_stocks_api.py` (delete old `/history` + `/intraday` tests)
+- Modify: `tests/test_indices_api.py` (delete old `/index_history` + `/index_intraday` tests)
+- Modify: `CLAUDE.md` (delete API surface table rows for `/history`, `/intraday`)
+- Modify: `stock_data/data_provider/manager.py` (drop `get_intraday_data` if no internal caller remains; see Step 3)
 
-- [ ] **Step 1: Write failing test (deprecation path: redirect to /kline)**
+Per spec rev 3 §6: **directly delete** legacy endpoints, no deprecation timeline, no `Deprecation` + `Sunset` headers, no redirect. Local-only project — any caller migrates in lockstep with this PR.
 
-Add to `tests/test_stocks_api.py`:
+- [ ] **Step 1: Audit callers of the legacy endpoints + manager method**
 
-```python
-def test_stocks_history_deprecation_redirects_to_kline(client):
-    """/stocks/{code}/history?period=daily → 200 with Deprecation response header."""
-    r = client.get("/api/v1/stocks/600519/history?period=daily&days=30")
-    assert r.status_code == 200
-    assert r.headers.get("Deprecation") == "true"
-    assert "Sunset" in r.headers
-
-
-def test_stocks_intraday_redirects_legacy_period_param(client):
-    """/stocks/{code}/intraday?period=5 (no 'm') → /kline via legacy_period_to_modern."""
-    # Test that the legacy `period=5` value gets mapped to `5m` before reaching /kline.
-    r = client.get("/api/v1/stocks/600519/intraday?period=5")
-    assert r.status_code == 200  # succeeds via forwarding
+Run grep for all references:
+```bash
+grep -rn "get_intraday_data\|get_index_intraday\|get_history\|get_intraday\|/stocks/.*/history\|/stocks/.*/intraday\|/indices/.*/history\|/indices/.*/intraday" stock_data/ tests/ docs/ CLAUDE.md | grep -v "\.pyc\|__pycache__"
 ```
 
-- [ ] **Step 2: Run test — expect FAIL (old endpoints exist without redirect headers)**
+Note every file that needs updating in this task.
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_stocks_api.py -v -k "deprecation or intraday"`
-Expected: old handler doesn't add `Deprecation` header.
+- [ ] **Step 2: Delete the 4 endpoint handlers + their tests**
 
-- [ ] **Step 3: Wrap `/history` and `/intraday` handlers to redirect to `/kline`**
+In `stock_data/api/routes/stocks.py`: delete the `get_history` and `get_intraday` functions entirely, plus their `@router.get` and `@endpoint_meta` decorators.
 
-In `stocks.py`, replace the body of `get_history` and `get_intraday` with thin forwards:
+In `stock_data/api/routes/indices.py`: same for `get_index_history` and `get_index_intraday`.
 
-```python
-@router.get("/stocks/{code}/history", deprecated=True)
-@endpoint_meta(
-    summary="[已弃用] 请改用 /stocks/{code}/kline",
-    markets=["csi", "hk", "us"],
-    capabilities=["STOCK_KLINE"],
-)
-def get_history_deprecated(
-    response: Response,
-    code: str = Path(...),
-    period: str = Query(default="daily", pattern="^(daily|weekly|monthly)$"),
-    days: int = Query(default=30, ge=1, le=365),
-    start_date: str | None = Query(default=None),
-    end_date: str | None = Query(default=None),
-    adjust: str = Query(default=""),
-    indicators: str | None = Query(default=None),
-):
-    response.headers["Deprecation"] = "true"
-    response.headers["Sunset"] = "Wed, 29 Dec 2026 00:00:00 GMT"  # T+180d, replace at PR time
-    return get_kline(
-        code=code, period=period, days=days, start_date=start_date,
-        end_date=end_date, adjust=adjust, indicators=indicators,
-    )
+In `tests/test_stocks_api.py` and `tests/test_indices_api.py`: delete every test whose path contains `/history` or `/intraday`. These tests must go — there are no redirect versions to keep.
 
+- [ ] **Step 3: Decide on `manager.get_intraday_data`**
 
-@router.get("/stocks/{code}/intraday", deprecated=True)
-@endpoint_meta(
-    summary="[已弃用] 请改用 /stocks/{code}/kline?period=...m",
-    markets=["csi"],
-    capabilities=["STOCK_KLINE"],
-)
-def get_intraday_deprecated(
-    response: Response,
-    code: str = Path(...),
-    period: str = Query(default="5", pattern="^(1|5|15|30|60)$"),  # legacy: no 'm'
-    adjust: str = Query(default=""),
-    indicators: str | None = Query(default=None),
-):
-    response.headers["Deprecation"] = "true"
-    response.headers["Sunset"] = "Wed, 29 Dec 2026 00:00:00 GMT"
-    return get_kline(
-        code=code,
-        period=_legacy_period_to_modern(period),  # '5' → '5m'
-        days=1,
-        start_date=None,
-        end_date=date.today().strftime("%Y-%m-%d"),
-        adjust=adjust,
-        indicators=indicators,
-    )
+Inspect `manager.get_intraday_data` callers. If after Step 1 the only remaining caller is the (now-deleted) `/intraday` route, **delete `get_intraday_data` from manager**.
+
+If any test still mocks `manager.get_intraday_data` directly (manager-internal test), update those tests to call `manager.get_kline_data(frequency="5"|..., adjust=...)` instead.
+
+- [ ] **Step 4: Update `CLAUDE.md` API surface table**
+
+In `CLAUDE.md`, the `## API Documentation` section / API surface table: delete the rows for `/stocks/{code}/history`, `/stocks/{code}/intraday`, `/indices/{code}/history`, `/indices/{code}/intraday`. Add the new `/stocks/{code}/kline` and `/indices/{code}/kline` rows to the table. Update the `## Provider Frequency Support` footnotes if they reference these endpoints.
+
+- [ ] **Step 5: Update explorer manifest**
+
+Run the server briefly and curl `/control/api-manifest`:
+```bash
+.venv/Scripts/python.exe -m stock_data.server &
+sleep 2
+curl -sf "http://localhost:8888/control/api-manifest" | python -c "import sys,json; m=json.load(sys.stdin); print([e['path'] for s in m['sections'] for e in s['endpoints']])"
 ```
 
-Add `_legacy_period_to_modern` helper in `helpers.py`:
+The manifest should now list `/stocks/{code}/kline` and `/indices/{code}/kline`. There must NOT be any stale `history` or `intraday` entries.
 
-```python
-def _legacy_period_to_modern(period: str) -> str:
-    return {
-        "1": "1m", "5": "5m", "15": "15m", "30": "30m", "60": "60m",
-    }.get(period, period)
-```
+- [ ] **Step 6: Run full default test suite**
 
-Same applies to `indices.get_history_deprecated` and `indices.get_intraday_deprecated`.
+Run: `.venv/Scripts/python.exe -m pytest -q`
+Expected: all PASS. No deprecation-redirect tests; the routes simply don't exist.
 
-- [ ] **Step 4: Re-run test — expect PASS**
+- [ ] **Step 7: Run ruff**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_stocks_api.py tests/test_indices_api.py -v`
-Expected: all PASS.
+Run: `ruff check .`
+Expected: clean (only pre-existing violations).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add stock_data/api/routes/stocks.py stock_data/api/routes/indices.py stock_data/api/routes/helpers.py tests/test_stocks_api.py tests/test_indices_api.py
-git commit -m "feat(api): deprecate /history + /intraday in favor of /kline per spec §6
+git add stock_data/api/routes/stocks.py stock_data/api/routes/indices.py stock_data/api/routes/helpers.py \
+        stock_data/data_provider/manager.py \
+        tests/test_stocks_api.py tests/test_indices_api.py CLAUDE.md
+git commit -m "feat(api): delete legacy /history + /intraday per spec rev 3 §6
 
-Both legacy endpoints forward to /kline with Deprecation + Sunset response
-headers. Legacy `period=1|5|15|30|60` (no 'm' suffix) is mapped via
-_legacy_period_to_modern before forwarding.
+Local-only project per rev 3 — no deprecation timeline. The /kline endpoint
+(Tasks 9-10) is the canonical entry; callers migrated in the same PR.
+
+- removes 4 endpoint handlers
+- removes manager.get_intraday_data (if Step 3 found no other caller)
+- deletes corresponding test cases
+- updates CLAUDE.md API surface table
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -1746,7 +1740,7 @@ Expected:
 - 5m + qfq: HTTP 200 + JSON body
 - 1m + qfq: HTTP 422 + `{"detail": {"error": "no_fetcher_available", ...}}`
 - quote with period: HTTP 422
-- history: HTTP 200 + Deprecation: true header
+- history: HTTP 404 (per spec rev 3 — endpoint deleted, no deprecation)
 
 - [ ] **Check the explorer manifest** at `GET /control/api-manifest`
 
@@ -1756,8 +1750,7 @@ curl -sf "http://localhost:8888/control/api-manifest" | python -c "import sys,js
 
 Expected:
 - `/stocks/{stock_code}/kline` and `/stocks/{stock_code}/quote` listed.
-- `/stocks/{stock_code}/history` listed (as deprecated, with summary prefix `[已弃用]`).
-- `/stocks/{stock_code}/intraday` listed (deprecated).
+- `/stocks/{stock_code}/history` and `/stocks/{stock_code}/intraday` **NOT listed** (deleted in Task 12).
 - The "Fetcher backends" panel under `/kline` lists fetchers with `supports_kline` results, including Zhitu/Zzshare handling minute K correctly.
 
 - [ ] **Commit any pending CLAUDE.md or follow-up doc updates** if necessary
@@ -1789,7 +1782,7 @@ git commit -m "docs(CLAUDE): refresh capability flag table to canonical names"
 | §5.1 /stocks/{code}/kline | Task 9 |
 | §5.2 /indices/{code}/kline | Task 10 |
 | §5.5 /quote reject semantics-less params | Task 11 |
-| §6 /history + /intraday deprecation | Task 12 |
+| §6 /history + /intraday direct deletion (rev 3) | Task 12 |
 | §9.3 /kline minute+adjust no longer 400 | Task 9 (no 400 reject emitted) |
 | §9.4 422 no_fetcher_available message | Task 5 (DataFetchError message) |
 
