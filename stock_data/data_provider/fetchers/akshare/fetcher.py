@@ -208,8 +208,16 @@ class AkshareFetcher(BaseFetcher):
         return normalize_intraday_df(df)
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
-        """Normalize Akshare data to standard columns."""
-        return self._normalize_dataframe(
+        """Normalize Akshare data to standard columns.
+
+        Akshare upstream returns ``成交量`` in **手 (lots = 100 shares)**.
+        Per spec §3.4 the canonical contract is **股 (shares)**, so we
+        divide by 100 + ``int()`` floor to satisfy
+        :class:`KLineData.volume_unit: Literal["share"]`. The floor
+        matters: ``7`` lots must become ``0`` shares (int), never
+        ``0.07`` (float that breaks Pydantic int coercion).
+        """
+        out = self._normalize_dataframe(
             df,
             stock_code,
             {
@@ -224,6 +232,13 @@ class AkshareFetcher(BaseFetcher):
                 "股票代码": "code",
             },
         )
+        # 手 -> 股 (lots -> shares). Apply only when the column is
+        # present (a missing volume column shouldn't be invented here).
+        if "volume" in out.columns:
+            out["volume"] = out["volume"].apply(
+                lambda v: int(v) // 100 if pd.notna(v) else 0
+            )
+        return out
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Akshare."""

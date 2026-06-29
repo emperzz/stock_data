@@ -2,7 +2,7 @@
 Pydantic schemas for API request/response models.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_serializer, model_validator
 
@@ -94,7 +94,13 @@ class KLineData(BaseModel):
     high: float = Field(description="Highest price")
     low: float = Field(description="Lowest price")
     close: float = Field(description="Closing price")
-    volume: int = Field(description="Volume")
+    volume: int = Field(description="Volume (in shares / 股; invariant per spec §3.4)")
+    volume_unit: Literal["share"] = Field(
+        default="share",
+        description="Volume unit. Always 'share' (股) — invariant enforced by fetcher "
+        "normalization per spec §3.4. Akshare upstream returns 手 (lots = 100 shares); "
+        "the AkshareFetcher normalizer divides by 100 + int() floor to satisfy this.",
+    )
     amount: float | None = Field(default=None, description="Amount")
     change_percent: float | None = Field(default=None, description="Change percent")
     ma5: float | None = Field(default=None, description="5-day moving average")
@@ -121,6 +127,7 @@ class KLineData(BaseModel):
             "low": self.low,
             "close": self.close,
             "volume": self.volume,
+            "volume_unit": self.volume_unit,
             "amount": self.amount,
             "change_percent": self.change_percent,
         }
@@ -249,7 +256,13 @@ class IntradayData(BaseModel):
     high: float = Field(description="Highest price")
     low: float = Field(description="Lowest price")
     close: float = Field(description="Closing price")
-    volume: int = Field(description="Volume")
+    volume: int = Field(description="Volume (in shares / 股; invariant per spec §3.4)")
+    volume_unit: Literal["share"] = Field(
+        default="share",
+        description="Volume unit. Always 'share' (股) — invariant enforced by fetcher "
+        "normalization per spec §3.4. Akshare upstream returns 手 (lots = 100 shares); "
+        "the AkshareFetcher normalizer divides by 100 + int() floor to satisfy this.",
+    )
     amount: float | None = Field(default=None, description="Amount")
 
 

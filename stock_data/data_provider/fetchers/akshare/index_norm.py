@@ -133,7 +133,11 @@ def normalize_intraday_df(df: pd.DataFrame, time_col: str = "时间") -> pd.Data
     2. Strips the time column to ``HH:MM:SS`` (the 8 rightmost chars) when
        present — akshare's EM and Sina endpoints return full timestamps.
     3. Coerces the OHLCV/amount columns via ``pd.to_numeric``.
-    4. Returns only the standard columns that exist after rename, in
+    4. **Akshare volume is 手 (lots = 100 shares); converts to 股 (shares)**
+       by ``int() // 100`` per spec §3.4. The floor prevents
+       ``7`` 手 → ``0.07`` shares (float) and keeps the int-typed column
+       schema invariant intact.
+    5. Returns only the standard columns that exist after rename, in
        the canonical order.
 
     Args:
@@ -153,6 +157,13 @@ def normalize_intraday_df(df: pd.DataFrame, time_col: str = "时间") -> pd.Data
     for col in _INTRADAY_NUMERIC_COLS:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
+    # 手 -> 股 (lots -> shares) per spec §3.4. Floor on int division
+    # ensures we never emit a fractional float (which would fail the
+    # `IntradayData.volume: int` schema invariant). NaN/None → 0.
+    if "volume" in out.columns:
+        out["volume"] = out["volume"].apply(
+            lambda v: int(v) // 100 if pd.notna(v) else 0
+        )
     # Ensure all standard columns are present (None for missing) and
     # in canonical order.
     for col in _INTRADAY_STANDARD_COLS:
