@@ -124,6 +124,8 @@ def _reject_non_index_code(code: str, *, endpoint_kind: str) -> None:
             hint = "Use /stocks/{stock_code}/history for stocks."
         elif endpoint_kind == "intraday":
             hint = "Use /stocks/{stock_code}/intraday for stocks."
+        elif endpoint_kind == "kline":
+            hint = "Use /stocks/{stock_code}/kline for stocks."
         else:  # pragma: no cover — exhaustive above
             hint = ""
         raise HTTPException(

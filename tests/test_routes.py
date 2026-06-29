@@ -389,6 +389,14 @@ class TestIndicesBlocksStocks:
         assert response.status_code == 400
         assert response.json()["detail"]["error"] == "invalid_request"
 
+    def test_indices_kline_blocks_stock(self, client):
+        """600519 is a stock — /indices/{code}/kline should reject with 400."""
+        response = client.get("/api/v1/indices/600519/kline?period=daily")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["error"] == "invalid_request"
+        assert "stocks" in detail["message"]
+
 
 class TestStockInfoRoute:
     """Tests for /api/v1/stocks/{code}/info endpoint."""
@@ -426,3 +434,72 @@ class TestStockInfoRoute:
             assert data["source"] in ("ZhituFetcher", "MyquantFetcher", "")
         else:
             assert response.status_code == 503
+
+
+class TestIndexKline:
+    """Tests for /api/v1/indices/{code}/kline endpoint (Task 10)."""
+
+    def test_index_kline_daily(self, client):
+        """GET /indices/{code}/kline?period=daily returns index K-line data."""
+        response = client.get("/api/v1/indices/000300/kline?period=daily&days=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["code"] == "000300"
+        assert data["period"] == "daily"
+        assert "data" in data
+
+    def test_index_kline_weekly(self, client):
+        response = client.get("/api/v1/indices/000300/kline?period=weekly&days=10")
+        assert response.status_code in (200, 503)
+        if response.status_code == 200:
+            assert response.json()["period"] == "weekly"
+
+    def test_index_kline_5m(self, client):
+        """GET /indices/{code}/kline?period=5m returns minute K-line data."""
+        response = client.get("/api/v1/indices/000300/kline?period=5m&days=1")
+        # 200 if a fetcher supports index minute kline; 422/503 if none available
+        assert response.status_code in (200, 422, 503)
+
+    def test_index_kline_rejects_stock_code(self, client):
+        """Stock codes must use /stocks/{code}/kline."""
+        response = client.get("/api/v1/indices/600519/kline?period=daily")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["error"] == "invalid_request"
+        assert "stocks" in detail["message"]
+
+    def test_index_kline_rejects_adjust_qfq(self, client):
+        """Indices have no qfq/hfq concept — 422 user input error."""
+        response = client.get("/api/v1/indices/000300/kline?period=daily&adjust=qfq")
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail["error"] == "adjust_not_supported"
+
+    def test_index_kline_rejects_adjust_hfq(self, client):
+        """Indices have no hfq concept either."""
+        response = client.get("/api/v1/indices/000300/kline?period=daily&adjust=hfq")
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail["error"] == "adjust_not_supported"
+
+    def test_index_kline_invalid_period(self, client):
+        response = client.get("/api/v1/indices/000300/kline?period=invalid")
+        assert response.status_code == 422
+
+    def test_index_kline_with_indicators(self, client):
+        response = client.get("/api/v1/indices/000300/kline?period=daily&days=30&indicators=ma")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["code"] == "000300"
+        assert len(data["data"]) <= 30
+
+    def test_index_kline_response_shape(self, client):
+        """Verify response has code, name, period, data, source fields."""
+        response = client.get("/api/v1/indices/000300/kline?period=daily&days=3")
+        assert response.status_code == 200
+        data = response.json()
+        assert "code" in data
+        assert "name" in data
+        assert "period" in data
+        assert "data" in data
+        assert "source" in data

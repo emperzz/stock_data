@@ -12,9 +12,11 @@ from ..cache import (
     get_history_cache,
     get_index_intraday_cache,
     get_index_quote_cache,
+    get_kline_cache,
     make_index_history_cache_key,
     make_index_intraday_cache_key,
     make_index_quote_cache_key,
+    make_kline_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
@@ -198,6 +200,105 @@ def get_index_history(
 
     return IndexHistoryResponse(
         code=index_code, name=index_name, period=period, data=data, source=source
+    )
+
+
+# ============================================================================
+# Unified K-line (daily + minute)
+# ============================================================================
+
+
+@router.get(
+    "/indices/{index_code}/kline",
+    response_model=IndexHistoryResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid index code"},
+        422: {"model": ErrorResponse, "description": "Adjust not supported for indices"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["indices"],
+)
+@endpoint_meta(
+    summary="指数 K 线（统一入口：d/w/m + 1m/5m/15m/30m/60m）",
+    markets=["csi", "hk", "us"],
+    capabilities=["INDEX_KLINE"],
+)
+@map_errors
+@cache_endpoint(
+    cache_fn=lambda index_code, period, days, start_date, end_date, adjust, indicators: (
+        get_kline_cache(_period_to_freq(period))
+    ),
+    key_builder=lambda index_code, period, days, start_date, end_date, adjust, indicators: (
+        make_kline_cache_key(
+            index_code,
+            _period_to_freq(period),
+            days,
+            start_date,
+            end_date,
+            adjust or None,
+            _parse_indicators_param(indicators),
+        )
+    ),
+    hit_label="index_kline",
+)
+def get_index_kline(
+    index_code: str = Path(max_length=20, description="Index code"),
+    period: str = Query(
+        default="daily",
+        pattern="^(daily|weekly|monthly|1m|5m|15m|30m|60m)$",
+    ),
+    days: int = Query(default=30, ge=1, le=365),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    adjust: str = Query(default="", pattern="^(qfq|hfq)?$"),
+    indicators: str | None = Query(default=None),
+) -> IndexHistoryResponse:
+    """Unified K-line endpoint for indices: daily/weekly/monthly + minute.
+
+    Symmetric to /stocks/{code}/kline but with INDEX_KLINE capability.
+    Indices have no qfq/hfq concept (no ex-dividend events) — adjust is
+    rejected at the route layer with 422.
+    """
+    _reject_non_index_code(index_code, endpoint_kind="kline")
+
+    # Indices have no qfq/hfq — reject early (user input error).
+    if adjust in ("qfq", "hfq"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "adjust_not_supported",
+                "message": "Indices have no qfq/hfq concept (no ex-dividend events).",
+            },
+        )
+
+    freq = _period_to_freq(period)
+
+    requested_indicators = _parse_indicators_param(indicators)
+    actual_days = days
+    if requested_indicators:
+        extra = compute_lookback(requested_indicators)
+        if extra > 0:
+            actual_days = max(days, extra)
+
+    manager = get_manager()
+    df, source = manager.get_kline_data(
+        index_code,
+        start_date=start_date,
+        end_date=end_date,
+        days=actual_days,
+        frequency=freq,
+        adjust=None,  # adjust already rejected above
+    )
+    df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
+    index_name = _resolve_index_name(index_code)
+
+    records = df.to_dict("records")
+    return IndexHistoryResponse(
+        code=index_code,
+        name=index_name,
+        period=period,
+        data=[_build_kline_data(r, _format_date) for r in records],
+        source=source,
     )
 
 
