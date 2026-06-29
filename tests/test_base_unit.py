@@ -232,7 +232,7 @@ class TestKlineDataProcessing:
 
         Indicators are now the responsibility of the indicator layer
         (see stock_data.data_provider.indicators); the orchestrator is
-        reached via the ?indicators= query param on /stocks/{code}/history.
+        reached via the ?indicators= query param on /stocks/{code}/kline.
         """
 
         df = pd.DataFrame(

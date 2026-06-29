@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # ---------- period-frequency map ----------
 
-# Shared by /stocks/{code}/history and /indices/{code}/history.
+# Shared by /stocks/{code}/kline and /indices/{code}/kline.
 _PERIOD_MAP: dict[str, str] = {
     "daily": "d",
     "weekly": "w",
@@ -96,8 +96,6 @@ def reset_manager() -> None:
 
 _INDEX_CODE_HINT_TEMPLATES = {
     "quote": "Use /indices/{code}/quote instead.",
-    "history": "Use /indices/{code}/history instead.",
-    "intraday": "Use /indices/{code}/intraday instead.",
     "kline": "Use /indices/{code}/kline instead.",
 }
 
@@ -120,10 +118,6 @@ def _reject_non_index_code(code: str, *, endpoint_kind: str) -> None:
     if not is_index_code(code):
         if endpoint_kind == "quote":
             hint = "Use /stocks/{stock_code}/quote for stocks."
-        elif endpoint_kind == "history":
-            hint = "Use /stocks/{stock_code}/history for stocks."
-        elif endpoint_kind == "intraday":
-            hint = "Use /stocks/{stock_code}/intraday for stocks."
         elif endpoint_kind == "kline":
             hint = "Use /stocks/{stock_code}/kline for stocks."
         else:  # pragma: no cover — exhaustive above
@@ -179,7 +173,7 @@ def _parse_indicators_param(indicators: str | None) -> list[str]:
     an empty list. Duplicates are deduplicated (preserves order of first
     occurrence). Raises 400 on an unknown indicator name.
 
-    Used by both ``/stocks/{code}/history`` and ``/indices/{code}/history``,
+    Used by both ``/stocks/{code}/kline`` and ``/indices/{code}/kline``,
     and inside the corresponding cache key builders so invalid input is
     rejected before any cache write.
     """

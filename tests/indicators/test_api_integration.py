@@ -55,7 +55,7 @@ def client(monkeypatch):
         fake_get_index_historical,
     )
 
-    # Also stub the stock-name lookup so /history doesn't try a network call
+    # Also stub the stock-name lookup so /kline doesn't try a network call
     def fake_get_stock_name(code, manager=None):
         return "贵州茅台"
 
@@ -89,7 +89,7 @@ def test_catalog_endpoint_lists_all_indicators(client):
 
 
 def test_history_default_no_indicators(client):
-    r = client.get("/api/v1/stocks/600519/history?days=30")
+    r = client.get("/api/v1/stocks/600519/kline?days=30")
     assert r.status_code == 200
     body = r.json()
     assert body["code"] == "600519"
@@ -108,7 +108,7 @@ def test_history_default_no_indicators(client):
 
 
 def test_history_with_ma_indicator(client):
-    r = client.get("/api/v1/stocks/600519/history?days=30&indicators=ma")
+    r = client.get("/api/v1/stocks/600519/kline?days=30&indicators=ma")
     assert r.status_code == 200
     body = r.json()
     assert len(body["data"]) == 30
@@ -125,7 +125,7 @@ def test_history_with_ma_indicator(client):
 
 
 def test_history_with_multiple_indicators(client):
-    r = client.get("/api/v1/stocks/600519/history?days=30&indicators=ma,macd,boll")
+    r = client.get("/api/v1/stocks/600519/kline?days=30&indicators=ma,macd,boll")
     assert r.status_code == 200
     body = r.json()
     last_inds = body["data"][-1]["indicators"]
@@ -135,7 +135,7 @@ def test_history_with_multiple_indicators(client):
 
 
 def test_history_unknown_indicator_rejected(client):
-    r = client.get("/api/v1/stocks/600519/history?days=30&indicators=macd,nope")
+    r = client.get("/api/v1/stocks/600519/kline?days=30&indicators=macd,nope")
     assert r.status_code == 400
     body = r.json()
     assert body["detail"]["error"] == "invalid_indicator"
@@ -159,7 +159,7 @@ def test_history_indicators_trigger_lookback_expansion(client):
     dp.DataFetcherManager.get_kline_data = spy_get_kline_data
     try:
         # Asking for days=30 but with macd (lookback=87)
-        r = client.get("/api/v1/stocks/600519/history?days=30&indicators=macd")
+        r = client.get("/api/v1/stocks/600519/kline?days=30&indicators=macd")
         assert r.status_code == 200
         # The last captured request should have requested at least 87 days
         assert any(int(kw.get("days", 0)) >= 87 for kw in captured_kwargs)
@@ -171,11 +171,11 @@ def test_history_indicators_trigger_lookback_expansion(client):
 
 
 def test_index_history_supports_indicators(client):
-    """The /indices/{code}/history endpoint accepts the same `?indicators=`
-    query param as /stocks/{code}/history. With it, the 4 indicator
+    """The /indices/{code}/kline endpoint accepts the same `?indicators=`
+    query param as /stocks/{code}/kline. With it, the 4 indicator
     fields appear; without it, they're omitted."""
     # With indicators
-    r = client.get("/api/v1/indices/000300/history?days=30&indicators=ma")
+    r = client.get("/api/v1/indices/000300/kline?days=30&indicators=ma")
     assert r.status_code == 200
     body = r.json()
     assert len(body["data"]) == 30
@@ -189,7 +189,7 @@ def test_index_history_supports_indicators(client):
     assert "ma30" in last["indicators"]
 
     # Without indicators — same 4 fields must be omitted
-    r2 = client.get("/api/v1/indices/000300/history?days=30")
+    r2 = client.get("/api/v1/indices/000300/kline?days=30")
     assert r2.status_code == 200
     last2 = r2.json()["data"][-1]
     assert "ma5" not in last2
@@ -202,7 +202,7 @@ def test_index_history_supports_indicators(client):
 
 
 def test_index_history_unknown_indicator_rejected(client):
-    r = client.get("/api/v1/indices/000300/history?days=30&indicators=macd,nope")
+    r = client.get("/api/v1/indices/000300/kline?days=30&indicators=macd,nope")
     assert r.status_code == 400
     body = r.json()
     assert body["detail"]["error"] == "invalid_indicator"

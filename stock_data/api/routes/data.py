@@ -150,7 +150,7 @@ def get_indicator_catalog() -> IndicatorCatalogResponse:
     """List all available technical indicators.
 
     Useful for AI agents that want to introspect what's available before
-    sending ``?indicators=...`` on ``/stocks/{code}/history``.
+    sending ``?indicators=...`` on ``/stocks/{code}/kline``.
     """
     catalog = available_catalog()
     return IndicatorCatalogResponse(

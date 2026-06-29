@@ -1,6 +1,6 @@
 """Per-stock endpoints. Everything under ``/stocks/{code}/...`` plus the
 related dragon-tiger / margin / block-trade / holder-num / dividend / fund-flow /
-reports / announcements / info / quote / history / intraday surfaces.
+reports / announcements / info / quote / kline surfaces.
 
 The stock-list endpoint (``GET /stocks``) lives in :mod:`.calendar` because
 it's a list-level query, not per-stock.
@@ -10,12 +10,6 @@ from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.indicators import compute_lookback
 from ...data_provider.persistence import stock_list as stock_cache
-from ...data_provider.utils.normalize import (
-    is_hk_market,
-    is_index_code,
-    is_us_market,
-    normalize_stock_code,
-)
 from ..cache import (
     cache_endpoint,
     get_announcements_cache,
@@ -24,28 +18,24 @@ from ..cache import (
     get_dragontiger_cache,
     get_fund_flow_cache,
     get_fund_flow_daily_cache,
-    get_history_cache,
     get_holder_num_cache,
     get_kline_cache,
     get_margin_cache,
     get_quote_cache,
     get_reports_cache,
     get_stock_info_cache,
-    get_stock_intraday_cache,
     make_announcements_cache_key,
     make_block_trade_cache_key,
     make_dividend_cache_key,
     make_dragon_tiger_cache_key,
     make_fund_flow_cache_key,
     make_fund_flow_daily_cache_key,
-    make_history_cache_key,
     make_holder_num_cache_key,
     make_kline_cache_key,
     make_margin_cache_key,
     make_quote_cache_key,
     make_reports_cache_key,
     make_stock_info_cache_key,
-    make_stock_intraday_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
@@ -65,8 +55,6 @@ from ..schemas import (
     FundFlowResponse,
     HolderNumRecord,
     HolderNumResponse,
-    IntradayData,
-    IntradayResponse,
     MarginTradingRecord,
     MarginTradingResponse,
     ReportPDFResponse,
@@ -194,111 +182,6 @@ def get_quote(
 
 
 # ============================================================================
-# History K-line (with optional indicators)
-# ============================================================================
-
-
-@router.get(
-    "/stocks/{stock_code}/history",
-    response_model=StockHistoryResponse,
-    responses={
-        500: {"model": ErrorResponse, "description": "Server error"},
-    },
-    tags=["stocks"],
-)
-@endpoint_meta(
-    summary="历史 K 线（含可选指标）",
-    markets=["csi", "hk", "us"],
-    capabilities=["STOCK_KLINE"],
-)
-@map_errors
-@cache_endpoint(
-    cache_fn=lambda stock_code, period, days, start_date, end_date, adjust, indicators: (
-        get_history_cache(_period_to_freq(period))
-    ),
-    key_builder=lambda stock_code, period, days, start_date, end_date, adjust, indicators: (
-        make_history_cache_key(
-            stock_code,
-            _period_to_freq(period),
-            days,
-            start_date,
-            end_date,
-            adjust or None,
-            _parse_indicators_param(indicators),
-        )
-    ),
-    hit_label="history",
-)
-def get_history(
-    stock_code: str = Path(max_length=20, description="Stock code"),
-    period: str = Query(
-        default="daily", pattern="^(daily|weekly|monthly)$", description="K-line period"
-    ),
-    days: int = Query(default=30, ge=1, le=365, description="Number of days"),
-    start_date: str | None = Query(
-        default=None, description="Start date (YYYY-MM-DD), overrides days"
-    ),
-    end_date: str | None = Query(
-        default=None, description="End date (YYYY-MM-DD), defaults to today"
-    ),
-    adjust: str = Query(
-        default="",
-        pattern="^(qfq|hfq)?$",
-        description="Adjustment type: empty=不复权, qfq=前复权, hfq=后复权",
-    ),
-    indicators: str | None = Query(
-        default=None,
-        description=(
-            "Comma-separated list of technical indicators to compute on the K-line. "
-            "Supported: ma, macd, boll, kdj, rsi, wr, bias, cci, atr, obv, "
-            "roc, dmi, sar, kc. The 'ma' indicator always returns ma5/10/20/30/60 "
-            "with default options. Use /indicators/catalog for details."
-        ),
-    ),
-) -> StockHistoryResponse:
-    """Get historical K-line data for a stock, optionally with technical indicators.
-
-    Note:
-        Index codes are not supported. Use /indices/{index_code}/history instead.
-    """
-    _reject_index_code(stock_code, endpoint_kind="history")
-
-    adj_value = adjust or None
-
-    # Parse indicators before issuing the upstream call (used by both the
-    # cache key builder and the lookback expansion below).
-    requested_indicators = _parse_indicators_param(indicators)
-
-    # If indicators are requested, fetch enough history to warm them up.
-    actual_days = days
-    if requested_indicators:
-        extra_lookback = compute_lookback(requested_indicators)
-        if extra_lookback > 0:
-            actual_days = max(days, extra_lookback)
-
-    manager = get_manager()
-    df, source = manager.get_kline_data(
-        stock_code,
-        start_date=start_date,
-        end_date=end_date,
-        days=actual_days,
-        frequency=_period_to_freq(period),
-        adjust=adj_value,
-    )
-
-    df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
-
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-
-    records = df.to_dict("records")
-    data = [_build_kline_data(row, _format_date) for row in records]
-
-    return StockHistoryResponse(
-        code=stock_code, stock_name=stock_name, period=period, data=data, source=source
-    )
-
-
-# ============================================================================
 # Unified K-line (daily + minute)
 # ============================================================================
 
@@ -350,8 +233,8 @@ def get_kline(
 ) -> StockHistoryResponse:
     """Unified K-line endpoint: daily/weekly/monthly + minute (1m/5m/15m/30m/60m).
 
-    Replaces /history and /intraday. ``supports_kline`` at manager level
-    decides fetcher availability; no route-layer reject for minute+adjust.
+    ``supports_kline`` at manager level decides fetcher availability;
+    no route-layer reject for minute+adjust.
     """
     _reject_index_code(code, endpoint_kind="kline")
     freq = _period_to_freq(period)
@@ -381,99 +264,6 @@ def get_kline(
         stock_name=name,
         period=period,
         data=[_build_kline_data(r, _format_date) for r in records],
-        source=source,
-    )
-
-
-# ============================================================================
-# Intraday minute K-line
-# ============================================================================
-
-
-@router.get(
-    "/stocks/{stock_code}/intraday",
-    response_model=IntradayResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Invalid period or unsupported market"},
-        500: {"model": ErrorResponse, "description": "Server error"},
-    },
-    tags=["stocks"],
-)
-@endpoint_meta(
-    summary="分钟 K 线",
-    markets=["csi"],
-    capabilities=["STOCK_KLINE"],
-)
-@map_errors
-@cache_endpoint(
-    cache_fn=lambda *args, **kwargs: get_stock_intraday_cache(),
-    key_builder=lambda stock_code, period, adjust: make_stock_intraday_cache_key(
-        stock_code, period, adjust
-    ),
-    hit_label="stock_intraday",
-)
-def get_intraday(
-    stock_code: str = Path(max_length=20, description="Stock code"),
-    period: str = Query(
-        default="5",
-        pattern="^(1|5|15|30|60)$",
-        description="Minute period: 1, 5, 15, 30, 60",
-    ),
-    adjust: str = Query(
-        default="",
-        pattern="^(qfq|hfq)?$",
-        description="Adjustment type: empty=不复权, qfq=前复权, hfq=后复权",
-    ),
-) -> IntradayResponse:
-    """Get intraday minute-level data for a stock.
-
-    Note:
-        - period=1 is only supported by Akshare (Zhitu does not support 1-minute data)
-        - Intraday data is only available for A-share stocks.
-    """
-    # Only A-share stocks supported for intraday (indices not allowed)
-    code = normalize_stock_code(stock_code)
-    if is_us_market(code) or is_hk_market(code) or is_index_code(code):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "unsupported_market",
-                "message": "Intraday data is only available for A-share stocks. Use /indices/{index_code}/intraday for indices.",
-            },
-        )
-
-    manager = get_manager()
-    df, source = manager.get_intraday_data(stock_code, period=period, adjust=adjust)
-    stock_name = stock_cache.get_stock_name(stock_code, manager=manager)
-
-    trade_date = ""
-    if "time" in df.columns and len(df) > 0:
-        first_time = str(df.iloc[0].get("time", ""))
-        if len(first_time) >= 10:
-            trade_date = first_time[:10]
-
-    records = df.to_dict("records")
-    data = [
-        IntradayData(
-            time=str(row.get("time", "")),
-            open=float(row.get("open", 0)),
-            high=float(row.get("high", 0)),
-            low=float(row.get("low", 0)),
-            close=float(row.get("close", 0)),
-            volume=int(row.get("volume", 0)),
-            amount=float(row.get("amount")) if row.get("amount") is not None else None,
-        )
-        for row in records
-    ]
-
-    period_label = f"{period}m"
-    return IntradayResponse(
-        code=stock_code,
-        stock_name=stock_name,
-        period=period_label,
-        adjust=adjust,
-        date=trade_date,
-        data=data,
         source=source,
     )
 

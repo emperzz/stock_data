@@ -78,7 +78,7 @@ class DataCapability(Flag):
 # method override via `@endpoint_meta(fetcher_method="...")`.
 CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.STOCK_KLINE: "get_kline_data",
-    DataCapability.INDEX_KLINE: "get_index_historical",  # for d/w/m; minute via get_intraday_data
+    DataCapability.INDEX_KLINE: "get_index_historical",
     DataCapability.STOCK_REALTIME_QUOTE: "get_realtime_quote",
     DataCapability.INDEX_REALTIME_QUOTE: "get_index_realtime_quote",
     DataCapability.STOCK_LIST: "get_all_stocks",

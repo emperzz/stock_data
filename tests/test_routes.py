@@ -188,32 +188,6 @@ class TestQuote:
         assert response.status_code == 422
 
 
-class TestHistory:
-    """Tests for /api/v1/stocks/{code}/history endpoint."""
-
-    def test_history_returns_503_for_invalid_stock(self, client):
-        """Invalid stock code should fail all fetchers and return 503."""
-        response = client.get("/api/v1/stocks/INVALID/history?period=daily&days=5")
-        assert response.status_code == 503
-
-    def test_history_with_adjust(self, client):
-        """Test history with adjustment parameter."""
-        response = client.get("/api/v1/stocks/600519/history?period=daily&days=5&adjust=qfq")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["code"] == "600519"
-        assert "data" in data
-
-
-class TestIntraday:
-    """Tests for /api/v1/stocks/{code}/intraday endpoint."""
-
-    def test_intraday_unsupported_market(self, client):
-        """US stocks not supported for intraday."""
-        response = client.get("/api/v1/stocks/AAPL/intraday?period=5")
-        assert response.status_code == 400
-
-
 class TestCalendar:
     """Tests for /api/v1/calendar endpoint."""
 
@@ -244,38 +218,6 @@ class TestIndexQuote:
         assert data["code"] == "399006"
 
 
-class TestIndexHistory:
-    """Tests for /api/v1/indices/{code}/history endpoint."""
-
-    def test_index_history_daily(self, client):
-        response = client.get("/api/v1/indices/000300/history?period=daily&days=5")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["code"] == "000300"
-        assert data["period"] == "daily"
-        assert len(data["data"]) <= 5
-
-    def test_index_history_weekly(self, client):
-        response = client.get("/api/v1/indices/000300/history?period=weekly&days=10")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["period"] == "weekly"
-
-
-class TestIndexIntraday:
-    """Tests for /api/v1/indices/{code}/intraday endpoint."""
-
-    def test_index_intraday_period_5(self, client):
-        response = client.get("/api/v1/indices/000300/intraday?period=5")
-        # 200 = success, 503 = data unavailable (market closed / upstream failure)
-        # 500 = implementation bug and should always fail the test
-        assert response.status_code in (200, 503)
-
-    def test_index_intraday_invalid_period(self, client):
-        response = client.get("/api/v1/indices/000300/intraday?period=999")
-        assert response.status_code == 422
-
-
 class TestStocksBlocksIndices:
     """Tests that /stocks/{code}/* endpoints reject index codes."""
 
@@ -283,15 +225,6 @@ class TestStocksBlocksIndices:
         response = client.get("/api/v1/stocks/000300/quote")
         assert response.status_code == 400
         assert "indices" in response.json()["detail"]["message"]
-
-    def test_stocks_history_blocks_index(self, client):
-        response = client.get("/api/v1/stocks/000300/history?period=daily&days=5")
-        assert response.status_code == 400
-        assert "indices" in response.json()["detail"]["message"]
-
-    def test_stocks_intraday_blocks_index(self, client):
-        response = client.get("/api/v1/stocks/000300/intraday?period=5")
-        assert response.status_code == 400
 
     def test_stocks_kline_blocks_index(self, client):
         response = client.get("/api/v1/stocks/000300/kline?period=daily")
@@ -354,10 +287,7 @@ class TestKline:
 class TestIndicesBlocksStocks:
     """Tests that /indices/{code}/* endpoints reject stock codes (and other non-index codes).
 
-    Symmetric to TestStocksBlocksIndices above. Regression coverage for the bug
-    where `/indices/600519/intraday` returned 503 with a leaked
-    ``[MyquantFetcher] ... Not an index code: 600519`` message instead of a
-    clean 400.
+    Symmetric to TestStocksBlocksIndices above.
     """
 
     def test_indices_quote_blocks_stock(self, client):
@@ -367,27 +297,6 @@ class TestIndicesBlocksStocks:
         detail = response.json()["detail"]
         assert detail["error"] == "invalid_request"
         assert "stocks" in detail["message"]
-
-    def test_indices_history_blocks_stock(self, client):
-        response = client.get("/api/v1/indices/600519/history?period=daily&days=5")
-        assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert detail["error"] == "invalid_request"
-        assert "stocks" in detail["message"]
-
-    def test_indices_intraday_blocks_stock(self, client):
-        """The original bug report: 600519 → /indices/{code}/intraday should be 400, not 503."""
-        response = client.get("/api/v1/indices/600519/intraday?period=5")
-        assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert detail["error"] == "invalid_request"
-        assert "stocks" in detail["message"]
-
-    def test_indices_intraday_blocks_garbage(self, client):
-        """Non-index, non-stock gibberish should also be 400 (clearer than 503)."""
-        response = client.get("/api/v1/indices/NOTACODE/intraday?period=5")
-        assert response.status_code == 400
-        assert response.json()["detail"]["error"] == "invalid_request"
 
     def test_indices_kline_blocks_stock(self, client):
         """600519 is a stock — /indices/{code}/kline should reject with 400."""

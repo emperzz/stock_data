@@ -123,20 +123,20 @@ class TestManifestFetchersField:
 
     def test_kline_endpoint_has_expected_fetchers(self):
         m = self._manifest()
-        ep = self._endpoint(m, "GET", "/stocks/{stock_code}/history")
+        ep = self._endpoint(m, "GET", "/stocks/{code}/kline")
         names = [f["name"] for f in ep["fetchers"]]
         # TushareFetcher is excluded — it requires TUSHARE_TOKEN and is
         # marked is_available()=False without it, so the manager skips
         # it. Assert only the token-free priorities: BaostockFetcher (1)
         # and AkshareFetcher (2). Both should always be present.
         for name in ("BaostockFetcher", "AkshareFetcher"):
-            assert name in names, f"{name} missing from /stocks/.../history fetchers"
+            assert name in names, f"{name} missing from /stocks/.../kline fetchers"
 
     def test_kline_baostock_merged_dwm_and_min(self):
         """Approach A: BaostockFetcher supports DWM+MIN (rev 3 collapsed to STOCK_KLINE).
         Single row with capability=STOCK_KLINE, method=get_kline_data."""
         m = self._manifest()
-        ep = self._endpoint(m, "GET", "/stocks/{stock_code}/history")
+        ep = self._endpoint(m, "GET", "/stocks/{code}/kline")
         baostock = next((f for f in ep["fetchers"] if f["name"] == "BaostockFetcher"), None)
         assert baostock is not None
         assert set(baostock["capabilities"]) == {"STOCK_KLINE"}
@@ -169,7 +169,7 @@ class TestManifestFetchersField:
 
     def test_signature_has_code_field_for_kline(self):
         m = self._manifest()
-        ep = self._endpoint(m, "GET", "/stocks/{stock_code}/history")
+        ep = self._endpoint(m, "GET", "/stocks/{code}/kline")
         baostock = next(f for f in ep["fetchers"] if f["name"] == "BaostockFetcher")
         sig = baostock["signature"]
         code_param = next((p for p in sig if p["name"] in ("code", "stock_code")), None)

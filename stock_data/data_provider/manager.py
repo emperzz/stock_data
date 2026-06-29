@@ -359,32 +359,6 @@ class DataFetcherManager:
                 continue
         raise DataFetchError(f"All fetchers failed: {errors}")
 
-    def get_intraday_data(
-        self,
-        stock_code: str,
-        frequency: str = "5",
-        adjust: str | None = None,
-        days: int = 1,
-    ) -> tuple[pd.DataFrame, str]:
-        """Backwards-compat wrapper — period=分钟 path used by /intraday route.
-
-        Per spec §5.1 the route is replaced by /kline in P1 (Task 9-10);
-        this method stays because (a) legacy code may call it directly and
-        (b) helper routes consume it. Internally delegates to
-        ``get_kline_data`` with ``end_date=today`` and the same frequency,
-        so the two-stage filter (capability → supports_kline) decides the
-        candidate pool uniformly.
-        """
-        from datetime import date
-        return self.get_kline_data(
-            stock_code=stock_code,
-            start_date=None,
-            end_date=date.today().strftime("%Y-%m-%d"),
-            days=days,
-            frequency=frequency,
-            adjust=adjust,
-        )
-
     # ---------- stock list ----------
 
     def get_all_stocks(self, market: str) -> tuple[list[dict], str]:

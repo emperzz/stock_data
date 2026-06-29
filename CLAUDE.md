@@ -122,7 +122,7 @@ the conventions / anti-patterns that govern adding a new indicator.
 Full Pydantic response models live in `api/schemas.py` — that is the source of truth.
 The non-obvious behaviors worth memorizing here are:
 
-- **`KLineData` conditional serialization** (response of `/stocks/{code}/history?indicators=...` and `/indices/{code}/history?indicators=...`): `amount` / `change_percent` are emitted as JSON `null` when missing. The four indicator fields (`ma5`, `ma10`, `ma20`, `indicators`) are **omitted from the JSON entirely** when their value is None/empty (via `@model_serializer` on `KLineData._serialize`). Contract: clients can rely on "key exists ⇔ indicator was computed".
+- **`KLineData` conditional serialization** (response of `/stocks/{code}/kline?indicators=...` and `/indices/{code}/kline?indicators=...`): `amount` / `change_percent` are emitted as JSON `null` when missing. The four indicator fields (`ma5`, `ma10`, `ma20`, `indicators`) are **omitted from the JSON entirely** when their value is None/empty (via `@model_serializer` on `KLineData._serialize`). Contract: clients can rely on "key exists ⇔ indicator was computed".
 - **`ma5`/`ma10`/`ma20` back-compat fields** are backfilled from the `ma` indicator's `ma5`/`ma10`/`ma20` output columns when the user requests `?indicators=ma`. Otherwise they (and the `indicators` dict) are absent.
 - **`KLineData.indicators`** is a per-bar dict populated only when `?indicators=` is set. One entry per output column of the requested indicators (e.g. `{"ma5": 12.34, "macd_dif": 0.23}`).
 - **Index indicators** share the same `KLineData` response shape as stocks — the orchestrator in `routes.py` (`_apply_indicators`, `_parse_indicators_param`) handles lookback expansion and truncation identically.
@@ -259,7 +259,7 @@ fetchers that support it.
 | `get_kline_data` (d/w/m, indices) | `INDEX_KLINE` |
 | `get_kline_data` (5/15/30/60, indices) | `INDEX_KLINE` |
 | `get_realtime_quote` | `STOCK_REALTIME_QUOTE` (ZzshareFetcher P5) |
-| `get_intraday_data` | `STOCK_KLINE` (ZzshareFetcher P5) |
+| `get_kline_data` (1m/5m/15m/30m/60m) | `STOCK_KLINE` (ZzshareFetcher P5) |
 | `get_stock_name` | n/a — handled by `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
 | `get_trade_calendar` | `TRADE_CALENDAR` (ZzshareFetcher P5) |
 | `get_all_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
@@ -268,7 +268,7 @@ fetchers that support it.
 | `get_board_history` | `STOCK_BOARD` (source-routed, no failover; zzshare plate_kline daily-only) (ZzshareFetcher P5) |
 | `get_index_realtime_quote` | `INDEX_REALTIME_QUOTE` |
 | `get_index_historical` | `INDEX_KLINE` |
-| `get_index_intraday` | `INDEX_KLINE` |
+| `get_kline_data` (index) | `INDEX_KLINE` |
 | `get_zt_pool` | `STOCK_ZT_POOL` (ZzshareFetcher P5) |
 | `get_dragon_tiger` | `DRAGON_TIGER` (ZzshareFetcher P5) |
 | `get_margin_trading` | `MARGIN_TRADING` |
@@ -337,8 +337,8 @@ Pure DataFrame transformer at the orchestration boundary:
 4. `routes.py` then truncates the DataFrame back to the user's `days`
    (the extra lookback was only needed to warm the indicator).
 
-**Index indicators**: `/indices/{code}/history` accepts the same `?indicators=`
-query param as `/stocks/{code}/history` and runs through the same
+**Index indicators**: `/indices/{code}/kline` accepts the same `?indicators=`
+query param as `/stocks/{code}/kline` and runs through the same
 `_apply_indicators` / `_parse_indicators_param` helpers in `routes.py`.
 The `KLineData` response shape and its conditional serialization behavior
 are the same as stocks (see [Standardized Data Schema](#standardized-data-schema)).
