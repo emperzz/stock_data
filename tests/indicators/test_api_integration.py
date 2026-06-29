@@ -38,21 +38,12 @@ def client(monkeypatch):
         requested = int(kwargs.get("days") or 30)
         return fake_kline.tail(requested).reset_index(drop=True), "StubFetcher"
 
-    def fake_get_index_historical(self, index_code, **kwargs):
-        # Same shape as the stock stub — return the synthetic frame.
-        requested = int(kwargs.get("days") or 30)
-        return fake_kline.tail(requested).reset_index(drop=True), "StubFetcher"
-
     # Import the FastAPI app
     from stock_data.server import app
 
     monkeypatch.setattr(
         "stock_data.data_provider.DataFetcherManager.get_kline_data",
         fake_get_kline_data,
-    )
-    monkeypatch.setattr(
-        "stock_data.data_provider.DataFetcherManager.get_index_historical",
-        fake_get_index_historical,
     )
 
     # Also stub the stock-name lookup so /kline doesn't try a network call

@@ -4,7 +4,6 @@ Manager for multiple stock data fetchers with priority-based failover.
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
 from threading import RLock
 from typing import Any, TypeVar
 
@@ -679,62 +678,6 @@ class DataFetcherManager:
             if q is not None:
                 return q
         raise DataFetchError(f"All fetchers failed: {errors}")
-
-    def get_index_historical(
-        self,
-        index_code: str,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        days: int = 30,
-        frequency: str = "d",
-    ) -> tuple[pd.DataFrame, str]:
-        """Get historical K-line data for an index with capability-based failover.
-
-        Routes through fetchers declaring INDEX_KLINE capability.
-        Each fetcher must implement get_index_historical().
-
-        Args:
-            index_code: Index code (e.g., 000300, 399006, SPX, HSI)
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
-            days: Number of days when start_date not provided
-            frequency: K-line period - 'd'=daily, 'w'=weekly, 'm'=monthly
-
-        Returns:
-            Tuple of (DataFrame, source_name)
-        """
-        if not start_date:
-            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        index_code = normalize_stock_code(index_code)
-        index_type = index_market_tag(index_code) or "csi"
-        return self._with_failover(
-            DataCapability.INDEX_KLINE, index_type, f"index_hist {index_code}",
-            lambda f: f.get_index_historical(index_code, start_date, end_date, frequency),
-            return_source=True,
-        )
-
-    def get_index_intraday(
-        self, index_code: str, period: str = "5"
-    ) -> tuple[pd.DataFrame, str]:
-        """Get intraday minute-level data for an index with capability-based failover.
-
-        Routes through fetchers declaring INDEX_KLINE capability.
-        Each fetcher must implement get_index_intraday().
-
-        Args:
-            index_code: Index code (e.g., 000300, 399006)
-            period: Minute period - "1", "5", "15", "30", "60"
-
-        Returns:
-            Tuple of (DataFrame, source_name)
-        """
-        index_code = normalize_stock_code(index_code)
-        index_type = index_market_tag(index_code) or "csi"
-        return self._with_failover(
-            DataCapability.INDEX_KLINE, index_type, f"index_intra {index_code}",
-            lambda f: f.get_index_intraday(index_code, period),
-            return_source=True,
-        )
 
     # ---------- boards (unified entry points) ----------
     #
