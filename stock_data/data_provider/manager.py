@@ -11,7 +11,12 @@ from typing import Any, TypeVar
 import pandas as pd
 
 from .base import BaseFetcher, DataCapability, DataFetchError
-from .core.types import REALTIME_CIRCUIT_BREAKER, CircuitBreaker, UnifiedRealtimeQuote
+from .core.types import (
+    KLINE_CIRCUIT_BREAKER,
+    REALTIME_CIRCUIT_BREAKER,
+    CircuitBreaker,
+    UnifiedRealtimeQuote,
+)
 from .utils.normalize import index_market_tag, market_tag, normalize_stock_code
 
 logger = logging.getLogger(__name__)
@@ -279,6 +284,23 @@ class DataFetcherManager:
     # Per spec §4.4: two-stage filter (capability bit → supports_kline).
     # Rev 3 explicitly removed fallback_cap (decorative dead code).
 
+    def _candidates(
+        self,
+        market: str,
+        capability: DataCapability,
+        supports_fn: Callable[[BaseFetcher], bool],
+    ) -> list[BaseFetcher]:
+        """Generic two-stage filter: capability bit → per-fetcher support check.
+
+        Stage 1 narrows by capability bit plus market. Stage 2 applies
+        ``supports_fn(fetcher)`` to each candidate so we never try a
+        fetcher that will refuse this exact request.
+
+        Returns an unsorted list — caller sorts by priority and runs failover.
+        """
+        candidates = self._filter_by_capability(market, capability)
+        return [f for f in candidates if supports_fn(f)]
+
     def _kline_candidates(
         self,
         market: str,
@@ -286,24 +308,20 @@ class DataFetcherManager:
         frequency: str,
         adjust: str | None,
     ) -> list[BaseFetcher]:
-        """Two-stage filter per spec §4.4: capability bit then supports_kline.
+        """Two-stage filter for K-line per spec §4.4.
 
-        Stage 1 narrows by capability bit (STOCK_KLINE for stock code,
-        INDEX_KLINE for index code) plus market. Stage 2 narrows by
-        per-fetcher ``supports_kline(frequency, adjust, market, asset)``
-        so we never try a fetcher that will refuse this exact request.
-
-        Returns an unsorted list — caller sorts by priority and runs failover.
+        Delegates to ``_candidates`` with KLINE capability and
+        ``supports_kline`` check.
         """
-        primary = (
+        cap = (
             DataCapability.INDEX_KLINE if asset == "index"
             else DataCapability.STOCK_KLINE
         )
-        candidates = self._filter_by_capability(market, primary)
-        return [
-            f for f in candidates
-            if f.supports_kline(frequency, adjust or "", market, asset)
-        ]
+        adj = adjust or ""
+        return self._candidates(
+            market, cap,
+            lambda f: f.supports_kline(frequency, adj, market, asset),
+        )
 
     def get_kline_data(
         self,
@@ -344,17 +362,22 @@ class DataFetcherManager:
                 f"adjust={adjust!r} market={market}"
             )
 
-        # Sort by priority; existing failover loop preserved from old impl.
+        # Sort by priority; failover with circuit breaker.
         candidates = sorted(candidates, key=lambda f: f.priority)
         errors: list[str] = []
         for fetcher in candidates:
+            if not KLINE_CIRCUIT_BREAKER.is_available(fetcher.name):
+                logger.debug(f"[Manager] {fetcher.name} circuit open, skipping")
+                continue
             try:
                 df = fetcher.get_kline_data(
                     stock_code, start_date, end_date, days, frequency, adjust
                 )
                 if _is_meaningful(df):
+                    KLINE_CIRCUIT_BREAKER.record_success(fetcher.name)
                     return df, fetcher.name
             except DataFetchError as e:
+                KLINE_CIRCUIT_BREAKER.record_failure(fetcher.name)
                 errors.append(f"[{fetcher.name}] {e}")
                 continue
         raise DataFetchError(f"All fetchers failed: {errors}")
@@ -452,17 +475,15 @@ class DataFetcherManager:
         market: str,
         capability: DataCapability,
     ) -> list[BaseFetcher]:
-        """Two-stage filter per spec §4.4: capability bit then supports_quote.
+        """Two-stage filter for quote per spec §4.4.
 
-        Stage 1 narrows by capability bit (STOCK_REALTIME_QUOTE for stock code,
-        INDEX_REALTIME_QUOTE for index code) plus market. Stage 2 narrows by
-        per-fetcher ``supports_quote(market)`` so we never try a fetcher that
-        will refuse this market.
-
-        Returns an unsorted list — caller sorts by priority and runs failover.
+        Delegates to ``_candidates`` with quote capability and
+        ``supports_quote`` check.
         """
-        candidates = self._filter_by_capability(market, capability)
-        return [f for f in candidates if f.supports_quote(market)]
+        return self._candidates(
+            market, capability,
+            lambda f: f.supports_quote(market),
+        )
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote with two-stage filter and circuit breaker (spec §4.4).
@@ -986,7 +1007,7 @@ def create_default_manager() -> DataFetcherManager:
     from .fetchers.tushare_fetcher import TushareFetcher
     from .fetchers.yfinance_fetcher import YfinanceFetcher
     from .fetchers.zhitu_fetcher import ZhituFetcher
-    from .fetchers.zzshare_fetcher import ZzshareFetcher   # NEW
+    from .fetchers.zzshare_fetcher import ZzshareFetcher  # NEW
 
     manager = DataFetcherManager()
     fetcher_classes = [
