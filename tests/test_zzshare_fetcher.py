@@ -400,6 +400,93 @@ class TestDailyKline:
                 "600519", "2026-05-20", "2026-05-20", frequency="5"
             )
 
+    def test_fetch_raw_data_minute_three_day_loop(self):
+        """3-day minute range → 3 stk_mins calls + concat."""
+        import pandas as pd
+
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(side_effect=[
+            pd.DataFrame({
+                "trade_time": ["202605180935", "202605180940"],
+                "open": [1700.0, 1705.0], "high": [1708.0, 1712.0],
+                "low": [1698.0, 1702.0], "close": [1705.0, 1710.0],
+                "vol": [1e5, 1.1e5], "amount": [1e8, 1.1e8],
+            }),
+            pd.DataFrame({
+                "trade_time": ["202605190935", "202605190940"],
+                "open": [1710.0, 1715.0], "high": [1718.0, 1723.0],
+                "low": [1708.0, 1713.0], "close": [1715.0, 1720.0],
+                "vol": [1.2e5, 1.3e5], "amount": [1.2e8, 1.3e8],
+            }),
+            pd.DataFrame({
+                "trade_time": ["202605200935", "202605200940"],
+                "open": [1720.0, 1725.0], "high": [1728.0, 1733.0],
+                "low": [1718.0, 1723.0], "close": [1725.0, 1730.0],
+                "vol": [1.4e5, 1.5e5], "amount": [1.4e8, 1.5e8],
+            }),
+        ])
+        fetcher._api = fake_api
+
+        df = fetcher._fetch_raw_data(
+            "600519", "2026-05-18", "2026-05-20", frequency="5"
+        )
+
+        assert fake_api.stk_mins.call_count == 3
+        # Verify trade_time argument across calls
+        times = [c.kwargs["trade_time"] for c in fake_api.stk_mins.call_args_list]
+        assert times == ["20260518", "20260519", "20260520"]
+        # Total rows
+        assert len(df) == 6
+
+    def test_fetch_raw_data_minute_skips_empty_days(self):
+        """Non-trade days returning None/empty are skipped, not raised."""
+        import pandas as pd
+
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(side_effect=[
+            pd.DataFrame({
+                "trade_time": ["202605180935"],
+                "open": [1700.0], "high": [1708.0], "low": [1698.0], "close": [1705.0],
+                "vol": [1e5], "amount": [1e8],
+            }),
+            pd.DataFrame(),  # 19th: empty (non-trade day)
+            pd.DataFrame({
+                "trade_time": ["202605200935"],
+                "open": [1720.0], "high": [1728.0], "low": [1718.0], "close": [1725.0],
+                "vol": [1.4e5], "amount": [1.4e8],
+            }),
+        ])
+        fetcher._api = fake_api
+
+        df = fetcher._fetch_raw_data(
+            "600519", "2026-05-18", "2026-05-20", frequency="5"
+        )
+        assert fake_api.stk_mins.call_count == 3
+        assert len(df) == 2  # only 18 and 20 contributed
+
+    def test_fetch_raw_data_minute_long_range_logs_warning(self, caplog):
+        """Range > 14 days triggers a logger.warning."""
+        import logging
+        import pandas as pd
+
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.stk_mins = MagicMock(return_value=pd.DataFrame({
+            "trade_time": ["202605180935"],
+            "open": [1700.0], "high": [1708.0], "low": [1698.0], "close": [1705.0],
+            "vol": [1e5], "amount": [1e8],
+        }))
+        fetcher._api = fake_api
+
+        with caplog.at_level(logging.WARNING, logger="stock_data.data_provider.fetchers.zzshare_fetcher"):
+            fetcher._fetch_raw_data(
+                "600519", "2026-05-01", "2026-05-20", frequency="5"
+            )
+
+        assert any("over 20 days" in r.message for r in caplog.records)
+
 
 # ====================================================================
 # K-line (HISTORICAL_MIN) — get_intraday_data
