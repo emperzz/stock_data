@@ -50,11 +50,11 @@ class TestAkshareFetcher:
 
     def test_capabilities(self, fetcher):
         caps = [
-            DataCapability.HISTORICAL_DWM, DataCapability.HISTORICAL_MIN,
-            DataCapability.REALTIME_QUOTE, DataCapability.STOCK_LIST,
+            DataCapability.STOCK_KLINE,
+            DataCapability.STOCK_REALTIME_QUOTE, DataCapability.STOCK_LIST,
             DataCapability.TRADE_CALENDAR,
-            DataCapability.INDEX_QUOTE, DataCapability.INDEX_HISTORICAL,
-            DataCapability.INDEX_INTRADAY, DataCapability.STOCK_ZT_POOL,
+            DataCapability.INDEX_REALTIME_QUOTE, DataCapability.INDEX_KLINE,
+            DataCapability.STOCK_ZT_POOL,
         ]
         for c in caps:
             assert c in fetcher.supported_data_types
@@ -112,8 +112,8 @@ class TestBaostockFetcher:
 
     def test_capabilities(self, fetcher):
         caps = [
-            DataCapability.HISTORICAL_DWM, DataCapability.HISTORICAL_MIN,
-            DataCapability.TRADE_CALENDAR, DataCapability.INDEX_HISTORICAL,
+            DataCapability.STOCK_KLINE,
+            DataCapability.TRADE_CALENDAR, DataCapability.INDEX_KLINE,
         ]
         for c in caps:
             assert c in fetcher.supported_data_types
@@ -161,9 +161,9 @@ class TestYfinanceFetcher:
 
     def test_capabilities(self, fetcher):
         caps = [
-            DataCapability.HISTORICAL_DWM, DataCapability.HISTORICAL_MIN,
-            DataCapability.REALTIME_QUOTE, DataCapability.INDEX_HISTORICAL,
-            DataCapability.INDEX_QUOTE,
+            DataCapability.STOCK_KLINE,
+            DataCapability.STOCK_REALTIME_QUOTE, DataCapability.INDEX_KLINE,
+            DataCapability.INDEX_REALTIME_QUOTE,
         ]
         for c in caps:
             assert c in fetcher.supported_data_types
@@ -211,7 +211,7 @@ class TestZhituFetcher:
         assert fetcher.supported_markets == {"csi"}
 
     def test_capabilities(self, fetcher):
-        caps = [DataCapability.REALTIME_QUOTE, DataCapability.STOCK_ZT_POOL]
+        caps = [DataCapability.STOCK_REALTIME_QUOTE, DataCapability.STOCK_ZT_POOL]
         for c in caps:
             assert c in fetcher.supported_data_types
 
@@ -247,8 +247,8 @@ class TestTushareFetcher:
 
     def test_capabilities(self, fetcher):
         caps = [
-            DataCapability.HISTORICAL_DWM, DataCapability.REALTIME_QUOTE,
-            DataCapability.INDEX_HISTORICAL,
+            DataCapability.STOCK_KLINE, DataCapability.STOCK_REALTIME_QUOTE,
+            DataCapability.INDEX_KLINE,
         ]
         for c in caps:
             assert c in fetcher.supported_data_types
@@ -311,10 +311,9 @@ class TestMyquantFetcher:
 
     def test_capabilities(self, fetcher):
         caps = [
-            DataCapability.HISTORICAL_DWM, DataCapability.HISTORICAL_MIN,
-            DataCapability.REALTIME_QUOTE, DataCapability.STOCK_LIST,
-            DataCapability.TRADE_CALENDAR, DataCapability.INDEX_HISTORICAL,
-            DataCapability.INDEX_INTRADAY,
+            DataCapability.STOCK_KLINE,
+            DataCapability.STOCK_REALTIME_QUOTE, DataCapability.STOCK_LIST,
+            DataCapability.TRADE_CALENDAR, DataCapability.INDEX_KLINE,
         ]
         for c in caps:
             assert c in fetcher.supported_data_types, f"missing {c}"

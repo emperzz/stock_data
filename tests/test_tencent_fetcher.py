@@ -28,7 +28,7 @@ class TestTencentFetcherBasics:
 
     def test_capabilities(self):
         f = TencentFetcher()
-        assert DataCapability.REALTIME_QUOTE in f.supported_data_types
+        assert DataCapability.STOCK_REALTIME_QUOTE in f.supported_data_types
 
     def test_is_available(self):
         f = TencentFetcher()

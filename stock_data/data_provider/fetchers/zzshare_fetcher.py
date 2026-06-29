@@ -75,9 +75,8 @@ class ZzshareFetcher(BaseFetcher):
     priority = int(os.getenv("ZZSHARE_PRIORITY", "5"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
-        DataCapability.HISTORICAL_DWM
-        | DataCapability.HISTORICAL_MIN
-        | DataCapability.REALTIME_QUOTE
+        DataCapability.STOCK_KLINE
+        | DataCapability.STOCK_REALTIME_QUOTE
         | DataCapability.STOCK_LIST
         | DataCapability.TRADE_CALENDAR
         | DataCapability.STOCK_BOARD

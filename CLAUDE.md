@@ -210,18 +210,18 @@ Compact overview:
 
 | Fetcher | Priority | Markets | Capabilities (in addition to defaults) | Auth |
 |---|---|---|---|---|
-| `TushareFetcher` | 0 | csi | `HISTORICAL_DWM`, `REALTIME_QUOTE`, `INDEX_HISTORICAL` | `TUSHARE_TOKEN` |
-| `BaostockFetcher` | 1 | csi | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `TRADE_CALENDAR`, `INDEX_HISTORICAL` | none |
-| `AkshareFetcher` | 2 | csi, hk | `HISTORICAL_DWM`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_*`, `STOCK_ZT_POOL` | none |
-| `YfinanceFetcher` | 3 | us, csi, hk | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `INDEX_HISTORICAL`, `INDEX_QUOTE` | none |
-| `ZhituFetcher` | 4 | csi | `REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `HISTORICAL_MIN` (minute fallback), `STOCK_LIST` (P4 backup), `STOCK_BOARD` | `ZHITU_TOKEN` |
-| `ZzshareFetcher` | 5 | csi | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
-| `TencentFetcher` | 6 | csi, hk | `REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
+| `TushareFetcher` | 0 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `INDEX_KLINE` | `TUSHARE_TOKEN` |
+| `BaostockFetcher` | 1 | csi | `STOCK_KLINE`, `TRADE_CALENDAR`, `INDEX_KLINE` | none |
+| `AkshareFetcher` | 2 | csi, hk | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_*`, `STOCK_ZT_POOL` | none |
+| `YfinanceFetcher` | 3 | us, csi, hk | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `INDEX_KLINE`, `INDEX_REALTIME_QUOTE` | none |
+| `ZhituFetcher` | 4 | csi | `STOCK_REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `STOCK_KLINE` (minute fallback), `STOCK_LIST` (P4 backup), `STOCK_BOARD` | `ZHITU_TOKEN` |
+| `ZzshareFetcher` | 5 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
+| `TencentFetcher` | 6 | csi, hk | `STOCK_REALTIME_QUOTE`, `INDEX_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
 | `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `STOCK_BOARD` | none |
 | `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH` | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
-| `MyquantFetcher` | 9 | csi | `HISTORICAL_DWM`, `HISTORICAL_MIN`, `REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_HISTORICAL`, `INDEX_INTRADAY`, `STOCK_INFO` (last-resort backup; richer sources win) | `MYQUANT_TOKEN` |
+| `MyquantFetcher` | 9 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_KLINE`, `STOCK_INFO` (last-resort backup; richer sources win) | `MYQUANT_TOKEN` |
 
 **Default priority is overridable** via `*_PRIORITY` env vars (see [Configuration](#configuration)). The lower the priority number, the earlier the fetcher is tried in the failover chain.
 
@@ -254,21 +254,21 @@ fetchers that support it.
 
 | API Method | Capability Used |
 |------------|----------------|
-| `get_kline_data` (d/w/m, stocks) | `HISTORICAL_DWM` (ZzshareFetcher P5) |
-| `get_kline_data` (5/15/30/60, stocks) | `HISTORICAL_MIN` (ZzshareFetcher P5) |
-| `get_kline_data` (d/w/m, indices) | `INDEX_HISTORICAL` (fallback: `HISTORICAL_DWM`) |
-| `get_kline_data` (5/15/30/60, indices) | `INDEX_INTRADAY` (fallback: `HISTORICAL_MIN`) |
-| `get_realtime_quote` | `REALTIME_QUOTE` (ZzshareFetcher P5) |
-| `get_intraday_data` | `HISTORICAL_MIN` (ZzshareFetcher P5) |
+| `get_kline_data` (d/w/m, stocks) | `STOCK_KLINE` (ZzshareFetcher P5) |
+| `get_kline_data` (5/15/30/60, stocks) | `STOCK_KLINE` (ZzshareFetcher P5) |
+| `get_kline_data` (d/w/m, indices) | `INDEX_KLINE` |
+| `get_kline_data` (5/15/30/60, indices) | `INDEX_KLINE` |
+| `get_realtime_quote` | `STOCK_REALTIME_QUOTE` (ZzshareFetcher P5) |
+| `get_intraday_data` | `STOCK_KLINE` (ZzshareFetcher P5) |
 | `get_stock_name` | n/a — handled by `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
 | `get_trade_calendar` | `TRADE_CALENDAR` (ZzshareFetcher P5) |
 | `get_all_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
 | `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
 | `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P5) |
 | `get_board_history` | `STOCK_BOARD` (source-routed, no failover; zzshare plate_kline daily-only) (ZzshareFetcher P5) |
-| `get_index_realtime_quote` | `INDEX_QUOTE` |
-| `get_index_historical` | `INDEX_HISTORICAL` |
-| `get_index_intraday` | `INDEX_INTRADAY` |
+| `get_index_realtime_quote` | `INDEX_REALTIME_QUOTE` |
+| `get_index_historical` | `INDEX_KLINE` |
+| `get_index_intraday` | `INDEX_KLINE` |
 | `get_zt_pool` | `STOCK_ZT_POOL` (ZzshareFetcher P5) |
 | `get_dragon_tiger` | `DRAGON_TIGER` (ZzshareFetcher P5) |
 | `get_margin_trading` | `MARGIN_TRADING` |
@@ -285,20 +285,20 @@ fetchers that support it.
 | `get_news_content` (URL extractor; no fetcher routing) | n/a — pure utility in `utils/news_extractor.py` |
 | `get_stock_info` | `STOCK_INFO` (ZzshareFetcher P5) |
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
-| `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `HISTORICAL_DWM` |
+| `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `STOCK_KLINE` |
 
 **Fetcher capability declarations:**
 
 | Fetcher | Capabilities |
 |---------|-------------|
 | BaiduFetcher | `NEWS_SEARCH` |
-| BaostockFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| TRADE_CALENDAR \| INDEX_HISTORICAL` |
-| AkshareFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_QUOTE \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_ZT_POOL` |
-| TushareFetcher | `HISTORICAL_DWM \| REALTIME_QUOTE \| INDEX_HISTORICAL` |
-| MyquantFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_HISTORICAL \| INDEX_INTRADAY \| STOCK_INFO` |
-| YfinanceFetcher | `HISTORICAL_DWM \| HISTORICAL_MIN \| REALTIME_QUOTE \| INDEX_HISTORICAL \| INDEX_QUOTE` |
-| ZhituFetcher | `REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| HISTORICAL_MIN \| STOCK_LIST \| STOCK_BOARD` |
-| TencentFetcher | `REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
+| BaostockFetcher | `STOCK_KLINE \| TRADE_CALENDAR \| INDEX_KLINE` |
+| AkshareFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_REALTIME_QUOTE \| INDEX_KLINE \| STOCK_ZT_POOL` |
+| TushareFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| INDEX_KLINE` |
+| MyquantFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_KLINE \| STOCK_INFO` |
+| YfinanceFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| INDEX_KLINE \| INDEX_REALTIME_QUOTE` |
+| ZhituFetcher | `STOCK_REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| STOCK_KLINE \| STOCK_LIST \| STOCK_BOARD` |
+| TencentFetcher | `STOCK_REALTIME_QUOTE \| INDEX_REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
 | EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD` |
 | ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH` |
 | CninfoFetcher | `ANNOUNCEMENT` |
@@ -350,7 +350,7 @@ are the same as stocks (see [Standardized Data Schema](#standardized-data-schema
 > `python` (system) will hit `ModuleNotFoundError` for those modules,
 > and `AkshareFetcher.is_available()` will return `False`, breaking
 > every endpoint that routes through akshare (STOCK_BOARD, STOCK_LIST,
-> INDEX_*, ZT_POOL, REALTIME_QUOTE, …). Use `.venv/Scripts/python.exe`
+> INDEX_*, ZT_POOL, STOCK_REALTIME_QUOTE, …). Use `.venv/Scripts/python.exe`
 > directly, or `source .venv/Scripts/activate` first.
 
 ```bash

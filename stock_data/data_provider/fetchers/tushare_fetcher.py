@@ -25,9 +25,9 @@ class TushareFetcher(BaseFetcher):
     priority = int(os.getenv("TUSHARE_PRIORITY", "0"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
-        DataCapability.HISTORICAL_DWM
-        | DataCapability.REALTIME_QUOTE
-        | DataCapability.INDEX_HISTORICAL
+        DataCapability.STOCK_KLINE
+        | DataCapability.STOCK_REALTIME_QUOTE
+        | DataCapability.INDEX_KLINE
     )
 
     def _map_adjust(self, adjust: str) -> str | None:

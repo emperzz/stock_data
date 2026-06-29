@@ -45,20 +45,20 @@ class _FakeFetcherA(_FakeFetcher):
     # _classes_declaring_capability walks BaseFetcher.__subclasses__() and
     # reads `cls.supported_data_types`, the same convention real fetchers
     # follow (Tushare/Zhitu/Myquant all declare it on the class).
-    supported_data_types = DataCapability.REALTIME_QUOTE
+    supported_data_types = DataCapability.STOCK_REALTIME_QUOTE
 
     def __init__(self):
         super().__init__(name="alpha", priority=99, markets={"csi"},
-                         caps=DataCapability.REALTIME_QUOTE)
+                         caps=DataCapability.STOCK_REALTIME_QUOTE)
 
 
 class _FakeFetcherB(_FakeFetcher):
     name = "beta"
-    supported_data_types = DataCapability.REALTIME_QUOTE
+    supported_data_types = DataCapability.STOCK_REALTIME_QUOTE
 
     def __init__(self):
         super().__init__(name="beta", priority=99, markets={"csi"},
-                         caps=DataCapability.REALTIME_QUOTE)
+                         caps=DataCapability.STOCK_REALTIME_QUOTE)
 
 
 def _mock_manager(fetchers):
@@ -104,7 +104,7 @@ def test_single_capability_returns_sorted_fetchers():
     a.priority = 1
     b.priority = 0
     manager = _mock_manager([a, b])
-    meta = EndpointMeta(summary="x", markets=["csi"], capabilities=["REALTIME_QUOTE"])
+    meta = EndpointMeta(summary="x", markets=["csi"], capabilities=["STOCK_REALTIME_QUOTE"])
     with _with_only_fake_classes(None, [type(a), type(b)]):
         result = _resolve_fetchers(meta, manager)
     assert [r["name"] for r in result] == ["beta", "alpha"]  # priority 0 first
@@ -112,29 +112,29 @@ def test_single_capability_returns_sorted_fetchers():
 
 
 def test_multi_capability_same_method_merges_to_one_row():
-    """Approach A: baostock supports DWM+MIN, both map to get_kline_data; result is ONE row."""
+    """Approach A: baostock supports DWM+MIN (rev 3 → STOCK_KLINE). Result is ONE row."""
 
     class _Baostock(_FakeFetcher):
         name = "baostock"
-        supported_data_types = DataCapability.HISTORICAL_DWM | DataCapability.HISTORICAL_MIN
+        supported_data_types = DataCapability.STOCK_KLINE
         def __init__(self):
             super().__init__(
                 name="baostock", priority=1, markets={"csi"},
-                caps=DataCapability.HISTORICAL_DWM | DataCapability.HISTORICAL_MIN,
+                caps=DataCapability.STOCK_KLINE,
             )
 
     f = _Baostock()
     manager = _mock_manager([f])
     meta = EndpointMeta(
         summary="K线", markets=["csi"],
-        capabilities=["HISTORICAL_DWM", "HISTORICAL_MIN"],
+        capabilities=["STOCK_KLINE"],
     )
     with _with_only_fake_classes(None, [type(f)]):
         result = _resolve_fetchers(meta, manager)
     assert len(result) == 1
     assert result[0]["name"] == "baostock"
     assert result[0]["method"] == "get_kline_data"
-    assert set(result[0]["capabilities"]) == {"HISTORICAL_DWM", "HISTORICAL_MIN"}
+    assert set(result[0]["capabilities"]) == {"STOCK_KLINE"}
 
 
 def test_fetcher_method_override_wins_over_capability_default():
@@ -175,14 +175,14 @@ def test_signature_field_is_populated():
 
     class _Alpha(_FakeFetcher):
         name = "alpha"
-        supported_data_types = DataCapability.REALTIME_QUOTE
+        supported_data_types = DataCapability.STOCK_REALTIME_QUOTE
         def __init__(self):
             super().__init__(name="alpha", priority=0, markets={"csi"},
-                             caps=DataCapability.REALTIME_QUOTE)
+                             caps=DataCapability.STOCK_REALTIME_QUOTE)
 
     f = _Alpha()
     manager = _mock_manager([f])
-    meta = EndpointMeta(summary="x", markets=["csi"], capabilities=["REALTIME_QUOTE"])
+    meta = EndpointMeta(summary="x", markets=["csi"], capabilities=["STOCK_REALTIME_QUOTE"])
     with _with_only_fake_classes(None, [type(f)]):
         result = _resolve_fetchers(meta, manager)
     sig = result[0]["signature"]

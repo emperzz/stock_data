@@ -32,7 +32,7 @@ class TencentFetcher(BaseFetcher):
     name = "TencentFetcher"
     priority = int(os.getenv("TENCENT_PRIORITY", "5"))
     supported_markets: set[str] = {"csi", "hk"}
-    supported_data_types = DataCapability.REALTIME_QUOTE
+    supported_data_types = DataCapability.STOCK_REALTIME_QUOTE
 
     def is_available(self) -> bool:
         """Tencent API is always available (no auth required)."""

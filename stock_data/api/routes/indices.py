@@ -72,7 +72,7 @@ def list_indices() -> list[IndexInfo]:
 @endpoint_meta(
     summary="指数实时行情",
     markets=["csi", "hk", "us"],
-    capabilities=["INDEX_QUOTE"],
+    capabilities=["INDEX_REALTIME_QUOTE"],
 )
 @map_errors
 @cache_endpoint(
@@ -123,7 +123,7 @@ def get_index_quote(
 @endpoint_meta(
     summary="指数历史 K 线",
     markets=["csi", "hk", "us"],
-    capabilities=["INDEX_HISTORICAL", "HISTORICAL_DWM"],
+    capabilities=["INDEX_KLINE"],
 )
 @map_errors
 @cache_endpoint(
@@ -213,7 +213,7 @@ def get_index_history(
 @endpoint_meta(
     summary="指数分钟 K 线",
     markets=["csi", "hk", "us"],
-    capabilities=["INDEX_INTRADAY", "HISTORICAL_MIN"],
+    capabilities=["INDEX_KLINE"],
 )
 @map_errors
 @cache_endpoint(

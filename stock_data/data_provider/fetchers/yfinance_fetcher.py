@@ -41,11 +41,10 @@ class YfinanceFetcher(BaseFetcher):
     priority = int(os.getenv("YFINANCE_PRIORITY", "3"))
     supported_markets: set[str] = {"csi", "hk", "us"}
     supported_data_types = (
-        DataCapability.HISTORICAL_DWM
-        | DataCapability.HISTORICAL_MIN
-        | DataCapability.REALTIME_QUOTE
-        | DataCapability.INDEX_HISTORICAL
-        | DataCapability.INDEX_QUOTE
+        DataCapability.STOCK_KLINE
+        | DataCapability.STOCK_REALTIME_QUOTE
+        | DataCapability.INDEX_KLINE
+        | DataCapability.INDEX_REALTIME_QUOTE
     )
 
     def _map_adjust(self, adjust: str) -> str | None:

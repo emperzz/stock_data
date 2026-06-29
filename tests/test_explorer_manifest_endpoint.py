@@ -52,7 +52,7 @@ class TestApiManifestEndpoint:
     def test_meta_capabilities_contain_known_flags(self, client):
         data = client.get("/control/api-manifest").json()
         caps = data["meta"]["capabilities"]
-        for flag in ("REALTIME_QUOTE", "HISTORICAL_DWM", "STOCK_BOARD"):
+        for flag in ("STOCK_REALTIME_QUOTE", "STOCK_KLINE", "STOCK_BOARD"):
             assert flag in caps
             assert "label" in caps[flag]
             assert "icon" in caps[flag]
@@ -133,12 +133,13 @@ class TestManifestFetchersField:
             assert name in names, f"{name} missing from /stocks/.../history fetchers"
 
     def test_kline_baostock_merged_dwm_and_min(self):
-        """Approach A: BaostockFetcher supports DWM+MIN, both map to get_kline_data → ONE row with merged caps."""
+        """Approach A: BaostockFetcher supports DWM+MIN (rev 3 collapsed to STOCK_KLINE).
+        Single row with capability=STOCK_KLINE, method=get_kline_data."""
         m = self._manifest()
         ep = self._endpoint(m, "GET", "/stocks/{stock_code}/history")
         baostock = next((f for f in ep["fetchers"] if f["name"] == "BaostockFetcher"), None)
         assert baostock is not None
-        assert set(baostock["capabilities"]) == {"HISTORICAL_DWM", "HISTORICAL_MIN"}
+        assert set(baostock["capabilities"]) == {"STOCK_KLINE"}
         assert baostock["method"] == "get_kline_data"
 
     def test_indicators_catalog_has_no_fetchers(self):

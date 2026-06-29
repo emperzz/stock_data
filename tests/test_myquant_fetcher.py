@@ -17,7 +17,7 @@ class TestMyquantFetcherBasics:
 
     def test_capabilities(self):
         caps = MyquantFetcher().supported_data_types
-        assert DataCapability.HISTORICAL_DWM in caps
+        assert DataCapability.STOCK_KLINE in caps
         assert DataCapability.STOCK_LIST in caps
         assert DataCapability.STOCK_INFO in caps  # NEW
 

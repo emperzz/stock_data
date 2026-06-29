@@ -6,7 +6,7 @@ from stock_data.api.endpoint_meta import EndpointMeta, REGISTRY, endpoint_meta
 
 class TestEndpointMetaDataclass:
     def test_is_frozen(self):
-        m = EndpointMeta(summary="test", markets=["csi"], capabilities=["REALTIME_QUOTE"])
+        m = EndpointMeta(summary="test", markets=["csi"], capabilities=["STOCK_REALTIME_QUOTE"])
         with pytest.raises((AttributeError, Exception)):
             m.summary = "changed"  # frozen dataclass raises
 
@@ -16,7 +16,7 @@ class TestEndpointMetaDataclass:
         b = EndpointMeta(summary="b")
         a.markets.append("csi")
         assert b.markets == []  # not poisoned by a's mutation
-        a.capabilities.append("REALTIME_QUOTE")
+        a.capabilities.append("STOCK_REALTIME_QUOTE")
         assert b.capabilities == []
 
 
@@ -26,12 +26,12 @@ class TestEndpointMetaDecorator:
         REGISTRY.clear()
 
     def test_registers_in_registry(self):
-        @endpoint_meta(summary="实时行情", markets=["csi"], capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="实时行情", markets=["csi"], capabilities=["STOCK_REALTIME_QUOTE"])
         def my_route():
             return None
         assert REGISTRY[my_route].summary == "实时行情"
         assert REGISTRY[my_route].markets == ["csi"]
-        assert REGISTRY[my_route].capabilities == ["REALTIME_QUOTE"]
+        assert REGISTRY[my_route].capabilities == ["STOCK_REALTIME_QUOTE"]
 
     def test_duplicate_registration_raises(self):
         def my_route():
@@ -74,7 +74,7 @@ class TestFetcherMethodOverride:
         assert meta.capabilities == ["DRAGON_TIGER"]
 
     def test_decorator_default_fetcher_method_is_none(self):
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def my_route():
             return None
         assert REGISTRY[my_route].fetcher_method is None

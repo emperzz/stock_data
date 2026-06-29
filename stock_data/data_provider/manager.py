@@ -306,22 +306,17 @@ class DataFetcherManager:
         index_tag = index_market_tag(stock_code)
 
         # Capability routing is capability-only — "no declaration = no capability".
-        # When index_tag is set, require INDEX_*; for stock codes, require HISTORICAL_*.
+        # When index_tag is set, require INDEX_KLINE; for stock codes, require STOCK_KLINE.
         # A missing declaration surfaces as DataFetchError via _with_failover.
+        # (rev 3 collapsed HISTORICAL_DWM + HISTORICAL_MIN → STOCK_KLINE and
+        #  INDEX_HISTORICAL + INDEX_INTRADAY → INDEX_KLINE, so the per-frequency
+        #  branch is gone — both daily and minute K line route through the same flag.)
         if index_tag:
             market = index_tag
-            capability = (
-                DataCapability.INDEX_INTRADAY
-                if frequency in ("5", "15", "30", "60")
-                else DataCapability.INDEX_HISTORICAL
-            )
+            capability = DataCapability.INDEX_KLINE
         else:
             market = market_tag(stock_code)
-            capability = (
-                DataCapability.HISTORICAL_MIN
-                if frequency in ("5", "15", "30", "60")
-                else DataCapability.HISTORICAL_DWM
-            )
+            capability = DataCapability.STOCK_KLINE
 
         def _fetch(fetcher: BaseFetcher) -> pd.DataFrame:
             return fetcher.get_kline_data(
@@ -352,7 +347,7 @@ class DataFetcherManager:
         stock_code = normalize_stock_code(stock_code)
         market = market_tag(stock_code)
         return self._with_failover(
-            DataCapability.HISTORICAL_MIN, market, f"intraday {stock_code}",
+            DataCapability.STOCK_KLINE, market, f"intraday {stock_code}",
             lambda f: f.get_intraday_data(stock_code, period, adjust),
             return_source=True,
         )
@@ -451,7 +446,7 @@ class DataFetcherManager:
         market = market_tag(stock_code)
 
         return self._with_failover(
-            DataCapability.REALTIME_QUOTE, market, f"realtime {stock_code}",
+            DataCapability.STOCK_REALTIME_QUOTE, market, f"realtime {stock_code}",
             lambda f: f.get_realtime_quote(stock_code),
             allow_none=True, circuit_breaker=REALTIME_CIRCUIT_BREAKER,
         )
@@ -586,7 +581,7 @@ class DataFetcherManager:
     def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote for an index with capability-based failover.
 
-        Routes through fetchers declaring INDEX_QUOTE capability.
+        Routes through fetchers declaring INDEX_REALTIME_QUOTE capability.
         Each fetcher must implement get_index_realtime_quote().
 
         Args:
@@ -598,7 +593,7 @@ class DataFetcherManager:
         index_code = normalize_stock_code(index_code)
         index_type = index_market_tag(index_code) or "csi"
         return self._with_failover(
-            DataCapability.INDEX_QUOTE,
+            DataCapability.INDEX_REALTIME_QUOTE,
             index_type,
             f"{index_code} index quote",
             lambda f: f.get_index_realtime_quote(index_code),
@@ -615,7 +610,7 @@ class DataFetcherManager:
     ) -> tuple[pd.DataFrame, str]:
         """Get historical K-line data for an index with capability-based failover.
 
-        Routes through fetchers declaring INDEX_HISTORICAL capability.
+        Routes through fetchers declaring INDEX_KLINE capability.
         Each fetcher must implement get_index_historical().
 
         Args:
@@ -633,7 +628,7 @@ class DataFetcherManager:
         index_code = normalize_stock_code(index_code)
         index_type = index_market_tag(index_code) or "csi"
         return self._with_failover(
-            DataCapability.INDEX_HISTORICAL, index_type, f"index_hist {index_code}",
+            DataCapability.INDEX_KLINE, index_type, f"index_hist {index_code}",
             lambda f: f.get_index_historical(index_code, start_date, end_date, frequency),
             return_source=True,
         )
@@ -643,7 +638,7 @@ class DataFetcherManager:
     ) -> tuple[pd.DataFrame, str]:
         """Get intraday minute-level data for an index with capability-based failover.
 
-        Routes through fetchers declaring INDEX_INTRADAY capability.
+        Routes through fetchers declaring INDEX_KLINE capability.
         Each fetcher must implement get_index_intraday().
 
         Args:
@@ -656,7 +651,7 @@ class DataFetcherManager:
         index_code = normalize_stock_code(index_code)
         index_type = index_market_tag(index_code) or "csi"
         return self._with_failover(
-            DataCapability.INDEX_INTRADAY, index_type, f"index_intra {index_code}",
+            DataCapability.INDEX_KLINE, index_type, f"index_intra {index_code}",
             lambda f: f.get_index_intraday(index_code, period),
             return_source=True,
         )

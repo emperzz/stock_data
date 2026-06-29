@@ -18,7 +18,7 @@ class TestZhituFetcherBasics:
 
     def test_capabilities(self):
         caps = ZhituFetcher().supported_data_types
-        assert DataCapability.REALTIME_QUOTE in caps
+        assert DataCapability.STOCK_REALTIME_QUOTE in caps
         assert DataCapability.STOCK_ZT_POOL in caps
         assert DataCapability.STOCK_INFO in caps  # NEW
 

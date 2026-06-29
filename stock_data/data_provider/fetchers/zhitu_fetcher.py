@@ -55,10 +55,10 @@ class ZhituFetcher(BaseFetcher):
     priority = int(os.getenv("ZHITU_PRIORITY", "4"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
-        DataCapability.REALTIME_QUOTE
+        DataCapability.STOCK_REALTIME_QUOTE
         | DataCapability.STOCK_ZT_POOL
         | DataCapability.STOCK_INFO
-        | DataCapability.HISTORICAL_MIN
+        | DataCapability.STOCK_KLINE
         | DataCapability.STOCK_LIST
         | DataCapability.STOCK_BOARD
     )

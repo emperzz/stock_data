@@ -135,7 +135,7 @@ def get_stock_info(code: str = Path(max_length=20)) -> StockInfoResponse:
 @endpoint_meta(
     summary="实时行情",
     markets=["csi", "hk", "us"],
-    capabilities=["REALTIME_QUOTE"],
+    capabilities=["STOCK_REALTIME_QUOTE"],
 )
 @map_errors
 @cache_endpoint(
@@ -204,7 +204,7 @@ def get_quote(
 @endpoint_meta(
     summary="历史 K 线（含可选指标）",
     markets=["csi", "hk", "us"],
-    capabilities=["HISTORICAL_DWM", "HISTORICAL_MIN"],
+    capabilities=["STOCK_KLINE"],
 )
 @map_errors
 @cache_endpoint(
@@ -310,7 +310,7 @@ def get_history(
 @endpoint_meta(
     summary="分钟 K 线",
     markets=["csi"],
-    capabilities=["HISTORICAL_MIN"],
+    capabilities=["STOCK_KLINE"],
 )
 @map_errors
 @cache_endpoint(

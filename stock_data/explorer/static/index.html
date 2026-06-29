@@ -759,8 +759,8 @@
 
     // Capability → group mapping (used by the sidebar capability filter).
     const CAPABILITY_GROUPS = {
-      quotes:   ["REALTIME_QUOTE", "INDEX_QUOTE"],
-      history:  ["HISTORICAL_DWM", "HISTORICAL_MIN", "INDEX_HISTORICAL", "INDEX_INTRADAY"],
+      quotes:   ["STOCK_REALTIME_QUOTE", "INDEX_REALTIME_QUOTE"],
+      history:  ["STOCK_KLINE", "INDEX_KLINE"],
       metadata: ["STOCK_LIST", "TRADE_CALENDAR", "STOCK_BOARD", "STOCK_INFO"],
       flows:    ["MARGIN_TRADING", "BLOCK_TRADE", "FUND_FLOW", "NORTH_FLOW"],
       notices:  ["DRAGON_TIGER", "HOLDER_NUM", "DIVIDEND", "RESEARCH_REPORT", "ANNOUNCEMENT", "NEWS_SEARCH", "NEWS_FLASH"],

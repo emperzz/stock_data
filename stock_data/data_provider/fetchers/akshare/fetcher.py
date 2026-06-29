@@ -41,14 +41,12 @@ class AkshareFetcher(BaseFetcher):
     priority = int(os.getenv("AKSHARE_PRIORITY", "2"))
     supported_markets: set[str] = {"csi", "hk"}
     supported_data_types = (
-        DataCapability.HISTORICAL_DWM
-        | DataCapability.HISTORICAL_MIN
-        | DataCapability.REALTIME_QUOTE
+        DataCapability.STOCK_KLINE
+        | DataCapability.STOCK_REALTIME_QUOTE
         | DataCapability.STOCK_LIST
         | DataCapability.TRADE_CALENDAR
-        | DataCapability.INDEX_QUOTE
-        | DataCapability.INDEX_HISTORICAL
-        | DataCapability.INDEX_INTRADAY
+        | DataCapability.INDEX_REALTIME_QUOTE
+        | DataCapability.INDEX_KLINE
         | DataCapability.STOCK_ZT_POOL
     )
 

@@ -28,9 +28,8 @@ class MockFetcher(BaseFetcher):
     priority = 10
     supported_markets = {"csi", "hk"}
     supported_data_types = (
-        DataCapability.HISTORICAL_DWM
-        | DataCapability.HISTORICAL_MIN
-        | DataCapability.REALTIME_QUOTE
+        DataCapability.STOCK_KLINE
+        | DataCapability.STOCK_REALTIME_QUOTE
         | DataCapability.STOCK_LIST
     )
 
@@ -73,7 +72,7 @@ class MockFetcherNoRealtime(BaseFetcher):
     name = "MockNoRealtime"
     priority = 5
     supported_markets = {"csi"}
-    supported_data_types = DataCapability.HISTORICAL_DWM | DataCapability.STOCK_LIST
+    supported_data_types = DataCapability.STOCK_KLINE | DataCapability.STOCK_LIST
 
     def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
         raise DataFetchError("Not available")
@@ -83,7 +82,7 @@ class MockFetcherNoRealtime(BaseFetcher):
 
 
 class MockFetcherNoIndex(BaseFetcher):
-    """Mock that declares HISTORICAL_DWM only (no INDEX_* capability).
+    """Mock that declares STOCK_KLINE only (no INDEX_* capability).
 
     Used to verify that index codes routed via manager.get_kline_data
     fall through to a clean DataFetchError when no INDEX_* fetcher is
@@ -95,7 +94,7 @@ class MockFetcherNoIndex(BaseFetcher):
     name = "MockFetcherNoIndex"
     priority = 10
     supported_markets = {"csi"}
-    supported_data_types = DataCapability.HISTORICAL_DWM
+    supported_data_types = DataCapability.STOCK_KLINE
 
     def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
         raise DataFetchError("MockFetcherNoIndex: should not be called for index codes")
@@ -163,11 +162,11 @@ class TestDataFetcherManagerUnit:
         """Test that historical-only fetchers are excluded from realtime queries."""
         manager.add_fetcher(MockFetcherNoRealtime())
         # Historical should include both
-        for f in manager._filter_by_capability("csi", DataCapability.HISTORICAL_DWM):
-            assert DataCapability.HISTORICAL_DWM in f.supported_data_types
+        for f in manager._filter_by_capability("csi", DataCapability.STOCK_KLINE):
+            assert DataCapability.STOCK_KLINE in f.supported_data_types
         # Realtime should exclude MockNoRealtime
-        for f in manager._filter_by_capability("csi", DataCapability.REALTIME_QUOTE):
-            assert DataCapability.REALTIME_QUOTE in f.supported_data_types
+        for f in manager._filter_by_capability("csi", DataCapability.STOCK_REALTIME_QUOTE):
+            assert DataCapability.STOCK_REALTIME_QUOTE in f.supported_data_types
 
     def test_reset(self, manager):
         manager.reset()
@@ -181,22 +180,23 @@ class TestDataFetcherManagerUnit:
     def test_get_kline_data_index_no_fallback_daily(self):
         """Index code + no INDEX_* fetcher registered: must raise DataFetchError.
 
-        Pre-fix: silently routed through HISTORICAL_DWM and returned fake data.
-        Post-fix: no INDEX_HISTORICAL declaration → DataFetchError.
-        Uses MockFetcherNoIndex (declares HISTORICAL_DWM only) so neither
-        INDEX_HISTORICAL nor INDEX_INTRADAY is satisfied.
+        Pre-fix: silently routed through STOCK_KLINE and returned fake data.
+        Post-fix: no INDEX_KLINE declaration → DataFetchError.
+        Uses MockFetcherNoIndex (declares STOCK_KLINE only) so INDEX_KLINE
+        is not satisfied.
         """
         mgr = DataFetcherManager([MockFetcherNoIndex()])
         with pytest.raises(DataFetchError):
             mgr.get_kline_data("000300", days=5, frequency="d")
 
     def test_get_kline_data_index_no_fallback_minute(self):
-        """Index code + minute freq + no INDEX_INTRADAY fetcher: must raise.
+        """Index code + minute freq + no INDEX_KLINE fetcher: must raise.
 
         Same setup as the daily variant; only difference is frequency="5"
-        which routes through INDEX_INTRADAY capability. MockFetcherNoIndex
-        declares HISTORICAL_DWM only — no INDEX_INTRADAY either, so the
-        strict routing surfaces DataFetchError.
+        which also routes through INDEX_KLINE capability (rev 3 unified
+        daily + minute into one flag). MockFetcherNoIndex declares
+        STOCK_KLINE only — no INDEX_KLINE either, so strict routing
+        surfaces DataFetchError.
         """
         mgr = DataFetcherManager([MockFetcherNoIndex()])
         with pytest.raises(DataFetchError):

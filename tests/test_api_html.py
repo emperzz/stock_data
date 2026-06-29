@@ -39,8 +39,8 @@ class TestHtmlStructure:
         assert "loadManifest" in html_text
 
     def test_has_capability_definitions(self, html_text):
-        assert "HISTORICAL_DWM" in html_text
-        assert "REALTIME_QUOTE" in html_text
+        assert "STOCK_KLINE" in html_text
+        assert "STOCK_REALTIME_QUOTE" in html_text
         assert "ANNOUNCEMENT" in html_text
 
     def test_has_theme_variables(self, html_text):
@@ -69,7 +69,7 @@ class TestHtmlStructure:
     def test_has_capability_groups_definition(self, html_text):
         """The CAPABILITY_GROUPS mapping must exist in JS."""
         assert "CAPABILITY_GROUPS" in html_text
-        assert "REALTIME_QUOTE" in html_text
+        assert "STOCK_REALTIME_QUOTE" in html_text
         assert "ANNOUNCEMENT" in html_text
 
     def test_has_no_external_dependencies(self, html_text):

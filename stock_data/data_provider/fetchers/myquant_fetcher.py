@@ -122,13 +122,11 @@ class MyquantFetcher(BaseFetcher):
     priority = int(os.getenv("MYQUANT_PRIORITY", "9"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
-        DataCapability.HISTORICAL_DWM
-        | DataCapability.HISTORICAL_MIN
-        | DataCapability.REALTIME_QUOTE
+        DataCapability.STOCK_KLINE
+        | DataCapability.STOCK_REALTIME_QUOTE
         | DataCapability.STOCK_LIST
         | DataCapability.TRADE_CALENDAR
-        | DataCapability.INDEX_HISTORICAL
-        | DataCapability.INDEX_INTRADAY
+        | DataCapability.INDEX_KLINE
         | DataCapability.STOCK_INFO
     )
 

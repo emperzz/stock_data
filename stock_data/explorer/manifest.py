@@ -29,14 +29,14 @@ logger = logging.getLogger(__name__)
 # Per-fetcher method overrides for capabilities where the capability-level
 # default in `CAPABILITY_TO_METHOD` doesn't match what the specific fetcher
 # actually implements. Currently the only such case is Zhitu's minute-level
-# support: `CAPABILITY_TO_METHOD[HISTORICAL_MIN]` maps to ``get_kline_data``
+# support: `CAPABILITY_TO_METHOD[STOCK_KLINE]` maps to ``get_kline_data``
 # (correct for Baostock/Akshare/Yfinance/Myquant, which all expose minutes
 # via ``get_kline_data``), but Zhitu's minutes live in ``get_intraday_data``
 # and its inherited ``get_kline_data`` raises DataFetchError. The Test
 # button uses this method name + signature verbatim, so getting it wrong
 # produces confusing 500s.
 _FETCHER_METHOD_OVERRIDES: dict[tuple[DataCapability, str], str] = {
-    (DataCapability.HISTORICAL_MIN, "ZhituFetcher"): "get_intraday_data",
+    (DataCapability.STOCK_KLINE, "ZhituFetcher"): "get_intraday_data",
 }
 
 

@@ -32,15 +32,15 @@ class DataCapability(Flag):
     and declare it on the fetchers that support it.
     """
 
-    HISTORICAL_DWM = auto()  # 日/周/月 K线 (d/w/m)
-    HISTORICAL_MIN = auto()  # 分钟 K线 (1/5/15/30/60m)
-    REALTIME_QUOTE = auto()  # 实时报价
+    # --- rev 3 unified flags ---
+    STOCK_KLINE = auto()              # 股票 d/w/m + 1m/5m/15m/30m/60m
+    INDEX_KLINE = auto()              # 指数 d/w/m + 1m/5m/15m/30m/60m
+    STOCK_REALTIME_QUOTE = auto()     # 股票实时快照
+    INDEX_REALTIME_QUOTE = auto()     # 指数实时快照
+    # --- unchanged ---
     STOCK_LIST = auto()  # 股票列表 (get_all_stocks)
     TRADE_CALENDAR = auto()  # 交易日历
     STOCK_BOARD = auto()  # 板块数据（概念/行业板块列表）
-    INDEX_QUOTE = auto()  # 指数实时行情
-    INDEX_HISTORICAL = auto()  # 指数历史K线 (d/w/m)
-    INDEX_INTRADAY = auto()  # 指数日内分时 (1/5/15/30/60m)
     STOCK_ZT_POOL = auto()  # 涨跌停股池（涨停/跌停/炸板）
     DRAGON_TIGER = auto()  # 龙虎榜（个股+全市场）
     MARGIN_TRADING = auto()  # 融资融券
@@ -77,15 +77,13 @@ class DataCapability(Flag):
 # the value here is the DEFAULT. Endpoints that need a different
 # method override via `@endpoint_meta(fetcher_method="...")`.
 CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
-    DataCapability.HISTORICAL_DWM: "get_kline_data",
-    DataCapability.HISTORICAL_MIN: "get_kline_data",
-    DataCapability.REALTIME_QUOTE: "get_realtime_quote",
+    DataCapability.STOCK_KLINE: "get_kline_data",
+    DataCapability.INDEX_KLINE: "get_index_historical",  # for d/w/m; minute via get_intraday_data
+    DataCapability.STOCK_REALTIME_QUOTE: "get_realtime_quote",
+    DataCapability.INDEX_REALTIME_QUOTE: "get_index_realtime_quote",
     DataCapability.STOCK_LIST: "get_all_stocks",
     DataCapability.TRADE_CALENDAR: "get_trade_calendar",
     DataCapability.STOCK_BOARD: "get_all_boards",            # default; .stocks variant overrides
-    DataCapability.INDEX_QUOTE: "get_index_realtime_quote",
-    DataCapability.INDEX_HISTORICAL: "get_index_historical",
-    DataCapability.INDEX_INTRADAY: "get_index_intraday",
     DataCapability.STOCK_ZT_POOL: "get_zt_pool",
     DataCapability.DRAGON_TIGER: "get_dragon_tiger",         # default; /daily variant overrides
     DataCapability.MARGIN_TRADING: "get_margin_trading",

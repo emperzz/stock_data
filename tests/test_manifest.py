@@ -35,7 +35,7 @@ class TestBuildManifestIncludesDecoratedRoutes:
         @endpoint_meta(
             summary="实时行情",
             markets=["csi", "hk", "us"],
-            capabilities=["REALTIME_QUOTE"],
+            capabilities=["STOCK_REALTIME_QUOTE"],
         )
         def quote(stock_code: str, days: int = Query(30, ge=1)):
             return None
@@ -54,8 +54,8 @@ class TestBuildManifestIncludesDecoratedRoutes:
         m = build_manifest(self._build_app())
         assert m["meta"]["version"] == "1.1"
         assert "server_version" in m["meta"]
-        assert "REALTIME_QUOTE" in m["meta"]["capabilities"]
-        assert m["meta"]["capabilities"]["REALTIME_QUOTE"]["icon"] == "💹"
+        assert "STOCK_REALTIME_QUOTE" in m["meta"]["capabilities"]
+        assert m["meta"]["capabilities"]["STOCK_REALTIME_QUOTE"]["icon"] == "💹"
 
 
 class TestRouteWithoutMetaSkipped:
@@ -78,7 +78,7 @@ class TestParamReflection:
         app = FastAPI()
 
         @app.get("/stocks/{stock_code}/quote", tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def quote(stock_code: str):
             return None
 
@@ -92,7 +92,7 @@ class TestParamReflection:
         app = FastAPI()
 
         @app.get("/x", tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def q(
             days: int = Query(30, ge=1, le=365),
             refresh: bool = Query(False),
@@ -111,7 +111,7 @@ class TestParamReflection:
         app = FastAPI()
 
         @app.get("/x", tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def q(market: str = Query(...)):
             return None
 
@@ -126,7 +126,7 @@ class TestResponseModelReflection:
         app = FastAPI()
 
         @app.get("/q", response_model=QuoteResp, tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def q():
             return None
 
@@ -153,7 +153,7 @@ class TestPrefixPrepending:
         sub = FastAPI()
 
         @sub.get("/stocks/{stock_code}/quote", tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def q(stock_code: str):
             return None
 
@@ -176,7 +176,7 @@ class TestIncludeRouterPrefix:
         router = APIRouter()
 
         @router.get("/stocks/{stock_code}/quote", tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def q(stock_code: str):
             return None
 
@@ -193,7 +193,7 @@ class TestSectionSorting:
 
         for i in [10, 2, 1]:
             @app.get(f"/p{i}", tags=["stocks"])
-            @endpoint_meta(summary=f"p{i}", capabilities=["REALTIME_QUOTE"])
+            @endpoint_meta(summary=f"p{i}", capabilities=["STOCK_REALTIME_QUOTE"])
             def handler(i=i):
                 return None
 
@@ -215,7 +215,7 @@ class TestControlTagExclusion:
             return None
 
         @app.get("/visible", tags=["stocks"])
-        @endpoint_meta(summary="visible", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="visible", capabilities=["STOCK_REALTIME_QUOTE"])
         def visible():
             return None
 
@@ -233,7 +233,7 @@ class TestSlugifyAndMethod:
         router = APIRouter()
 
         @router.get("/stocks/{stock_code}/quote", tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def q(stock_code: str):
             return None
 
@@ -251,7 +251,7 @@ class TestSlugifyAndMethod:
         router = APIRouter()
 
         @router.api_route("/x", methods=["GET", "POST"], tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def x():
             return None
 
@@ -270,7 +270,7 @@ class TestPep604Union:
         app = FastAPI()
 
         @app.get("/x", tags=["stocks"])
-        @endpoint_meta(summary="x", capabilities=["REALTIME_QUOTE"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def q(days: int | None = Query(None)):
             return None
 

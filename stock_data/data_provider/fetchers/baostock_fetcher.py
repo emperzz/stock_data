@@ -29,10 +29,9 @@ class BaostockFetcher(BaseFetcher):
     priority = int(os.getenv("BAOSTOCK_PRIORITY", "1"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
-        DataCapability.HISTORICAL_DWM
-        | DataCapability.HISTORICAL_MIN
+        DataCapability.STOCK_KLINE
         | DataCapability.TRADE_CALENDAR
-        | DataCapability.INDEX_HISTORICAL
+        | DataCapability.INDEX_KLINE
     )
 
     def _map_adjust(self, adjust: str) -> str | None:

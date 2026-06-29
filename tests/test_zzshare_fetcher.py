@@ -42,9 +42,8 @@ class TestZzshareFetcherMetadata:
 
     def test_supported_data_types_all_10_caps(self):
         expected = {
-            DataCapability.HISTORICAL_DWM,
-            DataCapability.HISTORICAL_MIN,
-            DataCapability.REALTIME_QUOTE,
+            DataCapability.STOCK_KLINE,
+            DataCapability.STOCK_REALTIME_QUOTE,
             DataCapability.STOCK_LIST,
             DataCapability.TRADE_CALENDAR,
             DataCapability.STOCK_BOARD,
@@ -205,7 +204,7 @@ class TestFromYyyymmdd:
 
 
 # ====================================================================
-# K-line (HISTORICAL_DWM)
+# K-line (STOCK_KLINE)
 # ====================================================================
 
 
@@ -497,7 +496,7 @@ class TestDailyKline:
 
 
 # ====================================================================
-# K-line (HISTORICAL_MIN) — get_intraday_data
+# K-line (STOCK_KLINE) — get_intraday_data
 # ====================================================================
 
 
@@ -650,7 +649,7 @@ class TestFetchMinuteKline:
 
 
 # ====================================================================
-# REALTIME_QUOTE
+# REALTIME_QUOTE (STOCK_REALTIME_QUOTE)
 # ====================================================================
 
 
