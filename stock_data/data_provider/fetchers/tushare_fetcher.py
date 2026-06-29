@@ -36,6 +36,10 @@ class TushareFetcher(BaseFetcher):
             return None  # 不复权
         return adjust  # "qfq" or "hfq"
 
+    def supports_kline(self, period, adjust, market, asset):
+        # Tushare: only csi + d/w/m; weekly/monthly adjust IS supported via adj='qfq|hfq'.
+        return market == "csi" and period in ("d", "w", "m")
+
     def __init__(self):
         self._token = os.getenv("TUSHARE_TOKEN", "").strip()
         self._api = None

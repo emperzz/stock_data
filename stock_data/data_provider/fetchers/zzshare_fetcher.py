@@ -100,6 +100,14 @@ class ZzshareFetcher(BaseFetcher):
         """
         return importlib.util.find_spec("zzshare") is not None
 
+    def supports_kline(self, period, adjust, market, asset):
+        if period == "d":
+            return True
+        if period in ("1", "5", "15", "30", "60"):
+            # Zzshare stk_mins upstream ignores adjust — treat as unsupported.
+            return adjust in ("", None)
+        return False  # no weekly/monthly
+
     def unavailable_reason(self) -> str | None:
         if self.is_available():
             return None

@@ -73,6 +73,12 @@ class AkshareFetcher(BaseFetcher):
         mapping = {"qfq": "qfq", "hfq": "hfq"}
         return mapping.get(adjust, "")
 
+    def supports_kline(self, period, adjust, market, asset):
+        # 1m refuses adjust (upstream hard constraint; whole-fetcher-only 1m source).
+        if period == "1" and adjust in ("qfq", "hfq"):
+            return False
+        return super().supports_kline(period, adjust, market, asset)
+
     def _convert_code(self, stock_code: str) -> str:
         """Convert to akshare query format. Delegates to ``to_akshare_format``."""
         return to_akshare_format(stock_code)

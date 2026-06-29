@@ -135,6 +135,15 @@ class MyquantFetcher(BaseFetcher):
         self._initialized = False
         self._init_error: str | None = None  # captured reason if SDK init fails
 
+    def supports_kline(self, period, adjust, market, asset):
+        # myquant: d + 5/15/30/60 with full adjust; index minutes csi-only;
+        # stock is csi-only too (mirrors supported_markets).
+        if market != "csi":
+            return False
+        if asset == "index" and period in ("5", "15", "30", "60"):
+            return True
+        return period in ("d", "5", "15", "30", "60")
+
     def _ensure_initialized(self) -> None:
         """Lazily import ``gm.api`` and call ``set_token``.
 

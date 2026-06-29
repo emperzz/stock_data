@@ -41,6 +41,17 @@ class BaostockFetcher(BaseFetcher):
         mapping = {"qfq": "2", "hfq": "1"}
         return mapping.get(adjust, "3")
 
+    def supports_kline(self, period, adjust, market, asset):
+        if asset == "stock":
+            if period in ("d", "w", "m"):
+                return True
+            if period in ("5", "15", "30", "60"):
+                return market == "csi"  # Baostock stock minutes are csi-only
+            return False  # no 1m
+        if asset == "index":
+            return period in ("d", "w", "m")  # Baostock index has no minutes
+        return False
+
     def __init__(self):
         self._initialized = False
 

@@ -53,6 +53,16 @@ class YfinanceFetcher(BaseFetcher):
             return None  # 不复权 (auto_adjust=False)
         return "qfq"  # yfinance only has one adjustment flavor, map both to it
 
+    def supports_kline(self, period, adjust, market, asset):
+        # hfq silently downgrades to qfq (semantic loss) → treat as unsupported.
+        if adjust == "hfq":
+            return False
+        # Yfinance upstream: no 1m interval (`interval` must be one of
+        # 1d/5d/1wk/1mo/1h/30m/15m/5m/90m/60m — no "1m" exists).
+        if period == "1":
+            return False
+        return super().supports_kline(period, adjust, market, asset)
+
     def _convert_code(self, stock_code: str) -> str:
         """Convert to yfinance ticker. Delegates to ``to_yfinance_format``."""
         return to_yfinance_format(stock_code)

@@ -70,6 +70,10 @@ class ZhituFetcher(BaseFetcher):
         """Check if Zhitu API token is configured."""
         return bool(self._token)
 
+    def supports_kline(self, period, adjust, market, asset):
+        # Zhitu: minutes only (5/15/30/60) + forces no adjust.
+        return period in ("5", "15", "30", "60") and adjust in ("", None)
+
     def unavailable_reason(self) -> str | None:
         """Return a human-readable reason this fetcher is unavailable, or None.
 
