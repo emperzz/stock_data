@@ -1,6 +1,6 @@
 # Price API 统一化设计 (Stock + Index)
 
-> 日期：2026-06-29 (rev 2: 扩入 quote 统一 + capability flag 精简)
+> 日期：2026-06-29 (rev 3: 直接优化，移除 6 个月 shim & deprecation timeline)
 > 状态：设计稿（待评审）
 > 目标：把 stock + index 的**价格数据**统一为两个端点家族（实时 quote / 时序 K 线）；boards 留到 phase-2 spec，本次不动。
 
@@ -11,7 +11,7 @@
 - **现状**：4 个 K 线端点（`/stocks/{code}/{history,intraday}` + `/indices/{code}/{history,intraday}`）+ 2 个 quote 端点（`/stocks/{code}/quote`、`/indices/{code}/quote`），覆盖 d/w/m + 1m/5m/15m/30m/60m + 实时快照。但 `/history` 路由层 regex 拒绝分钟频率、`/intraday` 不接受 `start_date/end_date`、quote 与 K 线之间参数命名不对齐 —— 多个真实 API gap。
 - **目标**：合并为 `/quote` + `/kline` 两族端点（stock/index 各两个）；参数命名约定统一（例如所有 K 线 entry 共享同一套 `period/adjust/start_date/end_date/days` 解释）。`adjust` 仅在 `/kline` 接受、`/quote` 路由层直接 422；`/kline` 上 `adjust` 不按 frequency 限，由 per-fetcher `supports_kline(period, adjust, market, asset)` 决定。
 - **能力模型**：K 线 capability 从 4 flag（`HISTORICAL_DWM` · `HISTORICAL_MIN` · `INDEX_HISTORICAL` · `INDEX_INTRADAY`）精简为 2 flag（`STOCK_KLINE` · `INDEX_KLINE`）；quote capability 重命名为 `STOCK_REALTIME_QUOTE` / `INDEX_REALTIME_QUOTE`。新增 `BaseFetcher.supports_kline(period, adjust, market, asset)` + `supports_quote(market)` 表达细粒度兼容性，manager 两阶段 filter。
-- **风险**：合并端点是路径破坏性变更，需要迁移窗口与兼容 shim；建议先做 capability 细化（零破坏，零 API 变化），再做 API 合并。
+- **风险**：合并端点是路径破坏性变更 — 但这是本地个人项目（无生产下游），**直接 rename / 直接删除旧端点**，不保留 6 个月 shim 与 deprecation 窗口。manager/endpoint 同步切换；测试 / docs / explorers manifest 在同一 PR 内全部迁移。
 - **Out of scope**：boards（已有 `/boards/{code}/history` 日线走 zzshare plate_kline；quote + 分钟 K 留到 phase-2 独立 spec），增量 indicator 服务改、Tencent level-2 字段、websocket 推送。
 
 ---
@@ -90,10 +90,10 @@ else:
 5. **明确 reject 行为**：
    - (a) `/quote` 收到 `adjust / period / days / start_date / end_date` → 422 user error；
    - (b) `/kline` 收到合法 period + adjust 组合但**无 fetcher 可服务** → 422 `no_fetcher_available`。
-6. **向后兼容**：旧 `/history` + `/intraday` 端点保留 6 个月过渡期，最终 410 Gone；`/quote` 无需迁移。
+6. **直接清理**：本地个人项目无生产下游 — 旧 `/history` + `/intraday` 端点随 P1 PR **直接删除**（不留 shim / 410 Gone / 旧 flag 兼容）。`/quote` URL 不变。flag rename + endpoint 切换 + manifest 更新 同 PR 完成。
 
 **非目标**：
-- 不做 schema 兼容层（统一 `KLineData` 用同一字段；`StockQuote` 维持现状，client 一次性迁移）。
+- 不做 schema 兼容层（统一 `KLineData` 用同一字段；`StockQuote` 维持现状）。
 - 不做分钟级跨日聚合（Tushare/Baostock 不支持由上层做）。
 - **boards 不在本次 spec scope**：已有 `/boards/{code}/history` 日线（zzshare plate_kline）；quote + 分钟 K 留到 phase-2 独立 spec。
 - 不引入 WebSocket / SSE 推送 —— 实时刷新仍为 polling 模型（受 cache TTL 控制）。
@@ -154,20 +154,26 @@ else:
 
 **对照旧版本（删除行）**：`HISTORICAL_DWM` + `HISTORICAL_MIN` → `STOCK_KLINE`；`INDEX_HISTORICAL` + `INDEX_INTRADAY` → `INDEX_KLINE`；`REALTIME_QUOTE` → `STOCK_REALTIME_QUOTE`（重命名，去歧义）；`INDEX_QUOTE` → `INDEX_REALTIME_QUOTE`（重命名）。**4 flag → 2** for K-line；2 flag 重命名 for quote。
 
-> **迁移期**：fetcher 注册时声明旧 flag 名仍合法 —— `BaseFetcher.__init__` 后置处理把 `HISTORICAL_DWM | HISTORICAL_MIN` 升为 `STOCK_KLINE`，`INDEX_HISTORICAL | INDEX_INTRADAY` 升为 `INDEX_KLINE`，`REALTIME_QUOTE` 改名为 `STOCK_REALTIME_QUOTE`，`INDEX_QUOTE` 改名为 `INDEX_REALTIME_QUOTE`；最终 `supported_data_types` 只含新 flag。manifest 注册只显示新名。6 个月后删除升迁逻辑。
+> **直接清理 (rev 3)**：因为本地项目，不保留旧 flag。`HISTORICAL_DWM` 等 enum 条目**直接删除**，所有引用方（fetcher `supported_data_types`、tests、docs、CLAUDE.md、manifest builder）一次性迁移到新名。`CAPABILITY_TO_METHOD` 也只列新 flag。
 
-### 3.4 单位不一致（隐式契约破裂）
+### 3.4 单位归一（统一到「股」）
 
-| Fetcher | volume 单位 | amount 单位 | 归一化 |
+**Canonical contract**：`/kline` 响应里 `volume` 字段**永远是股（整数，floor 除以 100 当来源是手）**。`volume_unit: "share"` 字段总是 `"share"`，作为冗余 metadata 给客户端校验。所有 fetcher 在 normalize 阶段完成 `/100` 转换。
+
+| Fetcher | 来源单位 | normalize 阶段 | 输出单位 |
 |---|---|---|---|
-| Baostock | 股 | 元 | 无需 |
-| Tushare | 手×100 → 股（`tushare_fetcher.py:174-181`） | 千元×1000 → 元 | 已归一 |
-| Zzshare | 股 | 元 | 无需 |
-| Myquant | 股 | 元 | 无需 |
-| **Akshare** | **手（100 股）** ⚠️ | 元 | **未归一** |
-| Yfinance | 股 | n/a（volume × close 计算） | n/a |
+| Baostock | 股 | 无需转换 | 股 (`volume_unit: "share"`) |
+| Tushare | 手×100 → 已归一股（`tushare_fetcher.py:174-181`） | 无需再转换 | 股 |
+| Zzshare | 股 | 无需转换 | 股 |
+| Myquant | 股 | 无需转换 | 股 |
+| **Akshare** | **手** | **`/100` 后 floor 取整** | **股** |
+| Yfinance | 股 | 无需转换（amount 由 volume × close 计算，不在此 field） | 股 |
 
-**这是当前静默数据契约破裂**：同一只股票从不同 fetcher 拿到的 `volume` 可能差 100 倍。**P0 必须修**（§7 提升至最高优先级），可选方案：fetchers 层 `/100` 归一 + 响应字段 `volume_unit: "lot" | "share"` 元数据，或向 Pydantic 字段 `volume_lot` / `volume_share` 拆分两个字段。
+**Spec §7 中 Akshare volume 归一升至 P0（最高优先级）**：fetchers 层加 `/100` 后 `int()` floor 截断，避免 `volume=7` lots → `0.07` shares 触发 Pydantic `int` 字段 500。
+
+`KLineData.volume_unit: Literal["share"]` 始终为 `"share"` —— Pydantic Literal 把"必须是 share"作为 schema invariant，不允许返回其他值。**Yfinance 的 amount 字段**仍保持现有逻辑（由 `volume × close` 计算），不受本规约影响。
+
+> 不再使用 `volume_unit: "lot"` 这条退路——所有 fetcher 都在 normalize 层归一。volume 字段 schema 不变 (`int`)，但其语义现在统一是「股」。
 
 ---
 
@@ -332,25 +338,16 @@ def get_kline_data(
     is_index = bool(index_market_tag(code))
     market = index_market_tag(code) or market_tag(code)
     
-    # Step 1: 选 primary capability (rev 2: 单一 KLINE flag, 走 fallback 不区分 period)
+    # Step 1: 选 primary capability (rev 3: 单 KLINE flag, 不兜底)
     primary_cap = (
         DataCapability.INDEX_KLINE if is_index
         else DataCapability.STOCK_KLINE
     )
-    
-    # Step 2: 失败兜底 capability
-    # 股票不走兜底 (INDEX_KLINE 才是股票入口, 反向不对);
-    # 指数无 INDEX_KLINE 时退到 STOCK_KLINE (例如港股指数的临时承接).
-    fallback_cap: DataCapability | None = None
-    if is_index:
-        fallback_cap = DataCapability.STOCK_KLINE
-    
-    # Step 3: 两阶段 filter
+
+    # Step 2: 两阶段 filter (rev 3: 无 fallback_cap, 见 §A appendix 行)
     candidates = self._filter_by_capability(market, primary_cap)
-    if not candidates and fallback_cap:
-        candidates = self._filter_by_capability(market, fallback_cap)
-    
-    # Step 3.5: 细粒度 filter (新增, failover 之前剔除必败者)
+
+    # Step 3: 细粒度 filter (failover 之前剔除必败者)
     asset = "index" if is_index else "stock"
     candidates = [
         f for f in candidates
@@ -566,43 +563,63 @@ CACHE_TTL_KLINE_MINUTE=30       # 分钟 K 线
 
 ---
 
-## 6. 迁移路径（向后兼容）
+## 6. 直接清理（无迁移窗口）
 
-### 6.1 旧端点 redirect 到新端点
+这是本地个人项目，**不保留旧 flag、不保留旧 endpoint、不做 deprecation timeline**。原因：
+- 无生产下游：调用方（IDE / OpenClaw / 自家脚本）谁调用谁改
+- 测试 / docs / CLAUDE.md / manifest builder 一次同步切换
+- review 与合并都清晰（一 PR 一个 phase）
 
-```python
-# api/routes/stocks.py
-@router.get("/stocks/{code}/history", deprecated=True)
-@endpoint_meta(summary="[已弃用] 历史 K 线；请改用 /stocks/{code}/kline",
-               capabilities=["STOCK_KLINE"], ...)
-def get_history_deprecated(code, period="daily", days=30, ...):
-    # 直接转发到新端点（不复制逻辑）
-    return get_kline(
-        code=code, period=period, days=days, start_date=start_date,
-        end_date=end_date, adjust=adjust, indicators=indicators,
-    )
-```
+### 6.1 旧 endpoint 直接删除
 
-`/intraday` 类似，但 `period` 兼容 `1`→`1m` 映射：
-
-```python
-def _legacy_period_to_modern(period: str) -> str:
-    return {"1": "1m", "5": "5m", "15": "15m", "30": "30m", "60": "60m"}.get(period, period)
-```
-
-`/quote` 端点 URL 不变，无需迁移。
-
-### 6.2 时间表
-
-| 阶段 | 改动 |
+| 旧 endpoint | 操作 |
 |---|---|
-| **T+0** | 新增 `/stocks/{code}/kline` + `/indices/{code}/kline`；旧 `/history` + `/intraday` 保留，标 `deprecated=True` |
-| **T+30d** | 旧端点响应头加 `Deprecation: true` + `Sunset: <T+180d>` |
-| **T+90d** | 旧端点 body 加 `{"_deprecated": "Use /stocks/{code}/kline"}` 字段 |
-| **T+180d** | 旧端点返回 410 Gone |
-| **T+365d** | 旧端点代码与测试删除 |
+| `GET /stocks/{code}/history` | 直接删除 route + handler + tests |
+| `GET /stocks/{code}/intraday` | 直接删除 route + handler + tests |
+| `GET /indices/{code}/history` | 直接删除 route + handler + tests |
+| `GET /indices/{code}/intraday` | 直接删除 route + handler + tests |
 
-旧 capability flag 名 (`HISTORICAL_DWM` 等) 的兼容 shim **同时长 6 个月**，T+180d 与 endpoint 一同下架。
+注意：**没有 `?period=` 兼容映射**。新端点用 `daily/weekly/monthly/1m/5m/15m/30m/60m`；旧端点的 `?period=1` 这种数字值没有兜底。
+
+任何引用旧路径的代码（`tests/test_routes.py`、`tests/test_legacy_endpoints.py`、CLAUDE.md 表格说明、explorer manifest 中旧的 URL 记录）在 P1 PR 内一起改完。
+
+### 6.2 manager 同步切换
+
+| 旧 manager 方法 | 处理 |
+|---|---|
+| `get_intraday_data` | 删除（被 `get_kline_data` 替代） |
+| `get_index_historical` / `get_index_intraday` | 保留签名作为内部 helper；route 改调 `get_index_kline_data`（统一入口）；或直接调 `get_kline_data` + asset="index" |
+
+具体取舍在 plan Task 10（`/indices/{code}/kline` 实现）决定 —— 看现有 manager 哪个重构代价小。
+
+### 6.3 capability flag 直接重命名
+
+按 §3.3 表直接替换 enum 条目：
+- `HISTORICAL_DWM` + `HISTORICAL_MIN` → `STOCK_KLINE`
+- `INDEX_HISTORICAL` + `INDEX_INTRADAY` → `INDEX_KLINE`
+- `REALTIME_QUOTE` → `STOCK_REALTIME_QUOTE`
+- `INDEX_QUOTE` → `INDEX_REALTIME_QUOTE`
+
+**不留 `DEPRECATED_TO_CANONICAL` shim**。当 P0 PR 落地时，所有 fetchers / tests / docs 一次性同步改完。
+
+### 6.4 旧测试与说明文档同步
+
+- `tests/test_capability_method_map.py`：测试新 flag 名 + 新 fetcher 方法映射
+- `tests/test_zzshare_fetcher.py`、`tests/test_manager_zzshare_minute.py`：任何引用 `HISTORICAL_*` 的断言改为 `STOCK_KLINE` 字符串比较
+- `CLAUDE.md` capability 行：按 §3.3 新表重写
+- `explorer/static/index.html`、`explorer/tags.py`：CAPABILITY_LABELS / CAPABILITY_GROUPS 新 flag 名
+- `docs/akshare/`、`docs/zzshare/` 等：用新 flag 引用（如果有）
+
+没有 graceful period；统一在 P0 PR 完成。
+
+### 6.5 时间线 = 一次性
+
+没有 T+30d / T+90d / T+180d / T+365d 的渐进表。**P0 PR 直接重命名 + 修测试**；**P1 PR 直接换 endpoint**。两层 PR：
+
+| PR | 内容 |
+|---|---|
+| **P0** | flag rename + supports_* 新方法 + manager 两阶段 filter + Akshare volume 归一 + 一致性更新（测试 / CLAUDE.md / manifest builder / explorer tags）。**零 API 变更。** |
+| **P1** | 新增 `/stocks/{code}/kline` + `/indices/{code}/kline`；删除 `/history` + `/intraday`；删 `get_intraday_data` manager 方法；统一 `/quote` reject 规则；cache key 合并。 |
 
 ---
 
@@ -614,8 +631,8 @@ def _legacy_period_to_modern(period: str) -> str:
 |---|---|---|---|
 | 🔴 P0 | §4.2 `supports_kline()` + §4.2.1 `supports_quote()` + §4.4 manager 两阶段 filter（不改 API） | 0.5d | 零（内部） |
 | 🔴 P0 | §3.4 修 Akshare volume 单位归一化（`/100` 或标 units） | 0.5d | 客户端需适配 |
-| 🔴 P0 | §4.1 capability flag 4 → 2 精简（不影响 6 个月兼容期内 client） | 0.5d | 内部 |
-| 🟠 P1 | §5 合并 `/kline` 端点，旧端点 redirect | 2–3d | 路径变更 |
+| 🔴 P0 | §4.1 capability flag 4 → 2 直接重命名（无 shim；测试 + docs 同步改） | 0.5d | 内部 |
+| 🟠 P1 | §5 合并 `/kline` 端点，旧端点**直接删除**（不再 redirect / 410 Gone） | 2–3d | 路径变更 |
 | 🟠 P1 | §5.4 cache key 合并 + TTL 拆双档 | 0.5d | 缓存重建一次 |
 | 🟠 P1 | §5.5 `/quote` 显式 reject `period/adjust/days/start_date/end_date`（明确文档化） | 0.5d | 内部 |
 | 🟡 P2 | Zzshare `daily` 1000 行分页回溯 | 1d | 数据深度解锁 |
@@ -699,7 +716,7 @@ def test_quote_endpoint_rejects_adjust_parameter():
     assert response.status_code == 422
 ```
 
-旧 endpoint 测试保持不变（redirect 行为）；flag collapse 测试在 `tests/test_capability_method_map.py` 中加：旧 flag 6 个月内仍被识别为新 flag。
+旧 endpoint 测试随 P1 PR 一起删（不留 redirect 行为 — rev 3 不兼容）。flag collapse 测试在 `tests/test_capability_method_map.py` 加：新 flag 名 + 直接确认旧 flag 名已不存在（AttributeError on `DataCapability.HISTORICAL_DWM` 这类）。
 
 ---
 
@@ -716,7 +733,8 @@ def test_quote_endpoint_rejects_adjust_parameter():
 
 - 日 K 与分钟 K 在 schema（`date` vs `time`）、复权语义（多 fetcher 静默 drop）、日期范围（多日 vs 当日）、市场支持（csi/hk/us vs csi only）上**没有任何一项完全一致**。
 - 把这些差异塞进"参数判断 + 文档免责"会增加 bug 表面积与客户端认知负担。
-- 现有 K 线端点已在生产环境被客户端使用，破坏性变更需要迁移窗口与 shim。
+- 旧 `date` vs `time` 区分是形式上的不一致：合并后 `KLineData.date: str`（新 `/kline` 路径）由 fetcher 返回 YYYY-MM-DD（d/w/m）或 YYYY-MM-DD HH:MM:SS（分钟）。客户端用 `len(date) > 10` 区分。
+- 本地项目无生产下游，**不需迁移窗口**：endpoint 切换 + flag rename + 测试同步 在 P1 PR 一并完成。
 
 ### 9.3 为什么 `adjust` 在所有 period 都允许（含 1m）？
 
@@ -761,14 +779,16 @@ def test_quote_endpoint_rejects_adjust_parameter():
 
 ## 附录 A. 与现存 2026-06-29 设计的差异
 
-| 项目 | rev 1 (原 spec) | rev 2 (本次) | 理由 |
-|---|---|---|---|
-| Scope | 仅 K 线 4 端点合并 | stock/index 的 quote + kline 4 端点统一；boards 留 phase-2 | 用户要求 quote 也进入统一模型 |
-| K-line flag 数 | 4 (HISTORICAL_DWM/HISTORICAL_MIN/INDEX_HISTORICAL/INDEX_INTRADAY) | 2 (STOCK_KLINE/INDEX_KLINE) | period 维度下沉到 supports_kline |
-| Quote flag 命名 | REALTIME_QUOTE / INDEX_QUOTE | STOCK_REALTIME_QUOTE / INDEX_REALTIME_QUOTE | 资产类显式化 |
-| `/kline` reject `period=分钟 + adjust=qfq/hfq` | 路由层 400 | 路由层放行；manager 层 supports_kline 滤掉 → 422 no_fetcher_available | 5/15/30/60m + adjust 是真实上游能力，1m 才限 |
-| `/kline?period=1m&adjust=qfq` 行为 | 400 user error | 422 no_fetcher_available（诚实错误） | 请求合法但上游不支持，区分 user error |
-| `/quote` 参数契约 | 文档不显式 | 显式 reject `period/adjust/days/start_date/end_date` → 422 | quote 是点位快照，这些参数无意义 |
-| Akshare volume 归一 | P2 优先级 | **P0 提升** | silent data corruption（差 100x）必须先修 |
-| supports_quote 新方法 | 未引入 | 新增 `BaseFetcher.supports_quote(market)` | quote 也有 market 路由 + Tencent 一致性问题 |
-| `supports_kline` 签名 | `(period, adjust, market)` | `(period, adjust, market, asset)` (rev 2.1) | 加 asset 让子类 override 表达不对称限制（Baostock 指数无分钟；Myquant 指数分钟仅 csi） |
+| 项目 | rev 1 (原 spec) | rev 2 (本次) | rev 3 (本次再订) | 理由 |
+|---|---|---|---|---|
+| Scope | 仅 K 线 4 端点合并 | stock/index 的 quote + kline 4 端点统一；boards 留 phase-2 | 同 rev 2 | 用户要求 quote 也进入统一模型 |
+| K-line flag 数 | 4 (HISTORICAL_DWM/HISTORICAL_MIN/INDEX_HISTORICAL/INDEX_INTRADAY) | 2 (STOCK_KLINE/INDEX_KLINE) | 同 rev 2 | period 维度下沉到 supports_kline |
+| Quote flag 命名 | REALTIME_QUOTE / INDEX_QUOTE | STOCK_REALTIME_QUOTE / INDEX_REALTIME_QUOTE | 同 rev 2 | 资产类显式化 |
+| **6 个月 shim / deprecation** | n/a（无） | 6 个月保留旧 flag + 6 个月 deprecation timeline | **直接删除**（无 shim、无 timeline、无 redirect） | 本地个人项目无生产下游；rev 2 的双份维护成本 > 收益（rev 3 user feedback） |
+| `/kline` reject `period=分钟 + adjust=qfq/hfq` | 路由层 400 | 路由层放行；manager 层 supports_kline 滤掉 → 422 no_fetcher_available | 同 rev 2 | 5/15/30/60m + adjust 是真实上游能力 |
+| `/kline?period=1m&adjust=qfq` 行为 | 400 user error | 422 no_fetcher_available | 同 rev 2 | 请求合法但上游不支持 |
+| `/quote` 参数契约 | 文档不显式 | 显式 reject `period/adjust/days/start_date/end_date` → 422 | 同 rev 2 | quote 是点位快照 |
+| Akshare volume 归一 | P2 优先级 | **P0 提升** | 同 rev 2；加 `volume_unit: Literal["share"]` schema invariant | silent data corruption |
+| supports_quote 新方法 | 未引入 | 新增 `BaseFetcher.supports_quote(market)` | 同 rev 2 | quote 也有 market 路由 |
+| `supports_kline` 签名 | `(period, adjust, market)` | `(period, adjust, market, asset)` (rev 2.1) | 同 rev 2.1 | 加 asset 让子类 override 表达不对称限制 |
+| **§4.4 fallback_cap (指数→兜底 STOCK_KLINE)** | n/a | 存在（防 HK index 边界） | **删除** — 装饰性 dead code（supports_kline(asset="index") 在 STOCK_KLINE fetcher 上恒为 False，反向无意义） | rev 3 user feedback：识别出 fallback 不会触发任何 candidate |
