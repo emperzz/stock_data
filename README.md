@@ -1034,7 +1034,6 @@ The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to 
 | `CACHE_TTL_HISTORY_WEEKLY` | TTL for weekly K-line (seconds) | `3600` |
 | `CACHE_TTL_HISTORY_MONTHLY` | TTL for monthly K-line (seconds) | `7200` |
 | `CACHE_TTL_INDEX_QUOTE` | TTL for index realtime quotes (seconds) | `60` |
-| `CACHE_TTL_INDEX_INTRADAY` | TTL for index intraday (seconds) | `30` |
 | `CACHE_TTL_STOCK_INTRADAY` | TTL for stock intraday (seconds) | `30` |
 | `CACHE_TTL_STOCK_INFO` | TTL for 公司画像 (`StockInfoResponse`, seconds) | `3600` |
 

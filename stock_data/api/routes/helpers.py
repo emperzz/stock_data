@@ -153,9 +153,7 @@ def _forbid_quote_params(request: Request) -> None:
 def _resolve_index_name(code: str) -> str:
     """Look up the human-readable name for an index code.
 
-    Falls back to the code itself if no match (preserves pre-refactor
-    behaviour at the call sites in ``get_index_history`` and
-    ``get_index_intraday``).
+    Falls back to the code itself if no match.
     """
     for entry in get_all_indices():
         if entry["code"] == code:

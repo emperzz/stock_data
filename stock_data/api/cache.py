@@ -16,7 +16,6 @@ _TTL_HISTORY_DAILY = int(os.getenv("CACHE_TTL_HISTORY_DAILY", 300))
 _TTL_HISTORY_WEEKLY = int(os.getenv("CACHE_TTL_HISTORY_WEEKLY", 3600))
 _TTL_HISTORY_MONTHLY = int(os.getenv("CACHE_TTL_HISTORY_MONTHLY", 7200))
 _TTL_INDEX_QUOTE = int(os.getenv("CACHE_TTL_INDEX_QUOTE", 60))
-_TTL_INDEX_INTRADAY = int(os.getenv("CACHE_TTL_INDEX_INTRADAY", 30))
 _TTL_STOCK_INTRADAY = int(os.getenv("CACHE_TTL_STOCK_INTRADAY", 30))
 _ENABLE_CACHE = os.getenv("ENABLE_API_CACHE", "true").lower() == "true"
 
@@ -27,7 +26,6 @@ _history_cache_m: TTLCache = TTLCache(maxsize=512, ttl=_TTL_HISTORY_MONTHLY)
 
 _quote_cache: TTLCache = TTLCache(maxsize=1024, ttl=_TTL_QUOTE)
 _index_quote_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_INDEX_QUOTE)
-_index_intraday_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_INDEX_INTRADAY)
 _stock_intraday_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INTRADAY)
 
 # TTL constants for uncached APIs
@@ -72,10 +70,6 @@ def get_quote_cache() -> TTLCache:
 
 def get_index_quote_cache() -> TTLCache:
     return _index_quote_cache
-
-
-def get_index_intraday_cache() -> TTLCache:
-    return _index_intraday_cache
 
 
 def get_stock_intraday_cache() -> TTLCache:
@@ -195,26 +189,6 @@ def make_stock_intraday_cache_key(stock_code: str, period: str, adjust: str) -> 
     return f"stock_intraday:{stock_code}:{period}{suffix}"
 
 
-def make_index_intraday_cache_key(index_code: str, period: str) -> str:
-    return f"idx_intraday:{index_code}:{period}"
-
-
-def make_index_history_cache_key(
-    index_code: str,
-    frequency: str,
-    days: int,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    indicators: list[str] | None = None,
-) -> str:
-    parts = [index_code, frequency, str(days)]
-    if start_date or end_date:
-        parts.extend([start_date or "", end_date or ""])
-    if indicators:
-        parts.append("ind=" + ",".join(sorted(indicators)))
-    return "idx_history:" + ":".join(parts)
-
-
 def make_dragon_tiger_cache_key(stock_code: str, trade_date: str, look_back: int) -> str:
     return f"dt:{stock_code}:{trade_date}:{look_back}"
 
@@ -283,6 +257,29 @@ def make_news_content_cache_key(url: str) -> str:
     import hashlib
 
     return f"news:content:{hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]}"
+
+
+def make_kline_cache_key(
+    code: str,
+    frequency: str,
+    days: int | None,
+    start_date: str | None,
+    end_date: str | None,
+    adjust: str | None,
+    indicators: list[str],
+) -> str:
+    """Stable cache key for /kline responses per spec §5.4."""
+    return (
+        f"kline:{code}:{frequency}:{days or ''}:{start_date or ''}:"
+        f"{end_date or ''}:{adjust or ''}:{','.join(indicators)}"
+    )
+
+
+def get_kline_cache(frequency: str) -> TTLCache:
+    """TTL split per spec §5.4. Minute -> 30s intraday TTL; daily+ -> history TTL."""
+    if frequency in ("1", "5", "15", "30", "60"):
+        return get_stock_intraday_cache()
+    return get_history_cache(frequency)
 
 
 def is_cache_enabled() -> bool:

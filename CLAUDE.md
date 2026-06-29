@@ -424,7 +424,7 @@ The non-obvious knobs worth memorizing here:
 - `ENABLE_API_CACHE` — toggle the in-memory `TTLCache` layer (default: `true`).
 - `*_PRIORITY` env vars — override any fetcher's default priority at startup. The lower the number, the earlier the fetcher is tried.
 - `MYQUANT_CALENDAR_START_YEAR` — start year for `get_trade_calendar` (default: `2010`).
-- `CACHE_TTL_STOCK_INTRADAY` / `CACHE_TTL_INDEX_INTRADAY` — minute-line cache TTL in seconds (default: `30`).
+- `CACHE_TTL_STOCK_INTRADAY` — minute-line cache TTL in seconds (default: `30`).
 - `CACHE_TTL_STOCK_INFO` — 公司画像 (`StockInfoResponse`) cache TTL in seconds (default: `3600`).
 
 ## Anti-Patterns to Avoid
