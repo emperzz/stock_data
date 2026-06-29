@@ -6,9 +6,7 @@ manager.get_kline_data → ZzshareFetcher._fetch_raw_data → stk_mins path.
 from unittest.mock import MagicMock
 
 import pandas as pd
-import pytest
 
-from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
 from stock_data.data_provider.manager import DataFetcherManager
 

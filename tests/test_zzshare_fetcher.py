@@ -343,7 +343,7 @@ class TestDailyKline:
         }))
         fetcher._api = fake_api
 
-        df = fetcher._fetch_raw_data(
+        fetcher._fetch_raw_data(
             "600519", "2026-05-20", "2026-05-20", frequency="5"
         )
 
@@ -469,6 +469,7 @@ class TestDailyKline:
     def test_fetch_raw_data_minute_long_range_logs_warning(self, caplog):
         """Range > 14 days triggers a logger.warning."""
         import logging
+
         import pandas as pd
 
         fetcher = ZzshareFetcher()
