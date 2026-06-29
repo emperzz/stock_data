@@ -362,6 +362,49 @@ class BaseFetcher(ABC):
         """
         return None
 
+    def supports_kline(
+        self,
+        period: str,
+        adjust: str,
+        market: str,
+        asset: str,
+    ) -> bool:
+        """Return True iff this fetcher CAN serve (asset, period, market).
+
+        Default behaviour (spec §4.2): True when (a) market is in
+        ``supported_markets`` AND (b) the fetcher has STOCK_KLINE / INDEX_KLINE
+        matching ``asset``. Subclasses narrow further to express upstream
+        quirks (e.g. Yfinance hfq silently downgrades to qfq -> unsupported,
+        Akshare refuses 1m + adjust). See task 3 for per-fetcher overrides.
+
+        Note: the ``adjust`` argument is intentionally NOT checked in the
+        default. Different fetchers have different supported adjust
+        combinations for different (period, market, asset); subclasses
+        encode those in ``supports_kline()`` overrides.
+        """
+        if market not in self.supported_markets:
+            return False
+        if asset == "stock" and DataCapability.STOCK_KLINE not in self.supported_data_types:
+            return False
+        if asset == "index" and DataCapability.INDEX_KLINE not in self.supported_data_types:
+            return False
+        return period in ("d", "w", "m", "1", "5", "15", "30", "60")
+
+    def supports_quote(self, market: str) -> bool:
+        """Return True iff this fetcher can serve realtime quote for ``market``.
+
+        Default (spec §4.2.1): market in ``supported_markets`` AND fetcher
+        has STOCK_REALTIME_QUOTE or INDEX_REALTIME_QUOTE. Subclasses override
+        only for edge cases (Tencent's csi/hk limitation is in
+        ``supported_markets``, so no override needed).
+        """
+        if market not in self.supported_markets:
+            return False
+        return (
+            DataCapability.STOCK_REALTIME_QUOTE in self.supported_data_types
+            or DataCapability.INDEX_REALTIME_QUOTE in self.supported_data_types
+        )
+
 
 # Backward-compatible re-export of DataFetcherManager (now in .manager)
 from .manager import DataFetcherManager  # noqa: E402, F401
