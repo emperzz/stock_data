@@ -154,6 +154,12 @@ class ZzshareFetcher(BaseFetcher):
 
         # Minute-frequency branch — multi-day loop with concat
         if frequency in ("5", "15", "30", "60"):
+            # Mirror the daily branch's SDK-availability check so users get
+            # a distinct "SDK 不可用" error instead of a misleading "无分钟数据".
+            if self._ensure_api() is None:
+                raise DataFetchError(
+                    f"ZzshareFetcher zzshare SDK 不可用: {self._init_error}"
+                )
             freq = self._PERIOD_TO_FREQ.get(frequency, f"{frequency}min")
             try:
                 start_d = datetime.strptime(start_date, "%Y-%m-%d").date()

@@ -377,11 +377,18 @@ class TestDailyKline:
         assert "adjust" not in call.kwargs
 
     def test_fetch_raw_data_minute_sdk_unavailable_raises(self, monkeypatch):
-        """SDK not installed → minute path raises DataFetchError."""
+        """SDK not installed → minute path raises DataFetchError with SDK-specific message.
+
+        Regression for the diagnostic conflation identified in code review: the
+        pre-fix path lumped SDK-unavailable with empty-data under a generic
+        "无分钟数据" message. Post-fix, SDK-unavailable surfaces with "SDK 不可用"
+        matching the daily branch's wording, so users can distinguish
+        "environment problem" from "upstream returned no data".
+        """
         monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
         with patch("importlib.util.find_spec", return_value=None):
             fetcher = ZzshareFetcher()
-            with pytest.raises(DataFetchError, match="无分钟数据"):
+            with pytest.raises(DataFetchError, match="SDK 不可用"):
                 fetcher.get_kline_data(
                     "600519", "2026-05-20", "2026-05-20", frequency="5"
                 )
