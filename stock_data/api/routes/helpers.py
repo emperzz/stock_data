@@ -43,6 +43,11 @@ _PERIOD_MAP: dict[str, str] = {
     "daily": "d",
     "weekly": "w",
     "monthly": "m",
+    "1m": "1",
+    "5m": "5",
+    "15m": "15",
+    "30m": "30",
+    "60m": "60",
 }
 
 
@@ -93,6 +98,7 @@ _INDEX_CODE_HINT_TEMPLATES = {
     "quote": "Use /indices/{code}/quote instead.",
     "history": "Use /indices/{code}/history instead.",
     "intraday": "Use /indices/{code}/intraday instead.",
+    "kline": "Use /indices/{code}/kline instead.",
 }
 
 
@@ -237,9 +243,16 @@ def _build_kline_data(row: dict, format_date) -> KLineData:
 
 
 def _format_date(val) -> str:
-    """Format a K-line / intraday ``date`` cell to a YYYY-MM-DD string."""
+    """Format a K-line / intraday ``date`` cell.
+
+    Returns ``YYYY-MM-DD HH:MM:SS`` for datetime values with non-zero
+    time components (minute-level bars), ``YYYY-MM-DD`` for date-only
+    values (daily/weekly/monthly bars), and the raw string otherwise.
+    """
     if val is None:
         return ""
     if hasattr(val, "strftime"):
+        if hasattr(val, "hour") and (val.hour or val.minute or val.second):
+            return val.strftime("%Y-%m-%d %H:%M:%S")
         return val.strftime("%Y-%m-%d")
     return str(val)

@@ -26,6 +26,7 @@ from ..cache import (
     get_fund_flow_daily_cache,
     get_history_cache,
     get_holder_num_cache,
+    get_kline_cache,
     get_margin_cache,
     get_quote_cache,
     get_reports_cache,
@@ -39,6 +40,7 @@ from ..cache import (
     make_fund_flow_daily_cache_key,
     make_history_cache_key,
     make_holder_num_cache_key,
+    make_kline_cache_key,
     make_margin_cache_key,
     make_quote_cache_key,
     make_reports_cache_key,
@@ -290,6 +292,93 @@ def get_history(
 
     return StockHistoryResponse(
         code=stock_code, stock_name=stock_name, period=period, data=data, source=source
+    )
+
+
+# ============================================================================
+# Unified K-line (daily + minute)
+# ============================================================================
+
+
+@router.get(
+    "/stocks/{code}/kline",
+    response_model=StockHistoryResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid period/date"},
+        422: {"model": ErrorResponse, "description": "No fetcher supports request"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["stocks"],
+)
+@endpoint_meta(
+    summary="K 线（统一入口：d/w/m + 1m/5m/15m/30m/60m）",
+    markets=["csi", "hk", "us"],
+    capabilities=["STOCK_KLINE"],
+)
+@map_errors
+@cache_endpoint(
+    cache_fn=lambda code, period, days, start_date, end_date, adjust, indicators: (
+        get_kline_cache(_period_to_freq(period))
+    ),
+    key_builder=lambda code, period, days, start_date, end_date, adjust, indicators: (
+        make_kline_cache_key(
+            code,
+            _period_to_freq(period),
+            days,
+            start_date,
+            end_date,
+            adjust or None,
+            _parse_indicators_param(indicators),
+        )
+    ),
+    hit_label="kline",
+)
+def get_kline(
+    code: str = Path(max_length=20),
+    period: str = Query(
+        default="daily",
+        pattern="^(daily|weekly|monthly|1m|5m|15m|30m|60m)$",
+    ),
+    days: int = Query(default=30, ge=1, le=365),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    adjust: str = Query(default="", pattern="^(qfq|hfq)?$"),
+    indicators: str | None = Query(default=None),
+) -> StockHistoryResponse:
+    """Unified K-line endpoint: daily/weekly/monthly + minute (1m/5m/15m/30m/60m).
+
+    Replaces /history and /intraday. ``supports_kline`` at manager level
+    decides fetcher availability; no route-layer reject for minute+adjust.
+    """
+    _reject_index_code(code, endpoint_kind="kline")
+    freq = _period_to_freq(period)
+
+    requested_indicators = _parse_indicators_param(indicators)
+    actual_days = days
+    if requested_indicators:
+        extra = compute_lookback(requested_indicators)
+        if extra > 0:
+            actual_days = max(days, extra)
+
+    manager = get_manager()
+    df, source = manager.get_kline_data(
+        code,
+        start_date=start_date,
+        end_date=end_date,
+        days=actual_days,
+        frequency=freq,
+        adjust=adjust or None,
+    )
+    df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
+    name = stock_cache.get_stock_name(code, manager=manager)
+
+    records = df.to_dict("records")
+    return StockHistoryResponse(
+        code=code,
+        stock_name=name,
+        period=period,
+        data=[_build_kline_data(r, _format_date) for r in records],
+        source=source,
     )
 
 

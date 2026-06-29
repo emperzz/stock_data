@@ -293,6 +293,63 @@ class TestStocksBlocksIndices:
         response = client.get("/api/v1/stocks/000300/intraday?period=5")
         assert response.status_code == 400
 
+    def test_stocks_kline_blocks_index(self, client):
+        response = client.get("/api/v1/stocks/000300/kline?period=daily")
+        assert response.status_code == 400
+        assert "indices" in response.json()["detail"]["message"]
+
+
+class TestKline:
+    """Tests for /api/v1/stocks/{code}/kline endpoint."""
+
+    def test_kline_daily(self, client):
+        response = client.get("/api/v1/stocks/600519/kline?period=daily&days=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["code"] == "600519"
+        assert data["period"] == "daily"
+        assert "data" in data
+
+    def test_kline_weekly(self, client):
+        response = client.get("/api/v1/stocks/600519/kline?period=weekly&days=10")
+        # 200 if a fetcher succeeds; 503 if upstream unavailable
+        assert response.status_code in (200, 503)
+        if response.status_code == 200:
+            assert response.json()["period"] == "weekly"
+
+    def test_kline_monthly(self, client):
+        response = client.get("/api/v1/stocks/600519/kline?period=monthly&days=5")
+        # 200 if a fetcher succeeds; 503 if upstream unavailable
+        assert response.status_code in (200, 503)
+        if response.status_code == 200:
+            assert response.json()["period"] == "monthly"
+
+    def test_kline_5m(self, client):
+        response = client.get("/api/v1/stocks/600519/kline?period=5m&days=1")
+        # 200 if a fetcher supports minute kline; 422/503 if none available
+        assert response.status_code in (200, 422, 503)
+
+    def test_kline_with_adjust(self, client):
+        response = client.get("/api/v1/stocks/600519/kline?period=daily&days=5&adjust=qfq")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["code"] == "600519"
+
+    def test_kline_invalid_period(self, client):
+        response = client.get("/api/v1/stocks/600519/kline?period=invalid")
+        assert response.status_code == 422
+
+    def test_kline_with_indicators(self, client):
+        response = client.get("/api/v1/stocks/600519/kline?period=daily&days=30&indicators=ma")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["code"] == "600519"
+        assert len(data["data"]) <= 30
+
+    def test_kline_invalid_stock(self, client):
+        response = client.get("/api/v1/stocks/INVALID/kline?period=daily&days=5")
+        assert response.status_code == 503
+
 
 class TestIndicesBlocksStocks:
     """Tests that /indices/{code}/* endpoints reject stock codes (and other non-index codes).
