@@ -160,7 +160,7 @@ def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjus
     return api.daily(**kwargs)
 ```
 
-3. `get_intraday_data` 重构：把 `api.stk_mins(...)` 调用挪入 `_fetch_minute_kline`，自身只做 column rename / `time` 字段提取 / 列裁剪。共享底层。
+3. `get_intraday_data` 重构：把 `api.stk_mins(...)` 调用挪入 `_fetch_minute_kline`，自身只做 column rename / `time` 字段提取 / 列裁剪（保留 `keep = ["time", "open", "high", "low", "close", "volume", "amount"]` 不变）。共享底层。**注**：多日区间不在 `manager` 或 `get_intraday_data` 内部循环——超出本设计范围，由调用方按需多次调用拼接。
 
 **新 helper 签名**：
 
@@ -209,7 +209,7 @@ def _fetch_minute_kline(
 | `manager.get_kline_data("000300", "5")` 无 INDEX_INTRADAY fetcher 可用 | `DataFetchError`（任务 1 兜底删除的必然结果） |
 | `manager.get_kline_data("000300", "5")` 有 Akshare/Myquant 可用 | 路由到它们各自的 INDEX_INTRADAY 实现（既有） |
 | `manager.get_kline_data("600519", "5")` | 路由到 HISTORICAL_MIN cap 的 fetcher；现在 ZzshareFetcher 也能正确返回（任务 2 修复） |
-| `manager.get_kline_data("600519", "5", start_date=20260518, end_date=20260520)` | 区间传日线 `start_date=20260518`，ZzshareFetcher 取 `start_date` 当交易日（与 Akshare 行为对齐，区间外的数据不返） |
+| `manager.get_kline_data("600519", "5", start_date=20260518, end_date=20260520)` | 区间传日线 `start_date=20260518`，ZzshareFetcher 取 `start_date` 当交易日（与 Akshare 行为对齐，区间外的数据不返）；多日拼接由调用方决定 |
 | `get_intraday_data("600519", "5")` 既有路径 | 不变；共用 `_fetch_minute_kline` |
 
 ---
