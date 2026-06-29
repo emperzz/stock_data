@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from ...data_provider import DataFetcherManager
 from ...data_provider.core.types import safe_float
@@ -133,6 +133,25 @@ def _reject_non_index_code(code: str, *, endpoint_kind: str) -> None:
             detail={
                 "error": "invalid_request",
                 "message": f"{code} is not a recognized index code. {hint}",
+            },
+        )
+
+
+def _forbid_quote_params(request: Request) -> None:
+    """Reject query params that are meaningless for snapshot (``/quote``) endpoints.
+
+    Per spec 5.5: quote is a snapshot; ``period``, ``adjust``, ``days``,
+    ``start_date``, ``end_date`` have no meaning. Clients get a clear 422
+    with a hint to use ``/kline`` instead.
+    """
+    forbidden = {"period", "adjust", "days", "start_date", "end_date"}
+    bad = forbidden & set(request.query_params.keys())
+    if bad:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "param_not_applicable",
+                "message": f"/quote does not accept {sorted(bad)}; use /kline instead.",
             },
         )
 

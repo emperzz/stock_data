@@ -3,7 +3,7 @@
 All four endpoints share the main ``router`` declared in ``routes/__init__.py``.
 """
 
-from fastapi import HTTPException, Path, Query
+from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.fetchers.index_symbols import get_all_indices
 from ...data_provider.indicators import compute_lookback
@@ -36,6 +36,7 @@ from .errors import map_errors
 from .helpers import (
     _apply_indicators,
     _build_kline_data,
+    _forbid_quote_params,
     _format_date,
     _parse_indicators_param,
     _period_to_freq,
@@ -79,13 +80,15 @@ def list_indices() -> list[IndexInfo]:
 @map_errors
 @cache_endpoint(
     cache_fn=lambda *args, **kwargs: get_index_quote_cache(),
-    key_builder=lambda index_code: make_index_quote_cache_key(index_code),
+    key_builder=lambda request, index_code: make_index_quote_cache_key(index_code),
     hit_label="index_quote",
 )
 def get_index_quote(
+    request: Request,
     index_code: str = Path(max_length=20, description="Index code"),
 ) -> IndexQuote:
     """Get realtime quote for an index."""
+    _forbid_quote_params(request)
     _reject_non_index_code(index_code, endpoint_kind="quote")
 
     manager = get_manager()

@@ -6,7 +6,7 @@ The stock-list endpoint (``GET /stocks``) lives in :mod:`.calendar` because
 it's a list-level query, not per-stock.
 """
 
-from fastapi import HTTPException, Path, Query
+from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.indicators import compute_lookback
 from ...data_provider.persistence import stock_list as stock_cache
@@ -81,6 +81,7 @@ from .errors import map_errors
 from .helpers import (
     _apply_indicators,
     _build_kline_data,
+    _forbid_quote_params,
     _format_date,
     _parse_indicators_param,
     _period_to_freq,
@@ -142,10 +143,11 @@ def get_stock_info(code: str = Path(max_length=20)) -> StockInfoResponse:
 @map_errors
 @cache_endpoint(
     cache_fn=lambda *args, **kwargs: get_quote_cache(),
-    key_builder=lambda stock_code: make_quote_cache_key(stock_code),
+    key_builder=lambda request, stock_code: make_quote_cache_key(stock_code),
     hit_label="quote",
 )
 def get_quote(
+    request: Request,
     stock_code: str = Path(max_length=20, description="Stock code"),
 ) -> StockQuote:
     """Get realtime quote for a stock.
@@ -153,6 +155,7 @@ def get_quote(
     Note:
         Index codes are not supported. Use /indices/{index_code}/quote instead.
     """
+    _forbid_quote_params(request)
     _reject_index_code(stock_code, endpoint_kind="quote")
 
     manager = get_manager()
