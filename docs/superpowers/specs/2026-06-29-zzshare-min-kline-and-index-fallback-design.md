@@ -11,7 +11,7 @@
 ## 0. 摘要
 
 - **任务 1**：删除 `manager.py:308-326` 的 INDEX→HISTORICAL 兜底块。统一方法 `get_kline_data` 与既有专属方法 `get_index_historical`/`get_index_intraday` 行为对齐：能力不匹配即 `DataFetchError`。
-- **任务 2**：在 `ZzshareFetcher._fetch_raw_data` 内对 minute 频率分发到 `api.stk_mins`（单日用 `start_date`），抽取 helper `_fetch_minute_kline` 与 `get_intraday_data` 共用底层 SDK 调用。
+- **任务 2**：在 `ZzshareFetcher._fetch_raw_data` 内对 minute 频率做多日循环拼接（区间内逐日调 `api.stk_mins` 并 `pd.concat`），抽取 helper `_fetch_minute_kline` 与 `get_intraday_data` 共用底层 SDK 调用。
 - **其他兜底模式扫描结论**：仅任务 1 命中"`HISTORICAL_*` 兜底 `INDEX_*` 兜底"模式。其余 7 处 fallback（`_with_source` slug 容错、`_with_failover` 主循环本身、SQLite 缓存层、Yfinance→Stooq、EastMoney concept→industry、Zzshare `lhb_detail`→`lhb_stock_history`、`stock_zh_a_minute` sina 兼容回退）均属不同语义（查找容错 / failover 设计要求 / 缓存层 / 单 fetcher 多上游 / 单 fetcher 内重试），按既有设计保留。
 
 ---
@@ -76,6 +76,7 @@ supported_data_types = (
 | `fetchers/zzshare_fetcher.py:715` `lhb_detail`→`lhb_stock_history` | 同 fetcher 双 API 互补 | 不动 |
 | `fetchers/eastmoney_fetcher.py:1350` concept→industry | 同 fetcher 内重试 | 不动 |
 | `fetchers/akshare/index_norm.py:143` `stock_zh_a_minute` sina 兼容 | 同 fetcher 字段映射 | 不动 |
+| `persistence/*.py` SQLite 缓存层（trade_calendar / pool_daily / board / stock_list） | **独立于 fetcher 能力**：缓存层只是把"fetcher 已经返回过的数据"落盘供未来复用，并不是 fetcher 没有能力时去兜底。fetchers 全失败时回退到缓存是缓存层的本职，不是能力兜底 | 不动 |
 
 ---
 
@@ -133,8 +134,8 @@ else:
 
 **核心变更**（`zzshare_fetcher.py`）：
 
-1. 抽取 helper `_fetch_minute_kline(stock_code, trade_date, freq) -> pd.DataFrame | None`，封装 `api.stk_mins(...)` 调用 + 异常兜底。
-2. `_fetch_raw_data` 内增加 minute 分支：
+1. 抽取 helper `_fetch_minute_kline(stock_code, trade_date_yyyymmdd, freq) -> pd.DataFrame | None`，封装**单日** `api.stk_mins(...)` 调用 + 异常兜底。被 `_fetch_raw_data`（多日循环）和 `get_intraday_data`（单日）共用。
+2. `_fetch_raw_data` 内增加 minute 分支，**多日区间循环拼接**：
 
 ```python
 def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
@@ -144,23 +145,40 @@ def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjus
         )
     if frequency in ("5", "15", "30", "60"):
         freq = self._PERIOD_TO_FREQ.get(frequency, f"{frequency}min")
-        # zzshare stk_mins 是单日 API；用 start_date 当交易日（与 Akshare 对齐）。
-        # 多日区间下，end_date 内的数据无法在单次调用拿到；上层若需多日，应循环。
-        df_minute = self._fetch_minute_kline(
-            stock_code, _to_yyyymmdd(start_date), freq
-        )
-        if df_minute is None:
-            raise DataFetchError(
-                f"ZzshareFetcher 无分钟数据 for {stock_code} on {start_date}"
+        # zzshare stk_mins 是单日 API；区间逐日循环拼接。
+        try:
+            start_d = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_d = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError as e:
+            raise DataFetchError(f"Invalid date: {e}") from e
+        day_count = (end_d - start_d).days + 1
+        if day_count > 14:
+            logger.warning(
+                "[ZzshareFetcher] minute K over %d days for %s — %d API calls",
+                day_count, stock_code, day_count,
             )
-        return df_minute
+        dfs = []
+        cur = start_d
+        while cur <= end_d:
+            df_one = self._fetch_minute_kline(
+                stock_code, cur.strftime("%Y%m%d"), freq
+            )
+            if df_one is not None:
+                dfs.append(df_one)
+            cur += timedelta(days=1)
+        if not dfs:
+            raise DataFetchError(
+                f"ZzshareFetcher 无分钟数据 for {stock_code} {start_date}~{end_date}"
+            )
+        return pd.concat(dfs, ignore_index=True)
     # 日线：现有路径
     api = self._ensure_api()
     ...
     return api.daily(**kwargs)
 ```
 
-3. `get_intraday_data` 重构：把 `api.stk_mins(...)` 调用挪入 `_fetch_minute_kline`，自身只做 column rename / `time` 字段提取 / 列裁剪（保留 `keep = ["time", "open", "high", "low", "close", "volume", "amount"]` 不变）。共享底层。**注**：多日区间不在 `manager` 或 `get_intraday_data` 内部循环——超出本设计范围，由调用方按需多次调用拼接。
+3. `_normalize_data` 增加 minute 分支：从 `trade_time`（12 位 YYYYMMDDHHMM）取前 8 位转 `date`（YYYY-MM-DD）；列裁剪为 `code, date, open, high, low, close, volume, amount`。**time 字段在 /history 响应里丢失**——这是 `KLineData` schema 的固有限制，详见 §3.1。
+4. `get_intraday_data` 重构：把 `api.stk_mins(...)` 调用挪入 `_fetch_minute_kline`，自身只做 column rename / `time` 字段提取 / 列裁剪（保留 `keep = ["time", "open", "high", "low", "close", "volume", "amount"]` 不变）。共享底层。
 
 **新 helper 签名**：
 
@@ -190,14 +208,18 @@ def _fetch_minute_kline(
 | 路径 | 列 | 备注 |
 |---|---|---|
 | `/stocks/{code}/intraday` (`manager.get_intraday_data`) | `time, open, high, low, close, volume, amount` | 既有 `get_intraday_data` 路径，不变 |
-| `/stocks/{code}/history?frequency=5` (`manager.get_kline_data`) | `date, open, high, low, close, volume, amount, pct_chg` | KLineData schema 仅承载 `date`，**minute 内 time 粒度在 /history 响应里丢失**——这是 `KLineData` schema 的固有限制，详见 §3.1 |
+| `/stocks/{code}/history?frequency=5` (`manager.get_kline_data`) | `date, open, high, low, close, volume, amount` | KLineData schema 仅承载 `date`，**minute 内 time 粒度在 /history 响应里丢失**——这是 `KLineData` schema 的固有限制，详见 §3.1 |
 
 **测试矩阵**（`tests/test_zzshare_fetcher.py` 新增 / 调整）：
 
 | 用例 | mock | 断言 |
 |---|---|---|
-| `_fetch_raw_data("5", trade_date=20260520)` | `api.stk_mins` 返回 3 行带 `trade_time` 的 df | 走 `stk_mins`、返回列含 `time` / `volume`、`time == "09:35:00"...` |
+| `_fetch_raw_data("5", 单日)` | `api.stk_mins` 返回 3 行带 `trade_time` 的 df | 走 `stk_mins`、返回列含 `date` / `volume` |
 | `_fetch_raw_data("15")` | 同上 | 调用参数 `freq="15min"` |
+| `_fetch_raw_data("5", 3 日区间)` | mock `api.stk_mins` 返回非空 | `stk_mins` 调用次数 = 3；concat 后行数累加；date 列覆盖 3 天 |
+| `_fetch_raw_data("5", 区间含非交易日)` | mock `api.stk_mins` 在某日返回 None | 该日被跳过；其余日子正常拼入；最终结果不含 None 日 |
+| `_fetch_raw_data("5", 区间全部空)` | mock `api.stk_mins` 全空 | 抛 `DataFetchError("…无分钟数据")` |
+| `_fetch_raw_data("5", 区间 > 14 天)` | mock `api.stk_mins` | 调用次数 = day_count；触发 logger.warning |
 | `_fetch_raw_data("5")` 在 SDK 不可用时 | mock `_ensure_api` 返回 None | 抛 `DataFetchError("…无分钟数据")` |
 | `_fetch_raw_data("5")` adjust="qfq" | mock `stk_mins` | 断言调用 kwarg 不含 `adj` / `adjust` |
 | `get_intraday_data` 不回归 | mock `stk_mins` | 既有 5 个用例继续通过 |
@@ -209,7 +231,7 @@ def _fetch_minute_kline(
 | `manager.get_kline_data("000300", "5")` 无 INDEX_INTRADAY fetcher 可用 | `DataFetchError`（任务 1 兜底删除的必然结果） |
 | `manager.get_kline_data("000300", "5")` 有 Akshare/Myquant 可用 | 路由到它们各自的 INDEX_INTRADAY 实现（既有） |
 | `manager.get_kline_data("600519", "5")` | 路由到 HISTORICAL_MIN cap 的 fetcher；现在 ZzshareFetcher 也能正确返回（任务 2 修复） |
-| `manager.get_kline_data("600519", "5", start_date=20260518, end_date=20260520)` | 区间传日线 `start_date=20260518`，ZzshareFetcher 取 `start_date` 当交易日（与 Akshare 行为对齐，区间外的数据不返）；多日拼接由调用方决定 |
+| `manager.get_kline_data("600519", "5", start_date=20260518, end_date=20260520)` | ZzshareFetcher 内部循环 3 次 `stk_mins` 调用，逐日拼接成 3 天数据；非交易日返回 None 被跳过 |
 | `get_intraday_data("600519", "5")` 既有路径 | 不变；共用 `_fetch_minute_kline` |
 
 ---
@@ -220,18 +242,22 @@ def _fetch_minute_kline(
 
 `KLineData` schema（`api/schemas.py`）的 `date: str \| None` 是单字符串字段，承载不了"日内多个时刻"。`/history` 走通 minute 后：
 
-- 响应里每根 bar 的 `date` 都相同（都是 `start_date`）
-- `time` 字段在 `KLineData` 里没有——lost
+- 多日区间下 `date` 列能区分不同交易日；同日内各 bar 的 `date` 都相同
+- `time` 字段在 `KLineData` 里没有——同日内 48 根 bar 的 OHLCV 仍可区分（值不同），但 K 线图上无法精确还原 5min 时序
 - `?indicators=` 在 minute 上行为未定义（indicator service 当前按 date 对齐）
 
 **缓解**：本设计只承诺"两个接口都通到分钟级"，粒度差异由端点决定（`/history` 简化、`/intraday` 完整）。如果未来要 `/history?frequency=5` 返回完整日内粒度，需要扩展 `KLineData` schema 加 `time: str | None`——超出本设计范围，留待后续 spec。
 
-### 3.2 区间 → 单日 的语义不一致
+### 3.2 多日区间循环的 QoS 成本
 
-`/history` 允许 `start_date/end_date` 区间，但 Zzshare 分钟仅单日。处理：
-- 与 Akshare 对齐：用 `start_date` 作为交易日
-- 不在 API 层报错（避免破坏既有 Akshare 用户的预期）
-- 在 fetcher docstring 标注限制
+`zzshare stk_mins` 仅支持单日查询，`/history?frequency=5&start_date=…&end_date=…` 的 N 天区间会触发 N 次 SDK 调用：
+
+- 默认 `days=30` 走 30 次调用，约 30s+ 延迟（取决于单次响应）
+- 触发 zzshare 匿名 30 次/分钟限速——**30 天区间会触顶**；带 `ZZSHARE_TOKEN` 可缓解
+- 无硬上限（用户自决），但 `> 14 天` 触发 `logger.warning`
+- 非交易日返回 `None`，自然跳过，不占配额
+
+**缓解**：客户端应避免 14+ 天 minute K 单次请求；必要时拆成多次小窗口。
 
 ### 3.3 既有 `/intraday` 调用方不受影响
 
