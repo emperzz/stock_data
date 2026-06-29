@@ -9,8 +9,8 @@
 ## 0. 摘要
 
 - **现状**：4 个 K 线端点（`/stocks/{code}/{history,intraday}` + `/indices/{code}/{history,intraday}`）+ 2 个 quote 端点（`/stocks/{code}/quote`、`/indices/{code}/quote`），覆盖 d/w/m + 1m/5m/15m/30m/60m + 实时快照。但 `/history` 路由层 regex 拒绝分钟频率、`/intraday` 不接受 `start_date/end_date`、quote 与 K 线之间参数命名不对齐 —— 多个真实 API gap。
-- **目标**：合并为 `/quote` + `/kline` 两族端点（stock/index 各两个）；参数命名约定统一（例如所有 K 线 entry 共享同一套 `period/adjust/start_date/end_date/days` 解释）。`adjust` 仅在 `/kline` 接受、`/quote` 路由层直接 422；`/kline` 上 `adjust` 不按 frequency 限，由 per-fetcher `supports_kline(period, adjust, market)` 决定。
-- **能力模型**：K 线 capability 从 4 flag（`HISTORICAL_DWM` · `HISTORICAL_MIN` · `INDEX_HISTORICAL` · `INDEX_INTRADAY`）精简为 2 flag（`STOCK_KLINE` · `INDEX_KLINE`）；quote capability 重命名为 `STOCK_REALTIME_QUOTE` / `INDEX_REALTIME_QUOTE`。新增 `BaseFetcher.supports_kline(period, adjust, market)` + `supports_quote(market)` 表达细粒度兼容性，manager 两阶段 filter。
+- **目标**：合并为 `/quote` + `/kline` 两族端点（stock/index 各两个）；参数命名约定统一（例如所有 K 线 entry 共享同一套 `period/adjust/start_date/end_date/days` 解释）。`adjust` 仅在 `/kline` 接受、`/quote` 路由层直接 422；`/kline` 上 `adjust` 不按 frequency 限，由 per-fetcher `supports_kline(period, adjust, market, asset)` 决定。
+- **能力模型**：K 线 capability 从 4 flag（`HISTORICAL_DWM` · `HISTORICAL_MIN` · `INDEX_HISTORICAL` · `INDEX_INTRADAY`）精简为 2 flag（`STOCK_KLINE` · `INDEX_KLINE`）；quote capability 重命名为 `STOCK_REALTIME_QUOTE` / `INDEX_REALTIME_QUOTE`。新增 `BaseFetcher.supports_kline(period, adjust, market, asset)` + `supports_quote(market)` 表达细粒度兼容性，manager 两阶段 filter。
 - **风险**：合并端点是路径破坏性变更，需要迁移窗口与兼容 shim；建议先做 capability 细化（零破坏，零 API 变化），再做 API 合并。
 - **Out of scope**：boards（已有 `/boards/{code}/history` 日线走 zzshare plate_kline；quote + 分钟 K 留到 phase-2 独立 spec），增量 indicator 服务改、Tencent level-2 字段、websocket 推送。
 
@@ -192,10 +192,10 @@ class DataCapability(Flag):
 **为什么从 4 flag 收敛为 2？**
 
 - 真正会变的不是"是否支持 K 线"，而是"调到上游的哪个 SDK 入口能拿到这一组 (period, adjust, market)"——这是 fetcher 内部细节，不应泄漏到 capability 层。
-- `supports_kline(period, adjust, market)` 已经能干 (period × adjust × market) 颗粒度的判定，capability bit 只需承担"这个 fetcher 进入 K 线路由"这件事。
+- `supports_kline(period, adjust, market, asset)` 已经能干 (asset × period × adjust × market) 颗粒度的判定，capability bit 只需承担"这个 fetcher 进入 K 线路由"这件事。
 - 4 flag 拆到 (asset × frequency-class) 已经是没必要的二维——`period` 这维交给 `supports_kline` 即可。
 
-### 4.2 新增 `BaseFetcher.supports_kline(period, adjust, market)`
+### 4.2 新增 `BaseFetcher.supports_kline(period, adjust, market, asset)`
 
 加到 `data_provider/base.py`：
 
@@ -205,12 +205,16 @@ def supports_kline(
     period: str,    # "d" / "w" / "m" / "1" / "5" / "15" / "30" / "60"
     adjust: str,     # "" / "qfq" / "hfq"
     market: str,     # "csi" / "hk" / "us"
+    asset: str,      # "stock" | "index"
 ) -> bool:
-    """Return True iff this fetcher can serve (period, adjust, market).
+    """Return True iff this fetcher can serve (period, adjust, market, asset).
 
-    Default: infer from capability flag. Override in subclasses when the
-    fetcher's actual upstream coverage is narrower (e.g. Yfinance hfq
-    silently downgrades to qfq, treated as unsupported).
+    `asset` reflects the caller's intent (stock K-line vs index K-line).
+    Manager has already pre-filtered fetchers by capability bit
+    (STOCK_KLINE for stock calls, INDEX_KLINE for index calls), so the
+    asset check is informational — the default impl returns True if the
+    period is supported. Subclasses narrow further (e.g. Baostock for
+    index has no minutes; Yfinance hfq silently downgrades → unsupported).
     """
     if market not in self.supported_markets:
         return False
@@ -219,6 +223,11 @@ def supports_kline(
                 or DataCapability.INDEX_KLINE in self.supported_data_types)
     return False
 ```
+
+> **为什么 asset 也作为参数？** 虽然 manager 已经按 STOCK_KLINE / INDEX_KLINE capability 把 fetchers 过滤了，`supports_kline(asset="index")` 收到的 fetcher 一定声明了 INDEX_KLINE。但子类 override 需要 asset 才能正确表达不对称限制，例如：
+> - Baostock 声明 INDEX_KLINE 但**只支持 d/w/m**（指数无分钟），因此 asset="index" + period∈{5,15,30,60} 返回 False。
+> - Zhitu/Zzshare 没声明 INDEX_KLINE，但万一未来添加时如果也支持 INDEX_KLINE，其 override 也可基于 asset 判定。
+> - 不带 asset 的话，这种"我有 index K-line 但只支持部分 period"的差异化会在 override 里变成"假设当前是 stock"这样脆弱。
 
 ### 4.2.1 (NEW) `BaseFetcher.supports_quote(market)`
 
@@ -244,7 +253,8 @@ def supports_quote(self, market: str) -> bool:
 ```python
 # tushare_fetcher.py
 class TushareFetcher(BaseFetcher):
-    def supports_kline(self, period, adjust, market):
+    def supports_kline(self, period, adjust, market, asset):
+        # Tushare 仅 csi，且仅 d/w/m
         if market != "csi" or period not in ("d", "w", "m"):
             return False
         # Tushare weekly/monthly 也支持 qfq/hfq（pro_bar adj 参数）
@@ -252,39 +262,44 @@ class TushareFetcher(BaseFetcher):
 
 # baostock_fetcher.py
 class BaostockFetcher(BaseFetcher):
-    def supports_kline(self, period, adjust, market):
-        # 全 frequency + 全 adjust 都支持（query_history_k_data_plus）
-        if period in ("d", "w", "m"):
-            return True
-        if period in ("5", "15", "30", "60"):
-            return market == "csi"  # 指数无分钟
-        return False  # 无 1m
+    def supports_kline(self, period, adjust, market, asset):
+        # 股票: 全 frequency + 全 adjust
+        if asset == "stock":
+            if period in ("d", "w", "m"):
+                return True
+            if period in ("5", "15", "30", "60"):
+                return market == "csi"  # 仅 csi 股票分钟
+            return False  # 无 1m
+        # 指数: 仅 d/w/m, 无分钟
+        if asset == "index":
+            return period in ("d", "w", "m")
+        return False
 
 # akshare/fetcher.py
 class AkshareFetcher(BaseFetcher):
-    def supports_kline(self, period, adjust, market):
+    def supports_kline(self, period, adjust, market, asset):
         # 1m 强制不复权（上游硬约束，全 fetcher 唯一 1m 源）
         if period == "1" and adjust in ("qfq", "hfq"):
             return False
-        return super().supports_kline(period, adjust, market)
+        return super().supports_kline(period, adjust, market, asset)
 
 # yfinance_fetcher.py
 class YfinanceFetcher(BaseFetcher):
-    def supports_kline(self, period, adjust, market):
+    def supports_kline(self, period, adjust, market, asset):
         # hfq 静默降级为 qfq（语义丢失）→ 视为不支持
         if adjust == "hfq":
             return False
-        return super().supports_kline(period, adjust, market)
+        return super().supports_kline(period, adjust, market, asset)
 
 # zhitu_fetcher.py
 class ZhituFetcher(BaseFetcher):
-    def supports_kline(self, period, adjust, market):
-        # Zhitu 仅 5/15/30/60，且分钟强制不复权
+    def supports_kline(self, period, adjust, market, asset):
+        # Zhitu 仅有 minute 5/15/30/60 + 强制不复权；无 stock/index 区分
         return period in ("5", "15", "30", "60") and adjust in ("", None)
 
 # zzshare_fetcher.py
 class ZzshareFetcher(BaseFetcher):
-    def supports_kline(self, period, adjust, market):
+    def supports_kline(self, period, adjust, market, asset):
         if period == "d":
             return True
         if period in ("1", "5", "15", "30", "60"):
@@ -293,8 +308,11 @@ class ZzshareFetcher(BaseFetcher):
 
 # myquant_fetcher.py
 class MyquantFetcher(BaseFetcher):
-    def supports_kline(self, period, adjust, market):
-        # myquant d + 5/15/30/60 全 adjust
+    def supports_kline(self, period, adjust, market, asset):
+        # myquant d + 5/15/30/60 全 adjust；asset 区分后还需附加:
+        # 指数分钟仅 csi
+        if asset == "index" and period in ("5", "15", "30", "60"):
+            return market == "csi"
         return period in ("d", "5", "15", "30", "60")
 ```
 
@@ -333,16 +351,17 @@ def get_kline_data(
         candidates = self._filter_by_capability(market, fallback_cap)
     
     # Step 3.5: 细粒度 filter (新增, failover 之前剔除必败者)
+    asset = "index" if is_index else "stock"
     candidates = [
         f for f in candidates
-        if f.supports_kline(frequency, adjust or "", market)
+        if f.supports_kline(frequency, adjust or "", market, asset)
     ]
-    
+
     if not candidates:
         # 诚实错误: 客户端请求合法但当前 fetcher 集合无人能服务
         raise DataFetchError(
-            f"No fetcher supports period={frequency} adjust={adjust!r} "
-            f"market={market}"
+            f"No fetcher supports asset={asset} period={frequency} "
+            f"adjust={adjust!r} market={market}"
         )
     
     # Step 4: 按 priority 排序后 failover
@@ -648,14 +667,14 @@ def test_kline_historical_minute():
     assert len(body["data"]) > 48 * 5  # 至少 5 天
 
 def test_supports_kline_method():
-    """逐 fetcher 验证 supports_kline"""
+    """逐 fetcher 验证 supports_kline(asset, period)"""
     for fetcher in manager.fetchers:
-        # d 全部应该支持 (有 STOCK_KLINE 或 INDEX_KLINE 能力的)
-        cap_kline = (
-            DataCapability.STOCK_KLINE in fetcher.supported_data_types
-            or DataCapability.INDEX_KLINE in fetcher.supported_data_types
-        )
-        assert fetcher.supports_kline("d", "", "csi") == cap_kline
+        for asset in ("stock", "index"):
+            cap_kline = (
+                (asset == "stock" and DataCapability.STOCK_KLINE in fetcher.supported_data_types)
+                or (asset == "index" and DataCapability.INDEX_KLINE in fetcher.supported_data_types)
+            )
+            assert fetcher.supports_kline("d", "", "csi", asset) == cap_kline
 
 def test_supports_quote_method():
     """quote 仅有 market 维度，逐 fetcher 验证"""
@@ -752,3 +771,4 @@ def test_quote_endpoint_rejects_adjust_parameter():
 | `/quote` 参数契约 | 文档不显式 | 显式 reject `period/adjust/days/start_date/end_date` → 422 | quote 是点位快照，这些参数无意义 |
 | Akshare volume 归一 | P2 优先级 | **P0 提升** | silent data corruption（差 100x）必须先修 |
 | supports_quote 新方法 | 未引入 | 新增 `BaseFetcher.supports_quote(market)` | quote 也有 market 路由 + Tencent 一致性问题 |
+| `supports_kline` 签名 | `(period, adjust, market)` | `(period, adjust, market, asset)` (rev 2.1) | 加 asset 让子类 override 表达不对称限制（Baostock 指数无分钟；Myquant 指数分钟仅 csi） |
