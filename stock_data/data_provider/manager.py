@@ -473,16 +473,54 @@ class DataFetcherManager:
 
     # ---------- realtime quotes (with circuit breaker) ----------
 
+    def _quote_candidates(
+        self,
+        market: str,
+        capability: DataCapability,
+    ) -> list[BaseFetcher]:
+        """Two-stage filter per spec §4.4: capability bit then supports_quote.
+
+        Stage 1 narrows by capability bit (STOCK_REALTIME_QUOTE for stock code,
+        INDEX_REALTIME_QUOTE for index code) plus market. Stage 2 narrows by
+        per-fetcher ``supports_quote(market)`` so we never try a fetcher that
+        will refuse this market.
+
+        Returns an unsorted list — caller sorts by priority and runs failover.
+        """
+        candidates = self._filter_by_capability(market, capability)
+        return [f for f in candidates if f.supports_quote(market)]
+
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
-        """Get realtime quote with automatic failover and circuit breaker."""
+        """Get realtime quote with two-stage filter and circuit breaker (spec §4.4).
+
+        The circuit breaker is checked per-fetcher inside the failover loop —
+        a fetcher in OPEN state is skipped without making a network call. The
+        first non-None result wins; on total failure, raises ``DataFetchError``.
+        """
         stock_code = normalize_stock_code(stock_code)
         market = market_tag(stock_code)
 
-        return self._with_failover(
-            DataCapability.STOCK_REALTIME_QUOTE, market, f"realtime {stock_code}",
-            lambda f: f.get_realtime_quote(stock_code),
-            allow_none=True, circuit_breaker=REALTIME_CIRCUIT_BREAKER,
-        )
+        candidates = self._quote_candidates(market, DataCapability.STOCK_REALTIME_QUOTE)
+        if not candidates:
+            raise DataFetchError(f"No fetcher supports quote market={market}")
+        candidates = sorted(candidates, key=lambda f: f.priority)
+
+        errors: list[str] = []
+        for fetcher in candidates:
+            # Circuit breaker: skip fetchers in OPEN state without a network call.
+            if not REALTIME_CIRCUIT_BREAKER.is_available(fetcher.name):
+                logger.debug(f"[Manager] {fetcher.name} circuit open, skipping")
+                continue
+            try:
+                q = fetcher.get_realtime_quote(stock_code)
+            except DataFetchError as e:
+                REALTIME_CIRCUIT_BREAKER.record_failure(fetcher.name)
+                errors.append(f"[{fetcher.name}] {e}")
+                continue
+            REALTIME_CIRCUIT_BREAKER.record_success(fetcher.name)
+            if q is not None:
+                return q
+        raise DataFetchError(f"All fetchers failed: {errors}")
 
     # ---------- trade calendar (with persistence) ----------
 
@@ -612,26 +650,40 @@ class DataFetcherManager:
     # ---------- index methods ----------
 
     def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
-        """Get realtime quote for an index with capability-based failover.
+        """Get realtime quote for an index with two-stage filter (spec §4.4).
 
-        Routes through fetchers declaring INDEX_REALTIME_QUOTE capability.
-        Each fetcher must implement get_index_realtime_quote().
+        Routes through fetchers declaring INDEX_REALTIME_QUOTE capability
+        and whose ``supports_quote(market)`` returns True. Each fetcher
+        must implement ``get_index_realtime_quote()``.
 
         Args:
             index_code: Index code (e.g., 000300, 399006, SPX, HSI)
 
         Returns:
             UnifiedRealtimeQuote or None if not available.
+
+        Raises:
+            DataFetchError: When no fetcher survives both stages (capability +
+                supports_quote) for the requested market.
         """
         index_code = normalize_stock_code(index_code)
         index_type = index_market_tag(index_code) or "csi"
-        return self._with_failover(
-            DataCapability.INDEX_REALTIME_QUOTE,
-            index_type,
-            f"{index_code} index quote",
-            lambda f: f.get_index_realtime_quote(index_code),
-            allow_none=True,
-        )
+
+        candidates = self._quote_candidates(index_type, DataCapability.INDEX_REALTIME_QUOTE)
+        if not candidates:
+            raise DataFetchError(f"No fetcher supports quote market={index_type}")
+        candidates = sorted(candidates, key=lambda f: f.priority)
+
+        errors: list[str] = []
+        for fetcher in candidates:
+            try:
+                q = fetcher.get_index_realtime_quote(index_code)
+            except DataFetchError as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                continue
+            if q is not None:
+                return q
+        raise DataFetchError(f"All fetchers failed: {errors}")
 
     def get_index_historical(
         self,
