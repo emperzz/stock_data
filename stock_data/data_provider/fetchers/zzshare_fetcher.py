@@ -196,9 +196,11 @@ class ZzshareFetcher(BaseFetcher):
         return api.daily(**kwargs)
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
-        """Normalize zzshare daily output to STANDARD_COLUMNS.
+        """Normalize zzshare K-line output to STANDARD_COLUMNS.
 
-        Column mapping: vol -> volume, trade_date -> date (YYYY-MM-DD).
+        Daily: trade_date (YYYYMMDD) -> date.
+        Minute: trade_time (YYYYMMDDHHMM, 12 digits) -> date (first 8 digits).
+        Column rename: vol -> volume. pct_chg absent for minute.
         """
         if df is None or df.empty:
             return df
@@ -206,11 +208,14 @@ class ZzshareFetcher(BaseFetcher):
         rename = {}
         if "vol" in df.columns:
             rename["vol"] = "volume"
-        if "trade_date" in df.columns:
+        # Daily path: trade_date (YYYYMMDD) → date
+        if "trade_date" in df.columns and "date" not in df.columns:
             rename["trade_date"] = "date"
         df = df.rename(columns=rename)
+        # Minute path: derive date from trade_time (first 8 digits of YYYYMMDDHHMM)
+        if "date" not in df.columns and "trade_time" in df.columns:
+            df["date"] = df["trade_time"].astype(str).str.slice(0, 8).apply(_from_yyyymmdd)
         if "date" in df.columns:
-            df["date"] = df["date"].astype(str).apply(_from_yyyymmdd)
             df["date"] = pd.to_datetime(df["date"])
         if "code" not in df.columns:
             df["code"] = normalize_stock_code(stock_code)

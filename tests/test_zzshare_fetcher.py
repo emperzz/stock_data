@@ -1267,3 +1267,38 @@ class TestBoardSubtypeValidation:
         from stock_data.data_provider.persistence.board import VALID_SUBTYPES_BY_SOURCE
 
         assert "同花顺题材" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["special"]
+
+
+# ====================================================================
+# _normalize_data minute branch
+# ====================================================================
+
+
+class TestNormalizeMinute:
+    """Tests for _normalize_data minute branch."""
+
+    def test_normalize_minute_extracts_date_from_trade_time(self):
+        """trade_time (YYYYMMDDHHMM, 12 digits) → date column (YYYY-MM-DD)."""
+        import pandas as pd
+
+        fetcher = ZzshareFetcher()
+        raw = pd.DataFrame({
+            "ts_code": ["600519.SH"] * 4,
+            "trade_time": ["202605200935", "202605200940", "202605210935", "202605210940"],
+            "open": [1700.0, 1705.0, 1710.0, 1715.0],
+            "high": [1708.0, 1712.0, 1718.0, 1723.0],
+            "low": [1698.0, 1702.0, 1708.0, 1713.0],
+            "close": [1705.0, 1710.0, 1715.0, 1720.0],
+            "vol": [1e5, 1.1e5, 1.2e5, 1.3e5],
+            "amount": [1e8, 1.1e8, 1.2e8, 1.3e8],
+        })
+        out = fetcher._normalize_data(raw, "600519")
+        assert "date" in out.columns
+        # trade_time[0:8] = "20260520" → "2026-05-20"
+        dates = sorted(out["date"].astype(str).unique())
+        assert dates == ["2026-05-20", "2026-05-21"]
+        # vol renamed to volume
+        assert "volume" in out.columns
+        assert "vol" not in out.columns
+        # No time column (lost per spec §3.1)
+        assert "time" not in out.columns
