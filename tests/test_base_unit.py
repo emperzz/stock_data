@@ -82,6 +82,25 @@ class MockFetcherNoRealtime(BaseFetcher):
         return df
 
 
+class MockFetcherIndexOnly:
+    """Mock that declares HISTORICAL_DWM only (NOT INDEX_HISTORICAL).
+
+    Used to verify that index codes routed via manager.get_kline_data
+    fall through to a clean DataFetchError when no INDEX_* fetcher is
+    registered — i.e., the INDEX→HISTORICAL silent fallback is gone.
+    """
+    name = "MockFetcherIndexOnly"
+    priority = 10
+    supported_markets = {"csi"}
+    supported_data_types = DataCapability.HISTORICAL_DWM
+
+    def get_kline_data(self, stock_code, start_date=None, end_date=None,
+                       days=30, frequency="d", adjust=None):
+        return pd.DataFrame({"date": pd.to_datetime(["2026-05-01"]),
+                             "open": [1.0], "high": [2.0], "low": [0.5],
+                             "close": [1.5], "volume": [1000.0]})
+
+
 class TestDataFetcherManagerUnit:
     """Unit tests for DataFetcherManager with mock fetchers."""
 
@@ -98,7 +117,7 @@ class TestDataFetcherManagerUnit:
         assert f.name == "MockFetcher"
 
     def test_get_kline_data(self, manager):
-        df, source = manager.get_kline_data("000001", days=5)
+        df, source = manager.get_kline_data("600519", days=5)
         assert source == "MockFetcher"
         assert len(df) > 0
         assert "close" in df.columns
@@ -155,6 +174,24 @@ class TestDataFetcherManagerUnit:
         stocks = manager.fetchers[0].get_all_stocks("csi")
         assert len(stocks) == 1
         assert stocks[0]["code"] == "000001"
+
+    def test_get_kline_data_index_no_fallback_daily(self):
+        """Index code + only HISTORICAL_DWM fetcher: must raise DataFetchError.
+
+        Pre-fix: silently routed through HISTORICAL_DWM and returned fake data.
+        Post-fix: no INDEX_HISTORICAL declaration → DataFetchError.
+        """
+        from stock_data.data_provider.base import DataFetchError
+        mgr = DataFetcherManager([MockFetcherIndexOnly()])
+        with pytest.raises(DataFetchError):
+            mgr.get_kline_data("000300", days=5, frequency="d")
+
+    def test_get_kline_data_index_no_fallback_minute(self):
+        """Index code + minute freq + only HISTORICAL_MIN fetcher: must raise."""
+        from stock_data.data_provider.base import DataFetchError
+        mgr_only_hist = DataFetcherManager([MockFetcherIndexOnly()])
+        with pytest.raises(DataFetchError):
+            mgr_only_hist.get_kline_data("000300", days=5, frequency="5")
 
 
 class TestKlineDataProcessing:

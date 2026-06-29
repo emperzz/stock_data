@@ -305,24 +305,23 @@ class DataFetcherManager:
         stock_code = normalize_stock_code(stock_code)
         index_tag = index_market_tag(stock_code)
 
-        # Index codes prefer INDEX_HISTORICAL/INDEX_INTRADAY so fetchers can
-        # declare index support independently of stock K-line support, then
-        # fall back to HISTORICAL_DWM/HISTORICAL_MIN for backward compat.
-        if frequency in ("5", "15", "30", "60"):
-            index_cap = DataCapability.INDEX_INTRADAY
-            gen_cap = DataCapability.HISTORICAL_MIN
-        else:
-            index_cap = DataCapability.INDEX_HISTORICAL
-            gen_cap = DataCapability.HISTORICAL_DWM
-
+        # Capability routing is capability-only — "no declaration = no capability".
+        # When index_tag is set, require INDEX_*; for stock codes, require HISTORICAL_*.
+        # A missing declaration surfaces as DataFetchError via _with_failover.
         if index_tag:
             market = index_tag
-            capability = index_cap
-            if not self._filter_by_capability(market, index_cap):
-                capability = gen_cap
+            capability = (
+                DataCapability.INDEX_INTRADAY
+                if frequency in ("5", "15", "30", "60")
+                else DataCapability.INDEX_HISTORICAL
+            )
         else:
             market = market_tag(stock_code)
-            capability = gen_cap
+            capability = (
+                DataCapability.HISTORICAL_MIN
+                if frequency in ("5", "15", "30", "60")
+                else DataCapability.HISTORICAL_DWM
+            )
 
         def _fetch(fetcher: BaseFetcher) -> pd.DataFrame:
             return fetcher.get_kline_data(
