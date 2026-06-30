@@ -217,7 +217,7 @@ Compact overview:
 | `ZzshareFetcher` | 2 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
 | `TencentFetcher` | 6 | csi, hk | `STOCK_REALTIME_QUOTE`, `INDEX_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
 | `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `STOCK_BOARD` | none |
-| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH` | none |
+| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH`, `NEWS_SEARCH` (via 问财 iWenCai) | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
 | `MyquantFetcher` | 9 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_KLINE`, `STOCK_INFO` (last-resort backup; richer sources win) | `MYQUANT_TOKEN` |
@@ -280,7 +280,7 @@ fetchers that support it.
 | `get_reports` | `RESEARCH_REPORT` |
 | `get_announcements` | `ANNOUNCEMENT` |
 | `get_flash_news` | `NEWS_FLASH` (EastMoney P6 → ThsFetcher P7) |
-| `search_news` | `NEWS_SEARCH` (EastMoney P6 → BaiduFetcher P7) |
+| `search_news` | `NEWS_SEARCH` (EastMoney P6 → ThsFetcher / BaiduFetcher P7) |
 | `get_news_content` (URL extractor; no fetcher routing) | n/a — pure utility in `utils/news_extractor.py` |
 | `get_stock_info` | `STOCK_INFO` (ZzshareFetcher P2) |
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
@@ -299,7 +299,7 @@ fetchers that support it.
 | ZhituFetcher | `STOCK_REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| STOCK_KLINE \| STOCK_LIST \| STOCK_BOARD` |
 | TencentFetcher | `STOCK_REALTIME_QUOTE \| INDEX_REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
 | EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD` |
-| ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH` |
+| ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH \| NEWS_SEARCH` |
 | CninfoFetcher | `ANNOUNCEMENT` |
 
 **Index routing design**: Each fetcher that declares an INDEX_* capability must implement the corresponding public method (`get_index_realtime_quote`, `get_index_historical`, `get_index_intraday`). The Manager calls these methods directly — no `hasattr` checks, no fallback to stock methods. Internally, a fetcher may delegate to shared data processing logic (e.g. `get_index_historical` → `get_kline_data`), but the public interface is always the dedicated index method.

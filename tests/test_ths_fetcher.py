@@ -26,6 +26,8 @@ class TestThsFetcherBasics:
         f = ThsFetcher()
         assert DataCapability.HOT_TOPICS in f.supported_data_types
         assert DataCapability.NORTH_FLOW in f.supported_data_types
+        assert DataCapability.NEWS_FLASH in f.supported_data_types
+        assert DataCapability.NEWS_SEARCH in f.supported_data_types
 
 
 class TestHotTopics:
@@ -446,3 +448,242 @@ class TestFetchFlashNewsErrors:
         assert len(results) == 2
         assert results[0]["title"] == "good"
         assert results[1]["title"] == "also good"
+
+
+# ----------------------------------------------------------------------
+# News search (问财 iWenCai) tests
+# ----------------------------------------------------------------------
+
+# 一条真实形态的 iWenCai comprehensive/search 响应(裁剪)。
+_IWENCAI_FIXTURE = {
+    "status_msg": "OK",
+    "status_code": 0,
+    "total": 3,
+    "data": [
+        {
+            "channel": "news",
+            "id": "55bb135d35c4b018",
+            "url": "https://finance.sina.com.cn/wm/2026-06-03/doc-iniacnun2387005.shtml",
+            "title": "贵州茅台拟提高每股分红金额",
+            "summary": "贵州茅台6月2日晚间发布公告，调整2025年年度利润分配方案。",
+            "extra": {"publish_source": "新浪财经", "host_name": "finance.sina.com.cn"},
+            "publish_date": "2026-06-03 16:53:00",
+        },
+        {
+            "channel": "news",
+            "id": "af9a96fa73c76ed6",
+            "url": "http://stock.10jqka.com.cn/20260630/c677840543.shtml",
+            "title": "<em>茅台</em>股东会召开",
+            "summary": "贵州<em>茅台</em>2025年度股东会在茅台会议中心举行。",
+            "extra": {"publish_source": "证券时报网", "host_name": "stock.10jqka.com.cn"},
+            "publish_date": "2026-06-30 18:28:21",
+        },
+        {
+            "channel": "news",
+            "id": "deadbeef",
+            # 缺 title → 坏数据, 应被跳过
+            "url": "http://example.com/x",
+            "summary": "no title here",
+            "extra": {},
+            "publish_date": "2026-06-20 09:00:00",
+        },
+    ],
+}
+
+
+def _fake_post_ok(payload):
+    """Build a fake requests.post returning ``payload`` with HTTP 200."""
+
+    def _post(url, json=None, headers=None, timeout=None):
+        class R:
+            status_code = 200
+            encoding = "utf-8"
+
+            def json(self_inner):
+                return payload
+
+        return R()
+
+    return _post
+
+
+class TestSearchNewsNormalize:
+    """Pure normalize helper — no network."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_normalize_full(self):
+        rec = _IWENCAI_FIXTURE["data"][0]
+        out = self.fetcher._normalize_search_item(rec)
+        assert set(out.keys()) == {
+            "title", "url", "source_domain", "publish_date", "snippet", "media_name",
+        }
+        assert out["title"] == "贵州茅台拟提高每股分红金额"
+        assert out["url"] == rec["url"]
+        assert out["source_domain"] == "finance.sina.com.cn"
+        assert out["publish_date"] == "2026-06-03"  # 截到日
+        assert out["media_name"] == "新浪财经"
+        assert "晚间发布公告" in out["snippet"]
+
+    def test_normalize_strips_em_tags(self):
+        rec = _IWENCAI_FIXTURE["data"][1]
+        out = self.fetcher._normalize_search_item(rec)
+        assert "<em>" not in out["title"] and "</em>" not in out["title"]
+        assert out["title"] == "茅台股东会召开"
+        assert "<em>" not in out["snippet"]
+
+    def test_normalize_source_domain_falls_back_to_url(self):
+        rec = {"url": "https://a.b.com/p", "title": "t", "extra": {}, "publish_date": "2026-01-01 00:00:00"}
+        out = self.fetcher._normalize_search_item(rec)
+        assert out["source_domain"] == "a.b.com"  # extra.host_name 缺失 → urlparse
+
+    def test_normalize_missing_url_raises(self):
+        with pytest.raises(KeyError):
+            self.fetcher._normalize_search_item({"title": "t", "extra": {}})
+
+
+class TestSearchNewsRequest:
+    """search_news request construction + response handling."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_builds_correct_request(self, monkeypatch):
+        captured = {}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            captured.update(url=url, json=json, headers=headers, timeout=timeout)
+            class R:
+                status_code = 200
+                encoding = "utf-8"
+                def json(self_inner):
+                    return _IWENCAI_FIXTURE
+            return R()
+
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "post", fake_post)
+
+        self.fetcher.search_news("茅台", limit=5)
+
+        assert captured["url"].endswith("/gateway/mobilesearch/comprehensive/search")
+        assert "iwencai.com" in captured["url"]
+        assert captured["json"]["query"] == "茅台"
+        assert captured["json"]["size"] == 5
+        assert captured["json"]["app_id"] == "wencai_pc"
+        assert captured["json"]["channels"] == ["news_filter", "web"]
+        assert captured["timeout"] == 15
+
+    def test_returns_normalized_dicts_and_skips_malformed(self, monkeypatch):
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
+
+        results = self.fetcher.search_news("茅台", limit=10)
+
+        # fixture 有 3 条, 第 3 条缺 title → 跳过 → 2 条
+        assert len(results) == 2
+        assert results[0]["title"] == "贵州茅台拟提高每股分红金额"
+        assert results[1]["title"] == "茅台股东会召开"
+        for it in results:
+            assert set(it.keys()) == {
+                "title", "url", "source_domain", "publish_date", "snippet", "media_name",
+            }
+
+    def test_from_date_filter(self, monkeypatch):
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
+        # 只保留 2026-06-30 当天及以后 → 仅第 2 条
+        results = self.fetcher.search_news("茅台", from_date="2026-06-10", limit=10)
+        assert len(results) == 1
+        assert results[0]["publish_date"] == "2026-06-30"
+
+    def test_to_date_filter(self, monkeypatch):
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
+        # 只保留 2026-06-03 当天及以前 → 仅第 1 条
+        results = self.fetcher.search_news("茅台", to_date="2026-06-10", limit=10)
+        assert len(results) == 1
+        assert results[0]["publish_date"] == "2026-06-03"
+
+    def test_empty_data_returns_empty(self, monkeypatch):
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        payload = {"status_msg": "OK", "status_code": 0, "total": 0, "data": []}
+        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(payload))
+        assert self.fetcher.search_news("不存在的词", limit=10) == []
+
+
+class TestSearchNewsValidation:
+    """q / limit validation (mirrors EastMoney/Baidu search_news)."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_empty_q_raises(self):
+        with pytest.raises(DataFetchError, match="invalid q"):
+            self.fetcher.search_news("", limit=10)
+
+    def test_too_long_q_raises(self):
+        with pytest.raises(DataFetchError, match="invalid q"):
+            self.fetcher.search_news("x" * 201, limit=10)
+
+    def test_limit_zero_raises(self):
+        with pytest.raises(DataFetchError, match="limit must be 1..100"):
+            self.fetcher.search_news("茅台", limit=0)
+
+    def test_limit_over_100_raises(self):
+        with pytest.raises(DataFetchError, match="limit must be 1..100"):
+            self.fetcher.search_news("茅台", limit=101)
+
+    def test_limit_non_numeric_raises(self):
+        with pytest.raises(DataFetchError, match="must be an integer"):
+            self.fetcher.search_news("茅台", limit="abc")
+
+    def test_limit_string_coerced(self, monkeypatch):
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
+        results = self.fetcher.search_news("茅台", limit="10")
+        assert len(results) == 2
+
+
+class TestSearchNewsErrors:
+    """Error handling for search_news."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_http_error_raises(self, monkeypatch):
+        class R:
+            status_code = 502
+            encoding = "utf-8"
+            def json(self_inner):
+                return {}
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "post", lambda *a, **kw: R())
+        with pytest.raises(DataFetchError, match="HTTP 502"):
+            self.fetcher.search_news("茅台", limit=10)
+
+    def test_network_error_raises(self, monkeypatch):
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        def boom(*a, **kw):
+            raise ConnectionError("refused")
+        monkeypatch.setattr(mod.requests, "post", boom)
+        with pytest.raises(DataFetchError, match="network error"):
+            self.fetcher.search_news("茅台", limit=10)
+
+    def test_bad_json_raises(self, monkeypatch):
+        class R:
+            status_code = 200
+            encoding = "utf-8"
+            def json(self_inner):
+                raise ValueError("bad json")
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "post", lambda *a, **kw: R())
+        with pytest.raises(DataFetchError, match="bad JSON"):
+            self.fetcher.search_news("茅台", limit=10)
+
+    def test_upstream_status_code_raises(self, monkeypatch):
+        bad = {"status_msg": "FAIL", "status_code": -1, "data": []}
+        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(bad))
+        with pytest.raises(DataFetchError, match="status_code=-1"):
+            self.fetcher.search_news("茅台", limit=10)

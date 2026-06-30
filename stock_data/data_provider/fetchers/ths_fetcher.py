@@ -1,18 +1,24 @@
 """
 同花顺 HTTP API fetcher for signal layer data.
 
-Provides: 热点题材(hot-topics), 北向资金(north-flow), 全球财经快讯(news-flash)
+Provides: 热点题材(hot-topics), 北向资金(north-flow), 全球财经快讯(news-flash),
+          新闻搜索(news-search)
 
 APIs:
 - 热点: zx.10jqka.com.cn/event/api/getharden/
 - 北向: data.hexin.cn/market/hsgtApi/method/dayChart/
 - 快讯: news.10jqka.com.cn/tapp/news/push/stock  (pageSize 硬编码 20/页, 内部翻页)
+- 搜索: www.iwencai.com/gateway/mobilesearch/comprehensive/search  (问财聚合搜索)
+
+注意: 新闻搜索走的是同花顺问财 iWenCai (www.iwencai.com), 不是 10jqka 域名。
+10jqka 财经页的站内搜索框本身就是跳转到 iWenCai 的。详见 search_news 文档。
 """
 
 import logging
 import math
 import os
 from datetime import date as _date, datetime
+from urllib.parse import urlparse
 
 import requests
 
@@ -42,6 +48,7 @@ class ThsFetcher(BaseFetcher):
         DataCapability.HOT_TOPICS
         | DataCapability.NORTH_FLOW
         | DataCapability.NEWS_FLASH
+        | DataCapability.NEWS_SEARCH
     )
 
     def is_available(self) -> bool:
@@ -272,4 +279,165 @@ class ThsFetcher(BaseFetcher):
                     f"[ThsFetcher] fetch_flash_news: skipping malformed record: {e}"
                 )
                 continue
+        return out
+
+    # ------------------------------------------------------------------
+    # 新闻搜索 (News Search) — 同花顺问财 iWenCai 聚合搜索
+    # ------------------------------------------------------------------
+
+    # 问财 PC 聚合搜索接口。注意是 www.iwencai.com 域名(同花顺问财),不是
+    # 10jqka —— 10jqka 财经页的站内搜索框 (#search_input) 本身就跳转到这里。
+    _NEWS_SEARCH_URL = (
+        "https://www.iwencai.com/gateway/mobilesearch/comprehensive/search"
+    )
+    # channels 选 news_filter+web → 资讯/网页聚合(多源: 新浪/百度/10jqka 等)。
+    _NEWS_SEARCH_CHANNELS = ["news_filter", "web"]
+    _NEWS_SEARCH_MAX_Q_LEN = 200
+    _NEWS_SEARCH_TIMEOUT = 15
+    _NEWS_SEARCH_HEADERS = {
+        "User-Agent": THS_UA,
+        "Content-Type": "application/json",
+        "Referer": "https://www.iwencai.com/",
+        "Origin": "https://www.iwencai.com",
+    }
+
+    @staticmethod
+    def _strip_em(s: str) -> str:
+        """剥离 <em>/</em> 高亮标签(与 EastMoneyFetcher._strip_em 对齐)。"""
+        return (
+            s.replace("(<em>", "")
+            .replace("</em>)", "")
+            .replace("<em>", "")
+            .replace("</em>", "")
+        )
+
+    @classmethod
+    def _normalize_search_item(cls, rec: dict) -> dict:
+        """Convert one iWenCai record to the shared NewsItem dict shape.
+
+        归一化到与 EastMoneyFetcher._normalize_news_item / NewsItem schema
+        完全一致的 6 字段: {title, url, source_domain, publish_date,
+        snippet, media_name}。
+
+        - ``url`` 直接用上游原文链接(问财聚合, 指向源站如新浪/百度/10jqka)。
+        - ``publish_date`` 取 ``publish_date`` 的前 10 位 (YYYY-MM-DD)。
+        - ``source_domain`` 优先用 ``extra.host_name``, 缺失时回退 urlparse(url)。
+        - ``media_name`` 用 ``extra.publish_source`` (e.g. 新浪财经)。
+
+        Raises KeyError/TypeError/ValueError on missing url/title, which the
+        caller treats as a skip.
+        """
+        url = rec["url"]  # 必填: 缺失视为坏数据 → KeyError → 上层跳过
+        title = cls._strip_em(rec["title"])
+        extra = rec.get("extra") or {}
+        # publish_date 形如 "2026-06-30 18:28:21"; 截到日。
+        publish_date = (rec.get("publish_date") or "")[:10]
+        snippet = cls._strip_em(rec.get("summary") or "").replace("　", "").strip()
+        source_domain = extra.get("host_name") or urlparse(url).netloc
+        return {
+            "title": title,
+            "url": url,
+            "source_domain": source_domain,
+            "publish_date": publish_date,
+            "snippet": snippet,
+            "media_name": extra.get("publish_source") or "",
+        }
+
+    def search_news(
+        self,
+        q: str,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Search news via 同花顺问财 iWenCai (EastMoney-fetcher backup).
+
+        ThsFetcher 作为 ``NEWS_SEARCH`` 能力的又一路 failover backup(EastMoney
+        P6 primary → Baidu/Ths P7 backup)。
+
+        上游: ``POST www.iwencai.com/gateway/mobilesearch/comprehensive/search``
+        请求体: ``{offset, size, app_id:"wencai_pc", query, channels:[...],
+        scroll_mode:"web", platform:"pc"}``。问财是全网聚合搜索, 结果来源不限于
+        同花顺自家(新浪/百度/10jqka 等都可能出现)。
+
+        鉴权: 实测当前**无需** hexin-v / v cookie token, 普通 UA + JSON body
+        即可。若上游日后收紧, 可复用 akshare 自带的 ``ths.js`` + py_mini_racer
+        生成 ``v`` token (``js.eval(ths.js); js.call("v")``), 以 ``Cookie: v=...``
+        头补上 —— 目前刻意不引入该依赖路径 (YAGNI)。
+
+        Returns:
+            归一化后的 list[dict], 每条匹配 NewsItem schema:
+            ``{title, url, source_domain, publish_date, snippet, media_name}``。
+
+        Raises:
+            DataFetchError: 参数越界 / 网络异常 / HTTP 非 200 / 上游 status_code != 0。
+        """
+        # ---- 参数校验(与 EastMoney/Baidu 的 search_news 对齐)----
+        if not q or len(q) > self._NEWS_SEARCH_MAX_Q_LEN:
+            raise DataFetchError(
+                f"[ThsFetcher] search_news: invalid q (len={len(q) if q else 0})"
+            )
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError) as e:
+            raise DataFetchError(
+                f"[ThsFetcher] search_news: limit must be an integer 1..100 (got {limit!r})"
+            ) from e
+        if not (1 <= limit <= 100):
+            raise DataFetchError(
+                f"[ThsFetcher] search_news: limit must be 1..100 (got {limit})"
+            )
+
+        body = {
+            "offset": 0,
+            "size": limit,
+            "app_id": "wencai_pc",
+            "query": q,
+            "channels": self._NEWS_SEARCH_CHANNELS,
+            "scroll_mode": "web",
+            "platform": "pc",
+        }
+
+        logger.info(f"[ThsFetcher] news search q={q!r} limit={limit}")
+        try:
+            resp = requests.post(
+                self._NEWS_SEARCH_URL,
+                json=body,
+                headers=self._NEWS_SEARCH_HEADERS,
+                timeout=self._NEWS_SEARCH_TIMEOUT,
+            )
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] search_news network error: {e}"
+            ) from e
+
+        if resp.status_code != 200:
+            raise DataFetchError(f"[ThsFetcher] search_news HTTP {resp.status_code}")
+
+        resp.encoding = "utf-8"
+        try:
+            payload = resp.json()
+        except ValueError as e:
+            raise DataFetchError(f"[ThsFetcher] search_news: bad JSON: {e}") from e
+
+        if payload.get("status_code") != 0:
+            raise DataFetchError(
+                f"[ThsFetcher] search_news API status_code={payload.get('status_code')} "
+                f"msg={payload.get('status_msg')}"
+            )
+
+        records = payload.get("data") or []
+        out: list[dict] = []
+        for rec in records:
+            try:
+                item = self._normalize_search_item(rec)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning(f"[ThsFetcher] search_news: skipping malformed record: {e}")
+                continue
+            # 日期过滤(publish_date 为 "YYYY-MM-DD", 字符串比较即可)。空日期不被过滤掉。
+            if from_date and item["publish_date"] and item["publish_date"] < from_date:
+                continue
+            if to_date and item["publish_date"] and item["publish_date"] > to_date:
+                continue
+            out.append(item)
         return out
