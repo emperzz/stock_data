@@ -731,6 +731,12 @@ class StockInfoResponse(BaseModel):
     secretary_phone: str = Field(default="", description="董秘电话 (Zhitu)")
     secretary_email: str = Field(default="", description="董秘邮箱 (Zhitu)")
 
+    # 交易所
+    exchange: str | None = Field(
+        default=None,
+        description="交易所 (SH/SZ/BJ), 由 code prefix 推断, 适用于 A 股; HK/US 返 null",
+    )
+
     # 源
     source: str = Field(default="", description="数据源: 'zhitu' | 'myquant'")
 

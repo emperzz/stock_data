@@ -10,6 +10,7 @@ from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.indicators import compute_lookback
 from ...data_provider.persistence import stock_list
+from ...data_provider.utils.normalize import code_to_exchange
 from ..cache import (
     cache_endpoint,
     get_announcements_cache,
@@ -103,10 +104,19 @@ from .helpers import (
     hit_label="stock_info",
 )
 def get_stock_info(code: str = Path(max_length=20)) -> StockInfoResponse:
-    """公司画像（Zhitu → Myquant failover）。A 股限定."""
+    """公司画像（Zhitu → Myquant failover）。A 股限定.
+
+    ``exchange`` 由 code prefix 推断 (SH/SZ/BJ), 不依赖上游字段 — 3 个
+    fetcher (Zhitu/Myquant/Zzshare) 的 get_stock_info payload 均不含
+    exchange, 走 prefix 推断确定性更高且零成本。
+    """
     manager = get_manager()
     data, source = manager.get_stock_info(code)
-    return StockInfoResponse(**data, source=source)
+    return StockInfoResponse(
+        **data,
+        source=source,
+        exchange=code_to_exchange(code),
+    )
 
 
 # ============================================================================

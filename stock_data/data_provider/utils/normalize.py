@@ -13,6 +13,7 @@ __all__ = [
     "is_index_code",
     "is_a_share_stock_code",
     "A_SHARE_STOCK_PREFIXES",
+    "code_to_exchange",
     "split_concepts",
 ]
 
@@ -137,6 +138,72 @@ def market_tag(code: str) -> str:
     if is_hk_market(code):
         return "hk"
     return "csi"
+
+
+# A-share code prefix → exchange. Keys are checked in order; the longest
+# (3-digit) prefixes must come before the 1-digit fallbacks so ``8xxxxx``
+# and ``4xxxxx`` (BSE) don't accidentally match the 3-digit checks first.
+# Source: SSE/SZSE/BSE board listings. STAR (688/689) and ChiNext (300/301/302)
+# are sub-boards of SSE/SZSE respectively — they keep the parent exchange.
+_CODE_PREFIX_TO_EXCHANGE: tuple[tuple[str, str], ...] = (
+    # Shanghai (SSE)
+    ("600", "SH"), ("601", "SH"), ("603", "SH"), ("605", "SH"),
+    ("688", "SH"), ("689", "SH"),
+    # Shenzhen (SZSE) — main board + ChiNext
+    ("000", "SZ"), ("001", "SZ"), ("002", "SZ"), ("003", "SZ"),
+    ("300", "SZ"), ("301", "SZ"), ("302", "SZ"),
+    # Beijing (BSE)
+    ("920", "BJ"),
+    # 1-digit Beijing prefixes (checked last; the 3-digit "920" shadows them
+    # for codes that happen to start with 9).
+    ("8", "BJ"),
+    ("4", "BJ"),
+)
+
+
+def code_to_exchange(code: str) -> str | None:
+    """Infer the exchange (SH/SZ/BJ) from an A-share stock code prefix.
+
+    Returns ``None`` for HK / US / unknown / non-stock codes. Pure
+    string-based — does not consult the upstream or the stock list.
+    Cheap enough to call on every ``/stocks/{code}/info`` request.
+
+    Use cases:
+        - Filling ``StockInfoResponse.exchange`` when the upstream
+          fetcher doesn't populate it (current state: Zhitu, Myquant,
+          Zzshare all omit exchange from their ``get_stock_info``
+          payload — see ``docs/zhitu/04``, ``docs/myquant/04``,
+          ``docs/zzshare/03``).
+        - Any place that needs a deterministic SH/SZ/BJ tag without an
+          extra API call.
+
+    Examples:
+        >>> code_to_exchange("600519")
+        'SH'
+        >>> code_to_exchange("000001")
+        'SZ'
+        >>> code_to_exchange("300750")
+        'SZ'
+        >>> code_to_exchange("688981")
+        'SH'
+        >>> code_to_exchange("830799")
+        'BJ'
+        >>> code_to_exchange("HK00700")
+        None
+        >>> code_to_exchange("AAPL")
+        None
+    """
+    if not code:
+        return None
+    # Normalize first — strips "SH" / "SZ" / "BJ" prefix and any ".SS"
+    # / ".SZ" suffix so prefix matching sees only the bare digits.
+    code = normalize_stock_code(code)
+    if not code.isdigit() or len(code) != 6:
+        return None
+    for prefix, exchange in _CODE_PREFIX_TO_EXCHANGE:
+        if code.startswith(prefix):
+            return exchange
+    return None
 
 
 def index_market_tag(code: str) -> str | None:
