@@ -7,6 +7,7 @@ Free data source, no API token required.
 import logging
 import os
 import threading
+from datetime import datetime
 
 import pandas as pd
 
@@ -16,7 +17,7 @@ from ..base import (
     DataFetchError,
     normalize_stock_code,
 )
-from ..core.types import UnifiedRealtimeQuote
+from ..core.types import UnifiedRealtimeQuote, safe_float
 from ..utils.code_converter import to_baostock_format
 from ..utils.normalize import get_index_type, is_a_share_stock_code, is_index_code
 
@@ -33,6 +34,7 @@ class BaostockFetcher(BaseFetcher):
         DataCapability.STOCK_KLINE
         | DataCapability.TRADE_CALENDAR
         | DataCapability.INDEX_KLINE
+        | DataCapability.DIVIDEND
     )
 
     # Class-level once-per-process init. The manifest builder (manifest.py
@@ -329,3 +331,85 @@ class BaostockFetcher(BaseFetcher):
             return self.get_kline_data(index_code, start_date, end_date, days=365, frequency=frequency)
         except DataFetchError:
             return None
+
+    # ---------- dividend ----------
+
+    def get_dividend(self, code: str, page_size: int = 20) -> list[dict]:
+        """Get dividend / distribution history via ``bs.query_dividend_data``.
+
+        Baostock splits dividend records into two views:
+        - ``yearType="report"`` (default) — by 预案公告 year (often leads in next cal year).
+        - ``yearType="operate"`` — by 除权除息 year (the year cash/rights actually land).
+
+        We use ``operate`` so the returned rows line up with the
+        ``EX_DIVIDEND_DATE`` field on the schema (除权除息日 == date). Records
+        with empty ``dividOperateDate`` (pre-disclosure / 预案 only) are
+        silently dropped — they have no exact ex-date and including them
+        would surface ``date=""`` to clients.
+
+        Baostock fields are per-share; the unified schema is per-10-shares
+        (matching EastMoney / Tushare conventions), so bonus / transfer
+        values are ×10 to stay on the same scale.
+
+        Args:
+            code: 6-digit A-share stock code.
+            page_size: Kept for interface symmetry with EastMoney fetcher;
+                baostock returns ALL matching rows for the year, so this
+                is a hard cap applied after sort (most-recent first).
+
+        Returns:
+            List of dicts matching ``DividendRecord`` schema, or ``[]`` on
+            any failure (so manager failover keeps trying other fetchers).
+        """
+        self._ensure_initialized()
+        if not BaostockFetcher._init_ok:
+            return []
+        try:
+            import baostock as bs
+
+            bs_code, _ = self._convert_code(code)
+            current_year = datetime.now().year
+            # Pull the previous + current calendar year — covers any records
+            # with operate_date in the recent past while keeping payloads small.
+            rows: list[dict] = []
+            for year in (current_year - 1, current_year):
+                rs = bs.query_dividend_data(code=bs_code, year=str(year), yearType="operate")
+                while rs.error_code == "0" and rs.next():
+                    rows.append(rs.get_row_data())
+            if not rows:
+                return []
+
+            def _operate_date(row: list[str]) -> str:
+                # dividOperateDate column index in baostock's record tuple.
+                # Schema field list: code, dividPreNoticeDate, dividAgmPumDate,
+                # dividPlanAnnounceDate, dividPlanDate, dividRegistDate,
+                # dividOperateDate, dividPayDate, dividStockMarketDate,
+                # dividCashPsBeforeTax, dividCashPsAfterTax, dividStocksPs,
+                # dividCashStock, dividReserveToStockPs.
+                v = row[6] if len(row) > 6 else ""
+                return str(v or "")
+
+            # Filter to rows with a non-empty ex-date (skip 预案 / 预披露).
+            rows = [r for r in rows if _operate_date(r)]
+            # Newest ex-date first.
+            rows.sort(key=lambda r: _operate_date(r), reverse=True)
+
+            out: list[dict] = []
+            for row in rows[: max(1, page_size)]:
+                date = _operate_date(row)
+                # Per-share → per-10-share. ``safe_float`` (from core.types)
+                # already handles ``""`` / ``"-"`` / non-numeric strings and
+                # NaN/inf; only the tuple-bound guard is local.
+                def _at(idx: int) -> float:
+                    return safe_float(row[idx], 0.0) if len(row) > idx else 0.0
+                out.append({
+                    "date": date,
+                    "bonus_rmb": _at(9),  # dividCashPsBeforeTax (元/股, pre-tax)
+                    "transfer_ratio": _at(13) * 10,  # dividReserveToStockPs (股/股) → 股/10股
+                    "bonus_ratio": _at(11) * 10,  # dividStocksPs (送股/股) → 送股/10股
+                    "plan": "实施",  # yearType=operate → only 实施 records come back
+                })
+            return out
+        except Exception as e:
+            logger.warning(f"[BaostockFetcher] get_dividend failed for {code}: {e}")
+            return []

@@ -61,6 +61,9 @@ class ZhituFetcher(BaseFetcher):
         | DataCapability.STOCK_KLINE
         | DataCapability.STOCK_LIST
         | DataCapability.STOCK_BOARD
+        | DataCapability.DIVIDEND
+        | DataCapability.FUND_FLOW
+        | DataCapability.HOLDER_NUM
     )
 
     def __init__(self):
@@ -662,3 +665,291 @@ class ZhituFetcher(BaseFetcher):
             if subtype in subtypes:
                 return board_type
         return ""
+
+    # ---------- shared helpers ----------
+
+    def _fetch_json(
+        self,
+        path: str,
+        *,
+        params: dict | None = None,
+        op_label: str,
+        timeout: int = 10,
+    ) -> object | None:
+        """GET ``https://api.zhituapi.com{path}`` and return parsed JSON.
+
+        Centralizes the boilerplate used by every ``hs/gs/*`` /
+        ``hs/history/transaction/*`` endpoint we wrap: token injection, error
+        token check, response raise, and exception logging. Returns ``None``
+        on any failure so the manager's failover loop can move on to the
+        next candidate fetcher.
+
+        Args:
+            path: URL path beginning with ``/`` (e.g. ``/hs/gs/jnff/600519``).
+            params: Extra query string params; ``token`` is auto-merged.
+            op_label: Short label for log messages (e.g. ``"dividend 600519"``).
+            timeout: requests timeout in seconds.
+
+        Returns:
+            Parsed JSON (typically ``list`` or ``dict``), or ``None``.
+        """
+        if not self.is_available():
+            logger.warning(f"[ZhituFetcher] ZHITU_TOKEN not configured; skipping {op_label}")
+            return None
+        url = f"{ZHITU_API_BASE}{path}"
+        merged = {"token": self._token}
+        if params:
+            merged.update(params)
+        try:
+            response = requests.get(url, params=merged, timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.Timeout:
+            logger.warning(f"[ZhituFetcher] timeout on {op_label}")
+            return None
+        except requests.exceptions.RequestException:
+            logger.warning(f"[ZhituFetcher] request failed on {op_label}", exc_info=True)
+            return None
+        except ValueError:
+            logger.warning(f"[ZhituFetcher] malformed JSON on {op_label}", exc_info=True)
+            return None
+        if isinstance(data, dict) and "detail" in data:
+            logger.warning(
+                f"[ZhituFetcher] {op_label} API error: "
+                f"{str(data.get('detail', ''))[:80]}"
+            )
+            return None
+        return data
+
+    # ---------- dividend (hs/gs/jnff) ----------
+
+    def get_dividend(self, code: str, page_size: int = 20) -> list[dict]:
+        """Get dividend history via Zhitu ``hs/gs/jnff`` endpoint.
+
+        Zhitu schema (per docs/zhitu/04-listed-company-details.md, 近年分红):
+            sdate   — 公告日期 yyyy-MM-dd
+            give    — 每 10 股送股
+            change  — 每 10 股转增
+            send    — 每 10 股派息 (元, pre-tax)
+            line    — 进度 (实施 / 预案 / 股东大会通过)
+            cdate   — 除权除息日 yyyy-MM-dd
+            edate   — 股权登记日 yyyy-MM-dd
+            hdate   — 红股上市日 yyyy-MM-dd
+
+        Zhitu's field units already match the unified ``DividendRecord``
+        schema (per 10 shares), so unlike Baostock we do NOT scale.
+
+        Records with empty ``cdate`` (pre-disclosure only) are dropped —
+        the unified ``date`` field is ``除权除息日`` and surfacing
+        ``date=""`` would mislead clients. Records are sorted by
+        ``cdate`` descending so the result matches the EastMoney /
+        Baostock contract (most-recent ex-date first).
+
+        ``page_size`` is applied as a post-sort cap (Zhitu returns all
+        records in one call).
+        """
+        data = self._fetch_json(
+            f"/hs/gs/jnff/{code}",
+            op_label=f"dividend {code}",
+        )
+        if not isinstance(data, list) or not data:
+            return []
+        rows = [r for r in data if isinstance(r, dict) and str(r.get("cdate") or "")]
+        rows.sort(key=lambda r: str(r.get("cdate") or ""), reverse=True)
+        out: list[dict] = []
+        for row in rows[: max(1, page_size)]:
+            out.append({
+                "date": str(row.get("cdate") or ""),
+                "bonus_rmb": safe_float(row.get("send"), 0.0),
+                "transfer_ratio": safe_float(row.get("change"), 0.0),
+                "bonus_ratio": safe_float(row.get("give"), 0.0),
+                "plan": str(row.get("line") or ""),
+            })
+        return out
+
+    # ---------- fund flow (hs/history/transaction) ----------
+
+    @staticmethod
+    def _parse_fund_flow_row(t: object) -> dict:
+        """Map a Zhitu ``hs/history/transaction`` row to a fund-flow record.
+
+        Zhitu classifies orders as 特大单 / 大单 / 中单 / 小单 (super / large /
+        mid / small). The unified schema groups them into
+        ``main_net`` (主力 = 特大 + 大) + ``mid_net`` + ``small_net`` +
+        ``large_net`` + ``super_net`` — same five-tuple the EastMoney
+        fetcher emits. Empty / missing fields fall back to 0.
+
+        Zhitu's ``t`` (trading time) is one of:
+            - daily: ``YYYY-MM-DD``  → exposed as ``date``
+            - minute: ``YYYY-MM-DD HH:MM:SS``  → exposed as ``time``
+        We preserve the raw string; the route layer's ``_format_date``
+        helper handles datetime conversion.
+        """
+        if not isinstance(t, dict):
+            return {}
+        # 主力净流入 = 特大单 + 大单 (主买 - 主卖)
+        super_net = (
+            safe_float(t.get("zmbstdcje"), 0.0)
+            - safe_float(t.get("zmsstdcje"), 0.0)
+        )
+        large_net = (
+            safe_float(t.get("zmbddcje"), 0.0)
+            - safe_float(t.get("zmsddcje"), 0.0)
+        )
+        mid_net = (
+            safe_float(t.get("zmbzdcje"), 0.0)
+            - safe_float(t.get("zmszdcje"), 0.0)
+        )
+        small_net = (
+            safe_float(t.get("zmbxdcje"), 0.0)
+            - safe_float(t.get("zmsxdcje"), 0.0)
+        )
+        time_str = str(t.get("t") or "")
+        # Zhitu minute records carry "YYYY-MM-DD HH:MM:SS"; daily records
+        # carry "YYYY-MM-DD". The minute schema wants ``HH:MM:SS`` — slice
+        # the last 8 chars (mirrors Zhitu's own ``_normalize_intraday_zhitu``
+        # convention). For daily the time field is irrelevant and gets
+        # dropped at the route boundary.
+        has_time = " " in time_str
+        record: dict = {
+            "time": time_str[-8:] if has_time else "",
+            "date": time_str.split(" ")[0] if time_str else "",
+            "main_net": super_net + large_net,
+            "small_net": small_net,
+            "mid_net": mid_net,
+            "large_net": large_net,
+            "super_net": super_net,
+        }
+        return record
+
+    def _fund_flow_records(
+        self,
+        code: str,
+        *,
+        st: str,
+        et: str,
+        limit: int,
+        op_label: str,
+    ) -> list[dict]:
+        """Shared helper for minute / daily fund flow.
+
+        ``st`` / ``et`` use Zhitu's ``YYYYMMDD`` format. ``limit`` caps the
+        number of returned rows (Zhitu's ``lt=`` query param).
+        """
+        data = self._fetch_json(
+            f"/hs/history/transaction/{code}",
+            params={"st": st, "et": et, "lt": str(limit)},
+            op_label=op_label,
+        )
+        if not isinstance(data, list) or not data:
+            return []
+        out: list[dict] = []
+        for t in data:
+            row = self._parse_fund_flow_row(t)
+            if row:
+                out.append(row)
+        return out
+
+    def get_fund_flow_minute(self, code: str) -> list[dict]:
+        """Get intraday minute-level fund flow via Zhitu.
+
+        Returns the most recent trading day's minute bars (Zhitu updates
+        ``hs/history/transaction`` at 21:30 with the day's final bars).
+        Records expose ``time`` (HH:MM:SS) and zero out ``date`` so the
+        response model (which is ``FundFlowMinuteRecord``) renders
+        correctly.
+
+        Per docs/zhitu/05-realtime-trading.md: 资金流向数据 with no
+        ``st``/``et`` returns all historical data; we constrain to the
+        latest cached trade date to keep payloads small.
+        """
+        from ..persistence.trade_calendar import get_latest_cached_trade_date
+
+        latest = get_latest_cached_trade_date()  # YYYY-MM-DD or None
+        if latest:
+            ymd = latest.replace("-", "")
+        else:
+            ymd = date.today().strftime("%Y%m%d")
+        rows = self._fund_flow_records(
+            code, st=ymd, et=ymd, limit=480,
+            op_label=f"fund_flow_minute {code}",
+        )
+        # Strip the date field — minute schema doesn't carry it.
+        for r in rows:
+            r.pop("date", None)
+        return rows
+
+    def get_fund_flow_120d(self, code: str) -> list[dict]:
+        """Get 120-day fund flow history via Zhitu.
+
+        Returns daily bars (Zhitu updates daily at 21:30). Records
+        expose ``date`` (YYYY-MM-DD) and zero out ``time`` so the
+        response model (``FundFlowDailyRecord``) renders correctly.
+        """
+        from datetime import timedelta
+
+        et = date.today().strftime("%Y%m%d")
+        st = (date.today() - timedelta(days=120)).strftime("%Y%m%d")
+        rows = self._fund_flow_records(
+            code, st=st, et=et, limit=120,
+            op_label=f"fund_flow_120d {code}",
+        )
+        # Strip the time field — daily schema doesn't carry it.
+        for r in rows:
+            r.pop("time", None)
+        return rows
+
+    # ---------- holder_num (hs/gs/gdbh) ----------
+
+    def get_holder_num_change(self, code: str, page_size: int = 10) -> list[dict]:
+        """Get shareholder count change via Zhitu ``hs/gs/gdbh`` endpoint.
+
+        Zhitu schema (per docs/zhitu/04-listed-company-details.md, 股东变化趋势):
+            jzrq — 截止日期 yyyy-MM-dd (报告期)
+            gdhs — 股东户数 (string in payload — coerce to int)
+            bh   — 比上期变化情况 (free text like ``减少28718`` / ``新增1702``)
+
+        Unified schema (``HolderNumRecord``) wants:
+            date / holder_num / change_num / change_ratio / avg_shares
+
+        Zhitu doesn't expose ``change_ratio`` or ``avg_shares`` — those
+        land as 0.0 / 0. We extract the absolute change from ``bh`` by
+        skipping ``新增``/``减少`` prefixes (best-effort; falls back to 0
+        on unrecognised text).
+        """
+        import re
+
+        data = self._fetch_json(
+            f"/hs/gs/gdbh/{code}",
+            op_label=f"holder_num {code}",
+        )
+        if not isinstance(data, list) or not data:
+            return []
+        rows: list[dict] = []
+        for r in data:
+            if not isinstance(r, dict):
+                continue
+            date_str = str(r.get("jzrq") or "")
+            if not date_str:
+                continue
+            holder_num = safe_int(r.get("gdhs"), 0)
+            bh_raw = str(r.get("bh") or "")
+            # Extract the leading integer magnitude. ``bh`` shapes seen
+            # in the docs: "减少28718", "减少21489", "新增1702", "新增43053".
+            m = re.search(r"-?\d+", bh_raw.replace(",", ""))
+            change_num = int(m.group(0)) if m else 0
+            # 新增 / 减少 flips the sign of the magnitude.
+            if "新增" in bh_raw and change_num > 0:
+                change_num = -change_num
+            elif "减少" in bh_raw and change_num > 0:
+                pass  # already positive — matches the docs example
+            rows.append({
+                "date": date_str,
+                "holder_num": holder_num,
+                "change_num": change_num,
+                "change_ratio": 0.0,
+                "avg_shares": 0.0,
+            })
+        # Newest report date first — matches EastMoney / schema expectation.
+        rows.sort(key=lambda r: r["date"], reverse=True)
+        return rows[: max(1, page_size)]
