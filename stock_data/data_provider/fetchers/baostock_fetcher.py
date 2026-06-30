@@ -34,6 +34,14 @@ class BaostockFetcher(BaseFetcher):
         | DataCapability.INDEX_KLINE
     )
 
+    # Class-level flag: once login has been attempted (success or failure),
+    # all future instances skip the network call.  Without this, the
+    # manifest builder (which creates a *fresh* BaostockFetcher per
+    # endpoint) and the health endpoint each trigger bs.login() —
+    # producing a burst of "login failed!" spam on every page load.
+    _init_attempted: bool = False
+    _init_ok: bool = False
+
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Baostock adjustflag."""
         if not adjust:
@@ -53,13 +61,13 @@ class BaostockFetcher(BaseFetcher):
         return False
 
     def __init__(self):
-        self._initialized = False
+        pass
 
     def _ensure_initialized(self):
-        """Lazily initialize Baostock."""
-        if self._initialized:
+        """Lazily initialize Baostock (once per process)."""
+        if BaostockFetcher._init_attempted:
             return
-        self._initialized = True
+        BaostockFetcher._init_attempted = True
 
         try:
             import baostock as bs
@@ -67,20 +75,18 @@ class BaostockFetcher(BaseFetcher):
             lg = bs.login()
             if lg.error_code != "0":
                 logger.warning(f"[BaostockFetcher] Login failed: {lg.error_msg}")
-                self._initialized = False
             else:
+                BaostockFetcher._init_ok = True
                 logger.info("[BaostockFetcher] Initialized successfully")
         except ImportError:
             logger.warning("[BaostockFetcher] baostock not installed")
-            self._initialized = False
         except Exception as e:
             logger.warning(f"[BaostockFetcher] Init failed: {e}")
-            self._initialized = False
 
     def is_available(self) -> bool:
         """Check if Baostock is available."""
         self._ensure_initialized()
-        return self._initialized
+        return BaostockFetcher._init_ok
 
     def _convert_code(self, stock_code: str) -> tuple:
         """Convert to Baostock ``(bs_code, yw_code)``. Delegates to ``to_baostock_format``."""
@@ -108,7 +114,7 @@ class BaostockFetcher(BaseFetcher):
                    Defaults to '2' (前复权) if not specified.
         """
         self._ensure_initialized()
-        if not self._initialized:
+        if not BaostockFetcher._init_ok:
             raise DataFetchError("Baostock not available")
 
         # Check if requesting minute frequency for an index (indices don't support minute data)
@@ -173,7 +179,7 @@ class BaostockFetcher(BaseFetcher):
     def get_stock_name(self, stock_code: str) -> str | None:
         """Get stock name from Baostock query_stock_basic."""
         self._ensure_initialized()
-        if not self._initialized:
+        if not BaostockFetcher._init_ok:
             return None
 
         try:
@@ -210,7 +216,7 @@ class BaostockFetcher(BaseFetcher):
             return []
 
         self._ensure_initialized()
-        if not self._initialized:
+        if not BaostockFetcher._init_ok:
             return []
 
         try:

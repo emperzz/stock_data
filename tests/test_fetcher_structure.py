@@ -233,6 +233,22 @@ class TestZhituFetcher:
 # ====================================================================
 
 class TestTushareFetcher:
+    @pytest.fixture(autouse=True)
+    def _isolate_cls_state(self):
+        from stock_data.data_provider.fetchers.tushare_fetcher import TushareFetcher
+        saved = (TushareFetcher._init_attempted, TushareFetcher._init_ok,
+                 TushareFetcher._cls_token, TushareFetcher._init_error,
+                 TushareFetcher._api)
+        TushareFetcher._init_attempted = False
+        TushareFetcher._init_ok = False
+        TushareFetcher._cls_token = ""
+        TushareFetcher._init_error = None
+        TushareFetcher._api = None
+        yield
+        (TushareFetcher._init_attempted, TushareFetcher._init_ok,
+         TushareFetcher._cls_token, TushareFetcher._init_error,
+         TushareFetcher._api) = saved
+
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.fetchers.tushare_fetcher import TushareFetcher
@@ -259,8 +275,10 @@ class TestTushareFetcher:
 
     @patch("stock_data.data_provider.fetchers.tushare_fetcher.TushareFetcher._ensure_api")
     def test_is_available_without_token(self, mock_ensure, fetcher):
-        fetcher._api = None
-        fetcher._initialized = True
+        from stock_data.data_provider.fetchers.tushare_fetcher import TushareFetcher
+        TushareFetcher._init_attempted = True
+        TushareFetcher._init_ok = False
+        TushareFetcher._api = None
         assert fetcher.is_available() is False
 
     def test_index_methods_exist(self, fetcher):
@@ -272,6 +290,19 @@ class TestTushareFetcher:
 # ====================================================================
 
 class TestMyquantFetcher:
+    @pytest.fixture(autouse=True)
+    def _isolate_cls_state(self):
+        from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
+        saved = (MyquantFetcher._init_attempted, MyquantFetcher._init_ok,
+                 MyquantFetcher._cls_token, MyquantFetcher._init_error)
+        MyquantFetcher._init_attempted = False
+        MyquantFetcher._init_ok = False
+        MyquantFetcher._cls_token = ""
+        MyquantFetcher._init_error = None
+        yield
+        (MyquantFetcher._init_attempted, MyquantFetcher._init_ok,
+         MyquantFetcher._cls_token, MyquantFetcher._init_error) = saved
+
     @pytest.fixture
     def fetcher(self, monkeypatch):
         """Build a fetcher with token pre-set.
@@ -319,17 +350,19 @@ class TestMyquantFetcher:
             assert c in fetcher.supported_data_types, f"missing {c}"
 
     def test_is_available_with_token(self, fetcher):
+        from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
         # is_available() must trigger _ensure_initialized() — once it
-        # returns True, _initialized stays True so subsequent gm.api calls
+        # returns True, _init_ok stays True so subsequent gm.api calls
         # have a configured token.
         assert fetcher.is_available() is True
-        assert fetcher._initialized is True
+        assert MyquantFetcher._init_ok is True
 
     def test_is_available_without_token(self, fetcher_no_token):
-        # Without MYQUANT_TOKEN, is_available() returns False (and rolls
-        # _initialized back to False so the fetcher is not registered).
+        from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
+        # Without MYQUANT_TOKEN, is_available() returns False (and
+        # _init_ok stays False so the fetcher is not registered).
         assert fetcher_no_token.is_available() is False
-        assert fetcher_no_token._initialized is False
+        assert MyquantFetcher._init_ok is False
 
     def test_map_adjust(self, fetcher):
         from stock_data.data_provider.fetchers.myquant_fetcher import (

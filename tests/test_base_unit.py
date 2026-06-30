@@ -208,6 +208,14 @@ class TestDataFetcherManagerUnit:
 class TestKlineDataProcessing:
     """Unit tests for kline data cleaning and indicator calculation."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_baostock_cls_state(self):
+        saved = (BaostockFetcher._init_attempted, BaostockFetcher._init_ok)
+        BaostockFetcher._init_attempted = False
+        BaostockFetcher._init_ok = False
+        yield
+        BaostockFetcher._init_attempted, BaostockFetcher._init_ok = saved
+
     def test_clean_data_drops_nan_close(self):
 
         df = pd.DataFrame(
@@ -223,7 +231,8 @@ class TestKlineDataProcessing:
             }
         )
         fetcher = BaostockFetcher()
-        fetcher._initialized = True  # Bypass Baostock login
+        BaostockFetcher._init_attempted = True
+        BaostockFetcher._init_ok = True  # Bypass Baostock login
         # _clean_data is public-like, test it directly
         df["date"] = pd.to_datetime(df["date"])
         cleaned = fetcher._clean_data(df)
@@ -250,7 +259,8 @@ class TestKlineDataProcessing:
             }
         )
         fetcher = BaostockFetcher()
-        fetcher._initialized = True
+        BaostockFetcher._init_attempted = True
+        BaostockFetcher._init_ok = True
         result = fetcher._clean_data(df.copy())
         assert "ma5" not in result.columns
         assert "ma10" not in result.columns

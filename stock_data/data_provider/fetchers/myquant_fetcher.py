@@ -130,10 +130,14 @@ class MyquantFetcher(BaseFetcher):
         | DataCapability.STOCK_INFO
     )
 
+    # Class-level: init runs once per process; all instances share the result.
+    _init_attempted: bool = False
+    _init_ok: bool = False
+    _cls_token: str = ""
+    _init_error: str | None = None
+
     def __init__(self):
-        self._token = os.getenv("MYQUANT_TOKEN", "").strip()
-        self._initialized = False
-        self._init_error: str | None = None  # captured reason if SDK init fails
+        pass
 
     def supports_kline(self, period, adjust, market, asset):
         # myquant: d + 5/15/30/60 with full adjust; index minutes csi-only;
@@ -145,60 +149,42 @@ class MyquantFetcher(BaseFetcher):
         return period in ("d", "5", "15", "30", "60")
 
     def _ensure_initialized(self) -> None:
-        """Lazily import ``gm.api`` and call ``set_token``.
-
-        Sets ``self._initialized = True`` only when ALL three preconditions
-        hold: ``MYQUANT_TOKEN`` is set, the ``gm`` package is importable,
-        AND ``set_token(token)`` runs without error. Mirrors the
-        Baostock/Tushare convention: ``is_available()`` triggers this so
-        the manager can register-or-skip correctly at construction time.
-        """
-        if self._initialized:
+        """Lazily import ``gm.api`` and call ``set_token`` (once per process)."""
+        if MyquantFetcher._init_attempted:
             return
-        if not self._token:
+        MyquantFetcher._init_attempted = True
+        MyquantFetcher._cls_token = os.getenv("MYQUANT_TOKEN", "").strip()
+
+        if not MyquantFetcher._cls_token:
+            MyquantFetcher._init_error = "MYQUANT_TOKEN not set"
             logger.warning("[MyquantFetcher] MYQUANT_TOKEN not set")
-            return  # _initialized stays False → is_available() returns False
-        # Optimistic: assume success. Roll back to False on ImportError /
-        # set_token failure so a subsequent is_available() returns False.
-        self._initialized = True
+            return
+
         try:
             from gm.api import set_token  # type: ignore
 
-            set_token(self._token)
+            set_token(MyquantFetcher._cls_token)
+            MyquantFetcher._init_ok = True
             logger.info("[MyquantFetcher] Initialized (token configured)")
-            self._init_error = None
-        except ImportError as e:
+        except ImportError:
+            MyquantFetcher._init_error = "gm SDK not importable"
             logger.warning("[MyquantFetcher] gm package not installed")
-            self._initialized = False
-            self._init_error = "gm SDK not importable"
         except Exception as e:
+            MyquantFetcher._init_error = f"set_token failed: {e}"
             logger.warning(f"[MyquantFetcher] Failed to set token: {e}")
-            self._initialized = False
-            self._init_error = f"set_token failed: {e}"
 
     def is_available(self) -> bool:
-        """True iff MYQUANT_TOKEN is set AND ``gm`` SDK initializes successfully.
-
-        Triggers lazy ``_ensure_initialized`` on first call, so once this
-        returns True every later ``gm.api`` call has a configured token.
-        """
+        """True iff MYQUANT_TOKEN is set AND ``gm`` SDK initializes successfully."""
         self._ensure_initialized()
-        return self._initialized
+        return MyquantFetcher._init_ok
 
     def unavailable_reason(self) -> str | None:
-        """Return a human-readable reason this fetcher is unavailable, or None.
-
-        Derived from the same state ``is_available()`` inspects. Captures
-        the specific failure mode (token missing vs. SDK missing vs.
-        set_token rejection) into ``_init_error`` during init so this
-        method can surface it without re-running init.
-        """
+        """Return a human-readable reason this fetcher is unavailable, or None."""
         if self.is_available():
             return None
-        if not self._token:
+        if not MyquantFetcher._cls_token:
             return f"MYQUANT_TOKEN environment variable not set (required by {self.name})"
-        # Token is set but init didn't complete. _init_error captures why.
-        return f"{self.name} unavailable: {self._init_error or 'unknown initialization error'}"
+        return f"{self.name} unavailable: {MyquantFetcher._init_error or 'unknown initialization error'}"
 
     def _map_adjust(self, adjust: str) -> int:
         """Map unified adjust to myquant integer constant.

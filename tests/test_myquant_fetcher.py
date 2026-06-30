@@ -24,15 +24,26 @@ class TestMyquantFetcherBasics:
 
 class TestGetStockInfo:
     def setup_method(self):
+        # Save class-level state for isolation
+        self._saved_attempted = MyquantFetcher._init_attempted
+        self._saved_ok = MyquantFetcher._init_ok
+        self._saved_token = MyquantFetcher._cls_token
         # Force is_available to return True (skip gm.init check)
+        MyquantFetcher._init_attempted = True
+        MyquantFetcher._init_ok = True
+        MyquantFetcher._cls_token = "test_token"
         self.fetcher = MyquantFetcher()
-        self.fetcher._initialized = True
-        self.fetcher._token = "test_token"
+
+    def teardown_method(self):
+        MyquantFetcher._init_attempted = self._saved_attempted
+        MyquantFetcher._init_ok = self._saved_ok
+        MyquantFetcher._cls_token = self._saved_token
 
     def test_returns_none_when_unavailable(self):
+        MyquantFetcher._init_attempted = True
+        MyquantFetcher._init_ok = False
+        MyquantFetcher._cls_token = ""
         f = MyquantFetcher()
-        f._token = ""
-        f._initialized = False
         assert f.get_stock_info("600519") is None
 
     def test_normalizes_minimal_payload(self, monkeypatch):

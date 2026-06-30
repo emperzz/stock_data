@@ -30,6 +30,13 @@ class TushareFetcher(BaseFetcher):
         | DataCapability.INDEX_KLINE
     )
 
+    # Class-level: init runs once per process; all instances share the result.
+    _init_attempted: bool = False
+    _init_ok: bool = False
+    _cls_token: str = ""
+    _init_error: str | None = None
+    _api: object = None
+
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Tushare value."""
         if not adjust:
@@ -41,49 +48,44 @@ class TushareFetcher(BaseFetcher):
         return market == "csi" and period in ("d", "w", "m")
 
     def __init__(self):
-        self._token = os.getenv("TUSHARE_TOKEN", "").strip()
-        self._api = None
-        self._initialized = False
+        pass
 
     def _ensure_api(self):
-        """Lazily initialize Tushare API."""
-        if self._initialized:
+        """Lazily initialize Tushare API (once per process)."""
+        if TushareFetcher._init_attempted:
             return
-        self._initialized = True
+        TushareFetcher._init_attempted = True
+        TushareFetcher._cls_token = os.getenv("TUSHARE_TOKEN", "").strip()
 
-        if not self._token:
+        if not TushareFetcher._cls_token:
+            TushareFetcher._init_error = "TUSHARE_TOKEN not set"
             logger.warning("[TushareFetcher] TUSHARE_TOKEN not set, will return empty results")
             return
 
         try:
             import tushare as ts
 
-            self._api = ts.pro_api(self._token)
+            TushareFetcher._api = ts.pro_api(TushareFetcher._cls_token)
+            TushareFetcher._init_ok = True
             logger.info("[TushareFetcher] Initialized successfully")
         except Exception as e:
+            TushareFetcher._init_error = str(e)
             logger.warning(f"[TushareFetcher] Failed to initialize: {e}")
-            self._api = None
 
     def is_available(self) -> bool:
         """Check if Tushare API is configured and available."""
         self._ensure_api()
-        return self._api is not None
+        return TushareFetcher._init_ok
 
     def unavailable_reason(self) -> str | None:
-        """Return a human-readable reason this fetcher is unavailable, or None.
-
-        Derived from the same state `is_available()` checks — `is_available()`
-        is invoked first to ensure `_ensure_api()` has run, then we inspect
-        the live state to pick the right message. No hardcoded "always wrong"
-        string: when the fetcher is actually available, this returns None.
-        """
+        """Return a human-readable reason this fetcher is unavailable, or None."""
         if self.is_available():
             return None
-        if not self._token:
+        if not TushareFetcher._cls_token:
             return f"TUSHARE_TOKEN environment variable not set (required by {self.name})"
         return (
             f"tushare SDK could not initialize for {self.name} "
-            f"(token may be invalid, or the tushare package is not importable)"
+            f"({TushareFetcher._init_error or 'token may be invalid, or the tushare package is not importable'})"
         )
 
     def _fetch_raw_data(
@@ -105,7 +107,7 @@ class TushareFetcher(BaseFetcher):
                    Only effective for stocks with 'd' frequency. Indices ignore this parameter.
         """
         self._ensure_api()
-        if self._api is None:
+        if TushareFetcher._api is None:
             raise DataFetchError("Tushare API not available (no token)")
 
         try:
@@ -151,7 +153,7 @@ class TushareFetcher(BaseFetcher):
 
             logger.debug(f"[TushareFetcher] Calling {api_name} for {ts_code} (no adjustment)")
 
-            df = self._api.query(
+            df = TushareFetcher._api.query(
                 api_name,
                 ts_code=ts_code,
                 start_date=start,
@@ -190,7 +192,7 @@ class TushareFetcher(BaseFetcher):
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Tushare (requires tick data permission)."""
         self._ensure_api()
-        if self._api is None:
+        if TushareFetcher._api is None:
             return None
 
         try:
@@ -237,13 +239,13 @@ class TushareFetcher(BaseFetcher):
     def get_stock_name(self, stock_code: str) -> str | None:
         """Get stock name from Tushare basic info."""
         self._ensure_api()
-        if self._api is None:
+        if TushareFetcher._api is None:
             return None
 
         try:
             ts_code = to_tushare_format(stock_code)
 
-            df = self._api.stock_basic(ts_code=ts_code, list_status="L")
+            df = TushareFetcher._api.stock_basic(ts_code=ts_code, list_status="L")
             if df is not None and not df.empty:
                 return df.iloc[0].get("name")
         except Exception as e:
