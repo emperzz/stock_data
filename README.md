@@ -311,7 +311,7 @@ GET /api/v1/stocks/{code}/info
 
 A-share only. Fetches rich company profile (industry, listing date,
 registered capital, executives, business scope, etc.) via
-`STOCK_INFO` capability — Zhitu (P4) → Myquant (P9) failover.
+`STOCK_INFO` capability — Zhitu (P5) → Myquant (P9) failover.
 Cached in-process for `CACHE_TTL_STOCK_INFO` (default 3600s).
 
 **Response (excerpt):**

@@ -38,7 +38,7 @@ class AkshareFetcher(BaseFetcher):
     """Akshare library fetcher for A-share and HK stock data."""
 
     name = "AkshareFetcher"
-    priority = int(os.getenv("AKSHARE_PRIORITY", "2"))
+    priority = int(os.getenv("AKSHARE_PRIORITY", "3"))
     supported_markets: set[str] = {"csi", "hk"}
     supported_data_types = (
         DataCapability.STOCK_KLINE

@@ -53,7 +53,7 @@ class TestZzshareFetcherMetadata:
 
     def test_priority_default(self, monkeypatch):
         monkeypatch.delenv("ZZSHARE_PRIORITY", raising=False)
-        assert ZzshareFetcher.priority == 5
+        assert ZzshareFetcher.priority == 2
 
     def test_priority_env_override(self, monkeypatch):
         """``priority`` reads ``ZZSHARE_PRIORITY`` at module-import time.

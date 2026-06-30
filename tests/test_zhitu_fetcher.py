@@ -14,7 +14,7 @@ class TestZhituFetcherBasics:
         assert ZhituFetcher().name == "ZhituFetcher"
 
     def test_priority_default(self):
-        assert ZhituFetcher().priority == 4
+        assert ZhituFetcher().priority == 5
 
     def test_capabilities(self):
         caps = ZhituFetcher().supported_data_types

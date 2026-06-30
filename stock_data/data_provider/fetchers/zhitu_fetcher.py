@@ -53,7 +53,7 @@ class ZhituFetcher(BaseFetcher):
     """Zhitu API fetcher for A-share realtime quotes (no historical data)."""
 
     name = "ZhituFetcher"
-    priority = int(os.getenv("ZHITU_PRIORITY", "4"))
+    priority = int(os.getenv("ZHITU_PRIORITY", "5"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
         DataCapability.STOCK_REALTIME_QUOTE

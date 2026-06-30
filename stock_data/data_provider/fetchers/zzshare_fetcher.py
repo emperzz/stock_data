@@ -73,7 +73,7 @@ class ZzshareFetcher(BaseFetcher):
     """zzshare SDK fetcher — A-share multi-capability (priority 5)."""
 
     name = "ZzshareFetcher"
-    priority = int(os.getenv("ZZSHARE_PRIORITY", "5"))
+    priority = int(os.getenv("ZZSHARE_PRIORITY", "2"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
         DataCapability.STOCK_KLINE

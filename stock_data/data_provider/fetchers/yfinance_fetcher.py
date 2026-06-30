@@ -38,7 +38,7 @@ class YfinanceFetcher(BaseFetcher):
     """Yahoo Finance fetcher for US stocks and indices."""
 
     name = "YfinanceFetcher"
-    priority = int(os.getenv("YFINANCE_PRIORITY", "3"))
+    priority = int(os.getenv("YFINANCE_PRIORITY", "4"))
     supported_markets: set[str] = {"csi", "hk", "us"}
     supported_data_types = (
         DataCapability.STOCK_KLINE
