@@ -14,6 +14,7 @@ from typing import Literal
 
 from fastapi import HTTPException, Path, Query
 
+from ...data_provider.core.types import safe_float, safe_int
 from ...data_provider.persistence import board as stock_board_cache
 from ...data_provider.persistence import trade_calendar
 from ..cache import (
@@ -424,11 +425,11 @@ def get_board_history(
             kline_data.append(
                 KLineData(
                     date=str(row.get("date", "")),
-                    open=float(row.get("open", 0.0)),
-                    high=float(row.get("high", 0.0)),
-                    low=float(row.get("low", 0.0)),
-                    close=float(row.get("close", 0.0)),
-                    volume=int(row.get("volume", 0)),
+                    open=safe_float(row.get("open"), 0.0),
+                    high=safe_float(row.get("high"), 0.0),
+                    low=safe_float(row.get("low"), 0.0),
+                    close=safe_float(row.get("close"), 0.0),
+                    volume=safe_int(row.get("volume"), 0),
                     amount=_safe_optional_float(row.get("amount")),
                     change_percent=_safe_optional_float(row.get("pct_chg")),
                 )

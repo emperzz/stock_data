@@ -439,7 +439,6 @@ class ZzshareFetcher(BaseFetcher):
             "delisted_date": "",
             "total_shares": safe_float(data.get("totalstock")),
             "float_shares": safe_float(data.get("flowstock")),
-            "industry": "",
             "concepts": _split_concepts(data.get("idea", "")),
             "registered_address": str(data.get("raddr", "") or ""),
             "registered_capital": str(data.get("rcapital", "") or ""),

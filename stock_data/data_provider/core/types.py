@@ -73,6 +73,7 @@ class UnifiedRealtimeQuote:
 
     # Volume indicators
     volume: int | None = None
+    volume_unit: str = "share"  # 恒为"share"（股）— spec §3.4
     amount: float | None = None
     volume_ratio: float | None = None
     turnover_rate: float | None = None

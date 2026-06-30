@@ -70,7 +70,6 @@ class TestGetStockInfo:
         assert result["delisted_date"] == ""
         assert result["total_shares"] == 125619.78
         assert result["float_shares"] == 125619.78
-        assert result["industry"] == ""
         assert result["concepts"] == ["白酒", "融资融券", "证金持股", "沪股通"]
         assert result["registered_address"] == "贵州省遵义市仁怀市茅台镇"
         assert result["registered_capital"] == "9.82亿"

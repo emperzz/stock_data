@@ -59,7 +59,8 @@ class StockQuote(BaseModel):
     high: float | None = Field(default=None, description="Highest price")
     low: float | None = Field(default=None, description="Lowest price")
     prev_close: float | None = Field(default=None, description="Previous close price")
-    volume: int | None = Field(default=None, description="Trading volume")
+    volume: int | None = Field(default=None, description="Trading volume (股/shares)")
+    volume_unit: str = Field(default="share", description="Volume unit. Always 'share' (股) per spec §3.4.")
     amount: float | None = Field(default=None, description="Trading amount")
     update_time: str | None = Field(default=None, description="Update timestamp")
     # Valuation metrics (from Tencent财经)
@@ -246,8 +247,7 @@ class IntradayData(BaseModel):
     volume_unit: Literal["share"] = Field(
         default="share",
         description="Volume unit. Always 'share' (股) — invariant enforced by fetcher "
-        "normalization per spec §3.4. Akshare upstream returns 手 (lots = 100 shares); "
-        "the AkshareFetcher normalizer divides by 100 + int() floor to satisfy this.",
+        "normalization per spec §3.4.",
     )
     amount: float | None = Field(default=None, description="Amount")
 
@@ -367,7 +367,8 @@ class IndexQuote(BaseModel):
     high: float | None = Field(default=None, description="Highest price")
     low: float | None = Field(default=None, description="Lowest price")
     prev_close: float | None = Field(default=None, description="Previous close price")
-    volume: int | None = Field(default=None, description="Trading volume")
+    volume: int | None = Field(default=None, description="Trading volume (股/shares)")
+    volume_unit: str = Field(default="share", description="Volume unit. Always 'share' (股) per spec §3.4.")
     amount: float | None = Field(default=None, description="Trading amount")
     update_time: str | None = Field(default=None, description="Update timestamp")
 

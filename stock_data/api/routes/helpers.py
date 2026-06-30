@@ -131,6 +131,11 @@ def _reject_non_index_code(code: str, *, endpoint_kind: str) -> None:
         )
 
 
+_FORBID_QUOTE_PARAMS: frozenset[str] = frozenset(
+    {"period", "adjust", "days", "start_date", "end_date", "indicators"}
+)
+
+
 def _forbid_quote_params(request: Request) -> None:
     """Reject query params that are meaningless for snapshot (``/quote``) endpoints.
 
@@ -138,8 +143,7 @@ def _forbid_quote_params(request: Request) -> None:
     ``start_date``, ``end_date``, ``indicators`` have no meaning. Clients
     get a clear 422 with a hint to use ``/kline`` instead.
     """
-    forbidden = {"period", "adjust", "days", "start_date", "end_date", "indicators"}
-    bad = forbidden & set(request.query_params.keys())
+    bad = _FORBID_QUOTE_PARAMS & set(request.query_params.keys())
     if bad:
         raise HTTPException(
             status_code=422,
@@ -232,11 +236,11 @@ def _build_kline_data(row: dict, format_date) -> KLineData:
     ind = row.get("indicators") or {}
     return KLineData(
         date=format_date(row.get("date")),
-        open=safe_float(row.get("open"), 0.0) or 0.0,
-        high=safe_float(row.get("high"), 0.0) or 0.0,
-        low=safe_float(row.get("low"), 0.0) or 0.0,
-        close=safe_float(row.get("close"), 0.0) or 0.0,
-        volume=safe_int(row.get("volume"), 0) or 0,
+        open=safe_float(row.get("open"), 0.0),
+        high=safe_float(row.get("high"), 0.0),
+        low=safe_float(row.get("low"), 0.0),
+        close=safe_float(row.get("close"), 0.0),
+        volume=safe_int(row.get("volume"), 0),
         amount=safe_float(row.get("amount")),
         change_percent=safe_float(row.get("pct_chg")),
         indicators=ind or None,

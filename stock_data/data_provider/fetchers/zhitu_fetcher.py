@@ -163,7 +163,7 @@ class ZhituFetcher(BaseFetcher):
                 price=safe_float(row.get("p")),
                 change_pct=safe_float(row.get("pc")),
                 change_amount=safe_float(row.get("ud")),
-                volume=safe_int(row.get("v")),
+                volume=safe_int(row.get("v"), 0) * 100,  # 手→股 per spec §3.4
                 amount=safe_float(row.get("cje")),
                 open_price=safe_float(row.get("o")),
                 high=safe_float(row.get("h")),
@@ -468,7 +468,6 @@ class ZhituFetcher(BaseFetcher):
             "delisted_date":     "",
             "total_shares":      safe_float(data.get("totalstock")),
             "float_shares":      safe_float(data.get("flowstock")),
-            "industry":          "",
             "concepts":          _split_concepts(data.get("idea", "")),
             "registered_address": data.get("raddr", "") or "",
             "registered_capital": data.get("rcapital", "") or "",

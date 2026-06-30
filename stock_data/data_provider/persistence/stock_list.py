@@ -160,7 +160,8 @@ def get_stock_name(code: str, market: str | None = None, manager=None) -> str:
     Args:
         code: Stock code (e.g., 600519, AAPL, HK00700)
         market: Market tag (csi/hk/us). If None, inferred from code.
-        manager: DataFetcherManager instance. If None and cache miss, returns "".
+        manager: DataFetcherManager instance. If provided and DB misses,
+            triggers a stock-list refresh to auto-warm the DB, then retries.
 
     Returns:
         Stock name or empty string if not found.
@@ -171,7 +172,19 @@ def get_stock_name(code: str, market: str | None = None, manager=None) -> str:
     if market is None:
         market = market_tag(normalized)
 
-    return _get_stock_name_from_db(normalized, market) or ""
+    name = _get_stock_name_from_db(normalized, market)
+    if name:
+        return name
+
+    # DB miss — try auto-warming via manager if available
+    if manager is not None:
+        try:
+            manager.get_stock_list(market, refresh=False)  # auto-warm DB
+            name = _get_stock_name_from_db(normalized, market)
+        except Exception:
+            pass
+
+    return name or ""
 
 
 def _get_stock_name_from_db(code: str, market: str) -> str:

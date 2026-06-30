@@ -326,11 +326,11 @@ class TestStockInfoRoute:
         response = client.get("/api/v1/stocks/600519/info")
         if response.status_code == 200:
             data = response.json()
-            # All 19 fields present
+            # All 18 fields present
             expected_fields = {
                 "code", "name", "ename", "market",
                 "listed_date", "delisted_date", "total_shares", "float_shares",
-                "industry", "concepts",
+                "concepts",
                 "registered_address", "registered_capital", "legal_representative",
                 "business_scope", "established_date",
                 "secretary", "secretary_phone", "secretary_email",

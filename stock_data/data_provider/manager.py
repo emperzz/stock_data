@@ -225,6 +225,7 @@ class DataFetcherManager:
         error_prefix: str | None = None,
         return_source: bool = False,
         circuit_breaker: CircuitBreaker | None = None,
+        candidates: list[BaseFetcher] | None = None,
     ) -> T:
         """Run `call(fetcher)` over every fetcher with the given capability, in priority order.
 
@@ -241,6 +242,10 @@ class DataFetcherManager:
                 instead of plain ``result``
             circuit_breaker: optional CircuitBreaker to integrate per-fetcher
                 availability checks and success/failure recording
+            candidates: pre-filtered fetcher list (from ``_kline_candidates``
+                or ``_quote_candidates``). When provided, skips internal
+                ``_filter_by_capability`` — the caller already did the
+                two-stage filter (capability bit → supports_fn).
 
         Returns:
             The first non-None/non-empty result (or ``(result, source_name)``
@@ -249,7 +254,7 @@ class DataFetcherManager:
         Raises:
             DataFetchError: when all fetchers fail and ``allow_none`` is False.
         """
-        fetchers = self._filter_by_capability(market, capability)
+        fetchers = candidates if candidates is not None else self._filter_by_capability(market, capability)
         errors: list[str] = []
         for fetcher in fetchers:
             # Circuit breaker: skip fetchers in OPEN state
@@ -276,6 +281,11 @@ class DataFetcherManager:
         if allow_none:
             return (None, "") if return_source else None  # type: ignore[return-value]
         prefix = error_prefix or f"All fetchers failed for {op_label}:"
+        if not errors and circuit_breaker is not None:
+            raise DataFetchError(
+                f"{prefix} all candidate fetchers are circuit-open "
+                f"(cooldown ~{circuit_breaker.cooldown_seconds:.0f}s). Retry later."
+            )
         raise DataFetchError(prefix + "\n" + "\n".join(errors))
 
     # ---------- K-line & intraday (stocks) ----------
@@ -361,25 +371,15 @@ class DataFetcherManager:
                 f"adjust={adjust!r} market={market}"
             )
 
-        # Sort by priority; failover with circuit breaker.
-        candidates = sorted(candidates, key=lambda f: f.priority)
-        errors: list[str] = []
-        for fetcher in candidates:
-            if not KLINE_CIRCUIT_BREAKER.is_available(fetcher.name):
-                logger.debug(f"[Manager] {fetcher.name} circuit open, skipping")
-                continue
-            try:
-                df = fetcher.get_kline_data(
-                    stock_code, start_date, end_date, days, frequency, adjust
-                )
-                if _is_meaningful(df):
-                    KLINE_CIRCUIT_BREAKER.record_success(fetcher.name)
-                    return df, fetcher.name
-            except DataFetchError as e:
-                KLINE_CIRCUIT_BREAKER.record_failure(fetcher.name)
-                errors.append(f"[{fetcher.name}] {e}")
-                continue
-        raise DataFetchError(f"All fetchers failed: {errors}")
+        cap = DataCapability.INDEX_KLINE if asset == "index" else DataCapability.STOCK_KLINE
+        return self._with_failover(
+            cap, market,
+            f"kline {stock_code} {frequency}",
+            lambda f: f.get_kline_data(stock_code, start_date, end_date, days, frequency, adjust),
+            return_source=True,
+            circuit_breaker=KLINE_CIRCUIT_BREAKER,
+            candidates=sorted(candidates, key=lambda f: f.priority),
+        )
 
     # ---------- stock list ----------
 
@@ -497,24 +497,14 @@ class DataFetcherManager:
         candidates = self._quote_candidates(market, DataCapability.STOCK_REALTIME_QUOTE)
         if not candidates:
             raise DataFetchError(f"No fetcher supports quote market={market}")
-        candidates = sorted(candidates, key=lambda f: f.priority)
 
-        errors: list[str] = []
-        for fetcher in candidates:
-            # Circuit breaker: skip fetchers in OPEN state without a network call.
-            if not REALTIME_CIRCUIT_BREAKER.is_available(fetcher.name):
-                logger.debug(f"[Manager] {fetcher.name} circuit open, skipping")
-                continue
-            try:
-                q = fetcher.get_realtime_quote(stock_code)
-            except DataFetchError as e:
-                REALTIME_CIRCUIT_BREAKER.record_failure(fetcher.name)
-                errors.append(f"[{fetcher.name}] {e}")
-                continue
-            REALTIME_CIRCUIT_BREAKER.record_success(fetcher.name)
-            if q is not None:
-                return q
-        raise DataFetchError(f"All fetchers failed: {errors}")
+        return self._with_failover(
+            DataCapability.STOCK_REALTIME_QUOTE, market,
+            f"quote {stock_code}",
+            lambda f: f.get_realtime_quote(stock_code),
+            circuit_breaker=REALTIME_CIRCUIT_BREAKER,
+            candidates=sorted(candidates, key=lambda f: f.priority),
+        )
 
     # ---------- trade calendar (with persistence) ----------
 
@@ -658,18 +648,14 @@ class DataFetcherManager:
         candidates = self._quote_candidates(index_type, DataCapability.INDEX_REALTIME_QUOTE)
         if not candidates:
             raise DataFetchError(f"No fetcher supports quote market={index_type}")
-        candidates = sorted(candidates, key=lambda f: f.priority)
 
-        errors: list[str] = []
-        for fetcher in candidates:
-            try:
-                q = fetcher.get_index_realtime_quote(index_code)
-            except DataFetchError as e:
-                errors.append(f"[{fetcher.name}] {e}")
-                continue
-            if q is not None:
-                return q
-        raise DataFetchError(f"All fetchers failed: {errors}")
+        return self._with_failover(
+            DataCapability.INDEX_REALTIME_QUOTE, index_type,
+            f"index_quote {index_code}",
+            lambda f: f.get_index_realtime_quote(index_code),
+            circuit_breaker=REALTIME_CIRCUIT_BREAKER,
+            candidates=sorted(candidates, key=lambda f: f.priority),
+        )
 
     # ---------- boards (unified entry points) ----------
     #

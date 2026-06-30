@@ -122,9 +122,8 @@ the conventions / anti-patterns that govern adding a new indicator.
 Full Pydantic response models live in `api/schemas.py` — that is the source of truth.
 The non-obvious behaviors worth memorizing here are:
 
-- **`KLineData` conditional serialization** (response of `/stocks/{code}/kline?indicators=...` and `/indices/{code}/kline?indicators=...`): `amount` / `change_percent` are emitted as JSON `null` when missing. The four indicator fields (`ma5`, `ma10`, `ma20`, `indicators`) are **omitted from the JSON entirely** when their value is None/empty (via `@model_serializer` on `KLineData._serialize`). Contract: clients can rely on "key exists ⇔ indicator was computed".
-- **`ma5`/`ma10`/`ma20` back-compat fields** are backfilled from the `ma` indicator's `ma5`/`ma10`/`ma20` output columns when the user requests `?indicators=ma`. Otherwise they (and the `indicators` dict) are absent.
-- **`KLineData.indicators`** is a per-bar dict populated only when `?indicators=` is set. One entry per output column of the requested indicators (e.g. `{"ma5": 12.34, "macd_dif": 0.23}`).
+- **`KLineData` conditional serialization** (response of `/stocks/{code}/kline?indicators=...` and `/indices/{code}/kline?indicators=...`): `amount` / `change_percent` are emitted as JSON `null` when missing. The `indicators` field is **omitted from the JSON entirely** when its value is None/empty (via `@model_serializer` on `KLineData._serialize`). Contract: clients can rely on "key exists ⇔ indicator was computed".
+- **`KLineData.indicators`** is a per-bar dict populated only when `?indicators=` is set. One entry per output column of the requested indicators (e.g. `{"ma5": 12.34, "macd_dif": 0.23}`). Per-indicator values like `ma5`, `ma10`, `ma20` live inside this dict, not as top-level fields.
 - **Index indicators** share the same `KLineData` response shape as stocks — the orchestrator in `routes.py` (`_apply_indicators`, `_parse_indicators_param`) handles lookback expansion and truncation identically.
 - **Historical K-line** uses `STANDARD_COLUMNS` (`date, open, high, low, close, volume, amount, pct_chg`).
 - **`StockInfo.exchange`** is `"SH"` / `"SZ"` / `"BJ"` when known, else `null` (Zhitu / Myquant populate it; Baostock / Akshare do not).
@@ -194,9 +193,9 @@ for all board methods.
 
 ### Anti-patterns
 
-- **Don't** add a `DataCapability` without putting it in either
-  `CAPABILITY_TO_METHOD` or `_NO_FETCHER_METHOD`. Both startup sanity
-  checks and `tests/test_capability_method_map.py` will refuse silently.
+- **Don't** add a `DataCapability` without putting it in
+  `CAPABILITY_TO_METHOD`. Startup sanity checks and
+  `tests/test_capability_method_map.py` will flag violations.
 - **Don't** assume Stage 2 result is "production-equivalent" — it bypasses
   the manager's circuit breaker and the capability filter.
 - **Don't** rely on `/control/fetcher-test` from external networks — it's
@@ -440,6 +439,6 @@ The non-obvious knobs worth memorizing here:
 - **Don't** write `options.get(key) or default` for numeric/float option keys — when `key=0` is a valid value, the `or` treats it as missing. Use `options.get(key, default)` so `0` flows through.
 - **Don't** re-introduce inline MA/EMA/WMA calculations in the fetcher path. If you need a moving average on K-line data, ask the indicator service via `?indicators=ma` (or compute it downstream of the API).
 - **Don't** reorder decorators on a route so `@endpoint_meta` sits OUTSIDE `@router.get` (i.e. `@endpoint_meta(...) @router.get(...) def f`). The contract requires `@endpoint_meta` to be the INNER decorator so FastAPI captures the same function object that `REGISTRY[f]` was keyed on. Reversing the order silently drops the route from the explorer manifest (a startup warning is logged, but the endpoint still works as an API). The runtime sanity check in `explorer/__init__.py` catches this on boot.
-- **Don't** add a `DataCapability` flag without declaring intent — every flag must be in either `CAPABILITY_TO_METHOD` (maps to a fetcher method) or `_NO_FETCHER_METHOD` (explicit "no method"). `tests/test_capability_method_map.py` enforces this; the explorer startup sanity check also warns about violations.
+- **Don't** add a `DataCapability` flag without declaring intent — every flag must be in `CAPABILITY_TO_METHOD` (maps to a fetcher method). `tests/test_capability_method_map.py` enforces this; the explorer startup sanity check also warns about violations.
 - **Don't** override `@endpoint_meta(fetcher_method=...)` with a method name that doesn't exist on any fetcher class — startup sanity check warns but the manifest will silently produce a misleading Stage 2 entry.
 - **Don't** leak the outbound `ts_code` / `_to_xxx_ts_code` suffix into an inbound API response. The server's canonical stock_code format is **bare 6-digit** (e.g. `000034`, `600519`), enforced by `normalize_stock_code()`. Per-upstream protocol formats (Tushare `000034.SZ`, Baostock `sh.600519`, Yfinance `600519.SS`, Zhitu `600519.SH`) are an **outbound-only** concern — they live in helpers like `_to_zzshare_ts_code` / `to_tushare_format` / `to_baostock_code` that are called RIGHT BEFORE the SDK call. On the response side, always return the bare 6-digit (e.g. `ts_code.split(".")[0]`). Forgetting the inbound/outbound boundary is exactly how `ZzshareFetcher.get_board_stocks` / `get_daily_dragon_tiger` / `get_hot_topics` ended up returning `000034.SZ` instead of `000034` (fixed 2026-06-25). Same rule applies to HK (`HK00700`) and US (`AAPL`) codes — they keep their canonical form, never get re-suffixed.

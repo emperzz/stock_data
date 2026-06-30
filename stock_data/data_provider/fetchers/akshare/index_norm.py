@@ -134,9 +134,7 @@ def normalize_intraday_df(df: pd.DataFrame, time_col: str = "时间") -> pd.Data
        present — akshare's EM and Sina endpoints return full timestamps.
     3. Coerces the OHLCV/amount columns via ``pd.to_numeric``.
     4. **Akshare volume is 手 (lots = 100 shares); converts to 股 (shares)**
-       by ``int() // 100`` per spec §3.4. The floor prevents
-       ``7`` 手 → ``0.07`` shares (float) and keeps the int-typed column
-       schema invariant intact.
+       by ``int(v) * 100`` per spec §3.4.
     5. Returns only the standard columns that exist after rename, in
        the canonical order.
 

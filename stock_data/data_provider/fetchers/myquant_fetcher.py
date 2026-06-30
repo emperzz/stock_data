@@ -628,7 +628,6 @@ class MyquantFetcher(BaseFetcher):
                 "delisted_date":     _ts_to_date(row.get("delisted_date")),
                 "total_shares":      None,  # free tier 不提供
                 "float_shares":      None,  # free tier 不提供
-                "industry":          "",    # paid 接口 (GmError 2001)
                 "concepts":          [],
                 "registered_address": "",
                 "registered_capital": "",

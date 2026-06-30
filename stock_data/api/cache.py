@@ -160,33 +160,8 @@ def make_quote_cache_key(stock_code: str) -> str:
     return stock_code
 
 
-def make_history_cache_key(
-    stock_code: str,
-    frequency: str,
-    days: int,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    adjust: str | None = None,
-    indicators: list[str] | None = None,
-) -> str:
-    parts = [stock_code, frequency, str(days)]
-    if start_date or end_date:
-        parts.extend([start_date or "", end_date or ""])
-    if adjust:
-        parts.append(adjust)
-    if indicators:
-        # Sort to make key stable regardless of input order
-        parts.append("ind=" + ",".join(sorted(indicators)))
-    return ":".join(parts)
-
-
 def make_index_quote_cache_key(index_code: str) -> str:
     return f"idx_quote:{index_code}"
-
-
-def make_stock_intraday_cache_key(stock_code: str, period: str, adjust: str) -> str:
-    suffix = f":{adjust}" if adjust else ""
-    return f"stock_intraday:{stock_code}:{period}{suffix}"
 
 
 def make_dragon_tiger_cache_key(stock_code: str, trade_date: str, look_back: int) -> str:
@@ -271,7 +246,7 @@ def make_kline_cache_key(
     """Stable cache key for /kline responses per spec §5.4."""
     return (
         f"kline:{code}:{frequency}:{days or ''}:{start_date or ''}:"
-        f"{end_date or ''}:{adjust or ''}:{','.join(indicators)}"
+        f"{end_date or ''}:{adjust or ''}:{','.join(sorted(indicators))}"
     )
 
 

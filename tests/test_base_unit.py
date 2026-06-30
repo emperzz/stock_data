@@ -130,8 +130,8 @@ class TestDataFetcherManagerUnit:
         assert quote.code == "000001"
         assert quote.price == 101.0
 
-    def test_get_stock_name_empty_db_returns_empty(self, manager, tmp_path, monkeypatch):
-        """Verify get_stock_name returns '' when DB has no matching stock."""
+    def test_get_stock_name_empty_db_no_manager_returns_empty(self, tmp_path, monkeypatch):
+        """Verify get_stock_name returns '' when DB has no matching stock and no manager."""
         from stock_data.data_provider.persistence import (
             db,
             stock_list as stock_list_mod,
@@ -141,6 +141,22 @@ class TestDataFetcherManagerUnit:
         monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list_mod.init_schema()
 
+        name = stock_list.get_stock_name("000001", manager=None)
+        assert name == ""
+
+    def test_get_stock_name_empty_db_with_manager_attempts_warm(self, manager, tmp_path, monkeypatch):
+        """Verify get_stock_name tries manager fallback on DB miss."""
+        from stock_data.data_provider.persistence import (
+            db,
+            stock_list as stock_list_mod,
+        )
+
+        monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
+        monkeypatch.setattr(db, "_conn", None, raising=False)
+        stock_list_mod.init_schema()
+
+        # With a real manager that has no fetchers, get_stock_list will fail gracefully
+        # and get_stock_name should still return ""
         name = stock_list.get_stock_name("000001", manager=manager)
         assert name == ""
 

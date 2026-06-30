@@ -73,3 +73,18 @@ def test_get_kline_cache_monthly_uses_history_ttl():
     """Monthly uses the monthly history cache."""
     cache = get_kline_cache("m")
     assert cache.ttl == _TTL_HISTORY_MONTHLY
+
+
+def test_kline_cache_key_indicator_order_independent():
+    """Same indicator set in different orders produces the same cache key."""
+    k1 = make_kline_cache_key(
+        code="600519", frequency="d", days=30,
+        start_date=None, end_date=None, adjust=None,
+        indicators=["ma", "macd", "kdj"],
+    )
+    k2 = make_kline_cache_key(
+        code="600519", frequency="d", days=30,
+        start_date=None, end_date=None, adjust=None,
+        indicators=["kdj", "ma", "macd"],
+    )
+    assert k1 == k2

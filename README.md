@@ -221,11 +221,11 @@ the `days` you asked for. You don't need to pre-compute a larger
 }
 ```
 
-> **Note:** the 4 indicator fields (`ma5`, `ma10`, `ma20`, `indicators`)
-> are **omitted from the response entirely** when `?indicators=` is not
-> passed — instead of being present-but-null. To get them, opt in with
-> `?indicators=ma` (or any indicator set that produces them). `amount`
-> and `change_percent` keep their original "null when missing" behavior.
+> **Note:** the `indicators` field is **omitted from the response entirely**
+> when `?indicators=` is not passed — instead of being present-but-null.
+> To get per-bar indicator values, opt in with `?indicators=ma` (or any
+> indicator set). `amount` and `change_percent` keep their original
+> "null when missing" behavior.
 
 **Response (with `?indicators=ma,macd,kdj,boll`):**
 ```json
@@ -270,8 +270,8 @@ under [Technical Indicators](#technical-indicators) above (parameters,
 auto-lookback expansion, with- and without-`?indicators=` response
 shapes). Omit `?indicators=` to receive the slim per-bar payload shown
 in the **Response (without `indicators`)** block; pass
-`?indicators=ma,macd,kdj,boll` to attach per-bar values and the
-back-compat `ma5`/`ma10`/`ma20` top-level fields.
+`?indicators=ma,macd,kdj,boll` to attach per-bar values via the
+`indicators` dict.
 
 ---
 

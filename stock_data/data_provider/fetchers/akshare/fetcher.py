@@ -282,7 +282,7 @@ class AkshareFetcher(BaseFetcher):
                 price=safe_float(row.get("最新价")),
                 change_pct=safe_float(row.get("涨跌幅")),
                 change_amount=safe_float(row.get("涨跌额")),
-                volume=safe_int(row.get("成交量")),
+                volume=safe_int(row.get("成交量"), 0) * 100,  # 手→股 per spec §3.4
                 amount=safe_float(row.get("成交额")),
                 open_price=safe_float(row.get("今开")),
                 high=safe_float(row.get("最高")),
@@ -519,7 +519,7 @@ class AkshareFetcher(BaseFetcher):
                             price=safe_float(row.get("最新价")),
                             change_pct=safe_float(row.get("涨跌幅")),
                             change_amount=safe_float(row.get("涨跌额")),
-                            volume=safe_int(row.get("成交量")),
+                            volume=safe_int(row.get("成交量"), 0) * 100,  # 手→股 per spec §3.4
                             amount=safe_float(row.get("成交额")),
                             open_price=safe_float(row.get("今开")),
                             high=safe_float(row.get("最高")),
@@ -549,7 +549,7 @@ class AkshareFetcher(BaseFetcher):
                             price=safe_float(row.get("最新价")),
                             change_pct=safe_float(row.get("涨跌幅")),
                             change_amount=safe_float(row.get("涨跌额")),
-                            volume=safe_int(row.get("成交量")),
+                            volume=safe_int(row.get("成交量"), 0) * 100,  # 手→股 per spec §3.4
                             amount=safe_float(row.get("成交额")),
                             open_price=safe_float(row.get("今开")),
                             high=safe_float(row.get("最高")),
