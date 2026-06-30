@@ -400,8 +400,8 @@ class BaostockFetcher(BaseFetcher):
                 # Per-share → per-10-share. ``safe_float`` (from core.types)
                 # already handles ``""`` / ``"-"`` / non-numeric strings and
                 # NaN/inf; only the tuple-bound guard is local.
-                def _at(idx: int) -> float:
-                    return safe_float(row[idx], 0.0) if len(row) > idx else 0.0
+                def _at(idx: int, _row=row) -> float:
+                    return safe_float(_row[idx], 0.0) if len(_row) > idx else 0.0
                 out.append({
                     "date": date,
                     "bonus_rmb": _at(9),  # dividCashPsBeforeTax (元/股, pre-tax)

@@ -563,8 +563,6 @@ class TestIntradayKline:
         fake_api.stk_mins = MagicMock(return_value=fake_stk_mins)
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_intraday_normalizes_time(self):
@@ -722,8 +720,6 @@ class TestRealtimeQuote:
         fake_api.rt_k = MagicMock(return_value=fake_rt_k)
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_realtime_basic_fields(self):
@@ -820,8 +816,6 @@ class TestStockList:
         fake_api.stock_basic = MagicMock(return_value=fake_basic)
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_get_all_stocks_normalizes_exchange(self):
@@ -890,8 +884,6 @@ class TestTradeCalendar:
         fake_api.trade_days = MagicMock(return_value=fake_days)
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_trade_calendar_passthrough(self):
@@ -921,8 +913,6 @@ class TestStockInfo:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.stock_info = MagicMock(return_value=fake_info)
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
         return fetcher
@@ -1021,8 +1011,6 @@ class TestZtPool:
         fake_api.uplimit_stocks = MagicMock(return_value=stocks if stocks is not None else [])
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_zt_pool_returns_stocks(self):
@@ -1089,8 +1077,6 @@ class TestBoards:
         fake_api = MagicMock()
         for name, value in mocks.items():
             setattr(fake_api, name, MagicMock(return_value=value))
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
         return fetcher
@@ -1252,8 +1238,6 @@ class TestDragonTiger:
             setattr(fake_api, name, MagicMock(return_value=value))
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_daily_dragon_tiger_returns_bare_6digit_codes(self):
@@ -1354,8 +1338,6 @@ class TestHotTopics:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.ths_hot_top = MagicMock(return_value=fake_top)
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
         return fetcher

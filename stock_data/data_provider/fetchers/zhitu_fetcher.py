@@ -7,7 +7,8 @@ Token configured via ZHITU_TOKEN environment variable.
 
 import logging
 import os
-from datetime import date
+import re
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -537,7 +538,6 @@ class ZhituFetcher(BaseFetcher):
         if leaves is None:
             return []
 
-        valid_subtypes = ZHITU_SUBTYPES_BY_TYPE.get(board_type, set())
         out: list[dict] = []
         for row in leaves:
             type2 = row.get("type2")
@@ -736,8 +736,9 @@ class ZhituFetcher(BaseFetcher):
             edate   — 股权登记日 yyyy-MM-dd
             hdate   — 红股上市日 yyyy-MM-dd
 
-        Zhitu's field units already match the unified ``DividendRecord``
-        schema (per 10 shares), so unlike Baostock we do NOT scale.
+        Zhitu's ``send`` is per-10-share (每10股派息); the unified schema's
+        ``bonus_rmb`` is per-share (每股派息), so we ÷10 on that field.
+        ``give`` / ``change`` are already per-10-share and need no scaling.
 
         Records with empty ``cdate`` (pre-disclosure only) are dropped —
         the unified ``date`` field is ``除权除息日`` and surfacing
@@ -760,7 +761,7 @@ class ZhituFetcher(BaseFetcher):
         for row in rows[: max(1, page_size)]:
             out.append({
                 "date": str(row.get("cdate") or ""),
-                "bonus_rmb": safe_float(row.get("send"), 0.0),
+                "bonus_rmb": safe_float(row.get("send"), 0.0) / 10,  # 每10股→每股
                 "transfer_ratio": safe_float(row.get("change"), 0.0),
                 "bonus_ratio": safe_float(row.get("give"), 0.0),
                 "plan": str(row.get("line") or ""),
@@ -886,8 +887,6 @@ class ZhituFetcher(BaseFetcher):
         expose ``date`` (YYYY-MM-DD) and zero out ``time`` so the
         response model (``FundFlowDailyRecord``) renders correctly.
         """
-        from datetime import timedelta
-
         et = date.today().strftime("%Y%m%d")
         st = (date.today() - timedelta(days=120)).strftime("%Y%m%d")
         rows = self._fund_flow_records(
@@ -917,8 +916,6 @@ class ZhituFetcher(BaseFetcher):
         skipping ``新增``/``减少`` prefixes (best-effort; falls back to 0
         on unrecognised text).
         """
-        import re
-
         data = self._fetch_json(
             f"/hs/gs/gdbh/{code}",
             op_label=f"holder_num {code}",

@@ -8,6 +8,7 @@ Exercises the bs.query_dividend_data → DividendRecord mapping:
 - page_size cap
 - Failure paths (no init, no rows, exception) → empty list
 """
+
 import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -16,7 +17,6 @@ import pytest
 
 from stock_data.data_provider.base import DataCapability
 from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,10 +34,20 @@ def _make_baostock_result(rows: list[list[str]], fields: list[str] | None = None
     """
     if fields is None:
         fields = [
-            "code", "dividPreNoticeDate", "dividAgmPumDate", "dividPlanAnnounceDate",
-            "dividPlanDate", "dividRegistDate", "dividOperateDate", "dividPayDate",
-            "dividStockMarketDate", "dividCashPsBeforeTax", "dividCashPsAfterTax",
-            "dividStocksPs", "dividCashStock", "dividReserveToStockPs",
+            "code",
+            "dividPreNoticeDate",
+            "dividAgmPumDate",
+            "dividPlanAnnounceDate",
+            "dividPlanDate",
+            "dividRegistDate",
+            "dividOperateDate",
+            "dividPayDate",
+            "dividStockMarketDate",
+            "dividCashPsBeforeTax",
+            "dividCashPsAfterTax",
+            "dividStocksPs",
+            "dividCashStock",
+            "dividReserveToStockPs",
         ]
     rs = MagicMock()
     rs.error_code = "0"
@@ -113,17 +123,26 @@ class TestGetDividendNormalPayload:
     @patch.dict(sys.modules, {"baostock": MagicMock()})
     def test_maps_per_share_to_per_10_share(self):
         """baostock fields are per-share; schema is per-10-share (×10)."""
-        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result([
+        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result(
             [
-                "sh.600519", "", "", "", "", "2025-06-18",
-                "2025-06-23", "2025-06-23", "",
-                "21.91",  # dividCashPsBeforeTax (元/股)
-                "19.72",  # dividCashPsAfterTax
-                "0.0",    # dividStocksPs (送股/股)
-                "10派21.91元(含税)",  # dividCashStock
-                "0.0",    # dividReserveToStockPs (转增/股)
-            ],
-        ])
+                [
+                    "sh.600519",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "2025-06-18",
+                    "2025-06-23",
+                    "2025-06-23",
+                    "",
+                    "21.91",  # dividCashPsBeforeTax (元/股)
+                    "19.72",  # dividCashPsAfterTax
+                    "0.0",  # dividStocksPs (送股/股)
+                    "10派21.91元(含税)",  # dividCashStock
+                    "0.0",  # dividReserveToStockPs (转增/股)
+                ],
+            ]
+        )
         _patch_baostock_init(ok=True)
 
         fetcher = BaostockFetcher()
@@ -141,17 +160,26 @@ class TestGetDividendNormalPayload:
     @patch.dict(sys.modules, {"baostock": MagicMock()})
     def test_scales_bonus_and_transfer_to_per_10(self):
         """送股 / 转增 should be multiplied by 10 to match schema."""
-        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result([
+        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result(
             [
-                "sh.600519", "", "", "", "", "2024-05-15",
-                "2024-05-20", "2024-05-20", "",
-                "0.50",   # dividCashPsBeforeTax
-                "0.45",   # dividCashPsAfterTax
-                "0.30",   # dividStocksPs = 0.30 股/股  → ×10 = 3 股/10股
-                "10转3派5元",  # dividCashStock
-                "0.20",   # dividReserveToStockPs = 0.20 股/股 → ×10 = 2 股/10股
-            ],
-        ])
+                [
+                    "sh.600519",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "2024-05-15",
+                    "2024-05-20",
+                    "2024-05-20",
+                    "",
+                    "0.50",  # dividCashPsBeforeTax
+                    "0.45",  # dividCashPsAfterTax
+                    "0.30",  # dividStocksPs = 0.30 股/股  → ×10 = 3 股/10股
+                    "10转3派5元",  # dividCashStock
+                    "0.20",  # dividReserveToStockPs = 0.20 股/股 → ×10 = 2 股/10股
+                ],
+            ]
+        )
         _patch_baostock_init(ok=True)
 
         fetcher = BaostockFetcher()
@@ -165,14 +193,58 @@ class TestGetDividendNormalPayload:
     @patch.dict(sys.modules, {"baostock": MagicMock()})
     def test_sorts_newest_first(self):
         """Results must be sorted by ex-date desc (matches EastMoney/Zhitu)."""
-        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result([
-            ["sh.600000", "", "", "", "", "2023-07-10", "2023-07-15", "2023-07-15",
-             "", "0.10", "0.09", "0.0", "10派1元", "0.0"],
-            ["sh.600000", "", "", "", "", "2025-06-18", "2025-06-23", "2025-06-23",
-             "", "0.50", "0.45", "0.0", "10派5元", "0.0"],
-            ["sh.600000", "", "", "", "", "2024-06-12", "2024-06-17", "2024-06-17",
-             "", "0.30", "0.27", "0.0", "10派3元", "0.0"],
-        ])
+        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result(
+            [
+                [
+                    "sh.600000",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "2023-07-10",
+                    "2023-07-15",
+                    "2023-07-15",
+                    "",
+                    "0.10",
+                    "0.09",
+                    "0.0",
+                    "10派1元",
+                    "0.0",
+                ],
+                [
+                    "sh.600000",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "2025-06-18",
+                    "2025-06-23",
+                    "2025-06-23",
+                    "",
+                    "0.50",
+                    "0.45",
+                    "0.0",
+                    "10派5元",
+                    "0.0",
+                ],
+                [
+                    "sh.600000",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "2024-06-12",
+                    "2024-06-17",
+                    "2024-06-17",
+                    "",
+                    "0.30",
+                    "0.27",
+                    "0.0",
+                    "10派3元",
+                    "0.0",
+                ],
+            ]
+        )
         _patch_baostock_init(ok=True)
 
         fetcher = BaostockFetcher()
@@ -187,14 +259,44 @@ class TestGetDividendNormalPayload:
     @patch.dict(sys.modules, {"baostock": MagicMock()})
     def test_drops_records_without_ex_date(self):
         """预案 / 预披露 rows have empty dividOperateDate — drop them."""
-        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result([
-            # Pre-disclosure (预案 only) — must be filtered.
-            ["sh.600000", "2026-01-10", "", "", "", "", "", "", "",
-             "0.20", "0.18", "0.0", "10派2元", "0.0"],
-            # Operated — kept.
-            ["sh.600000", "", "", "", "", "2025-06-18", "2025-06-23",
-             "2025-06-23", "", "0.50", "0.45", "0.0", "10派5元", "0.0"],
-        ])
+        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result(
+            [
+                # Pre-disclosure (预案 only) — must be filtered.
+                [
+                    "sh.600000",
+                    "2026-01-10",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "0.20",
+                    "0.18",
+                    "0.0",
+                    "10派2元",
+                    "0.0",
+                ],
+                # Operated — kept.
+                [
+                    "sh.600000",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "2025-06-18",
+                    "2025-06-23",
+                    "2025-06-23",
+                    "",
+                    "0.50",
+                    "0.45",
+                    "0.0",
+                    "10派5元",
+                    "0.0",
+                ],
+            ]
+        )
         _patch_baostock_init(ok=True)
 
         fetcher = BaostockFetcher()
@@ -208,11 +310,24 @@ class TestGetDividendNormalPayload:
         """page_size is a hard cap applied after the desc sort."""
         rows = []
         for year in range(2020, 2025):
-            rows.append([
-                "sh.600000", "", "", "", "", f"{year}-06-18",
-                f"{year}-06-23", f"{year}-06-23", "",
-                "0.50", "0.45", "0.0", "10派5元", "0.0",
-            ])
+            rows.append(
+                [
+                    "sh.600000",
+                    "",
+                    "",
+                    "",
+                    "",
+                    f"{year}-06-18",
+                    f"{year}-06-23",
+                    f"{year}-06-23",
+                    "",
+                    "0.50",
+                    "0.45",
+                    "0.0",
+                    "10派5元",
+                    "0.0",
+                ]
+            )
         sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result(rows)
         _patch_baostock_init(ok=True)
 
@@ -226,15 +341,26 @@ class TestGetDividendNormalPayload:
     @patch.dict(sys.modules, {"baostock": MagicMock()})
     def test_empty_string_numeric_fields_default_to_zero(self):
         """Baostock may return "" for any numeric field — must coerce to 0."""
-        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result([
-            ["sh.600000", "", "", "", "", "2025-06-18", "2025-06-23",
-             "2025-06-23", "",
-             "",  # dividCashPsBeforeTax blank
-             "",  # dividCashPsAfterTax blank
-             "",  # dividStocksPs blank
-             "",  # dividCashStock blank
-             ""], # dividReserveToStockPs blank
-        ])
+        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result(
+            [
+                [
+                    "sh.600000",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "2025-06-18",
+                    "2025-06-23",
+                    "2025-06-23",
+                    "",
+                    "",  # dividCashPsBeforeTax blank
+                    "",  # dividCashPsAfterTax blank
+                    "",  # dividStocksPs blank
+                    "",  # dividCashStock blank
+                    "",
+                ],  # dividReserveToStockPs blank
+            ]
+        )
         _patch_baostock_init(ok=True)
 
         fetcher = BaostockFetcher()
@@ -248,9 +374,11 @@ class TestGetDividendNormalPayload:
     @patch.dict(sys.modules, {"baostock": MagicMock()})
     def test_short_tuple_does_not_raise(self):
         """Tuple shorter than the dividend schema (corrupted row) — length guard wins."""
-        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result([
-            ["sh.600000"],  # only 1 element
-        ])
+        sys.modules["baostock"].query_dividend_data.return_value = _make_baostock_result(
+            [
+                ["sh.600000"],  # only 1 element
+            ]
+        )
         _patch_baostock_init(ok=True)
 
         fetcher = BaostockFetcher()
