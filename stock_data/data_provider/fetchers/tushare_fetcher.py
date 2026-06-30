@@ -7,6 +7,8 @@ Gracefully falls back when token is not configured.
 
 import logging
 import os
+import threading
+from typing import Any
 
 import pandas as pd
 
@@ -30,12 +32,20 @@ class TushareFetcher(BaseFetcher):
         | DataCapability.INDEX_KLINE
     )
 
-    # Class-level: init runs once per process; all instances share the result.
+    # Class-level once-per-process init. The manifest builder and health
+    # endpoint each create a fresh TushareFetcher per endpoint, so a
+    # per-instance _initialized would re-run ts.pro_api() / env-var read
+    # on every page load. Class-level state survives across instances:
+    # init runs at most once per process, success or failure cached.
+    # _init_lock guards against two threads both observing
+    # _init_attempted==False and both running pro_api (the resulting
+    # client object would just overwrite — benign today, but explicit).
+    _init_lock: "threading.Lock" = threading.Lock()
     _init_attempted: bool = False
     _init_ok: bool = False
     _cls_token: str = ""
     _init_error: str | None = None
-    _api: object = None
+    _api: Any | None = None
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Tushare value."""
@@ -50,27 +60,33 @@ class TushareFetcher(BaseFetcher):
     def __init__(self):
         pass
 
-    def _ensure_api(self):
+    def _ensure_api(self) -> None:
         """Lazily initialize Tushare API (once per process)."""
         if TushareFetcher._init_attempted:
             return
-        TushareFetcher._init_attempted = True
-        TushareFetcher._cls_token = os.getenv("TUSHARE_TOKEN", "").strip()
+        with TushareFetcher._init_lock:
+            # Double-check after acquiring the lock.
+            if TushareFetcher._init_attempted:
+                return
+            TushareFetcher._init_attempted = True
+            TushareFetcher._cls_token = os.getenv("TUSHARE_TOKEN", "").strip()
 
-        if not TushareFetcher._cls_token:
-            TushareFetcher._init_error = "TUSHARE_TOKEN not set"
-            logger.warning("[TushareFetcher] TUSHARE_TOKEN not set, will return empty results")
-            return
+            if not TushareFetcher._cls_token:
+                TushareFetcher._init_error = "TUSHARE_TOKEN not set"
+                logger.warning(
+                    "[TushareFetcher] TUSHARE_TOKEN not set, will return empty results"
+                )
+                return
 
-        try:
-            import tushare as ts
+            try:
+                import tushare as ts
 
-            TushareFetcher._api = ts.pro_api(TushareFetcher._cls_token)
-            TushareFetcher._init_ok = True
-            logger.info("[TushareFetcher] Initialized successfully")
-        except Exception as e:
-            TushareFetcher._init_error = str(e)
-            logger.warning(f"[TushareFetcher] Failed to initialize: {e}")
+                TushareFetcher._api = ts.pro_api(TushareFetcher._cls_token)
+                TushareFetcher._init_ok = True
+                logger.info("[TushareFetcher] Initialized successfully")
+            except Exception as e:
+                TushareFetcher._init_error = str(e)
+                logger.warning(f"[TushareFetcher] Failed to initialize: {e}")
 
     def is_available(self) -> bool:
         """Check if Tushare API is configured and available."""

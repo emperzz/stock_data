@@ -12,12 +12,17 @@ from stock_data.data_provider.manager import DataFetcherManager
 
 
 def _make_manager_with_zzshare_only():
-    """Manager with only ZzshareFetcher (mocked as available)."""
+    """Manager with only ZzshareFetcher (mocked as available).
+
+    Injects fake_api at the CLASS level since init state lives there
+    (once-per-process). Skips actual SDK init by setting
+    ``_init_attempted=True`` so ``_ensure_api()`` short-circuits.
+    """
     fetcher = ZzshareFetcher()
     fetcher.is_available = lambda: True
-    # Patch _ensure_api to return a mock api so we don't need real SDK
     fake_api = MagicMock()
-    fetcher._api = fake_api
+    ZzshareFetcher._api = fake_api
+    ZzshareFetcher._init_attempted = True
     mgr = DataFetcherManager()
     mgr.add_fetcher(fetcher)
     return mgr, fake_api

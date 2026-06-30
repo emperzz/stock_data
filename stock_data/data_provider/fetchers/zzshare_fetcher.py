@@ -14,6 +14,7 @@ SDK is importable, even without a token.
 import importlib.util
 import logging
 import os
+import threading
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -86,10 +87,23 @@ class ZzshareFetcher(BaseFetcher):
         | DataCapability.STOCK_INFO
     )
 
+    # Class-level once-per-process init. Mirrors the Baostock/Tushare/
+    # Myquant pattern so all SDK-bearing fetchers share one convention.
+    # is_available() only does a cheap find_spec() check (no I/O) — the
+    # actual DataApi() construction lives behind _ensure_api() and runs
+    # at most once per process, success or failure cached. _init_lock
+    # guards against two threads both constructing DataApi() concurrently.
+    # Token is optional (anonymous works for most endpoints); checked
+    # lazily here and in per-method code paths.
+    _init_lock: "threading.Lock" = threading.Lock()
+    _init_attempted: bool = False
+    _init_ok: bool = False
+    _cls_token: str = ""
+    _init_error: str | None = None
+    _api: Any | None = None
+
     def __init__(self):
-        self._token = os.getenv("ZZSHARE_TOKEN", "").strip()
-        self._api = None
-        self._init_error: str | None = None
+        pass
 
     def is_available(self) -> bool:
         """True iff the zzshare PyPI package is importable. Token is optional.
@@ -114,30 +128,37 @@ class ZzshareFetcher(BaseFetcher):
         return f"{self.name} unavailable: zzshare SDK not installed (pip install zzshare)"
 
     def _ensure_api(self) -> Any:
-        """Lazy-init the zzshare SDK; caches in self._api.
+        """Lazy-init the zzshare SDK (once per process).
 
         Returns the DataApi instance, or None if SDK is missing. Records
-        the specific init failure into self._init_error for
-        unavailable_reason() reporting.
+        the specific init failure into ``_init_error`` for
+        ``unavailable_reason()`` reporting.
         """
-        if self._api is not None:
-            return self._api
-        if importlib.util.find_spec("zzshare") is None:
-            self._init_error = "zzshare SDK not importable (pip install zzshare)"
-            return None
-        try:
-            from zzshare.client import DataApi  # type: ignore
+        if ZzshareFetcher._init_attempted:
+            return ZzshareFetcher._api
+        with ZzshareFetcher._init_lock:
+            # Double-check after acquiring the lock.
+            if ZzshareFetcher._init_attempted:
+                return ZzshareFetcher._api
+            ZzshareFetcher._init_attempted = True
+            ZzshareFetcher._cls_token = os.getenv("ZZSHARE_TOKEN", "").strip()
+            if importlib.util.find_spec("zzshare") is None:
+                ZzshareFetcher._init_error = "zzshare SDK not importable (pip install zzshare)"
+                return None
+            try:
+                from zzshare.client import DataApi  # type: ignore
 
-            if self._token:
-                self._api = DataApi(token=self._token)
-            else:
-                self._api = DataApi()
-            self._init_error = None
-            return self._api
-        except Exception as e:
-            self._init_error = f"zzshare SDK init failed: {e}"
-            logger.warning("[ZzshareFetcher] %s", self._init_error)
-            return None
+                if ZzshareFetcher._cls_token:
+                    ZzshareFetcher._api = DataApi(token=ZzshareFetcher._cls_token)
+                else:
+                    ZzshareFetcher._api = DataApi()
+                ZzshareFetcher._init_ok = True
+                ZzshareFetcher._init_error = None
+                return ZzshareFetcher._api
+            except Exception as e:
+                ZzshareFetcher._init_error = f"zzshare SDK init failed: {e}"
+                logger.warning("[ZzshareFetcher] %s", ZzshareFetcher._init_error)
+                return None
 
     def _fetch_raw_data(
         self,
@@ -165,7 +186,7 @@ class ZzshareFetcher(BaseFetcher):
             # a distinct "SDK 不可用" error instead of a misleading "无分钟数据".
             if self._ensure_api() is None:
                 raise DataFetchError(
-                    f"ZzshareFetcher zzshare SDK 不可用: {self._init_error}"
+                    f"ZzshareFetcher zzshare SDK 不可用: {ZzshareFetcher._init_error}"
                 )
             freq = self._PERIOD_TO_FREQ.get(frequency, f"{frequency}min")
             try:
@@ -197,7 +218,7 @@ class ZzshareFetcher(BaseFetcher):
         # Daily branch (existing path)
         api = self._ensure_api()
         if api is None:
-            raise DataFetchError(f"ZzshareFetcher zzshare SDK 不可用: {self._init_error}")
+            raise DataFetchError(f"ZzshareFetcher zzshare SDK 不可用: {ZzshareFetcher._init_error}")
         ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
         kwargs: dict = {
             "ts_code": ts_code,
@@ -647,7 +668,7 @@ class ZzshareFetcher(BaseFetcher):
         api = self._ensure_api()
         if api is None:
             raise DataFetchError(
-                f"ZzshareFetcher zzshare SDK 不可用: {self._init_error}"
+                f"ZzshareFetcher zzshare SDK 不可用: {ZzshareFetcher._init_error}"
             )
 
         # Date range: start_date/end_date win over days

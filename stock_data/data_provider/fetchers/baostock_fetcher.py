@@ -6,6 +6,7 @@ Free data source, no API token required.
 
 import logging
 import os
+import threading
 
 import pandas as pd
 
@@ -34,11 +35,15 @@ class BaostockFetcher(BaseFetcher):
         | DataCapability.INDEX_KLINE
     )
 
-    # Class-level flag: once login has been attempted (success or failure),
-    # all future instances skip the network call.  Without this, the
-    # manifest builder (which creates a *fresh* BaostockFetcher per
-    # endpoint) and the health endpoint each trigger bs.login() —
-    # producing a burst of "login failed!" spam on every page load.
+    # Class-level once-per-process init. The manifest builder (manifest.py
+    # reflect-loop) and the health endpoint each create a *fresh*
+    # BaostockFetcher instance per endpoint, so per-instance _initialized
+    # would re-run bs.login() on every page load — a burst of "login
+    # failed!" log lines. Class-level state survives across instances:
+    # init runs at most once per process, success or failure cached.
+    # _init_lock guards the brief window where two threads could both
+    # observe _init_attempted==False and both run login.
+    _init_lock: "threading.Lock" = threading.Lock()
     _init_attempted: bool = False
     _init_ok: bool = False
 
@@ -63,25 +68,28 @@ class BaostockFetcher(BaseFetcher):
     def __init__(self):
         pass
 
-    def _ensure_initialized(self):
+    def _ensure_initialized(self) -> None:
         """Lazily initialize Baostock (once per process)."""
         if BaostockFetcher._init_attempted:
             return
-        BaostockFetcher._init_attempted = True
+        with BaostockFetcher._init_lock:
+            # Double-check after acquiring the lock.
+            if BaostockFetcher._init_attempted:
+                return
+            BaostockFetcher._init_attempted = True
+            try:
+                import baostock as bs
 
-        try:
-            import baostock as bs
-
-            lg = bs.login()
-            if lg.error_code != "0":
-                logger.warning(f"[BaostockFetcher] Login failed: {lg.error_msg}")
-            else:
-                BaostockFetcher._init_ok = True
-                logger.info("[BaostockFetcher] Initialized successfully")
-        except ImportError:
-            logger.warning("[BaostockFetcher] baostock not installed")
-        except Exception as e:
-            logger.warning(f"[BaostockFetcher] Init failed: {e}")
+                lg = bs.login()
+                if lg.error_code != "0":
+                    logger.warning(f"[BaostockFetcher] Login failed: {lg.error_msg}")
+                else:
+                    BaostockFetcher._init_ok = True
+                    logger.info("[BaostockFetcher] Initialized successfully")
+            except ImportError:
+                logger.warning("[BaostockFetcher] baostock not installed")
+            except Exception as e:
+                logger.warning(f"[BaostockFetcher] Init failed: {e}")
 
     def is_available(self) -> bool:
         """Check if Baostock is available."""

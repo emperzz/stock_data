@@ -34,6 +34,7 @@ Implementation notes (not in CLAUDE.md — these are fetcher-internal quirks):
 # isort: off
 import logging
 import os
+import threading
 from datetime import datetime  # used in get_trade_calendar, get_index_intraday, get_intraday_data
 
 import pandas as pd
@@ -130,7 +131,14 @@ class MyquantFetcher(BaseFetcher):
         | DataCapability.STOCK_INFO
     )
 
-    # Class-level: init runs once per process; all instances share the result.
+    # Class-level once-per-process init. The manifest builder and health
+    # endpoint each create a fresh MyquantFetcher per endpoint, so a
+    # per-instance _initialized would re-run gm.api.set_token() on every
+    # page load. Class-level state survives across instances: init runs
+    # at most once per process, success or failure cached. _init_lock
+    # guards against two threads both observing _init_attempted==False
+    # and both calling set_token.
+    _init_lock: "threading.Lock" = threading.Lock()
     _init_attempted: bool = False
     _init_ok: bool = False
     _cls_token: str = ""
@@ -152,26 +160,30 @@ class MyquantFetcher(BaseFetcher):
         """Lazily import ``gm.api`` and call ``set_token`` (once per process)."""
         if MyquantFetcher._init_attempted:
             return
-        MyquantFetcher._init_attempted = True
-        MyquantFetcher._cls_token = os.getenv("MYQUANT_TOKEN", "").strip()
+        with MyquantFetcher._init_lock:
+            # Double-check after acquiring the lock.
+            if MyquantFetcher._init_attempted:
+                return
+            MyquantFetcher._init_attempted = True
+            MyquantFetcher._cls_token = os.getenv("MYQUANT_TOKEN", "").strip()
 
-        if not MyquantFetcher._cls_token:
-            MyquantFetcher._init_error = "MYQUANT_TOKEN not set"
-            logger.warning("[MyquantFetcher] MYQUANT_TOKEN not set")
-            return
+            if not MyquantFetcher._cls_token:
+                MyquantFetcher._init_error = "MYQUANT_TOKEN not set"
+                logger.warning("[MyquantFetcher] MYQUANT_TOKEN not set")
+                return
 
-        try:
-            from gm.api import set_token  # type: ignore
+            try:
+                from gm.api import set_token  # type: ignore
 
-            set_token(MyquantFetcher._cls_token)
-            MyquantFetcher._init_ok = True
-            logger.info("[MyquantFetcher] Initialized (token configured)")
-        except ImportError:
-            MyquantFetcher._init_error = "gm SDK not importable"
-            logger.warning("[MyquantFetcher] gm package not installed")
-        except Exception as e:
-            MyquantFetcher._init_error = f"set_token failed: {e}"
-            logger.warning(f"[MyquantFetcher] Failed to set token: {e}")
+                set_token(MyquantFetcher._cls_token)
+                MyquantFetcher._init_ok = True
+                logger.info("[MyquantFetcher] Initialized (token configured)")
+            except ImportError:
+                MyquantFetcher._init_error = "gm SDK not importable"
+                logger.warning("[MyquantFetcher] gm package not installed")
+            except Exception as e:
+                MyquantFetcher._init_error = f"set_token failed: {e}"
+                logger.warning(f"[MyquantFetcher] Failed to set token: {e}")
 
     def is_available(self) -> bool:
         """True iff MYQUANT_TOKEN is set AND ``gm`` SDK initializes successfully."""

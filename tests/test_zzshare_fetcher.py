@@ -3,7 +3,6 @@
 All tests mock the zzshare SDK (no real network/token).
 """
 
-import importlib
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +11,36 @@ import pytest
 
 from stock_data.data_provider.base import DataCapability, DataFetchError
 from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
+
+@pytest.fixture(autouse=True)
+def _isolate_zzshare_cls_state():
+    """Reset class-level init state between tests.
+
+    ``_api`` / ``_init_attempted`` / ``_init_ok`` live on the class now
+    (once-per-process init). Each test must start from a clean slate so
+    fake_api mocks injected by one test don't leak into the next.
+    """
+    saved = (
+        ZzshareFetcher._init_attempted,
+        ZzshareFetcher._init_ok,
+        ZzshareFetcher._cls_token,
+        ZzshareFetcher._init_error,
+        ZzshareFetcher._api,
+    )
+    ZzshareFetcher._init_attempted = False
+    ZzshareFetcher._init_ok = False
+    ZzshareFetcher._cls_token = ""
+    ZzshareFetcher._init_error = None
+    ZzshareFetcher._api = None
+    yield
+    (
+        ZzshareFetcher._init_attempted,
+        ZzshareFetcher._init_ok,
+        ZzshareFetcher._cls_token,
+        ZzshareFetcher._init_error,
+        ZzshareFetcher._api,
+    ) = saved
 
 # ====================================================================
 # Metadata + availability
@@ -27,15 +56,27 @@ class TestZzshareFetcherMetadata:
         assert ZzshareFetcher.priority == 5
 
     def test_priority_env_override(self, monkeypatch):
-        monkeypatch.setenv("ZZSHARE_PRIORITY", "3")
+        """``priority`` reads ``ZZSHARE_PRIORITY`` at module-import time.
+
+        A reload-based test was tempting but creates class-identity churn
+        (``importlib.reload`` rebinds the class object, so anything that
+        did ``from … import ZzshareFetcher`` at module load keeps a stale
+        reference). With class-level init state this would silently
+        desync the autouse isolation fixture from production code, so we
+        verify via source inspection instead. The env-var read is one
+        line; if it ever changes, this test catches it.
+        """
+        import inspect
+
         from stock_data.data_provider.fetchers import zzshare_fetcher
 
-        importlib.reload(zzshare_fetcher)
-        try:
-            assert zzshare_fetcher.ZzshareFetcher.priority == 3
-        finally:
-            monkeypatch.delenv("ZZSHARE_PRIORITY", raising=False)
-            importlib.reload(zzshare_fetcher)
+        src = inspect.getsource(zzshare_fetcher)
+        assert 'os.getenv("ZZSHARE_PRIORITY"' in src, (
+            "ZzshareFetcher.priority no longer reads ZZSHARE_PRIORITY env var"
+        )
+        assert "priority = int(os.getenv" in src, (
+            "ZzshareFetcher.priority should be int(os.getenv(...))"
+        )
 
     def test_supported_markets(self):
         assert ZzshareFetcher.supported_markets == {"csi"}
@@ -210,11 +251,20 @@ class TestFromYyyymmdd:
 
 class TestDailyKline:
     def _fetcher_with_api(self, fake_daily):
-        """Helper: return fetcher with zzshare SDK .daily mocked."""
+        """Helper: return fetcher with zzshare SDK .daily mocked.
+
+        Injects the mock at the class level (ZzshareFetcher._api) since
+        init state now lives there — see _isolate_zzshare_cls_state.
+        Skips actual SDK init by setting _init_attempted=True so
+        _ensure_api() returns the injected mock without trying to
+        ``import zzshare`` / ``DataApi()``.
+        """
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.daily = MagicMock(return_value=fake_daily)
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._init_ok = True
         return fetcher
 
     def test_daily_normalizes_columns(self):
@@ -268,7 +318,7 @@ class TestDailyKline:
         )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
-        call = fetcher._api.daily.call_args
+        call = ZzshareFetcher._api.daily.call_args
         # start_date/end_date converted to YYYYMMDD
         assert call.kwargs["start_date"] == "20260501"
         assert call.kwargs["end_date"] == "20260503"
@@ -293,7 +343,7 @@ class TestDailyKline:
         )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03", adjust="qfq")
-        call = fetcher._api.daily.call_args
+        call = ZzshareFetcher._api.daily.call_args
         assert call.kwargs.get("adj") == "qfq"
 
     def test_daily_no_adjust_does_not_pass_adj(self):
@@ -314,7 +364,7 @@ class TestDailyKline:
         )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_kline_data("600519", "2026-05-01", "2026-05-03")
-        call = fetcher._api.daily.call_args
+        call = ZzshareFetcher._api.daily.call_args
         assert "adj" not in call.kwargs
 
     def test_daily_empty_df_raises(self):
@@ -340,7 +390,8 @@ class TestDailyKline:
             "vol": [1e5, 1.1e5, 1.2e5],
             "amount": [1e8, 1.1e8, 1.2e8],
         }))
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
 
         fetcher._fetch_raw_data(
             "600519", "2026-05-20", "2026-05-20", frequency="5"
@@ -366,7 +417,8 @@ class TestDailyKline:
             "open": [1700.0], "high": [1708.0], "low": [1698.0], "close": [1705.0],
             "vol": [1e5], "amount": [1e8],
         }))
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
 
         fetcher._fetch_raw_data(
             "600519", "2026-05-20", "2026-05-20", frequency="5", adjust="qfq"
@@ -399,7 +451,8 @@ class TestDailyKline:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.stk_mins = MagicMock(return_value=pd.DataFrame())
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
 
         with pytest.raises(DataFetchError, match="无分钟数据"):
             fetcher.get_kline_data(
@@ -432,7 +485,8 @@ class TestDailyKline:
                 "vol": [1.4e5, 1.5e5], "amount": [1.4e8, 1.5e8],
             }),
         ])
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
 
         df = fetcher._fetch_raw_data(
             "600519", "2026-05-18", "2026-05-20", frequency="5"
@@ -464,7 +518,8 @@ class TestDailyKline:
                 "vol": [1.4e5], "amount": [1.4e8],
             }),
         ])
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
 
         df = fetcher._fetch_raw_data(
             "600519", "2026-05-18", "2026-05-20", frequency="5"
@@ -485,7 +540,8 @@ class TestDailyKline:
             "open": [1700.0], "high": [1708.0], "low": [1698.0], "close": [1705.0],
             "vol": [1e5], "amount": [1e8],
         }))
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
 
         with caplog.at_level(logging.WARNING, logger="stock_data.data_provider.fetchers.zzshare_fetcher"):
             fetcher._fetch_raw_data(
@@ -505,7 +561,10 @@ class TestIntradayKline:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.stk_mins = MagicMock(return_value=fake_stk_mins)
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_intraday_normalizes_time(self):
@@ -547,7 +606,7 @@ class TestIntradayKline:
         )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_intraday_data("600519", period="15")
-        call = fetcher._api.stk_mins.call_args
+        call = ZzshareFetcher._api.stk_mins.call_args
         assert call.kwargs.get("freq") == "15min"
 
     def test_intraday_adjust_ignored(self):
@@ -568,7 +627,7 @@ class TestIntradayKline:
         )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_intraday_data("600519", period="5", adjust="qfq")
-        call = fetcher._api.stk_mins.call_args
+        call = ZzshareFetcher._api.stk_mins.call_args
         assert "adj" not in call.kwargs
         assert "adjust" not in call.kwargs
 
@@ -590,7 +649,7 @@ class TestIntradayKline:
         )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_intraday_data("600519", period="5")
-        call = fetcher._api.stk_mins.call_args
+        call = ZzshareFetcher._api.stk_mins.call_args
         # trade_time is the date in YYYYMMDD format (8 digits, no dashes)
         trade_time = call.kwargs.get("trade_time", "")
         assert len(trade_time) == 8
@@ -617,7 +676,8 @@ class TestFetchMinuteKline:
         fake_api.stk_mins = MagicMock(
             return_value=pd.DataFrame({"trade_time": ["202605200935"]})
         )
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         df = fetcher._fetch_minute_kline("600519", "20260520", "5min")
         call = fake_api.stk_mins.call_args
         assert call.kwargs["ts_code"] == "600519.SH"
@@ -635,7 +695,8 @@ class TestFetchMinuteKline:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.stk_mins = MagicMock(side_effect=RuntimeError("rate limit"))
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         assert fetcher._fetch_minute_kline("600519", "20260520", "5min") is None
 
     def test_helper_empty_df_returns_none(self):
@@ -644,7 +705,8 @@ class TestFetchMinuteKline:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.stk_mins = MagicMock(return_value=pd.DataFrame())
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         assert fetcher._fetch_minute_kline("600519", "20260520", "5min") is None
 
 
@@ -658,7 +720,10 @@ class TestRealtimeQuote:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.rt_k = MagicMock(return_value=fake_rt_k)
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_realtime_basic_fields(self):
@@ -726,7 +791,7 @@ class TestRealtimeQuote:
         )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_realtime_quote("600519")
-        call = fetcher._api.rt_k.call_args
+        call = ZzshareFetcher._api.rt_k.call_args
         # Enhanced fields mode requested
         assert call.kwargs.get("fields") == "all"
 
@@ -753,7 +818,10 @@ class TestStockList:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.stock_basic = MagicMock(return_value=fake_basic)
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_get_all_stocks_normalizes_exchange(self):
@@ -799,7 +867,7 @@ class TestStockList:
         )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_all_stocks("csi")
-        call = fetcher._api.stock_basic.call_args
+        call = ZzshareFetcher._api.stock_basic.call_args
         assert call.kwargs.get("exchange") == "ALL"
         assert call.kwargs.get("list_status") == "L"
 
@@ -820,7 +888,10 @@ class TestTradeCalendar:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.trade_days = MagicMock(return_value=fake_days)
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_trade_calendar_passthrough(self):
@@ -850,7 +921,10 @@ class TestStockInfo:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.stock_info = MagicMock(return_value=fake_info)
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_stock_info_returns_normalized_dict(self):
@@ -945,7 +1019,10 @@ class TestZtPool:
         else:
             fake_api.uplimit_hot = MagicMock(return_value={})
         fake_api.uplimit_stocks = MagicMock(return_value=stocks if stocks is not None else [])
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_zt_pool_returns_stocks(self):
@@ -996,7 +1073,7 @@ class TestZtPool:
         stocks = [{"ts_code": "600519.SH", "name": "茅台"}]
         fetcher = self._fetcher_with_api(stocks=stocks)
         fetcher.get_zt_pool("zt", "2026-05-20")
-        call = fetcher._api.uplimit_stocks.call_args
+        call = ZzshareFetcher._api.uplimit_stocks.call_args
         # date1 should be YYYYMMDD format
         assert call.kwargs.get("date1") == "20260520"
 
@@ -1012,7 +1089,10 @@ class TestBoards:
         fake_api = MagicMock()
         for name, value in mocks.items():
             setattr(fake_api, name, MagicMock(return_value=value))
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_get_all_boards_concept_via_15(self):
@@ -1111,7 +1191,7 @@ class TestBoards:
         fetcher.get_board_history(
             "883957", start_date="2026-05-15", end_date="2026-05-20",
         )
-        call = fetcher._api.plate_kline.call_args
+        call = ZzshareFetcher._api.plate_kline.call_args
         assert call.kwargs.get("b_code") == "883957"
         assert call.kwargs.get("date1") == "20260515"
         assert call.kwargs.get("date2") == "20260520"
@@ -1122,7 +1202,7 @@ class TestBoards:
         df_mock = pd.DataFrame({"date": ["2026-06-20"], "p_close": [1.0]})
         fetcher = self._fetcher_with_api(plate_kline=df_mock)
         fetcher.get_board_history("883957", days=7)
-        call = fetcher._api.plate_kline.call_args
+        call = ZzshareFetcher._api.plate_kline.call_args
         today = date.today()
         assert call.kwargs.get("date2") == today.strftime("%Y%m%d")
         assert call.kwargs.get("date1") == (today - timedelta(days=7)).strftime("%Y%m%d")
@@ -1170,7 +1250,10 @@ class TestDragonTiger:
         fake_api = MagicMock()
         for name, value in mocks.items():
             setattr(fake_api, name, MagicMock(return_value=value))
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_daily_dragon_tiger_returns_bare_6digit_codes(self):
@@ -1256,7 +1339,7 @@ class TestDragonTiger:
         )
         fetcher = self._fetcher_with_api(lhb_list=[])
         fetcher.get_daily_dragon_tiger("", None)
-        call = fetcher._api.lhb_list.call_args
+        call = ZzshareFetcher._api.lhb_list.call_args
         # Should be 20260522 (from mocked trade calendar)
         assert call.kwargs.get("date1") == "20260522"
 
@@ -1271,7 +1354,10 @@ class TestHotTopics:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         fake_api.ths_hot_top = MagicMock(return_value=fake_top)
-        fetcher._api = fake_api
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
         return fetcher
 
     def test_hot_topics_returns_bare_6digit_codes(self):
@@ -1323,7 +1409,7 @@ class TestHotTopics:
     def test_hot_topics_uses_today_when_date_empty(self):
         fetcher = self._fetcher_with_api([])
         fetcher.get_hot_topics("")  # empty -> today
-        call = fetcher._api.ths_hot_top.call_args
+        call = ZzshareFetcher._api.ths_hot_top.call_args
         # date1 should be today's YYYYMMDD
         from datetime import date
 
@@ -1333,7 +1419,7 @@ class TestHotTopics:
     def test_hot_topics_default_top_n(self):
         fetcher = self._fetcher_with_api([])
         fetcher.get_hot_topics("2026-05-20")
-        call = fetcher._api.ths_hot_top.call_args
+        call = ZzshareFetcher._api.ths_hot_top.call_args
         assert call.kwargs.get("top_n") == 100
 
 
