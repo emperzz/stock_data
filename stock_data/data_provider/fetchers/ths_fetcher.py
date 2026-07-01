@@ -20,9 +20,8 @@ import os
 from datetime import date as _date, datetime
 from urllib.parse import urlparse
 
-import requests
-
 from ..base import BaseFetcher, DataCapability, DataFetchError
+from ..utils.http import json_get, json_post
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +75,7 @@ class ThsFetcher(BaseFetcher):
         )
         headers = {"User-Agent": THS_UA}
         try:
-            r = requests.get(url, headers=headers, timeout=10)
-            data = r.json()
+            data = json_get(url, headers=headers, timeout=10)
             if data.get("errocode", 0) != 0:
                 logger.warning(f"[ThsFetcher] hot topics API error: {data.get('errormsg', '')}")
                 return []
@@ -111,8 +109,7 @@ class ThsFetcher(BaseFetcher):
         """
         url = "https://data.hexin.cn/market/hsgtApi/method/dayChart/"
         try:
-            r = requests.get(url, headers=HSGT_HEADERS, timeout=10)
-            d = r.json()
+            d = json_get(url, headers=HSGT_HEADERS, timeout=10)
             times = d.get("time", [])
             hgt = d.get("hgt", [])
             sgt = d.get("sgt", [])
@@ -220,29 +217,12 @@ class ThsFetcher(BaseFetcher):
             "User-Agent": THS_UA,
             "Referer": "https://news.10jqka.com.cn/realtimenews.html",
         }
-        try:
-            r = requests.get(
-                self._FLASH_NEWS_URL,
-                params=params,
-                headers=headers,
-                timeout=self._FLASH_NEWS_TIMEOUT,
-            )
-        except Exception as e:
-            raise DataFetchError(
-                f"[ThsFetcher] fetch_flash_news network error: {e}"
-            ) from e
-
-        if r.status_code != 200:
-            raise DataFetchError(
-                f"[ThsFetcher] fetch_flash_news HTTP {r.status_code}"
-            )
-
-        try:
-            payload = r.json()
-        except (ValueError,) as e:
-            raise DataFetchError(
-                f"[ThsFetcher] fetch_flash_news: bad JSON: {e}"
-            ) from e
+        payload = json_get(
+            self._FLASH_NEWS_URL,
+            params=params,
+            headers=headers,
+            timeout=self._FLASH_NEWS_TIMEOUT,
+        )
 
         # 上游成功时 code 是字符串 "200"(实测,不是 int 200)。
         # 与 EastMoneyFetcher.fetch_flash_news 一致,接受 str 和 int 两种"成功"
@@ -396,26 +376,12 @@ class ThsFetcher(BaseFetcher):
         }
 
         logger.info(f"[ThsFetcher] news search q={q!r} limit={limit}")
-        try:
-            resp = requests.post(
-                self._NEWS_SEARCH_URL,
-                json=body,
-                headers=self._NEWS_SEARCH_HEADERS,
-                timeout=self._NEWS_SEARCH_TIMEOUT,
-            )
-        except Exception as e:
-            raise DataFetchError(
-                f"[ThsFetcher] search_news network error: {e}"
-            ) from e
-
-        if resp.status_code != 200:
-            raise DataFetchError(f"[ThsFetcher] search_news HTTP {resp.status_code}")
-
-        resp.encoding = "utf-8"
-        try:
-            payload = resp.json()
-        except ValueError as e:
-            raise DataFetchError(f"[ThsFetcher] search_news: bad JSON: {e}") from e
+        payload = json_post(
+            self._NEWS_SEARCH_URL,
+            json_body=body,
+            headers=self._NEWS_SEARCH_HEADERS,
+            timeout=self._NEWS_SEARCH_TIMEOUT,
+        )
 
         if payload.get("status_code") != 0:
             raise DataFetchError(

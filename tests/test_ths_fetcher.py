@@ -51,7 +51,7 @@ class TestNorthFlow:
     def setup_method(self):
         self.fetcher = ThsFetcher()
 
-    @patch("stock_data.data_provider.fetchers.ths_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_records(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -157,12 +157,14 @@ class TestFetchFlashNewsSinglePage:
             captured["timeout"] = timeout
             class R:
                 status_code = 200
+                def raise_for_status(self_inner):
+                    pass
                 def json(self_inner):
                     return fixture
             return R()
 
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", fake_get)
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         self.fetcher.fetch_flash_news(limit=10)
 
@@ -180,12 +182,14 @@ class TestFetchFlashNewsSinglePage:
         def fake_get(url, params=None, headers=None, timeout=None):
             class R:
                 status_code = 200
+                def raise_for_status(self_inner):
+                    pass
                 def json(self_inner):
                     return fixture
             return R()
 
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", fake_get)
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=20)
 
@@ -220,12 +224,14 @@ class TestFetchFlashNewsMultiPage:
             page_calls.append(params["page"])
             class R:
                 status_code = 200
+                def raise_for_status(self_inner):
+                    pass
                 def json(self_inner):
                     return fixture
             return R()
 
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", fake_get)
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=50)
 
@@ -243,12 +249,14 @@ class TestFetchFlashNewsMultiPage:
             page_calls.append(params["page"])
             class R:
                 status_code = 200
+                def raise_for_status(self_inner):
+                    pass
                 def json(self_inner):
                     return fixture
             return R()
 
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", fake_get)
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=200)
 
@@ -271,12 +279,14 @@ class TestFetchFlashNewsMultiPage:
                 payload = empty
             class R:
                 status_code = 200
+                def raise_for_status(self_inner):
+                    pass
                 def json(self_inner, p=payload):
                     return p
             return R()
 
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", fake_get)
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=200)
 
@@ -308,12 +318,14 @@ class TestFetchFlashNewsLimits:
         def fake_get(url, params=None, headers=None, timeout=None):
             class R:
                 status_code = 200
+                def raise_for_status(self_inner):
+                    pass
                 def json(self_inner):
                     return fixture
             return R()
 
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", fake_get)
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit="10")
         assert len(results) == 10
@@ -333,12 +345,14 @@ class TestFetchFlashNewsLimits:
             page_calls.append(params["page"])
             class R:
                 status_code = 200
+                def raise_for_status(self_inner):
+                    pass
                 def json(self_inner):
                     return fixture
             return R()
 
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", fake_get)
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=500)
         assert page_calls == [str(i) for i in range(1, 11)]  # 10 pages
@@ -352,41 +366,49 @@ class TestFetchFlashNewsErrors:
         self.fetcher = ThsFetcher()
 
     def test_http_error_raises(self, monkeypatch):
+        import requests as _requests
         class R:
             status_code = 500
+            def raise_for_status(self_inner):
+                raise _requests.exceptions.HTTPError("500 Server Error")
             def json(self_inner):
                 return {}
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
-        with pytest.raises(DataFetchError, match="HTTP 500"):
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
+        with pytest.raises(DataFetchError, match="HTTP"):
             self.fetcher.fetch_flash_news(limit=10)
 
     def test_network_error_raises(self, monkeypatch):
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        import requests as _requests
+        import stock_data.data_provider.utils.http as http_mod
         def boom(*a, **kw):
-            raise ConnectionError("refused")
-        monkeypatch.setattr(mod.requests, "get", boom)
-        with pytest.raises(DataFetchError, match="network error"):
+            raise _requests.ConnectionError("refused")
+        monkeypatch.setattr(http_mod.requests, "get", boom)
+        with pytest.raises(DataFetchError, match="Request failed"):
             self.fetcher.fetch_flash_news(limit=10)
 
     def test_bad_json_raises(self, monkeypatch):
         class R:
             status_code = 200
+            def raise_for_status(self_inner):
+                pass
             def json(self_inner):
                 raise ValueError("bad json")
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
-        with pytest.raises(DataFetchError, match="bad JSON"):
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
+        with pytest.raises(DataFetchError, match="Invalid JSON"):
             self.fetcher.fetch_flash_news(limit=10)
 
     def test_upstream_error_code_raises(self, monkeypatch):
         bad = {"code": -1, "msg": "rate limited", "data": None}
         class R:
             status_code = 200
+            def raise_for_status(self_inner):
+                pass
             def json(self_inner):
                 return bad
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         with pytest.raises(DataFetchError, match="code=-1"):
             self.fetcher.fetch_flash_news(limit=10)
 
@@ -394,10 +416,12 @@ class TestFetchFlashNewsErrors:
         empty = {"code": "200", "msg": "ok", "data": {"list": []}}
         class R:
             status_code = 200
+            def raise_for_status(self_inner):
+                pass
             def json(self_inner):
                 return empty
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         results = self.fetcher.fetch_flash_news(limit=10)
         assert results == []
 
@@ -406,10 +430,12 @@ class TestFetchFlashNewsErrors:
         null_list = {"code": "200", "msg": "ok", "data": {"list": None}}
         class R:
             status_code = 200
+            def raise_for_status(self_inner):
+                pass
             def json(self_inner):
                 return null_list
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         results = self.fetcher.fetch_flash_news(limit=10)
         assert results == []
 
@@ -418,10 +444,12 @@ class TestFetchFlashNewsErrors:
         no_data = {"code": "200", "msg": "ok"}
         class R:
             status_code = 200
+            def raise_for_status(self_inner):
+                pass
             def json(self_inner):
                 return no_data
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         results = self.fetcher.fetch_flash_news(limit=10)
         assert results == []
 
@@ -440,10 +468,12 @@ class TestFetchFlashNewsErrors:
         }
         class R:
             status_code = 200
+            def raise_for_status(self_inner):
+                pass
             def json(self_inner):
                 return fixture
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "get", lambda *a, **kw: R())
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         results = self.fetcher.fetch_flash_news(limit=10)
         assert len(results) == 2
         assert results[0]["title"] == "good"
@@ -498,6 +528,9 @@ def _fake_post_ok(payload):
         class R:
             status_code = 200
             encoding = "utf-8"
+
+            def raise_for_status(self_inner):
+                pass
 
             def json(self_inner):
                 return payload
@@ -557,12 +590,14 @@ class TestSearchNewsRequest:
             class R:
                 status_code = 200
                 encoding = "utf-8"
+                def raise_for_status(self_inner):
+                    pass
                 def json(self_inner):
                     return _IWENCAI_FIXTURE
             return R()
 
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "post", fake_post)
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "post", fake_post)
 
         self.fetcher.search_news("茅台", limit=5)
 
@@ -575,8 +610,8 @@ class TestSearchNewsRequest:
         assert captured["timeout"] == 15
 
     def test_returns_normalized_dicts_and_skips_malformed(self, monkeypatch):
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
 
         results = self.fetcher.search_news("茅台", limit=10)
 
@@ -590,25 +625,25 @@ class TestSearchNewsRequest:
             }
 
     def test_from_date_filter(self, monkeypatch):
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
         # 只保留 2026-06-30 当天及以后 → 仅第 2 条
         results = self.fetcher.search_news("茅台", from_date="2026-06-10", limit=10)
         assert len(results) == 1
         assert results[0]["publish_date"] == "2026-06-30"
 
     def test_to_date_filter(self, monkeypatch):
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
         # 只保留 2026-06-03 当天及以前 → 仅第 1 条
         results = self.fetcher.search_news("茅台", to_date="2026-06-10", limit=10)
         assert len(results) == 1
         assert results[0]["publish_date"] == "2026-06-03"
 
     def test_empty_data_returns_empty(self, monkeypatch):
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        import stock_data.data_provider.utils.http as http_mod
         payload = {"status_msg": "OK", "status_code": 0, "total": 0, "data": []}
-        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(payload))
+        monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(payload))
         assert self.fetcher.search_news("不存在的词", limit=10) == []
 
 
@@ -639,8 +674,8 @@ class TestSearchNewsValidation:
             self.fetcher.search_news("茅台", limit="abc")
 
     def test_limit_string_coerced(self, monkeypatch):
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
         results = self.fetcher.search_news("茅台", limit="10")
         assert len(results) == 2
 
@@ -652,38 +687,44 @@ class TestSearchNewsErrors:
         self.fetcher = ThsFetcher()
 
     def test_http_error_raises(self, monkeypatch):
+        import requests as _requests
         class R:
             status_code = 502
             encoding = "utf-8"
+            def raise_for_status(self_inner):
+                raise _requests.exceptions.HTTPError("502 Bad Gateway")
             def json(self_inner):
                 return {}
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "post", lambda *a, **kw: R())
-        with pytest.raises(DataFetchError, match="HTTP 502"):
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "post", lambda *a, **kw: R())
+        with pytest.raises(DataFetchError, match="HTTP"):
             self.fetcher.search_news("茅台", limit=10)
 
     def test_network_error_raises(self, monkeypatch):
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
+        import requests as _requests
+        import stock_data.data_provider.utils.http as http_mod
         def boom(*a, **kw):
-            raise ConnectionError("refused")
-        monkeypatch.setattr(mod.requests, "post", boom)
-        with pytest.raises(DataFetchError, match="network error"):
+            raise _requests.ConnectionError("refused")
+        monkeypatch.setattr(http_mod.requests, "post", boom)
+        with pytest.raises(DataFetchError, match="Request failed"):
             self.fetcher.search_news("茅台", limit=10)
 
     def test_bad_json_raises(self, monkeypatch):
         class R:
             status_code = 200
             encoding = "utf-8"
+            def raise_for_status(self_inner):
+                pass
             def json(self_inner):
                 raise ValueError("bad json")
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "post", lambda *a, **kw: R())
-        with pytest.raises(DataFetchError, match="bad JSON"):
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "post", lambda *a, **kw: R())
+        with pytest.raises(DataFetchError, match="Invalid JSON"):
             self.fetcher.search_news("茅台", limit=10)
 
     def test_upstream_status_code_raises(self, monkeypatch):
         bad = {"status_msg": "FAIL", "status_code": -1, "data": []}
-        import stock_data.data_provider.fetchers.ths_fetcher as mod
-        monkeypatch.setattr(mod.requests, "post", _fake_post_ok(bad))
+        import stock_data.data_provider.utils.http as http_mod
+        monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(bad))
         with pytest.raises(DataFetchError, match="status_code=-1"):
             self.fetcher.search_news("茅台", limit=10)

@@ -137,4 +137,62 @@ def json_get(
         raise DataFetchError(f"Invalid JSON from {url}: {e}") from e
 
 
-__all__ = ["json_get", "random_ua"]
+# ---------------------------------------------------------------------------
+# Unified JSON POST — companion to json_get for POST endpoints.
+# ---------------------------------------------------------------------------
+def json_post(
+    url: str,
+    json_body: Any,
+    *,
+    timeout: int = 10,
+    headers: dict | None = None,
+    session: requests.Session | None = None,
+) -> Any:
+    """POST ``url`` with a JSON body and return the parsed JSON response.
+
+    Mirror of :func:`json_get` for POST endpoints (e.g. ThsFetcher's
+    iWenCai search, CninfoFetcher announcements). Errors are wrapped in
+    ``DataFetchError`` so the manager's failover loop can continue.
+
+    Args:
+        url: Full URL to POST.
+        json_body: JSON-serialisable body (passed as ``json=`` to requests).
+        timeout: Per-request timeout in seconds (default 10s).
+        headers: Extra headers; a random UA from the pool is always
+            injected unless ``headers`` already has its own ``User-Agent``.
+        session: Optional pre-configured ``requests.Session``. Defaults
+            to ``None`` (bare ``requests.post``; patchable by tests at
+            ``stock_data.data_provider.utils.http.requests.post``).
+
+    Returns:
+        Parsed JSON body (``dict`` / ``list`` / scalar).
+
+    Raises:
+        DataFetchError: on network timeout, HTTP error status, JSON
+            parse failure, or any other ``requests.RequestException``.
+    """
+    from ..base import DataFetchError
+
+    hdrs: dict = {"User-Agent": random_ua()}
+    if headers:
+        hdrs.update(headers)
+
+    try:
+        if session is not None:
+            resp = session.post(url, json=json_body, headers=hdrs, timeout=timeout)
+        else:
+            resp = requests.post(url, json=json_body, headers=hdrs, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.Timeout as e:
+        raise DataFetchError(f"Timeout posting to {url}: {e}") from e
+    except requests.exceptions.HTTPError as e:
+        status = getattr(resp, "status_code", "?")
+        raise DataFetchError(f"HTTP {status} from {url}: {e}") from e
+    except requests.exceptions.RequestException as e:
+        raise DataFetchError(f"Request failed for {url}: {e}") from e
+    except (ValueError, TypeError) as e:
+        raise DataFetchError(f"Invalid JSON from {url}: {e}") from e
+
+
+__all__ = ["json_get", "json_post", "random_ua"]

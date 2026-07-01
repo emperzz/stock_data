@@ -14,13 +14,12 @@ SDK is importable, even without a token.
 import importlib.util
 import logging
 import os
-import threading
 from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
 
-from ..base import BaseFetcher, DataCapability, DataFetchError
+from ..base import BaseFetcher, DataCapability, DataFetchError, SDKFetcherMixin
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 from ..persistence.trade_calendar import get_latest_trade_date_on_or_before
 from ..utils.normalize import normalize_stock_code
@@ -69,7 +68,7 @@ def _from_yyyymmdd(date: str) -> str:
     return date
 
 
-class ZzshareFetcher(BaseFetcher):
+class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
     """zzshare SDK fetcher — A-share multi-capability (priority 5)."""
 
     name = "ZzshareFetcher"
@@ -87,30 +86,30 @@ class ZzshareFetcher(BaseFetcher):
         | DataCapability.STOCK_INFO
     )
 
-    # Class-level once-per-process init. Mirrors the Baostock/Tushare/
-    # Myquant pattern so all SDK-bearing fetchers share one convention.
-    # is_available() only does a cheap find_spec() check (no I/O) — the
-    # actual DataApi() construction lives behind _ensure_api() and runs
-    # at most once per process, success or failure cached. _init_lock
-    # guards against two threads both constructing DataApi() concurrently.
-    # Token is optional (anonymous works for most endpoints); checked
-    # lazily here and in per-method code paths.
-    _init_lock: "threading.Lock" = threading.Lock()
-    _init_attempted: bool = False
-    _init_ok: bool = False
-    _cls_token: str = ""
-    _init_error: str | None = None
-    _api: Any | None = None
+    # SDKFetcherMixin declarations. Token is optional (anonymous works
+    # for most endpoints); _init_sdk handles the empty-token case.
+    _TOKEN_ENV_VAR = "ZZSHARE_TOKEN"
+    _SDK_NAME = "zzshare"
 
     def __init__(self):
         pass
 
+    def _init_sdk(self, token: str) -> Any:
+        """Initialise the zzshare SDK. Token is optional."""
+        if importlib.util.find_spec("zzshare") is None:
+            raise ImportError("zzshare SDK not importable (pip install zzshare)")
+        from zzshare.client import DataApi  # type: ignore
+
+        if token:
+            return DataApi(token=token)
+        return DataApi()
+
     def is_available(self) -> bool:
         """True iff the zzshare PyPI package is importable. Token is optional.
 
-        Mirrors the akshare pattern (probe via ``importlib.util.find_spec``
-        so the manager can skip this fetcher cleanly when the SDK isn't
-        installed). Token is checked lazily inside per-method calls.
+        Overrides the mixin's is_available() (which triggers _ensure_api)
+        because Zzshare only requires the SDK to be installed — token is
+        checked lazily inside per-method calls via _ensure_api().
         """
         return importlib.util.find_spec("zzshare") is not None
 
@@ -126,39 +125,6 @@ class ZzshareFetcher(BaseFetcher):
         if self.is_available():
             return None
         return f"{self.name} unavailable: zzshare SDK not installed (pip install zzshare)"
-
-    def _ensure_api(self) -> Any:
-        """Lazy-init the zzshare SDK (once per process).
-
-        Returns the DataApi instance, or None if SDK is missing. Records
-        the specific init failure into ``_init_error`` for
-        ``unavailable_reason()`` reporting.
-        """
-        if ZzshareFetcher._init_attempted:
-            return ZzshareFetcher._api
-        with ZzshareFetcher._init_lock:
-            # Double-check after acquiring the lock.
-            if ZzshareFetcher._init_attempted:
-                return ZzshareFetcher._api
-            ZzshareFetcher._init_attempted = True
-            ZzshareFetcher._cls_token = os.getenv("ZZSHARE_TOKEN", "").strip()
-            if importlib.util.find_spec("zzshare") is None:
-                ZzshareFetcher._init_error = "zzshare SDK not importable (pip install zzshare)"
-                return None
-            try:
-                from zzshare.client import DataApi  # type: ignore
-
-                if ZzshareFetcher._cls_token:
-                    ZzshareFetcher._api = DataApi(token=ZzshareFetcher._cls_token)
-                else:
-                    ZzshareFetcher._api = DataApi()
-                ZzshareFetcher._init_ok = True
-                ZzshareFetcher._init_error = None
-                return ZzshareFetcher._api
-            except Exception as e:
-                ZzshareFetcher._init_error = f"zzshare SDK init failed: {e}"
-                logger.warning("[ZzshareFetcher] %s", ZzshareFetcher._init_error)
-                return None
 
     def _fetch_raw_data(
         self,
@@ -184,7 +150,8 @@ class ZzshareFetcher(BaseFetcher):
         if frequency in ("5", "15", "30", "60"):
             # Mirror the daily branch's SDK-availability check so users get
             # a distinct "SDK 不可用" error instead of a misleading "无分钟数据".
-            if self._ensure_api() is None:
+            self._ensure_api()
+            if self.__class__._api is None:
                 raise DataFetchError(
                     f"ZzshareFetcher zzshare SDK 不可用: {ZzshareFetcher._init_error}"
                 )
@@ -216,7 +183,8 @@ class ZzshareFetcher(BaseFetcher):
             return pd.concat(dfs, ignore_index=True)
 
         # Daily branch (existing path)
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             raise DataFetchError(f"ZzshareFetcher zzshare SDK 不可用: {ZzshareFetcher._init_error}")
         ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
@@ -319,7 +287,8 @@ class ZzshareFetcher(BaseFetcher):
         get_intraday_data（单日）使用。SDK 不可用、上游异常、
         或返回空 df 时返回 None，调用方需自行决定下一步。
         """
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             return None
         ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
@@ -343,7 +312,8 @@ class ZzshareFetcher(BaseFetcher):
 
         Returns None if SDK unavailable or upstream returns empty.
         """
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             return None
         ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
@@ -388,7 +358,8 @@ class ZzshareFetcher(BaseFetcher):
         """
         if market != "csi":
             return []
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             return []
         try:
@@ -420,7 +391,8 @@ class ZzshareFetcher(BaseFetcher):
         Returns list of YYYY-MM-DD strings (already formatted by SDK),
         or None on failure.
         """
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             return None
         try:
@@ -440,7 +412,8 @@ class ZzshareFetcher(BaseFetcher):
         """
         from ..utils.normalize import split_concepts as _split_concepts
 
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             return None
         code = normalize_stock_code(stock_code)
@@ -485,7 +458,8 @@ class ZzshareFetcher(BaseFetcher):
         """
         if pool_type not in self._POOL_TYPE_MAP:
             return None
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             return None
         date_yyyymmdd = _to_yyyymmdd(date)
@@ -546,7 +520,8 @@ class ZzshareFetcher(BaseFetcher):
         plates_list does not expose realtime quote fields.
         """
         _ = source, include_quote  # accepted for Manager interface
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             return []
         out: list[dict] = []
@@ -588,7 +563,8 @@ class ZzshareFetcher(BaseFetcher):
         """
         source = kwargs.get("source", "zzshare")
         _ = source  # currently always 'zzshare' for this fetcher
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             return []
         # Try each plate_type (14/15/17) until one returns data.
@@ -665,7 +641,8 @@ class ZzshareFetcher(BaseFetcher):
             raise DataFetchError(
                 f"ZzshareFetcher 板块 K 线仅支持日线 (frequency={frequency!r})"
             )
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             raise DataFetchError(
                 f"ZzshareFetcher zzshare SDK 不可用: {ZzshareFetcher._init_error}"
@@ -734,7 +711,8 @@ class ZzshareFetcher(BaseFetcher):
         Returns ``{date, total, stocks[]}`` matching the manager's
         contract. ``min_net_buy`` filters rows whose buy_in < threshold.
         """
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             raise DataFetchError("ZzshareFetcher zzshare SDK 不可用")
         date_str = (
@@ -784,7 +762,8 @@ class ZzshareFetcher(BaseFetcher):
         Returns ``{records[], seats{buy, sell}, institution}`` matching
         the manager's per-stock contract.
         """
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             raise DataFetchError("ZzshareFetcher zzshare SDK 不可用")
         bare_code = normalize_stock_code(code)
@@ -839,7 +818,8 @@ class ZzshareFetcher(BaseFetcher):
         date_str empty -> today.
         """
 
-        api = self._ensure_api()
+        self._ensure_api()
+        api = self.__class__._api
         if api is None:
             return []
         d = _to_yyyymmdd(date_str) if date_str else date.today().strftime("%Y%m%d")
