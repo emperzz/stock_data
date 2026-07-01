@@ -23,7 +23,10 @@ def test_read_membership_by_board_code(fresh_db):
     board_mod.upsert_membership_bulk(
         source="eastmoney",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="BK1001", board_name="白酒", board_type="concept", subtype="concept",
+        board_code="BK1001",
+        board_name="白酒",
+        board_type="concept",
+        subtype="concept",
     )
     rows = board_mod.read_membership(board_code="BK1001", source="eastmoney")
     assert len(rows) == 1
@@ -38,12 +41,18 @@ def test_read_membership_by_stock_code(fresh_db):
     board_mod.upsert_membership_bulk(
         source="eastmoney",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="BK1001", board_name="白酒", board_type="concept", subtype="concept",
+        board_code="BK1001",
+        board_name="白酒",
+        board_type="concept",
+        subtype="concept",
     )
     board_mod.upsert_membership_bulk(
         source="zhitu",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="sw_yx_baijiu", board_name="白酒", board_type="industry", subtype="申万行业",
+        board_code="sw_yx_baijiu",
+        board_name="白酒",
+        board_type="industry",
+        subtype="申万行业",
     )
     rows = board_mod.read_membership(stock_code="600519")
     assert len(rows) == 2
@@ -56,12 +65,18 @@ def test_read_membership_source_isolation(fresh_db):
     board_mod.upsert_membership_bulk(
         source="eastmoney",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="BK1001", board_name="白酒", board_type="concept", subtype="concept",
+        board_code="BK1001",
+        board_name="白酒",
+        board_type="concept",
+        subtype="concept",
     )
     board_mod.upsert_membership_bulk(
         source="zhitu",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="sw_yx", board_name="白酒", board_type="industry", subtype="申万行业",
+        board_code="sw_yx",
+        board_name="白酒",
+        board_type="industry",
+        subtype="申万行业",
     )
     rows = board_mod.read_membership(stock_code="600519", source="eastmoney")
     assert len(rows) == 1
