@@ -304,6 +304,11 @@ def get_board_stocks(
     )
 
     if stocks:
+        # Cold-fill: this single call updates BOTH stock_board_stock (legacy)
+        # AND stock_board_membership (new reverse index) — see
+        # update_cached_board_stocks in this module. After Task 9 drops the
+        # legacy table, this call's behavior simplifies to a single
+        # upsert_membership_bulk.
         update_cached_board_stocks(board_code, source, stocks)
         logger.info(f"[BoardCache] Refreshed {len(stocks)} stocks for board {board_code}/{source}")
 
@@ -498,22 +503,14 @@ def _read_boards_from_db(board_type: str, source: str, subtype: str | None = Non
 
 
 def _read_board_stocks_from_db(board_code: str, source: str) -> list:
-    """Read board-stock list from database (metadata only)."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """SELECT stock_code, stock_name, updated_at
-           FROM stock_board_stock WHERE board_code = ? AND source = ? ORDER BY stock_code""",
-        (board_code, source),
-    )
-    rows = cursor.fetchall()
+    """Read board-stock list from membership table."""
     return [
         {
-            "stock_code": row["stock_code"],
-            "stock_name": row["stock_name"],
-            "updated_at": row["updated_at"],
+            "stock_code": r["stock_code"],
+            "stock_name": r["stock_name"],
+            "updated_at": r["refreshed_at"],
         }
-        for row in rows
+        for r in read_membership(board_code=board_code, source=source)
     ]
 
 
