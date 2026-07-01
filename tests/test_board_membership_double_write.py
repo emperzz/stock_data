@@ -33,7 +33,9 @@ def test_update_cached_board_stocks_writes_both_tables(fresh_db):
         {"stock_code": "000858", "stock_name": "五粮液"},
     ]
     n = board_mod.update_cached_board_stocks(
-        board_code="BK1001", source="eastmoney", stocks=stocks,
+        board_code="BK1001",
+        source="eastmoney",
+        stocks=stocks,
     )
     assert n == 2
 
@@ -50,5 +52,28 @@ def test_update_cached_board_stocks_writes_both_tables(fresh_db):
     ).fetchall()
     assert len(new_rows) == 2
     assert new_rows[0]["stock_name"] == "五粮液"  # populated from input dict
-    assert new_rows[0]["board_name"] == "白酒"    # populated via JOIN
+    assert new_rows[0]["board_name"] == "白酒"  # populated via JOIN
     assert new_rows[0]["board_type"] == "concept"
+    assert new_rows[0]["subtype"] == "concept"
+
+
+def test_update_cached_board_stocks_handles_missing_board_row(fresh_db):
+    """When stock_board has no row for (board_code, source), fall back gracefully."""
+    # NO seed of stock_board — board_row will be None
+    stocks = [{"stock_code": "600519", "stock_name": "贵州茅台"}]
+    n = board_mod.update_cached_board_stocks(
+        board_code="BK9999",
+        source="eastmoney",
+        stocks=stocks,
+    )
+    assert n == 1
+
+    conn = db_mod.get_connection()
+    new_row = conn.execute(
+        """SELECT board_name, board_type, subtype FROM stock_board_membership
+           WHERE board_code='BK9999'"""
+    ).fetchone()
+    # Fallbacks per the function: board_name → board_code; board_type → ""; subtype → None
+    assert new_row["board_name"] == "BK9999"
+    assert new_row["board_type"] == ""
+    assert new_row["subtype"] is None
