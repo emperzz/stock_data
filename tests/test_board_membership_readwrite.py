@@ -89,3 +89,54 @@ def test_read_membership_validates_one_of_keys(fresh_db):
         board_mod.read_membership()
     with pytest.raises(ValueError, match="Exactly one"):
         board_mod.read_membership(board_code="X", stock_code="Y")
+
+
+def test_upsert_inserts_new_rows(fresh_db):
+    """upsert_membership_bulk with new stock inserts a row."""
+    n = board_mod.upsert_membership_bulk(
+        source="eastmoney",
+        stocks=[
+            {"stock_code": "600519", "stock_name": "贵州茅台"},
+            {"stock_code": "000858", "stock_name": "五粮液"},
+        ],
+        board_code="BK1001", board_name="白酒", board_type="concept", subtype="concept",
+    )
+    assert n == 2
+    rows = board_mod.read_membership(board_code="BK1001")
+    assert len(rows) == 2
+
+
+def test_upsert_refreshes_existing_row(fresh_db):
+    """upsert with same (board_code, source, stock_code) updates refreshed_at + denorm fields."""
+    import time
+    board_mod.upsert_membership_bulk(
+        source="eastmoney",
+        stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
+        board_code="BK1001", board_name="白酒-OldName", board_type="concept", subtype="concept",
+    )
+    rows_before = board_mod.read_membership(board_code="BK1001")
+    assert rows_before[0]["board_name"] == "白酒-OldName"
+
+    # Sleep to ensure refreshed_at differs (SQLite CURRENT_TIMESTAMP has 1s precision)
+    time.sleep(1.1)
+
+    board_mod.upsert_membership_bulk(
+        source="eastmoney",
+        stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
+        board_code="BK1001", board_name="白酒-NewName", board_type="concept", subtype="concept",
+    )
+    rows_after = board_mod.read_membership(board_code="BK1001")
+    assert len(rows_after) == 1  # no duplicate
+    assert rows_after[0]["board_name"] == "白酒-NewName"
+    assert rows_after[0]["refreshed_at"] != rows_before[0]["refreshed_at"]
+
+
+def test_upsert_handles_empty_stocks(fresh_db):
+    """upsert with empty list returns 0 and writes nothing."""
+    n = board_mod.upsert_membership_bulk(
+        source="eastmoney", stocks=[],
+        board_code="BK1001", board_name="白酒", board_type="concept", subtype="concept",
+    )
+    assert n == 0
+    rows = board_mod.read_membership(board_code="BK1001")
+    assert len(rows) == 0
