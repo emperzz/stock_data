@@ -627,12 +627,12 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
 
 def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> int:
     """
-    Update cached stocks metadata for a board (dual-write window).
+    Upsert stocks for a board into `stock_board_membership` (single-write).
 
-    Writes to BOTH `stock_board_stock` (legacy) and `stock_board_membership`
-    (new reverse-index table). After `scripts/migrate_to_membership.py
-    --execute` drops the legacy table, this function will be simplified
-    to single-write (see Task 9).
+    Note: prior to this simplification, this function dual-wrote to a
+    now-deleted `stock_board_stock` table. After
+    `scripts/migrate_to_membership.py --execute` ran, only
+    `stock_board_membership` remains.
 
     Args:
         board_code: Board code
@@ -647,7 +647,6 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
 
     init_schema()
 
-    # Resolve board metadata for denormalization (board_name, board_type, subtype)
     conn = get_connection()
     board_row = conn.execute(
         "SELECT name, board_type, subtype FROM stock_board WHERE code = ? AND source = ?",
@@ -660,39 +659,19 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
     try:
         with conn:
             cursor = conn.cursor()
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            # Legacy table (will be dropped in Task 9)
-            cursor.executemany(
-                """INSERT OR REPLACE INTO stock_board_stock
-                (board_code, source, stock_code, stock_name, updated_at)
-                VALUES (?, ?, ?, ?, ?)""",
-                [(board_code, source, s["stock_code"], s["stock_name"], now) for s in stocks],
-            )
-
-            # New reverse-index table (denormalized: board_name / board_type / subtype)
             cursor.executemany(
                 """INSERT OR REPLACE INTO stock_board_membership
                    (board_code, source, stock_code, stock_name,
                     board_name, board_type, subtype, refreshed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
                 [
-                    (
-                        board_code,
-                        source,
-                        s["stock_code"],
-                        s["stock_name"],
-                        board_name,
-                        board_type,
-                        subtype,
-                        now,
-                    )
+                    (board_code, source, s["stock_code"], s["stock_name"],
+                     board_name, board_type, subtype)
                     for s in stocks
                 ],
             )
-
             logger.info(
-                f"[BoardCache] Updated {len(stocks)} stocks for board {board_code}/{source} (dual-write)"
+                f"[BoardCache] Updated {len(stocks)} stocks for board {board_code}/{source}"
             )
             return len(stocks)
     except Exception as e:

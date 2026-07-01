@@ -1,4 +1,12 @@
-"""Tests for dual-write in update_cached_board_stocks."""
+"""Tests for update_cached_board_stocks post-Task-9 (single-write to membership).
+
+Prior to Task 9, ``update_cached_board_stocks`` dual-wrote to the legacy
+``stock_board_stock`` table AND the new ``stock_board_membership`` table.
+After ``scripts/migrate_to_membership.py --execute`` drops the legacy
+table, ``update_cached_board_stocks`` was simplified to write only to
+``stock_board_membership``. These tests verify the post-migration
+single-write behavior — i.e. the legacy table is no longer populated.
+"""
 
 from __future__ import annotations
 
@@ -18,9 +26,18 @@ def fresh_db(tmp_path, monkeypatch):
     yield tmp_path / "test.db"
 
 
-def test_update_cached_board_stocks_writes_both_tables(fresh_db):
-    """update_cached_board_stocks must insert into stock_board_stock AND stock_board_membership."""
-    # Seed stock_board so dual-write can join board_name/board_type
+def test_update_cached_board_stocks_writes_only_membership(fresh_db):
+    """update_cached_board_stocks writes exclusively to stock_board_membership.
+
+    Post-Task-9: the legacy ``stock_board_stock`` table no longer exists in
+    production (it is dropped by ``scripts/migrate_to_membership.py``).
+    If the table does happen to still exist locally — e.g. a stale DB from
+    before migration — this function must NOT touch it (only writes go to
+    membership). When the table is absent, ``init_schema()`` no longer
+    creates it (the legacy CREATE was also removed by the migration), so
+    the absence check below acts as the canonical post-condition.
+    """
+    # Seed stock_board so the function can resolve board_name/board_type
     conn = db_mod.get_connection()
     conn.execute("""
         INSERT INTO stock_board (code, name, board_type, subtype, source)
@@ -39,18 +56,12 @@ def test_update_cached_board_stocks_writes_both_tables(fresh_db):
     )
     assert n == 2
 
-    # Check legacy table
-    legacy = conn.execute(
-        "SELECT stock_code FROM stock_board_stock WHERE board_code='BK1001' ORDER BY stock_code"
-    ).fetchall()
-    assert [r["stock_code"] for r in legacy] == ["000858", "600519"]
-
-    # Check new table
+    # Check new table got both rows with denormalized board metadata
     new_rows = conn.execute(
         """SELECT stock_code, stock_name, board_name, board_type, subtype FROM stock_board_membership
            WHERE board_code='BK1001' ORDER BY stock_code"""
     ).fetchall()
-    assert len(new_rows) == 2
+    assert [r["stock_code"] for r in new_rows] == ["000858", "600519"]
     assert new_rows[0]["stock_name"] == "五粮液"  # populated from input dict
     assert new_rows[0]["board_name"] == "白酒"  # populated via JOIN
     assert new_rows[0]["board_type"] == "concept"
