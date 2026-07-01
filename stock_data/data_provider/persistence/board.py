@@ -118,21 +118,6 @@ def init_schema() -> None:
         CREATE INDEX IF NOT EXISTS idx_stock_board_type_subtype_source
         ON stock_board(board_type, subtype, source)
     """)
-    # Board-stock relation table — metadata only; realtime quotes come from API
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stock_board_stock (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            board_code TEXT NOT NULL,
-            source TEXT NOT NULL,
-            stock_code TEXT NOT NULL,
-            stock_name TEXT NOT NULL,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(board_code, source, stock_code)
-        )
-    """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_stock_board_stock_board ON stock_board_stock(board_code, source)
-    """)
     # Membership table — bidirectional stock <-> board index. See
     # docs/superpowers/specs/2026-07-01-stock-board-membership-design.md §2.1.
     cursor.execute("""
@@ -157,9 +142,10 @@ def init_schema() -> None:
         CREATE INDEX IF NOT EXISTS idx_membership_forward
             ON stock_board_membership(board_code, source)
     """)
-    # Auto-migration: if legacy stock_board_stock exists, copy its rows
-    # into stock_board_membership with joined board metadata. One-shot —
-    # subsequent runs find stock_board_stock absent and skip.
+    # One-shot auto-migration from legacy stock_board_stock (post-Task-9
+    # plumbing). The table is no longer created by init_schema(), but
+    # pre-migration DBs still have it; this block is a no-op on fresh
+    # databases. Safe to keep indefinitely.
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_board_stock'")
     if cursor.fetchone() is not None:
         cursor.execute("""
@@ -311,11 +297,8 @@ def get_board_stocks(
     )
 
     if stocks:
-        # Cold-fill: this single call updates BOTH stock_board_stock (legacy)
-        # AND stock_board_membership (new reverse index) — see
-        # update_cached_board_stocks in this module. After Task 9 drops the
-        # legacy table, this call's behavior simplifies to a single
-        # upsert_membership_bulk.
+        # Cold-fill: persists stocks to stock_board_membership via the
+        # single-write update_cached_board_stocks helper.
         update_cached_board_stocks(board_code, source, stocks)
         logger.info(f"[BoardCache] Refreshed {len(stocks)} stocks for board {board_code}/{source}")
 
@@ -627,12 +610,11 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
 
 def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> int:
     """
-    Upsert stocks for a board into `stock_board_membership` (single-write).
+    Upsert stocks for a board into `stock_board_membership`.
 
-    Note: prior to this simplification, this function dual-wrote to a
-    now-deleted `stock_board_stock` table. After
-    `scripts/migrate_to_membership.py --execute` ran, only
-    `stock_board_membership` remains.
+    See docs/superpowers/specs/2026-07-01-stock-board-membership-design.md
+    for history (the legacy `stock_board_stock` table was dropped in the
+    membership migration).
 
     Args:
         board_code: Board code
@@ -665,8 +647,15 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
                     board_name, board_type, subtype, refreshed_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
                 [
-                    (board_code, source, s["stock_code"], s["stock_name"],
-                     board_name, board_type, subtype)
+                    (
+                        board_code,
+                        source,
+                        s["stock_code"],
+                        s["stock_name"],
+                        board_name,
+                        board_type,
+                        subtype,
+                    )
                     for s in stocks
                 ],
             )

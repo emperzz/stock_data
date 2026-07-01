@@ -24,6 +24,23 @@ def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(board_mod, "_schema_initialized_paths", set())
     monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "test.db"))
     board_mod.init_schema()
+    # These tests exercise the migration script that drops the legacy
+    # `stock_board_stock` table. With the legacy DDL removed from
+    # `init_schema()` (Task 9 post-migration cleanup), tests must bootstrap
+    # the legacy table explicitly to simulate the pre-migration state.
+    conn = db_mod.get_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_board_stock (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            board_code TEXT NOT NULL,
+            source TEXT NOT NULL,
+            stock_code TEXT NOT NULL,
+            stock_name TEXT NOT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(board_code, source, stock_code)
+        )
+    """)
+    conn.commit()
     yield tmp_path / "test.db"
 
 
