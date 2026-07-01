@@ -28,12 +28,18 @@ def test_view_returns_per_source_groups(fresh_db):
     board_mod.upsert_membership_bulk(
         source="eastmoney",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="BK1001", board_name="白酒", board_type="concept", subtype="concept",
+        board_code="BK1001",
+        board_name="白酒",
+        board_type="concept",
+        subtype="concept",
     )
     board_mod.upsert_membership_bulk(
         source="zhitu",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="sw_yx", board_name="白酒", board_type="industry", subtype="申万行业",
+        board_code="sw_yx",
+        board_name="白酒",
+        board_type="industry",
+        subtype="申万行业",
     )
     # zzshare has no data for this stock
 
@@ -53,12 +59,18 @@ def test_view_filters_by_type(fresh_db):
     board_mod.upsert_membership_bulk(
         source="eastmoney",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="BK1", board_name="白酒", board_type="concept", subtype="concept",
+        board_code="BK1",
+        board_name="白酒",
+        board_type="concept",
+        subtype="concept",
     )
     board_mod.upsert_membership_bulk(
         source="eastmoney",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="BK2", board_name="饮料制造", board_type="industry", subtype="industry",
+        board_code="BK2",
+        board_name="饮料制造",
+        board_type="industry",
+        subtype="industry",
     )
     with TestClient(app) as client:
         r = client.get("/api/v1/stocks/600519/board-memberships?type=concept")
@@ -77,3 +89,30 @@ def test_view_empty_stock_returns_all_cold_sources(fresh_db):
     body = r.json()
     assert body["memberships"] == {}
     assert set(body["cold_sources"]) == {"eastmoney", "zhitu", "zzshare"}
+
+
+def test_view_filters_by_subtype(fresh_db):
+    """?subtype= filters by source-specific subtype."""
+    board_mod.upsert_membership_bulk(
+        source="zhitu",
+        stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
+        board_code="sw_yx",
+        board_name="白酒",
+        board_type="industry",
+        subtype="申万行业",
+    )
+    board_mod.upsert_membership_bulk(
+        source="zhitu",
+        stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
+        board_code="sw_yx_2",
+        board_name="白酒2",
+        board_type="industry",
+        subtype="申万二级",
+    )
+    with TestClient(app) as client:
+        r = client.get("/api/v1/stocks/600519/board-memberships?subtype=申万行业")
+    body = r.json()
+    zhitu = body["memberships"]["zhitu"]
+    assert len(zhitu) == 1
+    assert zhitu[0]["board_code"] == "sw_yx"
+    assert zhitu[0]["subtype"] == "申万行业"
