@@ -6,6 +6,7 @@ upstream API calls which are slow and may fail.
 """
 
 import logging
+import sqlite3
 from datetime import datetime
 
 from . import db
@@ -401,6 +402,7 @@ def upsert_membership_bulk(
     board_name: str,
     board_type: str,
     subtype: str | None,
+    conn: sqlite3.Connection | None = None,
 ) -> int:
     """Bulk upsert all stocks for one board. Returns count of rows affected.
 
@@ -411,6 +413,10 @@ def upsert_membership_bulk(
         board_name: e.g. '白酒' (denormalized for read perf)
         board_type: 'concept' | 'industry' | 'index' | 'special'
         subtype: source-specific subtype string
+        conn: optional SQLite connection. When None, opens a fresh
+            connection via get_connection(). Pass an existing
+            connection when calling from a multi-threaded caller
+            (each thread should own its own connection).
 
     Implementation notes:
         - Uses INSERT OR REPLACE so refreshed_at = CURRENT_TIMESTAMP.
@@ -421,7 +427,8 @@ def upsert_membership_bulk(
         return 0
 
     init_schema()
-    conn = get_connection()
+    if conn is None:
+        conn = get_connection()
     with conn:
         cursor = conn.cursor()
         rows = [
@@ -451,6 +458,7 @@ def upsert_membership_for_stock_boards(
     stock_name: str,
     boards: list[dict],
     source: str,
+    conn: sqlite3.Connection | None = None,
 ) -> int:
     """Batch upsert all boards a stock belongs to (single transaction).
 
@@ -458,12 +466,19 @@ def upsert_membership_for_stock_boards(
     reverse-index rows for every board returned by the fetcher in one
     executemany call. Each input board dict must have keys: code, name,
     type, subtype.
+
+    Args:
+        conn: optional SQLite connection. When None, opens a fresh
+            connection via get_connection(). Pass an existing
+            connection when calling from a multi-threaded caller
+            (each thread should own its own connection).
     """
     if not boards:
         return 0
 
     init_schema()
-    conn = get_connection()
+    if conn is None:
+        conn = get_connection()
     with conn:
         cursor = conn.cursor()
         rows = [
