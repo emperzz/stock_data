@@ -87,7 +87,6 @@ __all__ = [
 # since none of the current tables have FK constraints, this is mostly
 # cosmetic, but keeping it explicit makes future FK additions safer.
 _TABLES = (
-    "stock_board_stock",
     "stock_board",
     "stock_list",
     "trade_calendar",

@@ -29,6 +29,8 @@ from ..schemas import (
     BoardInfo,
     BoardKlineResponse,
     BoardListResponse,
+    BoardMembershipEntry,
+    BoardMembershipsResponse,
     BoardStockInfo,
     BoardStocksResponse,
     ErrorResponse,
@@ -94,9 +96,7 @@ def _resolve_type(board_type: str) -> str:
 )
 @map_errors
 def list_boards(
-    type: Literal["concept", "industry", "index", "special"] = Query(
-        ..., description="Board type"
-    ),
+    type: Literal["concept", "industry", "index", "special"] = Query(..., description="Board type"),
     source: Literal["eastmoney", "zhitu", "zzshare"] = Query(
         ..., description="Data source (REQUIRED)"
     ),
@@ -110,9 +110,7 @@ def list_boards(
         None, description="Sort by field (requires include_quote=true)"
     ),
     sort_order: Literal["asc", "desc"] = Query("desc", description="Sort order"),
-    limit: int | None = Query(
-        None, ge=1, le=500, description="Max number of items (default: all)"
-    ),
+    limit: int | None = Query(None, ge=1, le=500, description="Max number of items (default: all)"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
 ) -> BoardListResponse:
     """Get list of concept / industry / index / special boards."""
@@ -246,7 +244,9 @@ def get_board_stocks(
         try:
             for bt in ("concept", "industry"):
                 boards, _ = manager.get_all_boards(
-                    source=source, board_type=bt, subtype=None,
+                    source=source,
+                    board_type=bt,
+                    subtype=None,
                 )
                 match = next((b["name"] for b in boards if b["code"] == board_code), None)
                 if match:
@@ -279,14 +279,13 @@ def get_board_stocks(
     response_model=StockBoardsResponse,
     responses={
         400: {"model": ErrorResponse, "description": "Invalid source/type/subtype"},
-        404: {"model": ErrorResponse, "description": "Stock not found"},
-        501: {"model": ErrorResponse, "description": "Source does not implement this endpoint"},
+        404: {"model": ErrorResponse, "description": "Stock not in any known board"},
         500: {"model": ErrorResponse, "description": "Server error"},
     },
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="股票所属板块（新增）",
+    summary="股票所属板块（所有 source 都支持）",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_stock_boards",
@@ -295,85 +294,128 @@ def get_board_stocks(
 def get_stock_boards(
     stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
     source: Literal["zhitu", "eastmoney", "zzshare"] = Query(
-        ..., description="Data source (currently only 'zhitu' supported; zzshare has no stock→boards API)"
+        ...,
+        description="Data source (zhitu has native API; eastmoney/zzshare served from membership table only)",
     ),
     type: Literal["concept", "industry", "index", "special"] | None = Query(
         None, description="Filter by board type"
     ),
-    subtype: str | None = Query(
-        None, description="Filter by source-specific subtype"
-    ),
+    subtype: str | None = Query(None, description="Filter by source-specific subtype"),
 ) -> StockBoardsResponse:
     """Get boards a stock belongs to.
 
-    Currently only ``source=zhitu`` is supported. EastMoney's API does not
-    expose a direct stock→boards mapping. zzshare has no stock→boards
-    reverse-lookup endpoint either (returns 501).
+    All sources supported. Reads from ``stock_board_membership`` (built by
+    forward-path lazy fill or ``tools/build_membership_index`` bootstrap).
+    For ``source=zhitu``, the cold-path fallback calls the fetcher's native
+    reverse API and writes the result to membership.
     """
     _resolve_source(source)
 
-    if source not in ("zhitu",):
-        raise HTTPException(
-            status_code=501,
-            detail={
-                "error": "not_implemented",
-                "message": f"source='{source}' does not implement stock->boards lookup. "
-                f"Currently supported: 'zhitu'. "
-                f"zzshare has no stock→boards reverse-lookup endpoint.",
-            },
-        )
-
-    # Subtype validation only if provided
     if type is not None:
         _resolve_type(type)
         stock_board_cache._validate_subtype(source, type, subtype)
 
-    manager = get_manager()
-    try:
-        boards, origin = manager.get_stock_boards(
-            stock_code, source=source,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)})
-
-    # boards may be None (fetcher signal: no data); treat as 404
-    if boards is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "not_found",
-                "message": f"No board data for stock {stock_code} (source={source})",
-            },
-        )
-
-    # Filter by type/subtype if specified
-    if type is not None:
-        boards = [b for b in boards if b.get("type") == type]
-    if subtype is not None:
-        boards = [b for b in boards if b.get("subtype") == subtype]
-
-    if not boards:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "not_found",
-                "message": f"No boards found for stock {stock_code} "
-                f"(source={source}, type={type}, subtype={subtype})",
-            },
-        )
-
-    return StockBoardsResponse(
+    # ① Try membership table first; ② fall back to zhitu cold path (native API
+    # → upsert membership). Both branches routed through the persistence layer
+    # so the route never calls the fetcher directly (per CLAUDE.md
+    # "persistence-only routing" rule).
+    boards, origin = stock_board_cache.get_stock_boards_with_lazy_fill(
         stock_code=stock_code,
-        source=origin,
-        data=[
-            StockBoardInfo(
-                code=b["code"],
-                name=b["name"],
-                type=b.get("type", ""),
-                subtype=b.get("subtype", ""),
+        source=source,
+        type=type,
+        subtype=subtype,
+        manager=get_manager(),
+    )
+    if boards is not None and len(boards) > 0:
+        return StockBoardsResponse(
+            stock_code=stock_code,
+            source=origin,
+            data=[
+                StockBoardInfo(
+                    code=b["code"],
+                    name=b["name"],
+                    type=b.get("type", ""),
+                    subtype=b.get("subtype", ""),
+                )
+                for b in boards
+            ],
+        )
+
+    # ③ Non-zhitu cold path: no upstream API → 404 + cold_source hint
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": "cold_stock_board_data",
+            "message": (
+                f"No reverse-index for {stock_code} in {source}. "
+                f"Run `python -m stock_data.tools.build_membership_index "
+                f"--source={source}` to populate."
+            ),
+            "cold_source": True,
+        },
+    )
+
+
+@router.get(
+    "/stocks/{stock_code}/board-memberships",
+    response_model=BoardMembershipsResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid type/subtype"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["boards"],
+)
+@endpoint_meta(
+    summary="股票所属板块（跨源视图）",
+    markets=["csi"],
+    capabilities=["STOCK_BOARD"],
+    # No fetcher_method: this endpoint is pure DB aggregation, never calls a fetcher.
+)
+@map_errors
+def get_stock_board_memberships(
+    stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
+    type: Literal["concept", "industry", "index", "special"] | None = Query(
+        None, description="Filter by board type"
+    ),
+    subtype: str | None = Query(None, description="Filter by source-specific subtype"),
+) -> BoardMembershipsResponse:
+    """Cross-source view of all known boards a stock belongs to.
+
+    Reads ``stock_board_membership`` directly. Does NOT call any fetcher —
+    sources without data are returned in ``cold_sources`` so the caller
+    can decide whether to bootstrap via CLI.
+    """
+    if type is not None:
+        _resolve_type(type)
+
+    # Read all rows for this stock (one query, indexed by stock_code)
+    rows = stock_board_cache.read_membership(stock_code=stock_code)
+
+    # SQL-level filtering (well, post-SQL Python filtering — small list)
+    if type is not None:
+        rows = [r for r in rows if r["board_type"] == type]
+    if subtype is not None:
+        rows = [r for r in rows if r["subtype"] == subtype]
+
+    # Group by source
+    by_source: dict[str, list[BoardMembershipEntry]] = {}
+    for r in rows:
+        by_source.setdefault(r["source"], []).append(
+            BoardMembershipEntry(
+                board_code=r["board_code"],
+                board_name=r["board_name"],
+                board_type=r["board_type"],
+                subtype=r["subtype"] or "",
             )
-            for b in boards
-        ],
+        )
+
+    # cold_sources: known sources without data for this stock
+    cold = [s for s in _VALID_SOURCES if s not in by_source]
+
+    return BoardMembershipsResponse(
+        stock_code=stock_code,
+        memberships=by_source,
+        cold_sources=cold,
     )
 
 
@@ -395,8 +437,12 @@ def get_stock_boards(
 @map_errors
 def get_board_history(
     board_code: str = Path(max_length=30, description="Board code (zzshare format, e.g. '883957')"),
-    source: Literal["zzshare"] = Query(..., description="Data source (only 'zzshare' is supported)"),
-    frequency: Literal["d"] = Query("d", description="K-line frequency (daily only — zzshare plate_kline is daily-only)"),
+    source: Literal["zzshare"] = Query(
+        ..., description="Data source (only 'zzshare' is supported)"
+    ),
+    frequency: Literal["d"] = Query(
+        "d", description="K-line frequency (daily only — zzshare plate_kline is daily-only)"
+    ),
     start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
     days: int = Query(30, ge=1, le=365, description="Days (used when start_date not given)"),

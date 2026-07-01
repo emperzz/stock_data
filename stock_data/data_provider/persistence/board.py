@@ -6,6 +6,7 @@ upstream API calls which are slow and may fail.
 """
 
 import logging
+import sqlite3
 from datetime import datetime
 
 from . import db
@@ -31,7 +32,7 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
         "index": {"分类", "指数成分", "大盘指数"},
         "special": {"风险警示", "次新股", "沪港通", "深港通"},
     },
-    "zzshare": {   # NEW
+    "zzshare": {  # NEW
         "industry": {"同花顺行业"},
         "concept": {"同花顺概念"},
         "special": {"同花顺题材"},
@@ -58,8 +59,7 @@ def _validate_subtype(source: str, board_type: str, subtype: str | None) -> None
     source_table = VALID_SUBTYPES_BY_SOURCE.get(source)
     if source_table is None:
         raise ValueError(
-            f"Unknown source '{source}'. "
-            f"Known sources: {sorted(VALID_SUBTYPES_BY_SOURCE.keys())}"
+            f"Unknown source '{source}'. Known sources: {sorted(VALID_SUBTYPES_BY_SOURCE.keys())}"
         )
     valid_set = source_table.get(board_type)
     if valid_set is None:
@@ -118,21 +118,49 @@ def init_schema() -> None:
         CREATE INDEX IF NOT EXISTS idx_stock_board_type_subtype_source
         ON stock_board(board_type, subtype, source)
     """)
-    # Board-stock relation table — metadata only; realtime quotes come from API
+    # Membership table — bidirectional stock <-> board index. See
+    # docs/superpowers/specs/2026-07-01-stock-board-membership-design.md §2.1.
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stock_board_stock (
+        CREATE TABLE IF NOT EXISTS stock_board_membership (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            board_code TEXT NOT NULL,
-            source TEXT NOT NULL,
-            stock_code TEXT NOT NULL,
-            stock_name TEXT NOT NULL,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            board_code  TEXT NOT NULL,
+            stock_code  TEXT NOT NULL,
+            source      TEXT NOT NULL,
+            board_name  TEXT NOT NULL,
+            stock_name  TEXT NOT NULL,
+            board_type  TEXT NOT NULL,
+            subtype     TEXT,
+            refreshed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(board_code, source, stock_code)
         )
     """)
     cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_stock_board_stock_board ON stock_board_stock(board_code, source)
+        CREATE INDEX IF NOT EXISTS idx_membership_reverse
+            ON stock_board_membership(stock_code, source)
     """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_membership_forward
+            ON stock_board_membership(board_code, source)
+    """)
+    # One-shot auto-migration from legacy stock_board_stock (post-Task-9
+    # plumbing). The table is no longer created by init_schema(), but
+    # pre-migration DBs still have it; this block is a no-op on fresh
+    # databases. Safe to keep indefinitely.
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_board_stock'")
+    if cursor.fetchone() is not None:
+        cursor.execute("""
+            INSERT OR IGNORE INTO stock_board_membership
+                (board_code, source, stock_code, stock_name,
+                 board_name, board_type, subtype, refreshed_at)
+            SELECT bs.board_code, bs.source, bs.stock_code, bs.stock_name,
+                   COALESCE(b.name, ''),
+                   COALESCE(b.board_type, ''),
+                   b.subtype,
+                   CURRENT_TIMESTAMP
+            FROM stock_board_stock bs
+            LEFT JOIN stock_board b
+              ON b.code = bs.board_code AND b.source = bs.source
+        """)
     conn.commit()
     logger.info(f"[BoardCache] Database initialized at {get_db_path()}")
 
@@ -178,7 +206,9 @@ def get_board_list(
     """
     init_schema()
 
-    needs_refresh = refresh or include_quote or _refresh_tracker.is_first_call(f"{board_type}:{source}")
+    needs_refresh = (
+        refresh or include_quote or _refresh_tracker.is_first_call(f"{board_type}:{source}")
+    )
 
     if not needs_refresh:
         cached = _read_boards_from_db(board_type, source, subtype)
@@ -195,7 +225,10 @@ def get_board_list(
     # reads can be served from cache. The fetcher returns rows already
     # tagged with their per-row subtype field.
     boards, fetcher_source = manager.get_all_boards(
-        source=source, board_type=board_type, subtype=None, include_quote=include_quote,
+        source=source,
+        board_type=board_type,
+        subtype=None,
+        include_quote=include_quote,
     )
 
     if boards:
@@ -238,7 +271,9 @@ def get_board_stocks(
     init_schema()
 
     # include_quote=True means always fetch fresh data, skip cache
-    needs_refresh = include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:{source}")
+    needs_refresh = (
+        include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:{source}")
+    )
 
     if not needs_refresh:
         cached = _read_board_stocks_from_db(board_code, source)
@@ -256,10 +291,14 @@ def get_board_stocks(
     # known concept/industry board avoids the fetcher's fallback cost.
     _ = _get_board_type(board_code, source, manager)  # warms the board_type cache
     stocks, fetcher_source = manager.get_board_stocks(
-        board_code, source=source, include_quote=include_quote,
+        board_code,
+        source=source,
+        include_quote=include_quote,
     )
 
     if stocks:
+        # Cold-fill: persists stocks to stock_board_membership via the
+        # single-write update_cached_board_stocks helper.
         update_cached_board_stocks(board_code, source, stocks)
         logger.info(f"[BoardCache] Refreshed {len(stocks)} stocks for board {board_code}/{source}")
 
@@ -277,6 +316,250 @@ def _get_board_type(board_code: str, source: str, manager) -> str | None:
     )
     row = cursor.fetchone()
     return row["board_type"] if row else None
+
+
+def read_membership(
+    board_code: str | None = None,
+    stock_code: str | None = None,
+    source: str | None = None,
+) -> list:
+    """Read membership rows. Exactly one of board_code / stock_code must be set.
+
+    Args:
+        board_code: forward direction — return all stocks in this board.
+        stock_code: reverse direction — return all boards this stock belongs to.
+        source: optional filter (e.g. 'eastmoney' / 'zhitu' / 'zzshare').
+
+    Returns:
+        List of membership rows with keys:
+            board_code, stock_code, source, board_name, stock_name,
+            board_type, subtype, refreshed_at
+    """
+    init_schema()
+    if (board_code is None) == (stock_code is None):
+        raise ValueError("Exactly one of board_code or stock_code must be set, not both/neither.")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if board_code is not None:
+        sql = """SELECT board_code, stock_code, source, board_name, stock_name,
+                        board_type, subtype, refreshed_at
+                 FROM stock_board_membership
+                 WHERE board_code = ?"""
+        params: tuple = (board_code,)
+    else:
+        sql = """SELECT board_code, stock_code, source, board_name, stock_name,
+                        board_type, subtype, refreshed_at
+                 FROM stock_board_membership
+                 WHERE stock_code = ?"""
+        params = (stock_code,)
+
+    if source is not None:
+        sql += " AND source = ?"
+        params = params + (source,)
+
+    sql += " ORDER BY board_code, stock_code"
+
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    return [
+        {
+            "board_code": r["board_code"],
+            "stock_code": r["stock_code"],
+            "source": r["source"],
+            "board_name": r["board_name"],
+            "stock_name": r["stock_name"],
+            "board_type": r["board_type"],
+            "subtype": r["subtype"],
+            "refreshed_at": r["refreshed_at"],
+        }
+        for r in rows
+    ]
+
+
+def upsert_membership_bulk(
+    source: str,
+    stocks: list[dict],
+    board_code: str,
+    board_name: str,
+    board_type: str,
+    subtype: str | None,
+    conn: sqlite3.Connection | None = None,
+) -> int:
+    """Bulk upsert all stocks for one board. Returns count of rows affected.
+
+    Args:
+        source: 'eastmoney' | 'zhitu' | 'zzshare'
+        stocks: list of {stock_code, stock_name}
+        board_code: e.g. 'BK1001' (eastmoney) or 'sw_yx' (zhitu)
+        board_name: e.g. '白酒' (denormalized for read perf)
+        board_type: 'concept' | 'industry' | 'index' | 'special'
+        subtype: source-specific subtype string
+        conn: optional SQLite connection. When None, opens a fresh
+            connection via get_connection(). Pass an existing
+            connection when calling from a multi-threaded caller
+            (each thread should own its own connection).
+
+    Implementation notes:
+        - Uses INSERT OR REPLACE so refreshed_at = CURRENT_TIMESTAMP.
+        - One executemany call (one transaction) for the whole batch.
+        - Returns the number of stock rows passed in (rows upserted).
+    """
+    if not stocks:
+        return 0
+
+    init_schema()
+    if conn is None:
+        conn = get_connection()
+    with conn:
+        cursor = conn.cursor()
+        rows = [
+            (
+                board_code,
+                source,
+                s["stock_code"],
+                s.get("stock_name", ""),
+                board_name,
+                board_type,
+                subtype,
+            )
+            for s in stocks
+        ]
+        cursor.executemany(
+            """INSERT OR REPLACE INTO stock_board_membership
+               (board_code, source, stock_code, stock_name,
+                board_name, board_type, subtype, refreshed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            rows,
+        )
+    return len(rows)
+
+
+def upsert_membership_for_stock_boards(
+    stock_code: str,
+    stock_name: str,
+    boards: list[dict],
+    source: str,
+    conn: sqlite3.Connection | None = None,
+) -> int:
+    """Batch upsert all boards a stock belongs to (single transaction).
+
+    Used by the zhitu cold path in `/stocks/{code}/boards` to write the
+    reverse-index rows for every board returned by the fetcher in one
+    executemany call. Each input board dict must have keys: code, name,
+    type, subtype.
+
+    Args:
+        conn: optional SQLite connection. When None, opens a fresh
+            connection via get_connection(). Pass an existing
+            connection when calling from a multi-threaded caller
+            (each thread should own its own connection).
+    """
+    if not boards:
+        return 0
+
+    init_schema()
+    if conn is None:
+        conn = get_connection()
+    with conn:
+        cursor = conn.cursor()
+        rows = [
+            (
+                b["code"],
+                source,
+                stock_code,
+                stock_name,
+                b.get("name", ""),
+                b.get("type", ""),
+                b.get("subtype"),
+            )
+            for b in boards
+        ]
+        cursor.executemany(
+            """INSERT OR REPLACE INTO stock_board_membership
+               (board_code, source, stock_code, stock_name,
+                board_name, board_type, subtype, refreshed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            rows,
+        )
+    return len(rows)
+
+
+def get_stock_boards_with_lazy_fill(
+    stock_code: str,
+    source: str,
+    type: str | None = None,
+    subtype: str | None = None,
+    manager=None,
+) -> tuple[list[dict] | None, str]:
+    """Get boards a stock belongs to (with lazy fill for zhitu).
+
+    Reads from ``stock_board_membership`` first. For ``source='zhitu'``,
+    falls back to the fetcher's native reverse API on cold path and
+    upserts the result to membership (consistent with the
+    "persistence-only routing" rule in CLAUDE.md).
+
+    For other sources, returns ``None`` if membership is empty
+    (no upstream API to call).
+
+    Args:
+        stock_code: 6-digit stock code (e.g. '600519').
+        source: 'eastmoney' | 'zhitu' | 'zzshare'.
+        type: optional board type filter (concept/industry/index/special).
+        subtype: optional source-specific subtype filter.
+        manager: DataFetcherManager instance. Required.
+
+    Returns:
+        Tuple of (boards_list_or_None, origin). origin is 'persistence' on hit,
+        fetcher name on cold-fill, or '' if cold (no upstream API).
+        ``None`` means no data available.
+    """
+    if manager is None:
+        raise ValueError("manager is required for get_stock_boards_with_lazy_fill")
+
+    # Fast path: read from membership table
+    rows = read_membership(stock_code=stock_code, source=source)
+    if rows:
+        if type is not None:
+            rows = [r for r in rows if r["board_type"] == type]
+        if subtype is not None:
+            rows = [r for r in rows if r["subtype"] == subtype]
+        if rows:
+            # Convert to expected board dict shape: {code, name, type, subtype}
+            boards = [
+                {
+                    "code": r["board_code"],
+                    "name": r["board_name"],
+                    "type": r["board_type"],
+                    "subtype": r["subtype"] or "",
+                }
+                for r in rows
+            ]
+            return boards, "persistence"
+
+    # Cold path: only zhitu has a native reverse API
+    if source == "zhitu":
+        boards, origin = manager.get_stock_boards(stock_code, source=source)
+        if boards is not None and len(boards) > 0:
+            # Resolve stock_name from stock_list
+            from .stock_list import get_stock_name as _get_stock_name
+
+            stock_name = _get_stock_name(stock_code) or ""
+            upsert_membership_for_stock_boards(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                boards=boards,
+                source=source,
+            )
+            # Apply type/subtype filters
+            if type is not None:
+                boards = [b for b in boards if b.get("type") == type]
+            if subtype is not None:
+                boards = [b for b in boards if b.get("subtype") == subtype]
+            return boards, origin
+
+    return None, ""
 
 
 def get_board_name(board_code: str, source: str) -> str | None:
@@ -347,22 +630,14 @@ def _read_boards_from_db(board_type: str, source: str, subtype: str | None = Non
 
 
 def _read_board_stocks_from_db(board_code: str, source: str) -> list:
-    """Read board-stock list from database (metadata only)."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """SELECT stock_code, stock_name, updated_at
-           FROM stock_board_stock WHERE board_code = ? AND source = ? ORDER BY stock_code""",
-        (board_code, source),
-    )
-    rows = cursor.fetchall()
+    """Read board-stock list from membership table."""
     return [
         {
-            "stock_code": row["stock_code"],
-            "stock_name": row["stock_name"],
-            "updated_at": row["updated_at"],
+            "stock_code": r["stock_code"],
+            "stock_name": r["stock_name"],
+            "updated_at": r["refreshed_at"],
         }
-        for row in rows
+        for r in read_membership(board_code=board_code, source=source)
     ]
 
 
@@ -411,10 +686,11 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
 
 def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> int:
     """
-    Update cached stocks metadata for a board.
+    Upsert stocks for a board into `stock_board_membership`.
 
-    Only stores metadata (board_code, stock_code, stock_name, source, timestamp).
-    Realtime quote data is always fetched from the API, never cached in SQLite.
+    See docs/superpowers/specs/2026-07-01-stock-board-membership-design.md
+    for history (the legacy `stock_board_stock` table was dropped in the
+    membership migration).
 
     Args:
         board_code: Board code
@@ -422,7 +698,7 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
         stocks: List of dicts [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
 
     Returns:
-        Number of stocks inserted/updated
+        Number of stocks written.
     """
     if not stocks:
         return 0
@@ -430,22 +706,38 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
     init_schema()
 
     conn = get_connection()
+    board_row = conn.execute(
+        "SELECT name, board_type, subtype FROM stock_board WHERE code = ? AND source = ?",
+        (board_code, source),
+    ).fetchone()
+    board_name = board_row["name"] if board_row else board_code
+    board_type = board_row["board_type"] if board_row else ""
+    subtype = board_row["subtype"] if board_row else None
+
     try:
         with conn:
             cursor = conn.cursor()
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
             cursor.executemany(
-                """INSERT OR REPLACE INTO stock_board_stock
-                (board_code, source, stock_code, stock_name, updated_at)
-                VALUES (?, ?, ?, ?, ?)""",
+                """INSERT OR REPLACE INTO stock_board_membership
+                   (board_code, source, stock_code, stock_name,
+                    board_name, board_type, subtype, refreshed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
                 [
-                    (board_code, source, s["stock_code"], s["stock_name"], now)
+                    (
+                        board_code,
+                        source,
+                        s["stock_code"],
+                        s["stock_name"],
+                        board_name,
+                        board_type,
+                        subtype,
+                    )
                     for s in stocks
                 ],
             )
-
-            logger.info(f"[BoardCache] Updated {len(stocks)} stocks for board {board_code}/{source}")
+            logger.info(
+                f"[BoardCache] Updated {len(stocks)} stocks for board {board_code}/{source}"
+            )
             return len(stocks)
     except Exception as e:
         logger.error(f"[BoardCache] Update board stocks failed: {e}")

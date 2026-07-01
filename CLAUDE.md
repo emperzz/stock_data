@@ -325,6 +325,16 @@ Cross-cutting behaviors implemented in `data_provider/manager.py` / `data_provid
 - **Market-aware routing** — request market is inferred from the stock code; A-share → Baostock → Akshare failover; US → Yfinance; HK → Akshare / Tencent / Yfinance. See [Capability-Based Routing](#capability-based-routing) for the capability side.
 - **Code normalization** — `normalize_stock_code()` accepts `SH600519` / `sz000001` / `HK00700` and returns the canonical 6-digit or `HK`-prefixed form (see `data_provider/utils/normalize.py`).
 
+### Persistence-Only Routing (board endpoints)
+
+**Rule**: Board-related route handlers (`/boards/...`, `/stocks/.../boards`, `/stocks/.../board-memberships`) call into `stock_data.data_provider.persistence.board` (`stock_board_cache.get_*`), **not** `DataFetcherManager` directly. Exceptions: `/control/fetcher-test` is a debug endpoint that intentionally bypasses this rule.
+
+The fetcher API surface (`manager.*`) has exactly two consumers:
+1. `persistence/board.py` lazy fill (cold-path single upstream call → upsert)
+2. `tools/build_membership_index.py` (full-source bootstrap, per-source worker threads)
+
+Anti-pattern: `manager.get_board_stocks(...)` in `api/routes/boards.py`. Add a new method to `stock_board_cache` instead.
+
 ### Indicator Computation
 Pure DataFrame transformer at the orchestration boundary:
 1. `routes.py` calls `manager.get_kline_data(code, days=max(days, lookback))`
@@ -434,7 +444,7 @@ The non-obvious knobs worth memorizing here:
 - **Don't** add features not needed for core data fetching (defer fundamental data, sentiment, etc.)
 - **Don't** create deeply nested manager hierarchies — one `DataFetcherManager` is sufficient
 - **Don't** hardcode a specific fetcher class (e.g. `AkshareFetcher()`) in `DataFetcherManager` methods. The Hard rule under *Capability-Based Routing* above is the canonical statement; this list just mirrors it for grep-ability.
-- **Don't** cache realtime quote data in SQLite — the `stock_board` and `stock_board_stock` tables store metadata only (code, name, type, timestamps). Quote/price data is always fetched live from the API.
+- **Don't** cache realtime quote data in SQLite — the `stock_board` and `stock_board_membership` tables store metadata only (code, name, type, timestamps). Quote/price data is always fetched live from the API.
 - **Don't** put indicator math inside a `BaseFetcher` or anywhere in the fetcher layer. The fetcher's job is to deliver a clean standardized K-line DataFrame; the indicator service's job is to enrich it.
 - **Don't** write `options.get(key) or default` for numeric/float option keys — when `key=0` is a valid value, the `or` treats it as missing. Use `options.get(key, default)` so `0` flows through.
 - **Don't** re-introduce inline MA/EMA/WMA calculations in the fetcher path. If you need a moving average on K-line data, ask the indicator service via `?indicators=ma` (or compute it downstream of the API).
