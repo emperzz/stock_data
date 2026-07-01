@@ -850,6 +850,7 @@
         state.fetcherFilter = collectAllFetcherNames(MANIFEST);
       }
       renderFetcherFilterUI();
+      $("#fetcherListRestrict").checked = state.fetcherListRestrict;
       bindUI();
       bindFetcherTestHandlers();
       // Initialize the right-side response panel (binds copy/clear buttons).
@@ -932,6 +933,11 @@
         safeSetItem("fetcherFilter", JSON.stringify(state.fetcherFilter));
         renderContent();
       };
+      $("#fetcherListRestrict").onchange = (e) => {
+        state.fetcherListRestrict = e.target.checked;
+        safeSetItem("fetcherListRestrict", String(state.fetcherListRestrict));
+        refreshFetcherLists();
+      };
     }
 
     async function refreshServerStatus() {
@@ -980,6 +986,42 @@
     function epMatchesFetcherFilter(ep) {
       if (!ep.fetchers || ep.fetchers.length === 0) return true;
       return ep.fetchers.some(f => state.fetcherFilter.includes(f.name));
+    }
+
+    // Compute the fetcher list to render under an endpoint card. When the
+    // user has the "Restrict inline fetcher list to filter" toggle ON,
+    // we narrow the list to the currently-checked fetchers; otherwise we
+    // show the full failover chain (default behavior).
+    function visibleFetchers(ep) {
+      const all = ep.fetchers || [];
+      if (!state.fetcherListRestrict) return all;
+      return all.filter(f => state.fetcherFilter.includes(f.name));
+    }
+
+    // Find an endpoint node in the manifest by its path. O(N×M) over
+    // sections × endpoints but trivial at our scale (31 endpoints).
+    function findEndpointByPath(manifest, path) {
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) if (ep.path === path) return ep;
+      }
+      return null;
+    }
+
+    // Local re-render of the inline fetcher-list subtree under every
+    // already-rendered endpoint card. Avoids a full renderContent()
+    // round-trip (which would re-attach all event listeners, lose any
+    // expanded <details> state, etc.) when the user only flips the
+    // toggle checkbox.
+    function refreshFetcherLists() {
+      $$(".endpoint").forEach(card => {
+        const path = card.dataset.path;
+        const ep = findEndpointByPath(MANIFEST, path);
+        if (!ep) return;
+        const list = card.querySelector(".fetcher-list");
+        if (!list) return;
+        list.innerHTML = "";
+        visibleFetchers(ep).forEach(f => list.appendChild(renderFetcherRow(f)));
+      });
     }
 
     // Apply both the search query and the current market filter to all
@@ -1261,7 +1303,7 @@
         textContent: `Fetcher backends (${ep.fetchers.length})`,
       }));
       const list = el("div", { className: "fetcher-list" });
-      ep.fetchers.forEach(f => list.appendChild(renderFetcherRow(f)));
+      visibleFetchers(ep).forEach(f => list.appendChild(renderFetcherRow(f)));
       det.appendChild(list);
       return det;
     }
