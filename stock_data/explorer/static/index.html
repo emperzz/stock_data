@@ -334,6 +334,8 @@
         <label><input type="checkbox" value="hk" checked> hk</label>
         <label><input type="checkbox" value="us" checked> us</label>
       </div>
+      <h3>Filter by fetcher</h3>
+      <div class="filter-group" id="fetcherFilter"></div>
     </nav>
     <main class="main">
       <div id="manifestError" class="manifest-error" style="display:none" role="alert"></div>
@@ -753,7 +755,45 @@
       baseUrl: safeGetItem("baseUrl", ""),
       theme: safeGetItem("theme", "light"),
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
+      // fetcherFilter: null = 首次访问,首次访问时由 boot() 填入全勾选
+      fetcherFilter: (() => {
+        const raw = safeGetItem("fetcherFilter", null);
+        return raw === null ? null : JSON.parse(raw);
+      })(),
+      fetcherListRestrict: safeGetItem("fetcherListRestrict", "false") === "true",
     };
+
+    // Aggregate all fetcher names declared across every endpoint in the
+    // current manifest. Used to build the dynamic Filter-by-fetcher
+    // checkbox group. Sorted alphabetically for stable UI ordering.
+    function collectAllFetcherNames(manifest) {
+      const set = new Set();
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          for (const f of (ep.fetchers || [])) set.add(f.name);
+        }
+      }
+      return [...set].sort();
+    }
+
+    // Dynamically build the fetcher filter checkbox group from the current
+    // manifest. Called once at boot, after the manifest loads. Subsequent
+    // checkbox state changes are handled by the fetcherFilter onchange.
+    function renderFetcherFilterUI() {
+      const container = $("#fetcherFilter");
+      container.innerHTML = "";
+      const names = collectAllFetcherNames(MANIFEST);
+      for (const name of names) {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = name;
+        input.checked = state.fetcherFilter.includes(name);
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(" " + name));
+        container.appendChild(label);
+      }
+    }
 
     // --- Subsequence fuzzy match: all chars of `q` must appear in `text` in order ---
     function fuzzyMatch(query, text) {
@@ -792,6 +832,12 @@
         el.style.display = "block";
       }
       applyTheme();
+      // 初始化 fetcherFilter:首次访问(null)用全勾选,后续用 localStorage
+      if (state.fetcherFilter === null) {
+        state.fetcherFilter = collectAllFetcherNames(MANIFEST);
+        safeSetItem("fetcherFilter", JSON.stringify(state.fetcherFilter));
+      }
+      renderFetcherFilterUI();
       bindUI();
       bindFetcherTestHandlers();
       // Initialize the right-side response panel (binds copy/clear buttons).
