@@ -832,10 +832,12 @@
         el.style.display = "block";
       }
       applyTheme();
-      // 初始化 fetcherFilter:首次访问(null)用全勾选,后续用 localStorage
+      // 初始化 fetcherFilter:首次访问(null)用全勾选,后续用 localStorage。
+      // 注意:首次访问**不写** localStorage,等用户真正交互(onchange)再写。
+      // 否则 manifest 加载失败 → collectAllFetcherNames 返回 [] → 持久化为 [] →
+      // 下次 reload `safeGetItem` 拿到 "[]" 不再是 null → 用户永久卡在空 filter。
       if (state.fetcherFilter === null) {
         state.fetcherFilter = collectAllFetcherNames(MANIFEST);
-        safeSetItem("fetcherFilter", JSON.stringify(state.fetcherFilter));
       }
       renderFetcherFilterUI();
       bindUI();
