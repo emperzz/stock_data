@@ -65,6 +65,21 @@
     .sidebar a.active { background: var(--accent); color: #fff; }
     .sidebar .filter-group { display: flex; flex-direction: column; gap: 4px; }
     .sidebar label { font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .filter-toggle {
+      padding: 4px 8px 8px;
+      font-size: 12px;
+      color: var(--text-muted, #6e6e73);
+      line-height: 1.4;
+    }
+    .filter-toggle label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+    }
+    .filter-toggle input[type="checkbox"] {
+      margin: 0;
+    }
     .endpoint.search-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
     .main { padding: 40px 32px; min-width: 0; }
     /* === Result panel (right) === */
@@ -333,6 +348,16 @@
         <label><input type="checkbox" value="csi" checked> csi (A股)</label>
         <label><input type="checkbox" value="hk" checked> hk</label>
         <label><input type="checkbox" value="us" checked> us</label>
+      </div>
+      <h3>Filter by fetcher</h3>
+      <div class="filter-group" id="fetcherFilter">
+        <!-- 12 个 fetcher 复选框由 renderFetcherFilterUI() 动态生成 -->
+      </div>
+      <div class="filter-toggle">
+        <label>
+          <input type="checkbox" id="fetcherListRestrict">
+          Restrict inline fetcher list to filter
+        </label>
       </div>
     </nav>
     <main class="main">
@@ -735,7 +760,9 @@
     const $$ = (sel) => document.querySelectorAll(sel);
     const el = (tag, props = {}, children = []) => {
       const e = document.createElement(tag);
-      Object.assign(e, props);
+      const { dataset, ...rest } = props;
+      Object.assign(e, rest);
+      if (dataset) Object.assign(e.dataset, dataset);
       children.forEach(c => e.appendChild(c));
       return e;
     };
@@ -753,7 +780,45 @@
       baseUrl: safeGetItem("baseUrl", ""),
       theme: safeGetItem("theme", "light"),
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
+      // fetcherFilter: null = 首次访问,首次访问时由 boot() 填入全勾选
+      fetcherFilter: (() => {
+        const raw = safeGetItem("fetcherFilter", null);
+        return raw === null ? null : JSON.parse(raw);
+      })(),
+      fetcherListRestrict: safeGetItem("fetcherListRestrict", "false") === "true",
     };
+
+    // Aggregate all fetcher names declared across every endpoint in the
+    // current manifest. Used to build the dynamic Filter-by-fetcher
+    // checkbox group. Sorted alphabetically for stable UI ordering.
+    function collectAllFetcherNames(manifest) {
+      const set = new Set();
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          for (const f of (ep.fetchers || [])) set.add(f.name);
+        }
+      }
+      return [...set].sort();
+    }
+
+    // Dynamically build the fetcher filter checkbox group from the current
+    // manifest. Called once at boot, after the manifest loads. Subsequent
+    // checkbox state changes are handled by the fetcherFilter onchange.
+    function renderFetcherFilterUI() {
+      const container = $("#fetcherFilter");
+      container.innerHTML = "";
+      const names = collectAllFetcherNames(MANIFEST);
+      for (const name of names) {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = name;
+        input.checked = state.fetcherFilter.includes(name);
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(" " + name));
+        container.appendChild(label);
+      }
+    }
 
     // --- Subsequence fuzzy match: all chars of `q` must appear in `text` in order ---
     function fuzzyMatch(query, text) {
@@ -792,6 +857,15 @@
         el.style.display = "block";
       }
       applyTheme();
+      // 初始化 fetcherFilter:首次访问(null)用全勾选,后续用 localStorage。
+      // 注意:首次访问**不写** localStorage,等用户真正交互(onchange)再写。
+      // 否则 manifest 加载失败 → collectAllFetcherNames 返回 [] → 持久化为 [] →
+      // 下次 reload `safeGetItem` 拿到 "[]" 不再是 null → 用户永久卡在空 filter。
+      if (state.fetcherFilter === null) {
+        state.fetcherFilter = collectAllFetcherNames(MANIFEST);
+      }
+      renderFetcherFilterUI();
+      $("#fetcherListRestrict").checked = state.fetcherListRestrict;
       bindUI();
       bindFetcherTestHandlers();
       // Initialize the right-side response panel (binds copy/clear buttons).
@@ -868,6 +942,17 @@
         safeSetItem("marketFilter", JSON.stringify(checked));
         renderContent();
       };
+      $("#fetcherFilter").onchange = () => {
+        state.fetcherFilter = Array.from($$("#fetcherFilter input:checked"), i => i.value);
+        // Persist on user interaction (NOT on first visit — see boot init comment).
+        safeSetItem("fetcherFilter", JSON.stringify(state.fetcherFilter));
+        renderContent();
+      };
+      $("#fetcherListRestrict").onchange = (e) => {
+        state.fetcherListRestrict = e.target.checked;
+        safeSetItem("fetcherListRestrict", String(state.fetcherListRestrict));
+        refreshFetcherLists();
+      };
     }
 
     async function refreshServerStatus() {
@@ -903,9 +988,55 @@
         content.appendChild(h2);
         sec.endpoints
           .filter(ep => ep.markets.some(m => state.marketFilter.includes(m)))
+          .filter(ep => epMatchesFetcherFilter(ep))
           .forEach(ep => content.appendChild(renderEndpoint(ep)));
       });
       applySearchAndFilter();  // re-apply search highlight after re-render
+    }
+
+    // OR-semantics fetcher filter: endpoint shows if any of its
+    // failover-chain fetchers is in the active filter set. Endpoints with
+    // no fetchers (e.g. /health) always show — they're "no data source"
+    // metadata and would otherwise be unreachable via this filter.
+    function epMatchesFetcherFilter(ep) {
+      if (!ep.fetchers || ep.fetchers.length === 0) return true;
+      return ep.fetchers.some(f => state.fetcherFilter.includes(f.name));
+    }
+
+    // Compute the fetcher list to render under an endpoint card. When the
+    // user has the "Restrict inline fetcher list to filter" toggle ON,
+    // we narrow the list to the currently-checked fetchers; otherwise we
+    // show the full failover chain (default behavior).
+    function visibleFetchers(ep) {
+      const all = ep.fetchers || [];
+      if (!state.fetcherListRestrict) return all;
+      return all.filter(f => state.fetcherFilter.includes(f.name));
+    }
+
+    // Find an endpoint node in the manifest by its path. O(N×M) over
+    // sections × endpoints but trivial at our scale (31 endpoints).
+    function findEndpointByPath(manifest, path) {
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) if (ep.path === path) return ep;
+      }
+      return null;
+    }
+
+    // Local re-render of the inline fetcher-list subtree under every
+    // already-rendered endpoint card. Avoids a full renderContent()
+    // round-trip (which would re-attach all event listeners, lose any
+    // expanded <details> state, etc.) when the user only flips the
+    // toggle checkbox.
+    function refreshFetcherLists() {
+      $$(".endpoint").forEach(card => {
+        const path = card.dataset.path;
+        const ep = findEndpointByPath(MANIFEST, path);
+        if (!ep) return;
+        const list = card.querySelector(".fetcher-list");
+        if (!list) return;
+        list.innerHTML = "";
+        visibleFetchers(ep).forEach(f => list.appendChild(renderFetcherRow(f)));
+      });
     }
 
     // Apply both the search query and the current market filter to all
@@ -1187,13 +1318,13 @@
         textContent: `Fetcher backends (${ep.fetchers.length})`,
       }));
       const list = el("div", { className: "fetcher-list" });
-      ep.fetchers.forEach(f => list.appendChild(renderFetcherRow(f)));
+      visibleFetchers(ep).forEach(f => list.appendChild(renderFetcherRow(f)));
       det.appendChild(list);
       return det;
     }
 
     function renderEndpoint(ep) {
-      const card = el("div", { className: "endpoint", id: `ep-${ep.id}` });
+      const card = el("div", { className: "endpoint", id: `ep-${ep.id}`, dataset: { path: ep.path } });
       const method = el("span", { className: `method ${ep.method}`, textContent: ep.method });
       const path = el("span", { className: "path", textContent: ep.path });
       const summary = el("div", { className: "summary", textContent: ep.summary || "" });
