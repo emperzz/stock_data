@@ -29,6 +29,8 @@ from ..schemas import (
     BoardInfo,
     BoardKlineResponse,
     BoardListResponse,
+    BoardMembershipEntry,
+    BoardMembershipsResponse,
     BoardStockInfo,
     BoardStocksResponse,
     ErrorResponse,
@@ -387,6 +389,71 @@ def get_stock_boards(
             ),
             "cold_source": True,
         },
+    )
+
+
+@router.get(
+    "/stocks/{stock_code}/board-memberships",
+    response_model=BoardMembershipsResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid type/subtype"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["boards"],
+)
+@endpoint_meta(
+    summary="股票所属板块（跨源视图）",
+    markets=["csi"],
+    capabilities=["STOCK_BOARD"],
+    # No fetcher_method: this endpoint is pure DB aggregation, never calls a fetcher.
+)
+@map_errors
+def get_stock_board_memberships(
+    stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
+    type: Literal["concept", "industry", "index", "special"] | None = Query(
+        None, description="Filter by board type"
+    ),
+    subtype: str | None = Query(
+        None, description="Filter by source-specific subtype"
+    ),
+) -> BoardMembershipsResponse:
+    """Cross-source view of all known boards a stock belongs to.
+
+    Reads ``stock_board_membership`` directly. Does NOT call any fetcher —
+    sources without data are returned in ``cold_sources`` so the caller
+    can decide whether to bootstrap via CLI.
+    """
+    if type is not None:
+        _resolve_type(type)
+
+    # Read all rows for this stock (one query, indexed by stock_code)
+    rows = stock_board_cache.read_membership(stock_code=stock_code)
+
+    # SQL-level filtering (well, post-SQL Python filtering — small list)
+    if type is not None:
+        rows = [r for r in rows if r["board_type"] == type]
+    if subtype is not None:
+        rows = [r for r in rows if r["subtype"] == subtype]
+
+    # Group by source
+    by_source: dict[str, list[BoardMembershipEntry]] = {}
+    for r in rows:
+        by_source.setdefault(r["source"], []).append(
+            BoardMembershipEntry(
+                board_code=r["board_code"],
+                board_name=r["board_name"],
+                board_type=r["board_type"],
+                subtype=r["subtype"] or "",
+            )
+        )
+
+    # cold_sources: known sources without data for this stock
+    cold = [s for s in _VALID_SOURCES if s not in by_source]
+
+    return BoardMembershipsResponse(
+        stock_code=stock_code,
+        memberships=by_source,
+        cold_sources=cold,
     )
 
 
