@@ -334,15 +334,6 @@
         <label><input type="checkbox" value="hk" checked> hk</label>
         <label><input type="checkbox" value="us" checked> us</label>
       </div>
-      <h3>Filter by capability</h3>
-      <div class="filter-group" id="capabilityFilter">
-        <label><input type="checkbox" value="quotes" checked> 行情 (Quotes)</label>
-        <label><input type="checkbox" value="history" checked> 历史 K线 (Historical)</label>
-        <label><input type="checkbox" value="metadata" checked> 元数据 (Lists/Calendar/Boards)</label>
-        <label><input type="checkbox" value="flows" checked> 资金流向 (Flows)</label>
-        <label><input type="checkbox" value="notices" checked> 公告研报 (Notices/Reports)</label>
-        <label><input type="checkbox" value="pools" checked> 特殊池 (Pools/Topics)</label>
-      </div>
     </nav>
     <main class="main">
       <div id="manifestError" class="manifest-error" style="display:none" role="alert"></div>
@@ -749,17 +740,6 @@
       return e;
     };
 
-    // Capability → group mapping (used by the sidebar capability filter).
-    const CAPABILITY_GROUPS = {
-      quotes:   ["STOCK_REALTIME_QUOTE", "INDEX_REALTIME_QUOTE"],
-      history:  ["STOCK_KLINE", "INDEX_KLINE"],
-      metadata: ["STOCK_LIST", "TRADE_CALENDAR", "STOCK_BOARD", "STOCK_INFO"],
-      flows:    ["MARGIN_TRADING", "BLOCK_TRADE", "FUND_FLOW", "NORTH_FLOW"],
-      notices:  ["DRAGON_TIGER", "HOLDER_NUM", "DIVIDEND", "RESEARCH_REPORT", "ANNOUNCEMENT", "NEWS_SEARCH", "NEWS_FLASH"],
-      pools:    ["STOCK_ZT_POOL", "HOT_TOPICS"],
-    };
-    const DEFAULT_CAP_GROUPS = Object.keys(CAPABILITY_GROUPS);
-
     // --- Try localStorage (with try/catch for private/incognito mode) ---
     function safeGetItem(key, fallback) {
       try { const v = localStorage.getItem(key); return v === null ? fallback : v; }
@@ -773,7 +753,6 @@
       baseUrl: safeGetItem("baseUrl", ""),
       theme: safeGetItem("theme", "light"),
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
-      capabilityFilter: JSON.parse(safeGetItem("capabilityFilter", JSON.stringify(DEFAULT_CAP_GROUPS))),
     };
 
     // --- Subsequence fuzzy match: all chars of `q` must appear in `text` in order ---
@@ -884,15 +863,9 @@
       });
 
       $("#marketFilter").onchange = () => {
-        const checked = $$("#marketFilter input:checked").map(i => i.value);
+        const checked = Array.from($$("#marketFilter input:checked"), i => i.value);
         state.marketFilter = checked;
         safeSetItem("marketFilter", JSON.stringify(checked));
-        renderContent();
-      };
-      $("#capabilityFilter").onchange = () => {
-        const checked = $$("#capabilityFilter input:checked").map(i => i.value);
-        state.capabilityFilter = checked;
-        safeSetItem("capabilityFilter", JSON.stringify(checked));
         renderContent();
       };
     }
@@ -930,29 +903,19 @@
         content.appendChild(h2);
         sec.endpoints
           .filter(ep => ep.markets.some(m => state.marketFilter.includes(m)))
-          .filter(ep => epMatchesCapabilityFilter(ep))
           .forEach(ep => content.appendChild(renderEndpoint(ep)));
       });
       applySearchAndFilter();  // re-apply search highlight after re-render
     }
 
-    // Apply both the search query and the current market+capability filters
-    // to all rendered endpoint cards.
+    // Apply both the search query and the current market filter to all
+    // rendered endpoint cards.
     function applySearchAndFilter() {
       const q = ($("#search").value || "").trim();
       $$(".endpoint").forEach(card => {
         const matches = fuzzyMatch(q, card.textContent);
         card.style.display = matches ? "" : "none";
       });
-    }
-
-    // A section's "no capabilities" endpoints (e.g., /health, /indices list)
-    // always show. Endpoints with capabilities must intersect at least one
-    // active capability group.
-    function epMatchesCapabilityFilter(ep) {
-      if (!ep.capabilities || ep.capabilities.length === 0) return true;
-      const activeCaps = state.capabilityFilter.flatMap(g => CAPABILITY_GROUPS[g] || []);
-      return ep.capabilities.some(c => activeCaps.includes(c));
     }
 
     // HTML-escape utility. The manifest can carry fetcher names / method
