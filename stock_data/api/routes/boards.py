@@ -279,14 +279,13 @@ def get_board_stocks(
     response_model=StockBoardsResponse,
     responses={
         400: {"model": ErrorResponse, "description": "Invalid source/type/subtype"},
-        404: {"model": ErrorResponse, "description": "Stock not found"},
-        501: {"model": ErrorResponse, "description": "Source does not implement this endpoint"},
+        404: {"model": ErrorResponse, "description": "Stock not in any known board"},
         500: {"model": ErrorResponse, "description": "Server error"},
     },
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="股票所属板块（新增）",
+    summary="股票所属板块（所有 source 都支持）",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_stock_boards",
@@ -295,7 +294,7 @@ def get_board_stocks(
 def get_stock_boards(
     stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
     source: Literal["zhitu", "eastmoney", "zzshare"] = Query(
-        ..., description="Data source (currently only 'zhitu' supported; zzshare has no stock→boards API)"
+        ..., description="Data source (zhitu has native API; eastmoney/zzshare served from membership table only)"
     ),
     type: Literal["concept", "industry", "index", "special"] | None = Query(
         None, description="Filter by board type"
@@ -306,74 +305,87 @@ def get_stock_boards(
 ) -> StockBoardsResponse:
     """Get boards a stock belongs to.
 
-    Currently only ``source=zhitu`` is supported. EastMoney's API does not
-    expose a direct stock→boards mapping. zzshare has no stock→boards
-    reverse-lookup endpoint either (returns 501).
+    All sources supported. Reads from ``stock_board_membership`` (built by
+    forward-path lazy fill or ``tools/build_membership_index`` bootstrap).
+    For ``source=zhitu``, the cold-path fallback calls the fetcher's native
+    reverse API and writes the result to membership.
     """
     _resolve_source(source)
 
-    if source not in ("zhitu",):
-        raise HTTPException(
-            status_code=501,
-            detail={
-                "error": "not_implemented",
-                "message": f"source='{source}' does not implement stock->boards lookup. "
-                f"Currently supported: 'zhitu'. "
-                f"zzshare has no stock→boards reverse-lookup endpoint.",
-            },
-        )
-
-    # Subtype validation only if provided
     if type is not None:
         _resolve_type(type)
         stock_board_cache._validate_subtype(source, type, subtype)
 
-    manager = get_manager()
-    try:
-        boards, origin = manager.get_stock_boards(
-            stock_code, source=source,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)})
-
-    # boards may be None (fetcher signal: no data); treat as 404
-    if boards is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "not_found",
-                "message": f"No board data for stock {stock_code} (source={source})",
-            },
-        )
-
-    # Filter by type/subtype if specified
-    if type is not None:
-        boards = [b for b in boards if b.get("type") == type]
-    if subtype is not None:
-        boards = [b for b in boards if b.get("subtype") == subtype]
-
-    if not boards:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "not_found",
-                "message": f"No boards found for stock {stock_code} "
-                f"(source={source}, type={type}, subtype={subtype})",
-            },
-        )
-
-    return StockBoardsResponse(
-        stock_code=stock_code,
-        source=origin,
-        data=[
-            StockBoardInfo(
-                code=b["code"],
-                name=b["name"],
-                type=b.get("type", ""),
-                subtype=b.get("subtype", ""),
+    # ① Try membership table first (fast path)
+    rows = stock_board_cache.read_membership(stock_code=stock_code, source=source)
+    if rows:
+        # Filter type/subtype in Python (small list)
+        if type is not None:
+            rows = [r for r in rows if r["board_type"] == type]
+        if subtype is not None:
+            rows = [r for r in rows if r["subtype"] == subtype]
+        if rows:
+            return StockBoardsResponse(
+                stock_code=stock_code, source="persistence",
+                data=[
+                    StockBoardInfo(
+                        code=r["board_code"], name=r["board_name"],
+                        type=r["board_type"], subtype=r["subtype"] or "",
+                    )
+                    for r in rows
+                ],
             )
-            for b in boards
-        ],
+
+    # ② zhitu cold path: native API → upsert membership
+    if source == "zhitu":
+        manager = get_manager()
+        boards, origin = manager.get_stock_boards(stock_code, source=source)
+        if boards is not None and len(boards) > 0:
+            # Resolve stock_name from stock_list (zhitu API doesn't return it).
+            # Local import to avoid cycles (persistence.stock_list is
+            # imported transitively by callers of this route).
+            from stock_data.data_provider.persistence.stock_list import (
+                get_stock_name as _get_stock_name,
+            )
+            stock_name = _get_stock_name(stock_code) or ""
+            # Upsert each board as a separate membership row
+            for b in boards:
+                stock_board_cache.upsert_membership_bulk(
+                    source="zhitu",
+                    stocks=[{"stock_code": stock_code, "stock_name": stock_name}],
+                    board_code=b["code"],
+                    board_name=b["name"],
+                    board_type=b.get("type", ""),
+                    subtype=b.get("subtype"),
+                )
+            # Apply type/subtype filters for response
+            if type is not None:
+                boards = [b for b in boards if b.get("type") == type]
+            if subtype is not None:
+                boards = [b for b in boards if b.get("subtype") == subtype]
+            return StockBoardsResponse(
+                stock_code=stock_code, source=origin,
+                data=[
+                    StockBoardInfo(
+                        code=b["code"], name=b["name"],
+                        type=b.get("type", ""), subtype=b.get("subtype", ""),
+                    )
+                    for b in boards
+                ],
+            )
+
+    # ③ Non-zhitu cold path: no upstream API → 404 + cold_source hint
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": "cold_stock_board_data",
+            "message": (
+                f"No reverse-index for {stock_code} in {source}. "
+                f"Run `python -m stock_data.tools.build_membership_index "
+                f"--source={source}` to populate."
+            ),
+            "cold_source": True,
+        },
     )
 
 
