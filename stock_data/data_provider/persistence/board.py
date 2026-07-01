@@ -323,6 +323,113 @@ def _get_board_type(board_code: str, source: str, manager) -> str | None:
     return row["board_type"] if row else None
 
 
+def read_membership(
+    board_code: str | None = None,
+    stock_code: str | None = None,
+    source: str | None = None,
+) -> list:
+    """Read membership rows. Exactly one of board_code / stock_code must be set.
+
+    Args:
+        board_code: forward direction — return all stocks in this board.
+        stock_code: reverse direction — return all boards this stock belongs to.
+        source: optional filter (e.g. 'eastmoney' / 'zhitu' / 'zzshare').
+
+    Returns:
+        List of membership rows with keys:
+            board_code, stock_code, source, board_name, stock_name,
+            board_type, subtype, refreshed_at
+    """
+    init_schema()
+    if (board_code is None) == (stock_code is None):
+        raise ValueError(
+            "Exactly one of board_code or stock_code must be set, not both/neither."
+        )
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if board_code is not None:
+        sql = """SELECT board_code, stock_code, source, board_name, stock_name,
+                        board_type, subtype, refreshed_at
+                 FROM stock_board_membership
+                 WHERE board_code = ?"""
+        params: tuple = (board_code,)
+    else:
+        sql = """SELECT board_code, stock_code, source, board_name, stock_name,
+                        board_type, subtype, refreshed_at
+                 FROM stock_board_membership
+                 WHERE stock_code = ?"""
+        params = (stock_code,)
+
+    if source is not None:
+        sql += " AND source = ?"
+        params = params + (source,)
+
+    sql += " ORDER BY board_code, stock_code"
+
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    return [
+        {
+            "board_code": r["board_code"],
+            "stock_code": r["stock_code"],
+            "source": r["source"],
+            "board_name": r["board_name"],
+            "stock_name": r["stock_name"],
+            "board_type": r["board_type"],
+            "subtype": r["subtype"],
+            "refreshed_at": r["refreshed_at"],
+        }
+        for r in rows
+    ]
+
+
+def upsert_membership_bulk(
+    source: str,
+    stocks: list[dict],
+    board_code: str,
+    board_name: str,
+    board_type: str,
+    subtype: str | None,
+) -> int:
+    """Bulk upsert all stocks for one board. Returns count of rows affected.
+
+    Args:
+        source: 'eastmoney' | 'zhitu' | 'zzshare'
+        stocks: list of {stock_code, stock_name}
+        board_code: e.g. 'BK1001' (eastmoney) or 'sw_yx' (zhitu)
+        board_name: e.g. '白酒' (denormalized for read perf)
+        board_type: 'concept' | 'industry' | 'index' | 'special'
+        subtype: source-specific subtype string
+
+    Implementation notes:
+        - Uses INSERT OR REPLACE so refreshed_at = CURRENT_TIMESTAMP.
+        - One executemany call (one transaction) for the whole batch.
+        - Returns the number of stock rows passed in (rows upserted).
+    """
+    if not stocks:
+        return 0
+
+    init_schema()
+    conn = get_connection()
+    with conn:
+        cursor = conn.cursor()
+        rows = [
+            (board_code, source, s["stock_code"],
+             s.get("stock_name", ""), board_name, board_type, subtype)
+            for s in stocks
+        ]
+        cursor.executemany(
+            """INSERT OR REPLACE INTO stock_board_membership
+               (board_code, source, stock_code, stock_name,
+                board_name, board_type, subtype, refreshed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            rows,
+        )
+    return len(rows)
+
+
 def get_board_name(board_code: str, source: str) -> str | None:
     """Look up a board's name from the SQLite cache (no upstream fallback).
 
