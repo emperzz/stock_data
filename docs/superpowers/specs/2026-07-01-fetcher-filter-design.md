@@ -361,3 +361,5 @@ stock_data/explorer/static/index.html
 - **动态 checkbox 而非硬编码 12 行**:新 fetcher 自动出现;HTML 干净
 - **不持久化旧 key**:本地开发项目,无历史包袱
 - **不写测试**:现有项目无前端测试基础设施;HTML 改动可由 Playwright 手测覆盖
+
+![Fetcher filter screenshot](fetcher-filter-final.png)
