@@ -924,6 +924,12 @@
         safeSetItem("marketFilter", JSON.stringify(checked));
         renderContent();
       };
+      $("#fetcherFilter").onchange = () => {
+        state.fetcherFilter = Array.from($$("#fetcherFilter input:checked"), i => i.value);
+        // Persist on user interaction (NOT on first visit — see boot init comment).
+        safeSetItem("fetcherFilter", JSON.stringify(state.fetcherFilter));
+        renderContent();
+      };
     }
 
     async function refreshServerStatus() {
@@ -959,9 +965,19 @@
         content.appendChild(h2);
         sec.endpoints
           .filter(ep => ep.markets.some(m => state.marketFilter.includes(m)))
+          .filter(ep => epMatchesFetcherFilter(ep))
           .forEach(ep => content.appendChild(renderEndpoint(ep)));
       });
       applySearchAndFilter();  // re-apply search highlight after re-render
+    }
+
+    // OR-semantics fetcher filter: endpoint shows if any of its
+    // failover-chain fetchers is in the active filter set. Endpoints with
+    // no fetchers (e.g. /health) always show — they're "no data source"
+    // metadata and would otherwise be unreachable via this filter.
+    function epMatchesFetcherFilter(ep) {
+      if (!ep.fetchers || ep.fetchers.length === 0) return true;
+      return ep.fetchers.some(f => state.fetcherFilter.includes(f.name));
     }
 
     // Apply both the search query and the current market filter to all
