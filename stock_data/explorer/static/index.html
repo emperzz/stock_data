@@ -335,7 +335,15 @@
         <label><input type="checkbox" value="us" checked> us</label>
       </div>
       <h3>Filter by fetcher</h3>
-      <div class="filter-group" id="fetcherFilter"></div>
+      <div class="filter-group" id="fetcherFilter">
+        <!-- 12 个 fetcher 复选框由 renderFetcherFilterUI() 动态生成 -->
+      </div>
+      <div class="filter-toggle">
+        <label>
+          <input type="checkbox" id="fetcherListRestrict">
+          Restrict inline fetcher list to filter
+        </label>
+      </div>
     </nav>
     <main class="main">
       <div id="manifestError" class="manifest-error" style="display:none" role="alert"></div>
