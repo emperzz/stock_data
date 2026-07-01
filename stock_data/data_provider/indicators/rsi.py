@@ -20,10 +20,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from .types import MABatch
+
 
 def calcRSI(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,  # accepted for orchestrator uniformity; unused
 ) -> list[dict[str, float | None]]:
     """Compute Wilder's RSI for one or more periods.
 

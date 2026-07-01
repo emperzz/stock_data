@@ -12,12 +12,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import OHLCV
+from .types import MABatch, OHLCV
 
 
 def calcATR(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,  # accepted for orchestrator uniformity; unused
 ) -> list[dict[str, float | None]]:
     options = options or {}
     period: int = int(options.get("period", 14))

@@ -13,6 +13,7 @@ import math
 from typing import Any
 
 from .ma import calcSMA
+from .types import MABatch
 
 
 def _stddev(window: list[float], mean: float) -> float:
@@ -26,6 +27,8 @@ def _stddev(window: list[float], mean: float) -> float:
 def calcBOLL(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,
 ) -> list[dict[str, float | None]]:
     """Compute Bollinger Bands for each bar.
 
@@ -42,7 +45,7 @@ def calcBOLL(  # noqa: N802
     if std_dev <= 0:
         raise ValueError(f"stdDev must be > 0, got {std_dev}")
 
-    mids = calcSMA(closes, period)
+    mids = batch.sma(closes, period) if batch is not None else calcSMA(closes, period)
 
     # Rolling window of raw closes for stddev calculation
     out: list[dict[str, float | None]] = []

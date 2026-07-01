@@ -13,12 +13,14 @@ from __future__ import annotations
 from typing import Any
 
 from .ma import calcSMA
-from .types import OHLCV
+from .types import MABatch, OHLCV
 
 
 def calcOBV(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     ma_period: int = int(options.get("maPeriod", 0))
@@ -56,7 +58,10 @@ def calcOBV(  # noqa: N802
         # for those bars — it will only publish values from the seed onward
         # anyway, so the leading 0s are harmless. Replace leading Nones with
         # 0 to be safe.
-        ma_obv = calcSMA(obv_for_sma, ma_period)
+        if batch is not None:
+            ma_obv = batch.sma(obv_for_sma, ma_period)
+        else:
+            ma_obv = calcSMA(obv_for_sma, ma_period)
 
     out: list[dict[str, float | None]] = []
     for i, value in enumerate(obvs):

@@ -24,9 +24,12 @@ A note on lookback:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .types import MAType, round2
+
+if TYPE_CHECKING:
+    from .types import MABatch
 
 # ---------- low-level helpers ----------
 
@@ -172,12 +175,14 @@ def calcWMA(  # noqa: N802
     return result
 
 
-# ---------- bulk calcMA ----------
+# ---------- bulk calcMA (per-bar dict-of-columns output) ----------
 
 
 def calcMA(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,
 ) -> list[dict[str, float | None]]:
     """Compute one or more moving averages in a single pass.
 
@@ -185,11 +190,66 @@ def calcMA(  # noqa: N802
     `ma{period}` (e.g. `ma5`, `ma20`). The `type` option (sma/ema/wma)
     applies uniformly to all requested periods — mixing types in one
     call is not supported (call calcMA twice if you need to mix).
+
+    For callers that want raw per-period arrays (e.g. to index into a
+    specific period's array from another pass), use :func:`calcMA_arrays`
+    instead.
+
+    When ``batch`` is provided, each per-period MA goes through the
+    batch's cache, so a sibling indicator (e.g. ``BOLL``) asking for
+    the same ``SMA(20)`` in the same ``compute()`` call reuses the
+    already-computed array instead of recomputing it.
     """
     options = options or {}
     periods: list[int] = list(options.get("periods") or [5, 10, 20, 30, 60, 120, 250])
     ma_type: MAType | str = options.get("type", MAType.SMA)
 
+    if isinstance(ma_type, str):
+        ma_type = MAType(ma_type)
+
+    if ma_type == MAType.SMA:
+        dispatch = batch.sma if batch is not None else calcSMA
+    elif ma_type == MAType.EMA:
+        dispatch = batch.ema if batch is not None else calcEMA
+    elif ma_type == MAType.WMA:
+        dispatch = batch.wma if batch is not None else calcWMA
+    else:
+        raise ValueError(f"unsupported MA type: {ma_type}")
+
+    columns: dict[str, list[float | None]] = {}
+    for period in periods:
+        if period <= 0:
+            raise ValueError(f"period must be > 0, got {period}")
+        columns[f"ma{period}"] = dispatch(closes, period)
+
+    n = len(closes)
+    out: list[dict[str, float | None]] = []
+    for i in range(n):
+        row: dict[str, float | None] = {}
+        for period in periods:
+            row[f"ma{period}"] = columns[f"ma{period}"][i]
+        out.append(row)
+    return out
+
+
+# ---------- bulk calcMA_arrays (per-period array output) ----------
+
+
+def calcMA_arrays(  # noqa: N802
+    closes: list[float | None],
+    periods: list[int],
+    ma_type: MAType | str = MAType.SMA,
+) -> dict[int, list[float | None]]:
+    """Compute one or more moving averages in a single dispatch; return arrays.
+
+    Returns ``{period: array}`` keyed by period. Useful for callers that
+    need to keep the per-period arrays around (e.g. ``calcBIAS`` indexes
+    into ``sma_arrays[p][i]`` for each bar), as opposed to :func:`calcMA`
+    which transposes to a per-bar dict-of-columns for direct output.
+
+    All periods share the same ``ma_type``. Mixing types in one call is
+    not supported (call twice if you need to mix).
+    """
     if isinstance(ma_type, str):
         ma_type = MAType(ma_type)
 
@@ -202,20 +262,11 @@ def calcMA(  # noqa: N802
     else:
         raise ValueError(f"unsupported MA type: {ma_type}")
 
-    columns: dict[str, list[float | None]] = {}
-    for period in periods:
-        if period <= 0:
-            raise ValueError(f"period must be > 0, got {period}")
-        columns[f"ma{period}"] = calc_fn(closes, period)
+    for p in periods:
+        if p <= 0:
+            raise ValueError(f"period must be > 0, got {p}")
 
-    n = len(closes)
-    out: list[dict[str, float | None]] = []
-    for i in range(n):
-        row: dict[str, float | None] = {}
-        for period in periods:
-            row[f"ma{period}"] = columns[f"ma{period}"][i]
-        out.append(row)
-    return out
+    return {p: calc_fn(closes, p) for p in periods}
 
 
-__all__ = ["calcSMA", "calcEMA", "calcWMA", "calcMA"]
+__all__ = ["calcSMA", "calcEMA", "calcWMA", "calcMA", "calcMA_arrays"]

@@ -37,14 +37,14 @@ from .kc import calcKC
 from .kdj import calcKDJ
 
 # Re-export the per-indicator calc functions for advanced / one-off use
-from .ma import calcEMA, calcMA, calcSMA, calcWMA
+from .ma import calcEMA, calcMA, calcMA_arrays, calcSMA, calcWMA
 from .macd import calcMACD
 from .obv import calcOBV
 from .registry import INDICATOR_REGISTRY, estimate_lookback, list_indicators
 from .roc import calcROC
 from .rsi import calcRSI
 from .sar import calcSAR
-from .types import OHLCV, IndicatorKey, MAType
+from .types import MABatch, OHLCV, IndicatorKey, MAType
 from .wr import calcWR
 
 __all__ = [
@@ -65,6 +65,7 @@ __all__ = [
     "calcEMA",
     "calcWMA",
     "calcMA",
+    "calcMA_arrays",
     "calcMACD",
     "calcBOLL",
     "calcKDJ",

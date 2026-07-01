@@ -17,12 +17,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import OHLCV, round2
+from .types import MABatch, OHLCV, round2
 
 
 def calcKDJ(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,  # accepted for orchestrator uniformity; unused
 ) -> list[dict[str, float | None]]:
     """Compute KDJ for each bar.
 

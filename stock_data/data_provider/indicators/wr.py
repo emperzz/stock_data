@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import OHLCV, round2
+from .types import MABatch, OHLCV, round2
 
 
 def calcWR(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,  # accepted for orchestrator uniformity; unused
 ) -> list[dict[str, float | None]]:
     options = options or {}
     periods: list[int] = sorted(options.get("periods") or [6, 10])

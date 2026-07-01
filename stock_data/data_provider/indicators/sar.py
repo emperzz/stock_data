@@ -21,12 +21,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import OHLCV
+from .types import MABatch, OHLCV
 
 
 def calcSAR(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,  # accepted for orchestrator uniformity; unused
 ) -> list[dict[str, float | None]]:
     options = options or {}
     af_start: float = float(options.get("afStart", 0.02))

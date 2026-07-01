@@ -23,7 +23,7 @@ from typing import Any
 import pandas as pd
 
 from .registry import INDICATOR_REGISTRY, estimate_lookback, list_indicators
-from .types import OHLCV, IndicatorKey
+from .types import MABatch, OHLCV, IndicatorKey
 
 
 def _coerce_indicator_key(raw: Any) -> IndicatorKey:
@@ -139,13 +139,21 @@ def compute(
     closes = _extract_closes(df)
     ohlcv = _extract_ohlcv(df)
 
+    # MABatch is a per-compute-call memoizer. Without it, a user asking
+    # for `?indicators=ma,macd,boll,bias,kc` would re-run SMA(20) inside
+    # both MA and BOLL, EMA(20) inside KC, etc. — pure waste. The batch
+    # is constructed fresh here and discarded at function exit, so it
+    # never leaks across requests. Indicators that don't (yet) accept
+    # `batch` simply get a None and fall back to their private calc.
+    batch = MABatch()
+
     per_bar_results: list[dict[str, float | None]] = [{} for _ in range(len(df))]
     for key_str, options in spec_dict.items():
         spec_obj = INDICATOR_REGISTRY[IndicatorKey(key_str)]
         if spec_obj.input_shape == "closes":
-            rows = spec_obj.compute(closes, options)
+            rows = spec_obj.compute(closes, options, batch=batch)
         else:
-            rows = spec_obj.compute(ohlcv, options)
+            rows = spec_obj.compute(ohlcv, options, batch=batch)
         for i, row in enumerate(rows):
             per_bar_results[i].update(row)
 

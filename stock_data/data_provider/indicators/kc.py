@@ -14,12 +14,14 @@ from typing import Any
 
 from .atr import calcATR
 from .ma import calcEMA
-from .types import OHLCV
+from .types import MABatch, OHLCV
 
 
 def calcKC(  # noqa: N802
     bars: list[OHLCV],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     ema_period: int = int(options.get("emaPeriod", 20))
@@ -29,7 +31,7 @@ def calcKC(  # noqa: N802
         raise ValueError("emaPeriod > 0, atrPeriod > 0, multiplier > 0 required")
 
     closes: list[float | None] = [bar.get("close") for bar in bars]
-    mids = calcEMA(closes, ema_period)
+    mids = batch.ema(closes, ema_period) if batch is not None else calcEMA(closes, ema_period)
     atr_rows = calcATR(bars, {"period": atr_period})
 
     out: list[dict[str, float | None]] = []

@@ -10,12 +10,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from .ma import calcSMA
+from .ma import calcMA_arrays
+from .types import MAType, MABatch
 
 
 def calcBIAS(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     periods: list[int] = sorted(options.get("periods") or [6, 12, 24])
@@ -24,8 +27,15 @@ def calcBIAS(  # noqa: N802
         if p <= 0:
             raise ValueError(f"period must be > 0, got {p}")
 
-    # Compute every requested SMA once
-    sma_arrays: dict[int, list[float | None]] = {p: calcSMA(closes, p) for p in periods}
+    # Resolve every requested SMA once. When `batch` is provided by the
+    # orchestrator, each call shares the cache with sibling indicators
+    # (e.g. a user asking for `ma + bias` won't recompute SMA(6/12/24)).
+    if batch is not None:
+        sma_arrays: dict[int, list[float | None]] = {
+            p: batch.sma(closes, p) for p in periods
+        }
+    else:
+        sma_arrays = calcMA_arrays(closes, periods, MAType.SMA)
 
     out: list[dict[str, float | None]] = []
     for i in range(len(closes)):

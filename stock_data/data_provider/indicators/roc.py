@@ -11,11 +11,14 @@ from __future__ import annotations
 from typing import Any
 
 from .ma import calcEMA
+from .types import MABatch
 
 
 def calcROC(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,
 ) -> list[dict[str, float | None]]:
     options = options or {}
     period: int = int(options.get("period", 12))
@@ -38,6 +41,9 @@ def calcROC(  # noqa: N802
 
     out: list[dict[str, float | None]] = []
     if signal_period > 0:
+        # The ROC array is freshly built, so it can't be in the cache yet
+        # (cache keys by id() of the input list). calcEMA on a never-seen
+        # list always misses — no benefit from going through batch here.
         signal = calcEMA(rocs, signal_period)
         for r, s in zip(rocs, signal, strict=True):
             out.append({"roc": r, "roc_signal": s})

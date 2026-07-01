@@ -71,9 +71,73 @@ def round2(value: float) -> float:
     return round(float(value), 2)
 
 
+class MABatch:
+    """Per-compute-call memoizer for moving-average arrays.
+
+    When the orchestrator computes several indicators in one pass (e.g.
+    ``?indicators=ma,macd,boll,kc,bias``), many of them independently
+    ask for the same SMA(20) / EMA(26) / ... arrays. Without sharing,
+    each indicator recomputes its MA from scratch — pure waste.
+
+    Usage from :func:`indicator_service.compute`:
+
+        batch = MABatch()
+        # ... per indicator:
+        rows = spec_obj.compute(closes, options, batch=batch)
+
+    And inside the indicator (e.g. ``calcBOLL``):
+
+        mids = batch.sma(closes, period)  # cached after first call
+
+    Cache key is ``(id(data), ma_type, period)``. ``id()`` is unique per
+    list object for the lifetime of that object, and the batch is
+    constructed fresh inside each ``compute()`` call and discarded at
+    the end — so we never leak arrays across requests, and we never
+    retain references to lists that have been garbage-collected (Python
+    may reuse an ``id()`` after GC, but by then the batch is gone too).
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[tuple[int, str, int], list[float | None]] = {}
+
+    def sma(self, data: list[float | None], period: int) -> list[float | None]:
+        key = (id(data), "sma", period)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        from .ma import calcSMA  # local import to avoid circular at module load
+
+        result = calcSMA(data, period)
+        self._cache[key] = result
+        return result
+
+    def ema(self, data: list[float | None], period: int) -> list[float | None]:
+        key = (id(data), "ema", period)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        from .ma import calcEMA
+
+        result = calcEMA(data, period)
+        self._cache[key] = result
+        return result
+
+    def wma(self, data: list[float | None], period: int) -> list[float | None]:
+        key = (id(data), "wma", period)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        from .ma import calcWMA
+
+        result = calcWMA(data, period)
+        self._cache[key] = result
+        return result
+
+
 __all__ = [
     "MAType",
     "IndicatorKey",
     "OHLCV",
     "round2",
+    "MABatch",
 ]

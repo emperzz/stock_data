@@ -14,11 +14,14 @@ from __future__ import annotations
 from typing import Any
 
 from .ma import calcEMA
+from .types import MABatch
 
 
 def calcMACD(  # noqa: N802
     closes: list[float | None],
     options: dict[str, Any] | None = None,
+    *,
+    batch: MABatch | None = None,
 ) -> list[dict[str, float | None]]:
     """Compute MACD for each bar.
 
@@ -36,8 +39,12 @@ def calcMACD(  # noqa: N802
     if short >= long:
         raise ValueError("short must be < long")
 
-    ema_short = calcEMA(closes, short)
-    ema_long = calcEMA(closes, long)
+    if batch is not None:
+        ema_short = batch.ema(closes, short)
+        ema_long = batch.ema(closes, long)
+    else:
+        ema_short = calcEMA(closes, short)
+        ema_long = calcEMA(closes, long)
 
     # DIF is only valid at indices where BOTH EMAs are defined
     dif: list[float | None] = []
@@ -47,7 +54,8 @@ def calcMACD(  # noqa: N802
         else:
             dif.append(s - long_ema)
 
-    # DEA = EMA(DIF, signal) — calcEMA handles None correctly
+    # DEA = EMA(DIF, signal) — calcEMA handles None correctly. The DIF
+    # array is freshly built, so it can't be in the cache yet.
     dea = calcEMA(dif, signal)
 
     out: list[dict[str, float | None]] = []
