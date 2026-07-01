@@ -168,7 +168,6 @@ class BaseFetcher(ABC):
             return None
         return adjust
 
-    @abstractmethod
     def _fetch_raw_data(
         self,
         stock_code: str,
@@ -179,6 +178,16 @@ class BaseFetcher(ABC):
     ) -> pd.DataFrame:
         """Fetch raw data from the source. Returns DataFrame with source-specific columns.
 
+        Default raises ``DataFetchError`` — K-line-unaware fetchers can
+        rely on this default and skip writing a stub. Override in
+        concrete fetchers that actually fetch K-line data.
+
+        Note: deliberately NOT ``@abstractmethod`` so fetchers that
+        don't support K-line (e.g. announcement-only, news-search-only)
+        don't have to define a meaningless stub. ``_normalize_data``
+        remains abstract to catch the symmetric "forgot to implement"
+        bug at instantiation time.
+
         Args:
             stock_code: Stock code
             start_date: Start date (YYYY-MM-DD)
@@ -186,7 +195,9 @@ class BaseFetcher(ABC):
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
             adjust: Provider-specific adjustment value (already mapped by _map_adjust)
         """
-        pass
+        raise DataFetchError(
+            f"{self.name} does not support historical K-line data"
+        )
 
     @abstractmethod
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:

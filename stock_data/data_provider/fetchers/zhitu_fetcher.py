@@ -98,19 +98,6 @@ class ZhituFetcher(BaseFetcher):
         """Zhitu market suffix. Delegates to ``to_zhitu_market_suffix``."""
         return to_zhitu_market_suffix(stock_code)
 
-    def _fetch_raw_data(
-        self,
-        stock_code: str,
-        start_date: str,
-        end_date: str,
-        frequency: str = "d",
-        adjust: str | None = None,
-    ) -> pd.DataFrame:
-        """Zhitu does not support historical data, only realtime quotes."""
-        raise DataFetchError(
-            "ZhituFetcher does not support historical K-line data, only realtime quotes"
-        )
-
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """Zhitu does not support historical data normalization."""
         raise DataFetchError("ZhituFetcher does not support historical K-line data")

@@ -42,19 +42,6 @@ class TencentFetcher(BaseFetcher):
         """Convert to Tencent API prefix. Delegates to ``to_tencent_prefix``."""
         return to_tencent_prefix(stock_code)
 
-    def _fetch_raw_data(
-        self,
-        stock_code: str,
-        start_date: str,
-        end_date: str,
-        frequency: str = "d",
-        adjust: str | None = None,
-    ) -> pd.DataFrame:
-        """Tencent API is realtime-only, not used for historical data."""
-        raise DataFetchError(
-            "TencentFetcher does not support historical K-line data, only realtime quotes"
-        )
-
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """Tencent API is realtime-only, not used for historical data."""
         raise DataFetchError("TencentFetcher does not support historical K-line data")

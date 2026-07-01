@@ -179,9 +179,7 @@ class BaiduFetcher(BaseFetcher):
         return f"BaiduFetcher unavailable: {API_KEY_ENV} env var is empty"
 
     # K-line methods are not supported by Baidu Web Search API.
-    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
-        raise DataFetchError("BaiduFetcher does not support historical K-line data")
-
+    # `_fetch_raw_data` uses the default-raising stub inherited from BaseFetcher.
     def _normalize_data(self, df, stock_code):
         raise DataFetchError("BaiduFetcher does not support historical K-line data")
 

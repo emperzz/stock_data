@@ -245,9 +245,6 @@ class EastMoneyFetcher(BaseFetcher):
     def is_available(self) -> bool:
         return True
 
-    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
-        raise DataFetchError("EastMoneyFetcher does not support historical K-line data")
-
     def _normalize_data(self, df, stock_code):
         raise DataFetchError("EastMoneyFetcher does not support historical K-line data")
 
