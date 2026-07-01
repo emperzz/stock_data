@@ -28,14 +28,18 @@ def test_get_board_stocks_reads_from_membership_table(fresh_db, monkeypatch):
             {"stock_code": "600519", "stock_name": "贵州茅台"},
             {"stock_code": "000858", "stock_name": "五粮液"},
         ],
-        board_code="BK1001", board_name="白酒", board_type="concept", subtype="concept",
+        board_code="BK1001",
+        board_name="白酒",
+        board_type="concept",
+        subtype="concept",
     )
     # Skip daily-refresh tracking so the cache read path is exercised
     # (this test specifically validates that _read_board_stocks_from_db
     # now reads from the membership table — without disabling the tracker,
     # the first call of the day always forces a refresh and bypasses cache).
     monkeypatch.setattr(
-        board_mod, "_refresh_tracker",
+        board_mod,
+        "_refresh_tracker",
         type("T", (), {"is_first_call": lambda *a: False})(),
     )
     # Mock manager so cold path would fail if triggered
@@ -45,7 +49,9 @@ def test_get_board_stocks_reads_from_membership_table(fresh_db, monkeypatch):
     )
 
     stocks, origin = board_mod.get_board_stocks(
-        board_code="BK1001", source="eastmoney", manager=mock_manager,
+        board_code="BK1001",
+        source="eastmoney",
+        manager=mock_manager,
     )
     assert origin == "persistence"
     assert len(stocks) == 2
@@ -55,13 +61,12 @@ def test_get_board_stocks_reads_from_membership_table(fresh_db, monkeypatch):
 
 def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
     """Cold path: membership empty → fetcher called → upsert → return."""
-    # Seed stock_board so board_name/board_type resolve
-    conn = db_mod.get_connection()
-    conn.execute("""
-        INSERT INTO stock_board (code, name, board_type, subtype, source)
-        VALUES ('BK1001', '白酒', 'concept', 'concept', 'eastmoney')
-    """)
-    conn.commit()
+    # Seed stock_board so board_name/board_type resolve on lazy-fill
+    board_mod.update_cached_boards(
+        board_type="concept",
+        source="eastmoney",
+        boards=[{"code": "BK1001", "name": "白酒", "subtype": "concept"}],
+    )
 
     # Mock manager returns 3 stocks
     mock_manager = MagicMock()
@@ -75,7 +80,9 @@ def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
     )
 
     stocks, origin = board_mod.get_board_stocks(
-        board_code="BK1001", source="eastmoney", manager=mock_manager,
+        board_code="BK1001",
+        source="eastmoney",
+        manager=mock_manager,
     )
     assert origin == "eastmoney"
     assert len(stocks) == 3
