@@ -94,9 +94,7 @@ def _resolve_type(board_type: str) -> str:
 )
 @map_errors
 def list_boards(
-    type: Literal["concept", "industry", "index", "special"] = Query(
-        ..., description="Board type"
-    ),
+    type: Literal["concept", "industry", "index", "special"] = Query(..., description="Board type"),
     source: Literal["eastmoney", "zhitu", "zzshare"] = Query(
         ..., description="Data source (REQUIRED)"
     ),
@@ -110,9 +108,7 @@ def list_boards(
         None, description="Sort by field (requires include_quote=true)"
     ),
     sort_order: Literal["asc", "desc"] = Query("desc", description="Sort order"),
-    limit: int | None = Query(
-        None, ge=1, le=500, description="Max number of items (default: all)"
-    ),
+    limit: int | None = Query(None, ge=1, le=500, description="Max number of items (default: all)"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
 ) -> BoardListResponse:
     """Get list of concept / industry / index / special boards."""
@@ -246,7 +242,9 @@ def get_board_stocks(
         try:
             for bt in ("concept", "industry"):
                 boards, _ = manager.get_all_boards(
-                    source=source, board_type=bt, subtype=None,
+                    source=source,
+                    board_type=bt,
+                    subtype=None,
                 )
                 match = next((b["name"] for b in boards if b["code"] == board_code), None)
                 if match:
@@ -294,14 +292,13 @@ def get_board_stocks(
 def get_stock_boards(
     stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
     source: Literal["zhitu", "eastmoney", "zzshare"] = Query(
-        ..., description="Data source (zhitu has native API; eastmoney/zzshare served from membership table only)"
+        ...,
+        description="Data source (zhitu has native API; eastmoney/zzshare served from membership table only)",
     ),
     type: Literal["concept", "industry", "index", "special"] | None = Query(
         None, description="Filter by board type"
     ),
-    subtype: str | None = Query(
-        None, description="Filter by source-specific subtype"
-    ),
+    subtype: str | None = Query(None, description="Filter by source-specific subtype"),
 ) -> StockBoardsResponse:
     """Get boards a stock belongs to.
 
@@ -326,11 +323,14 @@ def get_stock_boards(
             rows = [r for r in rows if r["subtype"] == subtype]
         if rows:
             return StockBoardsResponse(
-                stock_code=stock_code, source="persistence",
+                stock_code=stock_code,
+                source="persistence",
                 data=[
                     StockBoardInfo(
-                        code=r["board_code"], name=r["board_name"],
-                        type=r["board_type"], subtype=r["subtype"] or "",
+                        code=r["board_code"],
+                        name=r["board_name"],
+                        type=r["board_type"],
+                        subtype=r["subtype"] or "",
                     )
                     for r in rows
                 ],
@@ -347,28 +347,29 @@ def get_stock_boards(
             from stock_data.data_provider.persistence.stock_list import (
                 get_stock_name as _get_stock_name,
             )
+
             stock_name = _get_stock_name(stock_code) or ""
-            # Upsert each board as a separate membership row
-            for b in boards:
-                stock_board_cache.upsert_membership_bulk(
-                    source="zhitu",
-                    stocks=[{"stock_code": stock_code, "stock_name": stock_name}],
-                    board_code=b["code"],
-                    board_name=b["name"],
-                    board_type=b.get("type", ""),
-                    subtype=b.get("subtype"),
-                )
+            # Batch upsert all boards in a single transaction (executemany)
+            stock_board_cache.upsert_membership_for_stock_boards(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                boards=boards,
+                source="zhitu",
+            )
             # Apply type/subtype filters for response
             if type is not None:
                 boards = [b for b in boards if b.get("type") == type]
             if subtype is not None:
                 boards = [b for b in boards if b.get("subtype") == subtype]
             return StockBoardsResponse(
-                stock_code=stock_code, source=origin,
+                stock_code=stock_code,
+                source=origin,
                 data=[
                     StockBoardInfo(
-                        code=b["code"], name=b["name"],
-                        type=b.get("type", ""), subtype=b.get("subtype", ""),
+                        code=b["code"],
+                        name=b["name"],
+                        type=b.get("type", ""),
+                        subtype=b.get("subtype", ""),
                     )
                     for b in boards
                 ],
@@ -407,8 +408,12 @@ def get_stock_boards(
 @map_errors
 def get_board_history(
     board_code: str = Path(max_length=30, description="Board code (zzshare format, e.g. '883957')"),
-    source: Literal["zzshare"] = Query(..., description="Data source (only 'zzshare' is supported)"),
-    frequency: Literal["d"] = Query("d", description="K-line frequency (daily only — zzshare plate_kline is daily-only)"),
+    source: Literal["zzshare"] = Query(
+        ..., description="Data source (only 'zzshare' is supported)"
+    ),
+    frequency: Literal["d"] = Query(
+        "d", description="K-line frequency (daily only — zzshare plate_kline is daily-only)"
+    ),
     start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
     days: int = Query(30, ge=1, le=365, description="Days (used when start_date not given)"),

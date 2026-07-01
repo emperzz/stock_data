@@ -31,7 +31,7 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
         "index": {"分类", "指数成分", "大盘指数"},
         "special": {"风险警示", "次新股", "沪港通", "深港通"},
     },
-    "zzshare": {   # NEW
+    "zzshare": {  # NEW
         "industry": {"同花顺行业"},
         "concept": {"同花顺概念"},
         "special": {"同花顺题材"},
@@ -58,8 +58,7 @@ def _validate_subtype(source: str, board_type: str, subtype: str | None) -> None
     source_table = VALID_SUBTYPES_BY_SOURCE.get(source)
     if source_table is None:
         raise ValueError(
-            f"Unknown source '{source}'. "
-            f"Known sources: {sorted(VALID_SUBTYPES_BY_SOURCE.keys())}"
+            f"Unknown source '{source}'. Known sources: {sorted(VALID_SUBTYPES_BY_SOURCE.keys())}"
         )
     valid_set = source_table.get(board_type)
     if valid_set is None:
@@ -160,9 +159,7 @@ def init_schema() -> None:
     # Auto-migration: if legacy stock_board_stock exists, copy its rows
     # into stock_board_membership with joined board metadata. One-shot —
     # subsequent runs find stock_board_stock absent and skip.
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='stock_board_stock'"
-    )
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_board_stock'")
     if cursor.fetchone() is not None:
         cursor.execute("""
             INSERT OR IGNORE INTO stock_board_membership
@@ -222,7 +219,9 @@ def get_board_list(
     """
     init_schema()
 
-    needs_refresh = refresh or include_quote or _refresh_tracker.is_first_call(f"{board_type}:{source}")
+    needs_refresh = (
+        refresh or include_quote or _refresh_tracker.is_first_call(f"{board_type}:{source}")
+    )
 
     if not needs_refresh:
         cached = _read_boards_from_db(board_type, source, subtype)
@@ -239,7 +238,10 @@ def get_board_list(
     # reads can be served from cache. The fetcher returns rows already
     # tagged with their per-row subtype field.
     boards, fetcher_source = manager.get_all_boards(
-        source=source, board_type=board_type, subtype=None, include_quote=include_quote,
+        source=source,
+        board_type=board_type,
+        subtype=None,
+        include_quote=include_quote,
     )
 
     if boards:
@@ -282,7 +284,9 @@ def get_board_stocks(
     init_schema()
 
     # include_quote=True means always fetch fresh data, skip cache
-    needs_refresh = include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:{source}")
+    needs_refresh = (
+        include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:{source}")
+    )
 
     if not needs_refresh:
         cached = _read_board_stocks_from_db(board_code, source)
@@ -300,7 +304,9 @@ def get_board_stocks(
     # known concept/industry board avoids the fetcher's fallback cost.
     _ = _get_board_type(board_code, source, manager)  # warms the board_type cache
     stocks, fetcher_source = manager.get_board_stocks(
-        board_code, source=source, include_quote=include_quote,
+        board_code,
+        source=source,
+        include_quote=include_quote,
     )
 
     if stocks:
@@ -347,9 +353,7 @@ def read_membership(
     """
     init_schema()
     if (board_code is None) == (stock_code is None):
-        raise ValueError(
-            "Exactly one of board_code or stock_code must be set, not both/neither."
-        )
+        raise ValueError("Exactly one of board_code or stock_code must be set, not both/neither.")
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -421,9 +425,58 @@ def upsert_membership_bulk(
     with conn:
         cursor = conn.cursor()
         rows = [
-            (board_code, source, s["stock_code"],
-             s.get("stock_name", ""), board_name, board_type, subtype)
+            (
+                board_code,
+                source,
+                s["stock_code"],
+                s.get("stock_name", ""),
+                board_name,
+                board_type,
+                subtype,
+            )
             for s in stocks
+        ]
+        cursor.executemany(
+            """INSERT OR REPLACE INTO stock_board_membership
+               (board_code, source, stock_code, stock_name,
+                board_name, board_type, subtype, refreshed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            rows,
+        )
+    return len(rows)
+
+
+def upsert_membership_for_stock_boards(
+    stock_code: str,
+    stock_name: str,
+    boards: list[dict],
+    source: str,
+) -> int:
+    """Batch upsert all boards a stock belongs to (single transaction).
+
+    Used by the zhitu cold path in `/stocks/{code}/boards` to write the
+    reverse-index rows for every board returned by the fetcher in one
+    executemany call. Each input board dict must have keys: code, name,
+    type, subtype.
+    """
+    if not boards:
+        return 0
+
+    init_schema()
+    conn = get_connection()
+    with conn:
+        cursor = conn.cursor()
+        rows = [
+            (
+                b["code"],
+                source,
+                stock_code,
+                stock_name,
+                b.get("name", ""),
+                b.get("type", ""),
+                b.get("subtype"),
+            )
+            for b in boards
         ]
         cursor.executemany(
             """INSERT OR REPLACE INTO stock_board_membership
@@ -599,10 +652,7 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
                 """INSERT OR REPLACE INTO stock_board_stock
                 (board_code, source, stock_code, stock_name, updated_at)
                 VALUES (?, ?, ?, ?, ?)""",
-                [
-                    (board_code, source, s["stock_code"], s["stock_name"], now)
-                    for s in stocks
-                ],
+                [(board_code, source, s["stock_code"], s["stock_name"], now) for s in stocks],
             )
 
             # New reverse-index table (denormalized: board_name / board_type / subtype)
@@ -612,8 +662,16 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
                     board_name, board_type, subtype, refreshed_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
-                    (board_code, source, s["stock_code"], s["stock_name"],
-                     board_name, board_type, subtype, now)
+                    (
+                        board_code,
+                        source,
+                        s["stock_code"],
+                        s["stock_name"],
+                        board_name,
+                        board_type,
+                        subtype,
+                        now,
+                    )
                     for s in stocks
                 ],
             )

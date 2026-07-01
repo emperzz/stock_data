@@ -40,7 +40,10 @@ def test_reverse_route_returns_persisted_zhitu_boards(fresh_db):
     board_mod.upsert_membership_bulk(
         source="zhitu",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="sw_yx_baijiu", board_name="白酒", board_type="industry", subtype="申万行业",
+        board_code="sw_yx_baijiu",
+        board_name="白酒",
+        board_type="industry",
+        subtype="申万行业",
     )
     with TestClient(_app_for_test) as client:
         r = client.get("/api/v1/stocks/600519/boards?source=zhitu")
@@ -51,7 +54,7 @@ def test_reverse_route_returns_persisted_zhitu_boards(fresh_db):
     assert body["data"][0]["code"] == "sw_yx_baijiu"
 
 
-def test_reverse_route_zhitu_cold_path_populates_membership(fresh_db):
+def test_reverse_route_zhitu_cold_path_populates_membership(fresh_db, monkeypatch):
     """Cold path for zhitu: membership empty → fetcher called → upsert → return."""
     fake_boards = [
         {"code": "sw_yx_baijiu", "name": "白酒", "type": "industry", "subtype": "申万行业"},
@@ -62,13 +65,10 @@ def test_reverse_route_zhitu_cold_path_populates_membership(fresh_db):
     # Patch get_manager at the boards route's import point so the route uses
     # our mock instead of constructing the real (network-using) manager.
     import stock_data.api.routes.boards as boards_route
-    original_get_manager = boards_route.get_manager
-    boards_route.get_manager = lambda: mock_manager
-    try:
-        with TestClient(_app_for_test) as client:
-            r = client.get("/api/v1/stocks/600519/boards?source=zhitu")
-    finally:
-        boards_route.get_manager = original_get_manager
+
+    monkeypatch.setattr(boards_route, "get_manager", lambda: mock_manager)
+    with TestClient(_app_for_test) as client:
+        r = client.get("/api/v1/stocks/600519/boards?source=zhitu")
 
     assert r.status_code == 200
     body = r.json()
