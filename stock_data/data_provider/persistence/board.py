@@ -562,10 +562,12 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
 
 def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> int:
     """
-    Update cached stocks metadata for a board.
+    Update cached stocks metadata for a board (dual-write window).
 
-    Only stores metadata (board_code, stock_code, stock_name, source, timestamp).
-    Realtime quote data is always fetched from the API, never cached in SQLite.
+    Writes to BOTH `stock_board_stock` (legacy) and `stock_board_membership`
+    (new reverse-index table). After `scripts/migrate_to_membership.py
+    --execute` drops the legacy table, this function will be simplified
+    to single-write (see Task 9).
 
     Args:
         board_code: Board code
@@ -573,19 +575,29 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
         stocks: List of dicts [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
 
     Returns:
-        Number of stocks inserted/updated
+        Number of stocks written.
     """
     if not stocks:
         return 0
 
     init_schema()
 
+    # Resolve board metadata for denormalization (board_name, board_type, subtype)
     conn = get_connection()
+    board_row = conn.execute(
+        "SELECT name, board_type, subtype FROM stock_board WHERE code = ? AND source = ?",
+        (board_code, source),
+    ).fetchone()
+    board_name = board_row["name"] if board_row else board_code
+    board_type = board_row["board_type"] if board_row else ""
+    subtype = board_row["subtype"] if board_row else None
+
     try:
         with conn:
             cursor = conn.cursor()
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            # Legacy table (will be dropped in Task 9)
             cursor.executemany(
                 """INSERT OR REPLACE INTO stock_board_stock
                 (board_code, source, stock_code, stock_name, updated_at)
@@ -596,7 +608,22 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
                 ],
             )
 
-            logger.info(f"[BoardCache] Updated {len(stocks)} stocks for board {board_code}/{source}")
+            # New reverse-index table (denormalized: board_name / board_type / subtype)
+            cursor.executemany(
+                """INSERT OR REPLACE INTO stock_board_membership
+                   (board_code, source, stock_code, stock_name,
+                    board_name, board_type, subtype, refreshed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (board_code, source, s["stock_code"], s["stock_name"],
+                     board_name, board_type, subtype, now)
+                    for s in stocks
+                ],
+            )
+
+            logger.info(
+                f"[BoardCache] Updated {len(stocks)} stocks for board {board_code}/{source} (dual-write)"
+            )
             return len(stocks)
     except Exception as e:
         logger.error(f"[BoardCache] Update board stocks failed: {e}")
