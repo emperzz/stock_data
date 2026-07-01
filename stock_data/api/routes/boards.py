@@ -315,67 +315,31 @@ def get_stock_boards(
         _resolve_type(type)
         stock_board_cache._validate_subtype(source, type, subtype)
 
-    # ① Try membership table first (fast path)
-    rows = stock_board_cache.read_membership(stock_code=stock_code, source=source)
-    if rows:
-        # Filter type/subtype in Python (small list)
-        if type is not None:
-            rows = [r for r in rows if r["board_type"] == type]
-        if subtype is not None:
-            rows = [r for r in rows if r["subtype"] == subtype]
-        if rows:
-            return StockBoardsResponse(
-                stock_code=stock_code,
-                source="persistence",
-                data=[
-                    StockBoardInfo(
-                        code=r["board_code"],
-                        name=r["board_name"],
-                        type=r["board_type"],
-                        subtype=r["subtype"] or "",
-                    )
-                    for r in rows
-                ],
-            )
-
-    # ② zhitu cold path: native API → upsert membership
-    if source == "zhitu":
-        manager = get_manager()
-        boards, origin = manager.get_stock_boards(stock_code, source=source)
-        if boards is not None and len(boards) > 0:
-            # Resolve stock_name from stock_list (zhitu API doesn't return it).
-            # Local import to avoid cycles (persistence.stock_list is
-            # imported transitively by callers of this route).
-            from stock_data.data_provider.persistence.stock_list import (
-                get_stock_name as _get_stock_name,
-            )
-
-            stock_name = _get_stock_name(stock_code) or ""
-            # Batch upsert all boards in a single transaction (executemany)
-            stock_board_cache.upsert_membership_for_stock_boards(
-                stock_code=stock_code,
-                stock_name=stock_name,
-                boards=boards,
-                source="zhitu",
-            )
-            # Apply type/subtype filters for response
-            if type is not None:
-                boards = [b for b in boards if b.get("type") == type]
-            if subtype is not None:
-                boards = [b for b in boards if b.get("subtype") == subtype]
-            return StockBoardsResponse(
-                stock_code=stock_code,
-                source=origin,
-                data=[
-                    StockBoardInfo(
-                        code=b["code"],
-                        name=b["name"],
-                        type=b.get("type", ""),
-                        subtype=b.get("subtype", ""),
-                    )
-                    for b in boards
-                ],
-            )
+    # ① Try membership table first; ② fall back to zhitu cold path (native API
+    # → upsert membership). Both branches routed through the persistence layer
+    # so the route never calls the fetcher directly (per CLAUDE.md
+    # "persistence-only routing" rule).
+    boards, origin = stock_board_cache.get_stock_boards_with_lazy_fill(
+        stock_code=stock_code,
+        source=source,
+        type=type,
+        subtype=subtype,
+        manager=get_manager(),
+    )
+    if boards is not None and len(boards) > 0:
+        return StockBoardsResponse(
+            stock_code=stock_code,
+            source=origin,
+            data=[
+                StockBoardInfo(
+                    code=b["code"],
+                    name=b["name"],
+                    type=b.get("type", ""),
+                    subtype=b.get("subtype", ""),
+                )
+                for b in boards
+            ],
+        )
 
     # ③ Non-zhitu cold path: no upstream API → 404 + cold_source hint
     raise HTTPException(
@@ -413,9 +377,7 @@ def get_stock_board_memberships(
     type: Literal["concept", "industry", "index", "special"] | None = Query(
         None, description="Filter by board type"
     ),
-    subtype: str | None = Query(
-        None, description="Filter by source-specific subtype"
-    ),
+    subtype: str | None = Query(None, description="Filter by source-specific subtype"),
 ) -> BoardMembershipsResponse:
     """Cross-source view of all known boards a stock belongs to.
 

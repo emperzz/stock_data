@@ -145,6 +145,19 @@ def _build_one_source(
         # WAL mode allows concurrent writers; the connection's own
         # mutex serializes access within the thread.
         conn = sqlite3.connect(str(db_mod.get_db_path()), timeout=30)
+        # Ensure WAL mode is enabled (per-thread connection; main db may
+        # not have been initialized by the server). Once one writer sets
+        # the file's journal_mode to WAL, the setting persists at the file
+        # level — concurrent threads racing to set it again may hit
+        # "database is locked" transiently; the timeout=30 above handles
+        # contention, but we still tolerate a rare failure since WAL is
+        # already active on the file.
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc):
+                raise
+            logger.debug(f"[build_membership_index] WAL pragma busy (already set): {exc!r}")
         try:
             try:
                 stocks, _ = manager.get_board_stocks(
