@@ -325,6 +325,16 @@ Cross-cutting behaviors implemented in `data_provider/manager.py` / `data_provid
 - **Market-aware routing** — request market is inferred from the stock code; A-share → Baostock → Akshare failover; US → Yfinance; HK → Akshare / Tencent / Yfinance. See [Capability-Based Routing](#capability-based-routing) for the capability side.
 - **Code normalization** — `normalize_stock_code()` accepts `SH600519` / `sz000001` / `HK00700` and returns the canonical 6-digit or `HK`-prefixed form (see `data_provider/utils/normalize.py`).
 
+### Persistence-Only Routing (board endpoints)
+
+**Rule**: Board-related route handlers (`/boards/...`, `/stocks/.../boards`, `/stocks/.../board-memberships`) call into `stock_data.data_provider.persistence.board` (`stock_board_cache.get_*`), **not** `DataFetcherManager` directly. Exceptions: `/control/fetcher-test` is a debug endpoint that intentionally bypasses this rule.
+
+The fetcher API surface (`manager.*`) has exactly two consumers:
+1. `persistence/board.py` lazy fill (cold-path single upstream call → upsert)
+2. `tools/build_membership_index.py` (full-source bootstrap, per-source worker threads)
+
+Anti-pattern: `manager.get_board_stocks(...)` in `api/routes/boards.py`. Add a new method to `stock_board_cache` instead.
+
 ### Indicator Computation
 Pure DataFrame transformer at the orchestration boundary:
 1. `routes.py` calls `manager.get_kline_data(code, days=max(days, lookback))`
