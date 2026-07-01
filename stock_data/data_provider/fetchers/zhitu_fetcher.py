@@ -11,7 +11,6 @@ import re
 from datetime import date, timedelta
 
 import pandas as pd
-import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
@@ -115,69 +114,48 @@ class ZhituFetcher(BaseFetcher):
             logger.warning("[ZhituFetcher] ZHITU_TOKEN not configured")
             return None
 
-        try:
-            code = self._convert_code(stock_code)
-            url = f"{ZHITU_API_BASE}/hs/real/ssjy/{code}"
-            params = {"token": self._token}
+        code = self._convert_code(stock_code)
+        data = self._fetch_json(
+            f"/hs/real/ssjy/{code}",
+            op_label=f"quote {stock_code}",
+        )
 
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-
-            data = response.json()
-
-            # Check for error response
-            if isinstance(data, dict) and "detail" in data:
-                error_msg = data.get("detail", "Unknown error")
-                if "Licence证书" in str(error_msg) or "不存在" in str(error_msg):
-                    logger.warning("[ZhituFetcher] Invalid token: token rejected by upstream")
-                else:
-                    logger.warning(f"[ZhituFetcher] API error: {error_msg[:50]}...")
-                return None
-
-            # Zhitu returns a dict directly (not a list)
-            if not isinstance(data, dict):
-                logger.warning(
-                    f"[ZhituFetcher] Unexpected response type for {stock_code}: {type(data)}"
-                )
-                return None
-
-            if not data:
-                logger.warning(f"[ZhituFetcher] Empty response for {stock_code}")
-                return None
-
-            row = data
-
-            return UnifiedRealtimeQuote(
-                code=normalize_stock_code(stock_code),
-                name=str(row.get("nm", "")),
-                source=RealtimeSource.ZHITU,
-                price=safe_float(row.get("p")),
-                change_pct=safe_float(row.get("pc")),
-                change_amount=safe_float(row.get("ud")),
-                volume=safe_int(row.get("v"), 0) * 100,  # 手→股 per spec §3.4
-                amount=safe_float(row.get("cje")),
-                open_price=safe_float(row.get("o")),
-                high=safe_float(row.get("h")),
-                low=safe_float(row.get("l")),
-                pre_close=safe_float(row.get("yc")),
-                amplitude=safe_float(row.get("zf")),
-                volume_ratio=safe_float(row.get("lb")),
-                turnover_rate=safe_float(row.get("hs")),
-                pe_ratio=safe_float(row.get("pe")),
-                pb_ratio=safe_float(row.get("sjl")),
-                total_mv=safe_float(row.get("sz")),
-                circ_mv=safe_float(row.get("lt")),
+        # Zhitu returns a dict directly (not a list). _fetch_json already
+        # returns None for transport errors AND for the {"detail": ...}
+        # upstream error envelope; both cases short-circuit to None here.
+        if not isinstance(data, dict):
+            logger.warning(
+                f"[ZhituFetcher] Unexpected response type for {stock_code}: {type(data)}"
             )
+            return None
 
-        except requests.exceptions.Timeout:
-            logger.warning(f"[ZhituFetcher] Timeout for {stock_code}")
+        if not data:
+            logger.warning(f"[ZhituFetcher] Empty response for {stock_code}")
             return None
-        except requests.exceptions.RequestException:
-            logger.warning(f"[ZhituFetcher] Request failed for {stock_code}", exc_info=True)
-            return None
-        except Exception:
-            logger.warning(f"[ZhituFetcher] Error for {stock_code}", exc_info=True)
-            return None
+
+        row = data
+
+        return UnifiedRealtimeQuote(
+            code=normalize_stock_code(stock_code),
+            name=str(row.get("nm", "")),
+            source=RealtimeSource.ZHITU,
+            price=safe_float(row.get("p")),
+            change_pct=safe_float(row.get("pc")),
+            change_amount=safe_float(row.get("ud")),
+            volume=safe_int(row.get("v"), 0) * 100,  # 手→股 per spec §3.4
+            amount=safe_float(row.get("cje")),
+            open_price=safe_float(row.get("o")),
+            high=safe_float(row.get("h")),
+            low=safe_float(row.get("l")),
+            pre_close=safe_float(row.get("yc")),
+            amplitude=safe_float(row.get("zf")),
+            volume_ratio=safe_float(row.get("lb")),
+            turnover_rate=safe_float(row.get("hs")),
+            pe_ratio=safe_float(row.get("pe")),
+            pb_ratio=safe_float(row.get("sjl")),
+            total_mv=safe_float(row.get("sz")),
+            circ_mv=safe_float(row.get("lt")),
+        )
 
     def get_intraday_data(
         self, stock_code: str, period: str = "5", adjust: str = ""
@@ -195,68 +173,48 @@ class ZhituFetcher(BaseFetcher):
             DataFrame with columns: time, open, high, low, close, volume, amount
             or None if not supported or period=1 (not supported by Zhitu).
         """
+        # Zhitu doesn't support period=1 — checked BEFORE the network call
+        # so we can raise DataFetchError (lets manager try next fetcher)
+        # instead of swallowing it via _fetch_json's None-return.
+        if period == "1":
+            raise DataFetchError("ZhituFetcher does not support period=1")
+
         if not self.is_available():
             logger.warning("[ZhituFetcher] ZHITU_TOKEN not configured")
             return None
 
-        # Zhitu doesn't support period=1
-        if period == "1":
-            raise DataFetchError("ZhituFetcher does not support period=1")
+        code = normalize_stock_code(stock_code)
+        market = self._market_suffix(stock_code)
+        symbol = f"{code}{market}"
 
-        try:
-            code = normalize_stock_code(stock_code)
-            market = self._market_suffix(stock_code)
-            symbol = f"{code}{market}"
+        # Map adjust: API format
+        adj_map = {"": "n", "qfq": "f", "hfq": "b"}
+        adj_value = adj_map.get(adjust, "n")
 
-            # Map adjust: API format
-            adj_map = {"": "n", "qfq": "f", "hfq": "b"}
-            adj_value = adj_map.get(adjust, "n")
+        # Get latest trade date
+        from ..persistence.trade_calendar import get_latest_cached_trade_date
 
-            # Get latest trade date
-            from ..persistence.trade_calendar import get_latest_cached_trade_date
+        latest_date = get_latest_cached_trade_date()
+        if not latest_date:
+            latest_date = date.today().strftime("%Y%m%d")
+        else:
+            latest_date = latest_date.replace("-", "")
 
-            latest_date = get_latest_cached_trade_date()
-            if not latest_date:
-                latest_date = date.today().strftime("%Y%m%d")
-            else:
-                latest_date = latest_date.replace("-", "")
+        data = self._fetch_json(
+            f"/hs/history/{symbol}/{period}/{adj_value}",
+            params={"st": latest_date, "et": latest_date},
+            op_label=f"intraday {stock_code}",
+        )
 
-            url = f"{ZHITU_API_BASE}/hs/history/{symbol}/{period}/{adj_value}"
-            params = {
-                "token": self._token,
-                "st": latest_date,
-                "et": latest_date,
-            }
-
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if isinstance(data, dict) and "detail" in data:
-                logger.warning(f"[ZhituFetcher] API error: {data.get('detail')}")
-                return None
-
-            if not isinstance(data, list):
-                logger.warning(f"[ZhituFetcher] Unexpected response type: {type(data)}")
-                return None
-
-            if not data:
-                return None
-
-            df = pd.DataFrame(data)
-            return self._normalize_intraday_zhitu(df)
-
-        except DataFetchError:
-            raise
-        except requests.exceptions.Timeout:
-            logger.warning(f"[ZhituFetcher] Timeout for {stock_code}")
+        if not isinstance(data, list):
+            logger.warning(f"[ZhituFetcher] Unexpected response type: {type(data)}")
             return None
-        except requests.exceptions.RequestException:
-            logger.warning(f"[ZhituFetcher] Request failed for {stock_code}", exc_info=True)
+
+        if not data:
             return None
-        except Exception:
-            logger.warning(f"[ZhituFetcher] Error for {stock_code}", exc_info=True)
-            return None
+
+        df = pd.DataFrame(data)
+        return self._normalize_intraday_zhitu(df)
 
     def get_zt_pool(self, pool_type: str, date: str) -> list[dict] | None:
         """
@@ -280,35 +238,17 @@ class ZhituFetcher(BaseFetcher):
             logger.warning(f"[ZhituFetcher] Unknown pool_type: {pool_type}")
             return None
 
-        try:
-            url = f"{ZHITU_API_BASE}/hs/pool/{api_path}/{date}"
-            params = {"token": self._token}
+        data = self._fetch_json(
+            f"/hs/pool/{api_path}/{date}",
+            op_label=f"ZT pool {pool_type} {date}",
+        )
 
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-
-            data = response.json()
-
-            if isinstance(data, dict) and "detail" in data:
-                logger.warning(f"[ZhituFetcher] API error: {data.get('detail')}")
-                return None
-
-            if not isinstance(data, list):
-                logger.warning(f"[ZhituFetcher] Unexpected response type: {type(data)}")
-                return None
-
-            # Normalize and return
-            return [self._normalize_zt_stock(row, pool_type) for row in data]
-
-        except requests.exceptions.Timeout:
-            logger.warning(f"[ZhituFetcher] Timeout for ZT pool {pool_type} {date}")
+        if not isinstance(data, list):
+            logger.warning(f"[ZhituFetcher] Unexpected response type: {type(data)}")
             return None
-        except requests.exceptions.RequestException:
-            logger.warning(f"[ZhituFetcher] Request failed for ZT pool {pool_type}", exc_info=True)
-            return None
-        except Exception:
-            logger.warning(f"[ZhituFetcher] Error for ZT pool {pool_type}", exc_info=True)
-            return None
+
+        # Normalize and return
+        return [self._normalize_zt_stock(row, pool_type) for row in data]
 
     def _normalize_zt_stock(self, row: dict, pool_type: str) -> dict:
         """Normalize Zhitu ZT pool response to standard format."""
@@ -379,57 +319,32 @@ class ZhituFetcher(BaseFetcher):
             logger.warning("[ZhituFetcher] ZHITU_TOKEN not configured")
             return []
 
-        try:
-            url = f"{ZHITU_API_BASE}/hs/list/all"
-            params = {"token": self._token}
+        data = self._fetch_json(
+            "/hs/list/all",
+            op_label="get_all_stocks",
+        )
 
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-
-            data = response.json()
-
-            if isinstance(data, dict) and "detail" in data:
-                logger.warning(
-                    f"[ZhituFetcher] get_all_stocks API error: "
-                    f"{data.get('detail', 'unknown')[:80]}"
-                )
-                return []
-
-            if not isinstance(data, list):
-                logger.warning(
-                    f"[ZhituFetcher] get_all_stocks unexpected type: {type(data)}"
-                )
-                return []
-
-            result: list = []
-            for row in data:
-                if not isinstance(row, dict):
-                    continue
-                code = str(row.get("dm", "")).strip()
-                if not code:
-                    continue
-                result.append(
-                    {
-                        "code": code,
-                        "name": str(row.get("mc", "")).strip(),
-                        "exchange": str(row.get("jys", "")).strip().lower(),
-                    }
-                )
-            return result
-
-        except requests.exceptions.Timeout:
-            logger.warning("[ZhituFetcher] get_all_stocks timeout")
-            return []
-        except requests.exceptions.RequestException:
+        if not isinstance(data, list):
             logger.warning(
-                "[ZhituFetcher] get_all_stocks request failed", exc_info=True
+                f"[ZhituFetcher] get_all_stocks unexpected type: {type(data)}"
             )
             return []
-        except Exception:
-            logger.warning(
-                "[ZhituFetcher] get_all_stocks error", exc_info=True
+
+        result: list = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("dm", "")).strip()
+            if not code:
+                continue
+            result.append(
+                {
+                    "code": code,
+                    "name": str(row.get("mc", "")).strip(),
+                    "exchange": str(row.get("jys", "")).strip().lower(),
+                }
             )
-            return []
+        return result
 
     def get_stock_info(self, stock_code: str) -> dict | None:
         """公司画像 — Zhitu gs/gsjj 端点 (https://api.zhituapi.com/hs/gs/gsjj/{code}).
@@ -438,15 +353,10 @@ class ZhituFetcher(BaseFetcher):
         """
         if not self.is_available():
             return None
-        url = f"{ZHITU_API_BASE}/hs/gs/gsjj/{stock_code}"
-        params = {"token": self._token}
-        try:
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-        except (requests.RequestException, ValueError) as e:
-            logger.warning("[ZhituFetcher] get_stock_info %s failed: %s", stock_code, e)
-            return None
+        data = self._fetch_json(
+            f"/hs/gs/gsjj/{stock_code}",
+            op_label=f"stock_info {stock_code}",
+        )
         if not isinstance(data, dict) or "code" not in data:
             logger.warning("[ZhituFetcher] get_stock_info %s: malformed payload", stock_code)
             return None
@@ -476,25 +386,13 @@ class ZhituFetcher(BaseFetcher):
         """Fetch raw /hs/index/tree response leaves. Returns list or None on failure."""
         if not self.is_available():
             return None
-        try:
-            url = f"{ZHITU_API_BASE}/hs/index/tree"
-            params = {"token": self._token}
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if isinstance(data, dict) and "detail" in data:
-                logger.warning(
-                    f"[ZhituFetcher] _fetch_board_tree API error: "
-                    f"{data.get('detail', '')[:80]}"
-                )
-                return None
-            if not isinstance(data, list):
-                return None
-            return [r for r in data if isinstance(r, dict) and r.get("isleaf") == 1]
-        except Exception:
-            logger.warning("[ZhituFetcher] _fetch_board_tree failed", exc_info=True)
+        data = self._fetch_json(
+            "/hs/index/tree",
+            op_label="_fetch_board_tree",
+        )
+        if not isinstance(data, list):
             return None
+        return [r for r in data if isinstance(r, dict) and r.get("isleaf") == 1]
 
     def get_all_boards(
         self,
@@ -555,35 +453,21 @@ class ZhituFetcher(BaseFetcher):
         """
         if not self.is_available():
             return []
-        try:
-            url = f"{ZHITU_API_BASE}/hs/index/stock/{board_code}"
-            params = {"token": self._token}
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if isinstance(data, dict) and "detail" in data:
-                logger.warning(
-                    f"[ZhituFetcher] get_board_stocks({board_code}) API error"
-                )
-                return []
-            if not isinstance(data, list):
-                return []
-            return [
-                {
-                    "stock_code": str(r.get("dm", "")).strip(),
-                    "stock_name": str(r.get("mc", "")).strip(),
-                    "exchange": str(r.get("jys", "")).strip().lower(),
-                }
-                for r in data
-                if isinstance(r, dict) and r.get("dm")
-            ]
-        except Exception:
-            logger.warning(
-                f"[ZhituFetcher] get_board_stocks({board_code}) failed",
-                exc_info=True,
-            )
+        data = self._fetch_json(
+            f"/hs/index/stock/{board_code}",
+            op_label=f"get_board_stocks({board_code})",
+        )
+        if not isinstance(data, list):
             return []
+        return [
+            {
+                "stock_code": str(r.get("dm", "")).strip(),
+                "stock_name": str(r.get("mc", "")).strip(),
+                "exchange": str(r.get("jys", "")).strip().lower(),
+            }
+            for r in data
+            if isinstance(r, dict) and r.get("dm")
+        ]
 
     def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict] | None:
         """Get boards a stock belongs to via /hs/index/index/{stock_code}.
@@ -595,44 +479,30 @@ class ZhituFetcher(BaseFetcher):
         """
         if not self.is_available():
             return None
-        try:
-            url = f"{ZHITU_API_BASE}/hs/index/index/{stock_code}"
-            params = {"token": self._token}
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if isinstance(data, dict) and "detail" in data:
-                logger.warning(
-                    f"[ZhituFetcher] get_stock_boards({stock_code}) API error"
-                )
-                return None
-            if not isinstance(data, list):
-                return None
-
-            out: list[dict] = []
-            for r in data:
-                if not isinstance(r, dict):
-                    continue
-                code = str(r.get("code", "")).strip()
-                name = str(r.get("name", "")).strip()
-                if not code:
-                    continue
-                subtype = self._infer_subtype_from_name(name)
-                row_type = self._infer_type_from_subtype(subtype)
-                out.append({
-                    "code": code,
-                    "name": name,
-                    "type": row_type,
-                    "subtype": subtype,
-                })
-            return out
-        except Exception:
-            logger.warning(
-                f"[ZhituFetcher] get_stock_boards({stock_code}) failed",
-                exc_info=True,
-            )
+        data = self._fetch_json(
+            f"/hs/index/index/{stock_code}",
+            op_label=f"get_stock_boards({stock_code})",
+        )
+        if not isinstance(data, list):
             return None
+
+        out: list[dict] = []
+        for r in data:
+            if not isinstance(r, dict):
+                continue
+            code = str(r.get("code", "")).strip()
+            name = str(r.get("name", "")).strip()
+            if not code:
+                continue
+            subtype = self._infer_subtype_from_name(name)
+            row_type = self._infer_type_from_subtype(subtype)
+            out.append({
+                "code": code,
+                "name": name,
+                "type": row_type,
+                "subtype": subtype,
+            })
+        return out
 
     @staticmethod
     def _infer_subtype_from_name(name: str) -> str:
@@ -665,11 +535,15 @@ class ZhituFetcher(BaseFetcher):
     ) -> object | None:
         """GET ``https://api.zhituapi.com{path}`` and return parsed JSON.
 
-        Centralizes the boilerplate used by every ``hs/gs/*`` /
+        Thin wrapper over :func:`stock_data.data_provider.utils.http.json_get`
+        that injects the Zhitu token, classifies Zhitu's ``{"detail": ...}``
+        error envelope, and swallows network errors so the manager's
+        failover loop can transparently move on to the next fetcher.
+
+        Centralises the boilerplate used by every ``hs/gs/*`` /
         ``hs/history/transaction/*`` endpoint we wrap: token injection, error
-        token check, response raise, and exception logging. Returns ``None``
-        on any failure so the manager's failover loop can move on to the
-        next candidate fetcher.
+        envelope check, response raise, and exception logging. Returns ``None``
+        on any failure so callers can treat "no data" uniformly.
 
         Args:
             path: URL path beginning with ``/`` (e.g. ``/hs/gs/jnff/600519``).
@@ -678,27 +552,25 @@ class ZhituFetcher(BaseFetcher):
             timeout: requests timeout in seconds.
 
         Returns:
-            Parsed JSON (typically ``list`` or ``dict``), or ``None``.
+            Parsed JSON (typically ``list`` or ``dict``), or ``None`` on
+            network/HTTP/parse failure or upstream ``detail`` error.
         """
+        from ..utils.http import json_get
+
         if not self.is_available():
             logger.warning(f"[ZhituFetcher] ZHITU_TOKEN not configured; skipping {op_label}")
             return None
         url = f"{ZHITU_API_BASE}{path}"
-        merged = {"token": self._token}
+        merged: dict = {"token": self._token}
         if params:
             merged.update(params)
         try:
-            response = requests.get(url, params=merged, timeout=timeout)
-            response.raise_for_status()
-            data = response.json()
-        except requests.exceptions.Timeout:
-            logger.warning(f"[ZhituFetcher] timeout on {op_label}")
-            return None
-        except requests.exceptions.RequestException:
-            logger.warning(f"[ZhituFetcher] request failed on {op_label}", exc_info=True)
-            return None
-        except ValueError:
-            logger.warning(f"[ZhituFetcher] malformed JSON on {op_label}", exc_info=True)
+            data = json_get(url, params=merged, timeout=timeout)
+        except DataFetchError as e:
+            # json_get raises on timeout / HTTP error / parse error.
+            # Log at warning level (same severity as the original hand-
+            # rolled except block) and return None for failover semantics.
+            logger.warning(f"[ZhituFetcher] {op_label} HTTP error: {e}")
             return None
         if isinstance(data, dict) and "detail" in data:
             logger.warning(

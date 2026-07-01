@@ -32,7 +32,7 @@ class TestGetStockInfo:
         result = self.fetcher.get_stock_info("600519")
         assert result is None
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_normalizes_full_payload(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -82,7 +82,7 @@ class TestGetStockInfo:
         # No 'source' key — manager injects it
         assert "source" not in result
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_none_on_http_error(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -94,7 +94,7 @@ class TestGetStockInfo:
         mock_get.return_value = mock_response
         assert self.fetcher.get_stock_info("600519") is None
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_none_on_malformed_payload(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -108,7 +108,7 @@ class TestGetStockInfo:
         # No 'code' key in payload → returns None
         assert self.fetcher.get_stock_info("600519") is None
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_empty_optional_fields_default_to_blank(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -156,7 +156,7 @@ class TestGetAllStocks:
         assert self.fetcher.get_all_stocks("hk") == []
         assert self.fetcher.get_all_stocks("us") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_normalizes_zhitu_payload(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -178,7 +178,7 @@ class TestGetAllStocks:
         assert result[1] == {"code": "000001", "name": "平安银行", "exchange": "sz"}
         assert result[2] == {"code": "300750", "name": "宁德时代", "exchange": "sz"}
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_empty_list_response(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -191,7 +191,7 @@ class TestGetAllStocks:
         mock_get.return_value = mock_response
         assert self.fetcher.get_all_stocks("csi") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_error_detail_returns_empty(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -204,7 +204,7 @@ class TestGetAllStocks:
         mock_get.return_value = mock_response
         assert self.fetcher.get_all_stocks("csi") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_unexpected_response_type_returns_empty(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -217,7 +217,7 @@ class TestGetAllStocks:
         mock_get.return_value = mock_response
         assert self.fetcher.get_all_stocks("csi") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_http_failure_returns_empty(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -227,7 +227,7 @@ class TestGetAllStocks:
         mock_get.side_effect = requests.ConnectionError("boom")
         assert self.fetcher.get_all_stocks("csi") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_skips_rows_with_empty_code(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",

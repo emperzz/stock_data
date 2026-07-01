@@ -17,7 +17,7 @@ def _make_fetcher(token: str = "test_token") -> ZhituFetcher:
     return f
 
 
-@patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+@patch("stock_data.data_provider.utils.http.requests.get")
 def test_get_all_boards_filters_by_type_and_subtype(mock_get):
     """Returns leaves matching requested type/subtype from /hs/index/tree."""
     mock_response = MagicMock()
@@ -42,7 +42,7 @@ def test_get_all_boards_filters_by_type_and_subtype(mock_get):
     ]
 
 
-@patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+@patch("stock_data.data_provider.utils.http.requests.get")
 def test_get_all_boards_returns_all_subtypes_when_none(mock_get):
     mock_response = MagicMock()
     mock_response.json.return_value = [
@@ -61,7 +61,7 @@ def test_get_all_boards_returns_all_subtypes_when_none(mock_get):
     assert codes == {"sw_mt", "csrc_jr"}
 
 
-@patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+@patch("stock_data.data_provider.utils.http.requests.get")
 def test_get_board_stocks_calls_index_stock_endpoint(mock_get):
     mock_response = MagicMock()
     mock_response.json.return_value = [
@@ -79,7 +79,7 @@ def test_get_board_stocks_calls_index_stock_endpoint(mock_get):
     ]
 
 
-@patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+@patch("stock_data.data_provider.utils.http.requests.get")
 def test_get_stock_boards_calls_index_index_endpoint(mock_get):
     mock_response = MagicMock()
     mock_response.json.return_value = [

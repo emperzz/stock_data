@@ -88,7 +88,7 @@ class TestGetDividend:
         self.fetcher._token = ""
         assert self.fetcher.get_dividend("600519") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_normalizes_payload(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response(
@@ -131,7 +131,7 @@ class TestGetDividend:
         assert result[1]["transfer_ratio"] == 2.0
         assert result[1]["bonus_ratio"] == 1.0
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_sorts_newest_first(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response(
@@ -144,7 +144,7 @@ class TestGetDividend:
         result = self.fetcher.get_dividend("600519")
         assert [r["date"] for r in result] == ["2025-06-23", "2024-06-17", "2023-07-15"]
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_drops_records_without_ex_date(self, mock_get, monkeypatch):
         """预案 / 预披露 rows have empty cdate — must be filtered out."""
         _enable_token(self.fetcher, monkeypatch)
@@ -158,7 +158,7 @@ class TestGetDividend:
         assert len(result) == 1
         assert result[0]["date"] == "2025-06-23"
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_page_size_caps_results(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response(
@@ -178,21 +178,21 @@ class TestGetDividend:
         assert result[0]["date"] == "2024-06-23"
         assert result[1]["date"] == "2023-06-23"
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_empty_on_detail_error(self, mock_get, monkeypatch):
         """``{"detail": ...}`` response (e.g. invalid token) → []."""
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response({"detail": "Licence证书无效"})
         assert self.fetcher.get_dividend("600519") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_empty_on_unexpected_response_type(self, mock_get, monkeypatch):
         """Response is neither list nor error dict → []."""
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response({"unexpected": "object"})
         assert self.fetcher.get_dividend("600519") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_empty_on_http_error(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.side_effect = requests.ConnectionError("upstream down")
@@ -212,7 +212,7 @@ class TestGetFundFlowMinute:
         self.fetcher._token = ""
         assert self.fetcher.get_fund_flow_minute("600519") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_normalizes_main_super_large_mid_small(self, mock_get, monkeypatch):
         """主买-主卖 → super/large net；主力 = super+large net."""
         _enable_token(self.fetcher, monkeypatch)
@@ -262,7 +262,7 @@ class TestGetFundFlowMinute:
         assert result[1]["small_net"] == -5
         assert result[1]["main_net"] == -600
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_uses_cached_trade_date(self, mock_get, monkeypatch):
         """When trade calendar has a cached date, that date is used as st/et."""
         _enable_token(self.fetcher, monkeypatch)
@@ -276,7 +276,7 @@ class TestGetFundFlowMinute:
         assert params["st"] == "20250623"
         assert params["et"] == "20250623"
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_skips_non_dict_rows(self, mock_get, monkeypatch):
         """Defensive: non-dict entries in the response list are skipped."""
         _enable_token(self.fetcher, monkeypatch)
@@ -302,7 +302,7 @@ class TestGetFundFlowMinute:
         assert len(result) == 1
         assert result[0]["time"] == "09:35:00"
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_empty_on_detail_error(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         _patch_trade_calendar(monkeypatch, "2025-06-23")
@@ -323,7 +323,7 @@ class TestGetFundFlow120d:
         self.fetcher._token = ""
         assert self.fetcher.get_fund_flow_120d("600519") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_normalizes_daily_records(self, mock_get, monkeypatch):
         """Daily records expose ``date`` and zero out ``time``."""
         _enable_token(self.fetcher, monkeypatch)
@@ -352,7 +352,7 @@ class TestGetFundFlow120d:
         assert result[0]["main_net"] == 1200  # 800+400
         assert "time" not in result[0]
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_query_window_is_120_days(self, mock_get, monkeypatch):
         """``st`` should be ~120 days before ``et`` (today)."""
         _enable_token(self.fetcher, monkeypatch)
@@ -385,7 +385,7 @@ class TestGetHolderNumChange:
         self.fetcher._token = ""
         assert self.fetcher.get_holder_num_change("600519") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_normalizes_full_payload(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response(
@@ -404,7 +404,7 @@ class TestGetHolderNumChange:
         assert result[0]["avg_shares"] == 0.0
         assert result[1]["holder_num"] == 546413
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_sorts_newest_first(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response(
@@ -417,7 +417,7 @@ class TestGetHolderNumChange:
         result = self.fetcher.get_holder_num_change("600519")
         assert [r["date"] for r in result] == ["2025-03-31", "2024-06-30", "2023-12-31"]
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_xinzeng_flips_sign_to_negative(self, mock_get, monkeypatch):
         """``新增1702`` → change_num == -1702 (negative means share count grew)."""
         _enable_token(self.fetcher, monkeypatch)
@@ -429,7 +429,7 @@ class TestGetHolderNumChange:
         result = self.fetcher.get_holder_num_change("600519")
         assert result[0]["change_num"] == -1702
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_unknown_change_text_defaults_to_zero(self, mock_get, monkeypatch):
         """Free-form text with no ``新增`` / ``减少`` prefix → 0."""
         _enable_token(self.fetcher, monkeypatch)
@@ -441,7 +441,7 @@ class TestGetHolderNumChange:
         result = self.fetcher.get_holder_num_change("600519")
         assert result[0]["change_num"] == 0
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_drops_rows_with_empty_date(self, mock_get, monkeypatch):
         """Empty ``jzrq`` would surface as ``date=""`` — filter out."""
         _enable_token(self.fetcher, monkeypatch)
@@ -455,7 +455,7 @@ class TestGetHolderNumChange:
         assert len(result) == 1
         assert result[0]["date"] == "2025-03-31"
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_skips_non_dict_rows(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response(
@@ -469,7 +469,7 @@ class TestGetHolderNumChange:
         assert len(result) == 1
         assert result[0]["holder_num"] == 200
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_page_size_caps_results(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response(
@@ -483,13 +483,13 @@ class TestGetHolderNumChange:
         assert result[0]["date"] == "2024-03-31"
         assert result[1]["date"] == "2023-03-31"
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_empty_on_detail_error(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response({"detail": "rate limit"})
         assert self.fetcher.get_holder_num_change("600519") == []
 
-    @patch("stock_data.data_provider.fetchers.zhitu_fetcher.requests.get")
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_empty_on_http_error(self, mock_get, monkeypatch):
         _enable_token(self.fetcher, monkeypatch)
         mock_get.side_effect = requests.ConnectionError("upstream down")
