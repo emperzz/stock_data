@@ -745,7 +745,9 @@
     const $$ = (sel) => document.querySelectorAll(sel);
     const el = (tag, props = {}, children = []) => {
       const e = document.createElement(tag);
-      Object.assign(e, props);
+      const { dataset, ...rest } = props;
+      Object.assign(e, rest);
+      if (dataset) Object.assign(e.dataset, dataset);
       children.forEach(c => e.appendChild(c));
       return e;
     };
@@ -1265,7 +1267,7 @@
     }
 
     function renderEndpoint(ep) {
-      const card = el("div", { className: "endpoint", id: `ep-${ep.id}` });
+      const card = el("div", { className: "endpoint", id: `ep-${ep.id}`, dataset: { path: ep.path } });
       const method = el("span", { className: `method ${ep.method}`, textContent: ep.method });
       const path = el("span", { className: "path", textContent: ep.path });
       const summary = el("div", { className: "summary", textContent: ep.summary || "" });
