@@ -7,12 +7,11 @@ Gracefully falls back when token is not configured.
 
 import logging
 import os
-import threading
 from typing import Any
 
 import pandas as pd
 
-from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
+from ..base import BaseFetcher, DataCapability, DataFetchError, SDKFetcherMixin, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 from ..utils.code_converter import to_tushare_format
 from ..utils.normalize import get_index_type, is_index_code
@@ -20,7 +19,7 @@ from ..utils.normalize import get_index_type, is_index_code
 logger = logging.getLogger(__name__)
 
 
-class TushareFetcher(BaseFetcher):
+class TushareFetcher(SDKFetcherMixin, BaseFetcher):
     """Tushare Pro API fetcher for A-share data."""
 
     name = "TushareFetcher"
@@ -32,20 +31,21 @@ class TushareFetcher(BaseFetcher):
         | DataCapability.INDEX_KLINE
     )
 
-    # Class-level once-per-process init. The manifest builder and health
-    # endpoint each create a fresh TushareFetcher per endpoint, so a
-    # per-instance _initialized would re-run ts.pro_api() / env-var read
-    # on every page load. Class-level state survives across instances:
-    # init runs at most once per process, success or failure cached.
-    # _init_lock guards against two threads both observing
-    # _init_attempted==False and both running pro_api (the resulting
-    # client object would just overwrite — benign today, but explicit).
-    _init_lock: "threading.Lock" = threading.Lock()
-    _init_attempted: bool = False
-    _init_ok: bool = False
-    _cls_token: str = ""
-    _init_error: str | None = None
-    _api: Any | None = None
+    # SDKFetcherMixin configuration: this fetcher requires TUSHARE_TOKEN.
+    # Class-level init cache / lock / error state come from the mixin.
+    _TOKEN_ENV_VAR = "TUSHARE_TOKEN"
+    _SDK_NAME = "Tushare"
+
+    def _init_sdk(self, token: str) -> Any:
+        """Initialise the Tushare Pro client and return the api handle.
+
+        ``tushare.pro_api(token)`` is the documented one-step API —
+        it accepts the token directly and binds it to the returned
+        client. No separate ``ts.set_token`` call is needed.
+        """
+        import tushare as ts
+
+        return ts.pro_api(token)
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Tushare value."""
@@ -56,53 +56,6 @@ class TushareFetcher(BaseFetcher):
     def supports_kline(self, period, adjust, market, asset):
         # Tushare: only csi + d/w/m; weekly/monthly adjust IS supported via adj='qfq|hfq'.
         return market == "csi" and period in ("d", "w", "m")
-
-    def __init__(self):
-        pass
-
-    def _ensure_api(self) -> None:
-        """Lazily initialize Tushare API (once per process)."""
-        if TushareFetcher._init_attempted:
-            return
-        with TushareFetcher._init_lock:
-            # Double-check after acquiring the lock.
-            if TushareFetcher._init_attempted:
-                return
-            TushareFetcher._init_attempted = True
-            TushareFetcher._cls_token = os.getenv("TUSHARE_TOKEN", "").strip()
-
-            if not TushareFetcher._cls_token:
-                TushareFetcher._init_error = "TUSHARE_TOKEN not set"
-                logger.warning(
-                    "[TushareFetcher] TUSHARE_TOKEN not set, will return empty results"
-                )
-                return
-
-            try:
-                import tushare as ts
-
-                TushareFetcher._api = ts.pro_api(TushareFetcher._cls_token)
-                TushareFetcher._init_ok = True
-                logger.info("[TushareFetcher] Initialized successfully")
-            except Exception as e:
-                TushareFetcher._init_error = str(e)
-                logger.warning(f"[TushareFetcher] Failed to initialize: {e}")
-
-    def is_available(self) -> bool:
-        """Check if Tushare API is configured and available."""
-        self._ensure_api()
-        return TushareFetcher._init_ok
-
-    def unavailable_reason(self) -> str | None:
-        """Return a human-readable reason this fetcher is unavailable, or None."""
-        if self.is_available():
-            return None
-        if not TushareFetcher._cls_token:
-            return f"TUSHARE_TOKEN environment variable not set (required by {self.name})"
-        return (
-            f"tushare SDK could not initialize for {self.name} "
-            f"({TushareFetcher._init_error or 'token may be invalid, or the tushare package is not importable'})"
-        )
 
     def _fetch_raw_data(
         self,

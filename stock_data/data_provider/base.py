@@ -3,9 +3,12 @@ Base classes and manager for stock data fetchers.
 """
 
 import logging
+import os
+import threading
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Flag, auto
+from typing import Any
 
 import pandas as pd
 
@@ -20,6 +23,112 @@ logger = logging.getLogger(__name__)
 
 # Standard columns for normalized K-line data
 STANDARD_COLUMNS = ["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]
+
+
+class SDKFetcherMixin:
+    """Base for SDK-bearing fetchers (Tushare / Baostock / Myquant).
+
+    Centralises the once-per-process SDK initialization pattern that was
+    previously copy-pasted across three fetchers. Each subclass declares:
+
+        _TOKEN_ENV_VAR : str | None  — env var name for the credential.
+                                       Set to None for tokenless SDKs
+                                       (e.g. Baostock).
+        _SDK_NAME      : str        — human-readable name for log/error
+                                       messages. Defaults to the class name.
+
+    And implements one method:
+
+        def _init_sdk(self, token: str) -> Any:
+            '''Initialise the SDK. May return a client object (stored as
+            cls._api) or have global side effects (e.g. baostock.login,
+            gm.api.set_token). Raise on failure.'''
+
+    The mixin handles double-checked locking, class-level init cache
+    (success / failure sticky across instances and page reloads), the
+    standard env-var read, and the human-readable ``unavailable_reason()``
+    message that distinguishes "token not set" from "SDK init failed".
+
+    The init-cache behaviour is preserved verbatim from the original
+    per-fetcher implementations: once a process has attempted init and
+    failed (e.g. token missing), the failure is sticky — restarting the
+    process or changing the env var at runtime requires a process restart.
+    This is intentional (avoids surprise re-init storms during failover)
+    and matches the pre-mixin semantics.
+
+    MRO: subclass as ``class TushareFetcher(SDKFetcherMixin, BaseFetcher)``.
+    The mixin MUST come before ``BaseFetcher`` so its ``is_available``
+    takes precedence over the unconditional ``BaseFetcher.is_available``.
+    """
+
+    _init_lock: "threading.Lock" = threading.Lock()
+    _init_attempted: bool = False
+    _init_ok: bool = False
+    _cls_token: str = ""
+    _init_error: str | None = None
+    _api: Any = None
+
+    def _ensure_api(self) -> None:
+        """Lazily initialise the SDK (once per process).
+
+        Subclasses normally do NOT override this — they implement
+        ``_init_sdk`` instead. Override here only if you need init-time
+        behaviour the mixin can't express (none of the current SDK
+        fetchers do).
+        """
+        cls = self.__class__
+        if cls._init_attempted:
+            return
+        with cls._init_lock:
+            # Double-check after acquiring the lock.
+            if cls._init_attempted:
+                return
+            cls._init_attempted = True
+            env_var = getattr(self, "_TOKEN_ENV_VAR", None)
+            cls._cls_token = os.getenv(env_var, "").strip() if env_var else ""
+            if env_var and not cls._cls_token:
+                cls._init_error = f"{env_var} not set"
+                logger.warning(
+                    f"[{cls.__name__}] {cls._init_error}"
+                )
+                return
+            try:
+                cls._api = self._init_sdk(cls._cls_token)
+                cls._init_ok = True
+                logger.info(f"[{cls.__name__}] Initialized successfully")
+            except Exception as e:
+                cls._init_error = str(e)
+                logger.warning(f"[{cls.__name__}] SDK init failed: {e}")
+
+    def is_available(self) -> bool:
+        """True iff the SDK has been initialised successfully.
+
+        Triggers ``_ensure_api()`` on first call. Class-level init cache
+        means this is cheap to call repeatedly (after the first call,
+        every call just reads ``_init_ok``).
+        """
+        self._ensure_api()
+        return self.__class__._init_ok
+
+    def unavailable_reason(self) -> str | None:
+        """Return a human-readable reason this fetcher is unavailable.
+
+        Distinguishes "token env var missing" (user fixable) from "SDK
+        init failed" (likely transient or package not installed).
+        """
+        if self.is_available():
+            return None
+        env_var = getattr(self, "_TOKEN_ENV_VAR", None)
+        if env_var and not self.__class__._cls_token:
+            return (
+                f"{env_var} environment variable not set "
+                f"(required by {self.name})"
+            )
+        sdk_name = getattr(self, "_SDK_NAME", self.name)
+        return (
+            f"{sdk_name} SDK could not initialize for {self.name} "
+            f"({self.__class__._init_error or 'token may be invalid, or the package is not importable'})"
+        )
 
 
 class DataCapability(Flag):
@@ -112,6 +221,7 @@ __all__ = [
     "DataFetchError",
     "STANDARD_COLUMNS",
     "CAPABILITY_TO_METHOD",
+    "SDKFetcherMixin",
 ]
 
 

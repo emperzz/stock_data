@@ -34,12 +34,11 @@ Implementation notes (not in CLAUDE.md — these are fetcher-internal quirks):
 # isort: off
 import logging
 import os
-import threading
 from datetime import datetime  # used in get_trade_calendar, get_index_intraday, get_intraday_data
 
 import pandas as pd
 
-from ..base import BaseFetcher, DataCapability, DataFetchError, normalize_stock_code
+from ..base import BaseFetcher, DataCapability, DataFetchError, SDKFetcherMixin, normalize_stock_code
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float
 from ..utils.code_converter import to_myquant_format, to_myquant_index_format
 from ..utils.normalize import is_a_share_stock_code
@@ -116,7 +115,7 @@ _INTRADAY_FREQ_MAP: dict[str, str] = {
 _CALENDAR_START_YEAR = int(os.getenv("MYQUANT_CALENDAR_START_YEAR", "2010"))
 
 
-class MyquantFetcher(BaseFetcher):
+class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
     """Myquant (掘金量化) SDK fetcher for A-share data."""
 
     name = "MyquantFetcher"
@@ -131,21 +130,20 @@ class MyquantFetcher(BaseFetcher):
         | DataCapability.STOCK_INFO
     )
 
-    # Class-level once-per-process init. The manifest builder and health
-    # endpoint each create a fresh MyquantFetcher per endpoint, so a
-    # per-instance _initialized would re-run gm.api.set_token() on every
-    # page load. Class-level state survives across instances: init runs
-    # at most once per process, success or failure cached. _init_lock
-    # guards against two threads both observing _init_attempted==False
-    # and both calling set_token.
-    _init_lock: "threading.Lock" = threading.Lock()
-    _init_attempted: bool = False
-    _init_ok: bool = False
-    _cls_token: str = ""
-    _init_error: str | None = None
+    # SDKFetcherMixin configuration: myquant requires MYQUANT_TOKEN and
+    # initialises via the side-effecting ``gm.api.set_token`` (no client
+    # object returned — gm maintains global state internally).
+    _TOKEN_ENV_VAR = "MYQUANT_TOKEN"
+    _SDK_NAME = "Myquant"
 
-    def __init__(self):
-        pass
+    def _init_sdk(self, token: str) -> None:
+        """Import ``gm.api`` and call ``set_token`` (global side effect).
+
+        Returns None — the SDK does not return a client object.
+        """
+        from gm.api import set_token  # type: ignore
+
+        set_token(token)
 
     def supports_kline(self, period, adjust, market, asset):
         # myquant: d + 5/15/30/60 with full adjust; index minutes csi-only;
@@ -155,48 +153,6 @@ class MyquantFetcher(BaseFetcher):
         if asset == "index" and period in ("5", "15", "30", "60"):
             return True
         return period in ("d", "5", "15", "30", "60")
-
-    def _ensure_initialized(self) -> None:
-        """Lazily import ``gm.api`` and call ``set_token`` (once per process)."""
-        if MyquantFetcher._init_attempted:
-            return
-        with MyquantFetcher._init_lock:
-            # Double-check after acquiring the lock.
-            if MyquantFetcher._init_attempted:
-                return
-            MyquantFetcher._init_attempted = True
-            MyquantFetcher._cls_token = os.getenv("MYQUANT_TOKEN", "").strip()
-
-            if not MyquantFetcher._cls_token:
-                MyquantFetcher._init_error = "MYQUANT_TOKEN not set"
-                logger.warning("[MyquantFetcher] MYQUANT_TOKEN not set")
-                return
-
-            try:
-                from gm.api import set_token  # type: ignore
-
-                set_token(MyquantFetcher._cls_token)
-                MyquantFetcher._init_ok = True
-                logger.info("[MyquantFetcher] Initialized (token configured)")
-            except ImportError:
-                MyquantFetcher._init_error = "gm SDK not importable"
-                logger.warning("[MyquantFetcher] gm package not installed")
-            except Exception as e:
-                MyquantFetcher._init_error = f"set_token failed: {e}"
-                logger.warning(f"[MyquantFetcher] Failed to set token: {e}")
-
-    def is_available(self) -> bool:
-        """True iff MYQUANT_TOKEN is set AND ``gm`` SDK initializes successfully."""
-        self._ensure_initialized()
-        return MyquantFetcher._init_ok
-
-    def unavailable_reason(self) -> str | None:
-        """Return a human-readable reason this fetcher is unavailable, or None."""
-        if self.is_available():
-            return None
-        if not MyquantFetcher._cls_token:
-            return f"MYQUANT_TOKEN environment variable not set (required by {self.name})"
-        return f"{self.name} unavailable: {MyquantFetcher._init_error or 'unknown initialization error'}"
 
     def _map_adjust(self, adjust: str) -> int:
         """Map unified adjust to myquant integer constant.
@@ -609,7 +565,7 @@ class MyquantFetcher(BaseFetcher):
         try:
             from gm.api import get_symbols  # type: ignore  # lazy import
 
-            # is_available() above already triggered _ensure_initialized(); no
+            # is_available() above already triggered _ensure_api(); no
             # need to call it again here.
             symbol_full = self._convert_code(stock_code)  # "SHSE.600519" etc.
             df = get_symbols(sec_type1=1010, symbols=symbol_full, df=True)

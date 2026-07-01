@@ -6,7 +6,6 @@ Free data source, no API token required.
 
 import logging
 import os
-import threading
 from datetime import datetime
 
 import pandas as pd
@@ -15,6 +14,7 @@ from ..base import (
     BaseFetcher,
     DataCapability,
     DataFetchError,
+    SDKFetcherMixin,
     normalize_stock_code,
 )
 from ..core.types import UnifiedRealtimeQuote, safe_float
@@ -24,7 +24,7 @@ from ..utils.normalize import get_index_type, is_a_share_stock_code, is_index_co
 logger = logging.getLogger(__name__)
 
 
-class BaostockFetcher(BaseFetcher):
+class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
     """Baostock API fetcher for A-share data (free, no token)."""
 
     name = "BaostockFetcher"
@@ -37,17 +37,27 @@ class BaostockFetcher(BaseFetcher):
         | DataCapability.DIVIDEND
     )
 
-    # Class-level once-per-process init. The manifest builder (manifest.py
-    # reflect-loop) and the health endpoint each create a *fresh*
-    # BaostockFetcher instance per endpoint, so per-instance _initialized
-    # would re-run bs.login() on every page load — a burst of "login
-    # failed!" log lines. Class-level state survives across instances:
-    # init runs at most once per process, success or failure cached.
-    # _init_lock guards the brief window where two threads could both
-    # observe _init_attempted==False and both run login.
-    _init_lock: "threading.Lock" = threading.Lock()
-    _init_attempted: bool = False
-    _init_ok: bool = False
+    # SDKFetcherMixin configuration: Baostock has no token (None skips the
+    # env-var read in the mixin's _ensure_api), so login is attempted
+    # unconditionally on first call. Class-level init cache / lock /
+    # error state come from the mixin.
+    _TOKEN_ENV_VAR = None
+    _SDK_NAME = "Baostock"
+
+    def _init_sdk(self, token: str) -> None:
+        """Login to Baostock. Returns None — the SDK uses global state.
+
+        Raises ``ImportError`` if the package isn't installed and
+        ``Exception`` for any other login failure. The mixin catches both
+        and records the message into ``_init_error``.
+        """
+        import baostock as bs
+
+        lg = bs.login()
+        if lg.error_code != "0":
+            # Non-zero error_code is a soft failure — raise so the mixin
+            # records it; caller sees "Baostock SDK could not initialize".
+            raise RuntimeError(f"login failed: {lg.error_msg}")
 
     def _map_adjust(self, adjust: str) -> str | None:
         """Map unified adjust to Baostock adjustflag."""
@@ -66,37 +76,6 @@ class BaostockFetcher(BaseFetcher):
         if asset == "index":
             return period in ("d", "w", "m")  # Baostock index has no minutes
         return False
-
-    def __init__(self):
-        pass
-
-    def _ensure_initialized(self) -> None:
-        """Lazily initialize Baostock (once per process)."""
-        if BaostockFetcher._init_attempted:
-            return
-        with BaostockFetcher._init_lock:
-            # Double-check after acquiring the lock.
-            if BaostockFetcher._init_attempted:
-                return
-            BaostockFetcher._init_attempted = True
-            try:
-                import baostock as bs
-
-                lg = bs.login()
-                if lg.error_code != "0":
-                    logger.warning(f"[BaostockFetcher] Login failed: {lg.error_msg}")
-                else:
-                    BaostockFetcher._init_ok = True
-                    logger.info("[BaostockFetcher] Initialized successfully")
-            except ImportError:
-                logger.warning("[BaostockFetcher] baostock not installed")
-            except Exception as e:
-                logger.warning(f"[BaostockFetcher] Init failed: {e}")
-
-    def is_available(self) -> bool:
-        """Check if Baostock is available."""
-        self._ensure_initialized()
-        return BaostockFetcher._init_ok
 
     def _convert_code(self, stock_code: str) -> tuple:
         """Convert to Baostock ``(bs_code, yw_code)``. Delegates to ``to_baostock_format``."""
@@ -123,7 +102,7 @@ class BaostockFetcher(BaseFetcher):
             adjust: Adjustment type - None/3=不复权, '2'=前复权, '1'=后复权.
                    Defaults to '2' (前复权) if not specified.
         """
-        self._ensure_initialized()
+        self._ensure_api()
         if not BaostockFetcher._init_ok:
             raise DataFetchError("Baostock not available")
 
@@ -188,7 +167,7 @@ class BaostockFetcher(BaseFetcher):
 
     def get_stock_name(self, stock_code: str) -> str | None:
         """Get stock name from Baostock query_stock_basic."""
-        self._ensure_initialized()
+        self._ensure_api()
         if not BaostockFetcher._init_ok:
             return None
 
@@ -225,7 +204,7 @@ class BaostockFetcher(BaseFetcher):
             # persistence/stock_list.py.
             return []
 
-        self._ensure_initialized()
+        self._ensure_api()
         if not BaostockFetcher._init_ok:
             return []
 
@@ -361,7 +340,7 @@ class BaostockFetcher(BaseFetcher):
             List of dicts matching ``DividendRecord`` schema, or ``[]`` on
             any failure (so manager failover keeps trying other fetchers).
         """
-        self._ensure_initialized()
+        self._ensure_api()
         if not BaostockFetcher._init_ok:
             return []
         try:
