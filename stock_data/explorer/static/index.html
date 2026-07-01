@@ -356,7 +356,7 @@
       <div class="filter-toggle">
         <label>
           <input type="checkbox" id="fetcherListRestrict">
-          Restrict inline fetcher list to filter
+          Show only the selected fetcher in endpoint list
         </label>
       </div>
     </nav>
@@ -780,10 +780,14 @@
       baseUrl: safeGetItem("baseUrl", ""),
       theme: safeGetItem("theme", "light"),
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
-      // fetcherFilter: null = 首次访问,首次访问时由 boot() 填入全勾选
+      // fetcherFilter: null = 无选中(全选); string = 选中的 fetcher 名
       fetcherFilter: (() => {
         const raw = safeGetItem("fetcherFilter", null);
-        return raw === null ? null : JSON.parse(raw);
+        if (raw === null) return null;
+        const parsed = JSON.parse(raw);
+        // 旧版 schema 是 array; 遇到 array 当作 null (语义变更)
+        if (Array.isArray(parsed)) return null;
+        return typeof parsed === "string" ? parsed : null;
       })(),
       fetcherListRestrict: safeGetItem("fetcherListRestrict", "false") === "true",
     };
@@ -801,9 +805,9 @@
       return [...set].sort();
     }
 
-    // Dynamically build the fetcher filter checkbox group from the current
+    // Dynamically build the fetcher filter radio group from the current
     // manifest. Called once at boot, after the manifest loads. Subsequent
-    // checkbox state changes are handled by the fetcherFilter onchange.
+    // radio state changes are handled by the fetcherFilter onchange.
     function renderFetcherFilterUI() {
       const container = $("#fetcherFilter");
       container.innerHTML = "";
@@ -811,9 +815,10 @@
       for (const name of names) {
         const label = document.createElement("label");
         const input = document.createElement("input");
-        input.type = "checkbox";
+        input.type = "radio";
+        input.name = "fetcher";
         input.value = name;
-        input.checked = state.fetcherFilter.includes(name);
+        input.checked = (state.fetcherFilter === name);
         label.appendChild(input);
         label.appendChild(document.createTextNode(" " + name));
         container.appendChild(label);
@@ -857,13 +862,8 @@
         el.style.display = "block";
       }
       applyTheme();
-      // 初始化 fetcherFilter:首次访问(null)用全勾选,后续用 localStorage。
-      // 注意:首次访问**不写** localStorage,等用户真正交互(onchange)再写。
-      // 否则 manifest 加载失败 → collectAllFetcherNames 返回 [] → 持久化为 [] →
-      // 下次 reload `safeGetItem` 拿到 "[]" 不再是 null → 用户永久卡在空 filter。
-      if (state.fetcherFilter === null) {
-        state.fetcherFilter = collectAllFetcherNames(MANIFEST);
-      }
+      // fetcherFilter: null = 无选中 = 全选。首次访问不写 localStorage,
+      // 等用户真正交互(onchange)再写。避免 manifest 加载失败时锁死状态。
       renderFetcherFilterUI();
       $("#fetcherListRestrict").checked = state.fetcherListRestrict;
       bindUI();
@@ -942,12 +942,26 @@
         safeSetItem("marketFilter", JSON.stringify(checked));
         renderContent();
       };
-      $("#fetcherFilter").onchange = () => {
-        state.fetcherFilter = Array.from($$("#fetcherFilter input:checked"), i => i.value);
-        // Persist on user interaction (NOT on first visit — see boot init comment).
-        safeSetItem("fetcherFilter", JSON.stringify(state.fetcherFilter));
+      $("#fetcherFilter").onchange = (e) => {
+        if (e.target.checked) {
+          state.fetcherFilter = e.target.value;
+          safeSetItem("fetcherFilter", JSON.stringify(state.fetcherFilter));
+        }
         renderContent();
       };
+      // Radio 可取消: 点击已选中的 radio → 取消选中
+      $("#fetcherFilter").addEventListener("click", (e) => {
+        const input = e.target;
+        if (!(input instanceof HTMLInputElement) || input.type !== "radio") return;
+        if (input.checked && state.fetcherFilter === input.value) {
+          setTimeout(() => {
+            input.checked = false;
+            state.fetcherFilter = null;
+            safeSetItem("fetcherFilter", "null");
+            renderContent();
+          }, 0);
+        }
+      });
       $("#fetcherListRestrict").onchange = (e) => {
         state.fetcherListRestrict = e.target.checked;
         safeSetItem("fetcherListRestrict", String(state.fetcherListRestrict));
@@ -994,23 +1008,24 @@
       applySearchAndFilter();  // re-apply search highlight after re-render
     }
 
-    // OR-semantics fetcher filter: endpoint shows if any of its
-    // failover-chain fetchers is in the active filter set. Endpoints with
-    // no fetchers (e.g. /health) always show — they're "no data source"
-    // metadata and would otherwise be unreachable via this filter.
+    // Single-select fetcher filter: endpoint shows if the selected fetcher
+    // is in its failover chain. null = no selection = show all. Endpoints
+    // with no fetchers (e.g. /health) always show.
     function epMatchesFetcherFilter(ep) {
       if (!ep.fetchers || ep.fetchers.length === 0) return true;
-      return ep.fetchers.some(f => state.fetcherFilter.includes(f.name));
+      if (state.fetcherFilter === null) return true;
+      return ep.fetchers.some(f => f.name === state.fetcherFilter);
     }
 
     // Compute the fetcher list to render under an endpoint card. When the
-    // user has the "Restrict inline fetcher list to filter" toggle ON,
-    // we narrow the list to the currently-checked fetchers; otherwise we
+    // user has the "Show only the selected fetcher" toggle ON,
+    // we narrow the list to the selected fetcher; otherwise we
     // show the full failover chain (default behavior).
     function visibleFetchers(ep) {
       const all = ep.fetchers || [];
       if (!state.fetcherListRestrict) return all;
-      return all.filter(f => state.fetcherFilter.includes(f.name));
+      if (state.fetcherFilter === null) return all;
+      return all.filter(f => f.name === state.fetcherFilter);
     }
 
     // Find an endpoint node in the manifest by its path. O(N×M) over
