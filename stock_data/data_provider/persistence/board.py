@@ -133,6 +133,50 @@ def init_schema() -> None:
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_stock_board_stock_board ON stock_board_stock(board_code, source)
     """)
+    # Membership table — bidirectional stock <-> board index. See
+    # docs/superpowers/specs/2026-07-01-stock-board-membership-design.md §2.1.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stock_board_membership (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            board_code  TEXT NOT NULL,
+            stock_code  TEXT NOT NULL,
+            source      TEXT NOT NULL,
+            board_name  TEXT NOT NULL,
+            stock_name  TEXT NOT NULL,
+            board_type  TEXT NOT NULL,
+            subtype     TEXT,
+            refreshed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(board_code, source, stock_code)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_membership_reverse
+            ON stock_board_membership(stock_code, source)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_membership_forward
+            ON stock_board_membership(board_code, source)
+    """)
+    # Auto-migration: if legacy stock_board_stock exists, copy its rows
+    # into stock_board_membership with joined board metadata. One-shot —
+    # subsequent runs find stock_board_stock absent and skip.
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='stock_board_stock'"
+    )
+    if cursor.fetchone() is not None:
+        cursor.execute("""
+            INSERT OR IGNORE INTO stock_board_membership
+                (board_code, source, stock_code, stock_name,
+                 board_name, board_type, subtype, refreshed_at)
+            SELECT bs.board_code, bs.source, bs.stock_code, bs.stock_name,
+                   COALESCE(b.name, ''),
+                   COALESCE(b.board_type, ''),
+                   b.subtype,
+                   CURRENT_TIMESTAMP
+            FROM stock_board_stock bs
+            LEFT JOIN stock_board b
+              ON b.code = bs.board_code AND b.source = bs.source
+        """)
     conn.commit()
     logger.info(f"[BoardCache] Database initialized at {get_db_path()}")
 
