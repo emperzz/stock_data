@@ -60,6 +60,7 @@ __all__ = [
     "IndicatorKey",
     "MAType",
     "OHLCV",
+    "MABatch",
     # Pure calc functions
     "calcSMA",
     "calcEMA",
