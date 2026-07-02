@@ -20,7 +20,7 @@ def fresh_db(tmp_path, monkeypatch):
 
 
 def test_get_board_stocks_reads_from_membership_table(fresh_db, monkeypatch):
-    """get_board_stocks returns rows from stock_board_membership, not stock_board_stock."""
+    """get_board_stocks returns rows from stock_board_membership."""
     # Seed membership directly
     board_mod.upsert_membership_bulk(
         source="eastmoney",

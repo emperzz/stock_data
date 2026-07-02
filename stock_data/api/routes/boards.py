@@ -47,21 +47,19 @@ from .helpers import get_manager
 logger = logging.getLogger(__name__)
 
 
-# source 合法值集合（防止任意 source 触发 _with_source 任意调用）
-_VALID_SOURCES = {"eastmoney", "zhitu", "zzshare"}
-
-# type 合法值
-_VALID_TYPES = {"concept", "industry", "index", "special"}
+# Canonical source/type sets — single source of truth in persistence.board
+_SOURCES = stock_board_cache.VALID_SOURCES
+_TYPES = stock_board_cache.VALID_BOARD_TYPES
 
 
 def _resolve_source(source: str) -> str:
     """Validate source parameter; raise HTTPException(400) on invalid."""
-    if source not in _VALID_SOURCES:
+    if source not in _SOURCES:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "invalid_source",
-                "message": f"Unknown source '{source}'. Valid sources: {sorted(_VALID_SOURCES)}",
+                "message": f"Unknown source '{source}'. Valid sources: {sorted(_SOURCES)}",
             },
         )
     return source
@@ -69,12 +67,12 @@ def _resolve_source(source: str) -> str:
 
 def _resolve_type(board_type: str) -> str:
     """Validate type parameter."""
-    if board_type not in _VALID_TYPES:
+    if board_type not in _TYPES:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "invalid_type",
-                "message": f"Unknown type '{board_type}'. Valid types: {sorted(_VALID_TYPES)}",
+                "message": f"Unknown type '{board_type}'. Valid types: {sorted(_TYPES)}",
             },
         )
     return board_type
@@ -410,7 +408,7 @@ def get_stock_board_memberships(
         )
 
     # cold_sources: known sources without data for this stock
-    cold = [s for s in _VALID_SOURCES if s not in by_source]
+    cold = [s for s in _SOURCES if s not in by_source]
 
     return BoardMembershipsResponse(
         stock_code=stock_code,

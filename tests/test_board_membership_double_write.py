@@ -1,12 +1,4 @@
-"""Tests for update_cached_board_stocks post-Task-9 (single-write to membership).
-
-Prior to Task 9, ``update_cached_board_stocks`` dual-wrote to the legacy
-``stock_board_stock`` table AND the new ``stock_board_membership`` table.
-After ``scripts/migrate_to_membership.py --execute`` drops the legacy
-table, ``update_cached_board_stocks`` was simplified to write only to
-``stock_board_membership``. These tests verify the post-migration
-single-write behavior — i.e. the legacy table is no longer populated.
-"""
+"""Tests for update_cached_board_stocks — writes to stock_board_membership only."""
 
 from __future__ import annotations
 
@@ -27,16 +19,7 @@ def fresh_db(tmp_path, monkeypatch):
 
 
 def test_update_cached_board_stocks_writes_only_membership(fresh_db):
-    """update_cached_board_stocks writes exclusively to stock_board_membership.
-
-    Post-Task-9: the legacy ``stock_board_stock`` table no longer exists in
-    production (it is dropped by ``scripts/migrate_to_membership.py``).
-    If the table does happen to still exist locally — e.g. a stale DB from
-    before migration — this function must NOT touch it (only writes go to
-    membership). When the table is absent, ``init_schema()`` no longer
-    creates it (the legacy CREATE was also removed by the migration), so
-    the absence check below acts as the canonical post-condition.
-    """
+    """update_cached_board_stocks writes to stock_board_membership with denormalized board metadata."""
     # Seed stock_board so the function can resolve board_name/board_type
     conn = db_mod.get_connection()
     conn.execute("""

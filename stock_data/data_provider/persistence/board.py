@@ -8,6 +8,7 @@ upstream API calls which are slow and may fail.
 import logging
 import sqlite3
 from datetime import datetime
+from typing import Any
 
 from . import db
 from ._refresh import DailyRefreshTracker
@@ -39,6 +40,12 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
         # "index" — zzshare 不暴露大盘指数板块
     },
 }
+
+# Valid board types and sources — derived from VALID_SUBTYPES_BY_SOURCE so
+# there is exactly one source of truth.  Import these instead of re-defining
+# the same tuple/set elsewhere.
+VALID_BOARD_TYPES: tuple[str, ...] = ("concept", "industry", "index", "special")
+VALID_SOURCES: tuple[str, ...] = tuple(sorted(VALID_SUBTYPES_BY_SOURCE.keys()))
 
 
 def _validate_subtype(source: str, board_type: str, subtype: str | None) -> None:
@@ -142,25 +149,6 @@ def init_schema() -> None:
         CREATE INDEX IF NOT EXISTS idx_membership_forward
             ON stock_board_membership(board_code, source)
     """)
-    # One-shot auto-migration from legacy stock_board_stock (post-Task-9
-    # plumbing). The table is no longer created by init_schema(), but
-    # pre-migration DBs still have it; this block is a no-op on fresh
-    # databases. Safe to keep indefinitely.
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_board_stock'")
-    if cursor.fetchone() is not None:
-        cursor.execute("""
-            INSERT OR IGNORE INTO stock_board_membership
-                (board_code, source, stock_code, stock_name,
-                 board_name, board_type, subtype, refreshed_at)
-            SELECT bs.board_code, bs.source, bs.stock_code, bs.stock_name,
-                   COALESCE(b.name, ''),
-                   COALESCE(b.board_type, ''),
-                   b.subtype,
-                   CURRENT_TIMESTAMP
-            FROM stock_board_stock bs
-            LEFT JOIN stock_board b
-              ON b.code = bs.board_code AND b.source = bs.source
-        """)
     conn.commit()
     logger.info(f"[BoardCache] Database initialized at {get_db_path()}")
 
@@ -322,7 +310,7 @@ def read_membership(
     board_code: str | None = None,
     stock_code: str | None = None,
     source: str | None = None,
-) -> list:
+) -> list[dict[str, Any]]:
     """Read membership rows. Exactly one of board_code / stock_code must be set.
 
     Args:
@@ -590,7 +578,7 @@ def get_board_name(board_code: str, source: str) -> str | None:
     return row["name"] if row else None
 
 
-def _read_boards_from_db(board_type: str, source: str, subtype: str | None = None) -> list:
+def _read_boards_from_db(board_type: str, source: str, subtype: str | None = None) -> list[dict[str, Any]]:
     """Read board list from database (metadata only).
 
     Args:
@@ -629,7 +617,7 @@ def _read_boards_from_db(board_type: str, source: str, subtype: str | None = Non
     ]
 
 
-def _read_board_stocks_from_db(board_code: str, source: str) -> list:
+def _read_board_stocks_from_db(board_code: str, source: str) -> list[dict[str, Any]]:
     """Read board-stock list from membership table."""
     return [
         {
@@ -687,10 +675,6 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
 def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> int:
     """
     Upsert stocks for a board into `stock_board_membership`.
-
-    See docs/superpowers/specs/2026-07-01-stock-board-membership-design.md
-    for history (the legacy `stock_board_stock` table was dropped in the
-    membership migration).
 
     Args:
         board_code: Board code

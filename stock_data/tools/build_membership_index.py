@@ -32,8 +32,9 @@ from ..data_provider.persistence import db as db_mod
 
 logger = logging.getLogger(__name__)
 
-VALID_BOARD_TYPES = ("concept", "industry", "index", "special")
-VALID_SOURCES = ("eastmoney", "zhitu", "zzshare")
+# Re-export from the canonical source (persistence.board)
+VALID_BOARD_TYPES = board_mod.VALID_BOARD_TYPES
+VALID_SOURCES = board_mod.VALID_SOURCES
 
 
 @dataclass
@@ -171,7 +172,7 @@ def _build_one_source(
                         stocks=stocks,
                         board_code=board["code"],
                         board_name=board.get("name", ""),
-                        board_type=board.get("board_type", ""),
+                        board_type=board.get("type", ""),
                         subtype=board.get("subtype") or "",
                         conn=conn,
                     )

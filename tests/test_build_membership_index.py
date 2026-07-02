@@ -31,7 +31,7 @@ def _make_manager_mock(boards_per_source: dict[str, list[str]]):
                 {
                     "code": code,
                     "name": f"Board-{code}",
-                    "board_type": board_type,
+                    "type": board_type,
                     "subtype": subtype or board_type,
                 }
                 for code in boards_per_source.get(source, [])
