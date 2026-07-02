@@ -474,82 +474,6 @@ def upsert_membership_for_stock_boards(
     return len(rows)
 
 
-def get_stock_boards_with_lazy_fill(
-    stock_code: str,
-    source: str,
-    type: str | None = None,
-    subtype: str | None = None,
-    manager=None,
-) -> tuple[list[dict] | None, str]:
-    """Get boards a stock belongs to (with lazy fill for zhitu).
-
-    Reads from ``stock_board_membership`` first. For ``source='zhitu'``,
-    falls back to the fetcher's native reverse API on cold path and
-    upserts the result to membership (consistent with the
-    "persistence-only routing" rule in CLAUDE.md).
-
-    For other sources, returns ``None`` if membership is empty
-    (no upstream API to call).
-
-    Args:
-        stock_code: 6-digit stock code (e.g. '600519').
-        source: 'eastmoney' | 'zhitu' | 'zzshare'.
-        type: optional board type filter (concept/industry/index/special).
-        subtype: optional source-specific subtype filter.
-        manager: DataFetcherManager instance. Required.
-
-    Returns:
-        Tuple of (boards_list_or_None, origin). origin is 'persistence' on hit,
-        fetcher name on cold-fill, or '' if cold (no upstream API).
-        ``None`` means no data available.
-    """
-    if manager is None:
-        raise ValueError("manager is required for get_stock_boards_with_lazy_fill")
-
-    # Fast path: read from membership table
-    rows = read_membership(stock_code=stock_code, source=source)
-    if rows:
-        if type is not None:
-            rows = [r for r in rows if r["board_type"] == type]
-        if subtype is not None:
-            rows = [r for r in rows if r["subtype"] == subtype]
-        if rows:
-            # Convert to expected board dict shape: {code, name, type, subtype}
-            boards = [
-                {
-                    "code": r["board_code"],
-                    "name": r["board_name"],
-                    "type": r["board_type"],
-                    "subtype": r["subtype"] or "",
-                }
-                for r in rows
-            ]
-            return boards, "persistence"
-
-    # Cold path: only zhitu has a native reverse API
-    if source == "zhitu":
-        boards, origin = manager.get_stock_boards(stock_code, source=source)
-        if boards is not None and len(boards) > 0:
-            # Resolve stock_name from stock_list
-            from .stock_list import get_stock_name as _get_stock_name
-
-            stock_name = _get_stock_name(stock_code) or ""
-            upsert_membership_for_stock_boards(
-                stock_code=stock_code,
-                stock_name=stock_name,
-                boards=boards,
-                source=source,
-            )
-            # Apply type/subtype filters
-            if type is not None:
-                boards = [b for b in boards if b.get("type") == type]
-            if subtype is not None:
-                boards = [b for b in boards if b.get("subtype") == subtype]
-            return boards, origin
-
-    return None, ""
-
-
 def _read_membership_entries(
     stock_code: str, sources: list[str], cursor
 ) -> tuple[list[dict], set[str]]:
@@ -599,9 +523,8 @@ def get_stock_memberships(
         type: optional board type filter (concept/industry/index/special).
         subtype: optional source-specific subtype filter.
         cold_fill: if True and source='zhitu' has no data, call the zhitu
-                   fetcher to populate membership (same lazy-fill as
-                   get_stock_boards_with_lazy_fill). Other sources never
-                   trigger cold-fill (no upstream API).
+                   fetcher to populate membership (write-through upsert).
+                   Other sources never trigger cold-fill (no upstream API).
         manager: DataFetcherManager instance. Required when cold_fill=True.
 
     Returns:
