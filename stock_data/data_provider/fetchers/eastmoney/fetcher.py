@@ -15,6 +15,7 @@ Endpoint coverage of THIS module:
 
 See the two mixin modules for the rest.
 """
+
 from __future__ import annotations
 
 import logging
@@ -153,9 +154,7 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
         # impersonation + per-call Referer override for the quote subdomain.
         headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
         try:
-            r = self._session.get(
-                endpoint["url"], params=params, headers=headers, timeout=timeout
-            )
+            r = self._session.get(endpoint["url"], params=params, headers=headers, timeout=timeout)
             d = r.json()
             return d.get("data", {}).get("klines") or []
         except Exception as e:
@@ -299,20 +298,22 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
             "fields2": ENDPOINTS.BOARD_KLINE["fields2"],
             "klt": str(klt),
             "fqt": "1",
-            "end": "20500101",   # far-future → upstream returns last `lmt` bars
+            "end": "20500101",  # far-future → upstream returns last `lmt` bars
             "lmt": str(lmt),
             "ut": ENDPOINTS.BOARD_KLINE["ut"],
         }
         headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
         try:
             r = self._session.get(
-                ENDPOINTS.BOARD_KLINE["url"], params=params, headers=headers, timeout=15,
+                ENDPOINTS.BOARD_KLINE["url"],
+                params=params,
+                headers=headers,
+                timeout=15,
             )
             raws: list[str] = r.json().get("data", {}).get("klines") or []
         except Exception as e:
             logger.warning(
-                f"[EastMoneyFetcher] get_board_history({board_code}, "
-                f"freq={frequency}) failed: {e}"
+                f"[EastMoneyFetcher] get_board_history({board_code}, freq={frequency}) failed: {e}"
             )
             return []
 
@@ -512,6 +513,7 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
         a small pre-computation, hence the named function instead of
         a lambda.
         """
+
         def mapper(r: dict) -> dict:
             close = r.get("CLOSE_PRICE") or 0
             deal_price = r.get("DEAL_PRICE") or 0
@@ -526,6 +528,7 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
                 "buyer": r.get("BUYER_NAME", ""),
                 "seller": r.get("SELLER_NAME", ""),
             }
+
         return self._datacenter_records(
             ENDPOINTS.BLOCK_TRADE,
             code,

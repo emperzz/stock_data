@@ -3,6 +3,7 @@
 Pure parser tests (no HTTP) — validate the `_parse_board_kline` static method
 and the `_board_secid` normalizer.
 """
+
 from stock_data.data_provider.fetchers.eastmoney.fetcher import EastMoneyFetcher
 
 
