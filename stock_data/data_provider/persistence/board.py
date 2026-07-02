@@ -513,8 +513,8 @@ def get_stock_memberships(
     """Single source of truth for stock→boards reverse lookup.
 
     Reads stock_board_membership for each requested source, applies
-    type/subtype filters, and (optionally) triggers zhitu cold-fill for
-    sources with no data when cold_fill=True.
+    type/subtype filters, and (optionally) triggers zhitu / eastmoney
+    cold-fill for sources with no data when cold_fill=True.
 
     Args:
         stock_code: 6-digit stock code (e.g. '600519').
@@ -522,9 +522,9 @@ def get_stock_memberships(
                  must remap 'ths' → 'zzshare' before calling). May be empty.
         type: optional board type filter (concept/industry/index/special).
         subtype: optional source-specific subtype filter.
-        cold_fill: if True and source='zhitu' has no data, call the zhitu
-                   fetcher to populate membership (write-through upsert).
-                   Other sources never trigger cold-fill (no upstream API).
+        cold_fill: if True and source='zhitu' / 'eastmoney' has no data, call
+                   the corresponding fetcher to populate membership (write-through
+                   upsert). Other sources never trigger cold-fill (no upstream API).
         manager: DataFetcherManager instance. Required when cold_fill=True.
 
     Returns:
@@ -534,8 +534,10 @@ def get_stock_memberships(
         - origin_summary:
             - "persistence" — entries from SQLite cache (no fetcher calls); also used
                               when entries is empty (cache miss, no cold-fill)
-            - "zhitu"       — cold-fill triggered and zhitu is now in the result
-                              (network was hit, fresh data was written)
+            - "zhitu" / "eastmoney" — cold-fill triggered and that source is now in the
+                              result (network was hit, fresh data was written). When
+                              both cold-fill sources wrote, the single-source summary
+                              reflects whichever source was actually queried.
             - "mixed"       — multi-source query with entries (no cold-fill happened)
             - ""            — sources was empty (early return)
 
@@ -552,21 +554,26 @@ def get_stock_memberships(
 
     entries, present_sources = _read_membership_entries(stock_code, sources, cursor)
 
-    # Cold-fill: only zhitu has upstream reverse API; only when cold_fill=True.
-    if cold_fill and manager is not None and "zhitu" in sources and "zhitu" not in present_sources:
+    # Cold-fill: zhitu and eastmoney have upstream reverse APIs; only when cold_fill=True.
+    if cold_fill and manager is not None:
         from .stock_list import get_stock_name as _get_stock_name
 
-        boards, _ = manager.get_stock_boards(stock_code, source="zhitu")
-        if boards:
-            stock_name = _get_stock_name(stock_code) or ""
-            upsert_membership_for_stock_boards(
-                stock_code=stock_code,
-                stock_name=stock_name,
-                boards=boards,
-                source="zhitu",
-            )
-            # Re-read to include newly written rows
-            entries, present_sources = _read_membership_entries(stock_code, sources, cursor)
+        for cold_src in ("zhitu", "eastmoney"):
+            if cold_src not in sources or cold_src in present_sources:
+                continue
+            boards, _ = manager.get_stock_boards(stock_code, source=cold_src)
+            if boards:
+                stock_name = _get_stock_name(stock_code) or ""
+                upsert_membership_for_stock_boards(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    boards=boards,
+                    source=cold_src,
+                )
+                # Re-read to include newly written rows
+                entries, present_sources = _read_membership_entries(
+                    stock_code, sources, cursor
+                )
 
     # Apply type/subtype filters (post-query, in-memory)
     if type is not None:
@@ -580,9 +587,18 @@ def get_stock_memberships(
     # Origin summary
     if not entries:
         origin_summary = "persistence"
-    elif cold_fill and manager is not None and "zhitu" in {e["source"] for e in entries}:
-        # Cold-fill actually wrote data; signal we hit the network
-        origin_summary = "zhitu"
+    elif cold_fill and manager is not None:
+        # Cold-fill actually wrote data; signal which source(s) hit the network.
+        # Single-source query takes the queried source's name; multi-source uses "mixed".
+        coldfill_sources = {"zhitu", "eastmoney"} & {e["source"] for e in entries}
+        if coldfill_sources and len(sources) == 1:
+            origin_summary = next(iter(coldfill_sources))
+        elif coldfill_sources:
+            origin_summary = "mixed"
+        elif len(sources) > 1:
+            origin_summary = "mixed"
+        else:
+            origin_summary = "persistence"
     elif len(sources) > 1:
         origin_summary = "mixed"
     else:
