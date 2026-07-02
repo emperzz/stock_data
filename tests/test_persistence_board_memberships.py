@@ -106,6 +106,75 @@ class TestGetStockMemberships:
         assert origin == "persistence"  # all cold, no fetcher called
 
 
+class TestResolveBoardTypes:
+    """resolve_board_types — single source of truth for board type/subtype lookup."""
+
+    def test_empty_codes_returns_empty_dict(self, fresh_db):
+        """Empty input is a no-op (no SQL)."""
+        assert board_mod.resolve_board_types([], source="eastmoney") == {}
+
+    def test_returns_type_and_subtype_for_known_codes(self, fresh_db):
+        """Codes present in stock_board → dict mapping to {type, subtype}."""
+        conn = db_mod.get_connection()
+        # Seed two rows with non-default subtype (region-style)
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK0615", "中药概念", "concept", "concept", "eastmoney"),
+        )
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK0481", "光伏设备", "industry", "industry", "eastmoney"),
+        )
+        conn.commit()
+
+        result = board_mod.resolve_board_types(
+            ["BK0615", "BK0481"], source="eastmoney"
+        )
+        assert result == {
+            "BK0615": {"type": "concept", "subtype": "concept"},
+            "BK0481": {"type": "industry", "subtype": "industry"},
+        }
+
+    def test_unknown_codes_absent_from_result(self, fresh_db):
+        """Codes not in stock_board are simply missing — callers default-fill."""
+        conn = db_mod.get_connection()
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK0615", "中药概念", "concept", "concept", "eastmoney"),
+        )
+        conn.commit()
+
+        result = board_mod.resolve_board_types(
+            ["BK0615", "BK9999"], source="eastmoney"
+        )
+        # BK9999 absent → not in dict; caller decides what to do.
+        assert "BK0615" in result
+        assert "BK9999" not in result
+
+    def test_source_filters_correctly(self, fresh_db):
+        """Same code under different sources returns source-specific rows."""
+        conn = db_mod.get_connection()
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("sw_yx", "申万行业", "industry", "申万行业", "zhitu"),
+        )
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("sw_yx", "Bank Industry", "industry", "industry", "eastmoney"),
+        )
+        conn.commit()
+
+        zhitu = board_mod.resolve_board_types(["sw_yx"], source="zhitu")
+        em = board_mod.resolve_board_types(["sw_yx"], source="eastmoney")
+        assert zhitu["sw_yx"]["subtype"] == "申万行业"
+        assert em["sw_yx"]["subtype"] == "industry"
+
+
 class TestGetStockMembershipsColdFill:
     """Cold-fill behavior: only triggers for zhitu, only when cold_fill=True."""
 

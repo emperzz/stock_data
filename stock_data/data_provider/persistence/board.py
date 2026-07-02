@@ -302,16 +302,58 @@ def get_board_stocks(
 
 
 def _get_board_type(board_code: str, source: str, manager) -> str | None:
-    """Determine board type by checking in local cache."""
+    """Determine board type by checking in local cache.
+
+    .. deprecated::
+        Use :func:`resolve_board_types` instead. This wrapper now delegates
+        to the batch helper and is kept only because callers in this module
+        still use the single-code shape; it will be folded into its single
+        caller in a follow-up.
+    """
+    result = resolve_board_types([board_code], source)
+    entry = result.get(board_code)
+    return entry["type"] if entry else None
+
+
+def resolve_board_types(
+    codes: list[str],
+    source: str,
+) -> dict[str, dict[str, str | None]]:
+    """Look up authoritative ``board_type`` / ``subtype`` for a batch of codes.
+
+    Single source of truth for cross-layer type resolution. EastMoney's
+    push2.slist/get reverse endpoint (used by ``get_stock_boards``) cannot
+    distinguish concept / industry / region / index — every row has
+    ``f152=2`` — so the fetcher hardcodes ``"industry"`` and relies on this
+    helper to recover the true classification. The persistence layer's
+    cold-fill path (``upsert_membership_for_stock_boards``) calls the same
+    helper so the SQL and column projection live in exactly one place.
+
+    Args:
+        codes: Board codes (e.g. ``["BK0438", "BK0615"]``). Empty list is a no-op.
+        source: Data source slug (``"eastmoney"`` / ``"zhitu"`` / ``"zzshare"``).
+
+    Returns:
+        ``{code: {"type": str | None, "subtype": str | None}}`` for codes
+        present in the ``stock_board`` cache. Codes absent from the table are
+        simply not in the result; callers should default-fill.
+    """
+    if not codes:
+        return {}
     init_schema()
     conn = get_connection()
     cursor = conn.cursor()
+    placeholders = ",".join("?" * len(codes))
     cursor.execute(
-        "SELECT board_type FROM stock_board WHERE code = ? AND source = ?",
-        (board_code, source),
+        f"""SELECT code, board_type, subtype FROM stock_board
+            WHERE code IN ({placeholders})
+              AND source = ?""",
+        (*codes, source),
     )
-    row = cursor.fetchone()
-    return row["board_type"] if row else None
+    return {
+        row["code"]: {"type": row["board_type"], "subtype": row["subtype"]}
+        for row in cursor.fetchall()
+    }
 
 
 def read_membership(
@@ -471,23 +513,12 @@ def upsert_membership_for_stock_boards(
     with conn:
         cursor = conn.cursor()
 
-        # board_type override: look up authoritative type from stock_board
-        # for the codes in this batch. Skip if all boards already carry an
-        # explicit type (e.g. zhitu fetcher returns "concept" / "industry"
-        # directly), to avoid an unnecessary query on the zhitu path.
+        # board_type/subtype override: look up authoritative values from
+        # stock_board for the codes in this batch. The single-code variant
+        # (zhitu fetcher returns type/subtype directly from upstream) hits
+        # an empty dict here, so we skip the row-wise override below.
         board_codes = [b["code"] for b in boards if b.get("code")]
-        type_overrides: dict[str, str] = {}
-        if board_codes:
-            placeholders = ",".join("?" * len(board_codes))
-            cursor.execute(
-                f"""SELECT code, board_type FROM stock_board
-                    WHERE code IN ({placeholders})
-                      AND source = ?""",
-                (*board_codes, source),
-            )
-            for row in cursor.fetchall():
-                if row["board_type"]:
-                    type_overrides[row["code"]] = row["board_type"]
+        type_overrides = resolve_board_types(board_codes, source)
 
         rows = [
             (
@@ -496,8 +527,8 @@ def upsert_membership_for_stock_boards(
                 stock_code,
                 stock_name,
                 b.get("name", ""),
-                type_overrides.get(b["code"]) or b.get("type", ""),
-                b.get("subtype"),
+                (type_overrides.get(b["code"], {})).get("type") or b.get("type", ""),
+                (type_overrides.get(b["code"], {})).get("subtype") or b.get("subtype"),
             )
             for b in boards
         ]

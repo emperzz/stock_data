@@ -436,7 +436,9 @@ class BoardsMixin:
                     "name": r["f14"],
                     # EastMoney doesn't cleanly distinguish concept/industry at
                     # the stock-membership level (f152=2 for both). Default to
-                    # "industry" which is the most common case for A-share names.
+                    # "industry" as a fallback; the resolve_board_types call
+                    # below overwrites these with the authoritative values from
+                    # the local stock_board cache when the code is known there.
                     "type": "industry",
                     "subtype": "industry",
                     "change_pct": (r.get("f3") or 0) / 100,
@@ -447,4 +449,30 @@ class BoardsMixin:
             except KeyError as e:
                 logger.warning(f"[EastMoneyFetcher] skipping malformed board row: {e}")
                 continue
+
+        # Authoritative type/subtype override. EastMoney's upstream reply
+        # cannot distinguish concept / industry / region / index (f152 is
+        # always 2), so we look up each board_code in the stock_board
+        # cache populated by the forward board-list refresh path. Lazy
+        # import avoids a fetcher → persistence cycle at module load;
+        # the lookup is best-effort and falls back to the fetcher defaults
+        # above on any DB / schema error.
+        try:
+            from ...persistence.board import resolve_board_types
+            codes = [b["code"] for b in out if b.get("code")]
+            overrides = resolve_board_types(codes, source="eastmoney")
+        except Exception as e:
+            logger.warning(
+                f"[{self.name}] get_stock_boards({stock_code}) type override "
+                f"lookup failed: {e}; using fetcher defaults."
+            )
+            overrides = {}
+        for b in out:
+            override = overrides.get(b["code"])
+            if not override:
+                continue
+            if override.get("type"):
+                b["type"] = override["type"]
+            if override.get("subtype"):
+                b["subtype"] = override["subtype"]
         return out

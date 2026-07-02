@@ -84,6 +84,96 @@ def test_raises_on_network_error():
         fetcher.get_stock_boards("600519", source="eastmoney")
 
 
+class TestGetStockBoardsTypeOverride:
+    """Fetcher enriches type/subtype from the stock_board cache via lazy import.
+
+    EastMoney's upstream reply cannot distinguish concept / industry (f152 is
+    always 2), so the fetcher hardcodes ``"industry"`` and reaches into the
+    persistence layer's authoritative ``stock_board`` table to recover the
+    true classification. Boards whose code is unknown to the cache keep the
+    fetcher's fallback. These tests pin that behavior.
+    """
+
+    @pytest.fixture
+    def _seed_stock_board(self, tmp_path, monkeypatch):
+        """Seed stock_board with two boards of different types."""
+        from stock_data.data_provider.persistence import board as board_mod
+        from stock_data.data_provider.persistence import db as db_mod
+
+        monkeypatch.setattr(db_mod, "_db_path", None)
+        monkeypatch.setattr(db_mod, "_conn", None)
+        board_mod._schema_initialized_paths = set()
+        monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "test_eastmoney.db"))
+        board_mod.init_schema()
+        conn = db_mod.get_connection()
+        # BK0438: known concept in cache
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK0438", "食品饮料", "industry", "industry", "eastmoney"),
+        )
+        # BK0477: known concept in cache (overrides upstream "industry" fallback)
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK0477", "酿酒概念", "concept", "concept", "eastmoney"),
+        )
+        conn.commit()
+        return board_mod
+
+    def test_known_concept_overrides_industry_fallback(
+        self, _seed_stock_board,
+    ):
+        """BK0477 is cached as concept → fetcher output uses 'concept', not 'industry'."""
+        fetcher = EastMoneyFetcher()
+        with patch.object(fetcher._session, "get", return_value=_mock_resp(SAMPLE_RESPONSE)):
+            result = fetcher.get_stock_boards("600519", source="eastmoney")
+        by_code = {b["code"]: b for b in result}
+        assert by_code["BK0477"]["type"] == "concept"
+        assert by_code["BK0477"]["subtype"] == "concept"
+
+    def test_known_industry_keeps_industry_tag(
+        self, _seed_stock_board,
+    ):
+        """BK0438 is cached as industry → fetcher output matches cache."""
+        fetcher = EastMoneyFetcher()
+        with patch.object(fetcher._session, "get", return_value=_mock_resp(SAMPLE_RESPONSE)):
+            result = fetcher.get_stock_boards("600519", source="eastmoney")
+        by_code = {b["code"]: b for b in result}
+        assert by_code["BK0438"]["type"] == "industry"
+        assert by_code["BK0438"]["subtype"] == "industry"
+
+    def test_unknown_board_keeps_fetcher_fallback(
+        self, _seed_stock_board,
+    ):
+        """BK1277 not in cache → fetcher's hardcoded 'industry' / 'industry' stays."""
+        fetcher = EastMoneyFetcher()
+        with patch.object(fetcher._session, "get", return_value=_mock_resp(SAMPLE_RESPONSE)):
+            result = fetcher.get_stock_boards("600519", source="eastmoney")
+        by_code = {b["code"]: b for b in result}
+        assert by_code["BK1277"]["type"] == "industry"
+        assert by_code["BK1277"]["subtype"] == "industry"
+
+    def test_enrichment_falls_back_gracefully_when_persistence_unavailable(self):
+        """If persistence lookup raises (e.g. DB unreachable), fetcher keeps its defaults."""
+        fetcher = EastMoneyFetcher()
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("simulated DB failure")
+
+        with (
+            patch.object(fetcher._session, "get", return_value=_mock_resp(SAMPLE_RESPONSE)),
+            patch(
+                "stock_data.data_provider.persistence.board.resolve_board_types",
+                side_effect=_boom,
+            ),
+        ):
+            result = fetcher.get_stock_boards("600519", source="eastmoney")
+        # No exception; all entries keep the fetcher's hardcoded fallback.
+        assert all(b["type"] == "industry" for b in result)
+        assert all(b["subtype"] == "industry" for b in result)
+
+
 # ---------------------------------------------------------------------------
 # Live network tests (skipped by default; see module docstring).
 # ---------------------------------------------------------------------------
