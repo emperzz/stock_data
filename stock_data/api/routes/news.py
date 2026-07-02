@@ -1,7 +1,14 @@
-"""News endpoints (search / flash / content extraction).
+"""News endpoints (search / flash / content extraction / per-stock news).
 
 Mounted by ``server.py`` with ``prefix="/api/v1"``; this router's own paths
-start with ``/news/...`` so the final URLs are ``/api/v1/news/...``.
+are a mix:
+
+- ``/news/...`` — search / flash / content (news-bucket endpoints)
+- ``/stocks/{code}/news`` — per-stock news feed (added 2026-07-02; lives here
+  because the response shape and caching are identical to the news
+  endpoints, not because it's a stocks-bucket endpoint).
+
+Both share ``/api/v1`` as the top-level prefix.
 """
 
 from fastapi import APIRouter, HTTPException, Path, Query

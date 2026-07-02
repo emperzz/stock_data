@@ -433,10 +433,20 @@ def upsert_membership_for_stock_boards(
 ) -> int:
     """Batch upsert all boards a stock belongs to (single transaction).
 
-    Used by the zhitu cold path in `/stocks/{code}/boards` to write the
-    reverse-index rows for every board returned by the fetcher in one
-    executemany call. Each input board dict must have keys: code, name,
-    type, subtype.
+    Used by the zhitu/eastmoney cold paths in `/stocks/{code}/boards` to
+    write the reverse-index rows for every board returned by the fetcher
+    in one executemany call. Each input board dict must have keys:
+    code, name, type, subtype.
+
+    **board_type override**: For EastMoneyFetcher specifically, the
+    upstream push2.slist/get endpoint returns ``f152=2`` for every board
+    (concept, industry, region, index — all the same), so the fetcher
+    hardcodes ``"industry"``. To recover the true type (e.g. BK0615
+    中药概念 is ``concept``, not ``industry``), we look up the
+    authoritative ``board_type`` from the local ``stock_board`` table
+    (which is populated by the board-list refresh path) and override
+    the fetcher's value when the board_code is known there. Boards
+    absent from ``stock_board`` keep the fetcher's value.
 
     Args:
         conn: optional SQLite connection. When None, opens a fresh
@@ -452,6 +462,25 @@ def upsert_membership_for_stock_boards(
         conn = get_connection()
     with conn:
         cursor = conn.cursor()
+
+        # board_type override: look up authoritative type from stock_board
+        # for the codes in this batch. Skip if all boards already carry an
+        # explicit type (e.g. zhitu fetcher returns "concept" / "industry"
+        # directly), to avoid an unnecessary query on the zhitu path.
+        board_codes = [b["code"] for b in boards if b.get("code")]
+        type_overrides: dict[str, str] = {}
+        if board_codes:
+            placeholders = ",".join("?" * len(board_codes))
+            cursor.execute(
+                f"""SELECT code, board_type FROM stock_board
+                    WHERE code IN ({placeholders})
+                      AND source = ?""",
+                (*board_codes, source),
+            )
+            for row in cursor.fetchall():
+                if row["board_type"]:
+                    type_overrides[row["code"]] = row["board_type"]
+
         rows = [
             (
                 b["code"],
@@ -459,7 +488,7 @@ def upsert_membership_for_stock_boards(
                 stock_code,
                 stock_name,
                 b.get("name", ""),
-                b.get("type", ""),
+                type_overrides.get(b["code"]) or b.get("type", ""),
                 b.get("subtype"),
             )
             for b in boards

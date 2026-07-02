@@ -133,6 +133,26 @@ class TestToEastMoneySecid:
     def test_shanghai_nine_prefix(self):
         assert cc.to_eastmoney_secid("900001") == "1.900001"
 
+    def test_shanghai_star_market(self):
+        """68xxxxx (STAR Market) is SH."""
+        assert cc.to_eastmoney_secid("688052") == "1.688052"
+
+    def test_shanghai_fund_etf(self):
+        """5xxxxx SH funds/ETFs probed 2026-07-02 against np-listapi getListInfo:
+        only secid=1.{code} returns data; 0.{code} fails. See code_converter docstring.
+        """
+        assert cc.to_eastmoney_secid("510050") == "1.510050"
+        assert cc.to_eastmoney_secid("510300") == "1.510300"
+
+    def test_bse_falls_through_to_sz_prefix(self):
+        """BSE codes (4xxxxx, 8xxxxx) are not natively handled by EastMoney
+        push2 endpoints (most return data:null), so the helper falls through
+        to the SZ prefix ``0.{code}``. Callers that need BSE should
+        skip EastMoney routing entirely (see code_converter docstring).
+        """
+        assert cc.to_eastmoney_secid("430017") == "0.430017"
+        assert cc.to_eastmoney_secid("830799") == "0.830799"
+
 
 # ============================================================================
 # Zhitu

@@ -131,11 +131,21 @@ def to_tencent_prefix(code: str) -> str:
 def to_eastmoney_secid(code: str) -> str:
     """Build EastMoney ``secid``.
 
-    SH (600519, 9xxxxx) → ``1.600519``
-    SZ (000001 …)       → ``0.000001``
+    SH stocks (6xxxxx, 9xxxxx) → ``1.{code}``
+    SH funds/ETFs (5xxxxx)      → ``1.{code}``   (probed 2026-07-02: np-listapi requires 1.)
+    SZ (000001 …)               → ``0.{code}``
+
+    Note: BSE (4xxxxx, 8xxxxx) and HK/US are not handled here — BSE is
+    upstream-rejected by most push2 endpoints (returns data:null), and HK/US
+    codes are not EastMoney territory. Callers that need BSE should detect
+    it via ``is_us_market`` / similar and skip the EastMoney route.
+
+    Verified 2026-07-02 against np-listapi getListInfo:
+        510050 → 1.510050 (works), 0.510050 (fails)
+        430017 → 0.430017 (works for news; slist/get rejects either prefix)
     """
     code = normalize_stock_code(code)
-    if code.startswith(("6", "9")):
+    if code.startswith(("6", "9", "5")):
         return f"1.{code}"
     return f"0.{code}"
 
