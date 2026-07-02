@@ -1,8 +1,8 @@
-"""Integration test: /stocks/{code}/boards reads membership, fallback to zhitu fetcher."""
+"""Tests for unified /stocks/{code}/boards endpoint with CSV source + cold_fill."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,59 +35,110 @@ def fresh_db(tmp_path, monkeypatch):
     yield tmp_path / "test.db"
 
 
-def test_reverse_route_returns_persisted_zhitu_boards(fresh_db):
-    """Stock with rows in membership table → route returns them with source='persistence'."""
+def test_single_source_returns_per_entry_source_field(fresh_db):
+    """Per-entry source field must appear on each returned board."""
     board_mod.upsert_membership_bulk(
         source="zhitu",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="sw_yx_baijiu",
-        board_name="白酒",
-        board_type="industry",
-        subtype="申万行业",
+        board_code="sw_yx_baijiu", board_name="白酒",
+        board_type="industry", subtype="申万行业",
     )
     with TestClient(_app_for_test) as client:
         r = client.get("/api/v1/stocks/600519/boards?source=zhitu")
     assert r.status_code == 200
     body = r.json()
-    assert body["source"] == "persistence"
+    assert body["source"] == "persistence"  # cache hit
+    assert body["cold_sources"] == []
     assert len(body["data"]) == 1
+    assert body["data"][0]["source"] == "zhitu"  # per-entry source
     assert body["data"][0]["code"] == "sw_yx_baijiu"
 
 
-def test_reverse_route_zhitu_cold_path_populates_membership(fresh_db, monkeypatch):
-    """Cold path for zhitu: membership empty → fetcher called → upsert → return."""
-    fake_boards = [
-        {"code": "sw_yx_baijiu", "name": "白酒", "type": "industry", "subtype": "申万行业"},
-    ]
-    mock_manager = MagicMock()
-    mock_manager.get_stock_boards.return_value = (fake_boards, "zhitu")
-
-    # Patch get_manager at the boards route's import point so the route uses
-    # our mock instead of constructing the real (network-using) manager.
-    import stock_data.api.routes.boards as boards_route
-
-    monkeypatch.setattr(boards_route, "get_manager", lambda: mock_manager)
+def test_csv_source_aggregates_multiple_sources(fresh_db):
+    """?source=zhitu,eastmoney aggregates entries; per-entry source distinguishable."""
+    board_mod.upsert_membership_bulk(
+        source="zhitu",
+        stocks=[{"stock_code": "600519", "stock_name": "x"}],
+        board_code="sw_yx", board_name="SW", board_type="industry", subtype="申万行业",
+    )
+    board_mod.upsert_membership_bulk(
+        source="eastmoney",
+        stocks=[{"stock_code": "600519", "stock_name": "x"}],
+        board_code="BK1048", board_name="EM", board_type="concept", subtype="concept",
+    )
     with TestClient(_app_for_test) as client:
-        r = client.get("/api/v1/stocks/600519/boards?source=zhitu")
-
+        r = client.get("/api/v1/stocks/600519/boards?source=zhitu,eastmoney")
     assert r.status_code == 200
     body = r.json()
-    assert body["source"] == "zhitu"
-    # Verify membership was populated
-    rows = board_mod.read_membership(stock_code="600519", source="zhitu")
-    assert len(rows) == 1
-    assert rows[0]["stock_name"] == "贵州茅台"  # from stock_list lookup
+    assert body["source"] == "merged"
+    # Only the user-requested sources (zhitu, eastmoney) are queried, so cold_sources
+    # is empty when both are present. zzshare is excluded because user didn't request it.
+    assert body["cold_sources"] == []
+    by_src = {e["source"] for e in body["data"]}
+    assert by_src == {"zhitu", "eastmoney"}
 
 
-def test_reverse_route_eastmoney_404_with_cold_source_true(fresh_db):
-    """Cold path for non-zhitu: no fetcher available → 404 + cold_source=true."""
+def test_ths_alias_accepted_in_csv(fresh_db):
+    """?source=ths,zhitu → ths remaps to zzshare internally."""
+    with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
+        mock.return_value = ([], ["zzshare", "zhitu"], "")
+        with TestClient(_app_for_test) as client:
+            r = client.get("/api/v1/stocks/600519/boards?source=ths,zhitu")
+        assert r.status_code == 200
+        # Helper must be called with normalized sources (no 'ths')
+        called = mock.call_args.kwargs["sources"]
+        assert "ths" not in called
+        assert "zzshare" in called
+        assert "zhitu" in called
+
+
+def test_no_source_aggregates_all(fresh_db):
+    """Omitting ?source= aggregates all 3 sources."""
+    with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
+        mock.return_value = (
+            [{"code": "x", "name": "x", "type": "concept", "subtype": "", "source": "zhitu"}],
+            [],
+            "mixed",
+        )
+        with TestClient(_app_for_test) as client:
+            r = client.get("/api/v1/stocks/600519/boards")
+        assert r.status_code == 200
+        called = mock.call_args.kwargs["sources"]
+        assert set(called) == {"eastmoney", "zhitu", "zzshare"}
+
+
+def test_cold_fill_false_does_not_trigger_lazy_fill(fresh_db):
+    """?cold_fill=false (default) → cold source appears in cold_sources, no fetcher call."""
+    mock_manager = MagicMock()
+    with (
+        TestClient(_app_for_test) as client,
+        patch("stock_data.api.routes.boards.get_manager", return_value=mock_manager),
+    ):
+        r = client.get("/api/v1/stocks/600519/boards?source=zhitu")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cold_sources"] == ["zhitu"]
+    assert body["data"] == []
+    mock_manager.get_stock_boards.assert_not_called()
+
+
+def test_invalid_source_in_csv_returns_400(fresh_db):
+    """Unknown source in CSV → 400 with error detail."""
     with TestClient(_app_for_test) as client:
-        r = client.get("/api/v1/stocks/600519/boards?source=eastmoney")
-    assert r.status_code == 404
-    detail = r.json()["detail"]
-    assert detail["error"] == "cold_stock_board_data"
-    assert detail["cold_source"] is True
-    assert "build_membership_index" in detail["message"]
+        r = client.get("/api/v1/stocks/600519/boards?source=zhitu,bogus")
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "invalid_source"
+
+
+def test_ths_alias_single_source(fresh_db):
+    """Existing test pattern (kept for backwards compat): single ths source → alias works."""
+    with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
+        mock.return_value = ([], ["zzshare"], "")
+        with TestClient(_app_for_test) as client:
+            r = client.get("/api/v1/stocks/600519/boards?source=ths")
+        assert r.status_code == 200
+        called = mock.call_args.kwargs["sources"]
+        assert called == ["zzshare"]
 
 
 # Lazy import — keeps this module cheap to collect when only the persistence

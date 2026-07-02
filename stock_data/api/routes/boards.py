@@ -86,6 +86,40 @@ def _resolve_type(board_type: str) -> str:
     return board_type
 
 
+def _parse_source_csv(raw: str | None) -> list[str]:
+    """Parse ?source=ths,zhitu,eastmoney -> ['zzshare', 'zhitu', 'eastmoney'] (normalized).
+
+    - None / empty -> all valid sources
+    - Splits on comma, strips whitespace
+    - Remaps 'ths' -> 'zzshare' (route-layer alias, matches _resolve_source)
+    - Dedupes (preserves first occurrence order)
+    - Raises 400 on unknown source name
+    """
+    if not raw:
+        return list(stock_board_cache.VALID_SOURCES)
+    out: list[str] = []
+    for s in raw.split(","):
+        s = s.strip()
+        if not s:
+            continue
+        if s == "ths":
+            s = "zzshare"
+        if s not in stock_board_cache.VALID_SOURCES:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_source",
+                    "message": (
+                        f"Unknown source '{s}' in CSV. "
+                        f"Valid sources: {sorted(stock_board_cache.VALID_SOURCES)}"
+                    ),
+                },
+            )
+        if s not in out:
+            out.append(s)
+    return out
+
+
 @router.get(
     "/boards",
     response_model=BoardListResponse,
@@ -285,13 +319,12 @@ def get_board_stocks(
     response_model=StockBoardsResponse,
     responses={
         400: {"model": ErrorResponse, "description": "Invalid source/type/subtype"},
-        404: {"model": ErrorResponse, "description": "Stock not in any known board"},
         500: {"model": ErrorResponse, "description": "Server error"},
     },
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="股票所属板块（所有 source 都支持）",
+    summary="股票所属板块（统一端点：单源/多源聚合；cold_fill 显式 opt-in）",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_stock_boards",
@@ -299,66 +332,61 @@ def get_board_stocks(
 @map_errors
 def get_stock_boards(
     stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
-    source: Literal["zhitu", "eastmoney", "zzshare"] = Query(
-        ...,
-        description="Data source (zhitu has native API; eastmoney/zzshare served from membership table only)",
+    source: str | None = Query(
+        None,
+        description="Comma-separated sources (e.g. 'eastmoney,zhitu,zzshare,ths'). "
+        "Omit for all sources. 'ths' aliases 'zzshare'.",
     ),
     type: Literal["concept", "industry", "index", "special"] | None = Query(
         None, description="Filter by board type"
     ),
     subtype: str | None = Query(None, description="Filter by source-specific subtype"),
+    cold_fill: bool = Query(
+        False, description="Opt-in zhitu lazy-fill on cold data. "
+        "Default false (cold data surfaces in cold_sources instead).",
+    ),
 ) -> StockBoardsResponse:
     """Get boards a stock belongs to.
 
-    All sources supported. Reads from ``stock_board_membership`` (built by
-    forward-path lazy fill or ``tools/build_membership_index`` bootstrap).
-    For ``source=zhitu``, the cold-path fallback calls the fetcher's native
-    reverse API and writes the result to membership.
+    Unified endpoint: single source or multi-source aggregation in one call.
+    Reads from stock_board_membership; opt-in zhitu cold-fill via cold_fill=true.
     """
-    _resolve_source(source)
+    normalized_sources = _parse_source_csv(source)
 
-    if type is not None:
-        _resolve_type(type)
-        stock_board_cache._validate_subtype(source, type, subtype)
+    # Per-source subtype validation (only when type is provided)
+    if type is not None and subtype is not None:
+        for src in normalized_sources:
+            stock_board_cache._validate_subtype(src, type, subtype)
 
-    # ① Try membership table first; ② fall back to zhitu cold path (native API
-    # → upsert membership). Both branches routed through the persistence layer
-    # so the route never calls the fetcher directly (per CLAUDE.md
-    # "persistence-only routing" rule).
-    boards, origin = stock_board_cache.get_stock_boards_with_lazy_fill(
+    # Single shared helper — same code path for both single and multi source.
+    entries, cold_sources, origin = stock_board_cache.get_stock_memberships(
         stock_code=stock_code,
-        source=source,
+        sources=normalized_sources,
         type=type,
         subtype=subtype,
+        cold_fill=cold_fill,
         manager=get_manager(),
     )
-    if boards is not None and len(boards) > 0:
-        return StockBoardsResponse(
-            stock_code=stock_code,
-            source=origin,
-            data=[
-                StockBoardInfo(
-                    code=b["code"],
-                    name=b["name"],
-                    type=b.get("type", ""),
-                    subtype=b.get("subtype", ""),
-                )
-                for b in boards
-            ],
-        )
 
-    # ③ Non-zhitu cold path: no upstream API → 404 + cold_source hint
-    raise HTTPException(
-        status_code=404,
-        detail={
-            "error": "cold_stock_board_data",
-            "message": (
-                f"No reverse-index for {stock_code} in {source}. "
-                f"Run `python -m stock_data.tools.build_membership_index "
-                f"--source={source}` to populate."
-            ),
-            "cold_source": True,
-        },
+    # Top-level source field:
+    # - multi-source → "merged"
+    # - single source → origin from helper (persistence / zhitu / "")
+    top_source = "merged" if len(normalized_sources) > 1 else origin
+
+    return StockBoardsResponse(
+        stock_code=stock_code,
+        source=top_source,
+        data=[
+            StockBoardInfo(
+                code=e["code"],
+                name=e["name"],
+                type=e.get("type", ""),
+                subtype=e.get("subtype", ""),
+                source=e["source"],
+            )
+            for e in entries
+        ],
+        cold_sources=cold_sources,
     )
 
 
