@@ -5,8 +5,16 @@ renamed to ``get_announcements`` in Task 7 to align with the manager's
 failover lambda (`f.get_announcements(...)`) and CninfoFetcher's method
 name. The capability flag (``DataCapability.ANNOUNCEMENT``) routes both
 fetchers through the same failover chain.
+
+The live tests at the bottom (TestGetAnnouncementsLive) hit the real
+upstream and are tagged ``@pytest.mark.live_network`` so the default
+``pytest`` run skips them via ``pyproject.toml addopts = ["-m", "not
+live_network"]``. To run them: ``pytest -m live_network
+tests/test_eastmoney_stock_announcements.py``.
 """
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 
@@ -121,3 +129,36 @@ def test_handles_missing_codes_array():
         result = fetcher.get_announcements("600519", page_size=10)
     assert len(result) == 1
     assert result[0]["type"] == ""  # type falls back to empty
+
+
+# ---------------------------------------------------------------------------
+# Live network tests (skipped by default; see module docstring).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live_network
+class TestGetAnnouncementsLive:
+    @pytest.fixture(scope="class")
+    def fetcher(self):
+        return EastMoneyFetcher()
+
+    def test_600519_returns_recent_announcements(self, fetcher):
+        result = fetcher.get_announcements("600519", page_size=5)
+        assert isinstance(result, list)
+        assert len(result) > 0, "Should return at least 1 announcement"
+        first = result[0]
+        assert "title" in first and first["title"]
+        assert "url" in first and "AN" in first["url"], \
+            f"URL should contain announcement code: {first}"
+        assert "date" in first and len(first["date"]) == 10
+
+    def test_pagination_works(self, fetcher):
+        """page_index=2 should return different (earlier) announcements than page=1."""
+        page1 = fetcher.get_announcements("600519", page_size=5, page_index=1)
+        page2 = fetcher.get_announcements("600519", page_size=5, page_index=2)
+        assert len(page1) > 0
+        assert len(page2) > 0
+        # Dates should be different (page2 is older)
+        if page1 and page2:
+            assert page1[0]["date"] >= page2[0]["date"], \
+                f"page1 should be newer than page2: {page1[0]['date']} vs {page2[0]['date']}"

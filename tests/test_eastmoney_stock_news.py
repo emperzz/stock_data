@@ -1,5 +1,13 @@
-"""Tests for EastMoneyFetcher.get_stock_news (np-listapi getListInfo direct HTTP)."""
+"""Tests for EastMoneyFetcher.get_stock_news (np-listapi getListInfo direct HTTP).
+
+The live tests at the bottom (TestGetStockNewsLive) hit the real upstream
+and are tagged ``@pytest.mark.live_network`` so the default ``pytest`` run
+skips them via ``pyproject.toml addopts = ["-m", "not live_network"]``. To
+run them: ``pytest -m live_network tests/test_eastmoney_stock_news.py``.
+"""
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 
@@ -82,3 +90,29 @@ def test_invalid_code_returns_empty_list():
         result = fetcher.get_stock_news("", limit=10)
     assert result == []
     m.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Live network tests (skipped by default; see module docstring).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live_network
+class TestGetStockNewsLive:
+    @pytest.fixture(scope="class")
+    def fetcher(self):
+        return EastMoneyFetcher()
+
+    def test_600519_returns_recent_news(self, fetcher):
+        result = fetcher.get_stock_news("600519", limit=5)
+        assert isinstance(result, list)
+        assert len(result) > 0, "Should return at least 1 news item"
+        first = result[0]
+        assert "title" in first and first["title"], f"Missing title: {first}"
+        assert "url" in first and first["url"], f"Missing url: {first}"
+        assert "publish_date" in first
+        assert len(first["publish_date"]) == 10, f"Date should be YYYY-MM-DD: {first}"
+
+    def test_limit_respected(self, fetcher):
+        result = fetcher.get_stock_news("600519", limit=3)
+        assert len(result) <= 3

@@ -1,4 +1,11 @@
-"""Tests for /stocks/{code}/news endpoint."""
+"""Tests for /stocks/{code}/news endpoint.
+
+The live test at the bottom (``test_stocks_news_endpoint_live``) hits the
+real upstream and is tagged ``@pytest.mark.live_network`` so the default
+``pytest`` run skips it via ``pyproject.toml addopts = ["-m", "not
+live_network"]``. To run it: ``pytest -m live_network
+tests/test_stocks_news_endpoint.py``.
+"""
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -59,3 +66,21 @@ def test_endpoint_default_limit(client):
     body = resp.json()
     assert body["limit"] == 20
     m.return_value.get_stock_news.assert_called_once_with("600519", limit=20)
+
+
+# ---------------------------------------------------------------------------
+# Live network tests (skipped by default; see module docstring).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live_network
+def test_stocks_news_endpoint_live(client):
+    """End-to-end: /api/v1/stocks/600519/news returns EastMoneyFetcher news."""
+    resp = client.get("/api/v1/stocks/600519/news?limit=5")
+    assert resp.status_code == 200, f"Got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["code"] == "600519"
+    assert "data" in body
+    assert len(body["data"]) > 0, "Live news feed should not be empty"
+    assert body["source"] == "EastMoneyFetcher", \
+        f"Expected EastMoneyFetcher, got {body['source']}"

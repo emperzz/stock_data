@@ -6,8 +6,16 @@ and cold_fill=true, the fetcher is called and rows are written via
 ``upsert_membership_for_stock_boards``. When the fetcher returns ``None``
 (invalid stock code), the response is a 200 with eastmoney in ``cold_sources``
 (no 500).
+
+The live test at the bottom (``test_stocks_boards_eastmoney_source_live``)
+hits the real upstream and is tagged ``@pytest.mark.live_network`` so the
+default ``pytest`` run skips it via ``pyproject.toml addopts = ["-m", "not
+live_network"]``. To run it: ``pytest -m live_network
+tests/test_stock_boards_eastmoney_source.py``.
 """
 from unittest.mock import patch
+
+import pytest
 
 
 def _make_fake_manager(*, boards, fetcher_name="EastMoneyFetcher"):
@@ -142,3 +150,21 @@ def test_eastmoney_source_routes_through_persistence_layer(client):
     assert len(body["data"]) == 1
     assert body["data"][0]["code"] == "BK0001"
     assert body["cold_sources"] == []
+
+
+# ---------------------------------------------------------------------------
+# Live network tests (skipped by default; see module docstring).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live_network
+def test_stocks_boards_eastmoney_source_live(client):
+    """End-to-end: ?source=eastmoney returns eastmoney data via persistence cold-fill."""
+    resp = client.get("/api/v1/stocks/600519/boards?source=eastmoney")
+    # Acceptable: 200 (data) or 502 (no fetcher in env)
+    assert resp.status_code in (200, 502), f"Got {resp.status_code}: {resp.text}"
+    if resp.status_code == 200:
+        body = resp.json()
+        assert "data" in body
+        # Should have at least one board
+        assert len(body["data"]) > 0, "Live boards should not be empty"

@@ -1,4 +1,10 @@
-"""Tests for EastMoneyFetcher.get_stock_boards (push2 slist/get direct HTTP)."""
+"""Tests for EastMoneyFetcher.get_stock_boards (push2 slist/get direct HTTP).
+
+The live tests at the bottom (TestGetStockBoardsLive) hit the real upstream
+and are tagged ``@pytest.mark.live_network`` so the default ``pytest`` run
+skips them via ``pyproject.toml addopts = ["-m", "not live_network"]``. To
+run them: ``pytest -m live_network tests/test_eastmoney_stock_boards.py``.
+"""
 import json
 from unittest.mock import MagicMock, patch
 
@@ -76,3 +82,38 @@ def test_raises_on_network_error():
         pytest.raises(DataFetchError),
     ):
         fetcher.get_stock_boards("600519", source="eastmoney")
+
+
+# ---------------------------------------------------------------------------
+# Live network tests (skipped by default; see module docstring).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live_network
+class TestGetStockBoardsLive:
+    @pytest.fixture(scope="class")
+    def fetcher(self):
+        return EastMoneyFetcher()
+
+    def test_600519_returns_real_boards(self, fetcher):
+        """贵州茅台: page shows 食品饮料/白酒Ⅲ/白酒Ⅱ/贵州板块/酿酒概念 as first 5."""
+        result = fetcher.get_stock_boards("600519", source="eastmoney")
+        assert result is not None, "Should not return None for valid SH code"
+        assert len(result) > 0, "贵州茅台 should belong to multiple boards"
+        codes = {b["code"] for b in result}
+        names = {b["name"] for b in result}
+        # BK1277 = 白酒Ⅱ, BK0438 = 食品饮料 — both should appear
+        assert "BK1277" in codes, f"Expected BK1277 in {codes}"
+        assert any("白酒" in n for n in names), f"Expected 白酒* in {names}"
+        assert any("食品饮料" in n or "酿酒" in n for n in names), \
+            f"Expected 食品饮料/酿酒 in {names}"
+
+    def test_000001_sz_secid(self, fetcher):
+        """平安银行 (SZ) — verify secid construction works for non-SH codes."""
+        result = fetcher.get_stock_boards("000001", source="eastmoney")
+        assert result is not None
+        assert len(result) > 0
+
+    def test_invalid_code_returns_none(self, fetcher):
+        result = fetcher.get_stock_boards("", source="eastmoney")
+        assert result is None
