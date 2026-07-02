@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, patch
 
 from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 
-
 SAMPLE_RESPONSE = {
     "code": 1, "message": "success",
     "data": {
@@ -51,7 +50,7 @@ def test_returns_normalized_list():
     assert first["media_name"] == "CMS"
 
 
-def test_uses_mTypeAndCode_for_secid():
+def test_uses_mTypeAndCode_for_secid():  # noqa: N802 (upstream param is mTypeAndCode)
     fetcher = EastMoneyFetcher()
     with patch.object(fetcher._session, "get", return_value=_mock_resp(SAMPLE_RESPONSE)) as m:
         fetcher.get_stock_news("600519", limit=5)

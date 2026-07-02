@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
-
 
 SAMPLE_RESPONSE = {
     "rc": 0,
@@ -71,6 +71,8 @@ def test_returns_empty_list_on_empty_data():
 
 def test_raises_on_network_error():
     fetcher = EastMoneyFetcher()
-    with patch.object(fetcher._session, "get", side_effect=Exception("timeout")):
-        with pytest.raises(Exception):
-            fetcher.get_stock_boards("600519", source="eastmoney")
+    with (
+        patch.object(fetcher._session, "get", side_effect=Exception("timeout")),
+        pytest.raises(DataFetchError),
+    ):
+        fetcher.get_stock_boards("600519", source="eastmoney")

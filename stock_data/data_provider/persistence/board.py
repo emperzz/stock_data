@@ -593,9 +593,7 @@ def get_stock_memberships(
         coldfill_sources = {"zhitu", "eastmoney"} & {e["source"] for e in entries}
         if coldfill_sources and len(sources) == 1:
             origin_summary = next(iter(coldfill_sources))
-        elif coldfill_sources:
-            origin_summary = "mixed"
-        elif len(sources) > 1:
+        elif coldfill_sources or len(sources) > 1:
             origin_summary = "mixed"
         else:
             origin_summary = "persistence"

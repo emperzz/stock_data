@@ -9,9 +9,6 @@ and cold_fill=true, the fetcher is called and rows are written via
 """
 from unittest.mock import patch
 
-import pytest
-from fastapi.testclient import TestClient
-
 
 def _make_fake_manager(*, boards, fetcher_name="EastMoneyFetcher"):
     """Build a MagicMock manager whose get_stock_boards returns (boards, name)."""
