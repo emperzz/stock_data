@@ -241,6 +241,7 @@ class EastMoneyFetcher(BaseFetcher):
         | DataCapability.NEWS_FLASH
         | DataCapability.STOCK_BOARD  # NEW: migrated from AkshareFetcher
         | DataCapability.STOCK_NEWS  # NEW: 个股新闻
+        | DataCapability.ANNOUNCEMENT  # NEW (Task 7): joins failover chain alongside CninfoFetcher
     )
 
     def is_available(self) -> bool:
@@ -1028,7 +1029,7 @@ class EastMoneyFetcher(BaseFetcher):
                 continue
         return out
 
-    def get_stock_announcements(
+    def get_announcements(
         self, code: str, page_size: int = 30, page_index: int = 1
     ) -> list[dict]:
         """Get corporate announcements via np-anotice-stock.
@@ -1040,6 +1041,12 @@ class EastMoneyFetcher(BaseFetcher):
 
         Returns a list of normalized dicts with fields:
             title, type (e.g. "A,SHA"), date (YYYY-MM-DD), url.
+
+        Note: the method was originally named ``get_stock_announcements``;
+        renamed to ``get_announcements`` in Task 7 so the manager's
+        ``_with_failover(DataCapability.ANNOUNCEMENT, ...)`` lambda
+        (``lambda f: f.get_announcements(code, page_size)``) can call it
+        alongside CninfoFetcher without per-fetcher method overrides.
         """
         code = normalize_stock_code(code)
         if not code:
@@ -1072,19 +1079,19 @@ class EastMoneyFetcher(BaseFetcher):
             )
         except Exception as e:
             raise DataFetchError(
-                f"[EastMoneyFetcher] get_stock_announcements({code}) network error: {e}"
+                f"[EastMoneyFetcher] get_announcements({code}) network error: {e}"
             ) from e
 
         if resp.status_code != 200:
             raise DataFetchError(
-                f"[EastMoneyFetcher] get_stock_announcements({code}) HTTP {resp.status_code}"
+                f"[EastMoneyFetcher] get_announcements({code}) HTTP {resp.status_code}"
             )
 
         try:
             payload = resp.json()
         except ValueError as e:
             raise DataFetchError(
-                f"[EastMoneyFetcher] get_stock_announcements({code}) bad JSON: {e}"
+                f"[EastMoneyFetcher] get_announcements({code}) bad JSON: {e}"
             ) from e
 
         data = payload.get("data") or {}
