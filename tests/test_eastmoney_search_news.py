@@ -15,6 +15,7 @@ import pytest
 
 from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
+from stock_data.data_provider.fetchers.eastmoney._endpoints import URLS
 
 FIXTURE_PATH = "tests/fixtures/news_search_jsonp.txt"
 
@@ -279,8 +280,8 @@ class TestSessionWarmup:
             fetcher.search_news(q="603777")
 
         assert len(mock_get.call_args_list) == 2
-        assert mock_get.call_args_list[0].args[0] == EastMoneyFetcher._NEWS_WARMUP_URL
-        assert mock_get.call_args_list[1].args[0] == EastMoneyFetcher._NEWS_SEARCH_URL
+        assert mock_get.call_args_list[0].args[0] == URLS.NEWS_WARMUP
+        assert mock_get.call_args_list[1].args[0] == URLS.NEWS_SEARCH
         assert fetcher._news_warmed is True
 
     def test_warmup_skipped_on_subsequent_calls(self):
@@ -297,7 +298,7 @@ class TestSessionWarmup:
         # Three searches, zero warmups.
         assert len(mock_get.call_args_list) == 3
         for call in mock_get.call_args_list:
-            assert call.args[0] == EastMoneyFetcher._NEWS_SEARCH_URL
+            assert call.args[0] == URLS.NEWS_SEARCH
 
     def test_warmup_failure_is_non_fatal(self):
         """A network blip during warmup must not block the actual search."""

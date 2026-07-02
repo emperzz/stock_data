@@ -371,6 +371,51 @@ def test_get_all_boards_index_returns_empty():
         mock_get.assert_not_called()
 
 
+def test_get_board_stocks_known_concept_does_not_fall_through_to_industry():
+    """Regression for Phase 4 (2026-07-02): when ``board_type`` is passed
+    (e.g. from the persistence layer's SQLite cache), the fetcher
+    dispatches directly — no silent concept→industry fallback. Industry
+    must NOT be called. Pre-fix behaviour: a transient upstream failure
+    returning ``[]`` from concept silently re-routed to industry.
+    """
+    fetcher = EastMoneyFetcher()
+    with patch.object(fetcher, "get_concept_board_stocks", return_value=[]) as mock_c, \
+         patch.object(fetcher, "get_industry_board_stocks", return_value=[{"stock_code": "WRONG"}]) as mock_i:
+        result = fetcher.get_board_stocks(
+            "BK1048", source="eastmoney", board_type="concept",
+        )
+    mock_c.assert_called_once()
+    mock_i.assert_not_called()
+    assert result == []
+
+
+def test_get_board_stocks_known_industry_does_not_consult_concept():
+    """Mirror of the above for the industry branch."""
+    fetcher = EastMoneyFetcher()
+    with patch.object(fetcher, "get_concept_board_stocks", return_value=[{"stock_code": "WRONG"}]) as mock_c, \
+         patch.object(fetcher, "get_industry_board_stocks", return_value=[{"stock_code": "600519"}]) as mock_i:
+        result = fetcher.get_board_stocks(
+            "BK0481", source="eastmoney", board_type="industry",
+        )
+    mock_i.assert_called_once()
+    mock_c.assert_not_called()
+    assert result == [{"stock_code": "600519"}]
+
+
+def test_get_board_stocks_unknown_board_type_uses_legacy_fallback():
+    """When ``board_type`` is ``None`` (cold cache), the legacy
+    concept→industry fallback path is preserved AND now logged at INFO
+    so the fallback is no longer silent.
+    """
+    fetcher = EastMoneyFetcher()
+    with patch.object(fetcher, "get_concept_board_stocks", return_value=[]) as mock_c, \
+         patch.object(fetcher, "get_industry_board_stocks", return_value=[{"stock_code": "OK"}]) as mock_i:
+        fetcher.get_board_stocks("BKUNKNOWN", source="eastmoney")
+    mock_c.assert_called_once()
+    mock_i.assert_called_once()
+
+
+
 def test_get_board_stocks_tries_concept_then_industry():
     """concept 返回空时回退到 industry."""
     fetcher = EastMoneyFetcher()

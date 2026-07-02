@@ -727,20 +727,46 @@ class DataFetcherManager:
         return boards, name
 
     def get_board_stocks(
-        self, board_code: str, source: str, include_quote: bool = False
+        self,
+        board_code: str,
+        source: str,
+        include_quote: bool = False,
+        board_type: str | None = None,
     ) -> tuple[list[dict], str]:
-        """Get stocks belonging to a board from the named source."""
+        """Get stocks belonging to a board from the named source.
+
+        Args:
+            board_code: 6-digit ``BK`` prefixed board code.
+            source: fetcher name (e.g. ``"eastmoney"``).
+            include_quote: attach realtime quote fields when supported.
+            board_type: When ``"concept"`` or ``"industry"`` is supplied,
+                the fetcher dispatches directly without concept↔industry
+                fallback. ``None`` (default) keeps the legacy fallback
+                for fetchers that haven't implemented the explicit
+                dispatch. Phase 4 (2026-07-02) wired this through to
+                fix EastMoney's silent concept→industry fallback on a
+                transient upstream 5xx — see BoardsMixin.get_board_stocks.
+
+        Returns:
+            ``(stocks, fetcher_name)`` — same shape as before; ``board_type``
+            is only used to steer the fetcher, never returned in the
+            result.
+        """
+        def call(f):
+            kwargs = {"source": source, "include_quote": include_quote}
+            # Only pass board_type when explicitly set — keeps the call
+            # shape identical for callers that haven't migrated yet
+            # (assert_called_once_with tests in test_board_source_routing).
+            if board_type is not None:
+                kwargs["board_type"] = board_type
+            return f.get_board_stocks(board_code, **kwargs), f.name
+
         stocks, name = self._with_source(
             source=source,
             capability=DataCapability.STOCK_BOARD,
             market="csi",
             op_label=f"board stocks {board_code} ({source})",
-            call=lambda f: (
-                f.get_board_stocks(
-                    board_code, source=source, include_quote=include_quote,
-                ),
-                f.name,
-            ),
+            call=call,
         )
         return stocks, name
 

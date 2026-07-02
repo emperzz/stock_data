@@ -66,8 +66,11 @@ def test_get_board_list_returns_tuple(monkeypatch):
 def test_get_board_stocks_returns_tuple(monkeypatch):
     """board.get_board_stocks 应该返回 (stocks, origin)."""
     # Mock manager — unified entry point only.
+    # Phase 4 (2026-07-02): real manager now also accepts ``board_type=`` to
+    # steer the fetcher; ``**_`` keeps the mock interface-compatible for any
+    # future kwargs (e.g. include_quote stays positional too).
     class _MockManager:
-        def get_board_stocks(self, board_code, source="eastmoney", include_quote=False):
+        def get_board_stocks(self, board_code, source="eastmoney", include_quote=False, **_):
             return ([{"stock_code": "600519", "stock_name": "贵州茅台"}], "mock_fetcher")
 
     # 跳过 SQLite, 强制走 fetcher 路径

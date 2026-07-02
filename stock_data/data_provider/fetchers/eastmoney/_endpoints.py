@@ -1,0 +1,218 @@
+"""Static endpoint metadata and field-code maps for EastMoneyFetcher.
+
+This module is data-only — no ``self``, no HTTP, no Fetcher state. It
+centralises every EastMoney URL / report-name / sort-default / fs-prefix
+that the rest of the fetcher references by symbolic name.
+
+Two top-level singletons are exported:
+- ``URLS``  (``_EastMoneyURLs``) — the 6 push2/news subdomain URLs.
+- ``ENDPOINTS``  (``_Endpoints``) — every API entry the methods call:
+  dataclass entries for ``datacenter-web.eastmoney.com`` (7 endpoints),
+  dict entries for ``push2.eastmoney.com`` fund-flow + board clist,
+  plus ``reportapi`` and PDF.
+
+Field-code maps at the bottom of the module decouple the upstream
+``f1,f2,f3,...`` opaque field codes from the public JSON response
+keys. The mixins below consume these by lookup.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+# ---------------------------------------------------------------------------
+# Shared constants
+# ---------------------------------------------------------------------------
+
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+
+
+class _EastMoneyURLs:
+    """EastMoney URL registry — consolidated (was 6 scattered ``_*_URL``
+    constants before Phase 1). Each member is the full upstream URL for one
+    push2/news domain endpoint.
+    """
+
+    STOCK_BOARDS = "https://push2.eastmoney.com/api/qt/slist/get"
+    STOCK_NEWS = "https://np-listapi.eastmoney.com/comm/web/getListInfo"
+    STOCK_ANNOUNCEMENTS = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+    NEWS_SEARCH = "https://search-api-web.eastmoney.com/search/jsonp"
+    NEWS_WARMUP = "https://so.eastmoney.com/news/s"
+    FLASH_NEWS = "https://np-weblist.eastmoney.com/comm/web/getFastNewsList"
+
+
+URLS = _EastMoneyURLs()
+
+
+# ---------------------------------------------------------------------------
+# Per-endpoint metadata
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _DCEndpoint:
+    """Descriptor for a single ``datacenter-web.eastmoney.com`` API endpoint.
+    Used by ``_datacenter_query`` to build the standard ``reportName /
+    columns / filter / pageSize / sortColumns / sortTypes / source / client``
+    request payload, and by ``_datacenter_records`` to apply the
+    ``code_filter_field`` (most use ``SECURITY_CODE``; margin uses ``SCODE``).
+    """
+
+    report_name: str
+    sort_columns: str = ""
+    sort_types: str = "-1"
+    page_size: int = 50
+    code_filter_field: str = "SECURITY_CODE"  # some endpoints use "SCODE"
+
+
+class _Endpoints:
+    """Central registry of every EastMoney API endpoint this fetcher uses.
+
+    Each entry declares the upstream parameters needed for one
+    ``_datacenter_query`` or ``_push2_query`` call. Methods reference entries
+    by name so URL / reportName / sort defaults live in one place — adding a
+    new endpoint is one registry line + one wrapper method, no inline soup.
+    """
+
+    # -- datacenter-web endpoints ----------------------------------------
+
+    DRAGON_TIGER = _DCEndpoint(
+        report_name="RPT_DAILYBILLBOARD_DETAILSNEW",
+        sort_columns="TRADE_DATE",
+        page_size=50,
+    )
+    DRAGON_TIGER_BUY_SEATS = _DCEndpoint(
+        report_name="RPT_BILLBOARD_DAILYDETAILSBUY",
+        sort_columns="BUY",
+        page_size=10,
+    )
+    DRAGON_TIGER_SELL_SEATS = _DCEndpoint(
+        report_name="RPT_BILLBOARD_DAILYDETAILSSELL",
+        sort_columns="SELL",
+        page_size=10,
+    )
+    DAILY_DRAGON_TIGER = _DCEndpoint(
+        report_name="RPT_DAILYBILLBOARD_DETAILSNEW",
+        sort_columns="BILLBOARD_NET_AMT",
+        page_size=500,
+    )
+    MARGIN_TRADING = _DCEndpoint(
+        report_name="RPTA_WEB_RZRQ_GGMX",
+        sort_columns="DATE",
+        code_filter_field="SCODE",
+    )
+    BLOCK_TRADE = _DCEndpoint(
+        report_name="RPT_DATA_BLOCKTRADE",
+        sort_columns="TRADE_DATE",
+    )
+    HOLDER_NUM = _DCEndpoint(
+        report_name="RPT_HOLDERNUMLATEST",
+        sort_columns="END_DATE",
+    )
+    DIVIDEND = _DCEndpoint(
+        report_name="RPT_SHAREBONUS_DET",
+        sort_columns="EX_DIVIDEND_DATE",
+    )
+
+    # -- push2 / push2his ------------------------------------------------
+
+    FUND_FLOW_MINUTE = {
+        "url": "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
+        "params_template": {"klt": 1},
+        "fields1": "f1,f2,f3,f7",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57",
+    }
+    FUND_FLOW_DAILY = {
+        "url": "https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get",
+        "params_template": {"lmt": "120"},
+        "fields1": "f1,f2,f3,f7",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+    }
+
+    # -- reportapi -------------------------------------------------------
+
+    REPORT_LIST_URL = "https://reportapi.eastmoney.com/report/list"
+
+    # -- PDF -------------------------------------------------------------
+
+    PDF_URL_TPL = "https://pdf.dfcfw.com/pdf/H3_{info_code}_1.pdf"
+
+    # -- Board clist (概念 / 行业 板块清单与成分股) --------------------
+    # Direct push2.eastmoney.com clist. fs / fid / fields align with akshare's
+    # stock_board_*_em / stock_board_*_cons_em request shape; field-code →
+    # output key translations live in the _BOARD_*_FIELD_MAP constants below.
+    BOARD_LIST_CONCEPT = {
+        "url": "https://push2.eastmoney.com/api/qt/clist/get",
+        "fs": "m:90+t:3+f:!50",
+        "fid": "f12",
+        "fields": "f2,f3,f4,f8,f14,f15,f20,f104,f105,f128,f136",
+    }
+    BOARD_LIST_INDUSTRY = {
+        "url": "https://push2.eastmoney.com/api/qt/clist/get",
+        "fs": "m:90+t:2+f:!50",
+        "fid": "f3",
+        "fields": "f2,f3,f4,f8,f14,f16,f20,f104,f105,f128,f136",
+    }
+    BOARD_COMPONENTS = {
+        "url": "https://push2.eastmoney.com/api/qt/clist/get",
+        "fs_template": "b:{board_code}+f:!50",
+        "fid": "f3",
+        "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f14,f16,f17,f18,f20,f21,f22",
+    }
+
+
+ENDPOINTS = _Endpoints()
+
+
+# ---------------------------------------------------------------------------
+# Board field-code → output key mappings
+# ---------------------------------------------------------------------------
+#
+# EastMoney's clist / push2 API uses ``f1,f2,f3,...`` (internal opaque id)
+# as the ``fields`` query param; ``data.diff`` is either per-field dicts or
+# positional lists aligned with the ``fields`` order. The maps below translate
+# the field codes to the JSON keys the route layer exposes.
+#
+# Field-code semantics (from ``docs/stock_board_concept_em.py`` and
+# ``docs/stock_board_industry_em.py`` — akshare's reference impl):
+# - concept board list:  f14=board code, f15=board name
+# - industry board list: f14=board code, f16=board name (field set skewed by f13)
+# - board components:    f14=stock code, f16=stock name, f17=high, f18=low,
+#                        f20=open, f21=prev_close, f22=PB (NOT the same as
+#                        the per-stock field-code semantics — do not assume
+#                        ``f12=code`` for boards).
+
+_BOARD_LIST_FIELD_MAP: dict[str, str] = {
+    "f2": "price",
+    "f3": "change_pct",
+    "f4": "change_amount",
+    "f8": "turnover_rate",
+    "f14": "code",
+    "f20": "total_mv",
+    "f104": "up_count",
+    "f105": "down_count",
+    "f128": "leading_stock",
+    "f136": "leading_stock_pct",
+}
+# Name field differs between concept / industry endpoints; cannot fold into
+# the map above without an extra dispatch.
+_CONCEPT_LIST_NAME_FIELD = "f15"
+_INDUSTRY_LIST_NAME_FIELD = "f16"
+
+_BOARD_COMPONENTS_FIELD_MAP: dict[str, str] = {
+    "f2": "price",
+    "f3": "change_pct",
+    "f4": "change_amount",
+    "f5": "volume",
+    "f6": "amount",
+    "f7": "amplitude",
+    "f8": "turnover_rate",
+    "f9": "pe_ratio",
+    "f14": "stock_code",
+    "f16": "stock_name",
+    "f17": "high",
+    "f18": "low",
+    "f20": "open",
+    "f21": "pre_close",
+    "f22": "pb_ratio",
+}

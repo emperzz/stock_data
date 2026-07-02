@@ -277,11 +277,19 @@ def get_board_stocks(
     # then falls back to industry; Zhitu is type-agnostic). We still consult
     # the SQLite board_type cache above (in the cache-hit fast path) so a
     # known concept/industry board avoids the fetcher's fallback cost.
-    _ = _get_board_type(board_code, source, manager)  # warms the board_type cache
+    #
+    # Phase 4 (2026-07-02): capture the cached board_type and pass it
+    # through. Previously we warmed the cache but discarded the result,
+    # letting EastMoneyFetcher.get_board_stocks silently fall back to
+    # the OPPOSITE board kind when concept returned [] from a transient
+    # upstream failure (bug). Now: known board_type → direct dispatch,
+    # no fallback.
+    board_type = _get_board_type(board_code, source, manager)
     stocks, fetcher_source = manager.get_board_stocks(
         board_code,
         source=source,
         include_quote=include_quote,
+        board_type=board_type,
     )
 
     if stocks:
