@@ -686,6 +686,15 @@ class EastMoneyFetcher(BaseFetcher):
         return None
 
     # ------------------------------------------------------------------
+    # Stock → boards (push2 slist/get, used by 所属板块 widget)
+    # ------------------------------------------------------------------
+    # Verified 2026-07-02: live quote page at quote.eastmoney.com calls exactly
+    # this endpoint with secid={market}.{code} to render the 所属板块 widget.
+    _STOCK_BOARDS_URL = "https://push2.eastmoney.com/api/qt/slist/get"
+    _STOCK_BOARDS_UT = "fa5fd1943c7b386f172d6893dbfba10b"  # shared with other push2 endpoints
+    _STOCK_BOARDS_FIELDS = "f14,f12,f13,f3,f152,f4,f128,f140,f141"
+
+    # ------------------------------------------------------------------
     # News search (https://search-api-web.eastmoney.com/search/jsonp)
     # ------------------------------------------------------------------
 
@@ -1356,8 +1365,86 @@ class EastMoneyFetcher(BaseFetcher):
             board_code, source=source, include_quote=include_quote,
         )
 
-    def get_stock_boards(self, stock_code: str, source: str = "eastmoney") -> list[dict] | None:
-        """Get boards a stock belongs to. EastMoney does NOT expose this
-        lookup directly, so return ``None`` to signal "source doesn't support this".
+    @staticmethod
+    def _market_prefix(code: str) -> int:
+        """Return EastMoney market prefix: 1=SH, 0=SZ, 2=BSE.
+
+        Matches the convention used by push2 endpoints (secid=1.600519).
         """
-        return None
+        if code.startswith(("60", "68", "9", "5")):
+            return 1  # SH
+        if code.startswith(("8", "4")):
+            return 2  # BSE
+        return 0  # SZ
+
+    def get_stock_boards(self, stock_code: str, source: str = "eastmoney") -> list[dict] | None:
+        """Get boards a stock belongs to via push2 slist/get.
+
+        Verified 2026-07-02: live EastMoney quote page calls exactly this endpoint
+        with secid={market}.{code} to render the "所属板块" widget.
+
+        Returns a list of normalized dicts (empty list if upstream has no data).
+        Returns None if the stock code is invalid (signals "source unavailable"
+        to the persistence layer).
+        """
+        code = normalize_stock_code(stock_code)
+        if not code:
+            return None
+        market = self._market_prefix(code)
+        secid = f"{market}.{code}"
+
+        params = {
+            "fltt": 1,
+            "invt": 2,
+            "fields": self._STOCK_BOARDS_FIELDS,
+            "secid": secid,
+            "ut": self._STOCK_BOARDS_UT,
+            "pi": 0, "po": 1, "np": 1, "pz": 50, "spt": 3,
+            "wbp2u": "|0|0|0|web",
+        }
+        try:
+            resp = self._session.get(
+                self._STOCK_BOARDS_URL,
+                params=params,
+                headers={"Referer": "https://quote.eastmoney.com/"},
+                timeout=15,
+            )
+        except Exception as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_stock_boards({code}) network error: {e}"
+            ) from e
+
+        if resp.status_code != 200:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_stock_boards({code}) HTTP {resp.status_code}"
+            )
+
+        try:
+            payload = resp.json()
+        except ValueError as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_stock_boards({code}) bad JSON: {e}"
+            ) from e
+
+        data = payload.get("data") or {}
+        rows = data.get("diff") or []
+        out: list[dict] = []
+        for r in rows:
+            try:
+                out.append({
+                    "code": r["f12"],
+                    "name": r["f14"],
+                    # EastMoney doesn't cleanly distinguish concept/industry at
+                    # the stock-membership level (f152=2 for both). Default to
+                    # "industry" which is the most common case for A-share names.
+                    "type": "industry",
+                    "subtype": "industry",
+                    "change_pct": (r.get("f3") or 0) / 100,
+                    "change_amount": (r.get("f4") or 0) / 100,
+                    "leading_stock_code": r.get("f140", ""),
+                    "leading_stock_name": r.get("f128", ""),
+                })
+            except KeyError as e:
+                logger.warning(f"[EastMoneyFetcher] skipping malformed board row: {e}")
+                continue
+        return out

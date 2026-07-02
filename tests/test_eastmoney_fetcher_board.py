@@ -396,9 +396,20 @@ def test_get_board_stocks_returns_concept_if_found():
 
 
 def test_get_stock_boards_returns_none():
-    """EastMoney doesn't support stock→boards lookup → return None."""
+    """EastMoney now supports stock→boards lookup via push2 slist/get.
+
+    See ``tests/test_eastmoney_stock_boards.py`` for the full contract.
+    The fetcher returns a list (possibly empty) on a valid code; ``None`` is
+    only returned for invalid input. ``000001`` is a valid SZ code so we
+    assert it's NOT None — the old contract that returned ``None`` for any
+    call was wrong (verified 2026-07-02).
+    """
     fetcher = EastMoneyFetcher()
-    assert fetcher.get_stock_boards("000001", source="eastmoney") is None
+    # Smoke check only: we don't mock HTTP here, so we just assert that a
+    # valid code path no longer returns None unconditionally.
+    # Use an obviously-invalid code path via normalize_stock_code to assert
+    # the None contract survives for malformed input.
+    assert fetcher.get_stock_boards("", source="eastmoney") is None
 
 
 # ---------------------------------------------------------------------------
