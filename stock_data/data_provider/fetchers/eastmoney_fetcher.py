@@ -240,6 +240,7 @@ class EastMoneyFetcher(BaseFetcher):
         | DataCapability.NEWS_SEARCH
         | DataCapability.NEWS_FLASH
         | DataCapability.STOCK_BOARD  # NEW: migrated from AkshareFetcher
+        | DataCapability.STOCK_NEWS  # NEW: 个股新闻
     )
 
     def is_available(self) -> bool:

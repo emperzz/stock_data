@@ -164,6 +164,7 @@ class DataCapability(Flag):
     STOCK_INFO = auto()  # 公司画像（上市日期/概念/经营范围/注册地/总股本等）
     NEWS_SEARCH = auto()  # 新闻搜索（关键词 → 列表）
     NEWS_FLASH = auto()  # 全球财经快讯（7×24 实时推送流）
+    STOCK_NEWS = auto()  # 个股新闻（按股票代码 → 列表）
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -206,6 +207,7 @@ CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.STOCK_INFO: "get_stock_info",
     DataCapability.NEWS_SEARCH: "search_news",
     DataCapability.NEWS_FLASH: "fetch_flash_news",
+    DataCapability.STOCK_NEWS: "get_stock_news",
 }
 
 

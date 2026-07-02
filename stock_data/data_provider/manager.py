@@ -446,6 +446,28 @@ class DataFetcherManager:
             return_source=True,
         )
 
+    # ---------- stock news (per-stock feed) ----------
+
+    def get_stock_news(
+        self, code: str, limit: int = 20
+    ) -> tuple[list[dict], str]:
+        """Get stock-specific news feed via STOCK_NEWS-capable fetchers.
+
+        Capability-based routing: only fetchers that declare ``STOCK_NEWS``
+        are tried. EastMoney is currently the sole fetcher declaring this
+        capability (np-listapi endpoint).
+
+        Returns:
+            Tuple of (list_of_news_items, fetcher_name).
+        """
+        return self._with_failover(
+            DataCapability.STOCK_NEWS,
+            "csi",
+            f"stock news {code}",
+            lambda f: f.get_stock_news(code, limit),
+            return_source=True,
+        )
+
     # ---------- news flash ----------
 
     def get_flash_news(self, limit: int = 50) -> tuple[list[dict], str]:
