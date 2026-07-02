@@ -29,8 +29,6 @@ from ..schemas import (
     BoardInfo,
     BoardKlineResponse,
     BoardListResponse,
-    BoardMembershipEntry,
-    BoardMembershipsResponse,
     BoardStockInfo,
     BoardStocksResponse,
     ErrorResponse,
@@ -386,75 +384,6 @@ def get_stock_boards(
             )
             for e in entries
         ],
-        cold_sources=cold_sources,
-    )
-
-
-@router.get(
-    "/stocks/{stock_code}/board-memberships",
-    response_model=BoardMembershipsResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Invalid type/subtype"},
-        500: {"model": ErrorResponse, "description": "Server error"},
-    },
-    tags=["boards"],
-    deprecated=True,
-)
-@endpoint_meta(
-    summary="股票所属板块（跨源视图，已弃用，请改用 /stocks/{code}/boards）",
-    markets=["csi"],
-    capabilities=["STOCK_BOARD"],
-    # No fetcher_method: this endpoint is pure DB aggregation, never calls a fetcher.
-)
-@map_errors
-def get_stock_board_memberships(
-    stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
-    type: Literal["concept", "industry", "index", "special"] | None = Query(
-        None, description="Filter by board type"
-    ),
-    subtype: str | None = Query(None, description="Filter by source-specific subtype"),
-) -> BoardMembershipsResponse:
-    """Cross-source view of all known boards a stock belongs to.
-
-    **DEPRECATED**: This endpoint is preserved for backwards compatibility.
-    New code should use ``/stocks/{code}/boards?source=...`` instead, which
-    returns a unified flat-list response with per-entry source.
-
-    Behavior preserved:
-    - Reads stock_board_membership directly (no fetcher calls; never lazy-fills)
-    - Groups entries by source in `memberships` dict
-    - Lists sources with no data in `cold_sources`
-
-    Schema unchanged.
-    """
-    if type is not None:
-        _resolve_type(type)
-
-    # All sources, no lazy-fill (legacy behavior). Same helper as the unified
-    # endpoint — only the response shaping differs.
-    entries, cold_sources, _ = stock_board_cache.get_stock_memberships(
-        stock_code=stock_code,
-        sources=list(stock_board_cache.VALID_SOURCES),
-        type=type,
-        subtype=subtype,
-        cold_fill=False,
-        manager=get_manager(),
-    )
-
-    by_source: dict[str, list[BoardMembershipEntry]] = {}
-    for e in entries:
-        by_source.setdefault(e["source"], []).append(
-            BoardMembershipEntry(
-                board_code=e["code"],
-                board_name=e["name"],
-                board_type=e.get("type", ""),
-                subtype=e.get("subtype", ""),
-            )
-        )
-
-    return BoardMembershipsResponse(
-        stock_code=stock_code,
-        memberships=by_source,
         cold_sources=cold_sources,
     )
 

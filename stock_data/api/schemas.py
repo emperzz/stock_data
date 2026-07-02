@@ -364,33 +364,6 @@ class StockBoardsResponse(BaseModel):
     )
 
 
-class BoardMembershipEntry(BaseModel):
-    """Single board entry in the cross-source membership view."""
-
-    board_code: str = Field(description="Source-specific board code")
-    board_name: str = Field(description="Board full name")
-    board_type: str = Field(description="Board type: concept / industry / index / special")
-    subtype: str = Field(
-        default="",
-        description="Source-specific subtype (raw string, not normalized)",
-    )
-
-
-class BoardMembershipsResponse(BaseModel):
-    """Response for /stocks/{stock_code}/board-memberships (cross-source view)."""
-
-    stock_code: str = Field(description="Stock code queried")
-    memberships: dict[str, list[BoardMembershipEntry]] = Field(
-        default_factory=dict,
-        description="Memberships grouped by source. Empty group means no data for that source.",
-    )
-    cold_sources: list[str] = Field(
-        default_factory=list,
-        description="Sources with no membership data for this stock. "
-        "Run `python -m stock_data.tools.build_membership_index --source=<src>` to populate.",
-    )
-
-
 class IndexQuote(BaseModel):
     """Index realtime quote response."""
 

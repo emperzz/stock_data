@@ -327,7 +327,7 @@ Cross-cutting behaviors implemented in `data_provider/manager.py` / `data_provid
 
 ### Persistence-Only Routing (board endpoints)
 
-**Rule**: Board-related route handlers (`/boards/...`, `/stocks/.../boards`, `/stocks/.../board-memberships`) call into `stock_data.data_provider.persistence.board` (`stock_board_cache.get_*`), **not** `DataFetcherManager` directly. Exceptions: `/control/fetcher-test` is a debug endpoint that intentionally bypasses this rule.
+**Rule**: Board-related route handlers (`/boards/...`, `/stocks/.../boards`) call into `stock_data.data_provider.persistence.board` (`stock_board_cache.get_*`), **not** `DataFetcherManager` directly. Exceptions: `/control/fetcher-test` is a debug endpoint that intentionally bypasses this rule.
 
 The fetcher API surface (`manager.*`) has exactly two consumers:
 1. `persistence/board.py` lazy fill (cold-path single upstream call → upsert)
