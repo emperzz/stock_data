@@ -99,17 +99,15 @@ class TestFetchFlashNewsErrors:
         bad = {"code": -1, "message": "rate limit", "data": None}
         with patch.object(
             self.fetcher._session, "get", return_value=_mock_response(bad)
-        ):
-            with pytest.raises(DataFetchError, match="code=-1"):
-                self.fetcher.fetch_flash_news(limit=10)
+        ), pytest.raises(DataFetchError, match="code=-1"):
+            self.fetcher.fetch_flash_news(limit=10)
 
     def test_http_error_raises(self):
         bad = _mock_response({}, status=500)
         with patch.object(
             self.fetcher._session, "get", return_value=bad
-        ):
-            with pytest.raises(DataFetchError, match="HTTP 500"):
-                self.fetcher.fetch_flash_news(limit=10)
+        ), pytest.raises(DataFetchError, match="HTTP 500"):
+            self.fetcher.fetch_flash_news(limit=10)
 
     def test_empty_fast_news_list_returns_empty(self):
         """fastNewsList 缺失或为 null → 返回 []，不抛错。"""

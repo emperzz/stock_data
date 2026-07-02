@@ -280,6 +280,7 @@ def test_eastmoney_boards_have_subtype_tagged():
     persistence layer has a uniform shape across sources.
     """
     from unittest.mock import patch
+
     from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 
     fetcher = object.__new__(EastMoneyFetcher)  # bypass __init__ (no network)

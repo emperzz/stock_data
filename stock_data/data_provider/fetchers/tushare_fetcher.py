@@ -11,7 +11,13 @@ from typing import Any
 
 import pandas as pd
 
-from ..base import BaseFetcher, DataCapability, DataFetchError, SDKFetcherMixin, normalize_stock_code
+from ..base import (
+    BaseFetcher,
+    DataCapability,
+    DataFetchError,
+    SDKFetcherMixin,
+    normalize_stock_code,
+)
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 from ..utils.code_converter import to_tushare_format
 from ..utils.normalize import get_index_type, is_index_code

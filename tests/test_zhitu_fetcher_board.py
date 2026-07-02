@@ -1,5 +1,5 @@
 """Tests for ZhituFetcher board methods."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from stock_data.data_provider.base import DataCapability
 from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher

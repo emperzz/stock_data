@@ -146,7 +146,7 @@ def list_boards(
             manager=manager,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)})
+        raise HTTPException(status_code=400, detail={"error": str(e)}) from e
 
     # Sort
     if sort_by is not None:
@@ -225,7 +225,7 @@ def get_board_stocks(
             manager=manager,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)})
+        raise HTTPException(status_code=400, detail={"error": str(e)}) from e
 
     if not stocks:
         raise HTTPException(
@@ -458,7 +458,7 @@ def get_board_history(
             days=days,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)})
+        raise HTTPException(status_code=400, detail={"error": str(e)}) from e
 
     # Reshape manager rows (list[dict]) into KLineData list. Defensive —
     # if a fetcher returns a partial row missing required fields, drop it

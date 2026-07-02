@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from stock_data.data_provider.persistence import board as board_mod
 from stock_data.data_provider.persistence import db as db_mod

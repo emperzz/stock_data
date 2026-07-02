@@ -12,13 +12,12 @@
 """
 from __future__ import annotations
 
-import pytest
-
 from unittest.mock import patch
+
+import pytest
 
 from stock_data.data_provider.base import DataCapability
 from stock_data.data_provider.manager import DataFetcherManager
-
 
 # ---------------------------------------------------------------------------
 # FakeFetcher: a minimal stub that implements the BaseFetcher contract
@@ -323,11 +322,11 @@ def test_manager_returns_source_name_in_tuple():
 
 class ProductionStyleFetcher:
     """Real-world fetcher with PascalCase name (matches actual production fetchers)."""
-    def __init__(self, capabilities, markets={"csi"}):
+    def __init__(self, capabilities, markets=None):
         self.name = "ZhituFetcher"  # PascalCase like real fetchers
         self.priority = 1
         self.supported_data_types = capabilities
-        self.supported_markets = markets
+        self.supported_markets = markets if markets is not None else {"csi"}
 
 
 def test_with_source_routes_via_slug_for_pascalcase_fetcher():

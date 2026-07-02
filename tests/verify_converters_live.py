@@ -5,6 +5,7 @@ upstream API.  Requires network access and configured tokens (.env).
 Run: python tests/verify_converters_live.py
 """
 
+import contextlib
 import sys
 import traceback
 from datetime import date
@@ -13,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from stock_data.data_provider.utils.code_converter import (
+from stock_data.data_provider.utils.code_converter import (  # noqa: E402
     to_akshare_format,
     to_baostock_format,
     to_eastmoney_secid,
@@ -57,8 +58,8 @@ def _err_info() -> str:
 # ── helpers ────────────────────────────────────────────────────────────
 
 def _fetch_akshare_kline(code: str) -> bool | None:
-    import requests
     import akshare as ak
+    import requests
     try:
         df = ak.stock_zh_a_hist(symbol=code, period="daily",
                                  start_date="2025-06-02", end_date="2025-06-06",
@@ -90,20 +91,19 @@ def _fetch_baostock_kline(bs_code: str) -> bool | None:
         return ok and len(data) > 0
     except (requests.ConnectionError, requests.Timeout,
             ConnectionError, TimeoutError, OSError):
-        try: bs.logout()
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            bs.logout()
         return None
 
 
 def _fetch_tencent_quote(prefix: str) -> bool | None:
     import urllib.request
-    import socket
     try:
         url = f"https://qt.gtimg.cn/q={prefix}"
         resp = urllib.request.urlopen(url, timeout=15)
         body = resp.read().decode("gbk")
         return len(body) > 50 and "~" in body
-    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError):
+    except (urllib.error.URLError, TimeoutError, OSError):
         return None
 
 
@@ -129,7 +129,6 @@ def _fetch_eastmoney_kline(secid: str) -> bool | None:
 
 
 def _fetch_yfinance_kline(ticker: str) -> bool | None:
-    import requests
     import yfinance as yf
     try:
         df = yf.download(tickers=ticker, start="2025-06-02", end="2025-06-06",
@@ -145,6 +144,7 @@ def _fetch_yfinance_kline(ticker: str) -> bool | None:
 
 def _fetch_zhitu_quote(stock_code: str) -> bool | None:
     import os
+
     import requests
     token = os.getenv("ZHITU_TOKEN", "")
     if not token:
@@ -163,6 +163,7 @@ def _fetch_zhitu_quote(stock_code: str) -> bool | None:
 
 def _fetch_tushare_kline(ts_code: str) -> bool | None:
     import os
+
     import requests
     import tushare as ts
     token = os.getenv("TUSHARE_TOKEN", "")

@@ -17,7 +17,8 @@ APIs:
 import logging
 import math
 import os
-from datetime import date as _date, datetime
+from datetime import date as _date
+from datetime import datetime
 from urllib.parse import urlparse
 
 from ..base import BaseFetcher, DataCapability, DataFetchError

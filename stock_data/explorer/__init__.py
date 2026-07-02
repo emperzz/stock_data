@@ -16,8 +16,8 @@ from fastapi.staticfiles import StaticFiles
 
 from ..api.endpoint_meta import REGISTRY
 from ..data_provider.base import (
-    BaseFetcher,
     CAPABILITY_TO_METHOD,
+    BaseFetcher,
     DataCapability,
 )
 from .routes import build_control_router

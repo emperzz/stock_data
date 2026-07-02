@@ -58,6 +58,13 @@ line-length = 100
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "T20", "RUF100"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# T201: CLI / verify scripts use print() for user-facing output by design.
+# B008: FastAPI route signatures and test fixtures intentionally use
+# function calls (e.g. Body(...), DataCapability.X) in default arguments.
+"stock_data/tools/**.py" = ["T201"]
+"tests/verify_converters_live.py" = ["T201", "B008"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

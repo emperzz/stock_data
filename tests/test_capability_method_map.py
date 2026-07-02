@@ -14,11 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from stock_data.data_provider.base import (
-    BaseFetcher,
-    DataCapability,
-    CAPABILITY_TO_METHOD,
-)
 from stock_data.data_provider import (
     AkshareFetcher,
     BaostockFetcher,
@@ -29,10 +24,14 @@ from stock_data.data_provider import (
     TushareFetcher,
     YfinanceFetcher,
     ZhituFetcher,
-    ZzshareFetcher,   # NEW
+    ZzshareFetcher,  # NEW
+)
+from stock_data.data_provider.base import (
+    CAPABILITY_TO_METHOD,
+    BaseFetcher,
+    DataCapability,
 )
 from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
-
 
 # Concrete fetcher subclasses used to verify that method names in
 # CAPABILITY_TO_METHOD resolve to a real method on at least one subclass
@@ -105,7 +104,7 @@ def test_known_mappings():
 # disappears from the explorer UI (the bug we hit with STOCK_INFO).
 
 
-def test_every_capability_is_in_CAPABILITY_LABELS():
+def test_every_capability_is_in_capability_labels():
     """Every DataCapability flag must have a label+icon entry in tags.CAPABILITY_LABELS.
 
     Mirrors the contract enforced by `test_every_capability_has_intent_declared`
@@ -167,7 +166,7 @@ def _parse_inline_groups(stripped: str) -> dict[str, list[str]]:
     return groups
 
 
-def test_every_capability_is_in_some_CAPABILITY_GROUP():
+def test_every_capability_is_in_some_capability_group():
     """Every DataCapability flag must appear in at least one HTML capability group.
 
     `renderContent()` filters endpoints by `epMatchesCapabilityFilter`, which

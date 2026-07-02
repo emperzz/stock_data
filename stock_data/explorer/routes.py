@@ -132,7 +132,7 @@ def build_control_router() -> APIRouter:
     @router.post("/fetcher-test")
     def control_fetcher_test(
         request: Request,
-        req: FetcherTestRequest = Body(...),
+        req: FetcherTestRequest = Body(...),  # noqa: B008 (FastAPI idiom)
     ) -> dict:
         """Invoke a single fetcher method directly, bypassing manager failover.
 

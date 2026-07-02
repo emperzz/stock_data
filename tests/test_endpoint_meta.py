@@ -1,7 +1,7 @@
 """Unit tests for stock_data/api/endpoint_meta.py."""
 import pytest
 
-from stock_data.api.endpoint_meta import EndpointMeta, REGISTRY, endpoint_meta
+from stock_data.api.endpoint_meta import REGISTRY, EndpointMeta, endpoint_meta
 
 
 class TestEndpointMetaDataclass:

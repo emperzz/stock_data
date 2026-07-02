@@ -10,7 +10,6 @@ from .base import (
     DataCapability,
     DataFetchError,
 )
-from .manager import DataFetcherManager
 
 # Types
 from .core.types import (
@@ -36,7 +35,7 @@ from .fetchers.zhitu_fetcher import ZhituFetcher
 from .fetchers.zzshare_fetcher import ZzshareFetcher
 
 # Manager factory
-from .manager import create_default_manager
+from .manager import DataFetcherManager, create_default_manager
 
 # Persistence functions (on-disk SQLite store). The legacy data_provider.cache/
 # module was removed; this package is now the single home for SQLite-backed

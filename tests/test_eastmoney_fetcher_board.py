@@ -14,7 +14,6 @@ from stock_data.data_provider.fetchers.eastmoney_fetcher import (
     EastMoneyFetcher,
 )
 
-
 # ---------------------------------------------------------------------------
 # Realistic fixture shapes
 # ---------------------------------------------------------------------------
@@ -475,7 +474,6 @@ def test_fetch_one_clist_page_retries_on_rate_limit():
         call_count["n"] += 1
         if call_count["n"] < 3:
             raise _FakeRateLimitError("curl: (56) Connection closed abruptly")
-        r = patch.object  # unused, just need an object with .json
         from unittest.mock import MagicMock
         m = MagicMock()
         m.json.return_value = success_payload
@@ -497,12 +495,11 @@ def test_fetch_one_clist_page_gives_up_after_max_attempts():
     with patch.object(
         fetcher._session, "get",
         side_effect=_FakeRateLimitError("curl: (56)"),
-    ) as mock_get:
-        with pytest.raises(_FakeRateLimitError):
-            fetcher._fetch_one_clist_page(
-                "https://push2.eastmoney.com/api/qt/clist/get",
-                {"pn": 1}, "https://quote.eastmoney.com/",
-            )
+    ) as mock_get, pytest.raises(_FakeRateLimitError):
+        fetcher._fetch_one_clist_page(
+            "https://push2.eastmoney.com/api/qt/clist/get",
+            {"pn": 1}, "https://quote.eastmoney.com/",
+        )
     # tenacity stop_after_attempt=3 → 应该尝试 3 次
     assert mock_get.call_count == 3
 

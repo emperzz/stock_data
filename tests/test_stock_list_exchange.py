@@ -16,25 +16,25 @@ class TestNormalizeExchange:
     def test_sh_lowercase(self):
         assert _normalize_exchange("sh") == "SH"
 
-    def test_SH_uppercase(self):
+    def test_sh_uppercase(self):
         assert _normalize_exchange("SH") == "SH"
 
-    def test_SHSE_full_name(self):
+    def test_shse_full_name(self):
         assert _normalize_exchange("SHSE") == "SH"
 
-    def test_SSE_alias(self):
+    def test_sse_alias(self):
         assert _normalize_exchange("SSE") == "SH"
 
     def test_sz_lowercase(self):
         assert _normalize_exchange("sz") == "SZ"
 
-    def test_SZSE_full_name(self):
+    def test_szse_full_name(self):
         assert _normalize_exchange("SZSE") == "SZ"
 
     def test_bj_lowercase(self):
         assert _normalize_exchange("bj") == "BJ"
 
-    def test_BSE_alias(self):
+    def test_bse_alias(self):
         assert _normalize_exchange("BSE") == "BJ"
 
     def test_unknown_uppercased(self):
@@ -61,7 +61,7 @@ class TestExchangeRoundTrip:
         assert len(rows) == 1
         assert rows[0]["exchange"] == "SH"
 
-    def test_round_trip_myquant_SHSE(self, tmp_path, monkeypatch):
+    def test_round_trip_myquant_shse(self, tmp_path, monkeypatch):
         from stock_data.data_provider.persistence import db, stock_list
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
         monkeypatch.setattr(db, "_conn", None, raising=False)
@@ -111,4 +111,4 @@ class TestExchangeRoundTrip:
             {"code": "000001", "name": "平安银行"},
         ])
         rows = get_cached_stocks("csi")
-        assert "exchange" in rows[0]  # noqa: SIM118
+        assert "exchange" in rows[0]

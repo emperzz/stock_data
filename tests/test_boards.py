@@ -103,8 +103,8 @@ class TestBoardAPIRoutes:
         the new board manager methods.
         """
         with (
-            patch("stock_data.data_provider.manager.DataFetcherManager.get_board_stocks") as mock_get_stocks,
-            patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get_boards,
+            patch("stock_data.data_provider.manager.DataFetcherManager.get_board_stocks") as _mock_get_stocks,
+            patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as _mock_get_boards,
             patch("stock_data.api.routes.boards.get_manager") as mock_manager,
         ):
             mock_mgr = MagicMock()

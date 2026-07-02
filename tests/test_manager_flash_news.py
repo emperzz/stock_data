@@ -64,9 +64,8 @@ class TestManagerFlashNews:
         with patch.object(
             EastMoneyFetcher, "fetch_flash_news",
             side_effect=Exception("upstream broken"),
-        ):
-            with pytest.raises(DataFetchError, match="All fetchers failed"):
-                mgr.get_flash_news(limit=10)
+        ), pytest.raises(DataFetchError, match="All fetchers failed"):
+            mgr.get_flash_news(limit=10)
 
 
 # -----------------------------------------------------------------------------
@@ -90,12 +89,12 @@ class TestFlashNewsFailover:
     def test_eastmoney_succeeds_no_failover(self):
         """Happy path: EastMoney returns, ThsFetcher never called."""
         mgr = self._mgr()
-        ThsFetcher = self._ThsFetcher
+        ths_fetcher = self._ThsFetcher
         with patch.object(
             EastMoneyFetcher, "fetch_flash_news",
             return_value=[{"title": "from em"}],
         ) as em, patch.object(
-            ThsFetcher, "fetch_flash_news",
+            ths_fetcher, "fetch_flash_news",
         ) as ths:
             data, source = mgr.get_flash_news(limit=20)
 
@@ -107,12 +106,12 @@ class TestFlashNewsFailover:
     def test_eastmoney_raises_falls_back_to_ths(self):
         """EastMoney raises → ThsFetcher is called next."""
         mgr = self._mgr()
-        ThsFetcher = self._ThsFetcher
+        ths_fetcher = self._ThsFetcher
         with patch.object(
             EastMoneyFetcher, "fetch_flash_news",
             side_effect=Exception("em broken"),
         ), patch.object(
-            ThsFetcher, "fetch_flash_news",
+            ths_fetcher, "fetch_flash_news",
             return_value=[{"title": "from ths"}],
         ) as ths:
             data, source = mgr.get_flash_news(limit=20)
@@ -127,11 +126,11 @@ class TestFlashNewsFailover:
         _is_meaningful treats [] as 'no data', so failover continues.
         """
         mgr = self._mgr()
-        ThsFetcher = self._ThsFetcher
+        ths_fetcher = self._ThsFetcher
         with patch.object(
             EastMoneyFetcher, "fetch_flash_news", return_value=[],
         ), patch.object(
-            ThsFetcher, "fetch_flash_news",
+            ths_fetcher, "fetch_flash_news",
             return_value=[{"title": "from ths"}],
         ) as ths:
             data, source = mgr.get_flash_news(limit=20)
@@ -142,8 +141,8 @@ class TestFlashNewsFailover:
     def test_both_fail_raises(self):
         """Both fetchers raise → DataFetchError, source empty."""
         mgr = self._mgr()
-        ThsFetcher = self._ThsFetcher
+        ths_fetcher = self._ThsFetcher
         with patch.object(EastMoneyFetcher, "fetch_flash_news", side_effect=Exception("em")), \
-             patch.object(ThsFetcher, "fetch_flash_news", side_effect=Exception("ths")):
-            with pytest.raises(DataFetchError, match="All fetchers failed"):
-                mgr.get_flash_news(limit=20)
+             patch.object(ths_fetcher, "fetch_flash_news", side_effect=Exception("ths")), \
+             pytest.raises(DataFetchError, match="All fetchers failed"):
+            mgr.get_flash_news(limit=20)

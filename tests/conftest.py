@@ -35,7 +35,7 @@ os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 # evolve the classification logic.
 
 # Import here to keep the import resolution explicit and avoid cycles.
-from ._network_guard import (  # noqa: E402  (must follow conftest setup above)
+from ._network_guard import (
     is_upstream_error,
     short_reason,
 )
@@ -161,8 +161,9 @@ def sample_intraday_df():
 # concern is intentionally NOT autouse here because most tests mock at
 # the manager layer and never touch the cache).
 
+from fastapi.testclient import TestClient  # noqa: E402
+
 from stock_data.server import app as _app  # noqa: E402
-from fastapi.testclient import TestClient   # noqa: E402
 
 
 @pytest.fixture(scope="session")

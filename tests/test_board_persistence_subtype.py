@@ -11,10 +11,8 @@ from __future__ import annotations
 import pytest
 
 from stock_data.data_provider.persistence.board import (
-    VALID_SUBTYPES_BY_SOURCE,
     _validate_subtype,
 )
-
 
 # ── happy paths: zhitu subtypes ──────────────────────────────────────────
 

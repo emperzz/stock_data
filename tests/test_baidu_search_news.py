@@ -10,13 +10,9 @@ from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers import baidu_fetcher
 from stock_data.data_provider.fetchers.baidu_fetcher import (
     DEFAULT_BLOCKED_DOMAINS,
-    DEFAULT_MOBILE_PREFIXES,
     DEFAULT_NEWS_DOMAINS,
     BaiduFetcher,
     _domain_matches,
-    _is_mobile_host,
-    _load_blocked_domains,
-    _load_mobile_prefixes,
     _load_news_domains,
 )
 

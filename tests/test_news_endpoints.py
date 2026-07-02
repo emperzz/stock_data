@@ -3,7 +3,6 @@ Integration tests for /api/v1/news/search and /api/v1/news/content endpoints.
 """
 from unittest.mock import patch
 
-
 # ---------------------- /api/v1/news/search ----------------------
 
 class TestNewsSearchEndpoint:

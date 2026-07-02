@@ -25,9 +25,9 @@ import random
 import sqlite3
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Callable
 
 from ..data_provider.persistence import board as board_mod
 from ..data_provider.persistence import db as db_mod

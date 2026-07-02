@@ -16,7 +16,6 @@ from datetime import datetime, timedelta
 
 import pytest
 
-
 # All tests in this module are integration tests that hit real upstream
 # APIs. Mark at module level so the conftest hook converts network errors
 # to xfail (see tests/_network_guard.py for details).

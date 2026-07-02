@@ -104,7 +104,6 @@ class TestFetchFlashNewsNormalize:
         assert result["source_domain"] == "news.10jqka.com.cn"
         # rtime=1782181568 → 2026-06-22 16:26:08 UTC; verify dynamically so the
         # test doesn't break in 2027+ (year-coupled assertions rot on Jan 1).
-        from datetime import datetime
         expected_year = datetime.utcfromtimestamp(1782181568).year
         assert result["publish_time"].startswith(f"{expected_year}-")
         assert len(result["publish_time"]) == 19  # "YYYY-MM-DD HH:MM:SS"
@@ -157,9 +156,9 @@ class TestFetchFlashNewsSinglePage:
             captured["timeout"] = timeout
             class R:
                 status_code = 200
-                def raise_for_status(self_inner):
+                def raise_for_status(self):
                     pass
-                def json(self_inner):
+                def json(self):
                     return fixture
             return R()
 
@@ -182,9 +181,9 @@ class TestFetchFlashNewsSinglePage:
         def fake_get(url, params=None, headers=None, timeout=None):
             class R:
                 status_code = 200
-                def raise_for_status(self_inner):
+                def raise_for_status(self):
                     pass
-                def json(self_inner):
+                def json(self):
                     return fixture
             return R()
 
@@ -224,9 +223,9 @@ class TestFetchFlashNewsMultiPage:
             page_calls.append(params["page"])
             class R:
                 status_code = 200
-                def raise_for_status(self_inner):
+                def raise_for_status(self):
                     pass
-                def json(self_inner):
+                def json(self):
                     return fixture
             return R()
 
@@ -249,9 +248,9 @@ class TestFetchFlashNewsMultiPage:
             page_calls.append(params["page"])
             class R:
                 status_code = 200
-                def raise_for_status(self_inner):
+                def raise_for_status(self):
                     pass
-                def json(self_inner):
+                def json(self):
                     return fixture
             return R()
 
@@ -273,15 +272,12 @@ class TestFetchFlashNewsMultiPage:
 
         def fake_get(url, params=None, headers=None, timeout=None):
             page_calls.append(params["page"])
-            if params["page"] == "1":
-                payload = fixture
-            else:
-                payload = empty
+            payload = fixture if params["page"] == "1" else empty
             class R:
                 status_code = 200
-                def raise_for_status(self_inner):
+                def raise_for_status(self):
                     pass
-                def json(self_inner, p=payload):
+                def json(self, p=payload):
                     return p
             return R()
 
@@ -318,9 +314,9 @@ class TestFetchFlashNewsLimits:
         def fake_get(url, params=None, headers=None, timeout=None):
             class R:
                 status_code = 200
-                def raise_for_status(self_inner):
+                def raise_for_status(self):
                     pass
-                def json(self_inner):
+                def json(self):
                     return fixture
             return R()
 
@@ -345,9 +341,9 @@ class TestFetchFlashNewsLimits:
             page_calls.append(params["page"])
             class R:
                 status_code = 200
-                def raise_for_status(self_inner):
+                def raise_for_status(self):
                     pass
-                def json(self_inner):
+                def json(self):
                     return fixture
             return R()
 
@@ -369,9 +365,9 @@ class TestFetchFlashNewsErrors:
         import requests as _requests
         class R:
             status_code = 500
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 raise _requests.exceptions.HTTPError("500 Server Error")
-            def json(self_inner):
+            def json(self):
                 return {}
         import stock_data.data_provider.utils.http as http_mod
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
@@ -380,6 +376,7 @@ class TestFetchFlashNewsErrors:
 
     def test_network_error_raises(self, monkeypatch):
         import requests as _requests
+
         import stock_data.data_provider.utils.http as http_mod
         def boom(*a, **kw):
             raise _requests.ConnectionError("refused")
@@ -390,9 +387,9 @@ class TestFetchFlashNewsErrors:
     def test_bad_json_raises(self, monkeypatch):
         class R:
             status_code = 200
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 pass
-            def json(self_inner):
+            def json(self):
                 raise ValueError("bad json")
         import stock_data.data_provider.utils.http as http_mod
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
@@ -403,9 +400,9 @@ class TestFetchFlashNewsErrors:
         bad = {"code": -1, "msg": "rate limited", "data": None}
         class R:
             status_code = 200
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 pass
-            def json(self_inner):
+            def json(self):
                 return bad
         import stock_data.data_provider.utils.http as http_mod
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
@@ -416,9 +413,9 @@ class TestFetchFlashNewsErrors:
         empty = {"code": "200", "msg": "ok", "data": {"list": []}}
         class R:
             status_code = 200
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 pass
-            def json(self_inner):
+            def json(self):
                 return empty
         import stock_data.data_provider.utils.http as http_mod
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
@@ -430,9 +427,9 @@ class TestFetchFlashNewsErrors:
         null_list = {"code": "200", "msg": "ok", "data": {"list": None}}
         class R:
             status_code = 200
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 pass
-            def json(self_inner):
+            def json(self):
                 return null_list
         import stock_data.data_provider.utils.http as http_mod
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
@@ -444,9 +441,9 @@ class TestFetchFlashNewsErrors:
         no_data = {"code": "200", "msg": "ok"}
         class R:
             status_code = 200
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 pass
-            def json(self_inner):
+            def json(self):
                 return no_data
         import stock_data.data_provider.utils.http as http_mod
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
@@ -468,9 +465,9 @@ class TestFetchFlashNewsErrors:
         }
         class R:
             status_code = 200
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 pass
-            def json(self_inner):
+            def json(self):
                 return fixture
         import stock_data.data_provider.utils.http as http_mod
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
@@ -529,10 +526,10 @@ def _fake_post_ok(payload):
             status_code = 200
             encoding = "utf-8"
 
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 pass
 
-            def json(self_inner):
+            def json(self):
                 return payload
 
         return R()
@@ -590,9 +587,9 @@ class TestSearchNewsRequest:
             class R:
                 status_code = 200
                 encoding = "utf-8"
-                def raise_for_status(self_inner):
+                def raise_for_status(self):
                     pass
-                def json(self_inner):
+                def json(self):
                     return _IWENCAI_FIXTURE
             return R()
 
@@ -691,9 +688,9 @@ class TestSearchNewsErrors:
         class R:
             status_code = 502
             encoding = "utf-8"
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 raise _requests.exceptions.HTTPError("502 Bad Gateway")
-            def json(self_inner):
+            def json(self):
                 return {}
         import stock_data.data_provider.utils.http as http_mod
         monkeypatch.setattr(http_mod.requests, "post", lambda *a, **kw: R())
@@ -702,6 +699,7 @@ class TestSearchNewsErrors:
 
     def test_network_error_raises(self, monkeypatch):
         import requests as _requests
+
         import stock_data.data_provider.utils.http as http_mod
         def boom(*a, **kw):
             raise _requests.ConnectionError("refused")
@@ -713,9 +711,9 @@ class TestSearchNewsErrors:
         class R:
             status_code = 200
             encoding = "utf-8"
-            def raise_for_status(self_inner):
+            def raise_for_status(self):
                 pass
-            def json(self_inner):
+            def json(self):
                 raise ValueError("bad json")
         import stock_data.data_provider.utils.http as http_mod
         monkeypatch.setattr(http_mod.requests, "post", lambda *a, **kw: R())

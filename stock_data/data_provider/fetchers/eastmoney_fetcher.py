@@ -1176,7 +1176,7 @@ class EastMoneyFetcher(BaseFetcher):
                 if isinstance(r, dict):
                     all_rows.append(r)
                 else:
-                    all_rows.append(dict(zip(field_list, r)))
+                    all_rows.append(dict(zip(field_list, r, strict=False)))
             total = ((payload.get("data") or {}).get("total")) or 0
             # 终止条件: 拉到的行数 >= total, 或者本页不满 (last page)
             if not total or page * page_size >= total or len(rows) < page_size:

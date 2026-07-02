@@ -127,9 +127,9 @@ class TestHealthCheck:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] != "unhealthy", (
-            f"status flipped to 'unhealthy' just because Tushare/Zhitu "
-            f"aren't registered — but those are optional (token-gated). "
-            f"The probe must stay 'ok' or 'degraded' for k8s/lb readiness."
+            "status flipped to 'unhealthy' just because Tushare/Zhitu "
+            "aren't registered — but those are optional (token-gated). "
+            "The probe must stay 'ok' or 'degraded' for k8s/lb readiness."
         )
 
 

@@ -17,8 +17,8 @@ from stock_data.data_provider.base import (
     DataCapability,
     DataFetchError,
 )
-from stock_data.data_provider.persistence import stock_list
 from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
+from stock_data.data_provider.persistence import stock_list
 
 
 class MockFetcher(BaseFetcher):
@@ -134,6 +134,8 @@ class TestDataFetcherManagerUnit:
         """Verify get_stock_name returns '' when DB has no matching stock and no manager."""
         from stock_data.data_provider.persistence import (
             db,
+        )
+        from stock_data.data_provider.persistence import (
             stock_list as stock_list_mod,
         )
 
@@ -148,6 +150,8 @@ class TestDataFetcherManagerUnit:
         """Verify get_stock_name tries manager fallback on DB miss."""
         from stock_data.data_provider.persistence import (
             db,
+        )
+        from stock_data.data_provider.persistence import (
             stock_list as stock_list_mod,
         )
 

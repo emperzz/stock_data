@@ -16,13 +16,13 @@ this decorator ever wraps/replaces, `REGISTRY.get(route.endpoint)` will
 miss and the route silently disappears from the explorer manifest.
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Callable
 
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 # Module-level registry: id(route_function) -> EndpointMeta
 # Mutable on purpose: only the @endpoint_meta decorator writes to it.
-REGISTRY: dict[Callable, "EndpointMeta"] = {}
+REGISTRY: dict[Callable, EndpointMeta] = {}
 
 
 @dataclass(frozen=True)

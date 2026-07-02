@@ -22,7 +22,7 @@ class _FakeFetcher(BaseFetcher):
 
     def __init__(self, name: str = "_FakeFetcher", priority: int = 99,
                  markets: set[str] | None = None,
-                 caps: DataCapability = DataCapability(0),
+                 caps: DataCapability = DataCapability(0),  # noqa: B008 (test fixture)
                  extra_methods: tuple[str, ...] = ()):
         self.name = name
         self.priority = priority

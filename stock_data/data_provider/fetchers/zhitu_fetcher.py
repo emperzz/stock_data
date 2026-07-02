@@ -726,10 +726,7 @@ class ZhituFetcher(BaseFetcher):
         from ..persistence.trade_calendar import get_latest_cached_trade_date
 
         latest = get_latest_cached_trade_date()  # YYYY-MM-DD or None
-        if latest:
-            ymd = latest.replace("-", "")
-        else:
-            ymd = date.today().strftime("%Y%m%d")
+        ymd = latest.replace("-", "") if latest else date.today().strftime("%Y%m%d")
         rows = self._fund_flow_records(
             code, st=ymd, et=ymd, limit=480,
             op_label=f"fund_flow_minute {code}",

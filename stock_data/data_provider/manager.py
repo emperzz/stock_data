@@ -29,9 +29,7 @@ def _is_meaningful(result: Any) -> bool:
         return False
     if isinstance(result, pd.DataFrame) and result.empty:
         return False
-    if isinstance(result, list) and len(result) == 0:
-        return False
-    return True
+    return not (isinstance(result, list) and len(result) == 0)
 
 
 class DataFetcherManager:

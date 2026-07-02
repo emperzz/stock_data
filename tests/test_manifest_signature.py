@@ -1,5 +1,4 @@
 """Unit tests for _reflect_signature in explorer/manifest.py."""
-import pytest
 
 from stock_data.explorer.manifest import _reflect_signature
 
