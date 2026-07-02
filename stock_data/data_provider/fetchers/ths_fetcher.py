@@ -2,13 +2,17 @@
 同花顺 HTTP API fetcher for signal layer data.
 
 Provides: 热点题材(hot-topics), 北向资金(north-flow), 全球财经快讯(news-flash),
-          新闻搜索(news-search)
+          新闻搜索(news-search), 板块 K 线(board-history)
 
 APIs:
 - 热点: zx.10jqka.com.cn/event/api/getharden/
 - 北向: data.hexin.cn/market/hsgtApi/method/dayChart/
 - 快讯: news.10jqka.com.cn/tapp/news/push/stock  (pageSize 硬编码 20/页, 内部翻页)
 - 搜索: www.iwencai.com/gateway/mobilesearch/comprehensive/search  (问财聚合搜索)
+- 板块 K 线:
+    - 概念(clid 查找): q.10jqka.com.cn/gn/detail/code/{slug}/  →  clid
+    - 行业(直查):     q.10jqka.com.cn/thshy/                  →  slug = inner code
+    - 通用 K 线:      d.10jqka.com.cn/v4/line/bk_{inner_code}/01/{year}.js
 
 注意: 新闻搜索走的是同花顺问财 iWenCai (www.iwencai.com), 不是 10jqka 域名。
 10jqka 财经页的站内搜索框本身就是跳转到 iWenCai 的。详见 search_news 文档。
@@ -17,8 +21,11 @@ APIs:
 import logging
 import math
 import os
+import re
 from datetime import date as _date
 from datetime import datetime
+from functools import lru_cache
+from importlib import resources
 from urllib.parse import urlparse
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
@@ -38,6 +45,41 @@ HSGT_HEADERS = {
 }
 
 
+def _mint_ths_v_token() -> str:
+    """Mint the `v` cookie token via py_mini_racer + akshare's bundled ths.js.
+
+    akshare ships `akshare/data/ths.js` (~40KB JS obfuscator). py_mini_racer
+    evaluates it then calls the `v()` function to produce the cookie value.
+
+    One mint per process is enough (the token rotates on a long interval).
+    The cached wrapper `_get_ths_v_token` keeps the MiniRacer VM warm.
+
+    Raises:
+        DataFetchError: py_mini_racer not installed or ths.js not found.
+    """
+    try:
+        import py_mini_racer
+    except ImportError as e:
+        raise DataFetchError(
+            f"[ThsFetcher] board history requires py_mini_racer: {e}"
+        ) from e
+    js_path = resources.files("akshare.data").joinpath("ths.js")
+    if not js_path.is_file():
+        raise DataFetchError(
+            f"[ThsFetcher] akshare/data/ths.js not found at {js_path}"
+        )
+    js_text = js_path.read_text(encoding="utf-8")
+    js = py_mini_racer.MiniRacer()
+    js.eval(js_text)
+    return js.call("v")
+
+
+@lru_cache(maxsize=1)
+def _get_ths_v_token() -> str:
+    """Cached wrapper around `_mint_ths_v_token`."""
+    return _mint_ths_v_token()
+
+
 class ThsFetcher(BaseFetcher):
     """同花顺 HTTP API fetcher for signal data."""
 
@@ -49,6 +91,7 @@ class ThsFetcher(BaseFetcher):
         | DataCapability.NORTH_FLOW
         | DataCapability.NEWS_FLASH
         | DataCapability.NEWS_SEARCH
+        | DataCapability.STOCK_BOARD  # for board K-line (concept/industry)
     )
 
     def is_available(self) -> bool:
@@ -56,6 +99,14 @@ class ThsFetcher(BaseFetcher):
 
     def _normalize_data(self, df, stock_code):
         raise DataFetchError("ThsFetcher does not support historical K-line data")
+
+    # ------------------------------------------------------------------
+    # v-token (cookie auth for board K-line; same mechanism as akshare uses)
+    # ------------------------------------------------------------------
+
+    def _v_token(self) -> str:
+        """Instance accessor for the cached v token (for class-method ergonomics)."""
+        return _get_ths_v_token()
 
     # ------------------------------------------------------------------
     # 热点题材 (Hot Topics)
