@@ -317,13 +317,22 @@ class BoardStocksResponse(BaseModel):
 class BoardKlineResponse(BaseModel):
     """Response for board K-line endpoint (`/boards/{board_code}/history`)."""
 
-    board_code: str = Field(description="Board code (source-specific, e.g. '883957' for zzshare)")
+    board_code: str = Field(description="Board code (source-specific; echoed verbatim)")
     board_name: str = Field(default="", description="Board name (best-effort lookup; may be empty)")
-    period: str = Field(default="daily", description="K-line period (always 'daily' for now)")
+    period: str = Field(
+        default="daily",
+        description=(
+            "K-line period: 'daily'/'weekly'/'monthly' or '5m'/'15m'/'30m'/'60m'. "
+            "Source-dependent — zzshare and ths are daily-only."
+        ),
+    )
     data: list[KLineData] = Field(default_factory=list, description="K-line data points")
     source: str = Field(
         default="",
-        description="数据来源 fetcher 名 (目前固定为 'ZzshareFetcher')",
+        description=(
+            "Data source fetcher name — one of "
+            "'EastMoneyFetcher', 'ZzshareFetcher', 'ThsFetcher'"
+        ),
     )
 
 
