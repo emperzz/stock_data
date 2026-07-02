@@ -23,8 +23,7 @@ import math
 import os
 import re
 from datetime import date as _date
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import lru_cache
 from importlib import resources
 from urllib.parse import urlparse

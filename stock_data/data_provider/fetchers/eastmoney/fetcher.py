@@ -290,6 +290,7 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
         #   lmt ≥ 1000 → klt forced to 102 (weekly)
         #   lmt ≥ 5000 → klt forced to 103 (monthly)
         # Caller's chosen klt is what they want; let it stand.
+        # Route layer caps `days` at 365 via Query(le=365); the 800 cap only kicks in for non-route callers.
         lmt = max(1, min(int(days), 800))
 
         params: dict[str, str] = {
