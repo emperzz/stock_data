@@ -704,6 +704,15 @@ class EastMoneyFetcher(BaseFetcher):
     _STOCK_NEWS_URL = "https://np-listapi.eastmoney.com/comm/web/getListInfo"
 
     # ------------------------------------------------------------------
+    # Stock → announcements (np-anotice-stock, used by 个股公告 / 更多 widget)
+    # ------------------------------------------------------------------
+    # Verified 2026-07-02: data.eastmoney.com/notices/stock/{code}.html
+    # (the "更多" page for the quote-page announcement widget) calls exactly
+    # this endpoint with page_size=50. Note: stock_list param is the bare
+    # 6-digit code (NOT secid {market}.{code} like boards/news).
+    _STOCK_ANNOUNCEMENTS_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+
+    # ------------------------------------------------------------------
     # News search (https://search-api-web.eastmoney.com/search/jsonp)
     # ------------------------------------------------------------------
 
@@ -1015,6 +1024,90 @@ class EastMoneyFetcher(BaseFetcher):
                 })
             except (KeyError, TypeError) as e:
                 logger.warning(f"[EastMoneyFetcher] skipping malformed news row: {e}")
+                continue
+        return out
+
+    def get_stock_announcements(
+        self, code: str, page_size: int = 30, page_index: int = 1
+    ) -> list[dict]:
+        """Get corporate announcements via np-anotice-stock.
+
+        Verified 2026-07-02: data.eastmoney.com/notices/stock/{code}.html
+        (the "更多" page for the quote-page announcement widget) calls this
+        exact endpoint with page_size=50. Mirrors CninfoFetcher.get_announcements
+        shape so the route layer can merge both sources transparently.
+
+        Returns a list of normalized dicts with fields:
+            title, type (e.g. "A,SHA"), date (YYYY-MM-DD), url.
+        """
+        code = normalize_stock_code(code)
+        if not code:
+            return []
+        try:
+            page_size = max(1, min(int(page_size), 100))
+        except (TypeError, ValueError):
+            page_size = 30
+        try:
+            page_index = max(1, int(page_index))
+        except (TypeError, ValueError):
+            page_index = 1
+
+        params = {
+            "sr": -1,
+            "page_size": page_size,
+            "page_index": page_index,
+            "ann_type": "A",
+            "client_source": "web",
+            "stock_list": code,  # 6-digit code, NOT secid (unlike boards/news)
+            "f_node": 0,
+            "s_node": 0,
+        }
+        try:
+            resp = self._session.get(
+                self._STOCK_ANNOUNCEMENTS_URL,
+                params=params,
+                headers={"Referer": "https://data.eastmoney.com/"},
+                timeout=15,
+            )
+        except Exception as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_stock_announcements({code}) network error: {e}"
+            ) from e
+
+        if resp.status_code != 200:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_stock_announcements({code}) HTTP {resp.status_code}"
+            )
+
+        try:
+            payload = resp.json()
+        except ValueError as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_stock_announcements({code}) bad JSON: {e}"
+            ) from e
+
+        data = payload.get("data") or {}
+        rows = data.get("list") or []
+        out: list[dict] = []
+        for rec in rows:
+            try:
+                art_code = rec.get("art_code", "")
+                date_str = (rec.get("notice_date") or "")[:10]
+                codes = rec.get("codes") or []
+                ann_type = ""
+                if codes and isinstance(codes[0], dict):
+                    ann_type = codes[0].get("ann_type", "") or ""
+                url = f"https://data.eastmoney.com/notices/detail/{code}/{art_code}.html"
+                out.append({
+                    "title": rec.get("title", ""),
+                    "type": ann_type,
+                    "date": date_str,
+                    "url": url,
+                })
+            except (KeyError, TypeError) as e:
+                logger.warning(
+                    f"[EastMoneyFetcher] skipping malformed announcement row: {e}"
+                )
                 continue
         return out
 
