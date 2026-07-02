@@ -1365,18 +1365,6 @@ class EastMoneyFetcher(BaseFetcher):
             board_code, source=source, include_quote=include_quote,
         )
 
-    @staticmethod
-    def _market_prefix(code: str) -> int:
-        """Return EastMoney market prefix: 1=SH, 0=SZ, 2=BSE.
-
-        Matches the convention used by push2 endpoints (secid=1.600519).
-        """
-        if code.startswith(("60", "68", "9", "5")):
-            return 1  # SH
-        if code.startswith(("8", "4")):
-            return 2  # BSE
-        return 0  # SZ
-
     def get_stock_boards(self, stock_code: str, source: str = "eastmoney") -> list[dict] | None:
         """Get boards a stock belongs to via push2 slist/get.
 
@@ -1390,8 +1378,7 @@ class EastMoneyFetcher(BaseFetcher):
         code = normalize_stock_code(stock_code)
         if not code:
             return None
-        market = self._market_prefix(code)
-        secid = f"{market}.{code}"
+        secid = self._secid(code)
 
         params = {
             "fltt": 1,
