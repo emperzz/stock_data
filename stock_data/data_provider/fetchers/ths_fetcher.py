@@ -141,6 +141,66 @@ class ThsFetcher(BaseFetcher):
         m = _CONCEPT_CLID_RE.search(r.text or "")
         return m.group(1) if m else None
 
+    @staticmethod
+    def _extract_ths_json(body: str) -> str:
+        """Return the `{...}` JSON substring from `var v_X={...};` responses.
+
+        Falls back to returning the original body if no JSON object is found
+        (some upstream variants return plain JSON, others return other JS).
+        """
+        if not body:
+            return ""
+        m = re.search(r"\{[\s\S]*\}", body)
+        return m.group(0) if m else body
+
+    @staticmethod
+    def _parse_ths_kline_body(body: str) -> list[dict]:
+        """Parse a `d.10jqka.com.cn/v4/line/bk_*/01/{year}.js` response.
+
+        The upstream response is `var v_XXXX={"data": "<csv>"};`. The `data`
+        field is `;`-separated rows; each row is 11 comma-separated fields:
+        `date, open, high, low, close, volume, amount, amp, pct_chg, change_amt, turnover_rate`.
+        Some upstream variants return 12 columns (trailing null); we accept both
+        and consume only the first 7 (canonical K-line subset).
+
+        Returns canonical row dicts with keys: date, open, high, low, close,
+        volume, amount. Other fields (amp, pct_chg, change_amt, turnover_rate)
+        are dropped — THS upstream's last 4 fields aren't standardized. Empty
+        list on parse failure / empty data.
+        """
+        if not body:
+            return []
+        json_str = ThsFetcher._extract_ths_json(body)
+        try:
+            import json as _json
+            payload = _json.loads(json_str)
+        except (ValueError, TypeError):
+            return []
+        data = payload.get("data") or ""
+        if not data:
+            return []
+        out: list[dict] = []
+        for row in data.split(";"):
+            row = row.strip()
+            if not row:
+                continue
+            parts = row.split(",")
+            if len(parts) < 7:
+                continue
+            try:
+                out.append({
+                    "date": parts[0],
+                    "open": float(parts[1]),
+                    "high": float(parts[2]),
+                    "low": float(parts[3]),
+                    "close": float(parts[4]),
+                    "volume": int(float(parts[5])),
+                    "amount": float(parts[6]),
+                })
+            except (TypeError, ValueError):
+                continue
+        return out
+
     # ------------------------------------------------------------------
     # 热点题材 (Hot Topics)
     # ------------------------------------------------------------------
