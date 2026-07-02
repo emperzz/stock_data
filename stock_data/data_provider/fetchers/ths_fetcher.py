@@ -301,24 +301,14 @@ class ThsFetcher(BaseFetcher):
             body = self._fetch_ths_board_year(inner, year)
             rows.extend(self._parse_ths_kline_body(body))
 
-        # Dedupe by date (overlapping year fetches — rare in production, but
-        # mocks can return the same body across years).
-        seen: set[str] = set()
-        deduped: list[dict] = []
-        for r in rows:
-            if r["date"] in seen:
-                continue
-            seen.add(r["date"])
-            deduped.append(r)
-
         # Date range filter (string comparison works for YYYY-MM-DD)
         start_str = start_d.strftime("%Y-%m-%d")
         end_str = end_d.strftime("%Y-%m-%d")
-        deduped = [r for r in deduped if start_str <= r["date"] <= end_str]
+        rows = [r for r in rows if start_str <= r["date"] <= end_str]
 
         # Sort ascending
-        deduped.sort(key=lambda r: r["date"])
-        return deduped
+        rows.sort(key=lambda r: r["date"])
+        return rows
 
     # ------------------------------------------------------------------
     # 热点题材 (Hot Topics)

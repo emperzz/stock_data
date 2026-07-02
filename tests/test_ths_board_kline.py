@@ -123,37 +123,44 @@ class TestGetBoardHistory:
     def test_concept_calls_clid_then_year_js(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
         f = ThsFetcher.__new__(ThsFetcher)
-        year_js_body = (
+        body_2024 = 'var v_x={"data":"2024-12-15,1,2,3,4,5,6,7,8,9,10;"};'
+        body_2025 = (
             'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;'
             '2025-06-29,1.1,2.1,3.1,4.1,5.1,6.1,7.1,8.1,9.1,10.1;"};'
         )
+
+        def fetch_year(inner, year):
+            return body_2025 if year == 2025 else body_2024
+
         with patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"), \
-             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body):
+             patch.object(ThsFetcher, "_fetch_ths_board_year", side_effect=fetch_year):
             rows = f.get_board_history(
                 board_code="301558",
                 board_type="concept",
                 frequency="d",
                 days=400,
                 end_date="2025-06-30",
-                start_date="2025-06-01",
+                start_date="2024-12-01",
             )
-        assert len(rows) == 2
+        # 2024 body contributes 1 row, 2025 body contributes 2 rows
+        assert len(rows) == 3
         # Sorted oldest → newest per get_board_history docstring
-        assert rows[0]["date"] == "2025-06-29"
-        assert rows[1]["date"] == "2025-06-30"
+        assert [r["date"] for r in rows] == ["2024-12-15", "2025-06-29", "2025-06-30"]
 
     def test_industry_skips_clid_step(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
         f = ThsFetcher.__new__(ThsFetcher)
-        year_js_body = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
+        # Scope to a single year so a single-year body satisfies len(rows) == 1.
+        # start_d = 2025-12-31 - 180 days → still 2025 → only 2025 fetched.
+        year_js_body = 'var v_x={"data":"2025-12-30,1,2,3,4,5,6,7,8,9,10;"};'
         with patch.object(ThsFetcher, "_resolve_ths_concept_clid") as clid_mock, \
              patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body):
             rows = f.get_board_history(
                 board_code="881270",
                 board_type="industry",
                 frequency="d",
-                days=400,
-                end_date="2025-06-30",
+                days=180,
+                end_date="2025-12-31",
             )
         clid_mock.assert_not_called()
         assert len(rows) == 1
