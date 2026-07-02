@@ -21,7 +21,7 @@ APIs:
 import logging
 import math
 import os
-import re
+import re  # noqa: F401  # used in get_board_history (Task 4)
 from datetime import date as _date
 from datetime import datetime
 from functools import lru_cache
