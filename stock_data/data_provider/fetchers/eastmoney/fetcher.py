@@ -162,6 +162,185 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
             logger.warning(f"[EastMoneyFetcher] push2 query failed: {e}")
             return []
 
+    # ==================================================================
+    # 板块 K 线 (Board K-line) — push2his board kline endpoint
+    # ==================================================================
+    #
+    # EastMoney's quote subdomain uses the SAME `/api/qt/stock/kline/get`
+    # endpoint for both stocks and boards — only the `secid` differs:
+    #   stock:  "0.000725" / "1.600519" / "0.300059" ...
+    #   board:  "90.BK0996" / "90.BK0806" ...   (90 = board market prefix)
+    #
+    # See `_BOARD_KLINE_FREQ_MAP` for the supported klt (period) values.
+    # The endpoint returns `data.klines` as a list of comma-separated strings
+    # (`date,open,high,low,close,volume,amount,amplitude,pct_chg,change_amount,turnover_rate`).
+
+    _BOARD_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    _BOARD_KLINE_FREQ_MAP: dict[str, int] = {
+        "d": 101, "w": 102, "m": 103,
+        "5m": 5, "15m": 15, "30m": 30, "60m": 60,
+    }
+    _BOARD_KLINE_FIELDS1 = "f1,f2,f3,f4,f5,f6"
+    _BOARD_KLINE_FIELDS2 = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
+    # ut token — observed constant from quote.eastmoney.com JS (bk2.js, emcharts.js).
+    _BOARD_KLINE_UT = "fa5fd1943c7b386f172d6893dbfba10b"
+
+    @staticmethod
+    def _board_secid(board_code: str) -> str:
+        """Build EastMoney board secid from a board code.
+
+        Accepts any of ``"BK0996"`` / ``"bk0996"`` / ``"0996"`` / ``"996"``
+        — case-insensitive prefix, length-tolerant suffix (leading zeros are
+        kept; we only normalize the prefix). Returns the canonical
+        ``"90.BK0996"`` form. Anything else (non-digit suffix) is passed
+        through so the upstream 4xx gives a clearer error than we'd raise
+        locally.
+        """
+        code = (board_code or "").strip()
+        if not code:
+            return "90.BK"
+        upper = code.upper()
+        if upper.startswith("BK"):
+            # Preserve the digit portion verbatim (keep leading zeros), just
+            # uppercase the prefix so callers can pass "bk0806" too.
+            digits = code[2:]
+            code = f"BK{digits}"
+        elif code.isdigit():
+            code = f"BK{code}"
+        return f"90.{code}"
+
+    @staticmethod
+    def _parse_board_kline(raw: str) -> dict | None:
+        """Parse one ``data.klines`` comma string to a row dict.
+
+        Upstream field order (12 fields):
+            date, open, high, low, close, volume, amount,
+            amplitude, pct_chg, change_amount, turnover_rate, _
+        Trailing fields after position 11 are not surfaced (unknown).
+        ``fqt`` (复权) is meaningless for boards but accepted as a no-op
+        upstream — we don't apply any post-processing here.
+
+        Returns ``None`` on malformed rows (caller skips).
+        """
+        if not raw:
+            return None
+        parts = raw.split(",")
+        if len(parts) < 11:
+            return None
+        try:
+            return {
+                "date": parts[0],
+                "open": float(parts[1]),
+                "high": float(parts[2]),
+                "low": float(parts[3]),
+                "close": float(parts[4]),
+                "volume": int(float(parts[5])),
+                "amount": float(parts[6]),
+                "amplitude": float(parts[7]),
+                "pct_chg": float(parts[8]),
+                "change_amount": float(parts[9]),
+                "turnover_rate": float(parts[10]),
+            }
+        except (TypeError, ValueError):
+            return None
+
+    def get_board_history(
+        self,
+        board_code: str,
+        frequency: str = "d",
+        days: int = 30,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        source: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """K-line for a board via push2his.
+
+        Args:
+            board_code: Board code (e.g. ``"BK0996"`` or ``"0996"``).
+                EastMoney format. The ``BK`` prefix is optional.
+            frequency: One of ``d`` / ``w`` / ``m`` / ``5m`` / ``15m`` /
+                ``30m`` / ``60m``. Mapping:
+                  d→101, w→102, m→103, 5m→5, 15m→15, 30m→30, 60m→60
+                (verified against emcharts.js — see
+                ``docs/stock-board-reverse-index-design-2026-07-01.md``).
+            days: Used when ``start_date`` is not given; controls ``lmt``
+                (bar count). Capped at 800 to avoid push2his auto-escalating
+                klt from daily→weekly→monthly when ``lmt`` ≥ 1000.
+            start_date: ``YYYY-MM-DD`` — inclusive lower bound (applied
+                post-fetch).
+            end_date: ``YYYY-MM-DD`` — inclusive upper bound (applied
+                post-fetch).
+            source: Source slug. Ignored by EastMoneyFetcher (kept for
+                signature parity with zzshare's ``get_board_history``).
+            **kwargs: Future-proof (e.g. ``adjust`` / ``fqt``).
+
+        Returns:
+            list[dict] — one row per bar, sorted oldest → newest. Each row
+            has keys: ``date, open, high, low, close, volume, amount,
+            amplitude, pct_chg, change_amount, turnover_rate``. Empty list
+            on upstream failure (logged at WARNING).
+
+        Raises:
+            DataFetchError: ``frequency`` not in ``_BOARD_KLINE_FREQ_MAP``.
+        """
+        freq_key = (frequency or "d").lower()
+        klt = self._BOARD_KLINE_FREQ_MAP.get(freq_key)
+        if klt is None:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_board_history: unsupported frequency "
+                f"{frequency!r}; valid: {sorted(self._BOARD_KLINE_FREQ_MAP.keys())}"
+            )
+
+        secid = self._board_secid(board_code)
+
+        # Cap lmt at 800 to avoid emcharts.js's auto-escalation rule:
+        #   lmt ≥ 1000 → klt forced to 102 (weekly)
+        #   lmt ≥ 5000 → klt forced to 103 (monthly)
+        # Caller's chosen klt is what they want; let it stand.
+        lmt = max(1, min(int(days), 800))
+
+        params: dict[str, str] = {
+            "secid": secid,
+            "fields1": self._BOARD_KLINE_FIELDS1,
+            "fields2": self._BOARD_KLINE_FIELDS2,
+            "klt": str(klt),
+            "fqt": "1",
+            "end": "20500101",   # far-future → upstream returns last `lmt` bars
+            "lmt": str(lmt),
+            "ut": self._BOARD_KLINE_UT,
+        }
+        headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+        try:
+            r = self._session.get(
+                self._BOARD_KLINE_URL, params=params, headers=headers, timeout=15,
+            )
+            raws: list[str] = r.json().get("data", {}).get("klines") or []
+        except Exception as e:
+            logger.warning(
+                f"[EastMoneyFetcher] get_board_history({board_code}, "
+                f"freq={frequency}) failed: {e}"
+            )
+            return []
+
+        rows: list[dict] = []
+        for raw in raws:
+            row = self._parse_board_kline(raw)
+            if row is not None:
+                rows.append(row)
+
+        # Sort ascending by date (upstream order is already asc, defensive).
+        rows.sort(key=lambda r: r["date"])
+
+        # Date-range filter — start_date/end_date win over days (matches zzshare's contract).
+        if start_date:
+            rows = [r for r in rows if r["date"] >= start_date]
+        if end_date:
+            rows = [r for r in rows if r["date"] <= end_date]
+
+        return rows
+
     def _secid(self, code: str) -> str:
         """Build EastMoney secid. Delegates to ``to_eastmoney_secid``."""
         return to_eastmoney_secid(code)
