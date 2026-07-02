@@ -266,18 +266,73 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
 # ===== get_stock_boards (NEW) =====
 
 
-def test_get_stock_boards_zhitu_returns_boards(client):
-    """Reverse route reads from membership table; falls back to fetcher's
-    native API when membership is empty for the queried stock."""
-    # Use a stock code unlikely to have prior membership data, so the
-    # cold-path (manager mock) branch is exercised. The cold-path
-    # upserts a row into stock_board_membership, so we wipe both
-    # before and after to keep this test idempotent across re-runs.
+def test_get_stock_boards_zhitu_returns_200_with_cold_sources_when_empty(client):
+    """No zhitu data + cold_fill=False (default) -> 200 + cold_sources=['zhitu'].
+
+    Auto-cold-fill is removed; callers must opt in with ?cold_fill=true.
+    The route no longer raises 404 -- cold data surfaces in cold_sources.
+    """
+    # Use a stock code unlikely to have prior membership data so the route
+    # takes the empty-membership path.
     from stock_data.data_provider.persistence import board as board_mod
     stock_code = "800999"
     board_mod.init_schema()
     conn = board_mod.get_connection()  # type: ignore[attr-defined]
-    # 1) wipe pre-existing rows for this stock so the route takes the cold path
+    # wipe pre-existing rows for this stock so membership is empty
+    conn.execute(
+        "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
+    )
+    conn.commit()
+
+    try:
+        r = client.get(f"/api/v1/stocks/{stock_code}/boards?source=zhitu")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["stock_code"] == stock_code
+        assert body["data"] == []
+        assert body["cold_sources"] == ["zhitu"]
+        # cache hit (empty), no fetcher call -> origin "persistence"
+        assert body["source"] == "persistence"
+    finally:
+        conn.execute(
+            "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
+        )
+        conn.commit()
+
+
+def test_get_stock_boards_eastmoney_returns_200_with_cold_sources_when_empty(client):
+    """No eastmoney data -> 200 + cold_sources=['eastmoney'], no 404.
+
+    Pre-merge behavior was 404 + cold_source:true; replaced by uniform 200
+    response with cold_sources list (Task 4 of the spec).
+    """
+    r = client.get("/api/v1/stocks/800998/boards?source=eastmoney")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["data"] == []
+    assert "eastmoney" in body["cold_sources"]
+
+
+def test_get_stock_boards_zzshare_returns_200_with_cold_sources_when_empty(client):
+    """No zzshare data -> 200 + cold_sources=['zzshare'], no 404."""
+    r = client.get("/api/v1/stocks/800997/boards?source=zzshare")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["data"] == []
+    assert "zzshare" in body["cold_sources"]
+
+
+def test_get_stock_boards_zhitu_cold_fill_returns_populated_boards(client):
+    """Happy path: source=zhitu + cold_fill=true triggers zhitu lazy-fill.
+
+    The cold-fill triggers a fetcher call (zhitu has the only native reverse
+    API); the upserted rows surface in data with source='zhitu', and
+    cold_sources is empty.
+    """
+    from stock_data.data_provider.persistence import board as board_mod
+    stock_code = "800999"
+    board_mod.init_schema()
+    conn = board_mod.get_connection()  # type: ignore[attr-defined]
     conn.execute(
         "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
     )
@@ -294,41 +349,21 @@ def test_get_stock_boards_zhitu_returns_boards(client):
             "stock_data.data_provider.manager.DataFetcherManager.get_stock_boards",
             return_value=(fake_boards, "ZhituFetcher"),
         ):
-            r = client.get(f"/api/v1/stocks/{stock_code}/boards?source=zhitu")
+            r = client.get(
+                f"/api/v1/stocks/{stock_code}/boards?source=zhitu&cold_fill=true"
+            )
         assert r.status_code == 200
         body = r.json()
         assert body["stock_code"] == stock_code
-        assert body["source"] == "ZhituFetcher"
         assert len(body["data"]) == 2
+        assert body["cold_sources"] == []
+        # zhitu lazy-fill triggered -> origin reflects fresh fetcher hit
+        assert body["source"] == "zhitu"
     finally:
-        # 2) wipe rows we just upserted, so the next test run sees an
-        # empty membership for this stock.
         conn.execute(
             "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
         )
         conn.commit()
-
-
-def test_get_stock_boards_eastmoney_404_when_membership_empty(client):
-    """source=eastmoney has no native reverse API. With empty membership
-    table, the route returns 404 + cold_source hint instead of 501."""
-    # Use a stock code unlikely to have prior membership data.
-    r = client.get("/api/v1/stocks/800998/boards?source=eastmoney")
-    assert r.status_code == 404
-    body = r.json()
-    assert body["detail"]["error"] == "cold_stock_board_data"
-    assert body["detail"]["cold_source"] is True
-
-
-def test_get_stock_boards_zzshare_404_when_membership_empty(client):
-    """source=zzshare has no native reverse API. With empty membership
-    table, the route returns 404 + cold_source hint instead of 501."""
-    r = client.get("/api/v1/stocks/800997/boards?source=zzshare")
-    assert r.status_code == 404
-    body = r.json()
-    assert body["detail"]["error"] == "cold_stock_board_data"
-    assert body["detail"]["cold_source"] is True
-    assert "zzshare" in body["detail"]["message"].lower()
 
 
 # ===== get_board_history (zzshare) =====
