@@ -93,8 +93,9 @@ class TestStockBoardInfoSchema:
         assert info.source == "eastmoney"
 
     def test_stock_board_info_source_required_after_merge(self):
-        from stock_data.api.schemas import StockBoardInfo
         from pydantic import ValidationError
+
+        from stock_data.api.schemas import StockBoardInfo
         with pytest.raises(ValidationError):
             StockBoardInfo(code="BK1048", name="x", type="concept", subtype="concept")
         # No source → ValidationError (we made it required post-merge)
