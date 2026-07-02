@@ -6,8 +6,11 @@ Usage:
 Architecture:
     - Returns list[BuildReport] (one per source). For source=None, walks
       all 3 sources and aggregates into MultiSourceReport for the CLI.
-    - ThreadPoolExecutor per source with --max-workers-per-source=N.
-      Default 1 (serial). 2-3 is acceptable; higher risks upstream rate limits.
+    - Cross-source: each source runs on its own thread (per spec §3 Step 6).
+      3 sources → 3 worker threads, each owning one fetcher.
+    - Intra-source: serial for-loop over boards. Opening concurrent threads
+      against the same upstream would just hit its rate limit harder; one
+      board at a time per source is the safe pattern.
     - Per-board failures are logged and skipped (build continues).
     - Inter-call sleep (jittered) respects upstream rate limits.
 
@@ -21,7 +24,6 @@ import logging
 import random
 import sqlite3
 import sys
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -60,10 +62,9 @@ def build_membership_index(
     source: str | None = None,
     board_type: str | None = None,
     *,
-    inter_call_sleep: tuple[float, float] = (1.0, 2.0),
+    inter_call_sleep: tuple[float, float] = (1.0, 3.0),
     on_progress: Callable[[str, int, int], None] | None = None,
     manager=None,
-    max_workers_per_source: int = 1,
 ) -> list[BuildReport]:
     """Walk (source, board_type) and upsert all stocks to membership.
 
@@ -73,12 +74,12 @@ def build_membership_index(
         inter_call_sleep: (min, max) jitter range in seconds
         on_progress: optional callback(source, done, total)
         manager: DataFetcherManager instance
-        max_workers_per_source: 1 (serial within a source). Higher values
-            (2-3) are safe; >4 risks upstream rate limits.
 
     Returns:
         list[BuildReport], one per source walked. For source=None, returns
-        3 reports (one per VALID_SOURCES).
+        3 reports (one per VALID_SOURCES). Each source runs on its own
+        worker thread; intra-source fetching stays serial (see module
+        docstring).
     """
     if manager is None:
         raise ValueError("manager is required")
@@ -92,22 +93,31 @@ def build_membership_index(
     sources = [source] if source else list(VALID_SOURCES)
     types = [board_type] if board_type else list(VALID_BOARD_TYPES)
 
-    reports: list[BuildReport] = []
-    for src in sources:
+    reports: list[BuildReport] = [None] * len(sources)  # type: ignore[list-item]
+
+    def _run_one(i: int, src: str) -> None:
         report = _build_one_source(
             source=src,
             types=types,
             inter_call_sleep=inter_call_sleep,
             on_progress=on_progress,
             manager=manager,
-            max_workers=max_workers_per_source,
         )
-        reports.append(report)
+        reports[i] = report
         logger.info(
             f"[build_membership_index] {src}: {report.success_count}/{report.total_boards} "
             f"boards OK in {report.duration_seconds:.1f}s"
         )
-    return reports
+
+    if len(sources) == 1:
+        _run_one(0, sources[0])
+    else:
+        with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+            futures = [pool.submit(_run_one, i, src) for i, src in enumerate(sources)]
+            for f in as_completed(futures):
+                f.result()  # surface exceptions from per-source threads
+
+    return reports  # type: ignore[return-value]
 
 
 def _build_one_source(
@@ -116,7 +126,6 @@ def _build_one_source(
     inter_call_sleep: tuple[float, float],
     on_progress: Callable | None,
     manager,
-    max_workers: int,
 ) -> BuildReport:
     report = BuildReport(source=source)
     t0 = time.time()
@@ -137,14 +146,17 @@ def _build_one_source(
         report.duration_seconds = time.time() - t0
         return report
 
-    # 2) Per-board fetch + upsert via ThreadPoolExecutor with per-thread connections
-    done_lock = threading.Lock()
-    done_count = [0]
+    # 2) Per-board fetch + upsert (serial within this source; cross-source
+    #    parallelism is handled by build_membership_index's outer pool).
+    done_count = 0
 
     def _process_board(board: dict) -> None:
-        # Each thread opens its own SQLite connection (per spec §4.3).
-        # WAL mode allows concurrent writers; the connection's own
-        # mutex serializes access within the thread.
+        nonlocal done_count
+        # Each source-level worker thread opens its own SQLite connection
+        # (per spec §4.3). WAL mode allows concurrent writers across
+        # threads; the connection's own mutex serializes access within the
+        # thread. Intra-source processing is serial, so we only ever have
+        # one writer per source at a time.
         conn = sqlite3.connect(str(db_mod.get_db_path()), timeout=30)
         # Ensure WAL mode is enabled (per-thread connection; main db may
         # not have been initialized by the server). Once one writer sets
@@ -178,29 +190,21 @@ def _build_one_source(
                     )
                 sleep_s = random.uniform(*inter_call_sleep)
                 time.sleep(sleep_s)
-                with done_lock:
-                    done_count[0] += 1
-                    report.success_count += 1
-                    if on_progress:
-                        on_progress(source, done_count[0], report.total_boards)
+                done_count += 1
+                report.success_count += 1
+                if on_progress:
+                    on_progress(source, done_count, report.total_boards)
             except Exception as e:
-                with done_lock:
-                    done_count[0] += 1
-                    report.error_count += 1
-                    if len(report.error_samples) < 20:
-                        report.error_samples.append(f"{board['code']}: {e!r}")
+                done_count += 1
+                report.error_count += 1
+                if len(report.error_samples) < 20:
+                    report.error_samples.append(f"{board['code']}: {e!r}")
                 logger.warning(f"[build_membership_index] {source}/{board['code']}: {e!r}")
         finally:
             conn.close()
 
-    if max_workers <= 1:
-        for board in all_boards:
-            _process_board(board)
-    else:
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [pool.submit(_process_board, board) for board in all_boards]
-            for f in as_completed(futures):
-                f.result()  # surface exceptions (per-board errors already absorbed)
+    for board in all_boards:
+        _process_board(board)
 
     report.duration_seconds = time.time() - t0
     return report
@@ -230,20 +234,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Limit to one board_type (default: all 4)",
     )
     parser.add_argument("--inter-call-sleep-min", type=float, default=1.0)
-    parser.add_argument("--inter-call-sleep-max", type=float, default=2.0)
-    parser.add_argument(
-        "--max-workers-per-source",
-        type=int,
-        default=1,
-        help="Threads per source (1=serial, 2-3=safe, >4 risky)",
-    )
+    parser.add_argument("--inter-call-sleep-max", type=float, default=3.0)
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
     if args.inter_call_sleep_max < 0.5:
         logger.warning(
             f"inter_call_sleep_max={args.inter_call_sleep_max}s is risky for upstream "
-            "rate limits; consider >=0.5s, especially with --max-workers-per-source>1"
+            "rate limits; consider >=0.5s"
         )
 
     logging.basicConfig(
@@ -266,7 +264,6 @@ def main(argv: list[str] | None = None) -> int:
         inter_call_sleep=(args.inter_call_sleep_min, args.inter_call_sleep_max),
         on_progress=_on_progress,
         manager=manager,
-        max_workers_per_source=args.max_workers_per_source,
     )
     print()  # newline after progress
 

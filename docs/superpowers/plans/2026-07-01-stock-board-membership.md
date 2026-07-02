@@ -1293,8 +1293,8 @@ def test_build_one_source_populates_membership(fresh_db, monkeypatch):
 
     report = cli_mod.build_membership_index(
         source="eastmoney", board_type="concept",
-        manager=mock, max_workers_per_source=1,
-    )
+        manager=mock,
+    )[0]
     assert report.source == "eastmoney"
     assert report.total_boards == 3
     assert report.success_count == 3
@@ -1367,11 +1367,10 @@ def build_membership_index(
     source: str | None = None,
     board_type: str | None = None,
     *,
-    inter_call_sleep: tuple[float, float] = (1.0, 2.0),
+    inter_call_sleep: tuple[float, float] = (1.0, 3.0),
     on_progress: Callable[[str, int, int], None] | None = None,
     manager=None,
-    max_workers_per_source: int = 1,
-) -> BuildReport:
+) -> list[BuildReport]:
     """Walk (source, board_type) and upsert all stocks to membership.
 
     Args:
@@ -1380,12 +1379,11 @@ def build_membership_index(
         inter_call_sleep: (min, max) jitter range in seconds
         on_progress: optional callback(source, done, total)
         manager: DataFetcherManager instance
-        max_workers_per_source: 1 (single thread per source is the safe default;
-            higher values risk upstream rate limits)
 
     Returns:
-        BuildReport with counts. For multi-source builds, returns the LAST
-        source's report (call once per source to get all reports).
+        list[BuildReport], one per source walked. For source=None, returns
+        3 reports (one per VALID_SOURCES). Each source runs on its own
+        worker thread; intra-source fetching stays serial.
     """
     if manager is None:
         raise ValueError("manager is required")
@@ -1393,21 +1391,30 @@ def build_membership_index(
     sources = [source] if source else list(VALID_SOURCES)
     types = [board_type] if board_type else list(VALID_BOARD_TYPES)
 
-    last_report: BuildReport | None = None
-    for src in sources:
+    reports: list[BuildReport] = [None] * len(sources)  # type: ignore[list-item]
+
+    def _run_one(i: int, src: str) -> None:
         report = _build_one_source(
             source=src, types=types,
             inter_call_sleep=inter_call_sleep,
             on_progress=on_progress,
             manager=manager,
-            max_workers=max_workers_per_source,
         )
-        last_report = report
+        reports[i] = report
         logger.info(
             f"[build_membership_index] {src}: {report.success_count}/{report.total_boards} "
             f"boards OK in {report.duration_seconds:.1f}s"
         )
-    return last_report
+
+    if len(sources) == 1:
+        _run_one(0, sources[0])
+    else:
+        with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+            futures = [pool.submit(_run_one, i, src) for i, src in enumerate(sources)]
+            for f in as_completed(futures):
+                f.result()  # surface exceptions
+
+    return reports  # type: ignore[return-value]
 
 
 def _build_one_source(
@@ -1416,7 +1423,6 @@ def _build_one_source(
     inter_call_sleep: tuple[float, float],
     on_progress: Callable | None,
     manager,
-    max_workers: int,
 ) -> BuildReport:
     report = BuildReport(source=source)
     t0 = time.time()
@@ -1465,17 +1471,10 @@ def _build_one_source(
                     report.error_samples.append(f"{board['code']}: {e!r}")
             logger.warning(f"[build_membership_index] {source}/{board['code']}: {e!r}")
 
-    if max_workers <= 1:
-        for board in all_boards:
-            _process_board(board)
-    else:
-        threads = []
-        for board in all_boards:
-            t = threading.Thread(target=_process_board, args=(board,))
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join()
+    # Intra-source: serial. Concurrent threads against the same upstream
+    # would just hit its rate limit harder.
+    for board in all_boards:
+        _process_board(board)
 
     report.duration_seconds = time.time() - t0
     return report
@@ -1490,8 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--type", choices=VALID_BOARD_TYPES, default=None,
                         help="Limit to one board_type (default: all 4)")
     parser.add_argument("--inter-call-sleep-min", type=float, default=1.0)
-    parser.add_argument("--inter-call-sleep-max", type=float, default=2.0)
-    parser.add_argument("--max-workers-per-source", type=int, default=1)
+    parser.add_argument("--inter-call-sleep-max", type=float, default=3.0)
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
@@ -1509,19 +1507,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\r[{src}] {done}/{total} ({pct:.1f}%)", end="", flush=True)
 
     print(f"Building membership index...")
-    report = build_membership_index(
+    reports = build_membership_index(
         source=args.source, board_type=args.type,
         inter_call_sleep=(args.inter_call_sleep_min, args.inter_call_sleep_max),
         on_progress=_on_progress,
         manager=manager,
-        max_workers_per_source=args.max_workers_per_source,
     )
     print()  # newline after progress
-    print(f"Done: {report.source} "
-          f"({report.success_count}/{report.total_boards} OK, "
-          f"{report.error_count} errors, {report.duration_seconds:.1f}s)")
-    if report.error_samples:
-        print("Sample errors:")
+    agg = _aggregate(reports)
+    for r in reports:
+        status = "OK" if r.error_count == 0 else f"{r.error_count} ERRORS"
+        print(f"  {r.source}: {r.success_count}/{r.total_boards} OK ({status}) {r.duration_seconds:.1f}s")
+        for s in r.error_samples:
+            print(f"    {s}")
+    print(f"Total: {agg.total_success}/{agg.total_boards} OK, {agg.total_errors} errors "
+          f"in {agg.duration_seconds:.1f}s across {len(reports)} source(s)")
         for s in report.error_samples:
             print(f"  {s}")
     return 0 if report.error_count == 0 else 1
@@ -1563,26 +1563,24 @@ def test_per_board_failure_does_not_abort_build(fresh_db, monkeypatch):
 
     report = cli_mod.build_membership_index(
         source="eastmoney", board_type="concept",
-        manager=mock, max_workers_per_source=1,
-    )
+        manager=mock,
+    )[0]
     assert report.total_boards == 3
     assert report.success_count == 2
     assert report.error_count == 1
     assert "BK_FAIL" in report.error_samples[0]
 
 
-def test_all_sources_loop(fresh_db, monkeypatch):
-    """source=None iterates all 3 sources."""
+def test_all_sources_single_call(fresh_db, monkeypatch):
+    """source=None iterates all 3 sources and returns a list of reports."""
     mock = _make_manager_mock({
         "eastmoney": ["BK1"], "zhitu": ["sw1"], "zzshare": ["th1"],
     })
     monkeypatch.setattr(cli_mod.time, "sleep", lambda *a, **kw: None)
     monkeypatch.setattr(cli_mod.random, "uniform", lambda *a: 0.0)
-    reports = []
-    for src in ("eastmoney", "zhitu", "zzshare"):
-        reports.append(cli_mod.build_membership_index(
-            source=src, manager=mock, max_workers_per_source=1,
-        ))
+    reports = cli_mod.build_membership_index(
+        source=None, board_type="concept", manager=mock,
+    )
     assert {r.source for r in reports} == {"eastmoney", "zhitu", "zzshare"}
     assert all(r.success_count == 1 for r in reports)
     total_rows = board_mod.read_membership()
@@ -1631,8 +1629,9 @@ python -m stock_data.tools.build_membership_index -v
 ### Notes
 
 - Idempotent: re-running upserts existing rows. `refreshed_at` is updated.
-- Per-source single worker thread (default). `--max-workers-per-source=2` is possible
-  but risks upstream rate limits.
+- Cross-source parallel (3 sources → 3 worker threads via top-level
+  `ThreadPoolExecutor`); serial within each source (concurrent threads
+  against the same upstream just hits its rate limit harder).
 - After first bootstrap, membership data is kept fresh by forward-path lazy fill
   (`/boards/{code}/stocks` calls upsert). Long-tail boards never queried require
   `?refresh=true` or this CLI.

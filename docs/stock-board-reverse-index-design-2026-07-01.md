@@ -314,22 +314,21 @@ def build_membership_index(
     source: str | None = None,                  # None = 全部 source
     board_type: str | None = None,
     *,
-    inter_call_sleep: tuple[float, float] = (1.0, 2.0),  # jitter [min, max] seconds
+    inter_call_sleep: tuple[float, float] = (1.0, 3.0),  # jitter [min, max] seconds
     on_progress: Callable[[str, int, int], None] | None = None,  # (source, done, total)
     manager=None,
-    max_workers_per_source: int = 1,            # 默认 1 (保守);可调到 2-3 看上游限速
-) -> BuildReport:
+) -> list[BuildReport]:
     """枚举 (source, board_type[, subtype]) → 全 board → 全 stocks → 批量 upsert。
 
     线程模型:
-    - 每个 source 一个 worker thread (3 source → 3 thread)
-    - 每个 thread 内部:enumerate boards → fetch → sleep jitter → upsert → 下个 board
+    - Cross-source:每个 source 一个 worker thread (3 source → 3 thread,顶层 ThreadPoolExecutor)
+    - Intra-source:source 内 board-by-board 串行 (同 IP 撞同一上游限流,不开并发)
     - 每个 thread 用自己的 sqlite3 connection (SQLite WAL 允许多 connection)
-    - Main thread join 所有 worker,汇总进度,返回 BuildReport
+    - Main thread join 所有 worker,汇总进度,返回 list[BuildReport]
     - 整个进程 ~10-15 分钟完成全 source 全量 (3 source 并行)
 
     Inter-call sleep:
-    - Per (source, call_type) 独立 jitter,默认 1.0-2.0s,尊重上游 ~1 req/s 限速
+    - Per (source, call_type) 独立 jitter,默认 1.0-3.0s,尊重上游 ~1 req/s 限速
     - 不同 source 的 worker sleep 独立,source 间不互相干扰
     - EastMoney / Zzshare / Zhitu 限速不同 (probe 后填具体值),后续可配 env var
 

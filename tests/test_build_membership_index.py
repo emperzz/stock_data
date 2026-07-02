@@ -61,7 +61,6 @@ def test_build_one_source_populates_membership(fresh_db, monkeypatch):
         source="eastmoney",
         board_type="concept",
         manager=mock,
-        max_workers_per_source=1,
     )
     assert len(reports) == 1
     report = reports[0]
@@ -101,7 +100,6 @@ def test_per_board_failure_does_not_abort_build(fresh_db, monkeypatch):
         source="eastmoney",
         board_type="concept",
         manager=mock,
-        max_workers_per_source=1,
     )
     assert len(reports) == 1
     report = reports[0]
@@ -127,7 +125,6 @@ def test_all_sources_single_call(fresh_db, monkeypatch):
         source=None,  # the production multi-source path
         board_type="concept",
         manager=mock,
-        max_workers_per_source=1,
     )
     assert {r.source for r in reports} == {"eastmoney", "zhitu", "zzshare"}
     assert all(r.success_count == 1 for r in reports)
@@ -138,25 +135,72 @@ def test_all_sources_single_call(fresh_db, monkeypatch):
     assert len(total_rows) == 3
 
 
-def test_parallel_build_completes_correctly(fresh_db, monkeypatch):
-    """max_workers_per_source=4 must produce the same membership rows as serial."""
-    mock = _make_manager_mock({"eastmoney": [f"BK{i:03d}" for i in range(30)]})
+def test_cross_source_parallelism(fresh_db, monkeypatch):
+    """When source=None, all 3 sources must run on distinct worker threads."""
+    import threading
+
     monkeypatch.setattr(cli_mod.time, "sleep", lambda *a, **kw: None)
     monkeypatch.setattr(cli_mod.random, "uniform", lambda *a: 0.0)
 
-    reports = cli_mod.build_membership_index(
-        source="eastmoney",
-        board_type="concept",
-        manager=mock,
-        max_workers_per_source=4,
+    # Spy on _build_one_source to record which thread each source ran on.
+    # Must happen before _run_one captures the symbol; rebind on the module.
+    thread_ids: dict[str, int] = {}
+    real_build = cli_mod._build_one_source
+
+    def spy(source, types, inter_call_sleep, on_progress, manager):
+        thread_ids[source] = threading.get_ident()
+        return real_build(
+            source=source,
+            types=types,
+            inter_call_sleep=inter_call_sleep,
+            on_progress=on_progress,
+            manager=manager,
+        )
+
+    monkeypatch.setattr(cli_mod, "_build_one_source", spy)
+
+    mock = _make_manager_mock({"eastmoney": ["BK1"], "zhitu": ["sw1"], "zzshare": ["th1"]})
+    reports = cli_mod.build_membership_index(source=None, manager=mock)
+
+    assert len(reports) == 3
+    assert set(thread_ids) == {"eastmoney", "zhitu", "zzshare"}
+    # 3 sources → 3 distinct worker threads (the main thread is excluded
+    # because sources > 1 dispatches via ThreadPoolExecutor).
+    assert len(set(thread_ids.values())) == 3
+    main_tid = threading.get_ident()
+    assert all(tid != main_tid for tid in thread_ids.values()), (
+        "Each source must run on its own worker thread, not the main thread"
     )
+
+
+def test_single_source_runs_inline(fresh_db, monkeypatch):
+    """When --source=X is explicit, walk inline (no thread pool)."""
+    import threading
+
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda *a, **kw: None)
+    monkeypatch.setattr(cli_mod.random, "uniform", lambda *a: 0.0)
+
+    thread_ids: dict[str, int] = {}
+    real_build = cli_mod._build_one_source
+
+    def spy(source, types, inter_call_sleep, on_progress, manager):
+        thread_ids[source] = threading.get_ident()
+        return real_build(
+            source=source,
+            types=types,
+            inter_call_sleep=inter_call_sleep,
+            on_progress=on_progress,
+            manager=manager,
+        )
+
+    monkeypatch.setattr(cli_mod, "_build_one_source", spy)
+
+    mock = _make_manager_mock({"eastmoney": ["BK1", "BK2"]})
+    reports = cli_mod.build_membership_index(source="eastmoney", manager=mock)
+
     assert len(reports) == 1
-    report = reports[0]
-    assert report.error_count == 0
-    assert report.success_count == 30
-    # All 30 boards × 3 stocks landed, no duplicates
-    all_rows = board_mod.read_membership(source="eastmoney", stock_code="S0")
-    assert len(all_rows) == 30
+    # Single-source path runs inline on the main thread.
+    assert thread_ids["eastmoney"] == threading.get_ident()
 
 
 def test_cli_help_runs(capsys):

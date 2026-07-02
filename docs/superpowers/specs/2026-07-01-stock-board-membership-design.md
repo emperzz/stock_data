@@ -181,8 +181,10 @@ def upsert_membership_bulk(
 **改动**:
 - **新增** `stock_data/tools/__init__.py`(如不存在)
 - **新增** `stock_data/tools/build_membership_index.py`:
-  - `build_membership_index(source=None, board_type=None, inter_call_sleep=(1.0, 2.0), on_progress=None, manager=None, max_workers_per_source=1) -> BuildReport`
-  - Per-source worker thread,每个 thread 独立 sqlite3 connection
+  - `build_membership_index(source=None, board_type=None, inter_call_sleep=(1.0, 3.0), on_progress=None, manager=None) -> list[BuildReport]`
+  - **Cross-source parallel**:每个 source 独占一个 worker thread (3 sources → 3 threads,顶层 `ThreadPoolExecutor`)。
+  - **Intra-source serial**:source 内部 board-by-board 串行 fetch,因为同 client IP 撞同一上游限流,开并发反而有害。
+  - 每个 worker thread 独立 sqlite3 connection (WAL 模式允许并发写)。
   - `BuildReport` dataclass:`source, total_boards, success_count, error_count, error_samples, duration_seconds`
 - **新增** `stock_data/tools/README.md`:使用说明 + 速度预估
 
