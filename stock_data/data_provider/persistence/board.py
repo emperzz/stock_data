@@ -550,6 +550,139 @@ def get_stock_boards_with_lazy_fill(
     return None, ""
 
 
+def get_stock_memberships(
+    stock_code: str,
+    sources: list[str],
+    type: str | None = None,
+    subtype: str | None = None,
+    cold_fill: bool = False,
+    manager=None,
+) -> tuple[list[dict], list[str], str]:
+    """Single source of truth for stock→boards reverse lookup.
+
+    Reads stock_board_membership for each requested source, applies
+    type/subtype filters, and (optionally) triggers zhitu cold-fill for
+    sources with no data when cold_fill=True.
+
+    Args:
+        stock_code: 6-digit stock code (e.g. '600519').
+        sources: list of normalized source names (no 'ths' alias; caller
+                 must remap 'ths' → 'zzshare' before calling). May be empty.
+        type: optional board type filter (concept/industry/index/special).
+        subtype: optional source-specific subtype filter.
+        cold_fill: if True and source='zhitu' has no data, call the zhitu
+                   fetcher to populate membership (same lazy-fill as
+                   get_stock_boards_with_lazy_fill). Other sources never
+                   trigger cold-fill (no upstream API).
+        manager: DataFetcherManager instance. Required when cold_fill=True.
+
+    Returns:
+        (entries, cold_sources, origin_summary)
+        - entries: list of {code, name, type, subtype, source}, one dict per row.
+        - cold_sources: subset of `sources` with no data after cold_fill attempt.
+        - origin_summary:
+            - "persistence" — all entries came from SQLite cache (no fetcher calls)
+            - "<fetcher>"   — single source with cold-fill triggered
+            - "mixed"       — multi-source case (entries span multiple sources)
+            - ""            — no entries
+
+    Caller decides how to expose origin_summary in the top-level response
+    source field (single-source: pass-through; multi-source: override with 'merged').
+    """
+    init_schema()
+
+    if not sources:
+        return [], [], ""
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Read all rows for this stock from the requested sources in one query.
+    placeholders = ",".join("?" * len(sources))
+    cursor.execute(
+        f"""SELECT board_code, stock_code, source, board_name, stock_name,
+                   board_type, subtype
+           FROM stock_board_membership
+           WHERE stock_code = ? AND source IN ({placeholders})
+           ORDER BY source, board_code""",
+        (stock_code, *sources),
+    )
+    raw_rows = cursor.fetchall()
+
+    # Group by source to compute present set
+    present_sources: set[str] = set()
+    entries: list[dict] = []
+    for row in raw_rows:
+        present_sources.add(row["source"])
+        entries.append({
+            "code": row["board_code"],
+            "name": row["board_name"],
+            "type": row["board_type"],
+            "subtype": row["subtype"] or "",
+            "source": row["source"],
+        })
+
+    # Cold-fill: only zhitu has upstream reverse API; only when cold_fill=True.
+    cold_fill_triggered = False
+    if cold_fill and manager is not None and "zhitu" in sources and "zhitu" not in present_sources:
+        from .stock_list import get_stock_name as _get_stock_name
+
+        boards, _ = manager.get_stock_boards(stock_code, source="zhitu")
+        if boards:
+            stock_name = _get_stock_name(stock_code) or ""
+            upsert_membership_for_stock_boards(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                boards=boards,
+                source="zhitu",
+            )
+            cold_fill_triggered = True
+            # Re-query to include newly-written rows
+            cursor.execute(
+                f"""SELECT board_code, stock_code, source, board_name, stock_name,
+                           board_type, subtype
+                   FROM stock_board_membership
+                   WHERE stock_code = ? AND source IN ({placeholders})
+                   ORDER BY source, board_code""",
+                (stock_code, *sources),
+            )
+            raw_rows = cursor.fetchall()
+            entries = [
+                {
+                    "code": row["board_code"],
+                    "name": row["board_name"],
+                    "type": row["board_type"],
+                    "subtype": row["subtype"] or "",
+                    "source": row["source"],
+                }
+                for row in raw_rows
+            ]
+            present_sources = {row["source"] for row in raw_rows}
+
+    # Apply type/subtype filters (post-query, in-memory)
+    if type is not None:
+        entries = [e for e in entries if e["type"] == type]
+    if subtype is not None:
+        entries = [e for e in entries if e["subtype"] == subtype]
+
+    # Cold sources = requested but not present
+    cold_sources = [s for s in sources if s not in present_sources]
+
+    # Origin summary
+    if cold_fill_triggered:
+        origin_summary = "zhitu"  # cold-fill happened (zhitu is the only source that can)
+    elif not entries:
+        # No entries: either no cold-fill triggered, or cold-fill found nothing.
+        # Either way we only read from SQLite; surface as 'persistence'.
+        origin_summary = "persistence"
+    elif len(sources) > 1:
+        origin_summary = "mixed"
+    else:
+        origin_summary = "persistence"
+
+    return entries, cold_sources, origin_summary
+
+
 def get_board_name(board_code: str, source: str) -> str | None:
     """Look up a board's name from the SQLite cache (no upstream fallback).
 
