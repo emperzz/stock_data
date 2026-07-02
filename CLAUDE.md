@@ -264,7 +264,7 @@ fetchers that support it.
 | `get_all_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P2) |
 | `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P2) |
 | `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P2) |
-| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; zzshare plate_kline daily-only) (ZzshareFetcher P2) |
+| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; zzshare/eastmoney/ths) — see board-history note below |
 | `get_index_realtime_quote` | `INDEX_REALTIME_QUOTE` |
 | `get_index_historical` | `INDEX_KLINE` |
 | `get_kline_data` (index) | `INDEX_KLINE` |
@@ -286,6 +286,9 @@ fetchers that support it.
 | `get_stock_info` | `STOCK_INFO` (ZzshareFetcher P2) |
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
 | `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `STOCK_KLINE` |
+
+**Board K-line (`/boards/{board_code}/history`)** — source-routed across three fetchers:
+已实现于 ZzshareFetcher (daily-only, 883957 only) + EastMoneyFetcher (d/w/m + 5/15/30/60m via push2his) + ThsFetcher (d-only, concept/industry via d.10jqka.com.cn). 详见 `docs/superpowers/plans/2026-07-02-board-kline-eastmoney-ths.md`。
 
 **Fetcher capability declarations:**
 
