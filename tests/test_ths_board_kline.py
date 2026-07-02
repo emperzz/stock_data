@@ -1,5 +1,8 @@
 """Tests for ThsFetcher.get_board_history."""
 
+from datetime import date
+from unittest.mock import patch
+
 
 class TestVToken:
     def test_v_token_is_nonempty_string(self):
@@ -114,3 +117,124 @@ class TestParseThsKlineBody:
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
         f = ThsFetcher.__new__(ThsFetcher)
         assert f._parse_ths_kline_body("not-json-at-all") == []
+
+
+class TestGetBoardHistory:
+    def test_concept_calls_clid_then_year_js(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        f = ThsFetcher.__new__(ThsFetcher)
+        year_js_body = (
+            'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;'
+            '2025-06-29,1.1,2.1,3.1,4.1,5.1,6.1,7.1,8.1,9.1,10.1;"};'
+        )
+        with patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"), \
+             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body):
+            rows = f.get_board_history(
+                board_code="301558",
+                board_type="concept",
+                frequency="d",
+                days=400,
+                end_date="2025-06-30",
+                start_date="2025-06-01",
+            )
+        assert len(rows) == 2
+        # Sorted oldest → newest per get_board_history docstring
+        assert rows[0]["date"] == "2025-06-29"
+        assert rows[1]["date"] == "2025-06-30"
+
+    def test_industry_skips_clid_step(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        f = ThsFetcher.__new__(ThsFetcher)
+        year_js_body = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
+        with patch.object(ThsFetcher, "_resolve_ths_concept_clid") as clid_mock, \
+             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body):
+            rows = f.get_board_history(
+                board_code="881270",
+                board_type="industry",
+                frequency="d",
+                days=400,
+                end_date="2025-06-30",
+            )
+        clid_mock.assert_not_called()
+        assert len(rows) == 1
+
+    def test_unsupported_frequency_raises(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher, DataFetchError
+        f = ThsFetcher.__new__(ThsFetcher)
+        try:
+            f.get_board_history("881270", board_type="industry", frequency="w")
+        except DataFetchError as e:
+            assert "frequency" in str(e).lower() or "w" in str(e)
+        else:
+            raise AssertionError("expected DataFetchError for non-daily THS freq")
+
+    def test_missing_board_type_raises(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher, DataFetchError
+        f = ThsFetcher.__new__(ThsFetcher)
+        try:
+            f.get_board_history("881270", board_type=None)
+        except DataFetchError as e:
+            assert "board_type" in str(e).lower()
+        else:
+            raise AssertionError("expected DataFetchError when board_type missing")
+
+    def test_invalid_board_type_raises(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher, DataFetchError
+        f = ThsFetcher.__new__(ThsFetcher)
+        try:
+            f.get_board_history("881270", board_type="foobar")
+        except DataFetchError as e:
+            assert "board_type" in str(e).lower() or "foobar" in str(e)
+        else:
+            raise AssertionError("expected DataFetchError for unknown board_type")
+
+    def test_concept_clid_failure_raises(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher, DataFetchError
+        f = ThsFetcher.__new__(ThsFetcher)
+        with patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value=None):
+            try:
+                f.get_board_history("301558", board_type="concept")
+            except DataFetchError as e:
+                assert "301558" in str(e) or "clid" in str(e).lower()
+            else:
+                raise AssertionError("expected DataFetchError when clid resolves to None")
+
+    def test_date_range_filter(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        f = ThsFetcher.__new__(ThsFetcher)
+        year_js_body = (
+            'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;'
+            '2024-12-31,1,2,3,4,5,6,7,8,9,10;'
+            '2023-01-01,1,2,3,4,5,6,7,8,9,10;"};'
+        )
+        with patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"), \
+             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body):
+            rows = f.get_board_history(
+                board_code="301558",
+                board_type="concept",
+                start_date="2024-01-01",
+                end_date="2025-01-01",
+            )
+        dates = [r["date"] for r in rows]
+        assert "2024-12-31" in dates
+        assert "2025-06-30" not in dates
+        assert "2023-01-01" not in dates
+
+    def test_returns_sorted_ascending(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        f = ThsFetcher.__new__(ThsFetcher)
+        year_js_body = (
+            'var v_x={"data":"2025-06-29,1,2,3,4,5,6,7,8,9,10;'
+            '2025-06-30,1,2,3,4,5,6,7,8,9,10;'
+            '2025-06-28,1,2,3,4,5,6,7,8,9,10;"};'
+        )
+        with patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"), \
+             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body):
+            rows = f.get_board_history(
+                board_code="301558",
+                board_type="concept",
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
+        dates = [r["date"] for r in rows]
+        assert dates == sorted(dates)

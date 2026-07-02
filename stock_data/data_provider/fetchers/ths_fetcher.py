@@ -24,6 +24,7 @@ import os
 import re
 from datetime import date as _date
 from datetime import datetime
+from datetime import timedelta
 from functools import lru_cache
 from importlib import resources
 from urllib.parse import urlparse
@@ -85,6 +86,9 @@ _CONCEPT_CLID_RE = re.compile(
     r'<input[^>]*\bid=["\']clid["\'][^>]*\bvalue=["\']([^"\']+)["\']',
     re.IGNORECASE,
 )
+
+_THS_BOARD_KLINE_URL = "https://d.10jqka.com.cn/v4/line/bk_{inner}/01/{year}.js"
+_THS_BOARD_FREQ_MAP: dict[str, int] = {"d": 1}  # THS upstream only ships daily
 
 
 class ThsFetcher(BaseFetcher):
@@ -200,6 +204,121 @@ class ThsFetcher(BaseFetcher):
             except (TypeError, ValueError):
                 continue
         return out
+
+    # ------------------------------------------------------------------
+    # 板块 K 线 (Board K-Line) — concept + industry
+    # ------------------------------------------------------------------
+
+    def _fetch_ths_board_year(self, inner_code: str, year: int) -> str:
+        """Fetch one year of THS board K-line JS body. Returns "" on failure."""
+        url = _THS_BOARD_KLINE_URL.format(inner=inner_code, year=year)
+        headers = {
+            "User-Agent": THS_UA,
+            "Referer": "http://q.10jqka.com.cn",
+            "Host": "d.10jqka.com.cn",
+            "Cookie": f"v={self._v_token()}",
+        }
+        try:
+            r = self._http_get(url, headers=headers, timeout=15)
+            return r.text or ""
+        except Exception as e:
+            logger.warning(f"[ThsFetcher] board kline year={year} ({inner_code}) failed: {e}")
+            return ""
+
+    def get_board_history(
+        self,
+        board_code: str,
+        frequency: str = "d",
+        days: int = 365,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        source: str | None = None,
+        board_type: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """THS concept/industry board K-line via d.10jqka.com.cn.
+
+        Args:
+            board_code: THS board slug (concept: e.g. ``301558``; industry: e.g.
+                ``881270``). NOT the inner `clid` — that's resolved internally
+                for concept boards via the q.10jqka.com.cn HTML scrape.
+            frequency: Only ``"d"`` is supported. THS upstream returns daily only.
+            board_type: ``"concept"`` or ``"industry"`` — required. Concept slugs
+                are remapped to inner clid; industry slugs map directly.
+            days: Used when ``start_date`` not given; the year range is
+                ``[today - days, today]`` capped at the full available history.
+            start_date / end_date: ``YYYY-MM-DD`` — wins over ``days``.
+
+        Returns:
+            list[dict] — sorted oldest → newest. Keys: date, open, high, low,
+            close, volume, amount. Empty list on failure (logged at WARNING).
+
+        Raises:
+            DataFetchError: frequency not in ``_THS_BOARD_FREQ_MAP``; board_type
+                missing or invalid; concept clid resolution returns None.
+        """
+        if not board_type:
+            raise DataFetchError(
+                "[ThsFetcher] get_board_history: board_type is required "
+                "(must be 'concept' or 'industry')"
+            )
+        freq_key = (frequency or "d").lower()
+        if freq_key not in _THS_BOARD_FREQ_MAP:
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_history: unsupported frequency "
+                f"{frequency!r}; THS upstream is daily-only"
+            )
+
+        # Year range
+        end_d = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else _date.today()
+        start_d = (
+            datetime.strptime(start_date, "%Y-%m-%d").date()
+            if start_date else end_d - timedelta(days=days)
+        )
+        start_year = start_d.year
+        end_year = end_d.year
+
+        # Resolve inner code
+        if board_type == "concept":
+            clid = self._resolve_ths_concept_clid(board_code)
+            if not clid:
+                raise DataFetchError(
+                    f"[ThsFetcher] could not resolve concept clid for slug={board_code!r}"
+                )
+            inner = clid
+        elif board_type == "industry":
+            inner = board_code
+        else:
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_history: board_type must be "
+                f"'concept' or 'industry' (got {board_type!r})"
+            )
+
+        # Fetch each year, concat, parse, filter
+        rows: list[dict] = []
+        for year in range(start_year, end_year + 1):
+            body = self._fetch_ths_board_year(inner, year)
+            rows.extend(self._parse_ths_kline_body(body))
+
+        # Dedupe by date (overlapping year fetches — rare in production, but
+        # mocks can return the same body across years).
+        seen: set[str] = set()
+        deduped: list[dict] = []
+        for r in rows:
+            if r["date"] in seen:
+                continue
+            seen.add(r["date"])
+            deduped.append(r)
+
+        # Date range filter (string comparison works for YYYY-MM-DD)
+        start_str = start_d.strftime("%Y-%m-%d")
+        end_str = end_d.strftime("%Y-%m-%d")
+        deduped = [r for r in deduped if start_str <= r["date"] <= end_str]
+
+        # Sort ascending
+        deduped.sort(key=lambda r: r["date"])
+        return deduped
 
     # ------------------------------------------------------------------
     # 热点题材 (Hot Topics)
