@@ -839,3 +839,21 @@ class FlashNewsResponse(BaseModel):
         default="",
         description="数据来源 fetcher 名 (e.g. EastMoneyFetcher)",
     )
+
+
+class StockNewsItem(BaseModel):
+    """Single news item for the per-stock news feed."""
+    title: str = Field(default="")
+    url: str = Field(default="")
+    source_domain: str = Field(default="")
+    publish_date: str = Field(default="", description="YYYY-MM-DD")
+    media_name: str = Field(default="")
+
+
+class StockNewsResponse(BaseModel):
+    """Stock-specific news feed response."""
+    code: str = Field(description="股票代码")
+    data: list[StockNewsItem] = Field(default_factory=list)
+    total: int = Field(default=0)
+    limit: int = Field(default=20)
+    source: str = Field(default="", description="数据来源 fetcher 名")

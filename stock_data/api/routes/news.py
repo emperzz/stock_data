@@ -4,16 +4,18 @@ Mounted by ``server.py`` with ``prefix="/api/v1"``; this router's own paths
 start with ``/news/...`` so the final URLs are ``/api/v1/news/...``.
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Path, Query
 
 from ..cache import (
     cache_endpoint,
     get_news_content_cache,
     get_news_flash_cache,
     get_news_search_cache,
+    get_news_stock_cache,
     make_news_content_cache_key,
     make_news_flash_cache_key,
     make_news_search_cache_key,
+    make_news_stock_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
@@ -23,6 +25,8 @@ from ..schemas import (
     NewsContentResponse,
     NewsItem,
     NewsSearchResponse,
+    StockNewsItem,
+    StockNewsResponse,
 )
 from .errors import map_errors
 from .helpers import get_manager
@@ -164,4 +168,45 @@ def get_news_content(
         source_domain=result.source_domain,
         extractor=result.extractor,
         byte_size=result.byte_size,
+    )
+
+
+@news_router.get(
+    "/stocks/{stock_code}/news",
+    response_model=StockNewsResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid stock code"},
+        502: {"model": ErrorResponse, "description": "All fetchers failed"},
+    },
+    tags=["stocks"],
+)
+@endpoint_meta(
+    summary="个股资讯（按股票代码直接拉 news feed）",
+    markets=["csi"],
+    capabilities=["STOCK_NEWS"],
+)
+@map_errors
+@cache_endpoint(
+    cache_fn=lambda *args, **kwargs: get_news_stock_cache(),
+    key_builder=lambda stock_code, limit: make_news_stock_cache_key(stock_code, limit),
+    hit_label="news_stock",
+)
+def get_stock_news(
+    stock_code: str = Path(max_length=20, description="股票代码 (e.g. 600519)"),
+    limit: int = Query(default=20, ge=1, le=100, description="条数 1-100"),
+) -> StockNewsResponse:
+    """Get news feed for a specific stock via EastMoney np-listapi.
+
+    Distinct from /news/search (which needs a keyword/中文 stock name);
+    this endpoint takes a 6-digit code directly and returns the stock's
+    dedicated news feed (rendered as "个股资讯" on the EastMoney quote page).
+    """
+    manager = get_manager()
+    items, source = manager.get_stock_news(stock_code, limit=limit)
+    return StockNewsResponse(
+        code=stock_code,
+        data=[StockNewsItem(**it) for it in items],
+        total=len(items),
+        limit=limit,
+        source=source,
     )
