@@ -39,9 +39,21 @@ class TestHtmlStructure:
         assert "loadManifest" in html_text
 
     def test_has_capability_definitions(self, html_text):
-        assert "STOCK_KLINE" in html_text
-        assert "STOCK_REALTIME_QUOTE" in html_text
-        assert "ANNOUNCEMENT" in html_text
+        """Capability identifiers (STOCK_KLINE / STOCK_REALTIME_QUOTE / ANNOUNCEMENT)
+        are no longer hardcoded in the HTML — they are fetched from
+        /control/api-manifest at runtime. Verify the contract:
+          - The MANIFEST object carries a `capabilities` field (for labels)
+          - The FALLBACK object initializes `capabilities: {}`
+          - Capability strings are surfaced via `cap-chip` rendering of
+            the per-fetcher row's `f.capabilities` array
+        """
+        assert "MANIFEST" in html_text
+        assert "capabilities" in html_text
+        assert "cap-chip" in html_text
+        # Per-fetcher capabilities are rendered from `f.capabilities`:
+        assert "f.capabilities" in html_text
+        # FALLBACK defines the empty capabilities map for the offline state:
+        assert "capabilities: {}" in html_text
 
     def test_has_theme_variables(self, html_text):
         assert "--bg:" in html_text
@@ -50,27 +62,11 @@ class TestHtmlStructure:
     def test_has_search_input(self, soup):
         assert soup.select_one("#search") is not None
 
-    def test_has_capability_filter(self, soup):
-        """Capability filter UI: 6 grouped checkboxes."""
-        cf = soup.select_one("#capabilityFilter")
-        assert cf is not None
-        checkboxes = cf.select("input[type=checkbox]")
-        assert len(checkboxes) == 6, f"Expected 6 capability groups, got {len(checkboxes)}"
-        values = [c.get("value") for c in checkboxes]
-        for g in ("quotes", "history", "metadata", "flows", "notices", "pools"):
-            assert g in values, f"Missing capability group: {g}"
-
     def test_has_fuzzy_search_handler(self, html_text):
         """Search uses fuzzyMatch (subsequence), not just String.includes."""
         assert "fuzzyMatch" in html_text
         assert "ctrlKey" in html_text
         assert "ArrowDown" in html_text  # keyboard navigation
-
-    def test_has_capability_groups_definition(self, html_text):
-        """The CAPABILITY_GROUPS mapping must exist in JS."""
-        assert "CAPABILITY_GROUPS" in html_text
-        assert "STOCK_REALTIME_QUOTE" in html_text
-        assert "ANNOUNCEMENT" in html_text
 
     def test_has_no_external_dependencies(self, html_text):
         """No <script src=...> or <link href=...> to external URLs."""

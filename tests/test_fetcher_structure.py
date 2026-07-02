@@ -25,7 +25,8 @@ class TestAkshareFetcher:
 
     def test_name_and_priority(self, fetcher):
         assert fetcher.name == "AkshareFetcher"
-        assert fetcher.priority == 2
+        # Zzshare took P2 (free, broad coverage) per commit e7f3b68; Akshare → P3
+        assert fetcher.priority == 3
 
     def test_is_available(self, fetcher):
         """is_available() must reflect whether the akshare package is importable.
@@ -154,7 +155,8 @@ class TestYfinanceFetcher:
 
     def test_name_and_priority(self, fetcher):
         assert fetcher.name == "YfinanceFetcher"
-        assert fetcher.priority == 3
+        # Yielded P3 to Zzshare per commit e7f3b68
+        assert fetcher.priority == 4
 
     def test_supported_markets(self, fetcher):
         assert fetcher.supported_markets == {"csi", "hk", "us"}
@@ -205,7 +207,8 @@ class TestZhituFetcher:
 
     def test_name_and_priority(self, fetcher):
         assert fetcher.name == "ZhituFetcher"
-        assert fetcher.priority == 4
+        # Yielded P4 to Zzshare per commit e7f3b68 (Zhitu kept for paid/enhanced data only)
+        assert fetcher.priority == 5
 
     def test_supported_markets(self, fetcher):
         assert fetcher.supported_markets == {"csi"}

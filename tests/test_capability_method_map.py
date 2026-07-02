@@ -4,12 +4,11 @@ This table is the single source of truth used by the explorer manifest to
 decide which fetcher method corresponds to which DataCapability.
 Every DataCapability flag MUST be in CAPABILITY_TO_METHOD.
 
-Also enforces the explorer-side mappings that every DataCapability flag MUST
-appear in: (a) `explorer.tags.CAPABILITY_LABELS` (decorative icon/label)
-and (b) `explorer/static/index.html` `CAPABILITY_GROUPS` (sidebar filter).
+Also enforces the explorer-side mapping that every DataCapability flag MUST
+have a {label, icon} entry in `explorer.tags.CAPABILITY_LABELS` (the
+HTML `CAPABILITY_GROUPS` sidebar filter was removed in commit 37e52ed).
 Missing entries silently drop endpoints from the UI.
 """
-import re
 from pathlib import Path
 
 import pytest
@@ -126,67 +125,49 @@ _HTML_PATH = Path(__file__).resolve().parent.parent / "stock_data" / "explorer" 
 
 
 def _extract_capability_groups(html_text: str) -> dict[str, list[str]]:
-    """Parse the literal `const CAPABILITY_GROUPS = { ... }` block from index.html.
+    """DEPRECATED: capability filter UI was removed in commit 37e52ed.
 
-    Keeps this test resilient to JS formatting changes (single-line vs.
-    multi-line, trailing commas) by scanning line-by-line for entries of
-    the shape `<group>: [<caps>],`.
+    Kept as a no-op stub for one release cycle so external imports don't
+    break. Remove in the next cleanup pass. The new equivalent test
+    `test_every_capability_has_a_label_in_capability_labels` validates
+    coverage via `explorer.tags.CAPABILITY_LABELS` (server-side source
+    of truth) instead of parsing the HTML constant.
     """
-    groups: dict[str, list[str]] = {}
-    in_block = False
-    depth = 0
-    for line in html_text.splitlines():
-        stripped = line.strip()
-        if not in_block:
-            if stripped.startswith("const CAPABILITY_GROUPS"):
-                in_block = True
-                # Single-line form: const CAPABILITY_GROUPS = { quotes: [...] };
-                if "}" in stripped:
-                    return _parse_inline_groups(stripped)
-            continue
-        # multi-line: collect entries until matching closing brace
-        if "{" in stripped:
-            depth += stripped.count("{")
-        if "}" in stripped:
-            depth -= stripped.count("}")
-            if depth <= 0:
-                break
-        m = re.match(r'^([A-Za-z_]\w*):\s*\[([^\]]*)\],?\s*$', stripped)
-        if m:
-            group, caps_str = m.group(1), m.group(2)
-            groups[group] = re.findall(r'"([^"]+)"', caps_str)
-    return groups
+    return {}
 
 
 def _parse_inline_groups(stripped: str) -> dict[str, list[str]]:
-    """Fallback: extract `key: [a, b]` entries from a single-line literal."""
-    groups: dict[str, list[str]] = {}
-    for m in re.finditer(r'(\w+):\s*\[([^\]]*)\]', stripped):
-        groups[m.group(1)] = re.findall(r'"([^"]+)"', m.group(2))
-    return groups
+    """DEPRECATED: see `_extract_capability_groups`."""
+    return {}
 
 
-def test_every_capability_is_in_some_capability_group():
-    """Every DataCapability flag must appear in at least one HTML capability group.
+def test_every_capability_has_a_label_in_capability_labels():
+    """Every DataCapability flag must have a decorative label/icon entry in
+    `explorer.tags.CAPABILITY_LABELS`.
 
-    `renderContent()` filters endpoints by `epMatchesCapabilityFilter`, which
-    checks `ep.capabilities.some(c => activeCaps.includes(c))`. If a
-    capability is in NONE of the active groups, the endpoint is silently
-    dropped. This test catches the STOCK_INFO-style gap where the server
-    registers the capability but the UI filter has no slot for it.
+    The HTML no longer carries a `CAPABILITY_GROUPS` constant (commit 37e52ed
+    removed the capability filter UI). Capabilities are now sourced dynamically
+    from the server-side `/control/api-manifest`, and `CAPABILITY_LABELS` is
+    the new source of truth for how each capability renders (label + icon).
+    A capability missing from `CAPABILITY_LABELS` shows up as raw `STOCK_XXX`
+    text in the explorer's fetcher-row capability chips, hurting UX and
+    signalling the developer forgot to register a new flag here.
     """
-    if not _HTML_PATH.exists():
-        pytest.skip("explorer/static/index.html not found")
-    html_text = _HTML_PATH.read_text(encoding="utf-8")
-    groups = _extract_capability_groups(html_text)
-    assert groups, "Could not parse CAPABILITY_GROUPS from index.html"
+    from stock_data.explorer.tags import CAPABILITY_LABELS
 
-    all_caps_in_groups = {cap for caps in groups.values() for cap in caps}
-    missing = [c.name for c in DataCapability if c.name not in all_caps_in_groups]
+    missing = [c.name for c in DataCapability if c.name not in CAPABILITY_LABELS]
     assert not missing, (
-        f"DataCapability flag(s) missing from every CAPABILITY_GROUPS entry "
-        f"in stock_data/explorer/static/index.html: {missing}. "
-        f"Add each flag to at least one group, otherwise "
-        f"epMatchesCapabilityFilter silently hides the endpoint card. "
-        f"Current groups: {groups}"
+        f"DataCapability flag(s) missing from CAPABILITY_LABELS in "
+        f"stock_data/explorer/tags.py: {missing}. "
+        f"Add a {{label, icon}} entry for each, otherwise the explorer's "
+        f"fetcher-row chips render the raw flag name. "
+        f"Current labels: {sorted(CAPABILITY_LABELS.keys())}"
     )
+
+    # Every entry must have both a label and an icon (icon can be any
+    # non-empty string — typically an emoji).
+    for cap_name, entry in CAPABILITY_LABELS.items():
+        assert "label" in entry, f"CAPABILITY_LABELS[{cap_name!r}] missing 'label'"
+        assert "icon" in entry, f"CAPABILITY_LABELS[{cap_name!r}] missing 'icon'"
+        assert entry["label"].strip(), f"CAPABILITY_LABELS[{cap_name!r}] label is empty"
+        assert entry["icon"].strip(), f"CAPABILITY_LABELS[{cap_name!r}] icon is empty"
