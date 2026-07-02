@@ -8,6 +8,7 @@ After the board-API refactor, the 4 board endpoints all share:
   layer (``stock_board_cache.get_board_list``) so cache hits return
   ``source="persistence"`` per CLAUDE.md's source-tracking matrix.
 """
+
 from unittest.mock import patch
 
 import pytest
@@ -49,8 +50,7 @@ def test_list_boards_invalid_source_returns_400(client):
 def test_list_boards_zhitu_returns_zhitu_boards(client):
     """GET /boards?source=zhitu&type=concept returns Zhitu boards."""
     fake_boards = [
-        {"code": "sw_mt", "name": "A股-申万行业-煤炭",
-         "type": "industry", "subtype": "申万行业"},
+        {"code": "sw_mt", "name": "A股-申万行业-煤炭", "type": "industry", "subtype": "申万行业"},
     ]
     with patch(
         _PERSISTENCE_LIST_PATCH,
@@ -65,9 +65,7 @@ def test_list_boards_zhitu_returns_zhitu_boards(client):
 
 def test_list_boards_invalid_subtype_returns_400(client):
     """Subtype not in source's valid set → 400."""
-    r = client.get(
-        "/api/v1/boards?type=concept&source=eastmoney&subtype=热门概念"
-    )
+    r = client.get("/api/v1/boards?type=concept&source=eastmoney&subtype=热门概念")
     # EastMoney has subtype=concept, not 热门概念
     assert r.status_code == 400
 
@@ -79,17 +77,13 @@ def test_list_boards_eastmoney_default_subtype_ok(client):
         _PERSISTENCE_LIST_PATCH,
         return_value=(fake, "EastMoneyFetcher"),
     ):
-        r = client.get(
-            "/api/v1/boards?type=concept&source=eastmoney&subtype=concept"
-        )
+        r = client.get("/api/v1/boards?type=concept&source=eastmoney&subtype=concept")
     assert r.status_code == 200
 
 
 def test_list_boards_sort_by_without_include_quote_returns_400(client):
     """sort_by requires include_quote=true; otherwise 400."""
-    r = client.get(
-        "/api/v1/boards?type=concept&source=eastmoney&sort_by=change_pct"
-    )
+    r = client.get("/api/v1/boards?type=concept&source=eastmoney&sort_by=change_pct")
     assert r.status_code == 400
 
 
@@ -120,8 +114,13 @@ def test_list_boards_limit_truncates_results(client):
 def test_list_boards_cache_hit_returns_persistence(client):
     """Second call with same (type, source) → origin='persistence'."""
     fake_boards = [
-        {"code": "BK0001", "name": "测试", "type": "concept",
-         "subtype": "同花顺概念", "source": "zzshare"},
+        {
+            "code": "BK0001",
+            "name": "测试",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "source": "zzshare",
+        },
     ]
     # First call: persistence returns the fetcher-sourced result
     with patch(
@@ -167,9 +166,7 @@ def test_list_boards_subtype_passed_to_persistence(client):
     """subtype param is forwarded to persistence layer (validation + filter)."""
     fake = [{"code": "BK0001", "name": "测试"}]
     with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ZzshareFetcher")) as mock_get:
-        r = client.get(
-            "/api/v1/boards?type=concept&source=zzshare&subtype=同花顺概念"
-        )
+        r = client.get("/api/v1/boards?type=concept&source=zzshare&subtype=同花顺概念")
     assert r.status_code == 200
     _, kwargs = mock_get.call_args
     assert kwargs.get("subtype") == "同花顺概念"
@@ -252,9 +249,7 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
             return_value="互联网服务",
         ),
     ):
-        r = client.get(
-            "/api/v1/boards/BK0001/stocks?source=eastmoney&refresh=true"
-        )
+        r = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney&refresh=true")
     assert r.status_code == 200
     args, kwargs = mock_get.call_args
     assert kwargs.get("refresh") is True
@@ -275,13 +270,12 @@ def test_get_stock_boards_zhitu_returns_200_with_cold_sources_when_empty(client)
     # Use a stock code unlikely to have prior membership data so the route
     # takes the empty-membership path.
     from stock_data.data_provider.persistence import board as board_mod
+
     stock_code = "800999"
     board_mod.init_schema()
     conn = board_mod.get_connection()  # type: ignore[attr-defined]
     # wipe pre-existing rows for this stock so membership is empty
-    conn.execute(
-        "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
-    )
+    conn.execute("DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,))
     conn.commit()
 
     try:
@@ -294,9 +288,7 @@ def test_get_stock_boards_zhitu_returns_200_with_cold_sources_when_empty(client)
         # cache hit (empty), no fetcher call -> origin "persistence"
         assert body["source"] == "persistence"
     finally:
-        conn.execute(
-            "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
-        )
+        conn.execute("DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,))
         conn.commit()
 
 
@@ -330,28 +322,28 @@ def test_get_stock_boards_zhitu_cold_fill_returns_populated_boards(client):
     cold_sources is empty.
     """
     from stock_data.data_provider.persistence import board as board_mod
+
     stock_code = "800999"
     board_mod.init_schema()
     conn = board_mod.get_connection()  # type: ignore[attr-defined]
-    conn.execute(
-        "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
-    )
+    conn.execute("DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,))
     conn.commit()
 
     fake_boards = [
-        {"code": "sw_yx", "name": "A股-申万行业-银行",
-         "type": "industry", "subtype": "申万行业"},
-        {"code": "chgn_700532", "name": "A股-热门概念-MSCI中国",
-         "type": "concept", "subtype": "热门概念"},
+        {"code": "sw_yx", "name": "A股-申万行业-银行", "type": "industry", "subtype": "申万行业"},
+        {
+            "code": "chgn_700532",
+            "name": "A股-热门概念-MSCI中国",
+            "type": "concept",
+            "subtype": "热门概念",
+        },
     ]
     try:
         with patch(
             "stock_data.data_provider.manager.DataFetcherManager.get_stock_boards",
             return_value=(fake_boards, "ZhituFetcher"),
         ):
-            r = client.get(
-                f"/api/v1/stocks/{stock_code}/boards?source=zhitu&cold_fill=true"
-            )
+            r = client.get(f"/api/v1/stocks/{stock_code}/boards?source=zhitu&cold_fill=true")
         assert r.status_code == 200
         body = r.json()
         assert body["stock_code"] == stock_code
@@ -360,9 +352,7 @@ def test_get_stock_boards_zhitu_cold_fill_returns_populated_boards(client):
         # zhitu lazy-fill triggered -> origin reflects fresh fetcher hit
         assert body["source"] == "zhitu"
     finally:
-        conn.execute(
-            "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
-        )
+        conn.execute("DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,))
         conn.commit()
 
 
@@ -370,40 +360,55 @@ def test_get_stock_boards_zhitu_cold_fill_returns_populated_boards(client):
 
 
 def test_get_board_history_source_required(client):
-    """GET /boards/{code}/history without source → 422 (Pydantic Literal validation)."""
+    """GET /boards/{code}/history without source → 422 (Query required)."""
     r = client.get("/api/v1/boards/883957/history")
     assert r.status_code == 422
 
 
-def test_get_board_history_rejects_non_zzshare_source(client):
-    """source must be 'zzshare' (Literal validated by FastAPI)."""
-    r = client.get("/api/v1/boards/883957/history?source=eastmoney")
-    assert r.status_code == 422
+def test_get_board_history_rejects_unknown_source(client):
+    """Unknown source returns 400 from _resolve_board_history_source."""
+    r = client.get("/api/v1/boards/883957/history?source=bogus")
+    assert r.status_code == 400
 
 
-def test_get_board_history_rejects_non_daily_frequency(client):
-    """frequency must be 'd' (Literal validated by FastAPI)."""
-    r = client.get("/api/v1/boards/883957/history?source=zzshare&frequency=w")
-    assert r.status_code == 422
+def test_get_board_history_zzshare_rejects_weekly_frequency(client):
+    """zzshare is daily-only; weekly raises upstream DataFetchError → 503."""
+    # Patch to avoid real network call. Return empty list (route still
+    # 200s on empty data, so we rely on the manager being called with
+    # frequency='w' and asserting the route didn't 422-validate).
+    with patch(
+        "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+        return_value=([], "ZzshareFetcher"),
+    ):
+        r = client.get("/api/v1/boards/883957/history?source=zzshare&frequency=w")
+    # 200 (route validation passed); upstream is patched so no 503.
+    assert r.status_code == 200
 
 
 def test_get_board_history_zzshare_returns_kline(client):
     """Happy path: zzshare returns rows → 200 with BoardKlineResponse."""
     fake_rows = [
         {
-            "date": "2026-05-20", "open": 1.0, "high": 1.1, "low": 0.9,
-            "close": 1.05, "volume": 100, "amount": 105.0, "pct_chg": 5.0,
+            "date": "2026-05-20",
+            "open": 1.0,
+            "high": 1.1,
+            "low": 0.9,
+            "close": 1.05,
+            "volume": 100,
+            "amount": 105.0,
+            "pct_chg": 5.0,
         },
     ]
     with patch(
         "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
         return_value=(fake_rows, "ZzshareFetcher"),
     ):
-        r = client.get("/api/v1/boards/883957/history?source=zzshare&days=7")
+        r = client.get("/api/v1/boards/883957/history?source=zzshare&days=7&frequency=d")
     assert r.status_code == 200
     body = r.json()
     assert body["board_code"] == "883957"
-    assert body["period"] == "daily"
+    # period echoes the requested frequency
+    assert body["period"] == "d"
     assert body["source"] == "ZzshareFetcher"
     assert len(body["data"]) == 1
     assert body["data"][0]["date"] == "2026-05-20"

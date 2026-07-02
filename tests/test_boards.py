@@ -31,8 +31,18 @@ class TestBoardAPIRoutes:
         with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = (
                 [
-                    {"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"},
-                    {"code": "BK1049", "name": "云计算", "board_type": "concept", "source": "eastmoney"},
+                    {
+                        "code": "BK1048",
+                        "name": "互联网服务",
+                        "board_type": "concept",
+                        "source": "eastmoney",
+                    },
+                    {
+                        "code": "BK1049",
+                        "name": "云计算",
+                        "board_type": "concept",
+                        "source": "eastmoney",
+                    },
                 ],
                 "EastMoneyFetcher",
             )
@@ -47,7 +57,14 @@ class TestBoardAPIRoutes:
         """Test GET /api/v1/boards with type=industry."""
         with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = (
-                [{"code": "BK0816", "name": "银行", "board_type": "industry", "source": "eastmoney"}],
+                [
+                    {
+                        "code": "BK0816",
+                        "name": "银行",
+                        "board_type": "industry",
+                        "source": "eastmoney",
+                    }
+                ],
                 "EastMoneyFetcher",
             )
             response = client.get("/api/v1/boards?type=industry&source=eastmoney")
@@ -73,8 +90,12 @@ class TestBoardAPIRoutes:
     def test_get_board_stocks(self, client):
         """Test GET /api/v1/boards/{board_code}/stocks."""
         with (
-            patch("stock_data.data_provider.manager.DataFetcherManager.get_board_stocks") as mock_get_stocks,
-            patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as mock_get_boards,
+            patch(
+                "stock_data.data_provider.manager.DataFetcherManager.get_board_stocks"
+            ) as mock_get_stocks,
+            patch(
+                "stock_data.data_provider.manager.DataFetcherManager.get_all_boards"
+            ) as mock_get_boards,
         ):
             mock_get_stocks.return_value = (
                 [
@@ -84,7 +105,14 @@ class TestBoardAPIRoutes:
                 "EastMoneyFetcher",
             )
             mock_get_boards.return_value = (
-                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
+                [
+                    {
+                        "code": "BK1048",
+                        "name": "互联网服务",
+                        "board_type": "concept",
+                        "source": "eastmoney",
+                    }
+                ],
                 "EastMoneyFetcher",
             )
             response = client.get("/api/v1/boards/BK1048/stocks?source=eastmoney")
@@ -103,8 +131,12 @@ class TestBoardAPIRoutes:
         the new board manager methods.
         """
         with (
-            patch("stock_data.data_provider.manager.DataFetcherManager.get_board_stocks") as _mock_get_stocks,
-            patch("stock_data.data_provider.manager.DataFetcherManager.get_all_boards") as _mock_get_boards,
+            patch(
+                "stock_data.data_provider.manager.DataFetcherManager.get_board_stocks"
+            ) as _mock_get_stocks,
+            patch(
+                "stock_data.data_provider.manager.DataFetcherManager.get_all_boards"
+            ) as _mock_get_boards,
             patch("stock_data.api.routes.boards.get_manager") as mock_manager,
         ):
             mock_mgr = MagicMock()
@@ -120,12 +152,21 @@ class TestBoardAPIRoutes:
                 "EastMoneyFetcher",
             )
             mock_mgr.get_all_boards.return_value = (
-                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
+                [
+                    {
+                        "code": "BK1048",
+                        "name": "互联网服务",
+                        "board_type": "concept",
+                        "source": "eastmoney",
+                    }
+                ],
                 "EastMoneyFetcher",
             )
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/boards/BK1048/stocks?source=eastmoney&include_quote=true")
+            response = client.get(
+                "/api/v1/boards/BK1048/stocks?source=eastmoney&include_quote=true"
+            )
             assert response.status_code == 200
             data = response.json()
             assert "stocks" in data
@@ -136,7 +177,14 @@ class TestBoardAPIRoutes:
         """Test GET /api/v1/boards?refresh=true forces refresh."""
         with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = (
-                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
+                [
+                    {
+                        "code": "BK1048",
+                        "name": "互联网服务",
+                        "board_type": "concept",
+                        "source": "eastmoney",
+                    }
+                ],
                 "EastMoneyFetcher",
             )
             response = client.get("/api/v1/boards?type=concept&source=eastmoney&refresh=true")
@@ -207,7 +255,14 @@ class TestBoardAPIRoutes:
             patch(_PERSISTENCE_PATCH) as mock_get,
         ):
             mock_get.return_value = (
-                [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "source": "eastmoney"}],
+                [
+                    {
+                        "code": "BK1048",
+                        "name": "互联网服务",
+                        "board_type": "concept",
+                        "source": "eastmoney",
+                    }
+                ],
                 "EastMoneyFetcher",
             )
             response = client.get("/api/v1/boards?type=concept&source=eastmoney&include_quote=true")
@@ -224,6 +279,12 @@ class TestThsAlias:
         "endpoint,patch_target,extra_params,return_value",
         [
             # (url path, persistence patch target, extra query params, mocked return)
+            #
+            # NOTE: /boards/{code}/history is intentionally EXCLUDED from this
+            # set. The history route uses `_resolve_board_history_source` which
+            # does NOT alias `ths→zzshare` (THS as a K-line source routes to
+            # ThsFetcher, not ZzshareFetcher). The alias only applies to
+            # board-list and board-stocks endpoints.
             (
                 "/api/v1/boards?type=concept&source=ths",
                 "stock_data.data_provider.persistence.board.get_board_list",
@@ -237,13 +298,6 @@ class TestThsAlias:
                 {},
                 # get_board_stocks route raises 404 on empty list — use a non-empty stub
                 [{"stock_code": "600519", "stock_name": "贵州茅台"}],
-            ),
-            (
-                "/api/v1/boards/BK1048/history?source=ths",
-                "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
-                {"frequency": "d"},
-                # get_board_history tolerates empty data
-                [],
             ),
         ],
     )
@@ -386,7 +440,9 @@ class TestBoardSchemas:
         """Test BoardStockInfo with quote data."""
         from stock_data.api.schemas import BoardStockInfo
 
-        stock = BoardStockInfo(code="600519", name="贵州茅台", price=1800.0, change_pct=2.5, volume=1000000)
+        stock = BoardStockInfo(
+            code="600519", name="贵州茅台", price=1800.0, change_pct=2.5, volume=1000000
+        )
         assert stock.price == 1800.0
         assert stock.change_pct == 2.5
         assert stock.volume == 1000000
@@ -402,8 +458,13 @@ class TestBoardSchemas:
             data=[
                 KLineData(
                     date="2026-05-20",
-                    open=100.0, high=105.0, low=99.0, close=104.0,
-                    volume=1_000_000, amount=104_000_000.0, change_percent=4.0,
+                    open=100.0,
+                    high=105.0,
+                    low=99.0,
+                    close=104.0,
+                    volume=1_000_000,
+                    amount=104_000_000.0,
+                    change_percent=4.0,
                 ),
             ],
             source="ZzshareFetcher",

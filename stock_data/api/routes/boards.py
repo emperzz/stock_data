@@ -71,6 +71,40 @@ def _resolve_source(source: str) -> str:
     return source
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# board-history source routing — does NOT alias ths→zzshare.
+# Different from `_resolve_source` (used by board-list endpoints), because
+# THS as a board K-line source routes to ThsFetcher (different code system,
+# different upstream from zzshare's plates_list). The persistence layer's
+# alias still applies to board listings / stocks — only this route uses
+# the strict version.
+# ──────────────────────────────────────────────────────────────────────────
+_BOARD_HISTORY_VALID_SOURCES: tuple[str, ...] = ("zzshare", "ths", "eastmoney")
+
+
+def _resolve_board_history_source(source: str) -> str:
+    """Validate `source` for the board-history route — does NOT alias ths→zzshare.
+
+    Raises HTTPException(400) on invalid source. The set of valid sources
+    is intentionally narrower than `_SOURCES` (board-list): THS is exposed
+    here because ThsFetcher has a board K-line implementation, and EastMoney
+    is exposed because EastMoneyFetcher has a multi-frequency implementation.
+    Zhitu does not expose a board K-line endpoint and is therefore excluded.
+    """
+    if source not in _BOARD_HISTORY_VALID_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_source",
+                "message": (
+                    f"Unknown source '{source}'. "
+                    f"Valid sources: {list(_BOARD_HISTORY_VALID_SOURCES)}"
+                ),
+            },
+        )
+    return source
+
+
 def _resolve_type(board_type: str) -> str:
     """Validate type parameter."""
     if board_type not in _TYPES:
@@ -340,7 +374,8 @@ def get_stock_boards(
     ),
     subtype: str | None = Query(None, description="Filter by source-specific subtype"),
     cold_fill: bool = Query(
-        False, description="Opt-in zhitu lazy-fill on cold data. "
+        False,
+        description="Opt-in zhitu lazy-fill on cold data. "
         "Default false (cold data surfaces in cold_sources instead).",
     ),
 ) -> StockBoardsResponse:
@@ -398,26 +433,60 @@ def get_stock_boards(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块 K 线（日线，ZZSHARE）",
+    summary="板块 K 线 (zzshare 日线 / eastmoney 多周期 / ths 概念/行业日线)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_history",
 )
 @map_errors
 def get_board_history(
-    board_code: str = Path(max_length=30, description="Board code (zzshare format, e.g. '883957')"),
-    source: Literal["zzshare", "ths"] = Query(
-        ..., description="Data source. 'ths' is an alias for 'zzshare'."
+    board_code: str = Path(
+        max_length=30,
+        description=(
+            "Board code (source-specific). Examples: "
+            "zzshare='883957'; eastmoney='BK0996'; "
+            "ths concept='301558'; ths industry='881270'"
+        ),
     ),
-    frequency: Literal["d"] = Query(
-        "d", description="K-line frequency (daily only — zzshare plate_kline is daily-only)"
+    source: str = Query(
+        ...,
+        description=(
+            "Data source. One of: zzshare, ths, eastmoney. "
+            "'ths' here = ThsFetcher (NOT zzshare alias). "
+            "Validated by _resolve_board_history_source (400 on unknown)."
+        ),
+    ),
+    frequency: Literal["d", "w", "m", "5m", "15m", "30m", "60m"] = Query(
+        "d",
+        description=(
+            "K-line frequency. eastmoney supports all; "
+            "zzshare/ths are daily-only (other frequencies raise 4xx)"
+        ),
     ),
     start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
     days: int = Query(30, ge=1, le=365, description="Days (used when start_date not given)"),
+    board_type: Literal["concept", "industry"] | None = Query(
+        None,
+        description=(
+            "Required when source='ths' (concept vs industry boards use "
+            "different code systems). Ignored by other sources."
+        ),
+    ),
 ) -> BoardKlineResponse:
-    """Get historical K-line for a board (zzshare plate_kline)."""
-    source = _resolve_source(source)
+    """Get historical K-line for a board. Source-routed, no failover."""
+    source = _resolve_board_history_source(source)
+    # THS uses two incompatible board-code systems (concept vs industry).
+    # Fail fast at the route layer (422) when board_type is missing, rather
+    # than letting ThsFetcher raise a generic upstream error (503).
+    if source == "ths" and board_type is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "missing_board_type",
+                "message": "board_type is required when source='ths' (concept or industry)",
+            },
+        )
     manager = get_manager()
     try:
         rows, origin = manager.get_board_history(
@@ -427,6 +496,7 @@ def get_board_history(
             start_date=start_date,
             end_date=end_date,
             days=days,
+            board_type=board_type,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)}) from e
@@ -459,7 +529,7 @@ def get_board_history(
     return BoardKlineResponse(
         board_code=board_code,
         board_name=board_name,
-        period="daily",
+        period=frequency,
         data=kline_data,
         source=origin,
     )
