@@ -217,6 +217,52 @@ class TestBoardAPIRoutes:
             assert kwargs.get("include_quote") is True
 
 
+class TestThsAlias:
+    """?source=ths must behave identically to ?source=zzshare on all list endpoints."""
+
+    @pytest.mark.parametrize(
+        "endpoint,patch_target,extra_params,return_value",
+        [
+            # (url path, persistence patch target, extra query params, mocked return)
+            (
+                "/api/v1/boards?type=concept&source=ths",
+                "stock_data.data_provider.persistence.board.get_board_list",
+                {},
+                # list_boards route requires 'code'/'name' keys per BoardInfo
+                [{"code": "BK1048", "name": "互联网服务"}],
+            ),
+            (
+                "/api/v1/boards/BK1048/stocks?source=ths",
+                "stock_data.data_provider.persistence.board.get_board_stocks",
+                {},
+                # get_board_stocks route raises 404 on empty list — use a non-empty stub
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+            ),
+            (
+                "/api/v1/boards/BK1048/history?source=ths",
+                "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+                {"frequency": "d"},
+                # get_board_history tolerates empty data
+                [],
+            ),
+        ],
+    )
+    def test_ths_alias_remaps_to_zzshare(
+        self, client, endpoint, patch_target, extra_params, return_value
+    ):
+        """source=ths → routes to zzshare fetcher; DB writes use source='zzshare'."""
+        url = endpoint + "".join(f"&{k}={v}" for k, v in extra_params.items())
+        with patch(patch_target) as mock_get:
+            mock_get.return_value = (return_value, "zzshare")
+            response = client.get(url)
+            assert response.status_code == 200
+            # The persistence/manager layer must have been called with
+            # source='zzshare', not source='ths'. This proves the alias remap
+            # happened upstream of the persistence boundary.
+            called_kwargs = mock_get.call_args.kwargs
+            assert called_kwargs["source"] == "zzshare"
+
+
 class TestAkshareFetcherBoards:
     """Tests that AkshareFetcher no longer claims STOCK_BOARD.
 
