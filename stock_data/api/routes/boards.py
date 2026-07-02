@@ -398,9 +398,10 @@ def get_stock_boards(
         500: {"model": ErrorResponse, "description": "Server error"},
     },
     tags=["boards"],
+    deprecated=True,
 )
 @endpoint_meta(
-    summary="股票所属板块（跨源视图）",
+    summary="股票所属板块（跨源视图，已弃用，请改用 /stocks/{code}/boards）",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     # No fetcher_method: this endpoint is pure DB aggregation, never calls a fetcher.
@@ -415,41 +416,46 @@ def get_stock_board_memberships(
 ) -> BoardMembershipsResponse:
     """Cross-source view of all known boards a stock belongs to.
 
-    Reads ``stock_board_membership`` directly. Does NOT call any fetcher —
-    sources without data are returned in ``cold_sources`` so the caller
-    can decide whether to bootstrap via CLI.
+    **DEPRECATED**: This endpoint is preserved for backwards compatibility.
+    New code should use ``/stocks/{code}/boards?source=...`` instead, which
+    returns a unified flat-list response with per-entry source.
+
+    Behavior preserved:
+    - Reads stock_board_membership directly (no fetcher calls; never lazy-fills)
+    - Groups entries by source in `memberships` dict
+    - Lists sources with no data in `cold_sources`
+
+    Schema unchanged.
     """
     if type is not None:
         _resolve_type(type)
 
-    # Read all rows for this stock (one query, indexed by stock_code)
-    rows = stock_board_cache.read_membership(stock_code=stock_code)
+    # All sources, no lazy-fill (legacy behavior). Same helper as the unified
+    # endpoint — only the response shaping differs.
+    entries, cold_sources, _ = stock_board_cache.get_stock_memberships(
+        stock_code=stock_code,
+        sources=list(stock_board_cache.VALID_SOURCES),
+        type=type,
+        subtype=subtype,
+        cold_fill=False,
+        manager=get_manager(),
+    )
 
-    # SQL-level filtering (well, post-SQL Python filtering — small list)
-    if type is not None:
-        rows = [r for r in rows if r["board_type"] == type]
-    if subtype is not None:
-        rows = [r for r in rows if r["subtype"] == subtype]
-
-    # Group by source
     by_source: dict[str, list[BoardMembershipEntry]] = {}
-    for r in rows:
-        by_source.setdefault(r["source"], []).append(
+    for e in entries:
+        by_source.setdefault(e["source"], []).append(
             BoardMembershipEntry(
-                board_code=r["board_code"],
-                board_name=r["board_name"],
-                board_type=r["board_type"],
-                subtype=r["subtype"] or "",
+                board_code=e["code"],
+                board_name=e["name"],
+                board_type=e.get("type", ""),
+                subtype=e.get("subtype", ""),
             )
         )
-
-    # cold_sources: known sources without data for this stock
-    cold = [s for s in _SOURCES if s not in by_source]
 
     return BoardMembershipsResponse(
         stock_code=stock_code,
         memberships=by_source,
-        cold_sources=cold,
+        cold_sources=cold_sources,
     )
 
 

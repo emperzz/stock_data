@@ -116,3 +116,32 @@ def test_view_filters_by_subtype(fresh_db):
     assert len(zhitu) == 1
     assert zhitu[0]["board_code"] == "sw_yx"
     assert zhitu[0]["subtype"] == "申万行业"
+
+
+def test_wrapper_response_matches_helper_reshape(fresh_db):
+    """Sanity: wrapper's {memberships: {src: [...]}} is the helper's
+    flat list reshaped by source. Verify a multi-source seed round-trips."""
+    board_mod.upsert_membership_bulk(
+        source="zhitu",
+        stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
+        board_code="sw_yx",
+        board_name="SW",
+        board_type="industry",
+        subtype="申万行业",
+    )
+    board_mod.upsert_membership_bulk(
+        source="eastmoney",
+        stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
+        board_code="BK1048",
+        board_name="EM",
+        board_type="concept",
+        subtype="concept",
+    )
+    with TestClient(app) as client:
+        r = client.get("/api/v1/stocks/600519/board-memberships")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body["memberships"].keys()) == {"zhitu", "eastmoney"}
+    assert "zzshare" in body["cold_sources"]
+    assert body["memberships"]["zhitu"][0]["board_code"] == "sw_yx"
+    assert body["memberships"]["eastmoney"][0]["board_code"] == "BK1048"
