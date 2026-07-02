@@ -338,19 +338,29 @@ class StockBoardInfo(BaseModel):
         description="Source-specific subtype (e.g. '申万行业' for Zhitu, "
         "'concept' for EastMoney)",
     )
+    source: str = Field(
+        description="eastmoney / zhitu / zzshare — which source provided this entry. "
+        "Always present after endpoint merge (was implicit before).",
+    )
 
 
 class StockBoardsResponse(BaseModel):
-    """Response for /stocks/{stock_code}/boards endpoint."""
+    """Unified response for /stocks/{stock_code}/boards endpoint."""
 
     stock_code: str = Field(description="Stock code queried")
     source: str = Field(
         default="",
-        description="数据来源 fetcher 名 (e.g. 'zhitu')",
+        description="数据来源 fetcher 名 (e.g. 'zhitu'), 'persistence' on cache hit, "
+        "'merged' when multiple sources were aggregated.",
     )
     data: list[StockBoardInfo] = Field(
         default_factory=list,
-        description="Boards the stock belongs to",
+        description="Boards the stock belongs to. Each entry carries its source.",
+    )
+    cold_sources: list[str] = Field(
+        default_factory=list,
+        description="Sources with no membership data for this stock. "
+        "Always present (empty list = all requested sources returned data).",
     )
 
 
