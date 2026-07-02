@@ -210,13 +210,13 @@ Compact overview:
 | Fetcher | Priority | Markets | Capabilities (in addition to defaults) | Auth |
 |---|---|---|---|---|
 | `TushareFetcher` | 0 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `INDEX_KLINE` | `TUSHARE_TOKEN` |
-| `BaostockFetcher` | 1 | csi | `STOCK_KLINE`, `TRADE_CALENDAR`, `INDEX_KLINE` | none |
+| `BaostockFetcher` | 1 | csi | `STOCK_KLINE`, `TRADE_CALENDAR`, `INDEX_KLINE`, `DIVIDEND` | none |
 | `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_*`, `STOCK_ZT_POOL` | none |
 | `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `INDEX_KLINE`, `INDEX_REALTIME_QUOTE` | none |
 | `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `STOCK_KLINE` (minute fallback), `STOCK_LIST` (P5 backup), `STOCK_BOARD`, `DIVIDEND`, `FUND_FLOW`, `HOLDER_NUM` | `ZHITU_TOKEN` |
 | `ZzshareFetcher` | 2 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
-| `TencentFetcher` | 6 | csi, hk | `STOCK_REALTIME_QUOTE`, `INDEX_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
-| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `STOCK_BOARD` | none |
+| `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE`, `INDEX_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
+| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `NEWS_SEARCH`, `STOCK_BOARD`, `STOCK_NEWS`, `ANNOUNCEMENT` | none |
 | `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH`, `NEWS_SEARCH` (via 问财 iWenCai) | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
@@ -254,11 +254,11 @@ fetchers that support it.
 | API Method | Capability Used |
 |------------|----------------|
 | `get_kline_data` (d/w/m, stocks) | `STOCK_KLINE` (ZzshareFetcher P2) |
-| `get_kline_data` (5/15/30/60, stocks) | `STOCK_KLINE` (ZzshareFetcher P2) |
+| `get_kline_data` (5/15/30/60m, stocks) | `STOCK_KLINE` (ZzshareFetcher P2) |
+| `get_kline_data` (1m, stocks) | `STOCK_KLINE` (AkshareFetcher P3, no adjust) |
 | `get_kline_data` (d/w/m, indices) | `INDEX_KLINE` |
-| `get_kline_data` (5/15/30/60, indices) | `INDEX_KLINE` |
+| `get_kline_data` (5/15/30/60m, indices) | `INDEX_KLINE` (MyquantFetcher P9) |
 | `get_realtime_quote` | `STOCK_REALTIME_QUOTE` (ZzshareFetcher P2) |
-| `get_kline_data` (1m/5m/15m/30m/60m) | `STOCK_KLINE` (ZzshareFetcher P2) |
 | `get_stock_name` | n/a — handled by `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
 | `get_trade_calendar` | `TRADE_CALENDAR` (ZzshareFetcher P2) |
 | `get_all_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P2) |
@@ -281,6 +281,7 @@ fetchers that support it.
 | `get_announcements` | `ANNOUNCEMENT` |
 | `get_flash_news` | `NEWS_FLASH` (EastMoney P6 → ThsFetcher P7) |
 | `search_news` | `NEWS_SEARCH` (EastMoney P6 → ThsFetcher / BaiduFetcher P7) |
+| `get_stock_news` | `STOCK_NEWS` (EastMoney P6; np-listapi per-stock feed — `/stocks/{code}/news`) |
 | `get_news_content` (URL extractor; no fetcher routing) | n/a — pure utility in `utils/news_extractor.py` |
 | `get_stock_info` | `STOCK_INFO` (ZzshareFetcher P2) |
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
@@ -298,7 +299,7 @@ fetchers that support it.
 | YfinanceFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| INDEX_KLINE \| INDEX_REALTIME_QUOTE` |
 | ZhituFetcher | `STOCK_REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| STOCK_KLINE \| STOCK_LIST \| STOCK_BOARD` |
 | TencentFetcher | `STOCK_REALTIME_QUOTE \| INDEX_REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
-| EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD` |
+| EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD \| STOCK_NEWS \| ANNOUNCEMENT` |
 | ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH \| NEWS_SEARCH` |
 | CninfoFetcher | `ANNOUNCEMENT` |
 

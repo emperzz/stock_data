@@ -57,7 +57,7 @@ After startup, open `http://localhost:8888/explorer/` for the interactive API ex
 
 ```bash
 # K-line + MACD + KDJ + BOLL
-curl 'http://localhost:8888/api/v1/stocks/600519/history?days=120&indicators=macd,kdj,boll'
+curl 'http://localhost:8888/api/v1/stocks/600519/kline?days=120&indicators=macd,kdj,boll'
 
 # What indicators are available?
 curl 'http://localhost:8888/api/v1/indicators/catalog'
@@ -101,7 +101,7 @@ without their tokens) are surfaced with `available: false` and an
 
 The server ships with 14 pure-compute technical indicators. They are
 attached to the K-line response via `?indicators=...` on
-`/stocks/{code}/history` and never hit the network — they transform the
+`/stocks/{code}/kline` and never hit the network — they transform the
 K-line `DataFrame` in-process.
 
 #### List available indicators
@@ -147,9 +147,9 @@ what's available without reading source.
 
 ```bash
 # Stocks
-GET /api/v1/stocks/600519/history?days=120&indicators=ma,macd,kdj,boll,rsi
+GET /api/v1/stocks/600519/kline?days=120&indicators=ma,macd,kdj,boll,rsi
 # Indices (same query param, same behavior)
-GET /api/v1/indices/000300/history?days=120&indicators=ma,macd,boll
+GET /api/v1/indices/000300/kline?days=120&indicators=ma,macd,boll
 ```
 
 **Supported indicators** (with their default `output_columns`):
@@ -163,7 +163,7 @@ GET /api/v1/indices/000300/history?days=120&indicators=ma,macd,boll
 | `rsi` | Wilder's RSI | closes | `rsi_6, rsi_12, rsi_24` | 48 |
 | `wr` | Williams %R | ohlcv | `wr_6, wr_10` | 10 |
 | `bias` | 乖离率 | closes | `bias_6, bias_12, bias_24` | 24 |
-| `cci` | Commodity Channel | ohlcv | `cci` | 28 |
+| `cci` | Commodity Channel | ohlcv | `cci` | 14 |
 | `atr` | Average True Range | ohlcv | `atr, tr` | 28 |
 | `obv` | On-Balance Volume | ohlcv | `obv, obv_ma` | 1 |
 | `roc` | Rate of Change | closes | `roc, roc_signal` | 12 |
@@ -203,7 +203,7 @@ the `days` you asked for. You don't need to pre-compute a larger
 **Response (without `indicators`):**
 ```json
 {
-  "stock_code": "600519",
+  "code": "600519",
   "stock_name": "贵州茅台",
   "period": "daily",
   "data": [
@@ -230,7 +230,7 @@ the `days` you asked for. You don't need to pre-compute a larger
 **Response (with `?indicators=ma,macd,kdj,boll`):**
 ```json
 {
-  "stock_code": "600519",
+  "code": "600519",
   "stock_name": "贵州茅台",
   "period": "daily",
   "data": [
@@ -265,13 +265,15 @@ truncates the response to the `days` you asked for.
 
 ### Get Historical K-line Data
 
-The `GET /api/v1/stocks/{code}/history` endpoint is fully documented
+The `GET /api/v1/stocks/{code}/kline` endpoint is fully documented
 under [Technical Indicators](#technical-indicators) above (parameters,
 auto-lookback expansion, with- and without-`?indicators=` response
 shapes). Omit `?indicators=` to receive the slim per-bar payload shown
 in the **Response (without `indicators`)** block; pass
 `?indicators=ma,macd,kdj,boll` to attach per-bar values via the
-`indicators` dict.
+`indicators` dict. The same endpoint serves minute data via
+`?period=1m|5m|15m|30m|60m` (the period param replaces the legacy
+`/intraday` route, which was removed when the K-line API was unified).
 
 ---
 
@@ -284,7 +286,7 @@ GET /api/v1/stocks/{code}/quote
 **Response:**
 ```json
 {
-  "stock_code": "600519",
+  "code": "600519",
   "stock_name": "贵州茅台",
   "source": "AkshareFetcher",
   "current_price": 1698.0,
@@ -336,38 +338,56 @@ populate it) and `null` otherwise (Baostock / Akshare do not).
 
 ### Get Stock Intraday Data
 
+Minute-level (intraday) data is served via the unified K-line endpoint
+with `period=1m|5m|15m|30m|60m`. There is no separate `/intraday` route.
+
 ```bash
-GET /api/v1/stocks/{code}/intraday?period=5
+GET /api/v1/stocks/600519/kline?period=5m
+GET /api/v1/indices/000300/kline?period=15m
+```
+
+The `period` values `1m/5m/15m/30m/60m` select minute granularity; the
+rest of the response shape matches the daily K-line response
+(per-bar `time` replaces `date`). `adjust` is accepted but only Akshare
+1m rejects it; Zzshare also rejects minute+adjust upstream. A-share
+stocks and CSI indices support minute periods; US/HK stocks and US
+indices do not.
+
+---
+
+### Per-Stock News Feed
+
+```bash
+GET /api/v1/stocks/{code}/news?limit=20
 ```
 
 **Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `period` | string | `5` | Minute period: `1`, `5`, `15`, `30`, `60` |
-| `adjust` | string | `` | Adjustment type: empty=不复权, `qfq`=前复权, `hfq`=后复权 |
+| `limit` | int | 20 | Item count (1-100) |
 
-**Response:**
+Routed via `STOCK_NEWS` capability. **EastMoney** (P6) np-listapi is
+the sole provider currently (per-stock news feed rendered as
+"个股资讯" on the EastMoney quote page). Cached 60s. Distinct from
+`/news/search` (which needs a keyword or 中文 stock name); this endpoint
+takes a 6-digit code directly.
+
 ```json
 {
   "code": "600519",
-  "stock_name": "贵州茅台",
-  "period": "5m",
-  "date": "2026-05-19",
   "data": [
     {
-      "time": "09:30:00",
-      "open": 1698.0,
-      "high": 1700.0,
-      "low": 1695.0,
-      "close": 1699.0,
-      "volume": 12345,
-      "amount": 20987654.0
+      "title": "贵州茅台一季度业绩超预期",
+      "url": "https://finance.eastmoney.com/news/...",
+      "publish_time": "2026-05-20 09:31:00",
+      "source_domain": "finance.eastmoney.com"
     }
-  ]
+  ],
+  "total": 20,
+  "limit": 20,
+  "source": "EastMoneyFetcher"
 }
 ```
-
-**Note:** Intraday data is only available for A-share stocks (not US/HK stocks or indices).
 
 ---
 
@@ -427,7 +447,7 @@ GET /api/v1/indices/{index_code}/quote
 #### Index Historical K-line
 
 ```bash
-GET /api/v1/indices/{index_code}/history?period=daily&days=30
+GET /api/v1/indices/{index_code}/kline?period=daily&days=30
 ```
 
 **Parameters:**
@@ -437,17 +457,16 @@ GET /api/v1/indices/{index_code}/history?period=daily&days=30
 | `days` | int | 30 | Number of days (1-365, ignored when `start_date` provided) |
 | `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` |
 | `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
-| `indicators` | string | null | Comma-separated list of technical indicators to attach (see [Technical Indicators](#technical-indicators)). Same semantics as `/stocks/{code}/history`. |
+| `indicators` | string | null | Comma-separated list of technical indicators to attach (see [Technical Indicators](#technical-indicators)). Same semantics as `/stocks/{code}/kline`. |
 
 #### Index Intradaday (Minute-Level)
 
-```bash
-GET /api/v1/indices/{index_code}/intraday?period=5
-```
+Minute-level data for CSI indices is served via the unified K-line
+endpoint with `period=5m|15m|30m|60m` (1m is not supported for indices).
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `period` | string | `5` | Minute period: `1`, `5`, `15`, `30`, `60` |
+```bash
+GET /api/v1/indices/000300/kline?period=5m
+```
 
 ---
 
@@ -1008,17 +1027,16 @@ points at internal networks (`127.0.0.1`, `10.0.0.0/8`, etc.).
 
 ## API Response Caching
 
-The `/quote` and `/history` endpoints are cached using an in-memory TTLCache to avoid repeated upstream API calls when multiple users request the same data within a short window.
+The `/quote` and `/kline` endpoints are cached using an in-memory TTLCache to avoid repeated upstream API calls when multiple users request the same data within a short window.
 
 | Endpoint | Cache Key | Default TTL |
 |----------|-----------|-------------|
 | `GET /stocks/{code}/quote` | `stock_code` | 60s |
-| `GET /stocks/{code}/history` (daily) | `code:d:days` | 300s |
-| `GET /stocks/{code}/history` (weekly) | `code:w:days` | 3600s |
-| `GET /stocks/{code}/history` (monthly) | `code:m:days` | 7200s |
+| `GET /stocks/{code}/kline` (daily) | `code:d:days` | 300s |
+| `GET /stocks/{code}/kline` (weekly) | `code:w:days` | 3600s |
+| `GET /stocks/{code}/kline` (monthly) | `code:m:days` | 7200s |
 | `GET /indices/{code}/quote` | `idx_quote:{code}` | 60s |
-| `GET /indices/{code}/history` | `{code}:{freq}:{days}` | 300/3600/7200s |
-| `GET /indices/{code}/intraday` | `idx_intraday:{code}:{period}` | 30s |
+| `GET /indices/{code}/kline` | `{code}:{freq}:{days}` | 300/3600/7200s (daily/weekly/monthly); 30s for 1m/5m/15m/30m/60m |
 
 **Cache behavior:**
 - First request fetches from upstream (subject to rate limiting)
@@ -1108,8 +1126,8 @@ An interactive docs UI is mounted at `/explorer/` (after `python -m stock_data.s
 
 **Input examples (all normalized to 6-digit code):**
 ```bash
-GET /api/v1/stocks/600519/history     # 贵州茅台
-GET /api/v1/stocks/000001/history     # 平安银行
+GET /api/v1/stocks/600519/kline       # 贵州茅台
+GET /api/v1/stocks/000001/kline       # 平安银行
 GET /api/v1/stocks/SH600519/quote     # prefix stripped
 GET /api/v1/stocks/SZ000001/quote     # prefix stripped
 ```
@@ -1133,16 +1151,16 @@ GET /api/v1/indices/399006/quote      # 创业板指 realtime
 
 **Index historical K-line:**
 ```bash
-GET /api/v1/indices/000300/history     # 沪深300 日线
-GET /api/v1/indices/000300/history?period=weekly   # 沪深300 周线
-GET /api/v1/indices/399001/history     # 深证成指
-GET /api/v1/indices/000001/history?period=monthly  # 上证指数 月线
+GET /api/v1/indices/000300/kline       # 沪深300 日线
+GET /api/v1/indices/000300/kline?period=weekly    # 沪深300 周线
+GET /api/v1/indices/399001/kline       # 深证成指
+GET /api/v1/indices/000001/kline?period=monthly   # 上证指数 月线
 ```
 
 **Index intraday (minute-level):**
 ```bash
-GET /api/v1/indices/399006/intraday?period=5   # 创业板指 5-minute
-GET /api/v1/indices/000300/intraday?period=15  # 沪深300 15-minute
+GET /api/v1/indices/399006/kline?period=5m  # 创业板指 5-minute
+GET /api/v1/indices/000300/kline?period=15m # 沪深300 15-minute
 ```
 
 ### Hong Kong Indices
@@ -1163,8 +1181,8 @@ GET /api/v1/indices/000300/intraday?period=15  # 沪深300 15-minute
 
 **Examples:**
 ```bash
-GET /api/v1/stocks/HK00700/history    # 腾讯控股
-GET /api/v1/stocks/HK01810/history   # 小米集团
+GET /api/v1/stocks/HK00700/kline      # 腾讯控股
+GET /api/v1/stocks/HK01810/kline     # 小米集团
 ```
 
 ### US Stocks
@@ -1190,10 +1208,10 @@ GET /api/v1/stocks/TSLA/quote        # Tesla
 
 **Examples:**
 ```bash
-GET /api/v1/stocks/SPX/history       # S&P 500 日线
-GET /api/v1/stocks/SPX/history?period=weekly    # S&P 500 周线
-GET /api/v1/stocks/DJI/history        # 道琼斯工业平均
-GET /api/v1/stocks/IXIC/history       # 纳斯达克综合
+GET /api/v1/indices/SPX/kline        # S&P 500 日线
+GET /api/v1/indices/SPX/kline?period=weekly     # S&P 500 周线
+GET /api/v1/indices/DJI/kline        # 道琼斯工业平均
+GET /api/v1/indices/IXIC/kline       # 纳斯达克综合
 ```
 
 ---
@@ -1208,12 +1226,12 @@ The server automatically routes requests to the appropriate data source based on
 |----------|--------|------|
 | 0 | Tushare | Requires `TUSHARE_TOKEN` |
 | 1 | Baostock | Free, no token |
-| 2 | Akshare | Fallback |
-| 3 | Yfinance | Fallback |
-| 4 | Zhitu | Realtime quotes + 公司画像 + 板块 (含 stock→boards), requires `ZHITU_TOKEN` |
-| 5 | Zzshare | A-share multi-capability (d/5/15/30/60/股票列表/交易日历/板块/龙虎榜/热点题材/公司画像); anonymous-capable, `ZZSHARE_TOKEN` optional (only `stock_info` + `uplimit_stocks` need it) |
-| 6 | Tencent | Enhanced quotes (PE/PB/市值/涨跌停价), HTTP only |
-| 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报/快讯/新闻/板块 |
+| 2 | Zzshare | A-share multi-capability (d/5/15/30/60/股票列表/交易日历/板块/龙虎榜/热点题材/公司画像); anonymous-capable, `ZZSHARE_TOKEN` optional (only `stock_info` + `uplimit_stocks` need it) |
+| 3 | Akshare | Fallback (also serves 1m, no adjust) |
+| 4 | Yfinance | Fallback |
+| 5 | Zhitu | Realtime quotes + 公司画像 + 板块 (含 stock→boards), minute fallback (5/15/30/60), requires `ZHITU_TOKEN` |
+| 5 | Tencent | Enhanced quotes (PE/PB/市值/涨跌停价), HTTP only |
+| 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报/快讯/新闻/板块/个股资讯/公告 |
 | 7 | THS | 热点题材/北向资金/快讯 (backup) |
 | 7 | Baidu | 新闻搜索 (backup for EastMoney), requires `BAIDU_API_KEY` |
 | 8 | Cninfo | 公告检索 |
@@ -1224,56 +1242,57 @@ The server automatically routes requests to the appropriate data source based on
 | Priority | Source | Note |
 |----------|--------|------|
 | 0 | Tushare | Requires API token, uses `index_daily` API |
-| 1 | Baostock | Uses `sh.XXXXXX` / `sz.XXXXXX` format |
-| 2 | Akshare | Uses `index_zh_a_hist` API |
-| 3 | Yfinance | Uses `.SS` / `.SZ` suffix |
-| 9 | Myquant | Last-resort backup |
+| 1 | Baostock | Uses `sh.XXXXXX` / `sz.XXXXXX` format; d/w/m only (no minutes) |
+| 3 | Akshare | Uses `index_zh_a_hist` API |
+| 4 | Yfinance | Uses `.SS` / `.SZ` suffix |
+| 9 | Myquant | Last-resort backup; serves 5/15/30/60 minutes for CSI indices |
 
 ### US Stocks
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 0 | Yfinance | Primary source, falls back to Stooq |
+| 4 | Yfinance | Primary source, falls back to Stooq |
 
 ### US Indices
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 0 | Yfinance | Uses `^GSPC`, `^DJI` etc. |
+| 4 | Yfinance | Uses `^GSPC`, `^DJI` etc. |
 
 ### HK Stocks
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 0 | Akshare | Primary, uses `stock_hk_hist` API |
-| 1 | Yfinance | Fallback, uses `.HK` suffix |
+| 3 | Akshare | Primary, uses `stock_hk_hist` API |
+| 4 | Yfinance | Fallback, uses `.HK` suffix |
 | 9 | Myquant | Last-resort backup |
 
 ### HK Indices
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 0 | Yfinance | Uses `^HSI`, `^HSCE` format |
+| 4 | Yfinance | Uses `^HSI`, `^HSCE` format |
+| 3 | Akshare | Fallback |
 | 1 | Akshare | Fallback |
 
 ---
 
 ## Frequency Support
 
-| Provider | Daily (d) | Weekly (w) | Monthly (m) | Minute (1/5/15/30/60) |
-|----------|-----------|------------|-------------|------------------------|
-| Baostock | ✅ | ✅ | ✅ | ✅ (5/15/30/60, stocks only) |
+| Provider | Daily (d) | Weekly (w) | Monthly (m) | Minute (1m/5m/15m/30m/60m) |
+|----------|-----------|------------|-------------|------------------------------|
+| Baostock | ✅ | ✅ | ✅ | ✅ (5m/15m/30m/60m, csi stocks only — not indices) |
 | Tushare | ✅ | ✅ | ✅ | ❌ |
-| Akshare | ✅ | ✅ | ✅ | ❌ |
-| Yfinance | ✅ | ✅ | ✅ | ✅ |
-| Zhitu | ❌ | ❌ | ❌ | ✅ (5/15/30/60; no 1-min) |
-| Zzshare | ✅ | ❌ | ❌ | ✅ (5/15/30/60; no 1-min) |
-| Myquant | ✅ | ✅ | ✅ | ✅ |
+| Akshare | ✅ | ✅ | ✅ | ✅ (1m/5m/15m/30m/60m; 1m refuses adjust) |
+| Yfinance | ✅ | ✅ | ✅ | ✅ (5m/15m/30m/60m — no 1m; refuses hfq) |
+| Zhitu | ❌ | ❌ | ❌ | ✅ (5m/15m/30m/60m only; no 1m; no adjust) |
+| Zzshare | ✅ | ❌ | ❌ | ✅ (1m/5m/15m/30m/60m; refuses adjust on minutes) |
+| Myquant | ✅ | ✅ | ✅ | ✅ (5m/15m/30m/60m — no 1m; csi only) |
 
 **Notes:**
-- Baostock does NOT support minute frequency for indices (only for stocks).
-- `period=1` (1-minute) is only served by Akshare; Zhitu / Zzshare do not support 1-minute data.
-- Minute-line K-line is only available for A-share stocks (not US/HK stocks or indices — use `/indices/{code}/intraday` for indices).
+- Baostock does NOT support minute frequency for CSI indices (only csi stocks).
+- 1-minute data is served by Akshare (no adjust) and Zzshare (no adjust); Zhitu / Myquant / Yfinance do not support 1m.
+- Minute-line K-line is only available for A-share stocks and CSI indices (not US/HK stocks or US indices). Use `period=5m` etc. on `/stocks/{code}/kline` or `/indices/{code}/kline` — there is no separate `/intraday` route.
 
 ---
 
@@ -1286,20 +1305,20 @@ The server automatically routes requests to the appropriate data source based on
 | `TUSHARE_TOKEN` | Tushare Pro API token | - |
 | `TUSHARE_PRIORITY` | Override Tushare priority | 0 |
 | `BAOSTOCK_PRIORITY` | Override Baostock priority | 1 |
-| `AKSHARE_PRIORITY` | Override Akshare priority | 2 |
-| `YFINANCE_PRIORITY` | Override Yfinance priority | 3 |
-| `ZHITU_TOKEN` | Zhitu API token (realtime + 公司画像) | - |
-| `ZHITU_PRIORITY` | Override Zhitu priority | 4 |
 | `ZZSHARE_TOKEN` | Zzshare API token (optional — only `stock_info` + `uplimit_stocks` need it; everything else is anonymous-capable) | - |
-| `ZZSHARE_PRIORITY` | Override Zzshare priority | 5 |
-| `TENCENT_PRIORITY` | Override Tencent priority | 6 |
+| `ZZSHARE_PRIORITY` | Override Zzshare priority | 2 |
+| `AKSHARE_PRIORITY` | Override Akshare priority | 3 |
+| `YFINANCE_PRIORITY` | Override Yfinance priority | 4 |
+| `ZHITU_TOKEN` | Zhitu API token (realtime + 公司画像) | - |
+| `ZHITU_PRIORITY` | Override Zhitu priority | 5 |
+| `TENCENT_PRIORITY` | Override Tencent priority | 5 |
 | `EASTMONEY_PRIORITY` | Override EastMoney priority | 6 |
 | `THS_PRIORITY` | Override THS priority | 7 |
+| `BAIDU_API_KEY` | Baidu Qianfan API key (NEWS_SEARCH backup for EastMoney) | - |
+| `BAIDU_PRIORITY` | Override Baidu priority | 7 |
 | `CNINFO_PRIORITY` | Override Cninfo priority | 8 |
 | `MYQUANT_TOKEN` | Myquant (掘金) API token | - |
 | `MYQUANT_PRIORITY` | Override Myquant priority (default is 9, last-resort) | 9 |
-| `BAIDU_API_KEY` | Baidu Qianfan API key (NEWS_SEARCH backup for EastMoney) | - |
-| `BAIDU_PRIORITY` | Override Baidu priority | 7 |
 | `BAIDU_NEWS_DOMAINS` | Comma-separated host whitelist for Baidu news search | canonical news subdomains |
 | `SERVER_PORT` | Server port | 8888 |
 | `SERVER_HOST` | Server host (default changed to loopback; control API must not be public) | 127.0.0.1 |
