@@ -695,6 +695,15 @@ class EastMoneyFetcher(BaseFetcher):
     _STOCK_BOARDS_FIELDS = "f14,f12,f13,f3,f152,f4,f128,f140,f141"
 
     # ------------------------------------------------------------------
+    # Stock → news feed (np-listapi getListInfo, used by  个股资讯 widget)
+    # ------------------------------------------------------------------
+    # Verified 2026-07-02: live quote page at quote.eastmoney.com calls exactly
+    # this endpoint with mTypeAndCode={market}.{code} to render the 个股资讯
+    # widget. Complementary to search_news(q) (which uses search-api-web and
+    # needs a keyword) — this takes a 6-digit stock code directly.
+    _STOCK_NEWS_URL = "https://np-listapi.eastmoney.com/comm/web/getListInfo"
+
+    # ------------------------------------------------------------------
     # News search (https://search-api-web.eastmoney.com/search/jsonp)
     # ------------------------------------------------------------------
 
@@ -925,6 +934,88 @@ class EastMoneyFetcher(BaseFetcher):
             if to_date and item["publish_date"] > to_date:
                 continue
             out.append(item)
+        return out
+
+    def get_stock_news(self, stock_code: str, limit: int = 20) -> list[dict]:
+        """Get news feed for a specific stock via np-listapi.getListInfo.
+
+        Verified 2026-07-02: live EastMoney quote page calls this endpoint with
+        mTypeAndCode={market}.{code} to render the "个股资讯" widget. This is
+        complementary to ``search_news(q)`` (which uses search-api-web and needs
+        a keyword / 中文 stock name) — this method takes a 6-digit stock code
+        directly and does not need any name lookup.
+
+        Returns a list of normalized dicts with fields:
+            title, url, source_domain, publish_date (YYYY-MM-DD), media_name.
+        Returns [] on invalid code or empty upstream list. Raises
+        ``DataFetchError`` on network/HTTP/JSON failure.
+        """
+        code = normalize_stock_code(stock_code)
+        if not code:
+            return []
+        try:
+            limit = max(1, min(int(limit), 100))
+        except (TypeError, ValueError):
+            limit = 20
+
+        secid = self._secid(code)
+        params = {
+            "cfh": 1,
+            "client": "web",
+            "mTypeAndCode": secid,
+            "type": 1,
+            "pageSize": limit,
+        }
+        try:
+            resp = self._session.get(
+                self._STOCK_NEWS_URL,
+                params=params,
+                headers={"Referer": "https://quote.eastmoney.com/"},
+                timeout=15,
+            )
+        except Exception as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_stock_news({code}) network error: {e}"
+            ) from e
+
+        if resp.status_code != 200:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_stock_news({code}) HTTP {resp.status_code}"
+            )
+
+        try:
+            payload = resp.json()
+        except ValueError as e:
+            raise DataFetchError(
+                f"[EastMoneyFetcher] get_stock_news({code}) bad JSON: {e}"
+            ) from e
+
+        if payload.get("code") != 1:
+            logger.warning(
+                f"[EastMoneyFetcher] get_stock_news({code}) code={payload.get('code')} "
+                f"msg={payload.get('message')}"
+            )
+            return []
+
+        data = payload.get("data") or {}
+        rows = data.get("list") or []
+        out: list[dict] = []
+        for rec in rows:
+            try:
+                url = rec.get("Art_Url") or rec.get("Art_OriginUrl") or ""
+                source_domain = ""
+                if url:
+                    source_domain = urlparse(url).hostname or ""
+                out.append({
+                    "title": rec.get("Art_Title", ""),
+                    "url": url,
+                    "source_domain": source_domain,
+                    "publish_date": (rec.get("Art_ShowTime") or "")[:10],
+                    "media_name": rec.get("Np_dst", "") or rec.get("Author", "") or "",
+                })
+            except (KeyError, TypeError) as e:
+                logger.warning(f"[EastMoneyFetcher] skipping malformed news row: {e}")
+                continue
         return out
 
     @staticmethod
