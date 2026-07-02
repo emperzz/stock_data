@@ -1,6 +1,5 @@
 """Tests for ThsFetcher.get_board_history."""
 
-from datetime import date
 from unittest.mock import patch
 
 
@@ -19,8 +18,9 @@ class TestVToken:
 
 class TestResolveConceptClid:
     def test_extracts_clid_from_html(self, monkeypatch):
+        from unittest.mock import MagicMock, patch
+
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
-        from unittest.mock import patch, MagicMock
 
         fake_html = '<html><body><input id="clid" value="T000267467"/></body></html>'
 
@@ -38,8 +38,9 @@ class TestResolveConceptClid:
         assert clid == "T000267467"
 
     def test_missing_clid_returns_none(self):
+        from unittest.mock import MagicMock, patch
+
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
-        from unittest.mock import patch, MagicMock
 
         f = ThsFetcher.__new__(ThsFetcher)
 
@@ -53,8 +54,9 @@ class TestResolveConceptClid:
             assert f._resolve_ths_concept_clid("xxx") is None
 
     def test_http_failure_returns_none(self):
-        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
         from unittest.mock import patch
+
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
 
@@ -166,7 +168,7 @@ class TestGetBoardHistory:
         assert len(rows) == 1
 
     def test_unsupported_frequency_raises(self):
-        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher, DataFetchError
+        from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
         f = ThsFetcher.__new__(ThsFetcher)
         try:
             f.get_board_history("881270", board_type="industry", frequency="w")
@@ -176,7 +178,7 @@ class TestGetBoardHistory:
             raise AssertionError("expected DataFetchError for non-daily THS freq")
 
     def test_missing_board_type_raises(self):
-        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher, DataFetchError
+        from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
         f = ThsFetcher.__new__(ThsFetcher)
         try:
             f.get_board_history("881270", board_type=None)
@@ -186,7 +188,7 @@ class TestGetBoardHistory:
             raise AssertionError("expected DataFetchError when board_type missing")
 
     def test_invalid_board_type_raises(self):
-        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher, DataFetchError
+        from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
         f = ThsFetcher.__new__(ThsFetcher)
         try:
             f.get_board_history("881270", board_type="foobar")
@@ -196,7 +198,7 @@ class TestGetBoardHistory:
             raise AssertionError("expected DataFetchError for unknown board_type")
 
     def test_concept_clid_failure_raises(self):
-        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher, DataFetchError
+        from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
         f = ThsFetcher.__new__(ThsFetcher)
         with patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value=None):
             try:
