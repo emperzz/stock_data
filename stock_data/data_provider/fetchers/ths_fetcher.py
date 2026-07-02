@@ -21,7 +21,7 @@ APIs:
 import logging
 import math
 import os
-import re  # noqa: F401  # used in get_board_history (Task 4)
+import re
 from datetime import date as _date
 from datetime import datetime
 from functools import lru_cache
@@ -80,6 +80,13 @@ def _get_ths_v_token() -> str:
     return _mint_ths_v_token()
 
 
+_CONCEPT_DETAIL_URL = "https://q.10jqka.com.cn/gn/detail/code/{slug}/"
+_CONCEPT_CLID_RE = re.compile(
+    r'<input[^>]*\bid=["\']clid["\'][^>]*\bvalue=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+
+
 class ThsFetcher(BaseFetcher):
     """同花顺 HTTP API fetcher for signal data."""
 
@@ -107,6 +114,32 @@ class ThsFetcher(BaseFetcher):
     def _v_token(self) -> str:
         """Instance accessor for the cached v token (for class-method ergonomics)."""
         return _get_ths_v_token()
+
+    @staticmethod
+    def _http_get(url: str, *, headers: dict | None = None, timeout: int = 10):
+        """Raw HTTP GET returning the response object (not parsed).
+
+        Uses requests (not curl_cffi) — d.10jqka.com.cn / q.10jqka.com.cn don't
+        fingerprint-block. Reuses the project's requests default (no proxy).
+        """
+        import requests
+        return requests.get(url, headers=headers or {"User-Agent": THS_UA}, timeout=timeout)
+
+    def _resolve_ths_concept_clid(self, slug: str) -> str | None:
+        """Fetch the concept-board HTML page and extract the inner `clid` (e.g. T000267467).
+
+        Returns the clid string, or None if not found / on any error.
+        Logs at WARNING on network failure.
+        """
+        url = _CONCEPT_DETAIL_URL.format(slug=slug)
+        headers = {"User-Agent": THS_UA, "Cookie": f"v={self._v_token()}"}
+        try:
+            r = self._http_get(url, headers=headers, timeout=10)
+        except Exception as e:
+            logger.warning(f"[ThsFetcher] concept clid fetch failed for {slug}: {e}")
+            return None
+        m = _CONCEPT_CLID_RE.search(r.text or "")
+        return m.group(1) if m else None
 
     # ------------------------------------------------------------------
     # 热点题材 (Hot Topics)
