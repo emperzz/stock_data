@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from stock_data.data_provider.persistence import board as board_mod
@@ -102,3 +104,50 @@ class TestGetStockMemberships:
         assert entries == []
         assert set(cold) == {"eastmoney", "zhitu", "zzshare"}
         assert origin == "persistence"  # all cold, no fetcher called
+
+
+class TestGetStockMembershipsColdFill:
+    """Cold-fill behavior: only triggers for zhitu, only when cold_fill=True."""
+
+    def test_cold_fill_true_writes_to_membership_and_returns_zhitu_origin(self, fresh_db, monkeypatch):
+        """cold_fill=True + cold zhitu data → fetcher called, rows upserted, origin='zhitu'."""
+        # Mock manager that returns boards for the cold zhitu path
+        mock_manager = MagicMock()
+        mock_manager.get_stock_boards.return_value = (
+            [
+                {"code": "sw_yx", "name": "SW", "type": "industry", "subtype": "申万行业"},
+                {"code": "chgn_700532", "name": "MSCI中国", "type": "concept", "subtype": "热门概念"},
+            ],
+            "zhitu",
+        )
+
+        # Seed stock_list so the upsert path can resolve stock_name
+        from stock_data.data_provider.persistence import stock_list as stock_list_mod
+
+        stock_list_mod._schema_initialized_paths = set()
+        stock_list_mod.init_schema()
+        conn = db_mod.get_connection()
+        conn.execute("INSERT INTO stock_list (code, name, market) VALUES ('600519', '贵州茅台', 'csi')")
+        conn.commit()
+
+        # Stock has no zhitu data in membership yet → cold-fill should fire
+        entries, cold, origin = board_mod.get_stock_memberships(
+            stock_code="600519", sources=["zhitu"], cold_fill=True, manager=mock_manager
+        )
+
+        # Fetcher was called
+        mock_manager.get_stock_boards.assert_called_once_with("600519", source="zhitu")
+
+        # Rows were written to membership
+        conn = db_mod.get_connection()
+        rows = conn.execute(
+            "SELECT board_code, source FROM stock_board_membership WHERE stock_code='600519'"
+        ).fetchall()
+        assert len(rows) == 2
+        assert {r["source"] for r in rows} == {"zhitu"}
+
+        # Return values reflect the cold-fill
+        assert len(entries) == 2
+        assert {e["source"] for e in entries} == {"zhitu"}
+        assert cold == []
+        assert origin == "zhitu"

@@ -550,6 +550,34 @@ def get_stock_boards_with_lazy_fill(
     return None, ""
 
 
+def _read_membership_entries(
+    stock_code: str, sources: list[str], cursor
+) -> tuple[list[dict], set[str]]:
+    """Read membership rows for a stock from the given sources. Returns (entries, present_sources)."""
+    placeholders = ",".join("?" * len(sources))
+    cursor.execute(
+        f"""SELECT board_code, stock_code, source, board_name, stock_name,
+                   board_type, subtype
+           FROM stock_board_membership
+           WHERE stock_code = ? AND source IN ({placeholders})
+           ORDER BY source, board_code""",
+        (stock_code, *sources),
+    )
+    raw_rows = cursor.fetchall()
+    entries = [
+        {
+            "code": r["board_code"],
+            "name": r["board_name"],
+            "type": r["board_type"],
+            "subtype": r["subtype"] or "",
+            "source": r["source"],
+        }
+        for r in raw_rows
+    ]
+    present_sources = {r["source"] for r in raw_rows}
+    return entries, present_sources
+
+
 def get_stock_memberships(
     stock_code: str,
     sources: list[str],
@@ -581,10 +609,12 @@ def get_stock_memberships(
         - entries: list of {code, name, type, subtype, source}, one dict per row.
         - cold_sources: subset of `sources` with no data after cold_fill attempt.
         - origin_summary:
-            - "persistence" — all entries came from SQLite cache (no fetcher calls)
-            - "<fetcher>"   — single source with cold-fill triggered
-            - "mixed"       — multi-source case (entries span multiple sources)
-            - ""            — no entries
+            - "persistence" — entries from SQLite cache (no fetcher calls); also used
+                              when entries is empty (cache miss, no cold-fill)
+            - "zhitu"       — cold-fill triggered and zhitu is now in the result
+                              (network was hit, fresh data was written)
+            - "mixed"       — multi-source query with entries (no cold-fill happened)
+            - ""            — sources was empty (early return)
 
     Caller decides how to expose origin_summary in the top-level response
     source field (single-source: pass-through; multi-source: override with 'merged').
@@ -597,33 +627,9 @@ def get_stock_memberships(
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Read all rows for this stock from the requested sources in one query.
-    placeholders = ",".join("?" * len(sources))
-    cursor.execute(
-        f"""SELECT board_code, stock_code, source, board_name, stock_name,
-                   board_type, subtype
-           FROM stock_board_membership
-           WHERE stock_code = ? AND source IN ({placeholders})
-           ORDER BY source, board_code""",
-        (stock_code, *sources),
-    )
-    raw_rows = cursor.fetchall()
-
-    # Group by source to compute present set
-    present_sources: set[str] = set()
-    entries: list[dict] = []
-    for row in raw_rows:
-        present_sources.add(row["source"])
-        entries.append({
-            "code": row["board_code"],
-            "name": row["board_name"],
-            "type": row["board_type"],
-            "subtype": row["subtype"] or "",
-            "source": row["source"],
-        })
+    entries, present_sources = _read_membership_entries(stock_code, sources, cursor)
 
     # Cold-fill: only zhitu has upstream reverse API; only when cold_fill=True.
-    cold_fill_triggered = False
     if cold_fill and manager is not None and "zhitu" in sources and "zhitu" not in present_sources:
         from .stock_list import get_stock_name as _get_stock_name
 
@@ -636,28 +642,8 @@ def get_stock_memberships(
                 boards=boards,
                 source="zhitu",
             )
-            cold_fill_triggered = True
-            # Re-query to include newly-written rows
-            cursor.execute(
-                f"""SELECT board_code, stock_code, source, board_name, stock_name,
-                           board_type, subtype
-                   FROM stock_board_membership
-                   WHERE stock_code = ? AND source IN ({placeholders})
-                   ORDER BY source, board_code""",
-                (stock_code, *sources),
-            )
-            raw_rows = cursor.fetchall()
-            entries = [
-                {
-                    "code": row["board_code"],
-                    "name": row["board_name"],
-                    "type": row["board_type"],
-                    "subtype": row["subtype"] or "",
-                    "source": row["source"],
-                }
-                for row in raw_rows
-            ]
-            present_sources = {row["source"] for row in raw_rows}
+            # Re-read to include newly written rows
+            entries, present_sources = _read_membership_entries(stock_code, sources, cursor)
 
     # Apply type/subtype filters (post-query, in-memory)
     if type is not None:
@@ -669,12 +655,11 @@ def get_stock_memberships(
     cold_sources = [s for s in sources if s not in present_sources]
 
     # Origin summary
-    if cold_fill_triggered:
-        origin_summary = "zhitu"  # cold-fill happened (zhitu is the only source that can)
-    elif not entries:
-        # No entries: either no cold-fill triggered, or cold-fill found nothing.
-        # Either way we only read from SQLite; surface as 'persistence'.
+    if not entries:
         origin_summary = "persistence"
+    elif cold_fill and manager is not None and "zhitu" in {e["source"] for e in entries}:
+        # Cold-fill actually wrote data; signal we hit the network
+        origin_summary = "zhitu"
     elif len(sources) > 1:
         origin_summary = "mixed"
     else:
