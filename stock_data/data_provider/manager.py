@@ -795,12 +795,17 @@ class DataFetcherManager:
         start_date: str | None = None,
         end_date: str | None = None,
         days: int = 30,
+        board_type: str | None = None,  # NEW — required for THS concept/industry
     ) -> tuple[list[dict], str]:
-        """Get K-line for a board from the named source (zzshare only).
+        """Get K-line for a board from the named source.
 
         `start_date` / `end_date` (YYYY-MM-DD) take precedence over `days`.
         Source-routed (no failover) per CLAUDE.md — board classification
         systems differ across sources.
+
+        `board_type` is currently consumed only by ThsFetcher (must be
+        ``"concept"`` or ``"industry"``); EastMoney and ZzshareFetcher
+        ignore it. Pass it through regardless so the call shape is uniform.
         """
         result, name = self._with_source(
             source=source,
@@ -815,6 +820,7 @@ class DataFetcherManager:
                     start_date=start_date,
                     end_date=end_date,
                     source=source,
+                    board_type=board_type,
                 ),
                 f.name,
             ),
