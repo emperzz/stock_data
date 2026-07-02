@@ -53,7 +53,15 @@ _TYPES = stock_board_cache.VALID_BOARD_TYPES
 
 
 def _resolve_source(source: str) -> str:
-    """Validate source parameter; raise HTTPException(400) on invalid."""
+    """Normalize alias + validate; raise HTTPException(400) on invalid.
+
+    Aliases are remapped to their canonical source name BEFORE the
+    canonical-source validation, so the canonical `VALID_SOURCES` set
+    stays free of alias names (e.g., `ths` never reaches the DB).
+    """
+    # ths alias: zzshare's plates_list 上游就是同花顺数据,客户端用 ths/zzshare 等价。
+    if source == "ths":
+        source = "zzshare"
     if source not in _SOURCES:
         raise HTTPException(
             status_code=400,
@@ -96,7 +104,7 @@ def _resolve_type(board_type: str) -> str:
 def list_boards(
     type: Literal["concept", "industry", "index", "special"] = Query(..., description="Board type"),
     source: Literal["eastmoney", "zhitu", "zzshare", "ths"] = Query(
-        ..., description="Data source (REQUIRED). 'ths' is an alias for 'zzshare' (THS-classified boards)."
+        ..., description="Data source (REQUIRED). 'ths' is an alias for 'zzshare'."
     ),
     subtype: str | None = Query(
         None,
@@ -112,10 +120,7 @@ def list_boards(
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
 ) -> BoardListResponse:
     """Get list of concept / industry / index / special boards."""
-    # ths alias: zzshare's plates_list 上游就是同花顺数据,客户端用 ths/zzshare 等价。
-    if source == "ths":
-        source = "zzshare"
-    _resolve_source(source)
+    source = _resolve_source(source)
     _resolve_type(type)
 
     # subtype validation — early failure before manager invocation
@@ -212,10 +217,7 @@ def get_board_stocks(
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
 ) -> BoardStocksResponse:
     """Get stocks belonging to a board."""
-    # ths alias: zzshare's plates_list 上游就是同花顺数据,客户端用 ths/zzshare 等价。
-    if source == "ths":
-        source = "zzshare"
-    _resolve_source(source)
+    source = _resolve_source(source)
 
     manager = get_manager()
     try:
@@ -441,8 +443,8 @@ def get_stock_board_memberships(
 @map_errors
 def get_board_history(
     board_code: str = Path(max_length=30, description="Board code (zzshare format, e.g. '883957')"),
-    source: Literal["eastmoney", "zhitu", "zzshare", "ths"] = Query(
-        ..., description="Data source (REQUIRED). 'ths' is an alias for 'zzshare'."
+    source: Literal["zzshare", "ths"] = Query(
+        ..., description="Data source. 'ths' is an alias for 'zzshare'."
     ),
     frequency: Literal["d"] = Query(
         "d", description="K-line frequency (daily only — zzshare plate_kline is daily-only)"
@@ -452,10 +454,7 @@ def get_board_history(
     days: int = Query(30, ge=1, le=365, description="Days (used when start_date not given)"),
 ) -> BoardKlineResponse:
     """Get historical K-line for a board (zzshare plate_kline)."""
-    # ths alias: zzshare's plates_list 上游就是同花顺数据,客户端用 ths/zzshare 等价。
-    if source == "ths":
-        source = "zzshare"
-    _resolve_source(source)
+    source = _resolve_source(source)
     manager = get_manager()
     try:
         rows, origin = manager.get_board_history(
