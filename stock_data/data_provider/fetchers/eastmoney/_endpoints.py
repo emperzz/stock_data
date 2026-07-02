@@ -160,6 +160,18 @@ class _Endpoints:
         "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f14,f16,f17,f18,f20,f21,f22",
     }
 
+    # -- Board K-line (push2his /api/qt/stock/kline/get) ----------------
+    # Same endpoint as the per-stock kline; only the ``secid`` differs
+    # (``90.BKxxxx`` for boards). ``ut`` is the observed constant from
+    # quote.eastmoney.com JS (bk2.js, emcharts.js).
+    BOARD_KLINE = {
+        "url": "https://push2his.eastmoney.com/api/qt/stock/kline/get",
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "freq_map": {"d": 101, "w": 102, "m": 103, "5m": 5, "15m": 15, "30m": 30, "60m": 60},
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+    }
+
 
 ENDPOINTS = _Endpoints()
 

@@ -171,19 +171,10 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
     #   stock:  "0.000725" / "1.600519" / "0.300059" ...
     #   board:  "90.BK0996" / "90.BK0806" ...   (90 = board market prefix)
     #
-    # See `_BOARD_KLINE_FREQ_MAP` for the supported klt (period) values.
-    # The endpoint returns `data.klines` as a list of comma-separated strings
+    # See ``ENDPOINTS.BOARD_KLINE['freq_map']`` for the supported klt (period)
+    # values. The endpoint returns `data.klines` as a list of comma-separated
+    # strings
     # (`date,open,high,low,close,volume,amount,amplitude,pct_chg,change_amount,turnover_rate`).
-
-    _BOARD_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-    _BOARD_KLINE_FREQ_MAP: dict[str, int] = {
-        "d": 101, "w": 102, "m": 103,
-        "5m": 5, "15m": 15, "30m": 30, "60m": 60,
-    }
-    _BOARD_KLINE_FIELDS1 = "f1,f2,f3,f4,f5,f6"
-    _BOARD_KLINE_FIELDS2 = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
-    # ut token — observed constant from quote.eastmoney.com JS (bk2.js, emcharts.js).
-    _BOARD_KLINE_UT = "fa5fd1943c7b386f172d6893dbfba10b"
 
     @staticmethod
     def _board_secid(board_code: str) -> str:
@@ -283,14 +274,15 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
             on upstream failure (logged at WARNING).
 
         Raises:
-            DataFetchError: ``frequency`` not in ``_BOARD_KLINE_FREQ_MAP``.
+            DataFetchError: ``frequency`` not in ``ENDPOINTS.BOARD_KLINE['freq_map']``.
         """
+        freq_map = ENDPOINTS.BOARD_KLINE["freq_map"]
         freq_key = (frequency or "d").lower()
-        klt = self._BOARD_KLINE_FREQ_MAP.get(freq_key)
+        klt = freq_map.get(freq_key)
         if klt is None:
             raise DataFetchError(
                 f"[EastMoneyFetcher] get_board_history: unsupported frequency "
-                f"{frequency!r}; valid: {sorted(self._BOARD_KLINE_FREQ_MAP.keys())}"
+                f"{frequency!r}; valid: {sorted(freq_map.keys())}"
             )
 
         secid = self._board_secid(board_code)
@@ -303,18 +295,18 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
 
         params: dict[str, str] = {
             "secid": secid,
-            "fields1": self._BOARD_KLINE_FIELDS1,
-            "fields2": self._BOARD_KLINE_FIELDS2,
+            "fields1": ENDPOINTS.BOARD_KLINE["fields1"],
+            "fields2": ENDPOINTS.BOARD_KLINE["fields2"],
             "klt": str(klt),
             "fqt": "1",
             "end": "20500101",   # far-future → upstream returns last `lmt` bars
             "lmt": str(lmt),
-            "ut": self._BOARD_KLINE_UT,
+            "ut": ENDPOINTS.BOARD_KLINE["ut"],
         }
         headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
         try:
             r = self._session.get(
-                self._BOARD_KLINE_URL, params=params, headers=headers, timeout=15,
+                ENDPOINTS.BOARD_KLINE["url"], params=params, headers=headers, timeout=15,
             )
             raws: list[str] = r.json().get("data", {}).get("klines") or []
         except Exception as e:
