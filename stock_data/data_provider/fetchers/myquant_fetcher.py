@@ -112,7 +112,14 @@ _INTRADAY_FREQ_MAP: dict[str, str] = {
 }
 
 # Trade calendar start year — env-var overridable for deep backfill needs.
-_CALENDAR_START_YEAR = int(os.getenv("MYQUANT_CALENDAR_START_YEAR", "2010"))
+# Canonical name: TRADE_CALENDAR_START_YEAR (used by all trade-calendar
+# fetchers). Legacy name MYQUANT_CALENDAR_START_YEAR kept as a fallback
+# for backward compatibility with existing .env files.
+_CALENDAR_START_YEAR = int(
+    os.getenv("TRADE_CALENDAR_START_YEAR")
+    or os.getenv("MYQUANT_CALENDAR_START_YEAR")
+    or "2010"
+)
 
 
 class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
