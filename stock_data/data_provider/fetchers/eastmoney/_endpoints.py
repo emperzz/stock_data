@@ -145,13 +145,13 @@ class _Endpoints:
         "url": "https://push2.eastmoney.com/api/qt/clist/get",
         "fs": "m:90+t:3+f:!50",
         "fid": "f12",
-        "fields": "f2,f3,f4,f8,f14,f15,f20,f104,f105,f128,f136",
+        "fields": "f2,f3,f4,f8,f12,f14,f15,f20,f104,f105,f128,f136",
     }
     BOARD_LIST_INDUSTRY = {
         "url": "https://push2.eastmoney.com/api/qt/clist/get",
         "fs": "m:90+t:2+f:!50",
         "fid": "f3",
-        "fields": "f2,f3,f4,f8,f14,f16,f20,f104,f105,f128,f136",
+        "fields": "f2,f3,f4,f8,f12,f14,f16,f20,f104,f105,f128,f136",
     }
     BOARD_COMPONENTS = {
         "url": "https://push2.eastmoney.com/api/qt/clist/get",
@@ -185,31 +185,37 @@ ENDPOINTS = _Endpoints()
 # positional lists aligned with the ``fields`` order. The maps below translate
 # the field codes to the JSON keys the route layer exposes.
 #
-# Field-code semantics (from ``docs/stock_board_concept_em.py`` and
-# ``docs/stock_board_industry_em.py`` — akshare's reference impl):
-# - concept board list:  f14=board code, f15=board name
-# - industry board list: f14=board code, f16=board name (field set skewed by f13)
+# Field-code semantics (probed 2026-07-03 from push2.eastmoney.com reply;
+# fixture in tests/test_eastmoney_stock_boards.py:22-26):
+# - concept board list:  f12=board code (e.g. "BK0438"), f14=board name
+#                        (e.g. "食品饮料"); f15 is some numeric quote field
+# - industry board list: f12=board code, f14=board name; f16 is a numeric
+#                        quote field (NOT the name — that was the prior bug,
+#                        see commit history)
 # - board components:    f14=stock code, f16=stock name, f17=high, f18=low,
-#                        f20=open, f21=prev_close, f22=PB (NOT the same as
-#                        the per-stock field-code semantics — do not assume
-#                        ``f12=code`` for boards).
+#                        f20=open, f21=prev_close, f22=PB
+# Note: the comment in akshare's stock_board_concept_em / industry_em source
+# has the inverse mapping (says f14=code, f15/f16=name); that's stale. Trust
+# the actual upstream probe, not the akshare column headers.
 
 _BOARD_LIST_FIELD_MAP: dict[str, str] = {
     "f2": "price",
     "f3": "change_pct",
     "f4": "change_amount",
     "f8": "turnover_rate",
-    "f14": "code",
+    "f12": "code",
+    "f14": "name",
     "f20": "total_mv",
     "f104": "up_count",
     "f105": "down_count",
     "f128": "leading_stock",
     "f136": "leading_stock_pct",
 }
-# Name field differs between concept / industry endpoints; cannot fold into
-# the map above without an extra dispatch.
-_CONCEPT_LIST_NAME_FIELD = "f15"
-_INDUSTRY_LIST_NAME_FIELD = "f16"
+# Both endpoints now use f14 for the board name. Per-endpoint symbols
+# retained so each method's intent stays locally readable (the production
+# code branches by symbol, not by value).
+_CONCEPT_LIST_NAME_FIELD = "f14"
+_INDUSTRY_LIST_NAME_FIELD = "f14"
 
 _BOARD_COMPONENTS_FIELD_MAP: dict[str, str] = {
     "f2": "price",

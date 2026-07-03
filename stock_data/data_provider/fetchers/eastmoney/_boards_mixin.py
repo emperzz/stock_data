@@ -202,7 +202,7 @@ class BoardsMixin:
             return []
         out: list[dict] = []
         for rec in rows:
-            code = str(rec.get("f14", "")).strip()
+            code = str(rec.get("f12", "")).strip()
             if not code:
                 continue
             board: dict[str, Any] = {
@@ -211,7 +211,9 @@ class BoardsMixin:
             }
             if include_quote:
                 for fc, ok in _BOARD_LIST_FIELD_MAP.items():
-                    if fc == "f14":
+                    # code (f12) and name (f14) are already emitted above —
+                    # skip them so the loop only adds the quote extras.
+                    if fc in ("f12", "f14"):
                         continue
                     board[ok] = rec.get(fc)
             out.append(board)
@@ -231,7 +233,7 @@ class BoardsMixin:
             return []
         out: list[dict] = []
         for rec in rows:
-            code = str(rec.get("f14", "")).strip()
+            code = str(rec.get("f12", "")).strip()
             if not code:
                 continue
             board: dict[str, Any] = {
@@ -240,7 +242,7 @@ class BoardsMixin:
             }
             if include_quote:
                 for fc, ok in _BOARD_LIST_FIELD_MAP.items():
-                    if fc == "f14":
+                    if fc in ("f12", "f14"):
                         continue
                     board[ok] = rec.get(fc)
             out.append(board)

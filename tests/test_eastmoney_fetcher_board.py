@@ -22,10 +22,11 @@ from stock_data.data_provider.fetchers.eastmoney_fetcher import (
 # 每行是按 ``fields`` 参数顺序排列的值数组 (非 dict)。字段码语义见
 # eastmoney_fetcher.py: _BOARD_LIST_FIELD_MAP / _BOARD_COMPONENTS_FIELD_MAP。
 
-# 概念板块清单: 11 字段 (f2,f3,f4,f8,f14,f15,f20,f104,f105,f128,f136)
+# 概念板块清单: 12 字段 (f2,f3,f4,f8,f12,f14,f15,f20,f104,f105,f128,f136)
 CONCEPT_LIST_FIELDS = ENDPOINTS.BOARD_LIST_CONCEPT["fields"].split(",")
-# 行业板块清单: 11 字段 (f2,f3,f4,f8,f14,f16,f20,f104,f105,f128,f136)
-# 注意 name 在 f16 而不是 f15 (字段集含 f13 错位)。
+# 行业板块清单: 12 字段 (f2,f3,f4,f8,f12,f14,f16,f20,f104,f105,f128,f136)
+# Both endpoints use f12=code, f14=name (probed 2026-07-03; was f14=code,
+# f15/f16=name pre-fix — that mapping came from a stale akshare reference).
 INDUSTRY_LIST_FIELDS = ENDPOINTS.BOARD_LIST_INDUSTRY["fields"].split(",")
 # 成分股: 15 字段 (f2,f3,f4,f5,f6,f7,f8,f9,f14,f16,f17,f18,f20,f21,f22)
 COMPONENTS_FIELDS = ENDPOINTS.BOARD_COMPONENTS["fields"].split(",")
@@ -35,8 +36,9 @@ _CONCEPT_ROW_TEMPLATE = {
     "f3": 2.35,       # change_pct
     "f4": 28.34,      # change_amount
     "f8": 1.23,       # turnover_rate
-    "f14": "BK0001",  # code
-    "f15": "人形机器人",  # name (concept specific)
+    "f12": "BK0001",  # code (e.g. "BK0996")
+    "f14": "人形机器人",  # name (concept)
+    "f15": 1068.9,    # some numeric quote field (NOT the name)
     "f20": 1.23e10,   # total_mv
     "f104": 30,       # up_count
     "f105": 5,        # down_count
@@ -49,8 +51,9 @@ _INDUSTRY_ROW_TEMPLATE = {
     "f3": -1.23,
     "f4": -43.21,
     "f8": 0.56,
-    "f14": "BK1001",
-    "f16": "小金属",  # name (industry specific)
+    "f12": "BK1001",  # code
+    "f14": "小金属",  # name (industry)
+    "f16": 543.21,    # some numeric quote field (NOT the name)
     "f20": 9.87e9,
     "f104": 15,
     "f105": 30,
@@ -154,7 +157,7 @@ def test_get_all_concept_boards_with_quote_includes_quote_fields():
 def test_get_all_concept_boards_skips_rows_with_empty_code():
     fetcher = EastMoneyFetcher()
     good_row = _row_from_template(CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE)
-    bad_row = _row_from_template(CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE, **{"f14": ""})  # no code
+    bad_row = _row_from_template(CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE, **{"f12": ""})  # no code
     mock_resp = _make_session_mock([bad_row, good_row], total=2)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_concept_boards(source="eastmoney")
@@ -179,14 +182,65 @@ def test_get_all_industry_boards_parses_response():
     assert mock_get.call_args.args[1]["fs"] == "m:90+t:2+f:!50"
 
 
-def test_get_all_industry_boards_does_not_pick_f15_as_name():
-    """防护: 如果 f15 有数据 (残留字段) 不能被当作 name 误用."""
+def test_get_all_industry_boards_does_not_pick_f16_as_name():
+    """防护: 行业端点 f16 是 numeric quote field, 不能误用为 name.
+    之前实现错误地把 f16 当作 name 来源 (stale akshare 列号错位)."""
     fetcher = EastMoneyFetcher()
-    row = _row_from_template(INDUSTRY_LIST_FIELDS, _INDUSTRY_ROW_TEMPLATE, **{"f15": "WRONG_NAME"})
+    row = _row_from_template(
+        INDUSTRY_LIST_FIELDS, _INDUSTRY_ROW_TEMPLATE, **{"f16": "WRONG_NAME_F16"},
+    )
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_industry_boards(source="eastmoney")
-    assert boards[0]["name"] == "小金属"  # 来自 f16, 不是 f15
+    assert boards[0]["name"] == "小金属"  # 来自 f14, 不是 f16
+
+
+def test_get_all_concept_boards_does_not_pick_f15_as_name():
+    """概念端点的 f15 也是 numeric — name 来自 f14."""
+    fetcher = EastMoneyFetcher()
+    row = _row_from_template(
+        CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE, **{"f15": "WRONG_NAME_F15"},
+    )
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        boards = fetcher.get_all_concept_boards(source="eastmoney")
+    assert boards[0]["name"] == "人形机器人"  # 来自 f14, 不是 f15
+
+
+def test_get_all_concept_boards_uses_f12_as_code_not_f14():
+    """回归测试 (2026-07-03 用户报告): ``code`` 必须是 f12 (BK####),
+    ``name`` 必须是 f14 (中文). 之前实现把 f14 当作 code 导致
+    ``code=\"2026中报预增\"`` / ``name=\"1068.9\"`` 互换."""
+    fetcher = EastMoneyFetcher()
+    # Use realistic upstream values to mirror the actual bug report shape.
+    row = _dict_row_from_template(
+        _CONCEPT_ROW_TEMPLATE,
+        f12="BK0438",       # actual code from upstream
+        f14="食品饮料",     # actual name from upstream (was getting used as code)
+        f15=1068.9,         # numeric quote field (was getting used as name)
+    )
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        boards = fetcher.get_all_concept_boards(source="eastmoney")
+    assert len(boards) == 1
+    assert boards[0]["code"] == "BK0438", f"code should be f12, got {boards[0]['code']!r}"
+    assert boards[0]["name"] == "食品饮料", f"name should be f14, got {boards[0]['name']!r}"
+
+
+def test_get_all_industry_boards_uses_f12_as_code_not_f14():
+    """行业端点对称回归测试: ``code`` 来自 f12, ``name`` 来自 f14."""
+    fetcher = EastMoneyFetcher()
+    row = _dict_row_from_template(
+        _INDUSTRY_ROW_TEMPLATE,
+        f12="BK1001",
+        f14="小金属",
+        f16=543.21,         # numeric — would corrupt name if误读
+    )
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        boards = fetcher.get_all_industry_boards(source="eastmoney")
+    assert boards[0]["code"] == "BK1001"
+    assert boards[0]["name"] == "小金属"
 
 
 # ---------------------------------------------------------------------------
@@ -465,11 +519,11 @@ def test_get_stock_boards_returns_none():
 def test_handles_pagination_across_multiple_pages():
     """Concept boards 实际 ~300, 100/页需要 3 页。验证 helper 自动翻页."""
     fetcher = EastMoneyFetcher()
-    page1 = [_row_from_template(CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE, **{"f14": f"BK{i:04d}"})
+    page1 = [_row_from_template(CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE, **{"f12": f"BK{i:04d}"})
              for i in range(1, 101)]
-    page2 = [_row_from_template(CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE, **{"f14": f"BK{i:04d}"})
+    page2 = [_row_from_template(CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE, **{"f12": f"BK{i:04d}"})
              for i in range(101, 201)]
-    page3 = [_row_from_template(CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE, **{"f14": f"BK{i:04d}"})
+    page3 = [_row_from_template(CONCEPT_LIST_FIELDS, _CONCEPT_ROW_TEMPLATE, **{"f12": f"BK{i:04d}"})
              for i in range(201, 251)]
     r1 = _make_session_mock(page1, total=250)
     r2 = _make_session_mock(page2, total=250)
