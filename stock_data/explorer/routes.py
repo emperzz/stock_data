@@ -6,9 +6,12 @@ Exposes server config, server status, and the API manifest. Bound to
 
 from __future__ import annotations
 
+import inspect
 import os
 import time
 import traceback as _traceback
+import types
+import typing
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Request
@@ -48,6 +51,101 @@ def _json_safe(value):
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return repr(value)
+
+
+def _unwrap_optional(ann):
+    """Strip ``Optional[X]`` / ``X | None`` wrappers down to the inner type.
+
+    The fetcher-test HTML form submits every input as a JSON string. If a
+    method signature declares ``days: int = 365``, we want to coerce
+    ``"30"`` → ``30`` before calling the method. With
+    ``days: int | None = None`` we still want the same coercion when the
+    user supplies a value — only the ``None`` branch is unaffected.
+    """
+    if ann is inspect.Parameter.empty:
+        return ann
+    origin = getattr(ann, "__origin__", None)
+    # typing.Union / typing.Optional (older annotation style)
+    if origin is typing.Union:
+        non_none = [a for a in typing.get_args(ann) if a is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+        return ann  # Union of multiple non-None types — leave alone
+    # types.UnionType (PEP 604 `X | None` syntax, Python 3.10+)
+    if hasattr(types, "UnionType") and isinstance(ann, types.UnionType):
+        non_none = [a for a in typing.get_args(ann) if a is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+        return ann
+    return ann
+
+
+def _coerce_kwarg_value(value, ann):
+    """Coerce a string kwarg to the annotation type.
+
+    HTML form inputs always submit as strings. The fetcher method signature
+    is the contract — coerce string → declared primitive when the
+    annotation says so. ``bool`` is checked before ``int`` because
+    ``bool`` is a subclass of ``int`` in Python.
+
+    Leaves the value untouched when:
+      - it's not a string (already the right Python type from JSON),
+      - the annotation is unknown / unannotated,
+      - coercion fails (let the method raise its own error rather than
+        masking the original input with a default).
+    """
+    if not isinstance(value, str):
+        return value
+    ann = _unwrap_optional(ann)
+    if ann is bool:
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    if ann is int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+    if ann is float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+    if ann is str:
+        return value
+    return value
+
+
+def _coerce_kwargs_to_signature(method, kwargs: dict) -> dict:
+    """Coerce HTML-string kwargs to match ``method``'s declared annotations.
+
+    See ``_coerce_kwarg_value`` for the per-value rules. Unknown params
+    (not in the signature, e.g. extra ``**kwargs`` consumers don't care)
+    pass through unchanged so methods that accept arbitrary keyword
+    arguments still work.
+
+    PEP 563 note: several fetcher modules use ``from __future__ import
+    annotations``, which makes annotations lazy strings. ``inspect.signature``
+    alone returns those raw strings; we resolve via ``typing.get_type_hints``
+    so the ``ann is int`` / ``origin is typing.Union`` checks below see
+    real types. Falls back to the raw annotation if resolution fails
+    (e.g. forward reference that's not importable at runtime).
+    """
+    try:
+        sig = inspect.signature(method)
+    except (TypeError, ValueError):
+        return kwargs
+    try:
+        resolved = typing.get_type_hints(method)
+    except Exception:
+        resolved = {}
+    coerced: dict = {}
+    for key, value in kwargs.items():
+        param = sig.parameters.get(key)
+        if param is None:
+            coerced[key] = value
+            continue
+        ann = resolved.get(key, param.annotation)
+        coerced[key] = _coerce_kwarg_value(value, ann)
+    return coerced
 
 
 class FetcherTestRequest(BaseModel):
@@ -207,7 +305,13 @@ def build_control_router() -> APIRouter:
         # 5. Invoke and classify exceptions
         start = time.monotonic()
         try:
-            result = method(**req.kwargs)
+            # HTML form inputs are always strings; coerce to the method's
+            # declared annotation types so e.g. `days="30"` reaches
+            # `timedelta(days=30)` instead of raising TypeError. Without
+            # this, every numeric method parameter is broken when invoked
+            # from the explorer's Test button.
+            coerced_kwargs = _coerce_kwargs_to_signature(method, req.kwargs)
+            result = method(**coerced_kwargs)
         except TypeError as e:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             return _err("TypeError", str(e), with_tb=True, elapsed_ms=elapsed_ms)
