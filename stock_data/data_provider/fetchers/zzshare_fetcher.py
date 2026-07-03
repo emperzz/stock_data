@@ -386,17 +386,47 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         return out
 
     def get_trade_calendar(self) -> list[str] | None:
-        """Fetch recent N trade dates from zzshare trade_days(days=10).
+        """Fetch full A-share trade calendar from zzshare trade_days.
 
-        Returns list of YYYY-MM-DD strings (already formatted by SDK),
-        or None on failure.
+        Returns the ascending YYYY-MM-DD list of all trade dates in
+        [day_start, day_end]. Aligned with MyquantFetcher's
+        ``MYQUANT_CALENDAR_START_YEAR`` default (2010) so the cache has
+        a consistent lookback window across fetchers — downstream helpers
+        (``is_trade_date`` / ``get_latest_trade_date_on_or_before``) work
+        correctly with both partial and full ranges, but a full range
+        lets us answer "was date X a trade day" queries reliably for any
+        historical date.
+
+        Note: ``trade_days()`` with no args returns only ~8 recent dates
+        (a small rolling window), and ``days=N`` caps the count. To get
+        the full range we MUST pass explicit ``day_start`` and
+        ``day_end`` — that's what the SDK's ``market/trade/days``
+        endpoint requires for a complete pull.
+
+        Returns:
+            list[str] of YYYY-MM-DD strings, or None on failure.
         """
         self._ensure_api()
         api = self.__class__._api
         if api is None:
             return None
         try:
-            dates = api.trade_days(days=10)
+            # Reuse the project-wide start-year env var (default 2010) so
+            # the cache window matches MyquantFetcher. End year = current
+            # year; the SDK returns the full calendar within bounds.
+            # Canonical name is TRADE_CALENDAR_START_YEAR; legacy
+            # MYQUANT_CALENDAR_START_YEAR kept as a fallback for
+            # existing .env files.
+            start_year = int(
+                os.getenv("TRADE_CALENDAR_START_YEAR")
+                or os.getenv("MYQUANT_CALENDAR_START_YEAR")
+                or "2010"
+            )
+            end_year = datetime.now().year
+            dates = api.trade_days(
+                day_start=f"{start_year}-01-01",
+                day_end=f"{end_year}-12-31",
+            )
         except Exception as e:
             logger.warning(f"[ZzshareFetcher] trade_days failed: {e}")
             return None
