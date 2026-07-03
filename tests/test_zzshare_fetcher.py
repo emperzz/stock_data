@@ -845,6 +845,50 @@ class TestStockList:
             assert fetcher.get_all_stocks("hk") == []
             assert fetcher.get_all_stocks("us") == []
 
+    def test_get_all_stocks_accepts_cn_alias(self):
+        """Manager translates 'csi' -> 'cn' before calling fetchers
+        (see ``manager.get_all_stocks`` in stock_data/data_provider/manager.py
+        around the ``public_to_fetcher = {"csi": "cn"}`` block).
+
+        ZzshareFetcher must accept ``"cn"`` as a csi alias so the failover
+        chain does NOT silently fall through to Akshare when its public
+        ``"csi"`` check would have rejected the fetcher-internal tag.
+
+        Regression: 2026-07-03 — Akshare (P3) was winning the
+        ``/api/v1/stocks?market=csi`` failover because Zzshare (P2)
+        returned ``[]`` whenever the manager called it with ``"cn"``.
+        """
+        import pandas as pd
+
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH", "000001.SZ"],
+                "symbol": ["600519", "000001"],
+                "name": ["贵州茅台", "平安银行"],
+                "exchange": ["SSE", "SZSE"],
+                "area": ["", ""],
+                "industry": ["", ""],
+                "list_date": ["", ""],
+            }
+        )
+        fetcher = self._fetcher_with_api(raw)
+        result = fetcher.get_all_stocks("cn")
+        assert len(result) == 2, (
+            f"ZzshareFetcher must accept 'cn' as an alias for csi A-shares; "
+            f"got {len(result)} rows"
+        )
+        assert result[0] == {"code": "600519", "name": "贵州茅台", "exchange": "SSE"}
+        assert result[1] == {"code": "000001", "name": "平安银行", "exchange": "SZSE"}
+
+    def test_get_all_stocks_unsupported_market_returns_empty(self):
+        """Sanity: only csi/cn/hk/us are recognized market tags; anything
+        else returns ``[]`` rather than guessing."""
+        fetcher = ZzshareFetcher()
+        with patch("importlib.util.find_spec", return_value=MagicMock()):
+            assert fetcher.get_all_stocks("hk") == []
+            assert fetcher.get_all_stocks("us") == []
+            assert fetcher.get_all_stocks("garbage") == []
+
     def test_get_all_stocks_calls_stock_basic_all(self):
         import pandas as pd
 

@@ -114,29 +114,73 @@ class TestPersistenceMarketConversion:
 
     def test_persistence_calls_fetcher_with_cn_for_csi_market(self):
         """When the public API asks for market=csi, the fetcher must be
-        called with market='cn' (not 'csi'). Verified by patching
-        akshare's underlying API and asserting it was called."""
+        called with market='cn' (not 'csi'). Verified by patching the
+        underlying SDK of whichever fetcher wins the failover and
+        asserting it was called.
+
+        Note (2026-07-03): Zzshare (P2) wins the failover over Akshare
+        (P3) for ``market=csi`` after the contract fix on
+        ``ZzshareFetcher.get_all_stocks`` — so we patch Zzshare's
+        ``stock_basic`` here. The csi→cn translation invariant we are
+        verifying is the same; only the proxy changed.
+        """
+        from unittest.mock import MagicMock
+
         from stock_data.data_provider.manager import create_default_manager
 
         manager = create_default_manager()
-        fake_df = pd.DataFrame({"code": ["600519"], "name": ["贵州茅台"]})
-        with patch(
-            "akshare.stock_info_a_code_name", return_value=fake_df
-        ) as mock_ak:
+        # Fake DataFrame must include ``ts_code`` — Zzshare's
+        # ``get_all_stocks`` extracts the bare code from ``ts_code``
+        # via ``ts_code.split(".")[0]`` and silently skips rows with
+        # missing ``ts_code``. Without it, Zzshare returns ``[]`` and
+        # the failover would correctly fall through to Akshare — which
+        # would still leave the csi→cn translation invariant untested
+        # (because Akshare doesn't see a "cn" arg in this codepath).
+        fake_df = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"],
+                "name": ["贵州茅台"],
+                "exchange": ["SSE"],
+            }
+        )
+
+        # Inject a fake stock_basic into Zzshare's class-level _api so
+        # we don't need a live network. Skip the SDK init probe.
+        from stock_data.data_provider.fetchers.zzshare_fetcher import (
+            ZzshareFetcher,
+        )
+
+        fake_api = MagicMock()
+        fake_api.stock_basic = MagicMock(return_value=fake_df)
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher._init_ok = True
+
+        try:
             # force refresh so we hit the upstream path
             stocks, _origin = stock_list.get_stock_list(
                 "csi", refresh=True, manager=manager
             )
-            assert len(stocks) == 1
-            # The fetcher's if/elif would NOT match 'csi', so the
-            # underlying akshare call would never fire if the conversion
-            # is missing. Verifying mock_ak was called proves the
-            # conversion happened.
-            assert mock_ak.called, (
-                "akshare underlying API was not called — "
-                "persistence did not convert csi→cn before "
-                "fetcher.get_all_stocks()"
+            assert _origin == "ZzshareFetcher", (
+                f"Expected Zzshare (P2) to win the failover after the "
+                f"csi→cn contract fix, got {_origin!r}"
             )
+            assert len(stocks) == 1
+            assert stocks[0]["code"] == "600519"
+            # Zzshare's if/elif used to reject 'cn' and silently return
+            # ``[]`` — verifying stock_basic was called proves both the
+            # csi→cn translation happened AND Zzshare now accepts 'cn'.
+            assert fake_api.stock_basic.called, (
+                "zzshare stock_basic was not called — "
+                "either the csi→cn translation did not happen, or "
+                "ZzshareFetcher rejected the 'cn' market tag"
+            )
+            call_args = fake_api.stock_basic.call_args
+            assert "exchange" in (call_args.kwargs or {})
+        finally:
+            ZzshareFetcher._api = None
+            ZzshareFetcher._init_attempted = False
+            ZzshareFetcher._init_ok = False
 
 
 # ============================================================================

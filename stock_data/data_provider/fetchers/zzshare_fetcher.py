@@ -354,9 +354,16 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         area/industry/list_date left empty (zzshare does not fill them; other
         fetchers will backfill via persistence layer).
 
-        Returns [] on failure or non-csi market (manager failover keeps trying).
+        ``market`` accepts the public ``"csi"`` tag AND the fetcher-internal
+        ``"cn"`` alias — the manager translates ``"csi"`` → ``"cn"`` at the
+        call boundary (see ``manager.get_all_stocks`` ``public_to_fetcher``
+        map), and rejecting ``"cn"`` here would silently fall through to
+        the next fetcher in the failover chain (regression 2026-07-03:
+        Akshare P3 winning over Zzshare P2 on ``GET /api/v1/stocks``).
+
+        Returns [] on failure or unrecognized market tag.
         """
-        if market != "csi":
+        if market not in ("csi", "cn"):
             return []
         self._ensure_api()
         api = self.__class__._api
