@@ -82,18 +82,6 @@ __all__ = [
     "get_pool_count",
 ]
 
-# Tables owned by the persistence layer. Used by reset_all() to know what
-# to DROP. Listed in dependency-safe order (children before parents) —
-# since none of the current tables have FK constraints, this is mostly
-# cosmetic, but keeping it explicit makes future FK additions safer.
-_TABLES = (
-    "stock_board",
-    "stock_list",
-    "trade_calendar",
-    "pool_daily",
-)
-
-
 def init_schema() -> None:
     """Idempotently create all tables (CREATE TABLE IF NOT EXISTS). Safe to call on every startup."""
     stock_list.init_schema()
@@ -105,20 +93,31 @@ def init_schema() -> None:
 def reset_all() -> None:
     """DROP all persistence tables and recreate from scratch. Full reset for dev/test.
 
+    Scans ``sqlite_master`` to discover every business table at call time
+    (excluding SQLite's own ``sqlite_%`` internal tables), so future
+    schema additions / renames / removals don't need a code change here.
+    Previously a hardcoded ``_TABLES`` tuple was used; that list silently
+    went stale when new tables were added (e.g. ``stock_board_membership``
+    in 2026-07 — see plan "风险 3" 续).
+
     Notes:
     - On the first run, the SQLite file may not exist; DROP IF EXISTS
       silently no-ops in that case.
     - WAL sidecars (-wal, -shm) are left in place; on the next write the
       WAL will be rebuilt automatically. If you want a perfectly clean
       file, delete the .db (and -wal/-shm) manually after calling this.
-    - Old per-table names from the pre-refactor schema
-      (zt_pool / dt_pool / zbgc_pool) are NOT dropped here — see plan
-      "风险 3" for the rationale.
+    - Pre-refactor pool tables (zt_pool / dt_pool / zbgc_pool), if still
+      present, are also dropped here — they were renamed/merged into
+      ``pool_daily`` and any leftover copy is just garbage.
     """
     conn = get_connection()
     with conn:
-        for table in _TABLES:
-            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        for (name,) in rows:
+            conn.execute(f"DROP TABLE IF EXISTS {name}")
     # Clear each submodule's init-schema guard so init_schema() below
     # actually re-runs the DDL (otherwise the dropped tables won't be
     # recreated).
