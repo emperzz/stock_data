@@ -34,6 +34,19 @@ Implementation notes (not in CLAUDE.md — these are fetcher-internal quirks):
 # isort: off
 import logging
 import os
+
+# gm 3.x ships _pb2 descriptors that are incompatible with protobuf's C++
+# descriptor parser; the pure-Python parser is the only working path. This
+# MUST be set before any import that transitively loads gm.api / protobuf,
+# otherwise ``gm.api.set_token`` crashes with "Descriptors cannot be created
+# directly" and the fetcher silently becomes unavailable (every method that
+# gates on is_available() returns [] / None / DataFetchError). server.py and
+# tests/conftest.py set this for their respective entry points; setting it
+# here as well makes the fetcher self-contained so direct imports (debug
+# REPL, ad-hoc scripts, the manager under non-server entry points) work too.
+# ``setdefault`` preserves operator overrides set via the shell env.
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
 from datetime import datetime  # used in get_trade_calendar, get_index_intraday, get_intraday_data
 
 import pandas as pd

@@ -367,6 +367,28 @@ class TestMyquantFetcher:
         assert fetcher_no_token.is_available() is False
         assert MyquantFetcher._init_ok is False
 
+    def test_module_sets_protobuf_env_var(self, monkeypatch):
+        """Regression: gm 3.x is incompatible with protobuf's C++ descriptor
+        parser; ``myquant_fetcher`` MUST set PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+        at module load time so direct imports (debug REPL, ad-hoc scripts, the
+        manager under non-server entry points) don't silently leave the fetcher
+        unavailable (every method that gates on is_available() returns []/None).
+
+        server.py and tests/conftest.py set the same env var for their respective
+        entry points — this test locks down the in-module fallback. We verify
+        by clearing the env var first, then re-importing the module and checking
+        the env var got re-applied.
+        """
+        import importlib
+        import sys
+
+        monkeypatch.delenv("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", raising=False)
+        # Drop any cached module so the module-level setdefault runs fresh.
+        sys.modules.pop("stock_data.data_provider.fetchers.myquant_fetcher", None)
+        importlib.import_module("stock_data.data_provider.fetchers.myquant_fetcher")
+        import os
+        assert os.environ.get("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION") == "python"
+
     def test_map_adjust(self, fetcher):
         from stock_data.data_provider.fetchers.myquant_fetcher import (
             ADJUST_NONE,
