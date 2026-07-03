@@ -176,27 +176,71 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
     # (`date,open,high,low,close,volume,amount,amplitude,pct_chg,change_amount,turnover_rate`).
 
     @staticmethod
+    def _board_history_range_days(
+        start_date: str | None,
+        end_date: str | None,
+    ) -> int:
+        """Inclusive day count between two YYYY-MM-DD bounds, or 0.
+
+        Returns 0 when one or both bounds are absent / empty — the caller
+        treats 0 as "no range constraint, fall back to `days`".
+
+        Raises:
+            ValueError: a non-empty bound fails YYYY-MM-DD parsing, or
+                ``end_date`` is strictly before ``start_date``.
+                Route layer maps this to 400.
+        """
+        s = (start_date or "").strip()
+        e = (end_date or "").strip()
+        if not s or not e:
+            return 0
+        try:
+            s_d = datetime.strptime(s, "%Y-%m-%d").date()
+            e_d = datetime.strptime(e, "%Y-%m-%d").date()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"[EastMoneyFetcher] invalid date format: start_date={s!r}, "
+                f"end_date={e!r}; expected YYYY-MM-DD"
+            ) from exc
+        if e_d < s_d:
+            raise ValueError(f"[EastMoneyFetcher] end_date {e!r} < start_date {s!r}")
+        return (e_d - s_d).days + 1
+
+    @staticmethod
     def _board_secid(board_code: str) -> str:
         """Build EastMoney board secid from a board code.
 
-        Accepts any of ``"BK0996"`` / ``"bk0996"`` / ``"0996"`` / ``"996"``
-        — case-insensitive prefix, length-tolerant suffix (leading zeros are
-        kept; we only normalize the prefix). Returns the canonical
-        ``"90.BK0996"`` form. Anything else (non-digit suffix) is passed
-        through so the upstream 4xx gives a clearer error than we'd raise
-        locally.
+        Accepts ``"BK0996"`` / ``"bk0806"`` / ``"0996"`` / ``"996"`` /
+        whitespace-padded forms — case-insensitive prefix, leading zeros
+        preserved, digit suffix required. Returns the canonical
+        ``"90.BK0996"`` shape.
+
+        Raises:
+            ValueError: board_code empty, the digit portion is empty
+                (e.g. ``"BK"``), non-digit (e.g. ``"BK0A01"``), or the
+                stripped input isn't in any recognised form. The route
+                layer maps ValueError to 400 — better than silently
+                passing an invalid secid to upstream and surfacing a 4xx
+                with no context.
         """
         code = (board_code or "").strip()
         if not code:
-            return "90.BK"
+            raise ValueError("[EastMoneyFetcher] board_code is required")
         upper = code.upper()
         if upper.startswith("BK"):
-            # Preserve the digit portion verbatim (keep leading zeros), just
-            # uppercase the prefix so callers can pass "bk0806" too.
             digits = code[2:]
+            if not digits or not digits.isdigit():
+                raise ValueError(
+                    f"[EastMoneyFetcher] board_code {board_code!r}: "
+                    f"expected digits after BK prefix, got {digits!r}"
+                )
             code = f"BK{digits}"
         elif code.isdigit():
             code = f"BK{code}"
+        else:
+            raise ValueError(
+                f"[EastMoneyFetcher] board_code {board_code!r}: not in BK#### or #### form"
+            )
         return f"90.{code}"
 
     @staticmethod
@@ -256,8 +300,14 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
                 (verified against emcharts.js — see
                 ``docs/stock-board-reverse-index-design-2026-07-01.md``).
             days: Used when ``start_date`` is not given; controls ``lmt``
-                (bar count). Capped at 800 to avoid push2his auto-escalating
-                klt from daily→weekly→monthly when ``lmt`` ≥ 1000.
+                (bar count) directly. Capped at 800 to avoid push2his
+                auto-escalating klt from daily→weekly→monthly when
+                ``lmt`` ≥ 1000. When both ``start_date`` and ``end_date``
+                are given, the date range width (in days) wins over
+                ``days`` — effective_lmt = max(days, (end-start)+1) so
+                caller-side bounds actually translate to the upstream
+                request rather than getting silently capped by an
+                unrelated ``days`` value.
             start_date: ``YYYY-MM-DD`` — inclusive lower bound (applied
                 post-fetch).
             end_date: ``YYYY-MM-DD`` — inclusive upper bound (applied
@@ -274,6 +324,12 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
 
         Raises:
             DataFetchError: ``frequency`` not in ``ENDPOINTS.BOARD_KLINE['freq_map']``.
+            ValueError: ``days`` not int or < 1; ``board_code`` empty,
+                missing digits after ``BK``, non-numeric, or otherwise
+                malformed; ``start_date`` / ``end_date`` malformed or
+                ``end_date < start_date``. All ValueErrors are caller
+                input errors — the route layer maps them to 400 (bad
+                request).
         """
         freq_map = ENDPOINTS.BOARD_KLINE["freq_map"]
         freq_key = (frequency or "d").lower()
@@ -286,12 +342,32 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
 
         secid = self._board_secid(board_code)
 
-        # Cap lmt at 800 to avoid emcharts.js's auto-escalation rule:
+        # Validate days + date bounds up front so lmt math isn't poisoned
+        # by silently-coerced junk. The route layer's Query(ge=1, le=800,
+        # default=30) prevents garbage from reaching us via HTTP, but
+        # internal callers (manager, tests, scripts) can still pass
+        # anything — fail fast and tell them why.
+        try:
+            days_int = int(days)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"[EastMoneyFetcher] days must be int (got {days!r})") from exc
+        if days_int < 1:
+            raise ValueError(f"[EastMoneyFetcher] days must be >= 1 (got {days_int})")
+
+        # Compute effective_lmt. Priority:
+        #   1. Caller-supplied days (when start_date is not given, OR when
+        #      days > date-range width)
+        #   2. (end_date - start_date + 1) days when both bounds are set
+        # Otherwise date-range queries get silently truncated to `days`
+        # most-recent bars — see the long-running lmt bug where
+        # `days=30 + start_date=2020-01-01` returned only the last 30 days
+        # instead of the 5-year span the user asked for.
+        # Cap at 800 to avoid emcharts.js's auto-escalation:
         #   lmt ≥ 1000 → klt forced to 102 (weekly)
         #   lmt ≥ 5000 → klt forced to 103 (monthly)
-        # Caller's chosen klt is what they want; let it stand.
-        # Route layer caps `days` at 365 via Query(le=365); the 800 cap only kicks in for non-route callers.
-        lmt = max(1, min(int(days), 800))
+        range_days = EastMoneyFetcher._board_history_range_days(start_date, end_date)
+        effective_lmt = max(days_int, range_days) if range_days else days_int
+        lmt = max(1, min(effective_lmt, 800))
 
         params: dict[str, str] = {
             "secid": secid,

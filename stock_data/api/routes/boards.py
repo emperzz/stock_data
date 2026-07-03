@@ -465,7 +465,19 @@ def get_board_history(
     ),
     start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
-    days: int = Query(30, ge=1, le=365, description="Days (used when start_date not given)"),
+    days: int = Query(
+        30,
+        ge=1,
+        le=800,
+        description=(
+            "Days (used when start_date not given). The 800 ceiling "
+            "mirrors EastMoneyFetcher's hard `lmt` cap — past that "
+            "push2his auto-escalates klt from daily→weekly→monthly. "
+            "When `start_date` and `end_date` are both given, the date "
+            "range width wins over `days` so wide ranges don't get "
+            "silently clipped."
+        ),
+    ),
     board_type: Literal["concept", "industry"] | None = Query(
         None,
         description=(

@@ -94,3 +94,72 @@ class TestBoardTypeParam:
             params={"source": "eastmoney", "frequency": "d", "board_type": "concept"},
         )
         assert r.status_code != 422, r.text
+
+
+class TestDaysCap:
+    """Regression: route days cap raised from 365 → 800 (mirrors lmt=800)."""
+
+    def test_days_365_accepted(self, client):
+        r = client.get(
+            "/api/v1/boards/BK0996/history",
+            params={"source": "eastmoney", "frequency": "d", "days": 365},
+        )
+        # Validation passes (days <= 800); upstream may fail but route shouldn't 422.
+        assert r.status_code != 422, r.text
+
+    def test_days_800_accepted(self, client):
+        r = client.get(
+            "/api/v1/boards/BK0996/history",
+            params={"source": "eastmoney", "frequency": "d", "days": 800},
+        )
+        assert r.status_code != 422, r.text
+
+    def test_days_801_rejected(self, client):
+        r = client.get(
+            "/api/v1/boards/BK0996/history",
+            params={"source": "eastmoney", "frequency": "d", "days": 801},
+        )
+        assert r.status_code == 422, r.text
+
+    def test_wide_date_range_accepted(self, client):
+        """days=30 + start/end spanning > days is now served correctly.
+
+        Pre-fix this returned only the last 30 bars regardless of date
+        span because lmt was derived from days only.  Now the fetcher
+        computes effective_lmt = max(days, range_width); test asserts
+        the route accepts the wide range without 422 (upstream may
+        5xx but that's a fetcher concern).
+        """
+        r = client.get(
+            "/api/v1/boards/BK0996/history",
+            params={
+                "source": "eastmoney",
+                "frequency": "d",
+                "start_date": "2020-01-01",
+                "end_date": "2024-12-31",
+                "days": 30,
+            },
+        )
+        assert r.status_code != 422, r.text
+
+
+class TestBoardCodeValidation:
+    """_board_secid now raises ValueError on bad input → route maps to 400."""
+
+    def test_missing_board_code_rejected_by_route_validation(self, client):
+        # FastAPI Path(max_length=30) accepts empty-string board codes
+        # via /boards//history; we just want to make sure an obviously
+        # garbage code returns 4xx (not 200 with empty data).
+        r = client.get(
+            "/api/v1/boards/BK/history",
+            params={"source": "eastmoney", "frequency": "d", "days": 30},
+        )
+        # "BK" → ValueError from _board_secid → map_errors → 400
+        assert r.status_code == 400, r.text
+
+    def test_garbage_board_code_returns_400(self, client):
+        r = client.get(
+            "/api/v1/boards/not-a-code/history",
+            params={"source": "eastmoney", "frequency": "d", "days": 30},
+        )
+        assert r.status_code == 400, r.text
