@@ -19,8 +19,16 @@ class TestThsFetcherBasics:
         assert f.priority == 7
 
     def test_is_available(self):
+        # Conditional on py_mini_racer + ths.js shipping — same shape
+        # as the dedicated TestIsAvailable in test_ths_board_kline.py.
+        # In dev environments the deps may or may not be present.
         f = ThsFetcher()
-        assert f.is_available() is True
+        result = f.is_available()
+        assert isinstance(result, bool)
+        if result:
+            assert f.unavailable_reason() is None
+        else:
+            assert f.unavailable_reason() and "board_history unavailable" in f.unavailable_reason()
 
     def test_capabilities(self):
         f = ThsFetcher()

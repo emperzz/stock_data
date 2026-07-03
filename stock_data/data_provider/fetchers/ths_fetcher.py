@@ -24,7 +24,7 @@ import os
 import time
 from datetime import date as _date
 from datetime import datetime, timedelta
-from importlib import resources
+from importlib import resources, util
 from urllib.parse import urlparse
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
@@ -201,7 +201,52 @@ class ThsFetcher(BaseFetcher):
     )
 
     def is_available(self) -> bool:
-        return True
+        """True only when board-K-line deps are present.
+
+        Hot-topics / north-flow / flash-news / news-search don't need
+        ``py_mini_racer`` or the vendored ``ths.js`` — they're pure
+        HTTP. But by project convention (see ``ZhituFetcher`` and the
+        ``data_provider/manager.py:1002`` registration loop), an
+        unavailable fetcher is dropped from the manager's table —
+        meaning when is_available() returns False, the four
+        pure-HTTP THS endpoints lose their backend too. Trade-off:
+        one board-K-line dep outage costs four endpoints; in our
+        threat model (single akshare+py_mini_racer env per server)
+        that's acceptable. If you need fine-grained gating per
+        capability, the manager would need a per-capability
+        is_available variant — larger refactor, deferred.
+
+        The reverse is also worth catching: a process where someone
+        deleted ``ths_assets/ths.js`` shouldn't silently drop a
+        fetcher capability that does work.
+        """
+        if util.find_spec("py_mini_racer") is None:
+            return False
+        try:
+            js_path = resources.files("stock_data.data_provider.fetchers.ths_assets").joinpath(
+                "ths.js"
+            )
+            return js_path.is_file()
+        except (FileNotFoundError, ModuleNotFoundError):
+            # Package data missing for some reason (broken wheel install,
+            # developer wiped the assets dir). Treat as dep-unavailable.
+            # Don't catch broader Exception — that would hide programmer
+            # errors (typo in the package path, etc.) as False return.
+            return False
+
+    def unavailable_reason(self) -> str | None:
+        """Specific reason string when board K-line path is unavailable."""
+        if self.is_available():
+            return None
+        if util.find_spec("py_mini_racer") is None:
+            return (
+                f"{self.name}.board_history unavailable: "
+                f"py_mini_racer not installed (pip install py-mini-racer)"
+            )
+        return (
+            f"{self.name}.board_history unavailable: "
+            f"ths.js missing from ths_assets/ (run tools/vendor_ths_js.py)"
+        )
 
     def _normalize_data(self, df, stock_code):
         raise DataFetchError("ThsFetcher does not support historical K-line data")

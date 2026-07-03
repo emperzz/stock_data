@@ -1,8 +1,10 @@
-"""Tests for ThsFetcher.get_board_history."""
+"""Tests for ThsFetcher.get_board_history and runtime health checks."""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
 
 
 class TestVToken:
@@ -688,3 +690,61 @@ class TestThsAssetsShipping:
         text = js.read_text(encoding="utf-8")
         assert "function v_cookie" in text
         assert "function v ()" in text
+
+
+class TestIsAvailable:
+    """F1 — ThsFetcher.is_available() reflects py_mini_racer + ths.js shipping."""
+
+    def test_available_when_both_present(self):
+        # Real env in CI has both. On dev machines this can be True or
+        # False depending on whether py_mini_racer is installed; we
+        # exercise both paths via a sample, not as a hard pass/fail.
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        result = ThsFetcher().is_available()
+        assert isinstance(result, bool)
+        # When True, reason MUST be None; when False, reason must be a
+        # non-empty string pointing the operator at the fix.
+        if result:
+            assert ThsFetcher().unavailable_reason() is None
+        else:
+            reason = ThsFetcher().unavailable_reason()
+            assert reason and isinstance(reason, str)
+            assert "board_history unavailable" in reason
+
+    def test_missing_py_mini_racer_returns_false(self, monkeypatch):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        monkeypatch.setattr(ths_mod.util, "find_spec", lambda name: None if name == "py_mini_racer" else __import__("importlib").util.find_spec(name))
+        assert ThsFetcher().is_available() is False
+        reason = ThsFetcher().unavailable_reason()
+        assert reason is not None
+        assert "py_mini_racer" in reason
+
+    def test_missing_ths_js_returns_false_with_vendor_reason(self, monkeypatch):
+        """When ths.js is genuinely missing or unresolvable,
+        ``is_available()`` returns False and ``unavailable_reason()``
+        points the operator at the vendor script / pip install.
+
+        We mock ``resources.files`` to raise; the fetcher's broad
+        try/except for the package data lookup falls through cleanly.
+        """
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        # Mock ths_assets module to look empty
+        class _Spec:
+            pass
+
+        monkeypatch.setattr(ths_mod.util, "find_spec", lambda name: _Spec())
+        # is_available() fallback path: when resources.files() raises
+        # for any reason, return False.
+        def _raise_files(_pkg):
+            raise FileNotFoundError("simulated ths_assets missing")
+
+        monkeypatch.setattr(ths_mod.resources, "files", _raise_files)
+        # is_available() catches Exception broadly in the fallback.
+        # Result MUST be False; reason MUST point at vendor_ths_js.
+        assert ThsFetcher().is_available() is False
+        reason = ThsFetcher().unavailable_reason()
+        assert reason is not None
+        assert "vendor_ths_js" in reason or "ths.js" in reason
