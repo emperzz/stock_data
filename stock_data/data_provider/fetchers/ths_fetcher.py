@@ -21,10 +21,9 @@ APIs:
 import logging
 import math
 import os
-import re
+import time
 from datetime import date as _date
 from datetime import datetime, timedelta
-from functools import lru_cache
 from importlib import resources
 from urllib.parse import urlparse
 
@@ -33,10 +32,103 @@ from ..utils.http import json_get, json_post
 
 logger = logging.getLogger(__name__)
 
-THS_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "Chrome/117.0.0.0 Safari/537.36"
-)
+
+# ---------------------------------------------------------------------------
+# v-token cache (F2 from PR2 review)
+# ---------------------------------------------------------------------------
+#
+# THS upstream authenticates board K-line requests with a `v=` cookie
+# minted by a JavaScript obfuscator bundled as `ths.js` (~40KB, 989 lines).
+# We tokenize the JS once at process start (keep the V8 VM warm to avoid
+# 200ms cold starts per call), then cache the produced cookie string and
+# TTL-rotate it. The cache also retries on transient mint failures
+# instead of caching the exception (the lru_cache(maxsize=1) trick this
+# replaced pinned a single transient failure for the process lifetime).
+#
+# Note we DO NOT lru_cache anything — lru_cache caches exceptions too,
+# turning a one-shot failure into a perma-broken fetcher.
+
+_THS_V_TOKEN_MAX_RETRIES = 3
+_THS_V_TOKEN_TTL_SECONDS = 1800.0  # 30 min; THS rotates rarely upstream
+
+_ths_v_token_cache: dict[str, float | str | None] = {
+    "value": None,
+    "expires_at": 0.0,
+}
+_ths_js_vm = None  # lazily-initialized py_mini_racer.MiniRacer with ths.js loaded
+
+
+def _load_ths_js() -> str:
+    """Return the contents of the vendored ``ths.js`` blob.
+
+    The blob lives in this fetcher's own package — see
+    ``stock_data/data_provider/fetchers/ths_assets/ths.js``. We intentionally
+    don't read it from akshare's package data: vendor'ing keeps the
+    dependency direction between fetchers one-way (peer fetchers don't
+    reach into each other's packages, see CLAUDE.md anti-patterns).
+    """
+    js_path = resources.files("stock_data.data_provider.fetchers.ths_assets").joinpath("ths.js")
+    if not js_path.is_file():
+        raise DataFetchError(
+            "[ThsFetcher] ths.js not shipped in ths_assets/ — "
+            "`python tools/vendor_ths_js.py` to refresh it"
+        )
+    return js_path.read_text(encoding="utf-8")
+
+
+def _get_ths_js_vm():
+    """Singleton MiniRacer VM with ths.js loaded; raises DataFetchError."""
+    global _ths_js_vm
+    if _ths_js_vm is not None:
+        return _ths_js_vm
+    try:
+        import py_mini_racer
+    except ImportError as e:
+        raise DataFetchError(f"[ThsFetcher] board history requires py_mini_racer: {e}") from e
+    vm = py_mini_racer.MiniRacer()
+    vm.eval(_load_ths_js())
+    _ths_js_vm = vm
+    return vm
+
+
+def _get_ths_v_token() -> str:
+    """Cached v-token with TTL refresh + bounded retry on transient failure.
+
+    Proactive 30 min TTL means a forgotten stale token recovers on its
+    own at the next refresh instead of waiting for the next caller to
+    hit a 403 and re-mint. Bounded retry handles transient mint errors
+    (py_mini_racer startup races) without pinning the fetcher dead.
+    """
+    now = time.monotonic()
+    cached = _ths_v_token_cache["value"]
+    # `is not None` — not truthiness. `v()` could legitimately return ""
+    # upstream; truthiness would re-mint on every call (potential infinite
+    # loop) and 5xx users with no v-cookie. None means "never minted".
+    if cached is not None and _ths_v_token_cache["expires_at"] > now:
+        return cached
+
+    last_err: Exception | None = None
+    for attempt in range(_THS_V_TOKEN_MAX_RETRIES):
+        try:
+            vm = _get_ths_js_vm()
+            token = vm.call("v")
+            _ths_v_token_cache["value"] = token
+            _ths_v_token_cache["expires_at"] = now + _THS_V_TOKEN_TTL_SECONDS
+            return token
+        except DataFetchError as e:
+            last_err = e
+            if attempt + 1 < _THS_V_TOKEN_MAX_RETRIES:
+                logger.warning(
+                    f"[ThsFetcher] v-token mint attempt {attempt + 1} "
+                    f"failed: {e}, retrying "
+                    f"({_THS_V_TOKEN_MAX_RETRIES - attempt - 1} more)"
+                )
+    raise DataFetchError(
+        f"[ThsFetcher] v-token mint failed after {_THS_V_TOKEN_MAX_RETRIES} attempts: {last_err}"
+    )
+
+
+THS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0 Safari/537.36"
 
 HSGT_HEADERS = {
     "User-Agent": THS_UA,
@@ -45,49 +137,53 @@ HSGT_HEADERS = {
 }
 
 
-def _mint_ths_v_token() -> str:
-    """Mint the `v` cookie token via py_mini_racer + akshare's bundled ths.js.
-
-    akshare ships `akshare/data/ths.js` (~40KB JS obfuscator). py_mini_racer
-    evaluates it then calls the `v()` function to produce the cookie value.
-
-    One mint per process is enough (the token rotates on a long interval).
-    The cached wrapper `_get_ths_v_token` keeps the MiniRacer VM warm.
-
-    Raises:
-        DataFetchError: py_mini_racer not installed or ths.js not found.
-    """
-    try:
-        import py_mini_racer
-    except ImportError as e:
-        raise DataFetchError(
-            f"[ThsFetcher] board history requires py_mini_racer: {e}"
-        ) from e
-    js_path = resources.files("akshare.data").joinpath("ths.js")
-    if not js_path.is_file():
-        raise DataFetchError(
-            f"[ThsFetcher] akshare/data/ths.js not found at {js_path}"
-        )
-    js_text = js_path.read_text(encoding="utf-8")
-    js = py_mini_racer.MiniRacer()
-    js.eval(js_text)
-    return js.call("v")
-
-
-@lru_cache(maxsize=1)
-def _get_ths_v_token() -> str:
-    """Cached wrapper around `_mint_ths_v_token`."""
-    return _mint_ths_v_token()
-
-
 _CONCEPT_DETAIL_URL = "https://q.10jqka.com.cn/gn/detail/code/{slug}/"
-_CONCEPT_CLID_RE = re.compile(
-    r'<input[^>]*\bid=["\']clid["\'][^>]*\bvalue=["\']([^"\']+)["\']',
-    re.IGNORECASE,
-)
 
 _THS_BOARD_KLINE_URL = "https://d.10jqka.com.cn/v4/line/bk_{inner}/01/{year}.js"
 _THS_BOARD_FREQ_MAP: dict[str, int] = {"d": 1}  # THS upstream only ships daily
+# Year-loop cap (A6 from PR2 review).  Each year carries a 15s timeout
+# worst case; 17-year queries at 250s+ are a stability risk and a DoS
+# surface for callers (the route layer has no start/end span limit). The
+# fetcher is sequential on purpose — concurrent year-fetch triggers
+# push2-style rate limits on this endpoint.
+_MAX_YEAR_SPAN = 10
+
+
+def _resolve_ths_date_range(
+    start_date: str | None,
+    end_date: str | None,
+    days: int,
+) -> tuple[_date, _date]:
+    """Resolve and validate ``(start_date, end_date)`` for the year loop.
+
+    Mirrors ``EastMoneyFetcher._board_history_range_days`` semantics so
+    f-string path messages look the same; returns ``(start_d, end_d)``
+    both as ``date`` objects.
+
+    Raises:
+        DataFetchError: a non-empty bound fails YYYY-MM-DD parsing,
+            or ``end_date`` is strictly before ``start_date``.
+    """
+    try:
+        end_d = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else _date.today()
+    except (TypeError, ValueError) as exc:
+        raise DataFetchError(
+            f"[ThsFetcher] get_board_history: end_date={end_date!r} not YYYY-MM-DD"
+        ) from exc
+    if start_date:
+        try:
+            start_d = datetime.strptime(start_date, "%Y-%m-%d").date()
+        except (TypeError, ValueError) as exc:
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_history: start_date={start_date!r} not YYYY-MM-DD"
+            ) from exc
+    else:
+        start_d = end_d - timedelta(days=days)
+    if start_d > end_d:
+        raise DataFetchError(
+            f"[ThsFetcher] get_board_history: start_date {start_date!r} > end_date {end_date!r}"
+        )
+    return start_d, end_d
 
 
 class ThsFetcher(BaseFetcher):
@@ -126,13 +222,18 @@ class ThsFetcher(BaseFetcher):
         fingerprint-block. Reuses the project's requests default (no proxy).
         """
         import requests
+
         return requests.get(url, headers=headers or {"User-Agent": THS_UA}, timeout=timeout)
 
     def _resolve_ths_concept_clid(self, slug: str) -> str | None:
         """Fetch the concept-board HTML page and extract the inner `clid` (e.g. T000267467).
 
+        Uses BeautifulSoup's attribute dict lookup rather than a regex so a
+        different attribute order on the upstream HTML (e.g. ``value="..."``
+        before ``id="clid"``) doesn't silently break clid extraction.
+
         Returns the clid string, or None if not found / on any error.
-        Logs at WARNING on network failure.
+        Logs at WARNING on network failure or HTML parse error.
         """
         url = _CONCEPT_DETAIL_URL.format(slug=slug)
         headers = {"User-Agent": THS_UA, "Cookie": f"v={self._v_token()}"}
@@ -141,20 +242,21 @@ class ThsFetcher(BaseFetcher):
         except Exception as e:
             logger.warning(f"[ThsFetcher] concept clid fetch failed for {slug}: {e}")
             return None
-        m = _CONCEPT_CLID_RE.search(r.text or "")
-        return m.group(1) if m else None
+        try:
+            from bs4 import BeautifulSoup
 
-    @staticmethod
-    def _extract_ths_json(body: str) -> str:
-        """Return the `{...}` JSON substring from `var v_X={...};` responses.
-
-        Falls back to returning the original body if no JSON object is found
-        (some upstream variants return plain JSON, others return other JS).
-        """
-        if not body:
-            return ""
-        m = re.search(r"\{[\s\S]*\}", body)
-        return m.group(0) if m else body
+            soup = BeautifulSoup(r.text or "", features="lxml")
+            node = soup.find("input", attrs={"id": "clid"})
+        except Exception as e:
+            logger.warning(f"[ThsFetcher] soup parse failed for {slug}: {e}")
+            return None
+        if node is None:
+            return None
+        # node.get() returns None when the attribute is absent — different
+        # from `node["value"]` which would KeyError. Defensive — the upstream
+        # form does carry the value, but an HTML reshuffle that drops it
+        # shouldn't 500 the fetcher.
+        return node.get("value")
 
     @staticmethod
     def _parse_ths_kline_body(body: str) -> list[dict]:
@@ -163,8 +265,14 @@ class ThsFetcher(BaseFetcher):
         The upstream response is `var v_XXXX={"data": "<csv>"};`. The `data`
         field is `;`-separated rows; each row is 11 comma-separated fields:
         `date, open, high, low, close, volume, amount, amp, pct_chg, change_amt, turnover_rate`.
-        Some upstream variants return 12 columns (trailing null); we accept both
-        and consume only the first 7 (canonical K-line subset).
+        Some upstream variants return 12 columns (trailing null); we accept
+        both and consume only the first 7 (canonical K-line subset).
+
+        JSON extraction is positional (find first ``{`` + strip trailing
+        ``;``) instead of a greedy regex, so multi-var upstream variants
+        parse correctly. ``demjson3`` (Python 3 port — the original ``demjson``
+        doesn't install on 3.10+) is more lenient than ``json`` on JS-style
+        literals (e.g. unquoted keys are still rare but possible upstream).
 
         Returns canonical row dicts with keys: date, open, high, low, close,
         volume, amount. Other fields (amp, pct_chg, change_amt, turnover_rate)
@@ -173,12 +281,44 @@ class ThsFetcher(BaseFetcher):
         """
         if not body:
             return []
-        json_str = ThsFetcher._extract_ths_json(body)
+        # Locate the FIRST complete JSON object anywhere in ``body``.
+        # ``json.JSONDecoder().raw_decode(s, idx)`` is the only
+        # strictly-positional extractor that respects nested braces — it
+        # walks the string from ``idx`` and returns ``(obj, end_pos)`` of
+        # the first well-formed JSON object. Replaces both the old greedy
+        # ``re.search(r"\{[\s\S]*\}", body)`` AND the
+        # slightly-buggy ``body.find("}", start+1)`` we tried first.
+        idx = body.find("{")
+        if idx == -1:
+            return []
         try:
             import json as _json
-            payload = _json.loads(json_str)
-        except (ValueError, TypeError):
-            return []
+
+            decoder = _json.JSONDecoder()
+            payload, _ = decoder.raw_decode(body, idx)
+        except (_json.JSONDecodeError, ValueError):
+            # demjson3 is more lenient than stdlib on JS-style literals
+            # (unquoted keys, trailing commas). Fall back to a manual
+            # brace-balance scan + demjson3 decode for those variants.
+            try:
+                import demjson3 as demjson_lib
+
+                start = idx
+                depth = 0
+                end = -1
+                for i, ch in enumerate(body[start:], start=start):
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i
+                            break
+                if end == -1:
+                    return []
+                payload = demjson_lib.decode(body[start : end + 1])
+            except Exception:
+                return []
         data = payload.get("data") or ""
         if not data:
             return []
@@ -191,15 +331,17 @@ class ThsFetcher(BaseFetcher):
             if len(parts) < 7:
                 continue
             try:
-                out.append({
-                    "date": parts[0],
-                    "open": float(parts[1]),
-                    "high": float(parts[2]),
-                    "low": float(parts[3]),
-                    "close": float(parts[4]),
-                    "volume": int(float(parts[5])),
-                    "amount": float(parts[6]),
-                })
+                out.append(
+                    {
+                        "date": parts[0],
+                        "open": float(parts[1]),
+                        "high": float(parts[2]),
+                        "low": float(parts[3]),
+                        "close": float(parts[4]),
+                        "volume": int(float(parts[5])),
+                        "amount": float(parts[6]),
+                    }
+                )
             except (TypeError, ValueError):
                 continue
         return out
@@ -251,11 +393,18 @@ class ThsFetcher(BaseFetcher):
 
         Returns:
             list[dict] — sorted oldest → newest. Keys: date, open, high, low,
-            close, volume, amount. Empty list on failure (logged at WARNING).
+            close, volume, amount. Empty list if individual year fetches
+            return empty bodies (e.g. a brand-new board with no history yet);
+            a Hard error is raised when every requested year fails (e.g.
+            cached v-token expired) — see Raises.
 
         Raises:
-            DataFetchError: frequency not in ``_THS_BOARD_FREQ_MAP``; board_type
-                missing or invalid; concept clid resolution returns None.
+            DataFetchError: frequency not in ``_THS_BOARD_FREQ_MAP``;
+                board_type missing or invalid; concept clid resolution
+                returns None; year span exceeds ``_MAX_YEAR_SPAN``;
+                date bound malformed / ``end_date < start_date``;
+                every requested year fetch failed (likely upstream auth
+                problem — investigate the v-token / d.10jqka.com.cn).
         """
         if not board_type:
             raise DataFetchError(
@@ -269,14 +418,20 @@ class ThsFetcher(BaseFetcher):
                 f"{frequency!r}; THS upstream is daily-only"
             )
 
-        # Year range
-        end_d = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else _date.today()
-        start_d = (
-            datetime.strptime(start_date, "%Y-%m-%d").date()
-            if start_date else end_d - timedelta(days=days)
-        )
+        # Year range — fail fast on bad bounds (reversed dates, malformed,
+        # past-the-end dates) so the year loop doesn't silently loop weird
+        # windows. Mirrors the validation in EastMoneyFetcher.
+        # Tuple returned from _resolve_ths_date_range is (start_d, end_d).
+        start_d, end_d = _resolve_ths_date_range(start_date, end_date, days)
         start_year = start_d.year
         end_year = end_d.year
+        n_years = end_year - start_year + 1
+        if n_years > _MAX_YEAR_SPAN:
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_history year span "
+                f"({n_years}y) > {_MAX_YEAR_SPAN}; "
+                f"narrow start_date/end_date or call repeatedly."
+            )
 
         # Resolve inner code
         if board_type == "concept":
@@ -294,10 +449,28 @@ class ThsFetcher(BaseFetcher):
                 f"'concept' or 'industry' (got {board_type!r})"
             )
 
-        # Fetch each year, concat, parse, filter
+        # Fetch each year sequentially (concurrent year-fetch triggers
+        # push2-style rate limits on this endpoint — keep it serial).
+        # Track success vs failure so we can distinguish "no history yet"
+        # (board is brand-new) from "everything is broken" (auth failure).
         rows: list[dict] = []
+        bodies: dict[int, str] = {}
         for year in range(start_year, end_year + 1):
             body = self._fetch_ths_board_year(inner, year)
+            bodies[year] = body
+        # All-empty is a real failure surface: callers can't tell from an
+        # empty list whether the board has no history (legit) or every
+        # request 4xx'd (ops bug). Surface it.
+        if all(b == "" for b in bodies.values()):
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_history: all {n_years} year-fetches "
+                f"returned empty for inner={inner!r}; check v-token, "
+                f"d.10jqka.com.cn reachability, and that the board slug "
+                f"({board_code!r}) is correct. See WARNING logs above."
+            )
+        for body in bodies.values():
+            if not body:
+                continue
             rows.extend(self._parse_ths_kline_body(body))
 
         # Date range filter (string comparison works for YYYY-MM-DD)
@@ -372,11 +545,13 @@ class ThsFetcher(BaseFetcher):
             for i in range(n):
                 hgt_val = float(hgt[i]) if i < len(hgt) and hgt[i] else None
                 sgt_val = float(sgt[i]) if i < len(sgt) and sgt[i] else None
-                rows.append({
-                    "time": times[i],
-                    "hgt_yi": hgt_val,
-                    "sgt_yi": sgt_val,
-                })
+                rows.append(
+                    {
+                        "time": times[i],
+                        "hgt_yi": hgt_val,
+                        "sgt_yi": sgt_val,
+                    }
+                )
             return rows
         except Exception as e:
             logger.warning(f"[ThsFetcher] north flow failed: {e}")
@@ -407,9 +582,7 @@ class ThsFetcher(BaseFetcher):
         publish_time = ""
         if rtime_raw:
             try:
-                publish_time = datetime.fromtimestamp(int(rtime_raw)).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
+                publish_time = datetime.fromtimestamp(int(rtime_raw)).strftime("%Y-%m-%d %H:%M:%S")
             except (TypeError, ValueError, OSError):
                 publish_time = str(rtime_raw)  # graceful fallback
 
@@ -505,9 +678,7 @@ class ThsFetcher(BaseFetcher):
                 out.append(self._normalize_flash_item(rec))
             except (KeyError, TypeError, ValueError) as e:
                 # 单条记录缺关键字段就跳过,避免一条坏数据废整个 list
-                logger.warning(
-                    f"[ThsFetcher] fetch_flash_news: skipping malformed record: {e}"
-                )
+                logger.warning(f"[ThsFetcher] fetch_flash_news: skipping malformed record: {e}")
                 continue
         return out
 
@@ -517,9 +688,7 @@ class ThsFetcher(BaseFetcher):
 
     # 问财 PC 聚合搜索接口。注意是 www.iwencai.com 域名(同花顺问财),不是
     # 10jqka —— 10jqka 财经页的站内搜索框 (#search_input) 本身就跳转到这里。
-    _NEWS_SEARCH_URL = (
-        "https://www.iwencai.com/gateway/mobilesearch/comprehensive/search"
-    )
+    _NEWS_SEARCH_URL = "https://www.iwencai.com/gateway/mobilesearch/comprehensive/search"
     # channels 选 news_filter+web → 资讯/网页聚合(多源: 新浪/百度/10jqka 等)。
     _NEWS_SEARCH_CHANNELS = ["news_filter", "web"]
     _NEWS_SEARCH_MAX_Q_LEN = 200
@@ -534,12 +703,7 @@ class ThsFetcher(BaseFetcher):
     @staticmethod
     def _strip_em(s: str) -> str:
         """剥离 <em>/</em> 高亮标签(与 EastMoneyFetcher._strip_em 对齐)。"""
-        return (
-            s.replace("(<em>", "")
-            .replace("</em>)", "")
-            .replace("<em>", "")
-            .replace("</em>", "")
-        )
+        return s.replace("(<em>", "").replace("</em>)", "").replace("<em>", "").replace("</em>", "")
 
     @classmethod
     def _normalize_search_item(cls, rec: dict) -> dict:
@@ -604,9 +768,7 @@ class ThsFetcher(BaseFetcher):
         """
         # ---- 参数校验(与 EastMoney/Baidu 的 search_news 对齐)----
         if not q or len(q) > self._NEWS_SEARCH_MAX_Q_LEN:
-            raise DataFetchError(
-                f"[ThsFetcher] search_news: invalid q (len={len(q) if q else 0})"
-            )
+            raise DataFetchError(f"[ThsFetcher] search_news: invalid q (len={len(q) if q else 0})")
         try:
             limit = int(limit)
         except (TypeError, ValueError) as e:
@@ -614,9 +776,7 @@ class ThsFetcher(BaseFetcher):
                 f"[ThsFetcher] search_news: limit must be an integer 1..100 (got {limit!r})"
             ) from e
         if not (1 <= limit <= 100):
-            raise DataFetchError(
-                f"[ThsFetcher] search_news: limit must be 1..100 (got {limit})"
-            )
+            raise DataFetchError(f"[ThsFetcher] search_news: limit must be 1..100 (got {limit})")
 
         body = {
             "offset": 0,

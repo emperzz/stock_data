@@ -28,6 +28,8 @@ dependencies = [
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "cachetools>=5.3.0",
+    "demjson3>=3.0.6,<4",  # THS fetcher board K-line JSON parser (Py3 port; original `demjson` no longer installs on Python 3.10+)
+    "lxml>=4.9.0",  # THSFetcher clid parse — uses ``BeautifulSoup(features="lxml")`` for resilience to attribute order
     "tushare>=1.4.0",
     "baostock>=0.8.8",
     "gm>=3.0.180,<4",
@@ -43,12 +45,30 @@ dev = [
     "ruff>=0.4.0",
     "httpx>=0.27.0",
     "beautifulsoup4>=4.12.0",
+    "demjson3>=3.0.6,<4",  # Mirror at dev level so test env matches runtime deps
 ]
 zzshare = ["zzshare>=0.4.0,<0.5"]   # PyPI package `zzshare`; the `DataApi` class lives at `zzshare.client.DataApi`
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# ThsFetcher vendor — ths.js (the JS obfuscator that mints the v= cookie)
+# lives next to its consumer so the fetcher doesn't reach into a peer
+# fetcher's package data. force-include is the hatch idiom for shipping
+# non-Python files in a sub-package directory.
+[tool.hatch.build.targets.wheel.force-include]
+"stock_data/data_provider/fetchers/ths_assets" = "stock_data/data_provider/fetchers/ths_assets"
+# Mirror under sdist so `pip install *.tar.gz` and conda-forge builds also
+# bundle ths.js. Without this the wheel ships it but the sdist doesn't,
+# leaving installs that 503 on first board-history call.
+[tool.hatch.build.targets.sdist.force-include]
+"stock_data/data_provider/fetchers/ths_assets" = "stock_data/data_provider/fetchers/ths_assets"
+# Note: __pycache__/ exclusion needs `[tool.hatch.build.targets.wheel]`
+# excludes (array form, e.g. exclude = ["**/__pycache__/**"]). Tracking:
+# that's a follow-up — runtime impact is zero, only the published wheel
+# has a few extra .pyc files. See CLAUDE.md "wheel excludes" discussion.</new_string>
+
 
 [tool.ruff]
 target-version = "py310"
