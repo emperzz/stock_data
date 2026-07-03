@@ -18,7 +18,6 @@ from ..cache import (
     get_news_content_cache,
     get_news_flash_cache,
     get_news_search_cache,
-    get_news_stock_cache,
     make_news_content_cache_key,
     make_news_flash_cache_key,
     make_news_search_cache_key,
@@ -144,27 +143,9 @@ def get_news_content(
     url: str = Query(min_length=1, description="新闻详情页 URL"),
 ) -> NewsContentResponse:
     """Fetch and extract news content from a URL."""
-    from stock_data.data_provider.utils.news_extractor import (
-        NewsContent,
-        NewsContentExtractor,
-    )
+    from stock_data.data_provider.utils.news_extractor import NewsContentExtractor
 
     result = NewsContentExtractor.extract(url)
-
-    # The extractor returns a NewsContent dataclass in production; tests may
-    # mock it with a plain dict. Coerce dicts to the dataclass so the rest of
-    # the handler can use attribute access uniformly.
-    if isinstance(result, dict):
-        result = NewsContent(
-            url=result.get("url", url),
-            title=result.get("title"),
-            body=result.get("body", ""),
-            publish_date=result.get("publish_date"),
-            author=result.get("author"),
-            source_domain=result.get("source_domain", ""),
-            extractor=result.get("extractor", "default"),
-            byte_size=result.get("byte_size", 0),
-        )
 
     return NewsContentResponse(
         url=result.url,
@@ -194,7 +175,7 @@ def get_news_content(
 )
 @map_errors
 @cache_endpoint(
-    cache_fn=lambda *args, **kwargs: get_news_stock_cache(),
+    cache_fn=lambda *args, **kwargs: get_news_search_cache(),
     key_builder=lambda stock_code, limit: make_news_stock_cache_key(stock_code, limit),
     hit_label="news_stock",
 )

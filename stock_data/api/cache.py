@@ -151,11 +151,6 @@ def get_news_flash_cache() -> TTLCache:
     return _news_flash_cache
 
 
-def get_news_stock_cache() -> TTLCache:
-    """Per-stock news feed cache (shares TTL with news_search)."""
-    return get_news_search_cache()
-
-
 def make_news_stock_cache_key(stock_code: str, limit: int) -> str:
     from stock_data.data_provider.utils.normalize import normalize_stock_code
 

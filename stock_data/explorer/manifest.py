@@ -26,29 +26,13 @@ from .tags import _INTERNAL_TAGS, CAPABILITY_LABELS, TAG_TO_TITLE
 logger = logging.getLogger(__name__)
 
 
-# Per-fetcher method overrides for capabilities where the capability-level
-# default in `CAPABILITY_TO_METHOD` doesn't match what the specific fetcher
-# actually implements. Currently the only such case is Zhitu's minute-level
-# support: `CAPABILITY_TO_METHOD[STOCK_KLINE]` maps to ``get_kline_data``
-# (correct for Baostock/Akshare/Yfinance/Myquant, which all expose minutes
-# via ``get_kline_data``), but Zhitu's minutes live in ``get_intraday_data``
-# and its inherited ``get_kline_data`` raises DataFetchError. The Test
-# button uses this method name + signature verbatim, so getting it wrong
-# produces confusing 500s.
-_FETCHER_METHOD_OVERRIDES: dict[tuple[DataCapability, str], str] = {
-    (DataCapability.STOCK_KLINE, "ZhituFetcher"): "get_intraday_data",
-}
-
-
-def _resolve_fetcher_method(cap: DataCapability, fetcher_name: str) -> str | None:
-    """Pick the right method name for ``fetcher_name`` under capability ``cap``.
-
-    Order: per-fetcher override → capability default → ``None`` (no mapping).
-    """
-    override = _FETCHER_METHOD_OVERRIDES.get((cap, fetcher_name))
-    if override is not None:
-        return override
-    return CAPABILITY_TO_METHOD.get(cap)
+# Single known per-fetcher method override: Zhitu's STOCK_KLINE minutes
+# live in ``get_intraday_data``, not the capability default
+# ``get_kline_data`` (which Zhitu inherits and raises DataFetchError on).
+# The Test button uses this method name verbatim, so getting it wrong
+# produces confusing 500s. Hardcoded — when a second fetcher needs an
+# override, lift this into a dict.
+_ZHITU_STOCK_KLINE_METHOD = "get_intraday_data"
 
 
 # manifest schema version——schema 字段有 breaking 变化时递增
@@ -271,7 +255,7 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
 
         # Determine method name: endpoint-level override > capability default.
         # Per-fetcher overrides (e.g. Zhitu's intraday method) are applied
-        # *inside* the candidate-class loop below — see _resolve_fetcher_method.
+        # *inside* the candidate-class loop below.
         if meta.fetcher_method is not None:
             method_name = meta.fetcher_method
         else:
@@ -309,7 +293,11 @@ def _resolve_fetchers(meta, manager) -> list[dict]:
                 # `method_name` stays the loop-level default;
                 # `effective_method` is per-iteration so the override
                 # doesn't leak to the next fetcher.
-                effective_method = _resolve_fetcher_method(cap, fetcher_name)
+                effective_method = (
+                    _ZHITU_STOCK_KLINE_METHOD
+                    if (cap == DataCapability.STOCK_KLINE and fetcher_name == "ZhituFetcher")
+                    else method_name
+                )
                 if effective_method is None:
                     # Capability has no default mapping and no per-fetcher
                     # override — leave the row off this endpoint (matches

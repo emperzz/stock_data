@@ -58,21 +58,23 @@ class TestNewsSearchEndpoint:
 
 class TestNewsContentEndpoint:
     def test_content_200_returns_schema(self, client):
-        fake = {
-            "url": "https://finance.eastmoney.com/a/1.html",
-            "title": "Test Title",
-            "body": "Body content here for testing.",
-            "publish_date": "2026-06-09",
-            "author": "TestMedia",
-            "source_domain": "finance.eastmoney.com",
-            "extractor": "eastmoney_v1",
-            "byte_size": 28,
-        }
+        from stock_data.data_provider.utils.news_extractor import NewsContent
+
+        fake = NewsContent(
+            url="https://finance.eastmoney.com/a/1.html",
+            title="Test Title",
+            body="Body content here for testing.",
+            publish_date="2026-06-09",
+            author="TestMedia",
+            source_domain="finance.eastmoney.com",
+            extractor="eastmoney_v1",
+            byte_size=28,
+        )
         with patch(
             "stock_data.data_provider.utils.news_extractor.NewsContentExtractor.extract",
             return_value=fake,
         ):
-            resp = client.get("/api/v1/news/content", params={"url": fake["url"]})
+            resp = client.get("/api/v1/news/content", params={"url": fake.url})
 
         assert resp.status_code == 200
         assert resp.json()["title"] == "Test Title"
