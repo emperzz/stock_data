@@ -356,37 +356,40 @@ def test_get_stock_boards_zhitu_cold_fill_returns_populated_boards(client):
         conn.commit()
 
 
-# ===== get_board_history (zzshare) =====
+# ===== get_board_history (ths / eastmoney) =====
 
 
 def test_get_board_history_source_required(client):
     """GET /boards/{code}/history without source → 422 (Query required)."""
-    r = client.get("/api/v1/boards/883957/history")
+    r = client.get("/api/v1/boards/881270/history")
     assert r.status_code == 422
 
 
 def test_get_board_history_rejects_unknown_source(client):
     """Unknown source returns 400 from _resolve_board_history_source."""
-    r = client.get("/api/v1/boards/883957/history?source=bogus")
+    r = client.get("/api/v1/boards/881270/history?source=bogus")
     assert r.status_code == 400
 
 
-def test_get_board_history_zzshare_rejects_weekly_frequency(client):
-    """zzshare is daily-only; weekly raises upstream DataFetchError → 503."""
+def test_get_board_history_ths_rejects_weekly_frequency(client):
+    """THS board history is daily-only; weekly raises upstream DataFetchError."""
     # Patch to avoid real network call. Return empty list (route still
     # 200s on empty data, so we rely on the manager being called with
     # frequency='w' and asserting the route didn't 422-validate).
     with patch(
         "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
-        return_value=([], "ZzshareFetcher"),
+        return_value=([], "ThsFetcher"),
     ):
-        r = client.get("/api/v1/boards/883957/history?source=zzshare&frequency=w")
+        r = client.get(
+            "/api/v1/boards/881270/history",
+            params={"source": "ths", "frequency": "w", "board_type": "industry"},
+        )
     # 200 (route validation passed); upstream is patched so no 503.
     assert r.status_code == 200
 
 
-def test_get_board_history_zzshare_returns_kline(client):
-    """Happy path: zzshare returns rows → 200 with BoardKlineResponse."""
+def test_get_board_history_ths_returns_kline(client):
+    """Happy path: ths returns rows → 200 with BoardKlineResponse."""
     fake_rows = [
         {
             "date": "2026-05-20",
@@ -401,15 +404,41 @@ def test_get_board_history_zzshare_returns_kline(client):
     ]
     with patch(
         "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
-        return_value=(fake_rows, "ZzshareFetcher"),
+        return_value=(fake_rows, "ThsFetcher"),
     ):
-        r = client.get("/api/v1/boards/883957/history?source=zzshare&days=7&frequency=d")
+        r = client.get(
+            "/api/v1/boards/881270/history",
+            params={"source": "ths", "days": 7, "frequency": "d", "board_type": "industry"},
+        )
     assert r.status_code == 200
     body = r.json()
-    assert body["board_code"] == "883957"
+    assert body["board_code"] == "881270"
     # period echoes the requested frequency
     assert body["period"] == "d"
-    assert body["source"] == "ZzshareFetcher"
+    assert body["source"] == "ThsFetcher"
     assert len(body["data"]) == 1
     assert body["data"][0]["date"] == "2026-05-20"
     assert body["data"][0]["close"] == 1.05
+
+
+def test_get_board_history_zzshare_aliases_to_ths(client):
+    """Backward compat: `source=zzshare` is accepted and aliased to `ths`.
+
+    ZzshareFetcher has no K-line implementation (upstream `plate_kline`
+    only supports 883957 同花顺全A). The route layer must therefore alias
+    `zzshare` → `ths` so the same source label continues to work without
+    400 on unknown source. ThsFetcher then receives the request and
+    surfaces a real upstream error (e.g. board_type missing).
+    """
+    with patch(
+        "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+        return_value=([], "ThsFetcher"),
+    ) as spy:
+        r = client.get(
+            "/api/v1/boards/881270/history",
+            params={"source": "zzshare", "frequency": "d", "board_type": "industry"},
+        )
+    # Validation must pass (NOT 400); upstream is patched so route returns 200.
+    assert r.status_code == 200, r.text
+    # Confirm the manager was called with source='ths' (alias applied).
+    assert spy.call_args.kwargs.get("source") == "ths"

@@ -73,18 +73,27 @@ def _resolve_source(source: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# board-history source routing — does NOT alias ths→zzshare.
-# Different from `_resolve_source` (used by board-list endpoints), because
-# THS as a board K-line source routes to ThsFetcher (different code system,
-# different upstream from zzshare's plates_list). The persistence layer's
-# alias still applies to board listings / stocks — only this route uses
-# the strict version.
+# board-history source routing — aliases ``zzshare`` → ``ths``.
+# Different from `_resolve_source` (used by board-list endpoints): THS as a
+# board K-line source routes to ThsFetcher (different code system, different
+# upstream from zzshare's plates_list). The persistence layer's
+# `ths→zzshare` alias still applies to board listings / stocks — only this
+# route uses the reversed alias (`zzshare→ths`), because zzshare's
+# `plate_kline` upstream only supports 883957 同花顺全A and therefore
+# ZzshareFetcher has no K-line implementation. Both `source=zzshare` and
+# `source=ths` are now served by ThsFetcher, preserving backward compat for
+# existing callers.
 # ──────────────────────────────────────────────────────────────────────────
-_BOARD_HISTORY_VALID_SOURCES: tuple[str, ...] = ("zzshare", "ths", "eastmoney")
+_BOARD_HISTORY_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney")
 
 
 def _resolve_board_history_source(source: str) -> str:
-    """Validate `source` for the board-history route — does NOT alias ths→zzshare.
+    """Validate `source` for the board-history route — aliases ``zzshare``→``ths``.
+
+    zzshare's ``plate_kline`` upstream only supports 883957 (同花顺全A); all
+    concept / industry / special codes return empty. ZzshareFetcher therefore
+    has no `get_board_history` implementation, so this route aliases the
+    ``zzshare`` label to ``ths`` and dispatches to ThsFetcher.
 
     Raises HTTPException(400) on invalid source. The set of valid sources
     is intentionally narrower than `_SOURCES` (board-list): THS is exposed
@@ -92,6 +101,8 @@ def _resolve_board_history_source(source: str) -> str:
     is exposed because EastMoneyFetcher has a multi-frequency implementation.
     Zhitu does not expose a board K-line endpoint and is therefore excluded.
     """
+    if source == "zzshare":
+        source = "ths"
     if source not in _BOARD_HISTORY_VALID_SOURCES:
         raise HTTPException(
             status_code=400,
@@ -480,7 +491,7 @@ def get_stock_boards(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块 K 线 (zzshare 日线 / eastmoney 多周期 / ths 概念/行业日线)",
+    summary="板块 K 线 (ths 概念/行业日线 / eastmoney 多周期; zzshare alias → ths)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_history",
@@ -491,15 +502,18 @@ def get_board_history(
         max_length=30,
         description=(
             "Board code (source-specific). Examples: "
-            "zzshare='883957'; eastmoney='BK0996'; "
-            "ths concept='301558'; ths industry='881270'"
+            "eastmoney='BK0996'; "
+            "ths concept='301558'; ths industry='881270'. "
+            "`source=zzshare` is accepted as a backward-compat alias for `ths`."
         ),
     ),
     source: str = Query(
         ...,
         description=(
-            "Data source. One of: zzshare, ths, eastmoney. "
-            "'ths' here = ThsFetcher (NOT zzshare alias). "
+            "Data source. One of: ths, eastmoney. "
+            "`source=zzshare` is also accepted and aliased to `ths` "
+            "(ZzshareFetcher has no K-line implementation — upstream "
+            "`plate_kline` only supports 883957 同花顺全A). "
             "Validated by _resolve_board_history_source (400 on unknown)."
         ),
     ),

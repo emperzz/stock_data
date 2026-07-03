@@ -1,5 +1,7 @@
 """Route-level tests for /boards/{board_code}/history source expansion."""
 
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -13,8 +15,15 @@ def client():
 
 class TestSourceExpansion:
     def test_zzshare_source_accepted(self, client):
+        """Backward compat: `source=zzshare` is accepted and aliased to `ths`.
+
+        ZzshareFetcher has no K-line implementation (upstream `plate_kline`
+        only supports 883957 同花顺全A), so the route layer aliases
+        `zzshare` → `ths` instead of 400-ing on unknown source.
+        """
         r = client.get(
-            "/api/v1/boards/883957/history", params={"source": "zzshare", "frequency": "d"}
+            "/api/v1/boards/881270/history",
+            params={"source": "zzshare", "frequency": "d", "board_type": "industry"},
         )
         # Either 200 (upstream works) or 502/500 (upstream down) — NOT 400/422 (validation)
         assert r.status_code != 422, r.text
@@ -42,21 +51,29 @@ class TestSourceExpansion:
 
     def test_unknown_source_returns_400(self, client):
         r = client.get(
-            "/api/v1/boards/883957/history", params={"source": "bogus", "frequency": "d"}
+            "/api/v1/boards/881270/history", params={"source": "bogus", "frequency": "d"}
         )
         assert r.status_code == 400, r.text
 
-    def test_zzshare_alias_to_ths_not_done_here(self, client):
-        # `source=ths` here must NOT be aliased to `zzshare` — it should be
-        # validated against the history-source allowlist.
-        r = client.get(
-            "/api/v1/boards/881270/history",
-            params={"source": "ths", "frequency": "d", "board_type": "industry"},
-        )
-        # If aliased, the route would call ZzshareFetcher.get_board_history
-        # which only supports 883957 → 4xx/5xx.
-        # We assert the route accepted "ths" (status != 400/422).
-        assert r.status_code not in (400, 422), r.text
+    def test_zzshare_alias_to_ths(self, client):
+        """`source=zzshare` on /boards/.../history aliases to `ths`.
+
+        Reversed direction from `_resolve_source` (which aliases
+        `ths→zzshare` for board-list endpoints). Here `ths` MUST stay
+        canonical (different upstream from zzshare's plates_list), and
+        `zzshare` is the label that gets remapped.
+        """
+        with patch(
+            "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+            return_value=([], "ThsFetcher"),
+        ) as spy:
+            r = client.get(
+                "/api/v1/boards/881270/history",
+                params={"source": "zzshare", "frequency": "d", "board_type": "industry"},
+            )
+        assert r.status_code == 200, r.text
+        # Manager must have received source='ths' (alias applied before dispatch)
+        assert spy.call_args.kwargs.get("source") == "ths"
 
 
 class TestFrequencyExpansion:

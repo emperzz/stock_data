@@ -278,12 +278,12 @@ def test_manager_get_board_history_passes_args_to_fetcher():
 
 def test_manager_passes_date_range_to_fetcher():
     """start_date/end_date/days/board_type are forwarded verbatim to fetcher."""
-    em = _make_fetcher("ZzshareFetcher", DataCapability.STOCK_BOARD)
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
     manager = DataFetcherManager([em])
 
     manager.get_board_history(
-        "883957",
-        source="ZzshareFetcher",
+        "BK0996",
+        source="EastMoneyFetcher",
         frequency="d",
         start_date="2026-05-15",
         end_date="2026-05-20",
@@ -291,12 +291,12 @@ def test_manager_passes_date_range_to_fetcher():
     )
 
     em.get_board_history.assert_called_once_with(
-        "883957",
+        "BK0996",
         frequency="d",
         days=30,
         start_date="2026-05-15",
         end_date="2026-05-20",
-        source="ZzshareFetcher",
+        source="EastMoneyFetcher",
         board_type=None,
     )
 
