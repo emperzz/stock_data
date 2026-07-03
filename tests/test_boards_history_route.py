@@ -121,14 +121,13 @@ class TestDaysCap:
         )
         assert r.status_code == 422, r.text
 
-    def test_wide_date_range_accepted(self, client):
-        """days=30 + start/end spanning > days is now served correctly.
+    def test_wide_date_range_under_cap_accepted(self, client):
+        """days=30 + start/end spanning 1 year (under 800-day cap) is served.
 
         Pre-fix this returned only the last 30 bars regardless of date
         span because lmt was derived from days only.  Now the fetcher
         computes effective_lmt = max(days, range_width); test asserts
-        the route accepts the wide range without 422 (upstream may
-        5xx but that's a fetcher concern).
+        the route accepts the (narrow) range without 422.
         """
         r = client.get(
             "/api/v1/boards/BK0996/history",
@@ -136,11 +135,64 @@ class TestDaysCap:
                 "source": "eastmoney",
                 "frequency": "d",
                 "start_date": "2020-01-01",
-                "end_date": "2024-12-31",
+                "end_date": "2020-12-31",  # 366 days (leap year), under 800
                 "days": 30,
             },
         )
         assert r.status_code != 422, r.text
+
+    def test_date_range_over_cap_returns_400(self, client):
+        """start_date..end_date > 800 days → 400 + 'date_range_too_wide'.
+
+        Without the route-layer cap, the fetcher would silently return
+        only the 800 most-recent bars (post-fetch date filter trims
+        the older half of the requested range). The fix is to fail
+        fast at the route layer with a clear 400 + pagination guidance.
+        """
+        r = client.get(
+            "/api/v1/boards/BK0996/history",
+            params={
+                "source": "eastmoney",
+                "frequency": "d",
+                "start_date": "2015-01-01",
+                "end_date": "2024-12-31",  # 3653 days, well over 800
+                "days": 30,
+            },
+        )
+        assert r.status_code == 400, r.text
+        # Detail shape from _validate_board_history_date_range:
+        body = r.json()
+        assert body.get("detail", {}).get("error") == "date_range_too_wide"
+
+    def test_date_range_at_boundary_accepted(self, client):
+        """Exactly 800-day range passes (cap is inclusive)."""
+        # 2024-01-01 + 799 days = 2026-03-19 → inclusive width = 800 days.
+        r = client.get(
+            "/api/v1/boards/BK0996/history",
+            params={
+                "source": "eastmoney",
+                "frequency": "d",
+                "start_date": "2024-01-01",
+                "end_date": "2026-03-19",  # exactly 800 days inclusive
+                "days": 30,
+            },
+        )
+        assert r.status_code != 422, r.text
+
+    def test_date_range_one_over_cap_returns_400(self, client):
+        """801-day range (1 over) → 400 + 'date_range_too_wide'."""
+        r = client.get(
+            "/api/v1/boards/BK0996/history",
+            params={
+                "source": "eastmoney",
+                "frequency": "d",
+                "start_date": "2024-01-01",
+                "end_date": "2026-03-20",  # 801 days inclusive
+                "days": 30,
+            },
+        )
+        assert r.status_code == 400, r.text
+        assert r.json().get("detail", {}).get("error") == "date_range_too_wide"
 
 
 class TestBoardCodeValidation:

@@ -27,6 +27,14 @@ from datetime import datetime, timedelta
 from importlib import resources, util
 from urllib.parse import urlparse
 
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..utils.http import json_get, json_post
 
@@ -47,6 +55,14 @@ logger = logging.getLogger(__name__)
 #
 # Note we DO NOT lru_cache anything — lru_cache caches exceptions too,
 # turning a one-shot failure into a perma-broken fetcher.
+#
+# Retry uses the project-standard ``tenacity`` decorator
+# (``yfinance_fetcher._fetch_raw_data`` and
+# ``eastmoney._boards_mixin._fetch_one_clist_page`` follow the same
+# pattern). The previous manual loop only caught ``DataFetchError``;
+# tenacity's ``retry_if_exception_type(Exception)`` is broader so a
+# JSError / RuntimeError from ``py_mini_racer`` is also retried (which
+# is the most common transient class — see review finding #4).
 
 _THS_V_TOKEN_MAX_RETRIES = 3
 _THS_V_TOKEN_TTL_SECONDS = 1800.0  # 30 min; THS rotates rarely upstream
@@ -91,13 +107,35 @@ def _get_ths_js_vm():
     return vm
 
 
+@retry(
+    retry=retry_if_exception_type(Exception),  # broader than yfinance; matches eastmoney mixin
+    stop=stop_after_attempt(_THS_V_TOKEN_MAX_RETRIES),
+    wait=wait_exponential(multiplier=0.2, min=0.2, max=2),
+    reraise=False,  # we re-raise as DataFetchError ourselves for a clear final message
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
+def _mint_ths_v_token_uncached() -> str:
+    """Single mint attempt: load the singleton V8 VM, evaluate ``v()``.
+
+    No caching here — the TTL is managed by ``_get_ths_v_token`` via
+    ``_ths_v_token_cache``. Each call to this function pays the full
+    V8 cold-start cost; the TTL ensures this only happens at most once
+    every 30 min in steady state. The ``@retry`` decorator handles
+    transient failures (py_mini_racer import races, JS errors) with
+    exponential backoff up to ``_THS_V_TOKEN_MAX_RETRIES`` attempts.
+    """
+    vm = _get_ths_js_vm()
+    return vm.call("v")
+
+
 def _get_ths_v_token() -> str:
     """Cached v-token with TTL refresh + bounded retry on transient failure.
 
     Proactive 30 min TTL means a forgotten stale token recovers on its
     own at the next refresh instead of waiting for the next caller to
-    hit a 403 and re-mint. Bounded retry handles transient mint errors
-    (py_mini_racer startup races) without pinning the fetcher dead.
+    hit a 403 and re-mint. Bounded retry (via ``tenacity``) handles
+    transient mint errors (py_mini_racer startup races, JS errors) without
+    pinning the fetcher dead.
     """
     now = time.monotonic()
     cached = _ths_v_token_cache["value"]
@@ -107,25 +145,15 @@ def _get_ths_v_token() -> str:
     if cached is not None and _ths_v_token_cache["expires_at"] > now:
         return cached
 
-    last_err: Exception | None = None
-    for attempt in range(_THS_V_TOKEN_MAX_RETRIES):
-        try:
-            vm = _get_ths_js_vm()
-            token = vm.call("v")
-            _ths_v_token_cache["value"] = token
-            _ths_v_token_cache["expires_at"] = now + _THS_V_TOKEN_TTL_SECONDS
-            return token
-        except DataFetchError as e:
-            last_err = e
-            if attempt + 1 < _THS_V_TOKEN_MAX_RETRIES:
-                logger.warning(
-                    f"[ThsFetcher] v-token mint attempt {attempt + 1} "
-                    f"failed: {e}, retrying "
-                    f"({_THS_V_TOKEN_MAX_RETRIES - attempt - 1} more)"
-                )
-    raise DataFetchError(
-        f"[ThsFetcher] v-token mint failed after {_THS_V_TOKEN_MAX_RETRIES} attempts: {last_err}"
-    )
+    try:
+        token = _mint_ths_v_token_uncached()
+    except Exception as e:
+        raise DataFetchError(
+            f"[ThsFetcher] v-token mint failed after {_THS_V_TOKEN_MAX_RETRIES} attempts: {e}"
+        ) from e
+    _ths_v_token_cache["value"] = token
+    _ths_v_token_cache["expires_at"] = now + _THS_V_TOKEN_TTL_SECONDS
+    return token
 
 
 THS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0 Safari/537.36"
@@ -158,29 +186,39 @@ def _resolve_ths_date_range(
 
     Mirrors ``EastMoneyFetcher._board_history_range_days`` semantics so
     f-string path messages look the same; returns ``(start_d, end_d)``
-    both as ``date`` objects.
+    both as ``date`` objects. Both bounds are stripped before parsing
+    so user-supplied whitespace (e.g. ``" 2026-01-01 "``) is accepted,
+    matching EastMoney's behavior.
 
     Raises:
-        DataFetchError: a non-empty bound fails YYYY-MM-DD parsing,
-            or ``end_date`` is strictly before ``start_date``.
+        ValueError: a non-empty bound fails YYYY-MM-DD parsing, or
+            ``end_date`` is strictly before ``start_date``. The route
+            layer's ``@map_errors`` maps ``ValueError → 400`` (bad
+            request), matching EastMoney's contract. ``DataFetchError``
+            is reserved for upstream failures (year-span cap, all-empty
+            gate, clid resolution, etc.).
     """
     try:
-        end_d = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else _date.today()
+        end_d = (
+            datetime.strptime((end_date or "").strip(), "%Y-%m-%d").date()
+            if end_date
+            else _date.today()
+        )
     except (TypeError, ValueError) as exc:
-        raise DataFetchError(
+        raise ValueError(
             f"[ThsFetcher] get_board_history: end_date={end_date!r} not YYYY-MM-DD"
         ) from exc
     if start_date:
         try:
-            start_d = datetime.strptime(start_date, "%Y-%m-%d").date()
+            start_d = datetime.strptime(start_date.strip(), "%Y-%m-%d").date()
         except (TypeError, ValueError) as exc:
-            raise DataFetchError(
+            raise ValueError(
                 f"[ThsFetcher] get_board_history: start_date={start_date!r} not YYYY-MM-DD"
             ) from exc
     else:
         start_d = end_d - timedelta(days=days)
     if start_d > end_d:
-        raise DataFetchError(
+        raise ValueError(
             f"[ThsFetcher] get_board_history: start_date {start_date!r} > end_date {end_date!r}"
         )
     return start_d, end_d
@@ -200,18 +238,69 @@ class ThsFetcher(BaseFetcher):
         | DataCapability.STOCK_BOARD  # for board K-line (concept/industry)
     )
 
+    @staticmethod
+    def _check_ths_deps() -> tuple[bool, str | None]:
+        """Single source of truth for THS board-K-line dependency status.
+
+        Returns ``(is_available, reason_if_not)``. Used by both
+        :meth:`is_available` and :meth:`unavailable_reason` so the two
+        methods cannot drift. Mirrors the pattern in ``yfinance_fetcher``
+        / ``eastmoney._boards_mixin`` where availability is a single
+        tuple-returning helper.
+
+        Probes:
+        - ``py_mini_racer`` (V8 isolate for ``ths.js`` evaluation)
+        - ``bs4`` (BeautifulSoup for concept-board clid resolution)
+        - ``demjson3`` (lenient JSON parser for upstream JS-style bodies)
+        - ``ths_assets/ths.js`` (vendored JS blob)
+
+        Hot-topics / north-flow / flash-news / news-search don't need
+        any of these (pure HTTP), but by project convention
+        (``data_provider/manager.py:1002``) an unavailable fetcher is
+        dropped from the manager's table — meaning a missing dep costs
+        all four pure-HTTP endpoints too. This is a deliberate
+        trade-off; see :meth:`is_available` docstring.
+        """
+        missing: list[str] = []
+        for mod in ("py_mini_racer", "bs4", "demjson3"):
+            if util.find_spec(mod) is None:
+                missing.append(mod)
+        if missing:
+            return False, (
+                f"{ThsFetcher.name}.board_history unavailable: "
+                f"missing deps {sorted(missing)} "
+                f"(pip install py-mini-racer beautifulsoup4 demjson3)"
+            )
+        try:
+            js_path = resources.files("stock_data.data_provider.fetchers.ths_assets").joinpath(
+                "ths.js"
+            )
+            if not js_path.is_file():
+                return False, (
+                    f"{ThsFetcher.name}.board_history unavailable: "
+                    f"ths.js missing from ths_assets/ "
+                    f"(run tools/vendor_ths_js.py)"
+                )
+        except (FileNotFoundError, ModuleNotFoundError):
+            return False, (
+                f"{ThsFetcher.name}.board_history unavailable: "
+                f"ths.js missing or ths_assets/ unreadable "
+                f"(run tools/vendor_ths_js.py)"
+            )
+        return True, None
+
     def is_available(self) -> bool:
         """True only when board-K-line deps are present.
 
         Hot-topics / north-flow / flash-news / news-search don't need
-        ``py_mini_racer`` or the vendored ``ths.js`` — they're pure
-        HTTP. But by project convention (see ``ZhituFetcher`` and the
-        ``data_provider/manager.py:1002`` registration loop), an
-        unavailable fetcher is dropped from the manager's table —
-        meaning when is_available() returns False, the four
-        pure-HTTP THS endpoints lose their backend too. Trade-off:
-        one board-K-line dep outage costs four endpoints; in our
-        threat model (single akshare+py_mini_racer env per server)
+        ``py_mini_racer`` / ``bs4`` / ``demjson3`` or the vendored
+        ``ths.js`` — they're pure HTTP. But by project convention (see
+        ``ZhituFetcher`` and the ``data_provider/manager.py:1002``
+        registration loop), an unavailable fetcher is dropped from the
+        manager's table — meaning when is_available() returns False,
+        the four pure-HTTP THS endpoints lose their backend too.
+        Trade-off: one board-K-line dep outage costs four endpoints; in
+        our threat model (single akshare+py_mini_racer env per server)
         that's acceptable. If you need fine-grained gating per
         capability, the manager would need a per-capability
         is_available variant — larger refactor, deferred.
@@ -220,33 +309,14 @@ class ThsFetcher(BaseFetcher):
         deleted ``ths_assets/ths.js`` shouldn't silently drop a
         fetcher capability that does work.
         """
-        if util.find_spec("py_mini_racer") is None:
-            return False
-        try:
-            js_path = resources.files("stock_data.data_provider.fetchers.ths_assets").joinpath(
-                "ths.js"
-            )
-            return js_path.is_file()
-        except (FileNotFoundError, ModuleNotFoundError):
-            # Package data missing for some reason (broken wheel install,
-            # developer wiped the assets dir). Treat as dep-unavailable.
-            # Don't catch broader Exception — that would hide programmer
-            # errors (typo in the package path, etc.) as False return.
-            return False
+        return self._check_ths_deps()[0]
 
     def unavailable_reason(self) -> str | None:
         """Specific reason string when board K-line path is unavailable."""
-        if self.is_available():
+        available, reason = self._check_ths_deps()
+        if available:
             return None
-        if util.find_spec("py_mini_racer") is None:
-            return (
-                f"{self.name}.board_history unavailable: "
-                f"py_mini_racer not installed (pip install py-mini-racer)"
-            )
-        return (
-            f"{self.name}.board_history unavailable: "
-            f"ths.js missing from ths_assets/ (run tools/vendor_ths_js.py)"
-        )
+        return reason
 
     def _normalize_data(self, df, stock_code):
         raise DataFetchError("ThsFetcher does not support historical K-line data")
@@ -396,7 +466,20 @@ class ThsFetcher(BaseFetcher):
     # ------------------------------------------------------------------
 
     def _fetch_ths_board_year(self, inner_code: str, year: int) -> str:
-        """Fetch one year of THS board K-line JS body. Returns "" on failure."""
+        """Fetch one year of THS board K-line JS body. Returns "" on failure.
+
+        A non-2xx response (typically 403 when the v-token has been rotated
+        upstream, or 5xx during upstream incidents) is treated as failure:
+        we log and return ``""`` so the all-empty gate in
+        :meth:`get_board_history` can surface the upstream issue as 503.
+        Without this check, a 403 HTML body would be passed to the JSON
+        parser and silently return zero rows (no error, no signal) — the
+        exact bug the all-empty gate was supposed to catch.
+
+        Per-year 4xx/5xx does not abort the full request — other years may
+        still succeed. Only the all-empty case is fatal. This matches
+        cninfo_fetcher's "be forgiving on partial failure" pattern.
+        """
         url = _THS_BOARD_KLINE_URL.format(inner=inner_code, year=year)
         headers = {
             "User-Agent": THS_UA,
@@ -406,6 +489,12 @@ class ThsFetcher(BaseFetcher):
         }
         try:
             r = self._http_get(url, headers=headers, timeout=15)
+            if not (200 <= r.status_code < 300):
+                logger.warning(
+                    f"[ThsFetcher] board kline year={year} ({inner_code}) "
+                    f"HTTP {r.status_code} ({len(r.content)}B body)"
+                )
+                return ""
             return r.text or ""
         except Exception as e:
             logger.warning(f"[ThsFetcher] board kline year={year} ({inner_code}) failed: {e}")
@@ -446,10 +535,16 @@ class ThsFetcher(BaseFetcher):
         Raises:
             DataFetchError: frequency not in ``_THS_BOARD_FREQ_MAP``;
                 board_type missing or invalid; concept clid resolution
-                returns None; year span exceeds ``_MAX_YEAR_SPAN``;
-                date bound malformed / ``end_date < start_date``;
-                every requested year fetch failed (likely upstream auth
-                problem — investigate the v-token / d.10jqka.com.cn).
+                returns None; every requested year fetch failed
+                (likely upstream auth problem — investigate the v-token
+                / d.10jqka.com.cn).
+            ValueError: year span exceeds ``_MAX_YEAR_SPAN``;
+                date bound malformed or whitespace-padded past parse;
+                ``end_date < start_date``. These are caller-input
+                errors — the route layer's ``@map_errors`` maps
+                ``ValueError → 400``. Aligns with EastMoney's contract
+                so the same bad input gets the same status code
+                regardless of which source serves the request.
         """
         if not board_type:
             raise DataFetchError(
@@ -472,7 +567,7 @@ class ThsFetcher(BaseFetcher):
         end_year = end_d.year
         n_years = end_year - start_year + 1
         if n_years > _MAX_YEAR_SPAN:
-            raise DataFetchError(
+            raise ValueError(
                 f"[ThsFetcher] get_board_history year span "
                 f"({n_years}y) > {_MAX_YEAR_SPAN}; "
                 f"narrow start_date/end_date or call repeatedly."

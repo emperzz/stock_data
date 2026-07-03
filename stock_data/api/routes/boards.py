@@ -10,6 +10,7 @@ sources is intentionally not supported (different code systems).
 
 import logging
 from datetime import date as date_cls
+from datetime import datetime
 from typing import Literal
 
 from fastapi import HTTPException, Path, Query
@@ -103,6 +104,52 @@ def _resolve_board_history_source(source: str) -> str:
             },
         )
     return source
+
+
+# Inclusive day-count cap for board-history queries. Mirrors
+# ``EastMoneyFetcher.get_board_history``'s hard lmt=800 ceiling —
+# past that, push2his auto-escalates klt from daily→weekly→monthly.
+# When start_date..end_date exceeds this, the fetcher would silently
+# return only the 800 most-recent bars (post-fetch date filter
+# trims the older half of the requested range), so we fail fast at
+# the route layer with a clear 400 + pagination guidance instead.
+_MAX_BOARD_HISTORY_DAYS = 800
+
+
+def _validate_board_history_date_range(
+    start_date: str | None,
+    end_date: str | None,
+) -> None:
+    """Cap start_date..end_date at ``_MAX_BOARD_HISTORY_DAYS``.
+
+    Raises:
+        HTTPException(400): inclusive day count exceeds the cap.
+            Malformed or reversed date bounds are deferred to the
+            fetcher (which raises ``ValueError`` → 400 via
+            ``@map_errors``); this helper only checks the width.
+    """
+    if not (start_date and end_date):
+        return
+    try:
+        s = datetime.strptime(start_date, "%Y-%m-%d").date()
+        e = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return  # malformed dates are the fetcher's problem (ValueError → 400)
+    if s > e:
+        return  # reversed dates are the fetcher's problem
+    width = (e - s).days + 1
+    if width > _MAX_BOARD_HISTORY_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "date_range_too_wide",
+                "message": (
+                    f"Date range width ({width} days) exceeds the "
+                    f"{_MAX_BOARD_HISTORY_DAYS}-day cap (mirrors push2his "
+                    f"lmt=800). Narrow the range or paginate."
+                ),
+            },
+        )
 
 
 def _resolve_type(board_type: str) -> str:
@@ -474,8 +521,8 @@ def get_board_history(
             "mirrors EastMoneyFetcher's hard `lmt` cap — past that "
             "push2his auto-escalates klt from daily→weekly→monthly. "
             "When `start_date` and `end_date` are both given, the date "
-            "range width wins over `days` so wide ranges don't get "
-            "silently clipped."
+            "range width is also capped at 800 days (returns 400 with "
+            "`date_range_too_wide` on overflow)."
         ),
     ),
     board_type: Literal["concept", "industry"] | None = Query(
@@ -499,19 +546,22 @@ def get_board_history(
                 "message": "board_type is required when source='ths' (concept or industry)",
             },
         )
+    # Cap date range width at 800 days. Without this, a request like
+    # `start=2015-01-01&end=2024-12-31` would silently return only the
+    # 800 most-recent bars (post-fetch filter trims the older half).
+    # Fail fast at the route layer with a clear 400 + pagination
+    # guidance — see _validate_board_history_date_range.
+    _validate_board_history_date_range(start_date, end_date)
     manager = get_manager()
-    try:
-        rows, origin = manager.get_board_history(
-            board_code,
-            source=source,
-            frequency=frequency,
-            start_date=start_date,
-            end_date=end_date,
-            days=days,
-            board_type=board_type,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)}) from e
+    rows, origin = manager.get_board_history(
+        board_code,
+        source=source,
+        frequency=frequency,
+        start_date=start_date,
+        end_date=end_date,
+        days=days,
+        board_type=board_type,
+    )
 
     # Reshape manager rows (list[dict]) into KLineData list. Defensive —
     # if a fetcher returns a partial row missing required fields, drop it

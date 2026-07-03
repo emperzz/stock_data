@@ -48,7 +48,7 @@
    - **Concept:** `q.10jqka.com.cn/gn/detail/code/{slug}/` returns HTML containing `<input id="clid" value="T000267467">`. The `T...` clid is then used as `bk_{clid}` in the data URL.
    - **Industry:** `q.10jqka.com.cn/thshy/detail/code/{slug}/` already maps slug → `bk_{slug}` directly. No clid fetch needed.
    - **Data URL:** `https://d.10jqka.com.cn/v4/line/bk_{inner_code}/01/{year}.js` for each year. Response body shape: `var v_XXXX={...};` (variable name varies). The `{...}` substring is plain JSON: `{"data": "yyyy-mm-dd,open,high,low,close,volume,amount,...;..."}`.
-   - **Cookie:** `Cookie: v={v_code}` is required. `v_code` is computed by `py_mini_racer.MiniRacer().eval(akshare_ths_js).call("v")`. The bundled `ths.js` lives in `akshare/data/ths.js`; locate via `importlib.resources`.
+   - **Cookie:** `Cookie: v={v_code}` is required. `v_code` is computed by `py_mini_racer.MiniRacer().eval(akshare_ths_js).call("v")`. The bundled `ths.js` is **vendored** at `stock_data/data_provider/fetchers/ths_assets/ths.js` (NOT read from akshare's package data — peer fetchers must not reach into each other's packages, see CLAUDE.md anti-patterns). Refresh via `python -m stock_data.tools.vendor_ths_js`.
 
 4. **Route source semantics** (CLAUDE.md, boards.py docstring §1):
    - The `ths` alias to `zzshare` in `_resolve_source` exists because zzshare's `plates_list` upstream IS 同花顺 — board listings share a single canonical source. For board K-line, **THS is a separate fetcher** (different code system, different upstream). The new route must NOT alias `ths→zzshare`; aliasing would route to ZzshareFetcher (which only supports `883957`). Use a separate `_resolve_board_history_source` helper local to `boards.py` route module.
@@ -91,8 +91,9 @@ class TestBoardSecid:
     def test_with_whitespace(self):
         assert EastMoneyFetcher._board_secid("  BK0996  ") == "90.BK0996"
 
-    def test_empty_returns_fallback(self):
-        assert EastMoneyFetcher._board_secid("") == "90.BK"
+    def test_empty_raises(self):
+        with pytest.raises(ValueError, match="required"):
+            EastMoneyFetcher._board_secid("")
 
 
 class TestParseBoardKline:

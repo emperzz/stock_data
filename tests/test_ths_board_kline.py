@@ -519,7 +519,7 @@ class TestGetBoardHistoryEdgeCases:
                 days=400,
                 end_date="2025-06-30",
                 start_date="2024-12-01",
-                )
+            )
 
     def test_partial_years_success_passes_through(self):
         # Some years empty, others valid → no raise, returns what came back.
@@ -553,15 +553,12 @@ class TestGetBoardHistoryEdgeCases:
         # 11+ year span → reject
         from unittest.mock import patch
 
-        from stock_data.data_provider.fetchers.ths_fetcher import (
-            DataFetchError,
-            ThsFetcher,
-        )
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
         with (
             patch.object(ThsFetcher, "_v_token", return_value="x"),
-            pytest.raises(DataFetchError, match="year span .* > 10"),
+            pytest.raises(ValueError, match="year span .* > 10"),
         ):
             f.get_board_history(
                 board_code="881270",
@@ -603,37 +600,31 @@ class TestGetBoardHistoryEdgeCases:
     def test_reversed_dates_raises(self):
         from unittest.mock import patch
 
-        from stock_data.data_provider.fetchers.ths_fetcher import (
-            DataFetchError,
-            ThsFetcher,
-        )
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
         with (
             patch.object(ThsFetcher, "_v_token", return_value="x"),
-            pytest.raises(DataFetchError, match="start_date .* > end_date"),
+            pytest.raises(ValueError, match="start_date .* > end_date"),
         ):
             f.get_board_history(
                 board_code="881270",
                 board_type="industry",
                 frequency="d",
                 days=10,
-                    start_date="2025-06-30",
-                    end_date="2024-01-01",
-                )
+                start_date="2025-06-30",
+                end_date="2024-01-01",
+            )
 
     def test_malformed_start_date_raises(self):
         from unittest.mock import patch
 
-        from stock_data.data_provider.fetchers.ths_fetcher import (
-            DataFetchError,
-            ThsFetcher,
-        )
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
         with (
             patch.object(ThsFetcher, "_v_token", return_value="x"),
-            pytest.raises(DataFetchError, match="start_date=.*not YYYY-MM-DD"),
+            pytest.raises(ValueError, match="start_date=.*not YYYY-MM-DD"),
         ):
             f.get_board_history(
                 board_code="881270",
@@ -647,15 +638,12 @@ class TestGetBoardHistoryEdgeCases:
     def test_malformed_end_date_raises(self):
         from unittest.mock import patch
 
-        from stock_data.data_provider.fetchers.ths_fetcher import (
-            DataFetchError,
-            ThsFetcher,
-        )
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
         with (
             patch.object(ThsFetcher, "_v_token", return_value="x"),
-            pytest.raises(DataFetchError, match="end_date=.*not YYYY-MM-DD"),
+            pytest.raises(ValueError, match="end_date=.*not YYYY-MM-DD"),
         ):
             f.get_board_history(
                 board_code="881270",
@@ -715,7 +703,15 @@ class TestIsAvailable:
     def test_missing_py_mini_racer_returns_false(self, monkeypatch):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
-        monkeypatch.setattr(ths_mod.util, "find_spec", lambda name: None if name == "py_mini_racer" else __import__("importlib").util.find_spec(name))
+        # Capture the REAL find_spec BEFORE monkeypatching so we can call
+        # it for non-py_mini_racer names without recursing back into the
+        # mocked function (which would infinite-loop).
+        real_find_spec = ths_mod.util.find_spec
+        monkeypatch.setattr(
+            ths_mod.util,
+            "find_spec",
+            lambda name: None if name == "py_mini_racer" else real_find_spec(name),
+        )
         assert ThsFetcher().is_available() is False
         reason = ThsFetcher().unavailable_reason()
         assert reason is not None
@@ -736,6 +732,7 @@ class TestIsAvailable:
             pass
 
         monkeypatch.setattr(ths_mod.util, "find_spec", lambda name: _Spec())
+
         # is_available() fallback path: when resources.files() raises
         # for any reason, return False.
         def _raise_files(_pkg):
@@ -748,3 +745,95 @@ class TestIsAvailable:
         reason = ThsFetcher().unavailable_reason()
         assert reason is not None
         assert "vendor_ths_js" in reason or "ths.js" in reason
+
+    def test_missing_bs4_returns_false(self, monkeypatch):
+        """bs4 (BeautifulSoup) is required for concept clid resolution; if
+        missing, the lazy import at ths_fetcher.py:291 raises ImportError
+        that the broad except silently swallows — surfacing as the
+        misleading 'all year-fetches returned empty' 503. is_available()
+        must catch this dep gap at registration time.
+        """
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        real_find_spec = ths_mod.util.find_spec
+
+        def fake_find_spec(name):
+            if name == "bs4":
+                return None
+            return real_find_spec(name)
+
+        monkeypatch.setattr(ths_mod.util, "find_spec", fake_find_spec)
+        assert ThsFetcher().is_available() is False
+        reason = ThsFetcher().unavailable_reason()
+        assert reason is not None
+        assert "bs4" in reason
+
+    def test_missing_demjson3_returns_false(self, monkeypatch):
+        """demjson3 is required for the lenient-JSON fallback in
+        _parse_ths_kline_body; missing it surfaces as silent parse failure
+        → 'all year-fetches returned empty' 503. is_available() catches
+        the dep gap.
+        """
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        real_find_spec = ths_mod.util.find_spec
+
+        def fake_find_spec(name):
+            if name == "demjson3":
+                return None
+            return real_find_spec(name)
+
+        monkeypatch.setattr(ths_mod.util, "find_spec", fake_find_spec)
+        assert ThsFetcher().is_available() is False
+        reason = ThsFetcher().unavailable_reason()
+        assert reason is not None
+        assert "demjson3" in reason
+
+
+class TestFetchThsBoardYearStatusCode:
+    """Fix #9 — non-2xx upstream returns "" so the all-empty gate fires."""
+
+    def test_non_2xx_returns_empty_string(self, monkeypatch):
+        """A 403/5xx response body (HTML error page) must NOT be passed to
+        the JSON parser — that would silently return [] with no error
+        signal. The fix returns "" so the all-empty gate in
+        get_board_history raises DataFetchError → 503 with a clear
+        'check v-token / upstream reachability' message.
+        """
+        from unittest.mock import MagicMock, patch
+
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+
+        def fake_get(url, headers=None, timeout=None, **kw):
+            r = MagicMock()
+            r.status_code = 403
+            r.content = b"<html>Forbidden</html>"
+            r.text = "<html>Forbidden</html>"
+            return r
+
+        with (
+            patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
+            patch.object(ThsFetcher, "_v_token", return_value="x"),
+        ):
+            assert f._fetch_ths_board_year("T000267467", 2024) == ""
+
+    def test_2xx_returns_body(self, monkeypatch):
+        from unittest.mock import MagicMock, patch
+
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+
+        def fake_get(url, headers=None, timeout=None, **kw):
+            r = MagicMock()
+            r.status_code = 200
+            r.text = 'var v_x={"data":"2024-01-01,1,2,3,4,5,6,7,8,9,10;"};'
+            return r
+
+        with (
+            patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
+            patch.object(ThsFetcher, "_v_token", return_value="x"),
+        ):
+            assert f._fetch_ths_board_year("T000267467", 2024).startswith("var v_x=")
