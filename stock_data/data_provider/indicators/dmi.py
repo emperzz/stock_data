@@ -17,34 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import OHLCV
-
-
-def _wilder_smooth(values: list[float | None], period: int) -> list[float | None]:
-    """Wilder smoothing: seed = SMA of first `period` non-None values.
-
-    A None in the input short-circuits to None output until enough data
-    accumulates again. For our use the inputs are dense (every bar
-    produces a value), so this branch rarely fires.
-    """
-    out: list[float | None] = []
-    seed_buf: list[float] = []
-    smoothed: float | None = None
-    for v in values:
-        if v is None:
-            out.append(None)
-            continue
-        if smoothed is None:
-            seed_buf.append(v)
-            if len(seed_buf) == period:
-                smoothed = sum(seed_buf) / period
-                out.append(smoothed)
-            else:
-                out.append(None)
-        else:
-            smoothed = (smoothed * (period - 1) + v) / period
-            out.append(smoothed)
-    return out
+from .types import OHLCV, wilder_smooth
 
 
 def calcDMI(  # noqa: N802
@@ -94,9 +67,9 @@ def calcDMI(  # noqa: N802
             trs.append(tr)
         prev_high, prev_low, prev_close = h, low, c
 
-    smooth_plus = _wilder_smooth(plus_dm, period)
-    smooth_minus = _wilder_smooth(minus_dm, period)
-    smooth_tr = _wilder_smooth(trs, period)
+    smooth_plus = wilder_smooth(plus_dm, period)
+    smooth_minus = wilder_smooth(minus_dm, period)
+    smooth_tr = wilder_smooth(trs, period)
 
     # +DI / -DI / DX
     dx: list[float | None] = []
@@ -120,7 +93,7 @@ def calcDMI(  # noqa: N802
         else:
             dx.append(100.0 * abs(p - m) / (p + m))
 
-    adx = _wilder_smooth(dx, adx_period)
+    adx = wilder_smooth(dx, adx_period)
     # ADXR = (ADX[i] + ADX[i - adx_period]) / 2
     adxr: list[float | None] = []
     for i, a in enumerate(adx):

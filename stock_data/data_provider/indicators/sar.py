@@ -113,11 +113,18 @@ def calcSAR(  # noqa: N802
             if i >= 2:
                 p1 = bars[i - 1]
                 p2 = bars[i - 2]
+                # Use explicit None check — `p1.get("low") or low` would
+                # incorrectly fall through to `low` when p1's low is 0.0
+                # (a valid extreme). See CLAUDE.md anti-pattern.
+                p1_low = p1.get("low") if p1.get("low") is not None else low
+                p2_low = p2.get("low") if p2.get("low") is not None else low
+                p1_high = p1.get("high") if p1.get("high") is not None else h
+                p2_high = p2.get("high") if p2.get("high") is not None else h
                 if trend == 1:
-                    floor_ = min(p1.get("low") or low, p2.get("low") or low)  # type: ignore[arg-type]
+                    floor_ = min(p1_low, p2_low)
                     next_sar = min(next_sar, floor_)
                 else:
-                    ceil_ = max(p1.get("high") or h, p2.get("high") or h)  # type: ignore[arg-type]
+                    ceil_ = max(p1_high, p2_high)
                     next_sar = max(next_sar, ceil_)
 
         sar_value = next_sar

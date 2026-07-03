@@ -131,18 +131,6 @@ def is_upstream_error(exc: BaseException) -> bool:
     return isinstance(exc, UPSTREAM_ERRORS)
 
 
-def classify(exc: BaseException) -> str:
-    """Classify an exception as ``'upstream'`` or ``'code'``.
-
-    Use this in places that need to decide whether to skip vs. fail. Note
-    that ``AssertionError`` and friends are always ``'code'`` — those are
-    real regressions even in ``live_network`` tests.
-    """
-    if is_upstream_error(exc):
-        return "upstream"
-    return "code"
-
-
 def short_reason(exc: BaseException) -> str:
     """Build a compact xfail/skip reason from an exception (max ~120 chars)."""
     name = type(exc).__name__

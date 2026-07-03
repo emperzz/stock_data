@@ -37,6 +37,7 @@ from tenacity import (
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..utils.http import json_get, json_post
+from ..utils.text import strip_em_tags
 
 logger = logging.getLogger(__name__)
 
@@ -840,11 +841,6 @@ class ThsFetcher(BaseFetcher):
         "Origin": "https://www.iwencai.com",
     }
 
-    @staticmethod
-    def _strip_em(s: str) -> str:
-        """剥离 <em>/</em> 高亮标签(与 EastMoneyFetcher._strip_em 对齐)。"""
-        return s.replace("(<em>", "").replace("</em>)", "").replace("<em>", "").replace("</em>", "")
-
     @classmethod
     def _normalize_search_item(cls, rec: dict) -> dict:
         """Convert one iWenCai record to the shared NewsItem dict shape.
@@ -862,11 +858,11 @@ class ThsFetcher(BaseFetcher):
         caller treats as a skip.
         """
         url = rec["url"]  # 必填: 缺失视为坏数据 → KeyError → 上层跳过
-        title = cls._strip_em(rec["title"])
+        title = strip_em_tags(rec["title"])
         extra = rec.get("extra") or {}
         # publish_date 形如 "2026-06-30 18:28:21"; 截到日。
         publish_date = (rec.get("publish_date") or "")[:10]
-        snippet = cls._strip_em(rec.get("summary") or "").replace("　", "").strip()
+        snippet = strip_em_tags(rec.get("summary") or "").replace("　", "").strip()
         source_domain = extra.get("host_name") or urlparse(url).netloc
         return {
             "title": title,

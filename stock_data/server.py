@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    import time as _time
+
+    app.state.started_at = _time.time()
     logger.info(f"Starting Stock Data Server v{__version__}")
     logger.info(f"Server port: {os.getenv('SERVER_PORT', '8888')}")
 
@@ -65,14 +68,14 @@ async def lifespan(app: FastAPI):
     # trade_calendar table being populated. If it's empty on startup, kick
     # off a one-shot fetch. Failure here is non-fatal: the /calendar
     # endpoint will retry on first access.
+    from .api.routes import get_manager as _get_manager
     from .data_provider.persistence import trade_calendar
+
     cached_dates, _ = trade_calendar.get_cached_calendar()
     if not cached_dates:
         logger.info("[Startup] Trade calendar empty, fetching from upstream")
         try:
-            # Import lazily to avoid pulling in fetchers at module-import time
-            from .api.routes import get_manager
-            get_manager().get_trade_calendar()
+            _get_manager().get_trade_calendar()
         except Exception as e:
             logger.warning(f"[Startup] Trade calendar warm-up failed (non-fatal): {e}")
 
@@ -80,8 +83,7 @@ async def lifespan(app: FastAPI):
     # The manifest needs to enumerate fetchers per (market, capability).
     # Using app.state avoids importing the global get_manager() into manifest.py,
     # which would make manifest.py harder to unit-test (couldn't inject a mock).
-    from .api.routes import get_manager
-    app.state.manager = get_manager()
+    app.state.manager = _get_manager()
     logger.info("[Startup] app.state.manager wired for explorer manifest")
 
     yield

@@ -6,7 +6,6 @@ All three endpoints share the main ``router`` declared in ``routes/__init__.py``
 from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.fetchers.index_symbols import get_all_indices
-from ...data_provider.indicators import compute_lookback
 from ..cache import (
     cache_endpoint,
     get_index_quote_cache,
@@ -30,6 +29,7 @@ from .errors import map_errors
 from .helpers import (
     _apply_indicators,
     _build_kline_data,
+    _expand_indicator_lookback,
     _forbid_quote_params,
     _format_date,
     _parse_indicators_param,
@@ -176,11 +176,7 @@ def get_index_kline(
     freq = _period_to_freq(period)
 
     requested_indicators = _parse_indicators_param(indicators)
-    actual_days = days
-    if requested_indicators:
-        extra = compute_lookback(requested_indicators)
-        if extra > 0:
-            actual_days = max(days, extra)
+    actual_days = _expand_indicator_lookback(requested_indicators, days)
 
     manager = get_manager()
     df, source = manager.get_kline_data(

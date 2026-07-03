@@ -6,7 +6,6 @@ import pytest
 from stock_data.data_provider.indicators import (
     INDICATOR_REGISTRY,
     compute,
-    compute_lookback,
     estimate_lookback,
     list_indicators,
 )
@@ -136,7 +135,7 @@ def test_compute_does_not_mutate_input():
 
 
 def test_estimate_lookback_for_service():
-    assert compute_lookback(None) == 0
-    assert compute_lookback([]) == 0
-    assert compute_lookback(["ma"]) > 0
-    assert compute_lookback({"macd": {}}) >= 87
+    assert estimate_lookback(None) == 0
+    assert estimate_lookback([]) == 0
+    assert estimate_lookback(["ma"]) > 0
+    assert estimate_lookback({"macd": {}}) >= 87

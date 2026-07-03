@@ -71,9 +71,48 @@ def round2(value: float) -> float:
     return round(float(value), 2)
 
 
+def wilder_smooth(values: list[float | None], period: int) -> list[float | None]:
+    """Apply Wilder's smoothing to a sequence of floats.
+
+    Algorithm:
+      1. Collect the first ``period`` non-None values into a seed buffer.
+      2. Seed output[seed_end] = mean(seed_buf).
+      3. Recursive update for each subsequent non-None value:
+         ``smoothed = (smoothed * (period - 1) + v) / period``.
+
+    None in the input short-circuits to None output until enough data
+    accumulates again. Inputs are expected to be dense (every bar produces
+    a value) for typical Wilder-smoothed indicators (ATR, RSI, ADX).
+
+    Used by ``atr``, ``dmi``, ``rsi`` — kept here to avoid three near-
+    identical copies of the seed-then-smooth loop.
+    """
+    if period <= 0:
+        raise ValueError(f"period must be > 0, got {period}")
+    out: list[float | None] = []
+    seed_buf: list[float] = []
+    smoothed: float | None = None
+    for v in values:
+        if v is None:
+            out.append(None)
+            continue
+        if smoothed is None:
+            seed_buf.append(v)
+            if len(seed_buf) == period:
+                smoothed = sum(seed_buf) / period
+                out.append(smoothed)
+            else:
+                out.append(None)
+        else:
+            smoothed = (smoothed * (period - 1) + v) / period
+            out.append(smoothed)
+    return out
+
+
 __all__ = [
     "MAType",
     "IndicatorKey",
     "OHLCV",
     "round2",
+    "wilder_smooth",
 ]

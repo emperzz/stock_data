@@ -234,24 +234,78 @@ def list_indicators() -> list[dict[str, Any]]:
     ]
 
 
-def estimate_lookback(spec: dict[str, Any]) -> int:
+def normalize_spec(
+    spec: dict[str, Any] | list[str] | None,
+) -> dict[str, dict[str, Any]]:
+    """Expand list[str] / None / {key: options} into the canonical spec dict.
+
+    The canonical shape is ``{IndicatorKey.value: merged_options}`` with
+    user-supplied options overlaid on the indicator's defaults. Unknown
+    indicator names raise ValueError so callers fail fast rather than
+    silently dropping them.
+    """
+    if spec is None:
+        return {}
+    valid_keys = {k.value for k in IndicatorKey}
+
+    def _resolve_key(raw: Any) -> IndicatorKey:
+        if isinstance(raw, IndicatorKey):
+            return raw
+        try:
+            return IndicatorKey(raw)
+        except ValueError:
+            raise ValueError(
+                f"unknown indicator: {raw!r}. "
+                f"Supported: {sorted(valid_keys)}"
+            ) from None
+
+    if isinstance(spec, list):
+        out: dict[str, dict[str, Any]] = {}
+        for key in spec:
+            descriptor = INDICATOR_REGISTRY.get(_resolve_key(key))
+            if descriptor is None:
+                raise ValueError(f"unknown indicator: {key!r}")
+            out[key] = dict(descriptor.default_options)
+        return out
+    out = {}
+    for key, options in spec.items():
+        descriptor = INDICATOR_REGISTRY.get(_resolve_key(key))
+        if descriptor is None:
+            raise ValueError(f"unknown indicator: {key!r}")
+        merged = dict(descriptor.default_options)
+        if options:
+            merged.update(options)
+        out[key] = merged
+    return out
+
+
+def estimate_lookback(
+    spec: dict[str, Any] | list[str] | None,
+) -> int:
     """Compute the largest lookback across multiple requested indicators.
 
-    `spec` maps IndicatorKey.value (or IndicatorKey) -> options dict.
-    Returns the maximum number of historical bars the orchestrator
-    should fetch to fully warm up all requested indicators.
+    `spec` may be a mapping of `IndicatorKey.value (or IndicatorKey) -> options`
+    dict, a list of indicator names (uses defaults), or None. Returns the
+    maximum number of historical bars the orchestrator should fetch to
+    fully warm up all requested indicators. Unknown keys are silently
+    skipped — callers needing strict validation should call
+    ``normalize_spec`` instead.
     """
     if not spec:
         return 0
+    if isinstance(spec, list):
+        normalized = {
+            key: {} for key in spec if key in (k.value for k in IndicatorKey)
+        }
+    else:
+        normalized = spec
+
     max_lookback = 0
-    for key_value, options in spec.items():
-        if isinstance(key_value, str):
-            try:
-                key = IndicatorKey(key_value)
-            except ValueError:
-                continue
-        else:
-            key = key_value
+    for key_value, options in normalized.items():
+        try:
+            key = IndicatorKey(key_value)
+        except ValueError:
+            continue
         spec_obj = INDICATOR_REGISTRY.get(key)
         if spec_obj is None:
             continue
@@ -263,4 +317,5 @@ __all__ = [
     "INDICATOR_REGISTRY",
     "estimate_lookback",
     "list_indicators",
+    "normalize_spec",
 ]

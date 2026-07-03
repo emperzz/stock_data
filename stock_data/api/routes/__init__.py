@@ -1,25 +1,5 @@
 """Routes package — public API surface of ``stock_data.api.routes``.
 
-Why this exists
----------------
-
-Before this refactor, ``stock_data/api/routes.py`` was 2268 lines containing
-3 FastAPI routers, 30+ endpoint handlers, and a pile of shared helpers. Two
-real problems lived in that file:
-
-1. ``cached_endpoint`` was dead code on 14 endpoints (verified via runtime
-   test): FastAPI captures ``route.endpoint`` at ``@router.get`` decoration
-   time, so the ``cached_endpoint(...)`` re-bind that happened on the next
-   line never reached the request path. The TTLCache for stock_info /
-   dragon_tiger / margin / block_trade / holder_num / dividend / fund_flow /
-   fund_flow_daily / hot_topics / north_flow / reports / announcements was
-   never hit in production.
-
-2. Error contracts were inconsistent: ``get_quote`` and ``get_index_quote``
-   caught only generic ``Exception → 500``, while ``get_history`` and others
-   caught ``DataFetchError → 503``. Same upstream failure, different HTTP
-   code, depending on which endpoint you hit.
-
 What's in this package
 ----------------------
 

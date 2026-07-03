@@ -26,6 +26,7 @@ from ...data_provider import DataFetcherManager
 from ...data_provider.core.types import safe_float, safe_int
 from ...data_provider.fetchers.index_symbols import get_all_indices
 from ...data_provider.indicators import compute
+from ...data_provider.indicators.registry import estimate_lookback
 from ...data_provider.indicators.types import IndicatorKey
 from ...data_provider.utils.normalize import is_index_code
 from ..schemas import KLineData
@@ -201,6 +202,24 @@ def _parse_indicators_param(indicators: str | None) -> list[str]:
             ) from None
         out.append(key)
     return out
+
+
+def _expand_indicator_lookback(
+    requested_indicators: list[str], days: int
+) -> int:
+    """Return the bar count needed to warm the requested indicators.
+
+    If no indicators are requested, returns ``days`` unchanged. Otherwise
+    returns ``max(days, lookback)`` so the orchestrator has enough history
+    to compute the first valid indicator row, then ``_apply_indicators``
+    truncates back to ``days``.
+
+    Used by both ``/stocks/{code}/kline`` and ``/indices/{code}/kline``.
+    """
+    if not requested_indicators:
+        return days
+    extra = estimate_lookback(requested_indicators)
+    return max(days, extra) if extra > 0 else days
 
 
 def _apply_indicators(

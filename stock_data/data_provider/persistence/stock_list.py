@@ -102,7 +102,7 @@ def _fetch_from_upstream(public_market: str, manager) -> tuple[list, str]:
     return stocks, fetcher_source
 
 
-def get_stock_list(market: str, refresh: bool = False, manager=None) -> tuple[list, str]:
+def get_stock_list(market: str, refresh: bool = False, *, manager) -> tuple[list, str]:
     """
     Get stock list with automatic refresh.
 
@@ -116,7 +116,10 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> tuple[li
             the legacy ``cn`` tag is an internal fetcher convention
             and is converted transparently at the fetcher call site.
         refresh: If True, force refresh from upstream
-        manager: DataFetcherManager instance. If None, creates one lazily.
+        manager: DataFetcherManager instance. Required keyword-only —
+            every production caller already has one (routes/api routes
+            fetch via ``get_manager()``). Making this required removes
+            a persistence→manager layer-inversion anti-pattern.
 
     Returns:
         Tuple of ``(stocks, origin)`` where ``origin`` is:
@@ -138,12 +141,6 @@ def get_stock_list(market: str, refresh: bool = False, manager=None) -> tuple[li
         cached = _read_from_db(public_market)
         if cached:
             return cached, "persistence"
-
-    # Need refresh: fetch from upstream and update cache
-    if manager is None:
-        from ..manager import create_default_manager
-
-        manager = create_default_manager()
 
     stocks, fetcher_source = _fetch_from_upstream(public_market, manager)
     if stocks:

@@ -20,8 +20,10 @@ Methods:
 - ``_news_callback_name`` — JSONP callback name generator.
 - ``search_news``, ``get_stock_news``, ``get_announcements``,
   ``fetch_flash_news`` — the four public news endpoints.
-- ``_strip_em``, ``_normalize_news_item`` — private text-cleaning helpers
-  mirroring akshare's ``stock_news_em`` extraction.
+- ``_normalize_news_item`` — private text-cleaning helper mirroring
+  akshare's ``stock_news_em`` extraction. The ``<em>`` strip lives in
+  :func:`stock_data.data_provider.utils.text.strip_em_tags` and is
+  shared with :class:`ThsFetcher`.
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ from urllib.parse import quote, urlparse
 
 from ...base import DataFetchError
 from ...utils.normalize import normalize_stock_code
+from ...utils.text import strip_em_tags
 from ._cffi_json import cffi_json_get, cffi_json_get_resp
 from ._endpoints import UA, URLS
 
@@ -387,16 +390,6 @@ class NewsMixin:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _strip_em(s: str) -> str:
-        """Strip <em>/</em> highlight tags from a string.
-
-        Mirrors akshare's stock_news_em stripping pattern: it also removes
-        the ``(<em>...</em>)`` parenthesized variant which appears when the
-        upstream returns a parenthesized highlight inside title/content.
-        """
-        return s.replace("(<em>", "").replace("</em>)", "").replace("<em>", "").replace("</em>", "")
-
-    @staticmethod
     def _normalize_news_item(rec: dict) -> dict:
         """Convert one upstream record to the spec's NewsItem dict.
 
@@ -422,10 +415,10 @@ class NewsMixin:
         # Snippet: akshare strips <em> tags, full-width space (\\u3000), and
         # collapses \\r\\n to a single space.
         raw_content = rec.get("content", "")
-        snippet = NewsMixin._strip_em(raw_content).replace("　", "").replace("\r\n", " ")
+        snippet = strip_em_tags(raw_content).replace("　", "").replace("\r\n", " ")
 
         return {
-            "title": NewsMixin._strip_em(rec["title"]),
+            "title": strip_em_tags(rec["title"]),
             "url": url,
             "source_domain": urlparse(url).netloc,
             "publish_date": date_str,

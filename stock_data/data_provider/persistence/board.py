@@ -411,7 +411,8 @@ def get_board_stocks(
     # the OPPOSITE board kind when concept returned [] from a transient
     # upstream failure (bug). Now: known board_type → direct dispatch,
     # no fallback.
-    board_type = _get_board_type(board_code, source, manager)
+    _board_type_entry = resolve_board_types([board_code], source).get(board_code)
+    board_type = _board_type_entry["type"] if _board_type_entry else None
     stocks, fetcher_source = manager.get_board_stocks(
         board_code,
         source=source,
@@ -426,20 +427,6 @@ def get_board_stocks(
         logger.info(f"[BoardCache] Refreshed {len(stocks)} stocks for board {board_code}/{source}")
 
     return stocks, fetcher_source
-
-
-def _get_board_type(board_code: str, source: str, manager) -> str | None:
-    """Determine board type by checking in local cache.
-
-    .. deprecated::
-        Use :func:`resolve_board_types` instead. This wrapper now delegates
-        to the batch helper and is kept only because callers in this module
-        still use the single-code shape; it will be folded into its single
-        caller in a follow-up.
-    """
-    result = resolve_board_types([board_code], source)
-    entry = result.get(board_code)
-    return entry["type"] if entry else None
 
 
 def resolve_board_types(

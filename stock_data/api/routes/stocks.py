@@ -8,7 +8,6 @@ it's a list-level query, not per-stock.
 
 from fastapi import HTTPException, Path, Query, Request
 
-from ...data_provider.indicators import compute_lookback
 from ...data_provider.persistence import stock_list
 from ...data_provider.utils.normalize import code_to_exchange
 from ..cache import (
@@ -70,6 +69,7 @@ from .errors import map_errors
 from .helpers import (
     _apply_indicators,
     _build_kline_data,
+    _expand_indicator_lookback,
     _forbid_quote_params,
     _format_date,
     _parse_indicators_param,
@@ -250,11 +250,7 @@ def get_kline(
     freq = _period_to_freq(period)
 
     requested_indicators = _parse_indicators_param(indicators)
-    actual_days = days
-    if requested_indicators:
-        extra = compute_lookback(requested_indicators)
-        if extra > 0:
-            actual_days = max(days, extra)
+    actual_days = _expand_indicator_lookback(requested_indicators, days)
 
     manager = get_manager()
     df, source = manager.get_kline_data(

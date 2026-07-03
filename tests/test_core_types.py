@@ -73,21 +73,10 @@ class TestUnifiedRealtimeQuote:
         )
         assert quote.code == "600519"
         assert quote.price == 1800.0
-        assert quote.has_basic_data()
 
-    def test_no_price(self):
+    def test_default_source(self):
         quote = UnifiedRealtimeQuote(code="600519")
-        assert not quote.has_basic_data()
-
-    def test_to_dict(self):
-        quote = UnifiedRealtimeQuote(
-            code="600519",
-            price=1800.0,
-        )
-        d = quote.to_dict()
-        assert d["code"] == "600519"
-        assert d["price"] == 1800.0
-        assert "name" not in d  # Empty values excluded
+        assert quote.source == RealtimeSource.FALLBACK
 
 
 class TestCircuitBreaker:

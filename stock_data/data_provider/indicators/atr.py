@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import OHLCV
+from .types import OHLCV, wilder_smooth
 
 
 def calcATR(  # noqa: N802
@@ -38,25 +38,17 @@ def calcATR(  # noqa: N802
             trs.append(tr)
         prev_close = c
 
-    # ATR: seed = SMA of first `period` non-None TRs; then Wilder smoothing
-    out: list[dict[str, float | None]] = []
-    seed_buf: list[float] = []
-    atr: float | None = None
+    smoothed = wilder_smooth(trs, period)
 
-    for tr in trs:
+    out: list[dict[str, float | None]] = []
+    for i, tr in enumerate(trs):
         if tr is None:
             out.append({"atr": None, "tr": None})
-            continue
-        if atr is None:
-            seed_buf.append(tr)
-            if len(seed_buf) == period:
-                atr = sum(seed_buf) / period
-                out.append({"atr": round(atr, 2), "tr": round(tr, 2)})
-            else:
-                out.append({"atr": None, "tr": round(tr, 2)})
         else:
-            atr = (atr * (period - 1) + tr) / period
-            out.append({"atr": round(atr, 2), "tr": round(tr, 2)})
+            out.append({
+                "atr": round(smoothed[i], 2) if smoothed[i] is not None else None,
+                "tr": round(tr, 2),
+            })
 
     return out
 

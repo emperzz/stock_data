@@ -91,39 +91,6 @@ class UnifiedRealtimeQuote:
     total_mv: float | None = None
     circ_mv: float | None = None
 
-    def has_basic_data(self) -> bool:
-        """Check if basic price data is available."""
-        return self.price is not None and self.price > 0
-
-    def to_dict(self) -> dict:
-        """Convert to dict, excluding None and empty values."""
-        result = {}
-        for attr in [
-            "code",
-            "name",
-            "source",
-            "price",
-            "change_pct",
-            "change_amount",
-            "volume",
-            "amount",
-            "volume_ratio",
-            "turnover_rate",
-            "amplitude",
-            "open_price",
-            "high",
-            "low",
-            "pre_close",
-            "pe_ratio",
-            "pb_ratio",
-            "total_mv",
-            "circ_mv",
-        ]:
-            val = getattr(self, attr, None)
-            if val is not None and val != "":
-                result[attr] = val
-        return result
-
 
 class CircuitBreaker:
     """
@@ -253,7 +220,7 @@ class CircuitBreaker:
             state["half_open_calls"] = 0
             state["last_success_time"] = time.time()
 
-    def record_failure(self, source: str, error: str | None = None) -> None:
+    def record_failure(self, source: str) -> None:
         """Record failed call."""
         with self._lock:
             state = self._get_state(source)

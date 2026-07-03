@@ -10,7 +10,7 @@ frame with the requested technical columns.
 Architecture:
     API Layer
         ↓
-    compute(df, spec) / compute_lookback(spec)  ←  THIS LAYER
+    compute(df, spec) / estimate_lookback(spec)  ←  THIS LAYER
         ↓
     DataFetcherManager.get_kline_data(...)    ←  capability-routed
         ↓
@@ -19,7 +19,7 @@ Architecture:
 Public surface:
     - calcMA, calcMACD, calcBOLL, calcKDJ, ... : per-indicator pure functions
     - INDICATOR_REGISTRY                       : metadata for introspection
-    - compute, compute_lookback, available_catalog : orchestrator functions
+    - compute, estimate_lookback, available_catalog : orchestrator functions
     - IndicatorKey                             : enum of supported indicators
 """
 
@@ -31,7 +31,6 @@ from .dmi import calcDMI
 from .indicator_service import (
     available_catalog,
     compute,
-    compute_lookback,
 )
 from .kc import calcKC
 from .kdj import calcKDJ
@@ -50,7 +49,6 @@ from .wr import calcWR
 __all__ = [
     # Service functions
     "compute",
-    "compute_lookback",
     "available_catalog",
     # Registry / metadata
     "INDICATOR_REGISTRY",

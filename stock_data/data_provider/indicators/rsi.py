@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .types import wilder_smooth
+
 
 def calcRSI(  # noqa: N802
     closes: list[float | None],
@@ -44,45 +46,33 @@ def calcRSI(  # noqa: N802
         out.append(row)
 
     for period in periods:
-        avg_gain: float | None = None
-        avg_loss: float | None = None
+        # Build gain / loss per-bar series. None for the first bar (no
+        # prev close) and any bar where the close is None.
+        gains: list[float | None] = []
+        losses: list[float | None] = []
         prev_close: float | None = None
-        gains: list[float] = []
-        losses: list[float] = []
-
-        for i, value in enumerate(closes):
+        for value in closes:
             if value is None or prev_close is None:
-                out[i][f"rsi_{period}"] = None
-                prev_close = value
-                # Reset seed accumulators — a gap invalidates prior partial window
-                gains.clear()
-                losses.clear()
-                continue
-
-            change = value - prev_close
-            gain = max(change, 0.0)
-            loss = max(-change, 0.0)
-
-            if avg_gain is None:
-                # Still building the seed window
-                gains.append(gain)
-                losses.append(loss)
-                if len(gains) == period:
-                    avg_gain = sum(gains) / period
-                    avg_loss = sum(losses) / period
-                    out[i][f"rsi_{period}"] = _rsi_from(avg_gain, avg_loss)
+                gains.append(None)
+                losses.append(None)
             else:
-                # Wilder smoothing
-                avg_gain = (avg_gain * (period - 1) + gain) / period
-                avg_loss = (avg_loss * (period - 1) + loss) / period
-                out[i][f"rsi_{period}"] = _rsi_from(avg_gain, avg_loss)
-
+                change = value - prev_close
+                gains.append(max(change, 0.0))
+                losses.append(max(-change, 0.0))
             prev_close = value
+
+        avg_gain = wilder_smooth(gains, period)
+        avg_loss = wilder_smooth(losses, period)
+
+        for i in range(n):
+            out[i][f"rsi_{period}"] = _rsi_from(avg_gain[i], avg_loss[i])
 
     return out
 
 
-def _rsi_from(avg_gain: float, avg_loss: float) -> float | None:
+def _rsi_from(avg_gain: float | None, avg_loss: float | None) -> float | None:
+    if avg_gain is None or avg_loss is None:
+        return None
     if avg_gain == 0 and avg_loss == 0:
         return None
     if avg_loss == 0:

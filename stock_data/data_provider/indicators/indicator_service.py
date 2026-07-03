@@ -9,10 +9,11 @@ the cache. Callers are expected to:
     2. Hand the resulting DataFrame to ``compute()``.
     3. Truncate to the user's requested bar count if you over-fetched.
 
-This module exposes plain functions (``compute``, ``compute_lookback``,
-``available_catalog``) instead of a wrapper class — the previous
-``IndicatorService`` facade was a stateless shell that added no value
-over calling the module functions directly.
+This module exposes plain functions (``compute``, ``available_catalog``)
+instead of a wrapper class — the previous ``IndicatorService`` facade
+was a stateless shell that added no value over calling the module
+functions directly. Lookback estimation lives in
+:func:`registry.estimate_lookback`.
 """
 
 from __future__ import annotations
@@ -22,47 +23,13 @@ from typing import Any
 
 import pandas as pd
 
-from .registry import INDICATOR_REGISTRY, estimate_lookback, list_indicators
+from .registry import (
+    INDICATOR_REGISTRY,
+    estimate_lookback,
+    list_indicators,
+    normalize_spec,
+)
 from .types import OHLCV, IndicatorKey
-
-
-def _coerce_indicator_key(raw: Any) -> IndicatorKey:
-    """Resolve a key from str or IndicatorKey, raising ValueError on miss."""
-    if isinstance(raw, IndicatorKey):
-        return raw
-    try:
-        return IndicatorKey(raw)
-    except ValueError:
-        raise ValueError(
-            f"unknown indicator: {raw!r}. "
-            f"Supported: {sorted(k.value for k in IndicatorKey)}"
-        ) from None
-
-
-def _normalize_spec(
-    spec: dict[str, dict[str, Any]] | list[str] | None,
-) -> dict[str, dict[str, Any]]:
-    """Expand list[str] into a full spec dict, merging user options onto defaults."""
-    if spec is None:
-        return {}
-    if isinstance(spec, list):
-        out: dict[str, dict[str, Any]] = {}
-        for key in spec:
-            descriptor = INDICATOR_REGISTRY.get(_coerce_indicator_key(key))
-            if descriptor is None:
-                raise ValueError(f"unknown indicator: {key!r}")
-            out[key] = dict(descriptor.default_options)
-        return out
-    out = {}
-    for key, options in spec.items():
-        descriptor = INDICATOR_REGISTRY.get(_coerce_indicator_key(key))
-        if descriptor is None:
-            raise ValueError(f"unknown indicator: {key!r}")
-        merged = dict(descriptor.default_options)
-        if options:
-            merged.update(options)
-        out[key] = merged
-    return out
 
 
 def _extract_closes(df: pd.DataFrame) -> list[float | None]:
@@ -132,7 +99,7 @@ def compute(
         schema. Instead we put them in a single `indicators` dict
         so the API layer can render them as JSON keys.
     """
-    spec_dict = _normalize_spec(spec)
+    spec_dict = normalize_spec(spec)
     if not spec_dict:
         return _attach_indicators_dict(df, [])
 
@@ -152,18 +119,6 @@ def compute(
     return _attach_indicators_dict(df, per_bar_results)
 
 
-def compute_lookback(spec: dict[str, dict[str, Any]] | list[str] | None) -> int:
-    """How many bars of K-line are required to fully warm up `spec`?
-
-    For empty spec / None / unknown indicators, returns 0.
-    """
-    if not spec:
-        return 0
-    if isinstance(spec, list):
-        return estimate_lookback(_normalize_spec(spec))
-    return estimate_lookback(spec)
-
-
 def available_catalog() -> list[dict[str, Any]]:
     """Return the catalog of supported indicators (for /indicators/catalog)."""
     return list_indicators()
@@ -171,6 +126,5 @@ def available_catalog() -> list[dict[str, Any]]:
 
 __all__ = [
     "compute",
-    "compute_lookback",
     "available_catalog",
 ]

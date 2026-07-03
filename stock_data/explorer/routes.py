@@ -20,8 +20,6 @@ from pydantic import BaseModel, Field
 from .. import __version__
 from .manifest import build_manifest
 
-_CONTROL_STARTED_AT = time.time()
-
 
 def _read_server_port() -> int:
     try:
@@ -206,13 +204,15 @@ def build_control_router() -> APIRouter:
         }
 
     @router.get("/server/status")
-    def control_server_status() -> dict:
+    def control_server_status(request: Request) -> dict:
         """Status of the main server (the one serving the HTML)."""
+        started_at = getattr(request.app.state, "started_at", None)
+        uptime = int(time.time() - started_at) if started_at else 0
         return {
             "running": True,
             "pid": os.getpid(),
             "port": _read_server_port(),
-            "uptime_sec": int(time.time() - _CONTROL_STARTED_AT),
+            "uptime_sec": uptime,
         }
 
     @router.get("/api-manifest")
