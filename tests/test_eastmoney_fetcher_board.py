@@ -327,7 +327,9 @@ def test_get_all_boards_concept_dict_format_with_subtype():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_boards(board_type="concept", source="eastmoney")
-    assert boards == [{"code": "BK0001", "name": "人形机器人", "subtype": "concept"}]
+    # type is now also tagged (mirrors the per-type tag the all-types
+    # branch uses, so the persistence layer's write sees a uniform shape).
+    assert boards == [{"code": "BK0001", "name": "人形机器人", "type": "concept", "subtype": "concept"}]
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +407,7 @@ def test_get_all_boards_concept_delegates():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_boards(board_type="concept", source="eastmoney")
-    assert boards == [{"code": "BK0001", "name": "人形机器人", "subtype": "concept"}]
+    assert boards == [{"code": "BK0001", "name": "人形机器人", "type": "concept", "subtype": "concept"}]
 
 
 def test_get_all_boards_industry_delegates():
@@ -414,7 +416,7 @@ def test_get_all_boards_industry_delegates():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_boards(board_type="industry", source="eastmoney")
-    assert boards == [{"code": "BK1001", "name": "小金属", "subtype": "industry"}]
+    assert boards == [{"code": "BK1001", "name": "小金属", "type": "industry", "subtype": "industry"}]
 
 
 def test_get_all_boards_index_returns_empty():

@@ -539,7 +539,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
 
     def get_all_boards(
         self,
-        board_type: str,
+        board_type: str | None = None,
         subtype: str | None = None,
         source: str = "zzshare",
         include_quote: bool = False,
@@ -548,6 +548,11 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
 
         include_quote is accepted for interface symmetry but ignored —
         plates_list does not expose realtime quote fields.
+
+        ``board_type=None`` queries every type the source exposes (industry,
+        concept, special). zzshare does not expose index boards.
+        ``subtype`` is ignored when ``board_type`` is ``None`` because
+        subtypes are scoped per type and the cross-type union is undefined.
         """
         _ = source, include_quote  # accepted for Manager interface
         self._ensure_api()
@@ -556,7 +561,8 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             return []
         out: list[dict] = []
         target_plate_types = [
-            pt for pt, (bt, st) in self._BOARD_TYPE_BY_PLATE_TYPE.items() if bt == board_type
+            pt for pt, (bt, st) in self._BOARD_TYPE_BY_PLATE_TYPE.items()
+            if board_type is None or bt == board_type
         ]
         for pt in target_plate_types:
             try:

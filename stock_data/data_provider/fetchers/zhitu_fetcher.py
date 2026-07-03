@@ -396,15 +396,20 @@ class ZhituFetcher(BaseFetcher):
 
     def get_all_boards(
         self,
-        board_type: str,
+        board_type: str | None = None,
         subtype: str | None = None,
         source: str = "zhitu",
         include_quote: bool = False,
     ) -> list[dict]:
         """Get boards of a given type and optional subtype (unified entry).
 
+        ``board_type=None`` returns every type the source exposes (concept /
+        industry / index / special). ``subtype`` is ignored in that case
+        (subtypes are scoped per type).
+
         Args:
-            board_type: one of ``concept / industry / index / special``.
+            board_type: one of ``concept / industry / index / special``,
+                or ``None`` for all types.
             subtype: source-specific subtype (validated by persistence).
             source: fetcher name (accepted for Manager interface symmetry;
                 Zhitu is the only source here).
@@ -430,7 +435,7 @@ class ZhituFetcher(BaseFetcher):
             if mapped is None:
                 continue
             row_type, row_subtype = mapped
-            if row_type != board_type:
+            if board_type is not None and row_type != board_type:
                 continue
             if subtype is not None and row_subtype != subtype:
                 continue

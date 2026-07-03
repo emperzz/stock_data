@@ -272,6 +272,16 @@ class BoardInfo(BaseModel):
 
     code: str = Field(description="Board code (e.g., BK1048)")
     name: str = Field(description="Board name (e.g., 互联网服务)")
+    type: str | None = Field(
+        default=None,
+        description=(
+            "Board type (concept/industry/index/special). Always populated "
+            "by the route layer (both fresh fetcher rows and cache-hit rows "
+            "tag every board with its type). Required for the all-types "
+            "response (``GET /boards?source=...`` without ``type=``) so "
+            "callers can split the result by type."
+        ),
+    )
     price: float | None = Field(default=None, description="Latest price (requires include_quote=True)")
     change_pct: float | None = Field(default=None, description="Change percent (requires include_quote=True)")
     change_amount: float | None = Field(default=None, description="Change amount (requires include_quote=True)")

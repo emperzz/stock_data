@@ -694,7 +694,7 @@ class DataFetcherManager:
     def get_all_boards(
         self,
         source: str,
-        board_type: str,
+        board_type: str | None = None,
         subtype: str | None = None,
         include_quote: bool = False,
     ) -> tuple[list[dict], str]:
@@ -702,8 +702,12 @@ class DataFetcherManager:
 
         Args:
             source: fetcher name (e.g. ``"eastmoney"``, ``"zhitu"``).
-            board_type: one of ``concept / industry / index / special``.
+            board_type: one of ``concept / industry / index / special``, or
+                ``None`` to query every type the source exposes.
             subtype: source-specific subtype filter (validated by persistence).
+                Ignored when ``board_type`` is ``None`` (each type has its
+                own subtype set; filtering across all types would be
+                ambiguous and is unsupported at this layer).
             include_quote: forward to fetcher — include realtime quote fields.
 
         Returns:

@@ -187,6 +187,59 @@ def test_list_boards_persistence_validation_error_propagates(client):
     assert "No fetcher" in str(body)
 
 
+def test_list_boards_zzshare_no_type_returns_all_three_types(client):
+    """Omitting ``type`` on a zzshare query returns concept + industry + special.
+
+    zzshare's subtype table has industry/concept/special (no index).
+    Persistence is called with board_type=None; the all-types branch
+    iterates over the per-source supported types and merges the results.
+    The "mixed" origin label is used when both cache-hit and fetcher-hit
+    rows contributed (mirrors get_stock_memberships).
+    """
+    fake_boards = [
+        {"code": "BK_C1", "name": "概念1", "type": "concept", "subtype": "同花顺概念"},
+        {"code": "BK_I1", "name": "行业1", "type": "industry", "subtype": "同花顺行业"},
+        {"code": "BK_S1", "name": "题材1", "type": "special", "subtype": "同花顺题材"},
+    ]
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake_boards, "mixed")) as mock_get:
+        r = client.get("/api/v1/boards?source=zzshare")
+    assert r.status_code == 200
+    body = r.json()
+    # All three types are present in the response.
+    types = {b["type"] for b in body["data"]}
+    assert types == {"concept", "industry", "special"}
+    # board_type=None is forwarded to persistence.
+    _, kwargs = mock_get.call_args
+    assert kwargs.get("board_type") is None
+
+
+def test_list_boards_no_type_subtype_returns_400(client):
+    """subtype filter without type is rejected at the route layer."""
+    r = client.get("/api/v1/boards?source=zzshare&subtype=同花顺概念")
+    assert r.status_code == 400
+
+
+def test_list_boards_no_type_response_carries_type_field(client):
+    """Each board in the all-types response carries its ``type`` field.
+
+    The persistence helper tags every row with the board_type that wrote
+    it; the route forwards this to the response. This is what makes
+    ``GET /boards?source=...`` (no type) actually useful — callers can
+    tell concept / industry / special apart.
+    """
+    fake_boards = [
+        {"code": "BK_C1", "name": "概念1", "type": "concept", "subtype": "同花顺概念"},
+        {"code": "BK_I1", "name": "行业1", "type": "industry", "subtype": "同花顺行业"},
+    ]
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake_boards, "mixed")):
+        r = client.get("/api/v1/boards?source=zzshare")
+    assert r.status_code == 200
+    body = r.json()
+    by_code = {b["code"]: b for b in body["data"]}
+    assert by_code["BK_C1"]["type"] == "concept"
+    assert by_code["BK_I1"]["type"] == "industry"
+
+
 # ===== get_board_stocks =====
 
 

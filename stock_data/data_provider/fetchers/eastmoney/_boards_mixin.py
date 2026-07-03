@@ -431,7 +431,7 @@ class BoardsMixin:
 
     def get_all_boards(
         self,
-        board_type: str,
+        board_type: str | None = None,
         subtype: str | None = None,
         source: str = "eastmoney",
         include_quote: bool = False,
@@ -443,12 +443,28 @@ class BoardsMixin:
         - ``type=concept``: any subtype → returns concept boards
         - ``type=industry``: any subtype → returns industry boards
         - ``type=index`` / ``type=special``: not supported → return ``[]``
+        - ``type=None``: returns concept + industry (every type the source
+          exposes). ``subtype`` is ignored in this case (subtypes are
+          scoped per type).
 
-        Each returned board is tagged with ``subtype=board_type`` (e.g.
-        ``subtype="concept"``) so the persistence layer can store a uniform
-        shape across sources. This matches the Zhitu / Zzshare convention
-        without inventing fake EM-specific subtypes.
+        Each returned board is tagged with ``type`` and ``subtype=type`` so
+        the persistence layer can store a uniform shape across sources. This
+        matches the Zhitu / Zzshare convention without inventing fake
+        EM-specific subtypes.
         """
+        if board_type is None:
+            # All types the source exposes — concept + industry. Tag each
+            # batch with its type before merging.
+            tagged: list[dict] = []
+            for bt, helper in (
+                ("concept", self.get_all_concept_boards),
+                ("industry", self.get_all_industry_boards),
+            ):
+                for b in helper(source=source, include_quote=include_quote):
+                    b.setdefault("type", bt)
+                    b.setdefault("subtype", bt)
+                    tagged.append(b)
+            return tagged
         if board_type == "concept":
             boards = self.get_all_concept_boards(
                 source=source,
@@ -462,10 +478,11 @@ class BoardsMixin:
         else:
             # index / special: EastMoney has no such classification
             return []
-        # Tag every board with subtype=board_type so persistence layer has
-        # a uniform shape. setdefault preserves any subtype the inner helper
-        # already set (defensive — currently the helpers don't set it).
+        # Tag every board with type/subtype=board_type so persistence layer
+        # has a uniform shape. setdefault preserves any value the inner
+        # helper already set (defensive — currently the helpers don't).
         for b in boards:
+            b.setdefault("type", board_type)
             b.setdefault("subtype", board_type)
         return boards
 

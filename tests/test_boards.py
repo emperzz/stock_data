@@ -77,7 +77,12 @@ class TestBoardAPIRoutes:
             assert data["data"][0]["name"] == "银行"
 
     def test_get_boards_missing_type(self, client):
-        """Test GET /api/v1/boards without type parameter returns 422."""
+        """Test GET /api/v1/boards without type parameter returns 422.
+
+        ``type`` is now OPTIONAL on this route (omitting it means "all
+        types"), but ``source`` is still REQUIRED — a request with neither
+        param therefore still 422s on the missing-source FastAPI check.
+        """
         response = client.get("/api/v1/boards")
         assert response.status_code == 422
 
@@ -86,6 +91,47 @@ class TestBoardAPIRoutes:
         response = client.get("/api/v1/boards?type=invalid")
         # FastAPI validation error returns 422
         assert response.status_code == 422
+
+    def test_get_boards_no_type_returns_all_types(self, client):
+        """Omitting ``type`` queries every type the source exposes.
+
+        Source = eastmoney (concept + industry); zzshare is tested in
+        ``test_boards_api.py`` because it has its own board list
+        ``subtype`` table.
+        """
+        concept_board = {
+            "code": "BK1048",
+            "name": "互联网服务",
+            "type": "concept",
+            "subtype": "concept",
+        }
+        industry_board = {
+            "code": "BK0816",
+            "name": "银行",
+            "type": "industry",
+            "subtype": "industry",
+        }
+        with patch(_PERSISTENCE_PATCH) as mock_get:
+            mock_get.return_value = ([concept_board, industry_board], "mixed")
+            response = client.get("/api/v1/boards?source=eastmoney")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["source"] == "mixed"
+        codes = {b["code"] for b in data["data"]}
+        assert codes == {"BK1048", "BK0816"}
+        # Each board carries its type in the response so callers can split
+        # the result without re-querying.
+        by_code = {b["code"]: b["type"] for b in data["data"]}
+        assert by_code["BK1048"] == "concept"
+        assert by_code["BK0816"] == "industry"
+
+    def test_get_boards_subtype_without_type_returns_400(self, client):
+        """subtype filter requires a ``type`` (subtypes are type-scoped)."""
+        response = client.get("/api/v1/boards?source=eastmoney&subtype=concept")
+        assert response.status_code == 400
+        body = response.json()
+        assert "subtype" in str(body)
+        assert "type" in str(body)
 
     def test_get_board_stocks(self, client):
         """Test GET /api/v1/boards/{board_code}/stocks."""

@@ -176,6 +176,13 @@ def _resolve_type(board_type: str) -> str:
     return board_type
 
 
+def _resolve_type_optional(board_type: str | None) -> str | None:
+    """Validate type parameter when provided; allow ``None`` (means: all types)."""
+    if board_type is None:
+        return None
+    return _resolve_type(board_type)
+
+
 def _parse_source_csv(raw: str | None) -> list[str]:
     """Parse ?source=ths,zhitu,eastmoney -> ['zzshare', 'zhitu', 'eastmoney'] (normalized).
 
@@ -226,14 +233,23 @@ def _parse_source_csv(raw: str | None) -> list[str]:
 )
 @map_errors
 def list_boards(
-    type: Literal["concept", "industry", "index", "special"] = Query(..., description="Board type"),
+    type: Literal["concept", "industry", "index", "special"] | None = Query(
+        None,
+        description=(
+            "Board type. Omit to return all types "
+            "(concept / industry / index / special) for the given source."
+        ),
+    ),
     source: Literal["eastmoney", "zhitu", "zzshare", "ths"] = Query(
         ..., description="Data source (REQUIRED). 'ths' is an alias for 'zzshare'."
     ),
     subtype: str | None = Query(
         None,
-        description="Source-specific subtype. Validated per (source, type) pair. "
-        "Omit to return all subtypes for the type.",
+        description=(
+            "Source-specific subtype. Validated per (source, type) pair. "
+            "Omit to return all subtypes for the type. "
+            "When ``type`` is also omitted, ``subtype`` is ignored (no type to validate against)."
+        ),
     ),
     include_quote: bool = Query(False, description="Include realtime quote fields"),
     sort_by: Literal["change_pct", "volume", "amount", "price"] | None = Query(
@@ -243,12 +259,32 @@ def list_boards(
     limit: int | None = Query(None, ge=1, le=500, description="Max number of items (default: all)"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
 ) -> BoardListResponse:
-    """Get list of concept / industry / index / special boards."""
+    """Get list of concept / industry / index / special boards.
+
+    When ``type`` is omitted, the response contains boards of every type
+    supported by the source. Subtypes are filtered per-type internally; if
+    the caller also passes ``subtype``, the validation requires a ``type``
+    (subtype is source×type-scoped) — the request is rejected with 400.
+    """
     source = _resolve_source(source)
-    _resolve_type(type)
+    _resolve_type_optional(type)
+
+    # subtype without type is ambiguous (each type has its own subtype set).
+    if type is None and subtype is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_combination",
+                "message": (
+                    "subtype requires a 'type' filter (subtype is scoped per "
+                    "type). Either provide type= or omit subtype=."
+                ),
+            },
+        )
 
     # subtype validation — early failure before manager invocation
-    stock_board_cache._validate_subtype(source, type, subtype)
+    if type is not None:
+        stock_board_cache._validate_subtype(source, type, subtype)
 
     # sort_by requires include_quote (the sort fields are quote fields)
     if sort_by is not None and not include_quote:
@@ -298,6 +334,10 @@ def list_boards(
             BoardInfo(
                 code=b["code"],
                 name=b["name"],
+                # Every code path (fresh fetcher + cache hit) tags rows
+                # with ``type``; see _read_boards_from_db and the
+                # board_type=None fan-out in get_board_list.
+                type=b.get("type"),
                 price=b.get("price"),
                 change_pct=b.get("change_pct"),
                 change_amount=b.get("change_amount"),

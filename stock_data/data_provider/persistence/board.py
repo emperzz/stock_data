@@ -154,7 +154,7 @@ def init_schema() -> None:
 
 
 def get_board_list(
-    board_type: str,
+    board_type: str | None,
     source: str,
     refresh: bool = False,
     include_quote: bool = False,
@@ -170,8 +170,15 @@ def get_board_list(
     - include_quote=True -> always fetch fresh data from upstream
     - Otherwise -> return cached data
 
+    When ``board_type`` is ``None`` every type supported by ``source`` is
+    fetched (and persisted) as a single call. Subtype is rejected when
+    ``board_type`` is ``None`` (subtypes are scoped per type) — the route
+    layer surfaces a 400 in that case. The result rows carry their
+    ``type`` field so callers can split / filter on the response side.
+
     Args:
-        board_type: one of "concept" / "industry" / "index" / "special"
+        board_type: one of "concept" / "industry" / "index" / "special", or
+            ``None`` to query every type the source exposes.
         source: Data source (e.g., "eastmoney", "zhitu", "zzshare")
         refresh: If True, force refresh from upstream
         include_quote: If True, include realtime price/change/market data and skip cache
@@ -183,16 +190,32 @@ def get_board_list(
             filters in-memory before returning (the upstream cost is the
             same regardless of the subtype filter), so we don't lose
             caching granularity by always fetching unfiltered.
+            Ignored when ``board_type`` is ``None`` (each type has its own
+            subtype set; cross-type subtype filtering is undefined).
         manager: DataFetcherManager instance. Required for fetching from upstream.
 
     Returns:
         Tuple of (boards, origin) where origin is:
           - the fetcher name (e.g. "eastmoney") when the data was freshly fetched
           - "persistence" when the data was read from the SQLite cache
+          - "mixed" when ``board_type`` is ``None`` and the response is
+            composed of multiple (board_type, source) cache slots — some
+            may be cache hits, some fetcher hits. Mirrors the multi-source
+            summary in ``get_stock_memberships`` so the response's
+            ``source`` field uses the same label across endpoints.
         List of board dicts: [{"code": "BK1048", "name": "互联网服务", "board_type": "concept", "subtype": "热门概念", "source": "eastmoney"}, ...]
             May include quote fields when include_quote=True.
     """
     init_schema()
+
+    if board_type is None:
+        return _get_all_board_types(
+            source=source,
+            refresh=refresh,
+            include_quote=include_quote,
+            subtype=subtype,
+            manager=manager,
+        )
 
     needs_refresh = (
         refresh or include_quote or _refresh_tracker.is_first_call(f"{board_type}:{source}")
@@ -230,6 +253,110 @@ def get_board_list(
         boards = [b for b in boards if b.get("subtype") == subtype]
 
     return boards, fetcher_source
+
+
+def _get_all_board_types(
+    source: str,
+    refresh: bool,
+    include_quote: bool,
+    subtype: str | None,
+    manager,
+) -> tuple[list, str]:
+    """All-types variant of :func:`get_board_list`.
+
+    Iterates over every board_type the source exposes (derived from
+    ``VALID_SUBTYPES_BY_SOURCE[source]`` so sources without an entry for
+    a given type are simply skipped — e.g. zzshare has no ``index``).
+    Delegates to :func:`get_board_list` for each type so the per-type
+    daily-refresh tracker, cache-hit short-circuit, and persistence write
+    behave identically to single-type calls.
+
+    Returns:
+        ``(combined_boards, origin)`` where ``origin`` is:
+          - the fetcher name when *every* per-type call hit the network
+            (this matches single-source ``persistence`` consumers)
+          - ``"persistence"`` when *every* per-type call was a cache hit
+          - ``"merged"`` otherwise (some types fresh, some cached) — a
+            honest summary so the response field doesn't claim a single
+            fetcher that didn't fully run.
+    """
+    init_schema()
+
+    if subtype is not None:
+        # Defensive guard: route layer rejects this case with 400, but if
+        # some other caller passes through, fail loud rather than silently
+        # mixing types in the cache.
+        raise ValueError(
+            "subtype filter requires a specific board_type; "
+            "cross-type subtype filtering is not supported."
+        )
+
+    if manager is None:
+        raise ValueError(
+            "manager is required when querying all board types "
+            "(cache may be partially cold and an upstream call may be needed)"
+        )
+
+    # Use the per-source subtype table as the source of truth for which
+    # types this source exposes. This keeps zzshare's "no index" rule
+    # honest: a missing key means the type is not supported, full stop.
+    supported_types = list(VALID_SUBTYPES_BY_SOURCE.get(source, {}).keys())
+    if not supported_types:
+        return [], "persistence"
+
+    combined: list[dict] = []
+    seen_codes: set[str] = set()  # de-dup by (code) within a source
+    origins: set[str] = set()
+    for bt in supported_types:
+        boards, origin = get_board_list(
+            board_type=bt,
+            source=source,
+            refresh=refresh,
+            include_quote=include_quote,
+            subtype=None,
+            manager=manager,
+        )
+        origins.add(origin)
+        # H2 (review): partial-failure visibility. When the per-type
+        # call hits the network (origin != "persistence") and returns
+        # zero rows, the upstream almost certainly failed — log so the
+        # silent partial-success doesn't mislead downstream consumers.
+        if not boards and origin != "persistence":
+            logger.warning(
+                f"[BoardCache] all-types query for source='{source}' "
+                f"board_type='{bt}' returned 0 rows from upstream "
+                f"({origin}); partial result may be incomplete."
+            )
+        for b in boards:
+            # Some upstreams return the same code under multiple types
+            # (rare but possible). Keep the first occurrence so the
+            # response is deterministic and the per-type cache slots
+            # stay internally consistent.
+            code = b.get("code")
+            if not code or code in seen_codes:
+                if code in seen_codes:
+                    logger.debug(
+                        f"[BoardCache] dropping duplicate code '{code}' "
+                        f"under source='{source}' (kept first occurrence)"
+                    )
+                continue
+            seen_codes.add(code)
+            combined.append(b)
+
+    if origins == {"persistence"}:
+        summary = "persistence"
+    elif "persistence" in origins:
+        # Some types cache-hit, some fetcher-hit — the multi-source
+        # summary in get_stock_memberships uses the same label.
+        summary = "mixed"
+    else:
+        # All fresh from one (or more) fetchers — collapse to the single
+        # fetcher name. The current Manager dispatches by source so a
+        # single name is accurate; "mixed" would also be correct but
+        # hides the actual fetcher identity from clients.
+        summary = next(iter(origins))
+
+    return combined, summary
 
 
 def get_board_stocks(
@@ -709,6 +836,12 @@ def _read_boards_from_db(board_type: str, source: str, subtype: str | None = Non
         source: data source slug (eastmoney / zhitu / zzshare).
         subtype: optional subtype filter. ``None`` returns all subtypes for
             the (board_type, source) pair.
+
+    Returns:
+        Each row is projected with the key ``type`` (= SQL column
+        ``board_type``) so callers can use the same key for fresh fetcher
+        rows and cache-hit rows. ``board_type`` is also retained as an
+        alias for any caller that was using the column name directly.
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -731,6 +864,9 @@ def _read_boards_from_db(board_type: str, source: str, subtype: str | None = Non
         {
             "code": row["code"],
             "name": row["name"],
+            "type": row["board_type"],
+            # Keep ``board_type`` for backwards compat with any caller that
+            # was using the SQL column name directly.
             "board_type": row["board_type"],
             "subtype": row["subtype"],
             "source": row["source"],
