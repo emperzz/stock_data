@@ -15,6 +15,7 @@ Field-code maps at the bottom of the module decouple the upstream
 ``f1,f2,f3,...`` opaque field codes from the public JSON response
 keys. The mixins below consume these by lookup.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -141,20 +142,32 @@ class _Endpoints:
     # Direct push2.eastmoney.com clist. fs / fid / fields align with akshare's
     # stock_board_*_em / stock_board_*_cons_em request shape; field-code →
     # output key translations live in the _BOARD_*_FIELD_MAP constants below.
+    #
+    # url_prefixes (added 2026-07-03, push2 WAF hardening):
+    # Each push2 clist endpoint may have multiple URL variants — a numeric
+    # subdomain prefix (akshare's known-good pattern: 79/17/29) plus the bare
+    # push2.eastmoney.com fallback. The fetcher's _build_clist_url_variants()
+    # iterates these in order, first success wins. Empty string in the list
+    # means "no prefix" (bare push2.eastmoney.com).
+    # Override per-endpoint via env var: EASTMONEY_PUSH2_{CONCEPT,INDUSTRY,
+    # COMPONENTS}_PREFIXES — comma-separated prefix list, e.g. "29,17,".
     BOARD_LIST_CONCEPT = {
         "url": "https://push2.eastmoney.com/api/qt/clist/get",
+        "url_prefixes": ["79", ""],  # 79.push2 (akshare) → bare push2 (fallback)
         "fs": "m:90+t:3+f:!50",
         "fid": "f12",
         "fields": "f2,f3,f4,f8,f12,f14,f15,f20,f104,f105,f128,f136",
     }
     BOARD_LIST_INDUSTRY = {
         "url": "https://push2.eastmoney.com/api/qt/clist/get",
+        "url_prefixes": ["17", ""],  # 17.push2 (akshare) → bare push2 (fallback)
         "fs": "m:90+t:2+f:!50",
         "fid": "f3",
         "fields": "f2,f3,f4,f8,f12,f14,f16,f20,f104,f105,f128,f136",
     }
     BOARD_COMPONENTS = {
         "url": "https://push2.eastmoney.com/api/qt/clist/get",
+        "url_prefixes": ["29", ""],  # 29.push2 (akshare cons) → bare push2 (fallback)
         "fs_template": "b:{board_code}+f:!50",
         "fid": "f3",
         "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f14,f16,f17,f18,f20,f21,f22",

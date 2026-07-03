@@ -4,21 +4,28 @@ Mixed into ``EastMoneyFetcher`` so the public class surface is unchanged.
 Owns:
 - Five ``_STOCK_BOARDS_*`` / ``_BOARD_*`` knobs (max pages, retry attempts,
   page delay range, board-list fids/ut).
-- ``_fetch_one_clist_page``, ``_fetch_clist_paginated`` — the retry + paginated
-  page-fetcher for any push2 clist endpoint.
+- ``_fetch_one_clist_page``, ``_fetch_clist_page_with_fallback``,
+  ``_fetch_clist_paginated`` — single-page retry + URL-variant fallback +
+  paginated multi-page orchestration for any push2 clist endpoint.
+- ``_build_clist_url_variants`` — turns ``endpoint["url_prefixes"]`` (+ env
+  override) into a list of candidate URLs (e.g. ``[79.push2, push2]``).
 - All ``get_*_boards`` public methods (concept, industry, unified entry,
   stock → boards reverse lookup, ``_get_board_stocks_impl``).
 
 URLs / endpoint metadata consumed (all from ``._endpoints``):
 - ``URLS.STOCK_BOARDS`` — push2.slist/get (used by ``get_stock_boards``)
 - ``ENDPOINTS.BOARD_LIST_CONCEPT`` / ``BOARD_LIST_INDUSTRY`` /
-  ``BOARD_COMPONENTS`` — three push2.clist/get shapes
+  ``BOARD_COMPONENTS`` — three push2.clist/get shapes, each declaring
+  a ``url_prefixes`` list (default: akshare's numeric subdomain + bare
+  push2 fallback)
 - ``_BOARD_LIST_FIELD_MAP`` / ``_BOARD_COMPONENTS_FIELD_MAP`` — f-code → JSON
   output key translations
 """
+
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
 from typing import Any
@@ -96,6 +103,118 @@ class BoardsMixin:
     # Clist page fetchers (private)
     # ==================================================================
 
+    # ---- URL variant helpers (2026-07-03, push2 WAF hardening) ----
+    #
+    # push2.eastmoney.com WAF has tightened to reject curl_cffi Chrome120
+    # impersonation from the bare subdomain. akshare's known-good URLs use
+    # numeric subdomains (79/17/29.push2) — those CDN shards may not have
+    # the same WAF rules. We now build a list of URL variants per board
+    # clist endpoint and try them in order; first success wins.
+    #
+    # Override per-endpoint via env var (set to comma-separated prefix list;
+    # empty string = bare push2.eastmoney.com):
+    #   EASTMONEY_PUSH2_CONCEPT_PREFIXES    default "79,"
+    #   EASTMONEY_PUSH2_INDUSTRY_PREFIXES   default "17,"
+    #   EASTMONEY_PUSH2_COMPONENTS_PREFIXES default "29,"
+
+    _PUSH2_PREFIX_ENV_KEYS: dict[str, str] = {
+        "BOARD_LIST_CONCEPT": "EASTMONEY_PUSH2_CONCEPT_PREFIXES",
+        "BOARD_LIST_INDUSTRY": "EASTMONEY_PUSH2_INDUSTRY_PREFIXES",
+        "BOARD_COMPONENTS": "EASTMONEY_PUSH2_COMPONENTS_PREFIXES",
+    }
+
+    @staticmethod
+    def _build_clist_url_variants(endpoint: dict) -> list[str]:
+        """Build the list of candidate URLs for a board clist endpoint.
+
+        Reads ``endpoint["url_prefixes"]`` (default per-endpoint), lets the
+        matching ``EASTMONEY_PUSH2_*_PREFIXES`` env var override, then
+        materializes each prefix into a full URL. Empty prefix → bare
+        ``push2.eastmoney.com``.
+
+        Args:
+            endpoint: One of ``ENDPOINTS.BOARD_*`` dicts. Must have
+                ``url_prefixes`` (list of str, default-loaded from
+                ``_endpoints.py``) and ``url`` (bare URL — used to extract
+                the path component).
+
+        Returns:
+            List of full URLs in iteration order. Never empty.
+        """
+        # The endpoint's "url" field carries the bare URL (no prefix).
+        # We rebuild it from path so prefix substitution is consistent.
+        bare = endpoint["url"]
+        # Strip "https://push2.eastmoney.com" prefix to extract path.
+        path = bare.split("push2.eastmoney.com", 1)[-1]
+
+        # Find the endpoint's env-var key by matching the endpoint dict
+        # against the known ENDPOINTS entries.
+        env_key = None
+        for name, key in BoardsMixin._PUSH2_PREFIX_ENV_KEYS.items():
+            if getattr(ENDPOINTS, name, None) is endpoint:
+                env_key = key
+                break
+
+        # Determine prefix list: env override or endpoint default.
+        # Once the env var is *set* (even to ""), we honour it literally
+        # so users can fully replace the default prefix list. The endpoint
+        # default is only used when the env var is unset (or when the
+        # endpoint has no env-key mapping, e.g. test fixtures).
+        env_val = os.getenv(env_key) if env_key else None
+        if env_val is not None:
+            # Parse literally — empty string "" splits to [""] which means
+            # "only the bare push2 fallback"; trailing "," adds the bare
+            # fallback to a custom list (e.g. "29,17,").
+            prefixes = [p.strip() for p in env_val.split(",")]
+        else:
+            prefixes = list(endpoint["url_prefixes"])
+
+        variants: list[str] = []
+        for p in prefixes:
+            if p:
+                variants.append(f"https://{p}.push2.eastmoney.com{path}")
+            else:
+                variants.append(f"https://push2.eastmoney.com{path}")
+        return variants
+
+    def _fetch_clist_page_with_fallback(
+        self,
+        url_variants: list[str],
+        params: dict,
+        referer: str,
+    ) -> Any:
+        """Try each URL variant in order; first success wins.
+
+        Wraps ``_fetch_one_clist_page`` (which keeps its existing tenacity
+        retry on transient failures) with an outer fallback across URL
+        variants. Why outer fallback vs inner: persistent WAF rejections
+        on a single URL are best handled by switching to the next CDN
+        shard instead of retrying the same shard 3×.
+
+        Args:
+            url_variants: List of full URLs to try in order. Built by
+                ``_build_clist_url_variants()``.
+            params: Query params (same across all variants).
+            referer: Per-call Referer (typically quote.eastmoney.com).
+
+        Returns:
+            Parsed JSON payload (whatever ``_fetch_one_clist_page`` returns).
+
+        Raises:
+            The last exception encountered, when all variants fail.
+        """
+        last_exc: Exception | None = None
+        for url in url_variants:
+            try:
+                return self._fetch_one_clist_page(url, params, referer)
+            except Exception as e:
+                last_exc = e
+                logger.debug(f"[{self.name}] clist URL {url} failed, trying next variant: {e}")
+        # All variants exhausted — re-raise the last exception so the
+        # caller's existing try/except in _fetch_clist_paginated returns [].
+        assert last_exc is not None  # url_variants is non-empty by construction
+        raise last_exc
+
     def _fetch_one_clist_page(self, url: str, params: dict, referer: str) -> Any:
         """Fetch one page of a clist endpoint with tenacity retry.
 
@@ -140,7 +259,7 @@ class BoardsMixin:
             formats into dicts so consumers can always ``row.get("f14")``.
             Empty on persistent failure (caller treats that as "no boards").
         """
-        url = endpoint["url"]
+        url_variants = self._build_clist_url_variants(endpoint)
         base_params: dict[str, Any] = {
             "pz": page_size,
             "po": 1,
@@ -158,11 +277,13 @@ class BoardsMixin:
         for page in range(1, self._BOARD_MAX_PAGES + 1):
             params = {**base_params, "pn": page}
             try:
-                payload = self._fetch_one_clist_page(url, params, referer)
-            except Exception as e:
-                logger.warning(
-                    f"[{self.name}] clist page {page} failed after retries: {e}"
+                payload = self._fetch_clist_page_with_fallback(
+                    url_variants,
+                    params,
+                    referer,
                 )
+            except Exception as e:
+                logger.warning(f"[{self.name}] clist page {page} failed after retries: {e}")
                 break
             rows = ((payload.get("data") or {}).get("diff")) or []
             if not rows:
@@ -265,7 +386,11 @@ class BoardsMixin:
         )
 
     def _get_board_stocks_impl(
-        self, board_code: str, *, include_quote: bool, fetcher_kind: str,
+        self,
+        board_code: str,
+        *,
+        include_quote: bool,
+        fetcher_kind: str,
     ) -> list[dict]:
         """Shared logic for concept / industry board stock listing.
 
@@ -326,11 +451,13 @@ class BoardsMixin:
         """
         if board_type == "concept":
             boards = self.get_all_concept_boards(
-                source=source, include_quote=include_quote,
+                source=source,
+                include_quote=include_quote,
             )
         elif board_type == "industry":
             boards = self.get_all_industry_boards(
-                source=source, include_quote=include_quote,
+                source=source,
+                include_quote=include_quote,
             )
         else:
             # index / special: EastMoney has no such classification
@@ -379,16 +506,22 @@ class BoardsMixin:
         """
         if board_type == "concept":
             return self.get_concept_board_stocks(
-                board_code, source=source, include_quote=include_quote,
+                board_code,
+                source=source,
+                include_quote=include_quote,
             )
         if board_type == "industry":
             return self.get_industry_board_stocks(
-                board_code, source=source, include_quote=include_quote,
+                board_code,
+                source=source,
+                include_quote=include_quote,
             )
 
         # Cold cache / caller-doesn't-know: legacy fallback, but visible.
         stocks = self.get_concept_board_stocks(
-            board_code, source=source, include_quote=include_quote,
+            board_code,
+            source=source,
+            include_quote=include_quote,
         )
         if stocks:
             return stocks
@@ -398,7 +531,9 @@ class BoardsMixin:
             f"to bypass the silent fallback when board_type is known)."
         )
         return self.get_industry_board_stocks(
-            board_code, source=source, include_quote=include_quote,
+            board_code,
+            source=source,
+            include_quote=include_quote,
         )
 
     def get_stock_boards(self, stock_code: str, source: str = "eastmoney") -> list[dict] | None:
@@ -419,11 +554,17 @@ class BoardsMixin:
             "fields": self._STOCK_BOARDS_FIELDS,
             "secid": secid,
             "ut": self._STOCK_BOARDS_UT,
-            "pi": 0, "po": 1, "np": 1, "pz": 50, "spt": 3,
+            "pi": 0,
+            "po": 1,
+            "np": 1,
+            "pz": 50,
+            "spt": 3,
             "wbp2u": "|0|0|0|web",
         }
         payload = cffi_json_get(
-            self._session, URLS.STOCK_BOARDS, params=params,
+            self._session,
+            URLS.STOCK_BOARDS,
+            params=params,
             headers={"Referer": "https://quote.eastmoney.com/"},
             error_label=f"get_stock_boards({code})",
         )
@@ -433,21 +574,23 @@ class BoardsMixin:
         out: list[dict] = []
         for r in rows:
             try:
-                out.append({
-                    "code": r["f12"],
-                    "name": r["f14"],
-                    # EastMoney doesn't cleanly distinguish concept/industry at
-                    # the stock-membership level (f152=2 for both). Default to
-                    # "industry" as a fallback; the resolve_board_types call
-                    # below overwrites these with the authoritative values from
-                    # the local stock_board cache when the code is known there.
-                    "type": "industry",
-                    "subtype": "industry",
-                    "change_pct": (r.get("f3") or 0) / 100,
-                    "change_amount": (r.get("f4") or 0) / 100,
-                    "leading_stock_code": r.get("f140", ""),
-                    "leading_stock_name": r.get("f128", ""),
-                })
+                out.append(
+                    {
+                        "code": r["f12"],
+                        "name": r["f14"],
+                        # EastMoney doesn't cleanly distinguish concept/industry at
+                        # the stock-membership level (f152=2 for both). Default to
+                        # "industry" as a fallback; the resolve_board_types call
+                        # below overwrites these with the authoritative values from
+                        # the local stock_board cache when the code is known there.
+                        "type": "industry",
+                        "subtype": "industry",
+                        "change_pct": (r.get("f3") or 0) / 100,
+                        "change_amount": (r.get("f4") or 0) / 100,
+                        "leading_stock_code": r.get("f140", ""),
+                        "leading_stock_name": r.get("f128", ""),
+                    }
+                )
             except KeyError as e:
                 logger.warning(f"[EastMoneyFetcher] skipping malformed board row: {e}")
                 continue
@@ -461,6 +604,7 @@ class BoardsMixin:
         # above on any DB / schema error.
         try:
             from ...persistence.board import resolve_board_types
+
             codes = [b["code"] for b in out if b.get("code")]
             overrides = resolve_board_types(codes, source="eastmoney")
         except Exception as e:
