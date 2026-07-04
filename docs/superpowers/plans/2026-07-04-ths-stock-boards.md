@@ -915,11 +915,17 @@ Append:
 
 ```python
 def test_ths_industry_filter_returns_400(fresh_db):
-    """ths only supports concept; ?source=ths&type=industry → 400."""
+    """ths only supports concept; ?source=ths&type=industry → 400 (bad_request).
+
+    Note: error code is ``bad_request`` (not ``invalid_subtype``) because the
+    route delegates to ``stock_board_cache._validate_subtype`` which raises
+    ValueError, and ``@map_errors`` uniformly maps ValueError → bad_request.
+    Same convention as the existing ``/boards/{board_code}/stocks`` endpoint.
+    """
     with TestClient(_app_for_test) as client:
         r = client.get("/api/v1/stocks/600519/boards?source=ths&type=industry&subtype=申万行业")
     assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "invalid_subtype"
+    assert r.json()["detail"]["error"] == "bad_request"
 ```
 
 ### Step 7.6: Run updated tests
