@@ -45,16 +45,21 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
     },
 }
 
-# Valid board types and sources — derived from VALID_SUBTYPES_BY_SOURCE so
-# there is exactly one source of truth.  Import these instead of re-defining
-# the same tuple/set elsewhere.
+# Valid board types and sources — forward-board listings (board-list,
+# board-stocks, build_membership_index). NOT derived from
+# VALID_SUBTYPES_BY_SOURCE because 'ths' is in that table for stock-boards
+# reverse lookup (basic.10jqka.com.cn stock_concept_list), but has no
+# forward board listing (no get_all_boards method). Forward-board sources
+# are exactly the set with a get_all_boards implementation.
 VALID_BOARD_TYPES: tuple[str, ...] = ("concept", "industry", "index", "special")
-VALID_SOURCES: tuple[str, ...] = tuple(sorted(VALID_SUBTYPES_BY_SOURCE.keys()))
+VALID_SOURCES: tuple[str, ...] = ("eastmoney", "zhitu", "zzshare")
 
 
 # Stock-boards 专用 source 集合 + alias (仿照 _BOARD_HISTORY_VALID_SOURCES 模式).
 # board-list 端点继续用 ths→zzshare alias (zzshare 的 plates_list 上游 = THS);
 # stock-boards 端点反转为 zzshare→ths alias (THS basic API 是真正的 stock→boards 上游).
+# 注意: 'ths' 在 VALID_SUBTYPES_BY_SOURCE 里有 concept subtype (用于 stock-boards
+# 端点的 subtype 验证), 但不在 VALID_SOURCES 里 (因为它没有 get_all_boards).
 _STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
 _STOCK_BOARDS_SOURCE_ALIAS: dict[str, str] = {"zzshare": "ths"}
 

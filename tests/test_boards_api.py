@@ -359,12 +359,16 @@ def test_get_stock_boards_eastmoney_returns_200_with_cold_sources_when_empty(cli
 
 
 def test_get_stock_boards_zzshare_returns_200_with_cold_sources_when_empty(client):
-    """No zzshare data -> 200 + cold_sources=['zzshare'], no 404."""
+    """No zzshare data -> 200 + cold_sources contains the post-alias source.
+
+    source=zzshare aliases to ths (data is THS upstream), so the cold source
+    label in the response is "ths" (the canonical key), not "zzshare".
+    """
     r = client.get("/api/v1/stocks/800997/boards?source=zzshare")
     assert r.status_code == 200
     body = r.json()
     assert body["data"] == []
-    assert "zzshare" in body["cold_sources"]
+    assert "ths" in body["cold_sources"]
 
 
 def test_get_stock_boards_zhitu_cold_fill_returns_populated_boards(client):
