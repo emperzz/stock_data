@@ -778,7 +778,7 @@ def get_stock_memberships(
     if cold_fill and manager is not None:
         from .stock_list import get_stock_name as _get_stock_name
 
-        for cold_src in ("zhitu", "eastmoney"):
+        for cold_src in ("ths", "zhitu", "eastmoney"):  # ths 加首位 (新实现)
             if cold_src not in sources or cold_src in present_sources:
                 continue
             boards, _ = manager.get_stock_boards(stock_code, source=cold_src)
@@ -810,7 +810,7 @@ def get_stock_memberships(
     elif cold_fill and manager is not None:
         # Cold-fill actually wrote data; signal which source(s) hit the network.
         # Single-source query takes the queried source's name; multi-source uses "mixed".
-        coldfill_sources = {"zhitu", "eastmoney"} & {e["source"] for e in entries}
+        coldfill_sources = {"ths", "zhitu", "eastmoney"} & {e["source"] for e in entries}
         if coldfill_sources and len(sources) == 1:
             origin_summary = next(iter(coldfill_sources))
         elif coldfill_sources or len(sources) > 1:

@@ -122,6 +122,29 @@ def test_cold_fill_false_does_not_trigger_lazy_fill(fresh_db):
     mock_manager.get_stock_boards.assert_not_called()
 
 
+def test_cold_fill_ths_triggers_ths_fetcher(fresh_db):
+    """?cold_fill=true&source=ths → fetcher called with source='ths'."""
+    mock_manager = MagicMock()
+    # First read returns empty (cache miss); second read after cold-fill returns data
+    mock_manager.get_stock_boards.return_value = (
+        [
+            {"code": "885642", "name": "跨境电商",
+             "type": "concept", "subtype": "同花顺概念"},
+        ],
+        "ths",  # fetcher name
+    )
+    with (
+        TestClient(_app_for_test) as client,
+        patch("stock_data.api.routes.boards.get_manager", return_value=mock_manager),
+    ):
+        r = client.get("/api/v1/stocks/600519/boards?source=ths&cold_fill=true")
+    assert r.status_code == 200
+    # fetcher was called with source='ths'
+    mock_manager.get_stock_boards.assert_called_once()
+    call_kwargs = mock_manager.get_stock_boards.call_args.kwargs
+    assert call_kwargs["source"] == "ths"
+
+
 def test_invalid_source_in_csv_returns_400(fresh_db):
     """Unknown source in CSV → 400 with error detail."""
     with TestClient(_app_for_test) as client:
