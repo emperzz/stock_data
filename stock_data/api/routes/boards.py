@@ -525,14 +525,15 @@ def get_stock_boards(
     subtype: str | None = Query(None, description="Filter by source-specific subtype"),
     cold_fill: bool = Query(
         False,
-        description="Opt-in zhitu lazy-fill on cold data. "
+        description="Opt-in lazy-fill on cold data for ths / zhitu / eastmoney. "
         "Default false (cold data surfaces in cold_sources instead).",
     ),
 ) -> StockBoardsResponse:
     """Get boards a stock belongs to.
 
     Unified endpoint: single source or multi-source aggregation in one call.
-    Reads from stock_board_membership; opt-in zhitu cold-fill via cold_fill=true.
+    Reads from stock_board_membership; opt-in cold-fill via cold_fill=true
+    triggers upstream fetcher calls for ths / zhitu / eastmoney on cache miss.
     """
     normalized_sources = _parse_stock_boards_source_csv(source)
 

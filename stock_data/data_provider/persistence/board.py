@@ -640,7 +640,7 @@ def upsert_membership_for_stock_boards(
 ) -> int:
     """Batch upsert all boards a stock belongs to (single transaction).
 
-    Used by the zhitu/eastmoney cold paths in `/stocks/{code}/boards` to
+    Used by the ths / zhitu / eastmoney cold paths in `/stocks/{code}/boards` to
     write the reverse-index rows for every board returned by the fetcher
     in one executemany call. Each input board dict must have keys:
     code, name, type, subtype.
@@ -738,18 +738,19 @@ def get_stock_memberships(
     """Single source of truth for stock→boards reverse lookup.
 
     Reads stock_board_membership for each requested source, applies
-    type/subtype filters, and (optionally) triggers zhitu / eastmoney
+    type/subtype filters, and (optionally) triggers ths / zhitu / eastmoney
     cold-fill for sources with no data when cold_fill=True.
 
     Args:
         stock_code: 6-digit stock code (e.g. '600519').
-        sources: list of normalized source names (no 'ths' alias; caller
-                 must remap 'ths' → 'zzshare' before calling). May be empty.
+        sources: list of canonical source names (route layer normalizes
+                 'zzshare' → 'ths' before calling, so 'ths' appears here
+                 when the caller used either label). May be empty.
         type: optional board type filter (concept/industry/index/special).
         subtype: optional source-specific subtype filter.
-        cold_fill: if True and source='zhitu' / 'eastmoney' has no data, call
-                   the corresponding fetcher to populate membership (write-through
-                   upsert). Other sources never trigger cold-fill (no upstream API).
+        cold_fill: if True and source='ths' / 'zhitu' / 'eastmoney' has no data,
+                   call the corresponding fetcher to populate membership
+                   (write-through upsert). Other sources never trigger cold-fill.
         manager: DataFetcherManager instance. Required when cold_fill=True.
 
     Returns:
@@ -759,10 +760,11 @@ def get_stock_memberships(
         - origin_summary:
             - "persistence" — entries from SQLite cache (no fetcher calls); also used
                               when entries is empty (cache miss, no cold-fill)
-            - "zhitu" / "eastmoney" — cold-fill triggered and that source is now in the
-                              result (network was hit, fresh data was written). When
-                              both cold-fill sources wrote, the single-source summary
-                              reflects whichever source was actually queried.
+            - "ths" / "zhitu" / "eastmoney" — cold-fill triggered and that source is
+                              now in the result (network was hit, fresh data was
+                              written). When multiple cold-fill sources wrote, the
+                              single-source summary reflects whichever source was
+                              actually queried; multi-source collapses to "mixed".
             - "mixed"       — multi-source query with entries (no cold-fill happened)
             - ""            — sources was empty (early return)
 
@@ -779,7 +781,7 @@ def get_stock_memberships(
 
     entries, present_sources = _read_membership_entries(stock_code, sources, cursor)
 
-    # Cold-fill: zhitu and eastmoney have upstream reverse APIs; only when cold_fill=True.
+    # Cold-fill: ths / zhitu / eastmoney have upstream reverse APIs; only when cold_fill=True.
     if cold_fill and manager is not None:
         from .stock_list import get_stock_name as _get_stock_name
 
