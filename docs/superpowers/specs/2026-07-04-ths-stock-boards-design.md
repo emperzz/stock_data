@@ -68,6 +68,8 @@ GET basic.10jqka.com.cn/fuyao/.../stock_concept_list?code=...&market_id=...
 
 ### §1 — ThsFetcher.get_stock_boards
 
+在 `ths_fetcher.py` 顶部 imports 加 `from ..utils.normalize import normalize_stock_code`，然后新增：
+
 ```python
 # ths_fetcher.py 新增
 
@@ -95,8 +97,6 @@ def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict]:
     - type = 'concept' (硬编码 — 端点本身是 stock_concept_list)
     - subtype = '同花顺概念' (与现有 VALID_SUBTYPES_BY_SOURCE 一致)
     """
-    from ..utils.normalize import normalize_stock_code
-
     code = normalize_stock_code(stock_code)
     market_id = _THS_MARKET_ID_MAP.get(code[:1])
     if not market_id:
