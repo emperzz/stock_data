@@ -141,6 +141,37 @@ def test_ths_alias_single_source(fresh_db):
         assert called == ["zzshare"]
 
 
+# --- normalize_stock_board_source -----------------------------------
+
+def test_normalize_stock_board_source_canonical():
+    """ths / eastmoney / zhitu pass through unchanged."""
+    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+    assert normalize_stock_board_source("ths") == "ths"
+    assert normalize_stock_board_source("eastmoney") == "eastmoney"
+    assert normalize_stock_board_source("zhitu") == "zhitu"
+
+
+def test_normalize_stock_board_source_zzshare_alias():
+    """zzshare aliases to ths (data is THS upstream)."""
+    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+    assert normalize_stock_board_source("zzshare") == "ths"
+
+
+def test_normalize_stock_board_source_invalid_raises():
+    """Unknown source raises ValueError."""
+    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+    with pytest.raises(ValueError, match="Unknown stock-boards source"):
+        normalize_stock_board_source("bogus")
+    with pytest.raises(ValueError, match="Unknown stock-boards source"):
+        normalize_stock_board_source("")
+
+
+def test_normalize_stock_board_source_does_not_alias_other_directions():
+    """ths is canonical (does NOT alias to zzshare)."""
+    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+    assert normalize_stock_board_source("ths") != "zzshare"
+
+
 # Lazy import — keeps this module cheap to collect when only the persistence
 # tests above are being run via -k "not stock_boards_reverse_route".
 from stock_data.server import app as _app_for_test  # noqa: E402

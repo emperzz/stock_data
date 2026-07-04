@@ -52,6 +52,40 @@ VALID_BOARD_TYPES: tuple[str, ...] = ("concept", "industry", "index", "special")
 VALID_SOURCES: tuple[str, ...] = tuple(sorted(VALID_SUBTYPES_BY_SOURCE.keys()))
 
 
+# Stock-boards 专用 source 集合 + alias (仿照 _BOARD_HISTORY_VALID_SOURCES 模式).
+# board-list 端点继续用 ths→zzshare alias (zzshare 的 plates_list 上游 = THS);
+# stock-boards 端点反转为 zzshare→ths alias (THS basic API 是真正的 stock→boards 上游).
+_STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
+_STOCK_BOARDS_SOURCE_ALIAS: dict[str, str] = {"zzshare": "ths"}
+
+
+def normalize_stock_board_source(source: str) -> str:
+    """Alias + validate a source name for the stock-boards endpoint.
+
+    Applies the stock-boards alias map (zzshare → ths) and validates
+    against _STOCK_BOARDS_VALID_SOURCES. The board-list endpoint uses
+    the opposite alias direction (ths → zzshare); see boards.py:_resolve_source.
+
+    Args:
+        source: User-supplied source name (e.g. ``"ths"``, ``"zzshare"``).
+
+    Returns:
+        Canonical source name accepted by the persistence layer.
+
+    Raises:
+        ValueError: ``source`` is not in the valid set after aliasing.
+            Caller (route layer) maps this to ``HTTPException(400)``.
+    """
+    s = _STOCK_BOARDS_SOURCE_ALIAS.get(source, source)
+    if s not in _STOCK_BOARDS_VALID_SOURCES:
+        raise ValueError(
+            f"Unknown stock-boards source {source!r}. "
+            f"Valid sources: {list(_STOCK_BOARDS_VALID_SOURCES)} "
+            f"(alias 'zzshare' accepted)"
+        )
+    return s
+
+
 def _validate_subtype(source: str, board_type: str, subtype: str | None) -> None:
     """Validate subtype against the source's declared subtype set.
 
