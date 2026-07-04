@@ -78,22 +78,32 @@ def test_csv_source_aggregates_multiple_sources(fresh_db):
     assert by_src == {"zhitu", "eastmoney"}
 
 
-def test_ths_alias_accepted_in_csv(fresh_db):
-    """?source=ths,zhitu → ths remaps to zzshare internally."""
+def test_ths_canonical_in_csv(fresh_db):
+    """?source=ths,zhitu → ths stays as ths (no longer aliases to zzshare)."""
     with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
-        mock.return_value = ([], ["zzshare", "zhitu"], "")
+        mock.return_value = ([], ["ths", "zhitu"], "")
         with TestClient(_app_for_test) as client:
             r = client.get("/api/v1/stocks/600519/boards?source=ths,zhitu")
         assert r.status_code == 200
-        # Helper must be called with normalized sources (no 'ths')
         called = mock.call_args.kwargs["sources"]
-        assert "ths" not in called
-        assert "zzshare" in called
+        assert "ths" in called
+        assert "zzshare" not in called
         assert "zhitu" in called
 
 
+def test_zzshare_aliases_to_ths(fresh_db):
+    """?source=zzshare now aliases to ths (data is THS upstream)."""
+    with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
+        mock.return_value = ([], ["ths"], "")
+        with TestClient(_app_for_test) as client:
+            r = client.get("/api/v1/stocks/600519/boards?source=zzshare")
+        assert r.status_code == 200
+        called = mock.call_args.kwargs["sources"]
+        assert called == ["ths"]
+
+
 def test_no_source_aggregates_all(fresh_db):
-    """Omitting ?source= aggregates all 3 sources."""
+    """Omitting ?source= aggregates (ths, eastmoney, zhitu) — no zzshare."""
     with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
         mock.return_value = (
             [{"code": "x", "name": "x", "type": "concept", "subtype": "", "source": "zhitu"}],
@@ -104,7 +114,15 @@ def test_no_source_aggregates_all(fresh_db):
             r = client.get("/api/v1/stocks/600519/boards")
         assert r.status_code == 200
         called = mock.call_args.kwargs["sources"]
-        assert set(called) == {"eastmoney", "zhitu", "zzshare"}
+        assert set(called) == {"ths", "eastmoney", "zhitu"}
+
+
+def test_ths_industry_filter_returns_400(fresh_db):
+    """ths only supports concept; ?source=ths&type=industry → 400."""
+    with TestClient(_app_for_test) as client:
+        r = client.get("/api/v1/stocks/600519/boards?source=ths&type=industry&subtype=申万行业")
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "invalid_subtype"
 
 
 def test_cold_fill_false_does_not_trigger_lazy_fill(fresh_db):
@@ -151,17 +169,6 @@ def test_invalid_source_in_csv_returns_400(fresh_db):
         r = client.get("/api/v1/stocks/600519/boards?source=zhitu,bogus")
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "invalid_source"
-
-
-def test_ths_alias_single_source(fresh_db):
-    """Existing test pattern (kept for backwards compat): single ths source → alias works."""
-    with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
-        mock.return_value = ([], ["zzshare"], "")
-        with TestClient(_app_for_test) as client:
-            r = client.get("/api/v1/stocks/600519/boards?source=ths")
-        assert r.status_code == 200
-        called = mock.call_args.kwargs["sources"]
-        assert called == ["zzshare"]
 
 
 # --- normalize_stock_board_source -----------------------------------
