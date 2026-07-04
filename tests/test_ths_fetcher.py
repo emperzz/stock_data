@@ -840,3 +840,238 @@ class TestGetStockBoards:
             pytest.raises(DataFetchError, match="status_code=-1"),
         ):
             self.fetcher.get_stock_boards("300740")
+
+
+# --- get_board_stocks ---------------------------------------------------
+
+
+class TestGetBoardStocks:
+    """Tests for ThsFetcher.get_board_stocks (q.10jqka.com.cn board stocks).
+
+    All tests mock at the boundary (ThsFetcher._http_get) so py_mini_racer /
+    ths.js are not exercised — the v-token is patched to a literal "x"
+    per the precedent in tests/test_ths_board_kline.py:137.
+    """
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+        # Bypass v-token mint (avoids py_mini_racer import during tests).
+        self._v_token_patcher = patch.object(
+            ThsFetcher, "_v_token", return_value="x"
+        )
+        self._v_token_patcher.start()
+
+    def teardown_method(self):
+        self._v_token_patcher.stop()
+
+    @staticmethod
+    def _make_response(html: str):
+        """Build a fake requests.Response with .text/.encoding/.status_code."""
+
+        class _Resp:
+            status_code = 200
+            encoding = "gbk"
+            content = b""
+
+            def __init__(self, body):
+                self.text = body
+                self.content = body.encode("gbk")
+
+        return _Resp(html)
+
+    @staticmethod
+    def _build_html(rows: list) -> str:
+        """Build a minimal q.10jqka.com.cn board-stocks HTML fragment.
+
+        14 columns: 序号/代码/名称/现价/涨跌幅/涨跌/涨速/换手/量比/振幅/
+                     成交额/流通股/流通市值/市盈率
+        """
+        body_rows = ""
+        for row in rows:
+            tds = "".join(f"<td>{c}</td>" for c in row)
+            body_rows += f"<tr>{tds}</tr>\n"
+        return (
+            "<html><body><table><tbody>\n"
+            f"{body_rows}"
+            "</tbody></table></body></html>"
+        )
+
+    def test_single_page_returns_normalized_dicts(self):
+        """One page, two rows → two normalized dicts in canonical shape."""
+        html = self._build_html(
+            [
+                ["1", "300740", "皇台酒业", "10.50", "5.20", "0.52", "0.10",
+                 "3.50", "1.20", "2.10", "100000000", "500000000",
+                 "5250000000", "30.5"],
+                ["2", "000001", "平安银行", "12.30", "1.50", "0.18", "0.05",
+                 "0.80", "0.90", "1.50", "200000000", "19000000000",
+                 "234000000000", "5.2"],
+            ]
+        )
+        # side_effect list: page 1 returns data; pages 2+ return empty
+        # (loop terminates after first empty page). We provide enough
+        # empties so the test doesn't depend on the hard cap value.
+        side_effects = [self._make_response(html)] + [
+            self._make_response(self._build_html([])) for _ in range(49)
+        ]
+        with patch.object(
+            ThsFetcher, "_http_get", side_effect=side_effects
+        ) as mock_get:
+            result = self.fetcher.get_board_stocks("308709")
+
+        # URL shape — first call is page 1, field/199112, ajax/1
+        first_call = mock_get.call_args_list[0]
+        url = first_call.args[0]
+        assert "q.10jqka.com.cn" in url
+        assert "/gn/detail/code/308709/" in url
+        assert "/field/199112/" in url
+        assert "/page/1/" in url
+        assert "/ajax/1/" in url
+        # Cookie + UA + Referer + XHR header (THS AJAX requires XHR)
+        headers = first_call.kwargs["headers"]
+        assert headers["Cookie"] == "v=x"
+        assert "Referer" in headers
+        assert "User-Agent" in headers
+        assert headers["X-Requested-With"] == "XMLHttpRequest"
+
+        # Output schema — baseline fields populated
+        assert len(result) == 2
+        assert result[0]["stock_code"] == "300740"
+        assert result[0]["stock_name"] == "皇台酒业"
+        assert result[0]["exchange"] == "sz"  # 300xxx → 深市
+        # Quote fields
+        assert result[0]["price"] == 10.50
+        assert result[0]["change_pct"] == 5.20
+        assert result[0]["volume"] == 100000000
+
+        assert result[1]["stock_code"] == "000001"
+        assert result[1]["stock_name"] == "平安银行"
+        assert result[1]["exchange"] == "sz"
+
+    def test_exchange_mapping(self):
+        """沪市 codes → 'sh'; 深市 codes → 'sz'."""
+        html = self._build_html(
+            [
+                ["1", "600519", "贵州茅台", "1800.00", "0.50", "9.00", "0",
+                 "0.30", "1.00", "1.00", "50000000", "1200000000",
+                 "2160000000000", "30.0"],
+                ["2", "000001", "平安银行", "12.00", "1.00", "0.12", "0",
+                 "0.50", "0.80", "1.00", "100000000", "19000000000",
+                 "228000000000", "5.0"],
+                ["3", "300750", "宁德时代", "200.00", "2.00", "4.00", "0",
+                 "0.80", "1.00", "2.00", "80000000", "4300000000",
+                 "860000000000", "20.0"],
+            ]
+        )
+        side_effects = [self._make_response(html)] + [
+            self._make_response(self._build_html([])) for _ in range(49)
+        ]
+        with patch.object(
+            ThsFetcher, "_http_get", side_effect=side_effects
+        ):
+            result = self.fetcher.get_board_stocks("301558")
+        assert result[0]["exchange"] == "sh"
+        assert result[1]["exchange"] == "sz"
+        assert result[2]["exchange"] == "sz"
+
+    def test_em_dash_fields_become_none(self):
+        """'--' (em-dash) for missing numeric → None (not 0.0)."""
+        html = self._build_html(
+            [
+                ["1", "300740", "皇台酒业", "--", "--", "--", "--",
+                 "--", "--", "--", "--", "--", "--", "--"],
+            ]
+        )
+        side_effects = [self._make_response(html)] + [
+            self._make_response(self._build_html([])) for _ in range(49)
+        ]
+        with patch.object(
+            ThsFetcher, "_http_get", side_effect=side_effects
+        ):
+            result = self.fetcher.get_board_stocks("308709")
+        assert len(result) == 1
+        # All numeric fields should be None
+        for k in ("price", "change_pct", "volume", "turnover", "amount"):
+            assert result[0][k] is None, f"{k}={result[0][k]} (expected None)"
+
+    def test_pagination_fans_out_until_empty_page(self):
+        """3 pages, page 3 returns 0 rows → loop terminates after page 3."""
+        page1_html = self._build_html(
+            [[str(i + 1), f"3007{40 + i:02d}", f"股票{i}", "10.00", "1.00",
+              "0.10", "0.05", "0.80", "1.00", "1.50", "100000000",
+              "500000000", "5250000000", "30.0"]
+             for i in range(10)]
+        )
+        page2_html = self._build_html(
+            [[str(i + 11), f"3008{40 + i:02d}", f"股票{i + 10}", "10.00",
+              "1.00", "0.10", "0.05", "0.80", "1.00", "1.50", "100000000",
+              "500000000", "5250000000", "30.0"]
+             for i in range(10)]
+        )
+        page3_html = self._build_html([])  # empty page → terminate
+
+        responses = [
+            self._make_response(page1_html),
+            self._make_response(page2_html),
+            self._make_response(page3_html),
+        ]
+
+        with patch.object(
+            ThsFetcher, "_http_get", side_effect=responses
+        ) as mock_get:
+            result = self.fetcher.get_board_stocks("308709")
+
+        # 3 HTTP calls (page 1, 2, 3 — page 3 is empty so loop terminates)
+        assert mock_get.call_count == 3
+        # Page numbers in URLs
+        urls = [c.args[0] for c in mock_get.call_args_list]
+        assert "/page/1/" in urls[0]
+        assert "/page/2/" in urls[1]
+        assert "/page/3/" in urls[2]
+        # Result union: 10 + 10 = 20 rows
+        assert len(result) == 20
+        assert result[0]["stock_code"] == "300740"
+        assert result[9]["stock_code"] == "300749"
+        assert result[10]["stock_code"] == "300840"
+        assert result[19]["stock_code"] == "300849"
+
+    def test_raises_data_fetch_error_on_http_failure(self):
+        """HTTP non-2xx → DataFetchError."""
+        class _Bad:
+            status_code = 401
+            encoding = "utf-8"
+            text = "<html>Unauthorized</html>"
+            content = b"<html>Unauthorized</html>"
+
+        with (
+            patch.object(ThsFetcher, "_http_get", return_value=_Bad()),
+            pytest.raises(DataFetchError, match="board_stocks"),
+        ):
+            self.fetcher.get_board_stocks("308709")
+
+    def test_raises_data_fetch_error_on_network_failure(self):
+        """requests.ConnectionError → DataFetchError."""
+        import requests as _requests
+        with (
+            patch.object(
+                ThsFetcher,
+                "_http_get",
+                side_effect=_requests.ConnectionError("refused"),
+            ),
+            pytest.raises(DataFetchError, match="board_stocks"),
+        ):
+            self.fetcher.get_board_stocks("308709")
+
+    def test_accepts_kwargs_for_interface_parity(self):
+        """Accepts source/include_quote/board_type kwargs without error."""
+        html = self._build_html([])
+        with patch.object(
+            ThsFetcher, "_http_get", return_value=self._make_response(html)
+        ):
+            result = self.fetcher.get_board_stocks(
+                "308709",
+                source="ths",
+                include_quote=True,
+                board_type="concept",
+            )
+        assert result == []

@@ -170,6 +170,19 @@ HSGT_HEADERS = {
 
 _CONCEPT_DETAIL_URL = "https://q.10jqka.com.cn/gn/detail/code/{slug}/"
 
+# q.10jqka.com.cn AJAX board-stocks endpoint (同花顺概念/行业成分股).
+# field/199112 → 14 列固定字段集 (序号/代码/名称/现价/涨跌幅/涨跌/涨速/换手/
+#                 量比/振幅/成交额/流通股/流通市值/市盈率). 不可改.
+# order/desc   → 涨跌降序 (默认排序).
+# ajax/1/      → 强制走 AJAX HTML 片段 (而非完整页面), 省去无关内容.
+# 翻页由 page/N 段控制, 每页 10 条.
+_BOARD_STOCKS_URL = (
+    "https://q.10jqka.com.cn/gn/detail/code/{concept_id}"
+    "/field/199112/order/desc/page/{page}/ajax/1/"
+)
+# 安全上限: 防止上游翻页返回异常 (e.g. 全是非空表), 强制终止.
+_MAX_BOARD_STOCKS_PAGES = 50
+
 _STOCK_CONCEPT_LIST_URL = (
     "https://basic.10jqka.com.cn/fuyao/f10_stock_index/concept/v1/stock_concept_list"
 )
@@ -637,6 +650,171 @@ class ThsFetcher(BaseFetcher):
         # Sort ascending
         rows.sort(key=lambda r: r["date"])
         return rows
+
+    # ------------------------------------------------------------------
+    # 板块成分股 (Board Stocks) — q.10jqka.com.cn AJAX endpoint
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_ths_board_stocks_row(tds: list) -> dict | None:
+        """Parse one <tr> from q.10jqka.com.cn board-stocks HTML into a dict.
+
+        14 columns (固定):
+        idx 0:  序号 (string, ignored)
+        idx 1:  代码 (string)
+        idx 2:  名称 (string)
+        idx 3:  现价 (float | None)
+        idx 4:  涨跌幅 (float | None, %)
+        idx 5:  涨跌 (float | None, 元)
+        idx 6:  涨速 (float | None, %)
+        idx 7:  换手 (float | None, %)
+        idx 8:  量比 (float | None)
+        idx 9:  振幅 (float | None, %)
+        idx 10: 成交额 (int | None, 元)
+        idx 11: 流通股 (int | None, 股)
+        idx 12: 流通市值 (float | None, 元)
+        idx 13: 市盈率 (float | None)
+
+        Returns None when ``td[1]`` (code) is missing — that row is
+        malformed and gets skipped silently.
+
+        ``--`` (em-dash) maps to None via ``safe_float`` / ``safe_int``
+        in core.types.
+        """
+        from ..core.types import safe_float, safe_int
+
+        if len(tds) < 3:
+            return None
+        stock_code = tds[1].get_text(strip=True)
+        if not stock_code:
+            return None
+        stock_name = tds[2].get_text(strip=True)
+        # Exchange inferred from the code prefix (matches zzshare/eastmoney
+        # convention: 'sh' for 沪, 'sz' for 深, '' for 北交所/未知).
+        code_prefix = stock_code[:1]
+        exchange = "sh" if code_prefix in ("6", "9") else (
+            "sz" if code_prefix in ("0", "3") else ""
+        )
+        return {
+            "stock_code": stock_code,
+            "stock_name": stock_name,
+            "exchange": exchange,
+            "price": safe_float(tds[3].get_text(strip=True)) if len(tds) > 3 else None,
+            "change_pct": safe_float(tds[4].get_text(strip=True)) if len(tds) > 4 else None,
+            "change_amount": safe_float(tds[5].get_text(strip=True)) if len(tds) > 5 else None,
+            "turnover": safe_float(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
+            "volume": safe_int(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
+            "amount": safe_float(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
+        }
+
+    def _fetch_ths_board_stocks_page(self, concept_id: str, page: int) -> list[dict]:
+        """Fetch one page of THS board stocks (10 rows per page).
+
+        Returns ``[]`` when the page is empty (caller treats as the
+        end-of-pagination signal). HTTP non-2xx raises ``DataFetchError``
+        so the upstream failure surfaces as 503 at the route layer
+        rather than silently returning zero rows.
+
+        GBK decoding: the upstream serves ``text/html; charset=gbk``,
+        so we must set ``r.encoding = "gbk"`` BEFORE reading ``r.text``.
+        Without this, requests defaults to ISO-8859-1 and the Chinese
+        stock names decode to garbage.
+        """
+        url = _BOARD_STOCKS_URL.format(concept_id=concept_id, page=page)
+        headers = {
+            "User-Agent": THS_UA,
+            "Referer": _CONCEPT_DETAIL_URL.format(slug=concept_id),
+            "X-Requested-With": "XMLHttpRequest",
+            "Cookie": f"v={self._v_token()}",
+        }
+        try:
+            r = self._http_get(url, headers=headers, timeout=15)
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] board_stocks({concept_id}, page={page}) "
+                f"network failed: {e}"
+            ) from e
+        if not (200 <= r.status_code < 300):
+            raise DataFetchError(
+                f"[ThsFetcher] board_stocks({concept_id}, page={page}) "
+                f"HTTP {r.status_code} ({len(r.content)}B body)"
+            )
+        # Force GBK decoding BEFORE reading .text. requests defaults to
+        # ISO-8859-1 when Content-Type has charset (gbk) but the body is
+        # actually gbk-encoded — a documented requests behavior.
+        r.encoding = "gbk"
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(r.text or "", features="lxml")
+        rows_out: list[dict] = []
+        for tr in soup.select("tbody tr"):
+            tds = tr.find_all("td")
+            if not tds:
+                continue
+            try:
+                parsed = self._parse_ths_board_stocks_row(tds)
+            except Exception as e:
+                logger.warning(
+                    f"[ThsFetcher] board_stocks({concept_id}, page={page}) "
+                    f"skipping malformed row: {e}"
+                )
+                continue
+            if parsed is not None:
+                rows_out.append(parsed)
+        return rows_out
+
+    def get_board_stocks(
+        self,
+        board_code: str,
+        *,
+        source: str | None = None,
+        include_quote: bool = False,  # accepted for interface parity; ignored
+        board_type: str | None = None,  # accepted for interface parity; ignored
+        **kwargs,
+    ) -> list[dict]:
+        """THS board constituent stocks via q.10jqka.com.cn AJAX endpoint.
+
+        Args:
+            board_code: THS concept slug (e.g. ``"308709"``) — the path
+                segment used by ``q.10jqka.com.cn/gn/detail/code/{slug}/``.
+                THS concept/industry boards use 6-digit decimal slugs.
+                This fetcher always treats the code as a ``concept_id``
+                (THS does not expose a parallel industry endpoint that
+                we have observed). If industry support is added later,
+                branch on ``board_type``.
+            source: Accepted for interface parity (manager passes it).
+                Always effectively ``"ths"`` for this fetcher.
+            include_quote: Accepted for interface parity. THS upstream
+                already returns quote fields, so this flag is ignored.
+            board_type: Accepted for interface parity. Currently unused.
+
+        Returns:
+            ``list[dict]`` — one row per constituent stock. Each row has:
+            - ``stock_code`` (e.g. ``"300740"``)
+            - ``stock_name`` (Chinese name)
+            - ``exchange`` (``"sh"`` / ``"sz"`` / ``""`` for unknown prefix)
+            - ``price``, ``change_pct``, ``change_amount``, ``turnover``,
+              ``volume``, ``amount`` — None when upstream emits ``--``
+
+            Empty list on no-data or upstream empty. Multiple pages are
+            fanned out internally (10 rows per page, terminated by empty
+            page or ``_MAX_BOARD_STOCKS_PAGES`` cap).
+
+        Raises:
+            DataFetchError: v-token mint failed, HTTP non-2xx on any page,
+                or network failure on any page.
+        """
+        # Page fan-out. Empty page or hard cap terminates the loop.
+        # Hard cap exists because a buggy upstream that returns 10 rows
+        # forever (instead of empty past page N) would otherwise loop
+        # indefinitely.
+        all_rows: list[dict] = []
+        for page in range(1, _MAX_BOARD_STOCKS_PAGES + 1):
+            rows = self._fetch_ths_board_stocks_page(board_code, page)
+            if not rows:
+                break
+            all_rows.extend(rows)
+        return all_rows
 
     # ------------------------------------------------------------------
     # 股票所属概念 (stock_concept_list — basic.10jqka.com.cn)
