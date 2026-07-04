@@ -39,6 +39,10 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
         "special": {"同花顺题材"},
         # "index" — zzshare 不暴露大盘指数板块
     },
+    "ths": {  # NEW — stock-boards 专用 (THS basic API 仅返回 concept)
+        "concept": {"同花顺概念"},
+        # industry / special / index 暂不支持 (THS stock_concept_list 端点特性)
+    },
 }
 
 # Valid board types and sources — derived from VALID_SUBTYPES_BY_SOURCE so
