@@ -61,7 +61,12 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
 # forward board listing (no get_all_boards method). Forward-board sources
 # are exactly the set with a get_all_boards implementation.
 VALID_BOARD_TYPES: tuple[str, ...] = ("concept", "industry", "index", "special")
-VALID_SOURCES: tuple[str, ...] = ("eastmoney", "zhitu", "zzshare")
+# Forward-board sources: each must have BOTH get_all_boards AND
+# get_board_stocks implementations. 'ths' has only get_board_stocks
+# (no board-list endpoint), so a /boards?source=ths call will 503 at
+# the manager layer via _with_source — which is the correct semantic
+# (the source is registered but lacks the requested capability).
+VALID_SOURCES: tuple[str, ...] = ("eastmoney", "zhitu", "zzshare", "ths")
 
 
 # Stock-boards 专用 source 集合 + alias (仿照 _BOARD_HISTORY_VALID_SOURCES 模式).
@@ -71,6 +76,47 @@ VALID_SOURCES: tuple[str, ...] = ("eastmoney", "zhitu", "zzshare")
 # 端点的 subtype 验证), 但不在 VALID_SOURCES 里 (因为它没有 get_all_boards).
 _STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
 _STOCK_BOARDS_SOURCE_ALIAS: dict[str, str] = {"zzshare": "ths"}
+
+
+# Board-stocks 专用 source 集合 (no alias map — all 4 sources are
+# independently valid). Mirrors the existing _STOCK_BOARDS_VALID_SOURCES
+# pattern from the stock-boards endpoint. The route layer's
+# _resolve_board_stocks_source uses this to decide whether to accept
+# ?source=ths as canonical (was previously aliased to zzshare).
+_BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = (
+    "eastmoney", "zhitu", "zzshare", "ths"
+)
+
+
+def normalize_board_stocks_source(source: str) -> str:
+    """Validate a source name for the board-stocks endpoint.
+
+    Unlike ``normalize_stock_board_source`` (which aliases
+    ``zzshare → ths``), this helper does NOT alias. All four sources
+    have independent ``get_board_stocks`` implementations:
+
+    - ``ths``: ThsFetcher (q.10jqka.com.cn AJAX — concept boards)
+    - ``eastmoney``: EastMoneyFetcher (push2his)
+    - ``zhitu``: ZhituFetcher
+    - ``zzshare``: ZzshareFetcher (``plates_stocks``) — preserved for
+      back-compat; upstream IS 同花顺 but routed through the zzshare SDK
+
+    Args:
+        source: User-supplied source name (e.g. ``"ths"``).
+
+    Returns:
+        The same string (no transformation).
+
+    Raises:
+        ValueError: ``source`` is not in the valid set. Caller (route
+            layer) maps this to ``HTTPException(400)``.
+    """
+    if source not in _BOARD_STOCKS_VALID_SOURCES:
+        raise ValueError(
+            f"Unknown board-stocks source {source!r}. "
+            f"Valid sources: {list(_BOARD_STOCKS_VALID_SOURCES)}"
+        )
+    return source
 
 
 def normalize_stock_board_source(source: str) -> str:
