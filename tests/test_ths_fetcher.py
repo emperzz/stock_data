@@ -734,3 +734,93 @@ class TestSearchNewsErrors:
         monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(bad))
         with pytest.raises(DataFetchError, match="status_code=-1"):
             self.fetcher.search_news("茅台", limit=10)
+
+
+# --- get_stock_boards ---------------------------------------------------
+
+
+class TestGetStockBoards:
+    """Tests for ThsFetcher.get_stock_boards (basic.10jqka.com.cn concept list)."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_returns_normalized_dicts(self):
+        """Verify HTTP call shape + response normalization for known market."""
+        fake_payload = {
+            "status_code": 0,
+            "data": [
+                {"quote_code": "885642", "name": "跨境电商"},
+                {"quote_code": "885910", "name": "拼多多概念"},
+            ],
+        }
+
+        with patch(
+            "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+            return_value=fake_payload,
+        ) as mock_get:
+            result = self.fetcher.get_stock_boards("300740")
+
+        # HTTP called with right URL + params + headers
+        args, kwargs = mock_get.call_args
+        assert "basic.10jqka.com.cn" in args[0]
+        assert args[0].endswith("/stock_concept_list")
+        assert kwargs["params"]["code"] == "300740"
+        assert kwargs["params"]["market_id"] == "33"  # 深市 (3xx prefix)
+        assert kwargs["params"]["simple"] == 1
+        assert "Referer" in kwargs["headers"]
+
+        # Response normalized
+        assert len(result) == 2
+        assert result[0] == {
+            "code": "885642",
+            "name": "跨境电商",
+            "type": "concept",
+            "subtype": "同花顺概念",
+        }
+        assert result[1]["code"] == "885910"
+
+    def test_market_id_mapping(self):
+        """沪市代码 → market_id=17; 深市 → 33."""
+        fake_payload = {"status_code": 0, "data": []}
+
+        with patch(
+            "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+            return_value=fake_payload,
+        ) as mock_get:
+            # 沪市主板 (600xxx)
+            self.fetcher.get_stock_boards("600519")
+            assert mock_get.call_args.kwargs["params"]["market_id"] == "17"
+
+            # 沪市 B 股 (900xxx)
+            self.fetcher.get_stock_boards("900901")
+            assert mock_get.call_args.kwargs["params"]["market_id"] == "17"
+
+            # 深市主板 (000xxx)
+            self.fetcher.get_stock_boards("000001")
+            assert mock_get.call_args.kwargs["params"]["market_id"] == "33"
+
+            # 深市创业板 (300xxx)
+            self.fetcher.get_stock_boards("300750")
+            assert mock_get.call_args.kwargs["params"]["market_id"] == "33"
+
+    def test_empty_on_unknown_prefix(self):
+        """北交所代码 (4/8 prefix) 无 mapping → 空列表 + 不调上游."""
+        with patch(
+            "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+        ) as mock_get:
+            result = self.fetcher.get_stock_boards("830799")  # 北交所
+
+        assert result == []
+        mock_get.assert_not_called()
+
+    def test_raises_data_fetch_error_on_http_failure(self):
+        """json_get 抛异常 → 包装为 DataFetchError."""
+        with (
+            patch(
+                "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+                side_effect=RuntimeError("network unreachable"),
+            ),
+            pytest.raises(DataFetchError, match="stock_concept_list"),
+        ):
+            self.fetcher.get_stock_boards("300740")

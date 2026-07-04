@@ -37,6 +37,7 @@ from tenacity import (
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..utils.http import json_get, json_post
+from ..utils.normalize import normalize_stock_code
 from ..utils.text import strip_em_tags
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,19 @@ HSGT_HEADERS = {
 
 
 _CONCEPT_DETAIL_URL = "https://q.10jqka.com.cn/gn/detail/code/{slug}/"
+
+_STOCK_CONCEPT_LIST_URL = (
+    "https://basic.10jqka.com.cn/fuyao/f10_stock_index/concept/v1/stock_concept_list"
+)
+# THS market_id: 17=沪市, 33=深市. BJ (4/8 prefix) 暂不映射 (上游 stock_concept_list
+# 端点可能不支持北交所; 留待后续任务). 注意代码首位即可区分:
+#   6/9 → 沪市;  0/3 → 深市;  4/8 → 北交所 (未映射)
+_THS_MARKET_ID_MAP: dict[str, str] = {
+    "6": "17",  # 沪市主板 + 科创板
+    "9": "17",  # 沪市 B 股
+    "0": "33",  # 深市主板 + 中小板
+    "3": "33",  # 深市创业板
+}
 
 _THS_BOARD_KLINE_URL = "https://d.10jqka.com.cn/v4/line/bk_{inner}/01/{year}.js"
 _THS_BOARD_FREQ_MAP: dict[str, int] = {"d": 1}  # THS upstream only ships daily
@@ -622,6 +636,60 @@ class ThsFetcher(BaseFetcher):
         # Sort ascending
         rows.sort(key=lambda r: r["date"])
         return rows
+
+    # ------------------------------------------------------------------
+    # 股票所属概念 (stock_concept_list — basic.10jqka.com.cn)
+    # ------------------------------------------------------------------
+
+    def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict]:
+        """THS concept membership via basic.10jqka.com.cn stock_concept_list.
+
+        Returns list[{code, name, type, subtype}] or [] on upstream empty /
+        no market_id mapping (北交所暂不支持).
+
+        - code = quote_code (885xxx) — matches zzshare board-list code
+          system, so forward board-list cache and reverse cold-fill rows
+          join cleanly via (board_code, source).
+        - type = 'concept' (硬编码 — endpoint is stock_concept_list).
+        - subtype = '同花顺概念' — matches
+          VALID_SUBTYPES_BY_SOURCE["zzshare"]["concept"] convention.
+
+        Raises:
+            DataFetchError: HTTP fetch failed.
+        """
+        code = normalize_stock_code(stock_code)
+        market_id = _THS_MARKET_ID_MAP.get(code[:1])
+        if not market_id:
+            logger.warning(
+                f"[ThsFetcher] get_stock_boards: no market_id mapping "
+                f"for code={code!r} (北交所暂不支持)"
+            )
+            return []
+        try:
+            payload = json_get(
+                _STOCK_CONCEPT_LIST_URL,
+                params={"code": code, "market_id": market_id, "simple": 1},
+                headers={
+                    "Referer": "https://basic.10jqka.com.cn/astockpc/astockmain/index.html",
+                    "User-Agent": THS_UA,
+                },
+                timeout=10,
+            )
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] stock_concept_list({code}) failed: {e}"
+            ) from e
+        rows = payload.get("data") or []
+        return [
+            {
+                "code": str(r.get("quote_code", "")).strip(),
+                "name": str(r.get("name", "")).strip(),
+                "type": "concept",
+                "subtype": "同花顺概念",
+            }
+            for r in rows
+            if r.get("quote_code")
+        ]
 
     # ------------------------------------------------------------------
     # 热点题材 (Hot Topics)
