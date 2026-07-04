@@ -117,6 +117,48 @@ def _resolve_board_history_source(source: str) -> str:
     return source
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# board-stocks source routing — does NOT alias `ths → zzshare`.
+# Mirrors the precedent of `_resolve_board_history_source` (above): for
+# this endpoint, `ths` is a first-class source backed by ThsFetcher's
+# q.10jqka.com.cn AJAX endpoint (NOT aliased to ZzshareFetcher).
+# `zzshare` is preserved as a separate source for back-compat — both
+# return the same conceptual answer (同花顺 upstream data) but via
+# different fetcher implementations.
+# ──────────────────────────────────────────────────────────────────────────
+_BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = (
+    "ths", "eastmoney", "zhitu", "zzshare"
+)
+
+
+def _resolve_board_stocks_source(source: str) -> str:
+    """Validate `source` for the board-stocks route — no aliasing.
+
+    Differs from `_resolve_source` (used by board-list endpoints): that
+    helper aliases ``ths → zzshare`` because zzshare's ``plates_list``
+    upstream IS 同花顺 and the board-list endpoint has only ever been
+    wired through ZzshareFetcher. The board-stocks endpoint is now
+    served by ThsFetcher when ``source=ths`` is requested (new THS AJAX
+    endpoint). The route layer exposes both labels so existing
+    ``source=zzshare`` callers keep working while new callers can use
+    ``source=ths`` to opt into the THS-specific path.
+
+    Raises HTTPException(400) on invalid source.
+    """
+    if source not in _BOARD_STOCKS_VALID_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_source",
+                "message": (
+                    f"Unknown source '{source}'. "
+                    f"Valid sources: {list(_BOARD_STOCKS_VALID_SOURCES)}"
+                ),
+            },
+        )
+    return source
+
+
 # Inclusive day-count cap for board-history queries. Mirrors
 # ``EastMoneyFetcher.get_board_history``'s hard lmt=800 ceiling —
 # past that, push2his auto-escalates klt from daily→weekly→monthly.
@@ -415,7 +457,7 @@ def list_boards(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块成分股",
+    summary="板块成分股 (ths/eastmoney/zhitu/zzshare — no alias)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_stocks",
@@ -423,14 +465,20 @@ def list_boards(
 @map_errors
 def get_board_stocks(
     board_code: str = Path(max_length=30, description="Board code"),
-    source: Literal["eastmoney", "zhitu", "zzshare", "ths"] = Query(
-        ..., description="Data source (REQUIRED). 'ths' is an alias for 'zzshare'."
+    source: Literal["ths", "eastmoney", "zhitu", "zzshare"] = Query(
+        ...,
+        description=(
+            "Data source (REQUIRED). All four sources are independently "
+            "valid: `ths` (ThsFetcher via q.10jqka.com.cn AJAX), "
+            "`eastmoney` (push2his), `zhitu`, "
+            "`zzshare` (plates_stocks — upstream IS 同花顺 data)."
+        ),
     ),
     include_quote: bool = Query(False, description="Include realtime quote data"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
 ) -> BoardStocksResponse:
     """Get stocks belonging to a board."""
-    source = _resolve_source(source)
+    source = _resolve_board_stocks_source(source)
 
     manager = get_manager()
     try:
