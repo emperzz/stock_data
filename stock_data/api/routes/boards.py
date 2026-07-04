@@ -217,6 +217,55 @@ def _parse_source_csv(raw: str | None) -> list[str]:
     return out
 
 
+def _parse_stock_boards_source_csv(raw: str | None) -> list[str]:
+    """Parse ?source= for /stocks/{code}/boards — alias zzshare → ths.
+
+    与 _parse_source_csv (board-list 用, alias 方向是 ths→zzshare) 相反:
+    THS basic API 是 stock→boards 反查的真正上游; zzshare SDK 没有这个端点
+    (返回 stub None), 所以这里让 zzshare alias 到 ths (数据本来同源)。
+
+    核心 CSV 解析逻辑 (split/strip/dedup) 与 _parse_source_csv 重复 5 行 —
+    不抽公共 helper, 因为两端点的 alias 方向 / valid set / 默认集合都不同,
+    强行复用 = 配置化函数, 可读性下降。两个端点各自一个聚焦 helper
+    (rule of three 之后再考虑抽公共)。
+
+    Args:
+        raw: User-supplied ?source= value (may be None or comma-separated).
+
+    Returns:
+        List of normalized source names in user-requested order, deduplicated.
+
+    Raises:
+        HTTPException(400): any source (after aliasing) is not in the valid set.
+            Error detail lists valid sources + accepted alias.
+    """
+    valid_set = stock_board_cache._STOCK_BOARDS_VALID_SOURCES
+    alias_map = stock_board_cache._STOCK_BOARDS_SOURCE_ALIAS
+    if not raw:
+        return list(valid_set)
+    out: list[str] = []
+    for s in raw.split(","):
+        s = s.strip()
+        if not s:
+            continue
+        s = alias_map.get(s, s)
+        if s not in valid_set:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_source",
+                    "message": (
+                        f"Unknown stock-boards source {s!r}. "
+                        f"Valid sources: {list(valid_set)} "
+                        f"(alias 'zzshare' accepted)"
+                    ),
+                },
+            )
+        if s not in out:
+            out.append(s)
+    return out
+
+
 @router.get(
     "/boards",
     response_model=BoardListResponse,
@@ -454,7 +503,7 @@ def get_board_stocks(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="股票所属板块（统一端点：单源/多源聚合；cold_fill 显式 opt-in）",
+    summary="股票所属板块 (ths/eastmoney/zhitu; source=zzshare alias → ths)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_stock_boards",
@@ -464,8 +513,11 @@ def get_stock_boards(
     stock_code: str = Path(max_length=20, description="Stock code (e.g. 000001)"),
     source: str | None = Query(
         None,
-        description="Comma-separated sources (e.g. 'eastmoney,zhitu,zzshare,ths'). "
-        "Omit for all sources. 'ths' aliases 'zzshare'.",
+        description=(
+            "Comma-separated sources (e.g. 'ths,eastmoney,zhitu'). "
+            "'zzshare' is accepted as alias for 'ths' (THS upstream is shared). "
+            "Omit for all valid sources."
+        ),
     ),
     type: Literal["concept", "industry", "index", "special"] | None = Query(
         None, description="Filter by board type"
@@ -482,7 +534,7 @@ def get_stock_boards(
     Unified endpoint: single source or multi-source aggregation in one call.
     Reads from stock_board_membership; opt-in zhitu cold-fill via cold_fill=true.
     """
-    normalized_sources = _parse_source_csv(source)
+    normalized_sources = _parse_stock_boards_source_csv(source)
 
     # Per-source subtype validation (only when type is provided)
     if type is not None and subtype is not None:
