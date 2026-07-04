@@ -311,6 +311,73 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
     assert args[0] == "BK0001"
 
 
+# ===== /boards/{code}/stocks: source=ths canonical (no alias) =====
+
+
+def test_get_board_stocks_ths_passes_ths_to_persistence(client):
+    """?source=ths now passes 'ths' through to persistence (no alias).
+
+    Previously the route aliased 'ths' → 'zzshare' for board-stocks (mirroring
+    board-list). After ThsFetcher gained get_board_stocks, the alias is
+    removed and 'ths' is canonical. Backed by ThsFetcher at the manager
+    layer (verified via `data_source == "ThsFetcher"` in the response).
+    """
+    fake = [{"stock_code": "300740", "stock_name": "皇台酒业"}]
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks",
+            return_value=(fake, "ThsFetcher"),
+        ) as mock_get,
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_name",
+            return_value="多多概念",
+        ),
+    ):
+        r = client.get("/api/v1/boards/308709/stocks?source=ths")
+    assert r.status_code == 200
+    # Persistence was called with source='ths' (NOT aliased to zzshare).
+    _, kwargs = mock_get.call_args
+    assert kwargs.get("source") == "ths"
+    assert r.json()["data_source"] == "ThsFetcher"
+
+
+def test_get_board_stocks_zzshare_still_works(client):
+    """?source=zzshare still works — independent path, kept for back-compat.
+
+    ZzshareFetcher.plates_stocks is still served by the zzshare label; the
+    removal of the ths→zzshare alias only affects explicit ?source=ths
+    requests, not existing zzshare callers.
+    """
+    fake = [{"stock_code": "300740", "stock_name": "皇台酒业"}]
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks",
+            return_value=(fake, "ZzshareFetcher"),
+        ) as mock_get,
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_name",
+            return_value="多多概念",
+        ),
+    ):
+        r = client.get("/api/v1/boards/308709/stocks?source=zzshare")
+    assert r.status_code == 200
+    _, kwargs = mock_get.call_args
+    assert kwargs.get("source") == "zzshare"
+    assert r.json()["data_source"] == "ZzshareFetcher"
+
+
+def test_get_board_stocks_unknown_source_returns_400_or_422(client):
+    """?source=unknown → 400 or 422 (Literal or _resolve_board_stocks_source).
+
+    FastAPI's Literal rejection yields 422 (Pydantic validation error).
+    The _resolve_board_stocks_source fallback would yield 400 if Literal
+    is widened in the future. Both are acceptable — the spec only requires
+    the request to fail loudly (no silent default-to-something).
+    """
+    r = client.get("/api/v1/boards/308709/stocks?source=bogus")
+    assert r.status_code in (400, 422)
+
+
 # ===== get_stock_boards (NEW) =====
 
 
