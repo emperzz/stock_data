@@ -21,6 +21,7 @@ import pandas as pd
 
 from ..base import BaseFetcher, DataCapability, DataFetchError, SDKFetcherMixin
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
+from ..persistence.board import THS_CONCEPT_SUBTYPE, THS_INDUSTRY_SUBTYPE, THS_SPECIAL_SUBTYPE
 from ..persistence.trade_calendar import get_latest_trade_date_on_or_before
 from ..utils.normalize import normalize_stock_code
 
@@ -539,9 +540,9 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         "special": 17,
     }
     _BOARD_TYPE_BY_PLATE_TYPE: dict[int, tuple[str, str]] = {
-        14: ("industry", "同花顺行业"),
-        15: ("concept", "同花顺概念"),
-        17: ("special", "同花顺题材"),
+        14: ("industry", THS_INDUSTRY_SUBTYPE),
+        15: ("concept", THS_CONCEPT_SUBTYPE),
+        17: ("special", THS_SPECIAL_SUBTYPE),
     }
 
     def get_all_boards(

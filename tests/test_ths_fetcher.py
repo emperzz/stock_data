@@ -824,3 +824,19 @@ class TestGetStockBoards:
             pytest.raises(DataFetchError, match="stock_concept_list"),
         ):
             self.fetcher.get_stock_boards("300740")
+
+    def test_raises_data_fetch_error_on_business_error(self):
+        """上游 status_code != 0 → DataFetchError (对齐 search_news 的契约).
+
+        之前 fetcher 静默返回 [],会让 cold-fill 调用方以为'查了但没数据' —— 实际是
+        上游业务级错误 (权限/限流等)。现在抛 DataFetchError,cold-fill 路径可以
+        在 cold_sources 中体现失败。
+        """
+        with (
+            patch(
+                "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+                return_value={"status_code": -1, "status_msg": "forbidden", "data": []},
+            ),
+            pytest.raises(DataFetchError, match="status_code=-1"),
+        ):
+            self.fetcher.get_stock_boards("300740")

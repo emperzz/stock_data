@@ -220,3 +220,26 @@ class TestGetStockMembershipsColdFill:
         assert {e["source"] for e in entries} == {"zhitu"}
         assert cold == []
         assert origin == "zhitu"
+
+    def test_cold_fill_empty_when_fetcher_returns_no_rows(self, fresh_db, monkeypatch):
+        """cold_fill=True + fetcher returns [] → origin='cold_fill_empty'.
+
+        区分于 cache-miss (origin='persistence') 和 cold-fill-写入 (origin=fetcher 名)。
+        触发场景: 北交所 (4/8 前缀) 调 source=ths + cold_fill=True → ThsFetcher
+        早退返回 [],但网络层逻辑已生效 (或本想生效)。这个 sentinel 让上层能
+        区分"没有命中缓存" 与 "命中了但上游拒绝/不支持"。
+        """
+        mock_manager = MagicMock()
+        mock_manager.get_stock_boards.return_value = ([], "ths")  # 上游返回空
+
+        from stock_data.data_provider.persistence import stock_list as stock_list_mod
+        stock_list_mod._schema_initialized_paths = set()
+        stock_list_mod.init_schema()
+
+        entries, cold, origin = board_mod.get_stock_memberships(
+            stock_code="830799", sources=["ths"], cold_fill=True, manager=mock_manager
+        )
+        assert entries == []
+        assert cold == ["ths"]
+        assert origin == "cold_fill_empty"
+        mock_manager.get_stock_boards.assert_called_once_with("830799", source="ths")

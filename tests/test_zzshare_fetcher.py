@@ -1416,6 +1416,23 @@ class TestBoardSubtypeValidation:
 
         assert "同花顺题材" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["special"]
 
+    def test_ths_concept_subtype_constant_shared_with_persistence(self):
+        """THS_CONCEPT_SUBTYPE 必须等于 VALID_SUBTYPES_BY_SOURCE['ths']['concept'].
+
+        锁定 fetcher 输出的 subtype 与 persistence 验证器的 subtype 来自同一
+        常量,避免改一个不改另一个的静默漂移。
+        """
+        from stock_data.data_provider.persistence.board import (
+            THS_CONCEPT_SUBTYPE,
+            VALID_SUBTYPES_BY_SOURCE,
+        )
+
+        assert THS_CONCEPT_SUBTYPE in VALID_SUBTYPES_BY_SOURCE["ths"]["concept"]
+        assert (
+            THS_CONCEPT_SUBTYPE
+            in VALID_SUBTYPES_BY_SOURCE["zzshare"]["concept"]
+        )
+
 
 # ====================================================================
 # _normalize_data minute branch

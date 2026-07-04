@@ -36,6 +36,7 @@ from tenacity import (
 )
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
+from ..persistence.board import THS_CONCEPT_SUBTYPE
 from ..utils.http import json_get, json_post
 from ..utils.normalize import normalize_stock_code
 from ..utils.text import strip_em_tags
@@ -651,8 +652,9 @@ class ThsFetcher(BaseFetcher):
           system, so forward board-list cache and reverse cold-fill rows
           join cleanly via (board_code, source).
         - type = 'concept' (硬编码 — endpoint is stock_concept_list).
-        - subtype = '同花顺概念' — matches
-          VALID_SUBTYPES_BY_SOURCE["zzshare"]["concept"] convention.
+        - subtype = THS_CONCEPT_SUBTYPE — matches
+          VALID_SUBTYPES_BY_SOURCE["ths"]["concept"] (single source of truth
+          via stock_data.data_provider.persistence.board).
 
         Raises:
             DataFetchError: HTTP fetch failed.
@@ -679,13 +681,21 @@ class ThsFetcher(BaseFetcher):
             raise DataFetchError(
                 f"[ThsFetcher] stock_concept_list({code}) failed: {e}"
             ) from e
+        # Mirror search_news: business-level upstream errors (status_code != 0)
+        # surface as DataFetchError so cold-fill callers can see the failure in
+        # `cold_sources` instead of silently receiving [].
+        if payload.get("status_code") != 0:
+            raise DataFetchError(
+                f"[ThsFetcher] stock_concept_list({code}) upstream status_code="
+                f"{payload.get('status_code')} msg={payload.get('status_msg')}"
+            )
         rows = payload.get("data") or []
         return [
             {
                 "code": str(r.get("quote_code", "")).strip(),
                 "name": str(r.get("name", "")).strip(),
                 "type": "concept",
-                "subtype": "同花顺概念",
+                "subtype": THS_CONCEPT_SUBTYPE,
             }
             for r in rows
             if r.get("quote_code")

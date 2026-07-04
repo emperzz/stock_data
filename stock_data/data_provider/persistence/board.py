@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 _refresh_tracker = DailyRefreshTracker()
 _schema_initialized_paths: set[str] = set()
 
+# Canonical subtype names per source. Single source of truth so the persistence
+# validator and the fetcher write path cannot drift (cold-fill writes fetcher
+# output verbatim — if either side renames the literal, the validator on the
+# inbound query rejects valid queries). Both `ths` and `zzshare` produce the
+# same Chinese label because zzshare's plates_list upstream is itself THS.
+THS_CONCEPT_SUBTYPE = "同花顺概念"
+THS_INDUSTRY_SUBTYPE = "同花顺行业"
+THS_SPECIAL_SUBTYPE = "同花顺题材"
+
 # Subtype 合法值表：source → type → {subtype 集合}
 VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
     "eastmoney": {
@@ -34,13 +43,13 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
         "special": {"风险警示", "次新股", "沪港通", "深港通"},
     },
     "zzshare": {  # NEW
-        "industry": {"同花顺行业"},
-        "concept": {"同花顺概念"},
-        "special": {"同花顺题材"},
+        "industry": {THS_INDUSTRY_SUBTYPE},
+        "concept": {THS_CONCEPT_SUBTYPE},
+        "special": {THS_SPECIAL_SUBTYPE},
         # "index" — zzshare 不暴露大盘指数板块
     },
     "ths": {  # NEW — stock-boards 专用 (THS basic API 仅返回 concept)
-        "concept": {"同花顺概念"},
+        "concept": {THS_CONCEPT_SUBTYPE},
         # industry / special / index 暂不支持 (THS stock_concept_list 端点特性)
     },
 }
@@ -760,6 +769,11 @@ def get_stock_memberships(
         - origin_summary:
             - "persistence" — entries from SQLite cache (no fetcher calls); also used
                               when entries is empty (cache miss, no cold-fill)
+            - "cold_fill_empty" — cold_fill=True was attempted, fetcher was queried,
+                              but returned no rows for any cold-fill source. Distinct
+                              from "persistence" so the route layer doesn't mislead
+                              users into thinking the network was never hit
+                              (e.g. 北交所 early-return case for source=ths).
             - "ths" / "zhitu" / "eastmoney" — cold-fill triggered and that source is
                               now in the result (network was hit, fresh data was
                               written). When multiple cold-fill sources wrote, the
@@ -782,12 +796,16 @@ def get_stock_memberships(
     entries, present_sources = _read_membership_entries(stock_code, sources, cursor)
 
     # Cold-fill: ths / zhitu / eastmoney have upstream reverse APIs; only when cold_fill=True.
+    # Track which sources we ATTEMPTED to cold-fill, separately from which wrote rows —
+    # used downstream to distinguish "fetcher returned empty" from "cache miss".
+    coldfill_attempted: set[str] = set()
     if cold_fill and manager is not None:
         from .stock_list import get_stock_name as _get_stock_name
 
         for cold_src in ("ths", "zhitu", "eastmoney"):  # ths 加首位 (新实现)
             if cold_src not in sources or cold_src in present_sources:
                 continue
+            coldfill_attempted.add(cold_src)
             boards, _ = manager.get_stock_boards(stock_code, source=cold_src)
             if boards:
                 stock_name = _get_stock_name(stock_code) or ""
@@ -813,7 +831,15 @@ def get_stock_memberships(
 
     # Origin summary
     if not entries:
-        origin_summary = "persistence"
+        # Empty entries: distinguish "cache miss, no cold-fill" from
+        # "cold-fill attempted but fetcher returned []". The latter case
+        # (e.g. BSE stock queried via source=ths, where the fetcher
+        # early-returns without hitting upstream) would otherwise look
+        # identical to a clean cache miss.
+        if coldfill_attempted:
+            origin_summary = "cold_fill_empty"
+        else:
+            origin_summary = "persistence"
     elif cold_fill and manager is not None:
         # Cold-fill actually wrote data; signal which source(s) hit the network.
         # Single-source query takes the queried source's name; multi-source uses "mixed".
