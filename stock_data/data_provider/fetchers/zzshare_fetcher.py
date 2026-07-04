@@ -638,14 +638,6 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             )
         return out
 
-    def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict] | None:
-        """Reverse lookup: boards a stock belongs to.
-
-        zzshare SDK does not provide a direct stock->boards endpoint. Return
-        None so the route layer can 404 (matches EastMoney behavior).
-        """
-        return None
-
     # NOTE: get_board_history was removed (2026-07-03). zzshare's ``plate_kline``
     # upstream only supports board code 883957 (同花顺全A); all concept / industry
     # / special codes return empty. The board-history route now aliases

@@ -1204,11 +1204,6 @@ class TestBoards:
         assert stocks[0]["exchange"] == "sh"
         assert stocks[1]["exchange"] == "sz"
 
-    def test_get_stock_boards_returns_none(self):
-        """SDK has no stock->boards reverse lookup; return None (route 404)."""
-        fetcher = ZzshareFetcher()
-        assert fetcher.get_stock_boards("600519", source="zzshare") is None
-
 
 # NOTE: get_board_history tests removed (2026-07-03) — ZzshareFetcher no longer
 # implements get_board_history (upstream `plate_kline` only supports 883957).
