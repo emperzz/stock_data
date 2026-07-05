@@ -378,6 +378,46 @@ def test_get_board_stocks_unknown_source_returns_400_or_422(client):
     assert r.status_code in (400, 422)
 
 
+def test_get_board_stocks_projects_amount_from_fetcher_output(client):
+    """Route projects 'amount' (元) from fetcher output into BoardStockInfo.
+
+    THS fetcher populates 'amount' from the upstream 成交额 column.
+    EastMoney fetcher populates 'amount' via push2his f6 field (only when
+    include_quote=True). Zzshare leaves 'amount' as None. The route must
+    forward whatever the fetcher returned — including 成交额 — into the
+    response so callers don't lose data the upstream already provided.
+    """
+    fake = [{
+        "stock_code": "300740",
+        "stock_name": "皇台酒业",
+        "exchange": "sz",
+        "price": 22.49,
+        "change_pct": 1.44,
+        "volume": None,        # THS upstream has no shares-volume column
+        "amount": 10.23e8,     # 10.23亿元 = 1,023,000,000 元
+        "change_amount": 0.32,
+        "turnover": 12.32,
+    }]
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks",
+            return_value=(fake, "ThsFetcher"),
+        ),
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_name",
+            return_value="多多概念",
+        ),
+    ):
+        r = client.get("/api/v1/boards/308709/stocks?source=ths")
+    assert r.status_code == 200
+    stock = r.json()["stocks"][0]
+    assert stock["code"] == "300740"
+    assert stock["price"] == 22.49
+    assert stock["change_pct"] == 1.44
+    assert stock["volume"] is None            # upstream has no shares-volume
+    assert stock["amount"] == 10.23e8         # 成交额 (元) projected through
+
+
 def test_get_board_stocks_ths_falls_back_when_get_all_boards_unavailable(client):
     """?source=ths board-name fallback handles missing get_all_boards.
 

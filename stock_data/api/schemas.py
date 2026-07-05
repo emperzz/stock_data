@@ -302,7 +302,8 @@ class BoardStockInfo(BaseModel):
     name: str = Field(default="", description="Stock name")
     price: float | None = Field(default=None, description="Current price")
     change_pct: float | None = Field(default=None, description="Change percent")
-    volume: int | None = Field(default=None, description="Volume")
+    volume: int | None = Field(default=None, description="Volume (shares; only populated when upstream exposes it)")
+    amount: float | None = Field(default=None, description="Trading amount (元; populated by THS and EastMoney)")
 
 
 class BoardListResponse(BaseModel):

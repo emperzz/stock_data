@@ -526,6 +526,7 @@ def get_board_stocks(
             price=s.get("price"),
             change_pct=s.get("change_pct"),
             volume=s.get("volume"),
+            amount=s.get("amount"),
         )
         for s in stocks
     ]
