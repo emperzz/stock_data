@@ -1,0 +1,73 @@
+{
+  "status_code": 0,
+  "data": {
+    "page": 1,
+    "limit": 15,
+    "total": 1374,
+    "type": [
+      {"name": "全部公告", "value": "all", "stat": "qbgg"},
+      {"name": "业绩公告", "value": "eq-f1001", "stat": "yjgg"},
+      {"name": "重大事项", "value": "eq-f1002", "stat": "zdsx"},
+      {"name": "股份变动公告", "value": "eq-f1003", "stat": "gfbdgg"},
+      {"name": "决议公告", "value": "eq-f1004", "stat": "jygg"}
+    ],
+    "data": [
+      {
+        "seq": "58742727",
+        "guid": "e15a08743916d0ba",
+        "title": "水羊股份：关于2026年第二季度可转换公司债券转股情况的公告",
+        "time": "1782921892",
+        "mobile_url": "https://news.10jqka.com.cn/tapp/notice.html#seq=58742727",
+        "pc_url": "http://news.10jqka.com.cn/field/sn/20260702/58742727.shtml",
+        "raw_url": "http://static.cninfo.com.cn/finalpage/2026-07-02/1225402425.PDF",
+        "date": "2026-07-02",
+        "type": null
+      },
+      {
+        "seq": "58670563",
+        "guid": "7f72333a73c6b113",
+        "title": "水羊股份：2025年度权益分派实施公告",
+        "time": "1782403604",
+        "mobile_url": "https://news.10jqka.com.cn/tapp/notice.html#seq=58670563",
+        "pc_url": "http://news.10jqka.com.cn/field/sn/20260626/58670563.shtml",
+        "raw_url": "http://static.cninfo.com.cn/finalpage/2026-06-26/1225391685.PDF",
+        "date": "2026-06-26",
+        "type": null
+      },
+      {
+        "seq": "58670559",
+        "guid": "7ef7eeb1b2e7abe7",
+        "title": "水羊股份：关于调整水羊转债转股价格的公告",
+        "time": "1782403379",
+        "mobile_url": "https://news.10jqka.com.cn/tapp/notice.html#seq=58670559",
+        "pc_url": "http://news.10jqka.com.cn/field/sn/20260626/58670559.shtml",
+        "raw_url": "http://static.cninfo.com.cn/finalpage/2026-06-26/1225391684.PDF",
+        "date": "2026-06-26",
+        "type": null
+      },
+      {
+        "seq": "58352903",
+        "guid": "6d7ae3ca9217973a",
+        "title": "水羊股份：关于公司控股股东部分股份解除质押的公告",
+        "time": "1780416250",
+        "mobile_url": "https://news.10jqka.com.cn/tapp/notice.html#seq=58352903",
+        "pc_url": "http://news.10jqka.com.cn/field/sn/20260603/58352903.shtml",
+        "raw_url": "http://static.cninfo.com.cn/finalpage/2026-06-03/1225345290.PDF",
+        "date": "2026-06-03",
+        "type": null
+      },
+      {
+        "seq": "58095799",
+        "guid": "54d52633773926",
+        "title": "水羊股份：关于公司控股股东部分股份解除质押及新增质押的公告",
+        "time": "1778774650",
+        "mobile_url": "https://news.10jqka.com.cn/tapp/notice.html#seq=58095799",
+        "pc_url": "http://news.10jqka.com.cn/field/sn/20260515/58095799.shtml",
+        "raw_url": "http://static.cninfo.com.cn/finalpage/2026-05-15/1225308365.PDF",
+        "date": "2026-05-15",
+        "type": null
+      }
+    ]
+  },
+  "status_msg": "success"
+}

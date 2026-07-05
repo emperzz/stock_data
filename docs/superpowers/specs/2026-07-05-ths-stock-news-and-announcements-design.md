@@ -20,7 +20,7 @@
 
 `/stocks/{code}/announcements` 现在由 EastMoney (`np-anotice-stock`，P6) + Cninfo (`cninfo.com.cn/new/hisAnnouncement/query`，P8) 服务。THS 同花顺的实际备份路径 **已经存在** 但未被利用：`basic.10jqka.com.cn/fuyao/info/company/v1/news` 与 `/basicapi/notice/pub` 是干净的 JSON 端点。
 
-经 Playwright 在 `https://basic.10jqka.com.cn/.../news?code=300740&marketid=33` 抓到的 `/basicapi/notice/pub` 响应**额外带 `raw_url` 字段**（`http://static.cninfo.com.cn/finalpage/YYYY-MM-DD/...PDF`，巨潮原文 PDF 直链）。EastMoney / Cninfo 当前都不带这个字段。
+Playwright 在 `https://basic.10jqka.com.cn/.../news?code=300740&marketid=33` 抓到的 `/basicapi/notice/pub` 响应**额外带 `raw_url` 字段**（`http://static.cninfo.com.cn/finalpage/YYYY-MM-DD/...PDF`，巨潮原文 PDF 直链）。EastMoney / Cninfo 当前都不带这个字段。原始响应已落盘到 `tests/fixtures/ths_basic_notice.json`（5 条抽样），news 端点响应在 `tests/fixtures/ths_basic_news.json`。
 
 ### 1.3 ThsFetcher 已经在用 basic.10jqka.com.cn
 
@@ -42,7 +42,7 @@
 
 - ❌ **HK / US 股票支持**（THS `market=33|17` 是 CSI 专用） — 行为对齐现有 `get_stock_boards` 对北交所 4/8 的 skip。
 - ❌ **分页参数暴露给 route**（THS 上游支持 `current=`/`page=`，但本次只拉第一页，与现有 `?limit=` 行为对齐）。
-- ❌ **公告 `classify=` 分类过滤**（THS 上游支持 `全部/业绩/重大事项/股份变动/决议`；本次固定 `classify=all`，未来按需暴露为 query 参数）。
+- ❌ **公告 `classify=` 分类过滤路由参数**（THS 上游支持 `全部/业绩/重大事项/股份变动/决议`；本次 fetcher 内部固定 `classify=all`，路由层不暴露 `classify=` query 参数 — 与现有 `get_announcements` 接口签名兼容）。
 - ❌ **Manager / Route / Cache 层改动**（`get_stock_news` / `get_announcements` 路由自动纳入新 fetcher）。
 - ❌ **重启时持久化 / import-time 副作用**（如同花顺其它纯 HTTP 方法，无 class-level 状态）。
 
@@ -53,17 +53,17 @@
 ### 3.1 新增 endpoint（ths_fetcher.py）
 
 ```python
-THIS_NEWS_URL = "https://basic.10jqka.com.cn/fuyao/info/company/v1/news"
-THIS_NOTICE_URL = "https://basic.10jqka.com.cn/basicapi/notice/pub"
-THIS_BASIC_HEADERS = {
-    "User-Agent": THS_UA,  # 复用模块顶部已定义的常量
+# 命名与模块现有约定一致: 所有 *_URL / *_HEADERS 都带下划线前缀 + _THS_ 词缀
+# (_FLASH_NEWS_URL / _STOCK_CONCEPT_LIST_URL / _NEWS_SEARCH_URL 等同模板).
+_THS_NEWS_URL = "https://basic.10jqka.com.cn/fuyao/info/company/v1/news"
+_THS_NOTICE_URL = "https://basic.10jqka.com.cn/basicapi/notice/pub"
+_THS_BASIC_HEADERS = {
+    "User-Agent": THS_UA,  # 模块顶部已有常量, 复用
     "Referer": "https://basic.10jqka.com.cn/astockpc/astockmain/index.html",
 }
-THIS_NEWS_PAGE_SIZE = 15    # 上游默认值；本次不下发，用现有 route ?limit
-THIS_NOTICE_PAGE_SIZE = 15  # 上游默认值；本次不下发
 ```
 
-`User-Agent` 用 `THS_UA`（已有常量）；`Referer` 与现有 `get_stock_boards` 同源，**统一使用 helper**，便于未来一次性改 UA pool。
+**helper 不抽出**。原因: 整个模块目前每个端点都自己 inline dict(`HSGT_HEADERS` 是当下唯一同名常量), 没必要为了两个方法打破这个一致性。如果未来出现第三个 basic.10jqka.com.cn endpoint 再抽 helper(`_basic_ths_headers()`), 不在本次范围。
 
 ### 3.2 在 ThsFetcher 类顶部更新 supported_data_types
 
@@ -103,7 +103,7 @@ def get_stock_news(self, stock_code: str, limit: int = 20) -> list[dict]:
         n = 20
     try:
         payload = json_get(
-            THIS_NEWS_URL,
+            _THS_NEWS_URL,
             params={
                 "type": "stock",
                 "code": code,
@@ -111,7 +111,7 @@ def get_stock_news(self, stock_code: str, limit: int = 20) -> list[dict]:
                 "current": 1,
                 "limit": n,
             },
-            headers=THIS_BASIC_HEADERS,
+            headers=_THS_BASIC_HEADERS,
             timeout=10,
         )
     except DataFetchError as e:
@@ -163,16 +163,16 @@ def get_announcements(self, code: str, page_size: int = 30) -> list[dict]:
         n = 30
     try:
         payload = json_get(
-            THIS_NOTICE_URL,
+            _THS_NOTICE_URL,
             params={
                 "type": "stock",
                 "code": code,
                 "market": market_id,
-                "classify": "all",   # 未来如要分类过滤，再暴露为参数
+                "classify": "all",   # 固定 all; 见 §2 非目标 + §3.4 注释
                 "page": 1,
                 "limit": n,
             },
-            headers=THIS_BASIC_HEADERS,
+            headers=_THS_BASIC_HEADERS,
             timeout=10,
         )
     except DataFetchError:
@@ -223,9 +223,7 @@ class AnnouncementRecord(_UpstreamSanitizedModel):
     raw_url: str = Field(default="", description="巨潮原文 PDF 直链 (ThsFetcher only)")
 ```
 
-`_UpstreamSanitizedModel`（如启用 sanitization）会自动忽略 list 中的额外字段；新字段对老 client 是 forward-compatible 的。
-
-> **风险点**：如果 `_UpstreamSanitizedModel` 默认 `extra="ignore"` 且不含字段会被丢弃，仅 `**extra` 时抛弃，`raw_url` 显式声明则 Pydantic 不会丢；但还要查 `Route 端构造 AnnouncementRecord(**r)` 的位置是否容忍 schema 多字段 — 我们这次只新增字段，旧 fetcher 返回的 dict 不带 `raw_url`，Pydantic 取默认 `""`，**没问题**。
+**兼容性依据 (review finding #4)**: `_UpstreamSanitizedModel` 只做 `None → default` 和 `"" → None` 预校验, **没有** 配置 `extra` 字段. Pydantic v2 默认 `extra='ignore'` 才是额外字段被丢弃的原因 — 这与 `_UpstreamSanitizedModel` 无关, 是 Pydantic 自身行为. 本次显式声明 `raw_url` 字段, Pydantic 会读取它; 老 fetcher (EastMoney / Cninfo) 返回的 dict **不带** `raw_url`, 模型用 default `""` 填充, **无损**.
 
 ### 3.7 测试策略
 
@@ -239,14 +237,16 @@ class AnnouncementRecord(_UpstreamSanitizedModel):
 
 ### 3.8 错误处理
 
-| 场景 | 行为 |
-|---|---|
-| `code` 无 `market_id` 映射（4/8 开头，或 HK/US） | logger.warning + return `[]`（对齐 `get_stock_boards`） |
-| 上游 `status_code != 0` | logger.warning + return `[]`（**不 raise**）— 让 manager failover 跳到下一家 |
-| HTTP timeout / 5xx / JSON parse | `json_get` 抛 `DataFetchError`；manager failover 捕获后跳下一家 |
-| 上游 payload 不是 dict | logger.warning + return `[]` |
+> **重要更正 (review finding #1)**: `manager._is_meaningful(result)` (`manager.py:26-32`) 已经把 `None` / 空 `DataFrame` / **空 `list`** 都判定为 "no data" 并触发到下一个 fetcher 的 failover. 这是项目既定行为, 不是本次需要新增的机制. THS 返回 `[]` 与返回 `raise DataFetchError` 在 failover 语义上**等价**, 都让 manager 继续往下找.
 
-> **不 raise** 的关键：falsy response 不能让 manager 误以为本 fetcher 还能服务下一次同请求。只有 `DataFetchError` 才能保证 manager 进入下一家。
+| 场景 | 行为 | manager 接下来会… |
+|---|---|---|
+| `code` 无 `market_id` 映射 (4/8 开头, 或 HK/US) | logger.warning + return `[]` | 已有 cap: csi 限定, HK/US 路由层根本不通, 兜底走到最后抛 `DataFetchError` 503 |
+| 上游 `status_code != 0` | logger.warning + return `[]` | 自动跳下一家 (`ANNOUNCEMENT`: → Cninfo) 或在末位 (`STOCK_NEWS`: Ths 是 P7 末位) 抛 503 |
+| HTTP timeout / 5xx / JSON parse | `json_get` 抛 `DataFetchError` | 同上, 自动跳下一家 |
+| 上游 payload 不是 dict | logger.warning + return `[]` | 同上 |
+
+设计要点: THS 在所有 "软失败" (返回 `[]`) 场景下都不需要 `raise` — manager 已经会自动 failover. 只有 "硬失败" (网络 / JSON parse) 才 `raise DataFetchError`, 行为与 `json_get` 现有契约一致.
 
 ---
 
@@ -257,8 +257,8 @@ class AnnouncementRecord(_UpstreamSanitizedModel):
 | `basic.10jqka.com.cn` 限速未知（用户已 prompt 提醒） | 默认离线 mock；live 测试每条间隔 2-3s, 仅 1-2 case |
 | 北交所代码返回 `[]` vs 抛错 | 跟 `get_stock_boards` 同 return `[]`, **不 raise** |
 | 上游字段改版 (e.g. `pc_url` 重命名) | `str(r.get(..., ""))` + try/except；logger.warning 单行告警 |
-| `raw_url` 字段加进 schema 触发老 client 报错 | 默认 `""`，Pydantic 反序列化时忽略额外 key；schema 是 additive-only |
-| `manager._with_failover` 在 THS 返回 `[]` 时不会自动跳下一家 | 与 EastMoney 一致 — 同问题已存在；不属本次范围；failover 由 `DataFetchError` 触发，本次同 EastMoney 返回 `[]` 的语义 |
+| `raw_url` 字段加进 schema 触发老 client 报错 | 默认 `""`，Pydantic v2 默认 `extra='ignore'` 自动丢弃额外 key；schema 是 additive-only |
+| (已澄清) `manager._with_failover` 在 `[]` 时跳过 | **不是风险** — 项目既定行为; 见 §3.8 |
 
 ---
 
@@ -266,11 +266,13 @@ class AnnouncementRecord(_UpstreamSanitizedModel):
 
 | 文件 | 改动 |
 |---|---|
-| `stock_data/data_provider/fetchers/ths_fetcher.py` | 新增 `THIS_NEWS_URL` / `THIS_NOTICE_URL` / `THIS_BASIC_HEADERS` 常量；`supported_data_types` 加 `STOCK_NEWS` / `ANNOUNCEMENT`；新增 `get_stock_news` / `get_announcements` 方法 |
+| `stock_data/data_provider/fetchers/ths_fetcher.py` | (a) 模块顶部 docstring 追加 STOCK_NEWS / ANNOUNCEMENT 两条 capability (review finding #5); (b) 新增 `_THS_NEWS_URL` / `_THS_NOTICE_URL` / `_THS_BASIC_HEADERS` 常量; (c) `supported_data_types` 加 `STOCK_NEWS` / `ANNOUNCEMENT`; (d) 新增 `get_stock_news` / `get_announcements` 方法 |
 | `stock_data/api/schemas.py::AnnouncementRecord` | 新增 `raw_url: str = Field(default="", ...)` |
-| `tests/test_manager_announcements.py` | 新建（EastMoney P6 fail → Ths P7 backup 路径断言） |
-| `tests/fixtures/ths_basic_news.json` | 新建（300740 单页 fixture, 5-10 条记录） |
-| `tests/fixtures/ths_basic_notice.json` | 新建（300740 单页 fixture, 5-10 条记录） |
-| `tests/test_ths_basic_endpoints_live.py` | 新建, 标记 `@pytest.mark.live_network` |
+| `tests/test_manager_announcements.py` | 新建 (EastMoney P6 fail → Ths P7 backup 路径断言), 与既有 `test_manager_stock_news.py` 同 pattern |
+| `tests/fixtures/ths_basic_news.json` | 已落盘 (300740 单页, 5 条记录); 测试 mock `json_get` 时直接读这份文件 |
+| `tests/fixtures/ths_basic_notice.json` | 已落盘 (300740 单页, 5 条记录); 同上 |
+| `tests/test_ths_basic_endpoints_live.py` | 新建, 标记 `@pytest.mark.live_network`; CLAUDE.md 提示 CI 上至少跑一次 smoke, 实际 CI 配 `pytest -m ""` (含 live) 时跑; 默认 `pytest` 跳过 |
+
+零改动: `stock_data/data_provider/manager.py`, `stock_data/api/routes/news.py`, `stock_data/api/routes/stocks.py`, `stock_data/api/cache.py`, `stock_data/explorer/*` (manifest 自动 reflect 新方法).
 
 零改动：`stock_data/data_provider/manager.py`、`stock_data/api/routes/news.py`、`stock_data/api/routes/stocks.py`、`stock_data/api/cache.py`、`stock_data/explorer/*`（manifest 自动 reflect 新方法）。

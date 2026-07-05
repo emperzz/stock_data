@@ -1,0 +1,51 @@
+{
+  "status_code": 0,
+  "data": {
+    "current": 1,
+    "total": 100,
+    "data": [
+      {
+        "client_url": "http://news.10jqka.com.cn/field/v1/20260703/677937593.shtml",
+        "date": "2026-07-03",
+        "mobile_url": "",
+        "title": "行业周报|美容护理指数涨7.03%, 跑赢上证指数6.62%",
+        "pc_url": "http://news.10jqka.com.cn/field/v1/20260703/677937593.shtml",
+        "seq": "677937593"
+      },
+      {
+        "client_url": "http://news.10jqka.com.cn/field/v1/20260703/677925415.shtml",
+        "date": "2026-07-03",
+        "mobile_url": "",
+        "title": "水羊股份：公司旗下EDB品牌的精华防晒等产品有在欧洲地区销售",
+        "pc_url": "http://news.10jqka.com.cn/field/v1/20260703/677925415.shtml",
+        "seq": "677925415"
+      },
+      {
+        "client_url": "http://news.10jqka.com.cn/field/v1/20260703/677919094.shtml",
+        "date": "2026-07-03",
+        "mobile_url": "",
+        "title": "水羊股份连续2日融资买入额增长率超50%，多头加速建仓",
+        "pc_url": "http://news.10jqka.com.cn/field/v1/20260703/677919094.shtml",
+        "seq": "677919094"
+      },
+      {
+        "client_url": "http://news.10jqka.com.cn/field/v1/20260702/677901985.shtml",
+        "date": "2026-07-02",
+        "mobile_url": "",
+        "title": "A股92股涨停，海南海药8天天6板晋级3连板，机器人、半导体材料板块批量连板",
+        "pc_url": "http://news.10jqka.com.cn/field/v1/20260702/677901985.shtml",
+        "seq": "677901985"
+      },
+      {
+        "client_url": "http://news.10jqka.com.cn/field/v1/20260612/677436057.shtml",
+        "date": "2026-06-12",
+        "mobile_url": "",
+        "title": "水羊股份：截至6月10日公司总股东人数为2万5千余户",
+        "pc_url": "http://news.10jqka.com.cn/field/v1/20260612/677436057.shtml",
+        "seq": "677436057"
+      }
+    ],
+    "limit": 15
+  },
+  "status_msg": "success"
+}
