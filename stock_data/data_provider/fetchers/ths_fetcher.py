@@ -274,7 +274,7 @@ class ThsFetcher(BaseFetcher):
         | DataCapability.NEWS_FLASH
         | DataCapability.NEWS_SEARCH
         | DataCapability.STOCK_BOARD  # for board K-line (concept/industry)
-        | DataCapability.STOCK_NEWS   # 新: 个股新闻 basic.10jqka.com.cn
+        | DataCapability.STOCK_NEWS  # 新: 个股新闻 basic.10jqka.com.cn
         | DataCapability.ANNOUNCEMENT  # 新: 个股公告 basic.10jqka.com.cn
     )
 
@@ -881,13 +881,73 @@ class ThsFetcher(BaseFetcher):
                 source_domain = urlparse(url).hostname or ""
             except Exception:
                 source_domain = ""
-            out.append({
-                "title": str(r.get("title", "")),
-                "url": url,
-                "source_domain": source_domain,
-                "publish_date": str(r.get("date", "")),
-                "media_name": "",
-            })
+            out.append(
+                {
+                    "title": str(r.get("title", "")),
+                    "url": url,
+                    "source_domain": source_domain,
+                    "publish_date": str(r.get("date", "")),
+                    "media_name": "",
+                }
+            )
+        return out
+
+    def get_announcements(self, code: str, page_size: int = 30) -> list[dict]:
+        """THS 个股公告 via basic.10jqka.com.cn/basicapi/notice/pub.
+
+        Returns dict shape compatible with CninfoFetcher.get_announcements:
+          {title, type, date, url}; bonus field `raw_url` (cninfo PDF 直链).
+
+        The upstream `data.type` field is the static classification list
+        (业绩/重大事项/...); it's not per-record announcement type. Left as
+        "" to match the existing schema's "type" semantics used by
+        /stocks/{code}/announcements.
+
+        Soft failures (no market_id, upstream status_code != 0) → return [].
+        Hard failures (network / JSON parse) → raise DataFetchError.
+        """
+        code = normalize_stock_code(code)
+        market_id = _THS_MARKET_ID_MAP.get(code[:1])
+        if not market_id:
+            logger.warning(f"[ThsFetcher] get_announcements: no market_id for {code!r}")
+            return []
+        try:
+            n = max(1, min(int(page_size), 100))
+        except (TypeError, ValueError):
+            n = 30
+        payload = json_get(
+            _THS_NOTICE_URL,
+            params={
+                "type": "stock",
+                "code": code,
+                "market": market_id,
+                "classify": "all",
+                "page": 1,
+                "limit": n,
+            },
+            headers=_THS_BASIC_HEADERS,
+            timeout=10,
+        )
+        if not isinstance(payload, dict) or payload.get("status_code") != 0:
+            logger.warning(
+                f"[ThsFetcher] get_announcements({code}) upstream "
+                f"status_code={payload.get('status_code') if isinstance(payload, dict) else 'N/A'}"
+            )
+            return []
+        rows = payload.get("data") or {}
+        items = rows.get("data") if isinstance(rows, dict) else []
+        out: list[dict] = []
+        for r in items:
+            url = r.get("pc_url") or r.get("mobile_url") or ""
+            out.append(
+                {
+                    "title": str(r.get("title", "")),
+                    "type": "",
+                    "date": str(r.get("date", "")),
+                    "url": url,
+                    "raw_url": r.get("raw_url") or "",
+                }
+            )
         return out
 
     def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict]:
