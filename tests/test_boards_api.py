@@ -378,6 +378,54 @@ def test_get_board_stocks_unknown_source_returns_400_or_422(client):
     assert r.status_code in (400, 422)
 
 
+def test_get_board_stocks_ths_falls_back_when_get_all_boards_unavailable(client):
+    """?source=ths board-name fallback handles missing get_all_boards.
+
+    ThsFetcher implements ``get_board_stocks`` (for the AJAX endpoint) but
+    not ``get_all_boards`` (THS has no board-list endpoint). When the
+    persistence cache misses, the route's board-name fallback calls
+    ``manager.get_all_boards(source="ths", ...)`` which raises
+    ``AttributeError`` (manager calls the missing method directly).
+
+    The route must catch this gracefully (along with ``ValueError`` from
+    unknown sources and ``DataFetchError`` from fetcher failures) and
+    fall back to returning the bare ``board_code`` as the name. Previously
+    this raised 500 — fixed 2026-07-05 alongside THS board-stocks wiring.
+    """
+    fake = [{"stock_code": "300740", "stock_name": "皇台酒业"}]
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks",
+            return_value=(fake, "ThsFetcher"),
+        ),
+        # Cache miss for board name → triggers the upstream fallback path.
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_name",
+            return_value=None,
+        ),
+        # Simulate ThsFetcher lacking get_all_boards. We patch the
+        # manager method because that's what the route calls; manager's
+        # _with_source would otherwise raise ValueError before the
+        # AttributeError — patching manager.get_all_boards directly
+        # bypasses that layer and surfaces the AttributeError.
+        patch(
+            "stock_data.data_provider.manager.DataFetcherManager.get_all_boards",
+            side_effect=AttributeError(
+                "'ThsFetcher' object has no attribute 'get_all_boards'"
+            ),
+        ),
+    ):
+        r = client.get("/api/v1/boards/308709/stocks?source=ths")
+    # The request must NOT 500; the fallback is non-fatal.
+    assert r.status_code == 200
+    body = r.json()
+    # Bare board_code returned as name when fallback cannot resolve.
+    assert body["board"]["code"] == "308709"
+    assert body["board"]["name"] == "308709"
+    assert body["data_source"] == "ThsFetcher"
+    assert len(body["stocks"]) == 1
+
+
 # ===== get_stock_boards (NEW) =====
 
 

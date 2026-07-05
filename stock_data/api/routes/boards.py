@@ -15,6 +15,7 @@ from typing import Literal
 
 from fastapi import HTTPException, Path, Query
 
+from ...data_provider.base import DataFetchError
 from ...data_provider.core.types import safe_float, safe_int
 from ...data_provider.persistence import board as stock_board_cache
 from ...data_provider.persistence import trade_calendar
@@ -519,7 +520,15 @@ def get_board_stocks(
                 if match:
                     board_name = match
                     break
-        except ValueError:
+        except (ValueError, AttributeError, DataFetchError):
+            # ValueError: manager._with_source rejects unknown source
+            # AttributeError: fetcher doesn't implement get_all_boards
+            #   (e.g., ThsFetcher — only has get_board_stocks, not get_all_boards;
+            #   manager's _with_source accepts ThsFetcher because it has
+            #   STOCK_BOARD capability, but get_all_boards is not on the class)
+            # DataFetchError: fetcher's own failure (network/auth/etc.)
+            # All three are non-fatal: we just fall back to returning the
+            # bare board_code as the name.
             pass
 
     stock_list = [
