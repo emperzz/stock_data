@@ -454,7 +454,14 @@ def get_board_stocks(
     include_quote: bool = Query(False, description="Include realtime quote data"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
 ) -> BoardStocksResponse:
-    """Get stocks belonging to a board."""
+    """Get stocks belonging to a board.
+
+    Quote fields (price / change_pct / change_amount / volume / amount /
+    turnover_rate) come from the upstream fetcher. THS populates them by
+    default; eastmoney requires ``?include_quote=true``. Zzshare and
+    Zhitu do not emit quote fields at all. When quote data is unavailable,
+    affected fields are null in the response — not omitted.
+    """
     try:
         source = stock_board_cache.normalize_board_stocks_source(source)
     except ValueError as e:
@@ -525,8 +532,10 @@ def get_board_stocks(
             name=s.get("stock_name", ""),
             price=s.get("price"),
             change_pct=s.get("change_pct"),
+            change_amount=s.get("change_amount"),
             volume=s.get("volume"),
             amount=s.get("amount"),
+            turnover_rate=s.get("turnover_rate"),
         )
         for s in stocks
     ]

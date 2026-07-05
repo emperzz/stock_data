@@ -60,7 +60,9 @@ class StockQuote(BaseModel):
     low: float | None = Field(default=None, description="Lowest price")
     prev_close: float | None = Field(default=None, description="Previous close price")
     volume: int | None = Field(default=None, description="Trading volume (股/shares)")
-    volume_unit: str = Field(default="share", description="Volume unit. Always 'share' (股) per spec §3.4.")
+    volume_unit: str = Field(
+        default="share", description="Volume unit. Always 'share' (股) per spec §3.4."
+    )
     amount: float | None = Field(default=None, description="Trading amount")
     update_time: str | None = Field(default=None, description="Update timestamp")
     # Valuation metrics (from Tencent财经)
@@ -185,8 +187,12 @@ class SourceHealth(BaseModel):
     name: str = Field(description="Fetcher name")
     state: str = Field(description="Circuit breaker state: closed/open/half_open")
     available: bool = Field(description="Whether the source can be called")
-    last_success_time: float | None = Field(default=None, description="Unix timestamp of last successful call")
-    last_failure_time: float | None = Field(default=None, description="Unix timestamp of last failure")
+    last_success_time: float | None = Field(
+        default=None, description="Unix timestamp of last successful call"
+    )
+    last_failure_time: float | None = Field(
+        default=None, description="Unix timestamp of last failure"
+    )
     failure_count: int = Field(default=0, description="Consecutive failure count")
     # Set when the fetcher wasn't registered at startup (is_available()==False).
     # Logic-driven message from `fetcher.unavailable_reason()` — e.g.
@@ -203,7 +209,9 @@ class HealthResponse(BaseModel):
 
     status: str = Field(default="ok", description="Service status: ok/degraded/unhealthy")
     version: str = Field(default="0.1.0", description="Server version")
-    sources: list[SourceHealth] | None = Field(default=None, description="Per-source health details (only when details=true)")
+    sources: list[SourceHealth] | None = Field(
+        default=None, description="Per-source health details (only when details=true)"
+    )
 
 
 class IndexInfo(BaseModel):
@@ -282,17 +290,35 @@ class BoardInfo(BaseModel):
             "callers can split the result by type."
         ),
     )
-    price: float | None = Field(default=None, description="Latest price (requires include_quote=True)")
-    change_pct: float | None = Field(default=None, description="Change percent (requires include_quote=True)")
-    change_amount: float | None = Field(default=None, description="Change amount (requires include_quote=True)")
+    price: float | None = Field(
+        default=None, description="Latest price (requires include_quote=True)"
+    )
+    change_pct: float | None = Field(
+        default=None, description="Change percent (requires include_quote=True)"
+    )
+    change_amount: float | None = Field(
+        default=None, description="Change amount (requires include_quote=True)"
+    )
     volume: int | None = Field(default=None, description="Volume (requires include_quote=True)")
     amount: float | None = Field(default=None, description="Amount (requires include_quote=True)")
-    turnover_rate: float | None = Field(default=None, description="Turnover rate (requires include_quote=True)")
-    total_mv: float | None = Field(default=None, description="Total market value (requires include_quote=True)")
-    up_count: int | None = Field(default=None, description="Number of rising stocks (requires include_quote=True)")
-    down_count: int | None = Field(default=None, description="Number of falling stocks (requires include_quote=True)")
-    leading_stock: str | None = Field(default=None, description="Leading stock name (requires include_quote=True)")
-    leading_stock_pct: float | None = Field(default=None, description="Leading stock change percent (requires include_quote=True)")
+    turnover_rate: float | None = Field(
+        default=None, description="Turnover rate (requires include_quote=True)"
+    )
+    total_mv: float | None = Field(
+        default=None, description="Total market value (requires include_quote=True)"
+    )
+    up_count: int | None = Field(
+        default=None, description="Number of rising stocks (requires include_quote=True)"
+    )
+    down_count: int | None = Field(
+        default=None, description="Number of falling stocks (requires include_quote=True)"
+    )
+    leading_stock: str | None = Field(
+        default=None, description="Leading stock name (requires include_quote=True)"
+    )
+    leading_stock_pct: float | None = Field(
+        default=None, description="Leading stock change percent (requires include_quote=True)"
+    )
 
 
 class BoardStockInfo(BaseModel):
@@ -302,8 +328,12 @@ class BoardStockInfo(BaseModel):
     name: str = Field(default="", description="Stock name")
     price: float | None = Field(default=None, description="Current price")
     change_pct: float | None = Field(default=None, description="Change percent")
-    volume: int | None = Field(default=None, description="Volume (shares; only populated when upstream exposes it)")
-    amount: float | None = Field(default=None, description="Trading amount (元; populated by THS and EastMoney)")
+    change_amount: float | None = Field(default=None, description="Change amount (元)")
+    volume: int | None = Field(
+        default=None, description="Volume (shares; only populated when upstream exposes it)"
+    )
+    amount: float | None = Field(default=None, description="Trading amount (元)")
+    turnover_rate: float | None = Field(default=None, description="Turnover rate (%)")
 
 
 class BoardListResponse(BaseModel):
@@ -341,8 +371,7 @@ class BoardKlineResponse(BaseModel):
     source: str = Field(
         default="",
         description=(
-            "Data source fetcher name — one of "
-            "'EastMoneyFetcher', 'ZzshareFetcher', 'ThsFetcher'"
+            "Data source fetcher name — one of 'EastMoneyFetcher', 'ZzshareFetcher', 'ThsFetcher'"
         ),
     )
 
@@ -355,8 +384,7 @@ class StockBoardInfo(BaseModel):
     type: str = Field(description="Board type: concept / industry / index / special")
     subtype: str = Field(
         default="",
-        description="Source-specific subtype (e.g. '申万行业' for Zhitu, "
-        "'concept' for EastMoney)",
+        description="Source-specific subtype (e.g. '申万行业' for Zhitu, 'concept' for EastMoney)",
     )
     source: str = Field(
         description="eastmoney / zhitu / zzshare — which source provided this entry. "
@@ -398,7 +426,9 @@ class IndexQuote(BaseModel):
     low: float | None = Field(default=None, description="Lowest price")
     prev_close: float | None = Field(default=None, description="Previous close price")
     volume: int | None = Field(default=None, description="Trading volume (股/shares)")
-    volume_unit: str = Field(default="share", description="Volume unit. Always 'share' (股) per spec §3.4.")
+    volume_unit: str = Field(
+        default="share", description="Volume unit. Always 'share' (股) per spec §3.4."
+    )
     amount: float | None = Field(default=None, description="Trading amount")
     update_time: str | None = Field(default=None, description="Update timestamp")
 
@@ -441,10 +471,14 @@ class ZTPoolStock(BaseModel):
     circ_mv: float | None = Field(default=None, description="Circulating market value (元)")
     total_mv: float | None = Field(default=None, description="Total market value (元)")
     turnover_rate: float | None = Field(default=None, description="Turnover rate (%)")
-    lb_count: int | None = Field(default=None, description="Consecutive limit-up count (涨停连板数) / 连续跌停次数")
+    lb_count: int | None = Field(
+        default=None, description="Consecutive limit-up count (涨停连板数) / 连续跌停次数"
+    )
     first_seal_time: str | None = Field(default=None, description="First seal time (HH:mm:ss)")
     last_seal_time: str | None = Field(default=None, description="Last seal time (HH:mm:ss)")
-    seal_amount: float | None = Field(default=None, description="Seal amount (封板资金/封单资金, 元)")
+    seal_amount: float | None = Field(
+        default=None, description="Seal amount (封板资金/封单资金, 元)"
+    )
     seal_count: int | None = Field(default=None, description="Seal break count (炸板次数)")
     zt_count: str | None = Field(default=None, description="Limit-up statistics (x天/y板)")
 
@@ -455,7 +489,9 @@ class ZTPoolResponse(BaseModel):
     date: str = Field(description="Pool date (YYYY-MM-DD)")
     type: str = Field(description="Pool type: zt (涨停) / dt (跌停) / zbgc (炸板)")
     total: int = Field(description="Total number of stocks in the pool")
-    stocks: list[ZTPoolStock] = Field(default_factory=list, description="List of stocks in the pool")
+    stocks: list[ZTPoolStock] = Field(
+        default_factory=list, description="List of stocks in the pool"
+    )
     source: str = Field(
         default="",
         description="数据来源 fetcher 名 或 'persistence' (历史日期的池数据从 SQLite 读取)",
@@ -464,6 +500,7 @@ class ZTPoolResponse(BaseModel):
 
 class DragonTigerSeat(BaseModel):
     """龙虎榜席位"""
+
     name: str = Field(default="", description="营业部名称")
     buy_wan: float = Field(default=0, description="买入金额(万元)")
     sell_wan: float = Field(default=0, description="卖出金额(万元)")
@@ -472,6 +509,7 @@ class DragonTigerSeat(BaseModel):
 
 class DragonTigerInstitution(BaseModel):
     """机构买卖统计"""
+
     buy_amt: float = Field(default=0, description="机构买入(万元)")
     sell_amt: float = Field(default=0, description="机构卖出(万元)")
     net_amt: float = Field(default=0, description="机构净买入(万元)")
@@ -479,6 +517,7 @@ class DragonTigerInstitution(BaseModel):
 
 class DragonTigerRecord(BaseModel):
     """上榜记录"""
+
     date: str = Field(default="", description="上榜日期")
     reason: str = Field(default="", description="上榜原因")
     net_buy_wan: float = Field(default=0, description="净买入(万元)")
@@ -487,6 +526,7 @@ class DragonTigerRecord(BaseModel):
 
 class DragonTigerResponse(BaseModel):
     """个股龙虎榜响应"""
+
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     records: list[DragonTigerRecord] = Field(default_factory=list)
@@ -500,6 +540,7 @@ class DragonTigerResponse(BaseModel):
 
 class DailyDragonTigerStock(BaseModel):
     """全市场龙虎榜个股"""
+
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     reason: str = Field(default="", description="上榜原因")
@@ -513,6 +554,7 @@ class DailyDragonTigerStock(BaseModel):
 
 class DailyDragonTigerResponse(BaseModel):
     """全市场龙虎榜响应"""
+
     date: str = Field(description="交易日期")
     total: int = Field(default=0, description="上榜总数")
     stocks: list[DailyDragonTigerStock] = Field(default_factory=list)
@@ -524,6 +566,7 @@ class DailyDragonTigerResponse(BaseModel):
 
 class MarginTradingRecord(BaseModel):
     """融资融券记录"""
+
     date: str = Field(default="", description="日期")
     rzye: float = Field(default=0, description="融资余额(元)")
     rzmre: float = Field(default=0, description="融资买入额(元)")
@@ -536,6 +579,7 @@ class MarginTradingRecord(BaseModel):
 
 class MarginTradingResponse(BaseModel):
     """融资融券响应"""
+
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     records: list[MarginTradingRecord] = Field(default_factory=list)
@@ -547,6 +591,7 @@ class MarginTradingResponse(BaseModel):
 
 class BlockTradeRecord(BaseModel):
     """大宗交易记录"""
+
     date: str = Field(default="", description="交易日期")
     price: float = Field(default=0, description="成交价")
     close: float = Field(default=0, description="收盘价")
@@ -559,6 +604,7 @@ class BlockTradeRecord(BaseModel):
 
 class BlockTradeResponse(BaseModel):
     """大宗交易响应"""
+
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     records: list[BlockTradeRecord] = Field(default_factory=list)
@@ -571,6 +617,7 @@ class BlockTradeResponse(BaseModel):
 
 class HolderNumRecord(BaseModel):
     """股东户数记录"""
+
     date: str = Field(default="", description="报告期")
     holder_num: int = Field(default=0, description="股东户数")
     change_num: int = Field(default=0, description="户数变化")
@@ -580,6 +627,7 @@ class HolderNumRecord(BaseModel):
 
 class HolderNumResponse(BaseModel):
     """股东户数变化响应"""
+
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     records: list[HolderNumRecord] = Field(default_factory=list)
@@ -591,6 +639,7 @@ class HolderNumResponse(BaseModel):
 
 class DividendRecord(_UpstreamSanitizedModel):
     """分红送转记录"""
+
     date: str = Field(default="", description="除权除息日")
     bonus_rmb: float = Field(default=0, description="每股派息(税前)")
     transfer_ratio: float = Field(default=0, description="每10股转增")
@@ -600,6 +649,7 @@ class DividendRecord(_UpstreamSanitizedModel):
 
 class DividendResponse(BaseModel):
     """分红送转响应"""
+
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     records: list[DividendRecord] = Field(default_factory=list)
@@ -611,6 +661,7 @@ class DividendResponse(BaseModel):
 
 class FundFlowMinuteRecord(BaseModel):
     """资金流分钟级记录"""
+
     time: str = Field(default="", description="时间 (HH:mm)")
     main_net: float = Field(default=0, description="主力净流入(元)")
     small_net: float = Field(default=0, description="小单净流入(元)")
@@ -621,6 +672,7 @@ class FundFlowMinuteRecord(BaseModel):
 
 class FundFlowDailyRecord(BaseModel):
     """资金流日级记录"""
+
     date: str = Field(default="", description="日期")
     main_net: float = Field(default=0, description="主力净流入(元)")
     small_net: float = Field(default=0, description="小单净流入(元)")
@@ -631,6 +683,7 @@ class FundFlowDailyRecord(BaseModel):
 
 class FundFlowResponse(BaseModel):
     """资金流响应"""
+
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     type: str = Field(default="minute", description="类型: minute/daily")
@@ -643,6 +696,7 @@ class FundFlowResponse(BaseModel):
 
 class HotTopicRecord(BaseModel):
     """热点题材记录"""
+
     code: str = Field(default="", description="股票代码")
     name: str = Field(default="", description="股票名称")
     reason: str = Field(default="", description="题材归因")
@@ -655,6 +709,7 @@ class HotTopicRecord(BaseModel):
 
 class HotTopicResponse(BaseModel):
     """热点题材响应"""
+
     date: str = Field(description="交易日期")
     total: int = Field(default=0)
     topics: list[HotTopicRecord] = Field(default_factory=list)
@@ -666,6 +721,7 @@ class HotTopicResponse(BaseModel):
 
 class NorthFlowRecord(BaseModel):
     """北向资金记录"""
+
     time: str = Field(default="", description="时间")
     hgt_yi: float | None = Field(default=None, description="沪股通累计净买入(亿元)")
     sgt_yi: float | None = Field(default=None, description="深股通累计净买入(亿元)")
@@ -673,6 +729,7 @@ class NorthFlowRecord(BaseModel):
 
 class NorthFlowResponse(BaseModel):
     """北向资金响应"""
+
     records: list[NorthFlowRecord] = Field(default_factory=list)
     source: str = Field(
         default="",
@@ -682,6 +739,7 @@ class NorthFlowResponse(BaseModel):
 
 class ReportRecord(_UpstreamSanitizedModel):
     """研报记录"""
+
     title: str = Field(default="", description="标题")
     publish_date: str = Field(default="", description="发布日期")
     org: str = Field(default="", description="研究机构")
@@ -694,6 +752,7 @@ class ReportRecord(_UpstreamSanitizedModel):
 
 class ReportResponse(BaseModel):
     """研报列表响应"""
+
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     reports: list[ReportRecord] = Field(default_factory=list)
@@ -706,6 +765,7 @@ class ReportResponse(BaseModel):
 
 class ReportPDFResponse(BaseModel):
     """研报PDF响应"""
+
     report_id: str = Field(description="info_code")
     download_path: str | None = Field(default=None, description="本地文件路径")
     url: str | None = Field(default=None, description="PDF URL")
@@ -713,6 +773,7 @@ class ReportPDFResponse(BaseModel):
 
 class AnnouncementRecord(_UpstreamSanitizedModel):
     """公告记录"""
+
     title: str = Field(default="", description="标题")
     type: str = Field(default="", description="公告类型")
     date: str = Field(default="", description="发布日期")
@@ -721,6 +782,7 @@ class AnnouncementRecord(_UpstreamSanitizedModel):
 
 class AnnouncementResponse(BaseModel):
     """公告列表响应"""
+
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     announcements: list[AnnouncementRecord] = Field(default_factory=list)
@@ -751,7 +813,9 @@ class StockInfoResponse(BaseModel):
 
     # 公司画像
     registered_address: str = Field(default="", description="注册地址 (Zhitu)")
-    registered_capital: str = Field(default="", description="注册资本 (Zhitu, 字符串格式如 '9.82亿')")
+    registered_capital: str = Field(
+        default="", description="注册资本 (Zhitu, 字符串格式如 '9.82亿')"
+    )
     legal_representative: str = Field(default="", description="法人代表 (Zhitu)")
     business_scope: str = Field(default="", description="经营范围 (Zhitu)")
     established_date: str = Field(default="", description="成立日期 YYYY-MM-DD (Zhitu)")
@@ -773,6 +837,7 @@ class StockInfoResponse(BaseModel):
 
 class NewsItem(BaseModel):
     """Single news search result."""
+
     title: str = Field(default="", description="新闻标题 (已 strip <em>)")
     url: str = Field(description="新闻详情页 URL")
     source_domain: str = Field(default="", description="URL 的域名")
@@ -783,6 +848,7 @@ class NewsItem(BaseModel):
 
 class NewsSearchResponse(BaseModel):
     """News search response."""
+
     data: list[NewsItem] = Field(default_factory=list)
     total: int = Field(default=0, description="上游 API 报告的命中总数")
     limit: int = Field(default=20, description="请求的 limit")
@@ -795,6 +861,7 @@ class NewsSearchResponse(BaseModel):
 
 class NewsContentResponse(BaseModel):
     """News content extraction response."""
+
     url: str = Field(description="被提取的 URL")
     title: str | None = Field(default=None)
     body: str = Field(default="", description="已清洗的正文纯文本")
@@ -836,6 +903,7 @@ class FlashNewsResponse(BaseModel):
 
 class StockNewsItem(BaseModel):
     """Single news item for the per-stock news feed."""
+
     title: str = Field(default="")
     url: str = Field(default="")
     source_domain: str = Field(default="")
@@ -845,6 +913,7 @@ class StockNewsItem(BaseModel):
 
 class StockNewsResponse(BaseModel):
     """Stock-specific news feed response."""
+
     code: str = Field(description="股票代码")
     data: list[StockNewsItem] = Field(default_factory=list)
     total: int = Field(default=0)

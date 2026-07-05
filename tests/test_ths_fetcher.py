@@ -1,6 +1,7 @@
 """
 Unit tests for ThsFetcher.
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -44,9 +45,14 @@ class TestHotTopics:
 
     def test_normalize_hot_topic(self):
         row = {
-            "code": "600519", "name": "Test", "reason": "白酒+消费",
-            "zhangfu": 5.5, "huanshou": 2.1, "chengjiaoliang": 50000,
-            "chengjiaoe": 1000000, "ddejingliang": 100,
+            "code": "600519",
+            "name": "Test",
+            "reason": "白酒+消费",
+            "zhangfu": 5.5,
+            "huanshou": 2.1,
+            "chengjiaoliang": 50000,
+            "chengjiaoe": 1000000,
+            "ddejingliang": 100,
         }
         result = self.fetcher._normalize_hot_topic(row)
         assert result["code"] == "600519"
@@ -77,6 +83,7 @@ class TestNorthFlow:
 class TestHistoricalNotSupported:
     def test_fetch_raw_data_raises(self):
         from stock_data.data_provider.base import DataFetchError
+
         f = ThsFetcher()
         with pytest.raises(DataFetchError):
             f._fetch_raw_data("600519", "2026-01-01", "2026-05-01")
@@ -85,6 +92,7 @@ class TestHistoricalNotSupported:
         import pandas as pd
 
         from stock_data.data_provider.base import DataFetchError
+
         f = ThsFetcher()
         with pytest.raises(DataFetchError):
             f._normalize_data(pd.DataFrame(), "600519")
@@ -98,6 +106,7 @@ class TestFetchFlashNewsNormalize:
 
     def test_normalize_flash_item_full(self):
         from datetime import datetime
+
         item = {
             "id": "4572951",
             "seq": "677638595",
@@ -153,6 +162,7 @@ class TestFetchFlashNewsSinglePage:
     def test_fetch_one_page_uses_correct_url(self, monkeypatch):
         """Verify the upstream URL, params, and headers."""
         import json
+
         with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
             fixture = json.load(_f)
         captured = {}
@@ -162,15 +172,20 @@ class TestFetchFlashNewsSinglePage:
             captured["params"] = params
             captured["headers"] = headers
             captured["timeout"] = timeout
+
             class R:
                 status_code = 200
+
                 def raise_for_status(self):
                     pass
+
                 def json(self):
                     return fixture
+
             return R()
 
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         self.fetcher.fetch_flash_news(limit=10)
@@ -183,19 +198,24 @@ class TestFetchFlashNewsSinglePage:
 
     def test_returns_normalized_dicts_from_fixture(self, monkeypatch):
         import json
+
         with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
             fixture = json.load(_f)
 
         def fake_get(url, params=None, headers=None, timeout=None):
             class R:
                 status_code = 200
+
                 def raise_for_status(self):
                     pass
+
                 def json(self):
                     return fixture
+
             return R()
 
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=20)
@@ -210,6 +230,7 @@ class TestFetchFlashNewsSinglePage:
         # rtime=1782181568 → 2026-06-22 in UTC; verify dynamically (year-coupled
         # assertions rot on Jan 1, see test_normalize_flash_item_full).
         from datetime import datetime
+
         expected_year = datetime.utcfromtimestamp(1782181568).year
         assert first["publish_time"].startswith(f"{expected_year}-")
 
@@ -223,21 +244,27 @@ class TestFetchFlashNewsMultiPage:
     def test_paginates_to_3_pages_for_limit_50(self, monkeypatch):
         """limit=50 → 3 pages requested (3*20=60 >= 50), returns 50 items."""
         import json
+
         with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
             fixture = json.load(_f)
         page_calls = []
 
         def fake_get(url, params=None, headers=None, timeout=None):
             page_calls.append(params["page"])
+
             class R:
                 status_code = 200
+
                 def raise_for_status(self):
                     pass
+
                 def json(self):
                     return fixture
+
             return R()
 
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=50)
@@ -248,21 +275,27 @@ class TestFetchFlashNewsMultiPage:
     def test_paginates_to_10_pages_for_limit_200(self, monkeypatch):
         """limit=200 -> 10 pages, returns 200 items (max)."""
         import json
+
         with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
             fixture = json.load(_f)
         page_calls = []
 
         def fake_get(url, params=None, headers=None, timeout=None):
             page_calls.append(params["page"])
+
             class R:
                 status_code = 200
+
                 def raise_for_status(self):
                     pass
+
                 def json(self):
                     return fixture
+
             return R()
 
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=200)
@@ -273,6 +306,7 @@ class TestFetchFlashNewsMultiPage:
     def test_stops_on_empty_page(self, monkeypatch):
         """If upstream returns an empty list, stop paginating immediately."""
         import json
+
         with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
             fixture = json.load(_f)
         empty = {"code": "200", "msg": "ok", "data": {"list": []}}
@@ -281,15 +315,20 @@ class TestFetchFlashNewsMultiPage:
         def fake_get(url, params=None, headers=None, timeout=None):
             page_calls.append(params["page"])
             payload = fixture if params["page"] == "1" else empty
+
             class R:
                 status_code = 200
+
                 def raise_for_status(self):
                     pass
+
                 def json(self, p=payload):
                     return p
+
             return R()
 
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=200)
@@ -316,19 +355,24 @@ class TestFetchFlashNewsLimits:
     def test_limit_string_coerced(self, monkeypatch):
         """Route layer sends str; fetcher should coerce to int."""
         import json
+
         with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
             fixture = json.load(_f)
 
         def fake_get(url, params=None, headers=None, timeout=None):
             class R:
                 status_code = 200
+
                 def raise_for_status(self):
                     pass
+
                 def json(self):
                     return fixture
+
             return R()
 
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit="10")
@@ -341,21 +385,27 @@ class TestFetchFlashNewsLimits:
     def test_limit_above_200_capped_not_raised(self, monkeypatch):
         """limit=500 doesn't raise; capped to 200 (10 pages)."""
         import json
+
         with open("tests/fixtures/ths_flash_news.json", encoding="utf-8") as _f:
             fixture = json.load(_f)
         page_calls = []
 
         def fake_get(url, params=None, headers=None, timeout=None):
             page_calls.append(params["page"])
+
             class R:
                 status_code = 200
+
                 def raise_for_status(self):
                     pass
+
                 def json(self):
                     return fixture
+
             return R()
 
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", fake_get)
 
         results = self.fetcher.fetch_flash_news(limit=500)
@@ -371,13 +421,18 @@ class TestFetchFlashNewsErrors:
 
     def test_http_error_raises(self, monkeypatch):
         import requests as _requests
+
         class R:
             status_code = 500
+
             def raise_for_status(self):
                 raise _requests.exceptions.HTTPError("500 Server Error")
+
             def json(self):
                 return {}
+
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         with pytest.raises(DataFetchError, match="HTTP"):
             self.fetcher.fetch_flash_news(limit=10)
@@ -386,8 +441,10 @@ class TestFetchFlashNewsErrors:
         import requests as _requests
 
         import stock_data.data_provider.utils.http as http_mod
+
         def boom(*a, **kw):
             raise _requests.ConnectionError("refused")
+
         monkeypatch.setattr(http_mod.requests, "get", boom)
         with pytest.raises(DataFetchError, match="Request failed"):
             self.fetcher.fetch_flash_news(limit=10)
@@ -395,37 +452,51 @@ class TestFetchFlashNewsErrors:
     def test_bad_json_raises(self, monkeypatch):
         class R:
             status_code = 200
+
             def raise_for_status(self):
                 pass
+
             def json(self):
                 raise ValueError("bad json")
+
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         with pytest.raises(DataFetchError, match="Invalid JSON"):
             self.fetcher.fetch_flash_news(limit=10)
 
     def test_upstream_error_code_raises(self, monkeypatch):
         bad = {"code": -1, "msg": "rate limited", "data": None}
+
         class R:
             status_code = 200
+
             def raise_for_status(self):
                 pass
+
             def json(self):
                 return bad
+
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         with pytest.raises(DataFetchError, match="code=-1"):
             self.fetcher.fetch_flash_news(limit=10)
 
     def test_empty_list_returns_empty(self, monkeypatch):
         empty = {"code": "200", "msg": "ok", "data": {"list": []}}
+
         class R:
             status_code = 200
+
             def raise_for_status(self):
                 pass
+
             def json(self):
                 return empty
+
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         results = self.fetcher.fetch_flash_news(limit=10)
         assert results == []
@@ -433,13 +504,18 @@ class TestFetchFlashNewsErrors:
     def test_null_list_returns_empty(self, monkeypatch):
         """data.list is null (not []) -> return [] (not raise)."""
         null_list = {"code": "200", "msg": "ok", "data": {"list": None}}
+
         class R:
             status_code = 200
+
             def raise_for_status(self):
                 pass
+
             def json(self):
                 return null_list
+
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         results = self.fetcher.fetch_flash_news(limit=10)
         assert results == []
@@ -447,13 +523,18 @@ class TestFetchFlashNewsErrors:
     def test_missing_data_returns_empty(self, monkeypatch):
         """data key entirely missing -> return []."""
         no_data = {"code": "200", "msg": "ok"}
+
         class R:
             status_code = 200
+
             def raise_for_status(self):
                 pass
+
             def json(self):
                 return no_data
+
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         results = self.fetcher.fetch_flash_news(limit=10)
         assert results == []
@@ -465,19 +546,36 @@ class TestFetchFlashNewsErrors:
             "msg": "ok",
             "data": {
                 "list": [
-                    {"id": "1", "title": "good", "url": "https://x", "digest": "d", "rtime": "1782181568"},
+                    {
+                        "id": "1",
+                        "title": "good",
+                        "url": "https://x",
+                        "digest": "d",
+                        "rtime": "1782181568",
+                    },
                     {"id": "2", "title": "bad"},  # missing url → skipped
-                    {"id": "3", "title": "also good", "url": "https://y", "digest": "d2", "rtime": "1782181567"},
+                    {
+                        "id": "3",
+                        "title": "also good",
+                        "url": "https://y",
+                        "digest": "d2",
+                        "rtime": "1782181567",
+                    },
                 ]
             },
         }
+
         class R:
             status_code = 200
+
             def raise_for_status(self):
                 pass
+
             def json(self):
                 return fixture
+
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "get", lambda *a, **kw: R())
         results = self.fetcher.fetch_flash_news(limit=10)
         assert len(results) == 2
@@ -555,7 +653,12 @@ class TestSearchNewsNormalize:
         rec = _IWENCAI_FIXTURE["data"][0]
         out = self.fetcher._normalize_search_item(rec)
         assert set(out.keys()) == {
-            "title", "url", "source_domain", "publish_date", "snippet", "media_name",
+            "title",
+            "url",
+            "source_domain",
+            "publish_date",
+            "snippet",
+            "media_name",
         }
         assert out["title"] == "贵州茅台拟提高每股分红金额"
         assert out["url"] == rec["url"]
@@ -572,7 +675,12 @@ class TestSearchNewsNormalize:
         assert "<em>" not in out["snippet"]
 
     def test_normalize_source_domain_falls_back_to_url(self):
-        rec = {"url": "https://a.b.com/p", "title": "t", "extra": {}, "publish_date": "2026-01-01 00:00:00"}
+        rec = {
+            "url": "https://a.b.com/p",
+            "title": "t",
+            "extra": {},
+            "publish_date": "2026-01-01 00:00:00",
+        }
         out = self.fetcher._normalize_search_item(rec)
         assert out["source_domain"] == "a.b.com"  # extra.host_name 缺失 → urlparse
 
@@ -592,16 +700,21 @@ class TestSearchNewsRequest:
 
         def fake_post(url, json=None, headers=None, timeout=None):
             captured.update(url=url, json=json, headers=headers, timeout=timeout)
+
             class R:
                 status_code = 200
                 encoding = "utf-8"
+
                 def raise_for_status(self):
                     pass
+
                 def json(self):
                     return _IWENCAI_FIXTURE
+
             return R()
 
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "post", fake_post)
 
         self.fetcher.search_news("茅台", limit=5)
@@ -616,6 +729,7 @@ class TestSearchNewsRequest:
 
     def test_returns_normalized_dicts_and_skips_malformed(self, monkeypatch):
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
 
         results = self.fetcher.search_news("茅台", limit=10)
@@ -626,11 +740,17 @@ class TestSearchNewsRequest:
         assert results[1]["title"] == "茅台股东会召开"
         for it in results:
             assert set(it.keys()) == {
-                "title", "url", "source_domain", "publish_date", "snippet", "media_name",
+                "title",
+                "url",
+                "source_domain",
+                "publish_date",
+                "snippet",
+                "media_name",
             }
 
     def test_from_date_filter(self, monkeypatch):
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
         # 只保留 2026-06-30 当天及以后 → 仅第 2 条
         results = self.fetcher.search_news("茅台", from_date="2026-06-10", limit=10)
@@ -639,6 +759,7 @@ class TestSearchNewsRequest:
 
     def test_to_date_filter(self, monkeypatch):
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
         # 只保留 2026-06-03 当天及以前 → 仅第 1 条
         results = self.fetcher.search_news("茅台", to_date="2026-06-10", limit=10)
@@ -647,6 +768,7 @@ class TestSearchNewsRequest:
 
     def test_empty_data_returns_empty(self, monkeypatch):
         import stock_data.data_provider.utils.http as http_mod
+
         payload = {"status_msg": "OK", "status_code": 0, "total": 0, "data": []}
         monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(payload))
         assert self.fetcher.search_news("不存在的词", limit=10) == []
@@ -680,6 +802,7 @@ class TestSearchNewsValidation:
 
     def test_limit_string_coerced(self, monkeypatch):
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(_IWENCAI_FIXTURE))
         results = self.fetcher.search_news("茅台", limit="10")
         assert len(results) == 2
@@ -693,14 +816,19 @@ class TestSearchNewsErrors:
 
     def test_http_error_raises(self, monkeypatch):
         import requests as _requests
+
         class R:
             status_code = 502
             encoding = "utf-8"
+
             def raise_for_status(self):
                 raise _requests.exceptions.HTTPError("502 Bad Gateway")
+
             def json(self):
                 return {}
+
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "post", lambda *a, **kw: R())
         with pytest.raises(DataFetchError, match="HTTP"):
             self.fetcher.search_news("茅台", limit=10)
@@ -709,8 +837,10 @@ class TestSearchNewsErrors:
         import requests as _requests
 
         import stock_data.data_provider.utils.http as http_mod
+
         def boom(*a, **kw):
             raise _requests.ConnectionError("refused")
+
         monkeypatch.setattr(http_mod.requests, "post", boom)
         with pytest.raises(DataFetchError, match="Request failed"):
             self.fetcher.search_news("茅台", limit=10)
@@ -719,11 +849,15 @@ class TestSearchNewsErrors:
         class R:
             status_code = 200
             encoding = "utf-8"
+
             def raise_for_status(self):
                 pass
+
             def json(self):
                 raise ValueError("bad json")
+
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "post", lambda *a, **kw: R())
         with pytest.raises(DataFetchError, match="Invalid JSON"):
             self.fetcher.search_news("茅台", limit=10)
@@ -731,6 +865,7 @@ class TestSearchNewsErrors:
     def test_upstream_status_code_raises(self, monkeypatch):
         bad = {"status_msg": "FAIL", "status_code": -1, "data": []}
         import stock_data.data_provider.utils.http as http_mod
+
         monkeypatch.setattr(http_mod.requests, "post", _fake_post_ok(bad))
         with pytest.raises(DataFetchError, match="status_code=-1"):
             self.fetcher.search_news("茅台", limit=10)
@@ -856,9 +991,7 @@ class TestGetBoardStocks:
     def setup_method(self):
         self.fetcher = ThsFetcher()
         # Bypass v-token mint (avoids py_mini_racer import during tests).
-        self._v_token_patcher = patch.object(
-            ThsFetcher, "_v_token", return_value="x"
-        )
+        self._v_token_patcher = patch.object(ThsFetcher, "_v_token", return_value="x")
         self._v_token_patcher.start()
 
     def teardown_method(self):
@@ -890,22 +1023,44 @@ class TestGetBoardStocks:
         for row in rows:
             tds = "".join(f"<td>{c}</td>" for c in row)
             body_rows += f"<tr>{tds}</tr>\n"
-        return (
-            "<html><body><table><tbody>\n"
-            f"{body_rows}"
-            "</tbody></table></body></html>"
-        )
+        return f"<html><body><table><tbody>\n{body_rows}</tbody></table></body></html>"
 
     def test_single_page_returns_normalized_dicts(self):
         """One page, two rows → two normalized dicts in canonical shape."""
         html = self._build_html(
             [
-                ["1", "300740", "皇台酒业", "10.50", "5.20", "0.52", "0.10",
-                 "3.50", "1.20", "2.10", "100000000", "500000000",
-                 "5250000000", "30.5"],
-                ["2", "000001", "平安银行", "12.30", "1.50", "0.18", "0.05",
-                 "0.80", "0.90", "1.50", "200000000", "19000000000",
-                 "234000000000", "5.2"],
+                [
+                    "1",
+                    "300740",
+                    "皇台酒业",
+                    "10.50",
+                    "5.20",
+                    "0.52",
+                    "0.10",
+                    "3.50",
+                    "1.20",
+                    "2.10",
+                    "100000000",
+                    "500000000",
+                    "5250000000",
+                    "30.5",
+                ],
+                [
+                    "2",
+                    "000001",
+                    "平安银行",
+                    "12.30",
+                    "1.50",
+                    "0.18",
+                    "0.05",
+                    "0.80",
+                    "0.90",
+                    "1.50",
+                    "200000000",
+                    "19000000000",
+                    "234000000000",
+                    "5.2",
+                ],
             ]
         )
         # side_effect list: page 1 returns data; pages 2+ return empty
@@ -914,9 +1069,7 @@ class TestGetBoardStocks:
         side_effects = [self._make_response(html)] + [
             self._make_response(self._build_html([])) for _ in range(49)
         ]
-        with patch.object(
-            ThsFetcher, "_http_get", side_effect=side_effects
-        ) as mock_get:
+        with patch.object(ThsFetcher, "_http_get", side_effect=side_effects) as mock_get:
             result = self.fetcher.get_board_stocks("308709")
 
         # URL shape — first call is page 1, field/199112, ajax/1
@@ -956,23 +1109,60 @@ class TestGetBoardStocks:
         """沪市 codes → 'sh'; 深市 codes → 'sz'."""
         html = self._build_html(
             [
-                ["1", "600519", "贵州茅台", "1800.00", "0.50", "9.00", "0",
-                 "0.30", "1.00", "1.00", "50000000", "1200000000",
-                 "2160000000000", "30.0"],
-                ["2", "000001", "平安银行", "12.00", "1.00", "0.12", "0",
-                 "0.50", "0.80", "1.00", "100000000", "19000000000",
-                 "228000000000", "5.0"],
-                ["3", "300750", "宁德时代", "200.00", "2.00", "4.00", "0",
-                 "0.80", "1.00", "2.00", "80000000", "4300000000",
-                 "860000000000", "20.0"],
+                [
+                    "1",
+                    "600519",
+                    "贵州茅台",
+                    "1800.00",
+                    "0.50",
+                    "9.00",
+                    "0",
+                    "0.30",
+                    "1.00",
+                    "1.00",
+                    "50000000",
+                    "1200000000",
+                    "2160000000000",
+                    "30.0",
+                ],
+                [
+                    "2",
+                    "000001",
+                    "平安银行",
+                    "12.00",
+                    "1.00",
+                    "0.12",
+                    "0",
+                    "0.50",
+                    "0.80",
+                    "1.00",
+                    "100000000",
+                    "19000000000",
+                    "228000000000",
+                    "5.0",
+                ],
+                [
+                    "3",
+                    "300750",
+                    "宁德时代",
+                    "200.00",
+                    "2.00",
+                    "4.00",
+                    "0",
+                    "0.80",
+                    "1.00",
+                    "2.00",
+                    "80000000",
+                    "4300000000",
+                    "860000000000",
+                    "20.0",
+                ],
             ]
         )
         side_effects = [self._make_response(html)] + [
             self._make_response(self._build_html([])) for _ in range(49)
         ]
-        with patch.object(
-            ThsFetcher, "_http_get", side_effect=side_effects
-        ):
+        with patch.object(ThsFetcher, "_http_get", side_effect=side_effects):
             result = self.fetcher.get_board_stocks("301558")
         assert result[0]["exchange"] == "sh"
         assert result[1]["exchange"] == "sz"
@@ -982,35 +1172,77 @@ class TestGetBoardStocks:
         """'--' (em-dash) for missing numeric → None (not 0.0)."""
         html = self._build_html(
             [
-                ["1", "300740", "皇台酒业", "--", "--", "--", "--",
-                 "--", "--", "--", "--", "--", "--", "--"],
+                [
+                    "1",
+                    "300740",
+                    "皇台酒业",
+                    "--",
+                    "--",
+                    "--",
+                    "--",
+                    "--",
+                    "--",
+                    "--",
+                    "--",
+                    "--",
+                    "--",
+                    "--",
+                ],
             ]
         )
         side_effects = [self._make_response(html)] + [
             self._make_response(self._build_html([])) for _ in range(49)
         ]
-        with patch.object(
-            ThsFetcher, "_http_get", side_effect=side_effects
-        ):
+        with patch.object(ThsFetcher, "_http_get", side_effect=side_effects):
             result = self.fetcher.get_board_stocks("308709")
         assert len(result) == 1
         # All numeric fields should be None
-        for k in ("price", "change_pct", "volume", "turnover", "amount"):
+        for k in ("price", "change_pct", "volume", "turnover_rate", "amount"):
             assert result[0][k] is None, f"{k}={result[0][k]} (expected None)"
 
     def test_pagination_fans_out_until_empty_page(self):
         """3 pages, page 3 returns 0 rows → loop terminates after page 3."""
         page1_html = self._build_html(
-            [[str(i + 1), f"3007{40 + i:02d}", f"股票{i}", "10.00", "1.00",
-              "0.10", "0.05", "0.80", "1.00", "1.50", "100000000",
-              "500000000", "5250000000", "30.0"]
-             for i in range(10)]
+            [
+                [
+                    str(i + 1),
+                    f"3007{40 + i:02d}",
+                    f"股票{i}",
+                    "10.00",
+                    "1.00",
+                    "0.10",
+                    "0.05",
+                    "0.80",
+                    "1.00",
+                    "1.50",
+                    "100000000",
+                    "500000000",
+                    "5250000000",
+                    "30.0",
+                ]
+                for i in range(10)
+            ]
         )
         page2_html = self._build_html(
-            [[str(i + 11), f"3008{40 + i:02d}", f"股票{i + 10}", "10.00",
-              "1.00", "0.10", "0.05", "0.80", "1.00", "1.50", "100000000",
-              "500000000", "5250000000", "30.0"]
-             for i in range(10)]
+            [
+                [
+                    str(i + 11),
+                    f"3008{40 + i:02d}",
+                    f"股票{i + 10}",
+                    "10.00",
+                    "1.00",
+                    "0.10",
+                    "0.05",
+                    "0.80",
+                    "1.00",
+                    "1.50",
+                    "100000000",
+                    "500000000",
+                    "5250000000",
+                    "30.0",
+                ]
+                for i in range(10)
+            ]
         )
         page3_html = self._build_html([])  # empty page → terminate
 
@@ -1020,9 +1252,7 @@ class TestGetBoardStocks:
             self._make_response(page3_html),
         ]
 
-        with patch.object(
-            ThsFetcher, "_http_get", side_effect=responses
-        ) as mock_get:
+        with patch.object(ThsFetcher, "_http_get", side_effect=responses) as mock_get:
             result = self.fetcher.get_board_stocks("308709")
 
         # 3 HTTP calls (page 1, 2, 3 — page 3 is empty so loop terminates)
@@ -1041,6 +1271,7 @@ class TestGetBoardStocks:
 
     def test_raises_data_fetch_error_on_http_failure(self):
         """HTTP non-2xx → DataFetchError."""
+
         class _Bad:
             status_code = 401
             encoding = "utf-8"
@@ -1056,6 +1287,7 @@ class TestGetBoardStocks:
     def test_raises_data_fetch_error_on_network_failure(self):
         """requests.ConnectionError → DataFetchError."""
         import requests as _requests
+
         with (
             patch.object(
                 ThsFetcher,
@@ -1069,9 +1301,7 @@ class TestGetBoardStocks:
     def test_accepts_kwargs_for_interface_parity(self):
         """Accepts source/include_quote/board_type kwargs without error."""
         html = self._build_html([])
-        with patch.object(
-            ThsFetcher, "_http_get", return_value=self._make_response(html)
-        ):
+        with patch.object(ThsFetcher, "_http_get", return_value=self._make_response(html)):
             result = self.fetcher.get_board_stocks(
                 "308709",
                 source="ths",

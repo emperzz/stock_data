@@ -691,8 +691,8 @@ class ThsFetcher(BaseFetcher):
         # Exchange inferred from the code prefix (matches zzshare/eastmoney
         # convention: 'sh' for 沪, 'sz' for 深, '' for 北交所/未知).
         code_prefix = stock_code[:1]
-        exchange = "sh" if code_prefix in ("6", "9") else (
-            "sz" if code_prefix in ("0", "3") else ""
+        exchange = (
+            "sh" if code_prefix in ("6", "9") else ("sz" if code_prefix in ("0", "3") else "")
         )
         return {
             "stock_code": stock_code,
@@ -701,7 +701,7 @@ class ThsFetcher(BaseFetcher):
             "price": safe_float(tds[3].get_text(strip=True)) if len(tds) > 3 else None,
             "change_pct": safe_float(tds[4].get_text(strip=True)) if len(tds) > 4 else None,
             "change_amount": safe_float(tds[5].get_text(strip=True)) if len(tds) > 5 else None,
-            "turnover": safe_float(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
+            "turnover_rate": safe_float(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
             # THS field/199112 上游只有 14 列,没有 成交量(手) 字段 — 现有
             # 14 列中 idx 10 是 成交额(元),不是 成交量(股). 因为 BoardStockInfo
             # schema 的 volume 字段语义是 成交量(股),我们必须把 volume 留 None
@@ -734,8 +734,7 @@ class ThsFetcher(BaseFetcher):
             r = self._http_get(url, headers=headers, timeout=15)
         except Exception as e:
             raise DataFetchError(
-                f"[ThsFetcher] board_stocks({concept_id}, page={page}) "
-                f"network failed: {e}"
+                f"[ThsFetcher] board_stocks({concept_id}, page={page}) network failed: {e}"
             ) from e
         if not (200 <= r.status_code < 300):
             raise DataFetchError(
@@ -796,7 +795,7 @@ class ThsFetcher(BaseFetcher):
             - ``stock_code`` (e.g. ``"300740"``)
             - ``stock_name`` (Chinese name)
             - ``exchange`` (``"sh"`` / ``"sz"`` / ``""`` for unknown prefix)
-            - ``price``, ``change_pct``, ``change_amount``, ``turnover``,
+            - ``price``, ``change_pct``, ``change_amount``, ``turnover_rate``,
               ``volume``, ``amount`` — None when upstream emits ``--``
 
             Empty list on no-data or upstream empty. Multiple pages are
@@ -859,9 +858,7 @@ class ThsFetcher(BaseFetcher):
                 timeout=10,
             )
         except Exception as e:
-            raise DataFetchError(
-                f"[ThsFetcher] stock_concept_list({code}) failed: {e}"
-            ) from e
+            raise DataFetchError(f"[ThsFetcher] stock_concept_list({code}) failed: {e}") from e
         # Mirror search_news: business-level upstream errors (status_code != 0)
         # surface as DataFetchError so cold-fill callers can see the failure in
         # `cold_sources` instead of silently receiving [].

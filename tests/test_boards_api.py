@@ -382,22 +382,22 @@ def test_get_board_stocks_projects_amount_from_fetcher_output(client):
     """Route projects 'amount' (元) from fetcher output into BoardStockInfo.
 
     THS fetcher populates 'amount' from the upstream 成交额 column.
-    EastMoney fetcher populates 'amount' via push2his f6 field (only when
+    EastMoney fetcher populates 'amount' via push2 clist f6 field (only when
     include_quote=True). Zzshare leaves 'amount' as None. The route must
     forward whatever the fetcher returned — including 成交额 — into the
     response so callers don't lose data the upstream already provided.
     """
-    fake = [{
-        "stock_code": "300740",
-        "stock_name": "皇台酒业",
-        "exchange": "sz",
-        "price": 22.49,
-        "change_pct": 1.44,
-        "volume": None,        # THS upstream has no shares-volume column
-        "amount": 10.23e8,     # 10.23亿元 = 1,023,000,000 元
-        "change_amount": 0.32,
-        "turnover": 12.32,
-    }]
+    fake = [
+        {
+            "stock_code": "300740",
+            "stock_name": "皇台酒业",
+            "exchange": "sz",
+            "price": 22.49,
+            "change_pct": 1.44,
+            "volume": None,  # THS upstream has no shares-volume column
+            "amount": 10.23e8,  # 10.23亿元 = 1,023,000,000 元
+        }
+    ]
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
@@ -414,8 +414,80 @@ def test_get_board_stocks_projects_amount_from_fetcher_output(client):
     assert stock["code"] == "300740"
     assert stock["price"] == 22.49
     assert stock["change_pct"] == 1.44
-    assert stock["volume"] is None            # upstream has no shares-volume
-    assert stock["amount"] == 10.23e8         # 成交额 (元) projected through
+    assert stock["volume"] is None  # upstream has no shares-volume
+    assert stock["amount"] == 10.23e8  # 成交额 (元) projected through
+
+
+def test_get_board_stocks_projects_change_amount_and_turnover_rate(client):
+    """Route projects 'change_amount' (元) and 'turnover_rate' (%) alongside
+    the existing fields.
+
+    Both are populated by THS upstream (idx 5 涨跌元, idx 7 换手%) and by
+    EastMoney when include_quote=True (f4 → change_amount, f8 → turnover_rate).
+    Without this projection, they were silently dropped at the schema boundary
+    — same anti-pattern that originally motivated commit 46ff6cb for amount.
+    """
+    fake = [
+        {
+            "stock_code": "300740",
+            "stock_name": "皇台酒业",
+            "exchange": "sz",
+            "price": 22.49,
+            "change_pct": 1.44,
+            "change_amount": 0.32,  # 涨跌 0.32元
+            "turnover_rate": 12.32,  # 换手率 12.32%
+        }
+    ]
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks",
+            return_value=(fake, "ThsFetcher"),
+        ),
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_name",
+            return_value="多多概念",
+        ),
+    ):
+        r = client.get("/api/v1/boards/308709/stocks?source=ths")
+    assert r.status_code == 200
+    stock = r.json()["stocks"][0]
+    assert stock["change_amount"] == 0.32
+    assert stock["turnover_rate"] == 12.32
+
+
+def test_get_board_stocks_projects_change_amount_and_turnover_rate_null_when_absent(client):
+    """Both new fields default to None when the fetcher doesn't populate them.
+
+    Verifies the schema's default-None contract for callers relying on the
+    guaranteed-optional semantics (independent of the source). This is the
+    EastMoney include_quote=False path, and the Zzshare/Zhitu path (which
+    never emit quote fields).
+    """
+    fake = [
+        {
+            "stock_code": "300740",
+            "stock_name": "皇台酒业",
+            "exchange": "sz",
+            "price": 22.49,
+            "change_pct": 1.44,
+            # No change_amount, no turnover_rate keys — fetcher didn't emit them
+        }
+    ]
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks",
+            return_value=(fake, "ZzshareFetcher"),
+        ),
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_name",
+            return_value="多多概念",
+        ),
+    ):
+        r = client.get("/api/v1/boards/308709/stocks?source=zzshare")
+    assert r.status_code == 200
+    stock = r.json()["stocks"][0]
+    assert stock["change_amount"] is None
+    assert stock["turnover_rate"] is None
 
 
 def test_get_board_stocks_ths_falls_back_when_get_all_boards_unavailable(client):
@@ -450,9 +522,7 @@ def test_get_board_stocks_ths_falls_back_when_get_all_boards_unavailable(client)
         # bypasses that layer and surfaces the AttributeError.
         patch(
             "stock_data.data_provider.manager.DataFetcherManager.get_all_boards",
-            side_effect=AttributeError(
-                "'ThsFetcher' object has no attribute 'get_all_boards'"
-            ),
+            side_effect=AttributeError("'ThsFetcher' object has no attribute 'get_all_boards'"),
         ),
     ):
         r = client.get("/api/v1/boards/308709/stocks?source=ths")
