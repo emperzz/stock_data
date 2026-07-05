@@ -778,6 +778,9 @@ class AnnouncementRecord(_UpstreamSanitizedModel):
     type: str = Field(default="", description="公告类型")
     date: str = Field(default="", description="发布日期")
     url: str = Field(default="", description="公告链接")
+    # raw_url 上游仅 ThsFetcher (basic.10jqka.com.cn) 携带; 其他 fetcher 留空.
+    # Pydantic v2 默认 extra='ignore': 老 fetcher dict 缺 raw_url → 用 "" 默认.
+    raw_url: str = Field(default="", description="巨潮原文 PDF 直链 (ThsFetcher only)")
 
 
 class AnnouncementResponse(BaseModel):

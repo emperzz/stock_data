@@ -2,7 +2,8 @@
 同花顺 HTTP API fetcher for signal layer data.
 
 Provides: 热点题材(hot-topics), 北向资金(north-flow), 全球财经快讯(news-flash),
-          新闻搜索(news-search), 板块 K 线(board-history)
+          新闻搜索(news-search), 板块 K 线(board-history),
+          个股新闻(stock-news), 个股公告(announcements)
 
 APIs:
 - 热点: zx.10jqka.com.cn/event/api/getharden/
@@ -196,6 +197,14 @@ _THS_MARKET_ID_MAP: dict[str, str] = {
     "3": "33",  # 深市创业板
 }
 
+# 个股新闻 / 个股公告 — basic.10jqka.com.cn/fuyao/info/company/v1/...
+_THS_NEWS_URL = "https://basic.10jqka.com.cn/fuyao/info/company/v1/news"
+_THS_NOTICE_URL = "https://basic.10jqka.com.cn/basicapi/notice/pub"
+_THS_BASIC_HEADERS = {
+    "User-Agent": THS_UA,
+    "Referer": "https://basic.10jqka.com.cn/astockpc/astockmain/index.html",
+}
+
 _THS_BOARD_KLINE_URL = "https://d.10jqka.com.cn/v4/line/bk_{inner}/01/{year}.js"
 _THS_BOARD_FREQ_MAP: dict[str, int] = {"d": 1}  # THS upstream only ships daily
 # Year-loop cap (A6 from PR2 review).  Each year carries a 15s timeout
@@ -265,6 +274,8 @@ class ThsFetcher(BaseFetcher):
         | DataCapability.NEWS_FLASH
         | DataCapability.NEWS_SEARCH
         | DataCapability.STOCK_BOARD  # for board K-line (concept/industry)
+        | DataCapability.STOCK_NEWS  # 新: 个股新闻 basic.10jqka.com.cn
+        | DataCapability.ANNOUNCEMENT  # 新: 个股公告 basic.10jqka.com.cn
     )
 
     @staticmethod
@@ -821,6 +832,123 @@ class ThsFetcher(BaseFetcher):
     # ------------------------------------------------------------------
     # 股票所属概念 (stock_concept_list — basic.10jqka.com.cn)
     # ------------------------------------------------------------------
+
+    def get_stock_news(self, stock_code: str, limit: int = 20) -> list[dict]:
+        """THS 个股新闻 via basic.10jqka.com.cn/fuyao/info/company/v1/news.
+
+        返回 dict shape 严格对齐 EastMoneyFetcher.get_stock_news:
+          {title, url, source_domain, publish_date, media_name}.
+
+        Soft failures (no market_id, upstream status_code != 0) → return [].
+        Hard failures (network / JSON parse) → raise DataFetchError for
+        manager.failover fallback to next fetcher.
+
+        Returns:
+            list of normalized news items; possibly empty.
+        """
+        code = normalize_stock_code(stock_code)
+        market_id = _THS_MARKET_ID_MAP.get(code[:1])
+        if not market_id:
+            logger.warning(f"[ThsFetcher] get_stock_news: no market_id for {code!r}")
+            return []
+        try:
+            n = max(1, min(int(limit), 100))
+        except (TypeError, ValueError):
+            n = 20
+        payload = json_get(
+            _THS_NEWS_URL,
+            params={
+                "type": "stock",
+                "code": code,
+                "market": market_id,
+                "current": 1,
+                "limit": n,
+            },
+            headers=_THS_BASIC_HEADERS,
+            timeout=10,
+        )
+        if not isinstance(payload, dict) or payload.get("status_code") != 0:
+            logger.warning(
+                f"[ThsFetcher] get_stock_news({code}) upstream "
+                f"status_code={payload.get('status_code') if isinstance(payload, dict) else 'N/A'}"
+            )
+            return []
+        rows = (payload.get("data") or {}).get("data") or []
+        out: list[dict] = []
+        for r in rows:
+            url = r.get("pc_url") or r.get("client_url") or r.get("mobile_url") or ""
+            try:
+                source_domain = urlparse(url).hostname or ""
+            except Exception:
+                source_domain = ""
+            out.append(
+                {
+                    "title": str(r.get("title", "")),
+                    "url": url,
+                    "source_domain": source_domain,
+                    "publish_date": str(r.get("date", "")),
+                    "media_name": "",
+                }
+            )
+        return out
+
+    def get_announcements(self, code: str, page_size: int = 30) -> list[dict]:
+        """THS 个股公告 via basic.10jqka.com.cn/basicapi/notice/pub.
+
+        Returns dict shape compatible with CninfoFetcher.get_announcements:
+          {title, type, date, url}; bonus field `raw_url` (cninfo PDF 直链).
+
+        The upstream `data.type` field is the static classification list
+        (业绩/重大事项/...); it's not per-record announcement type. Left as
+        "" to match the existing schema's "type" semantics used by
+        /stocks/{code}/announcements.
+
+        Soft failures (no market_id, upstream status_code != 0) → return [].
+        Hard failures (network / JSON parse) → raise DataFetchError.
+        """
+        code = normalize_stock_code(code)
+        market_id = _THS_MARKET_ID_MAP.get(code[:1])
+        if not market_id:
+            logger.warning(f"[ThsFetcher] get_announcements: no market_id for {code!r}")
+            return []
+        try:
+            n = max(1, min(int(page_size), 100))
+        except (TypeError, ValueError):
+            n = 30
+        payload = json_get(
+            _THS_NOTICE_URL,
+            params={
+                "type": "stock",
+                "code": code,
+                "market": market_id,
+                "classify": "all",
+                "page": 1,
+                "limit": n,
+            },
+            headers=_THS_BASIC_HEADERS,
+            timeout=10,
+        )
+        if not isinstance(payload, dict) or payload.get("status_code") != 0:
+            logger.warning(
+                f"[ThsFetcher] get_announcements({code}) upstream "
+                f"status_code={payload.get('status_code') if isinstance(payload, dict) else 'N/A'}"
+            )
+            return []
+        rows = payload.get("data") or {}
+        items = rows.get("data") if isinstance(rows, dict) else []
+        out: list[dict] = []
+        for r in items:
+            url = r.get("pc_url") or r.get("mobile_url") or ""
+            out.append(
+                {
+                    "title": str(r.get("title", "")),
+                    "type": "",
+                    "date": str(r.get("date", "")),
+                    "url": url,
+                    "raw_url": r.get("raw_url") or "",
+                }
+            )
+        return out
 
     def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict]:
         """THS concept membership via basic.10jqka.com.cn stock_concept_list.
