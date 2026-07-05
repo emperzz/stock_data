@@ -119,45 +119,21 @@ def _resolve_board_history_source(source: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# board-stocks source routing — does NOT alias `ths → zzshare`.
-# Mirrors the precedent of `_resolve_board_history_source` (above): for
-# this endpoint, `ths` is a first-class source backed by ThsFetcher's
-# q.10jqka.com.cn AJAX endpoint (NOT aliased to ZzshareFetcher).
-# `zzshare` is preserved as a separate source for back-compat — both
-# return the same conceptual answer (同花顺 upstream data) but via
-# different fetcher implementations.
+# board-stocks source validation — delegate to persistence helper.
+#
+# Differs from `_resolve_source` (used by board-list endpoints): that
+# helper aliases ``ths → zzshare`` because zzshare's ``plates_list``
+# upstream IS 同花顺 and the board-list endpoint has only ever been
+# wired through ZzshareFetcher. The board-stocks endpoint is now
+# served by ThsFetcher when ``source=ths`` is requested (new THS AJAX
+# endpoint). The route layer exposes both labels so existing
+# ``source=zzshare`` callers keep working while new callers can use
+# ``source=ths`` to opt into the THS-specific path.
+#
+# Source set lives in persistence.board (single source of truth) via
+# `normalize_board_stocks_source`; route just translates ValueError to
+# HTTPException(400).
 # ──────────────────────────────────────────────────────────────────────────
-_BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = (
-    "ths", "eastmoney", "zhitu", "zzshare"
-)
-
-
-def _resolve_board_stocks_source(source: str) -> str:
-    """Validate `source` for the board-stocks route — no aliasing.
-
-    Differs from `_resolve_source` (used by board-list endpoints): that
-    helper aliases ``ths → zzshare`` because zzshare's ``plates_list``
-    upstream IS 同花顺 and the board-list endpoint has only ever been
-    wired through ZzshareFetcher. The board-stocks endpoint is now
-    served by ThsFetcher when ``source=ths`` is requested (new THS AJAX
-    endpoint). The route layer exposes both labels so existing
-    ``source=zzshare`` callers keep working while new callers can use
-    ``source=ths`` to opt into the THS-specific path.
-
-    Raises HTTPException(400) on invalid source.
-    """
-    if source not in _BOARD_STOCKS_VALID_SOURCES:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_source",
-                "message": (
-                    f"Unknown source '{source}'. "
-                    f"Valid sources: {list(_BOARD_STOCKS_VALID_SOURCES)}"
-                ),
-            },
-        )
-    return source
 
 
 # Inclusive day-count cap for board-history queries. Mirrors
@@ -479,7 +455,13 @@ def get_board_stocks(
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
 ) -> BoardStocksResponse:
     """Get stocks belonging to a board."""
-    source = _resolve_board_stocks_source(source)
+    try:
+        source = stock_board_cache.normalize_board_stocks_source(source)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_source", "message": str(e)},
+        ) from e
 
     manager = get_manager()
     try:
@@ -520,16 +502,22 @@ def get_board_stocks(
                 if match:
                     board_name = match
                     break
-        except (ValueError, AttributeError, DataFetchError):
-            # ValueError: manager._with_source rejects unknown source
-            # AttributeError: fetcher doesn't implement get_all_boards
-            #   (e.g., ThsFetcher — only has get_board_stocks, not get_all_boards;
-            #   manager's _with_source accepts ThsFetcher because it has
-            #   STOCK_BOARD capability, but get_all_boards is not on the class)
-            # DataFetchError: fetcher's own failure (network/auth/etc.)
-            # All three are non-fatal: we just fall back to returning the
-            # bare board_code as the name.
+        except DataFetchError:
+            # Fetcher's own failure (network/auth/etc.). Non-fatal —
+            # we just fall back to the bare board_code as the name.
             pass
+        except (ValueError, AttributeError) as e:
+            # ValueError: manager._with_source rejected unknown source / market / capability
+            # AttributeError: fetcher doesn't implement get_all_boards (e.g.,
+            #   ThsFetcher — has STOCK_BOARD capability for get_board_stocks but
+            #   no get_all_boards method; manager calls the missing method directly)
+            # Both are non-fatal for this endpoint. Log at DEBUG so legitimate
+            # fallback cases don't pollute logs, but real masking bugs surface
+            # at WARNING/ERROR for triage.
+            logger.debug(
+                f"[boards] board-name fallback for {board_code} (source={source}): "
+                f"{type(e).__name__}: {e}"
+            )
 
     stock_list = [
         BoardStockInfo(

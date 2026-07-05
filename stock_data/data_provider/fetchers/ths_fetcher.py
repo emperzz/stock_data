@@ -678,10 +678,9 @@ class ThsFetcher(BaseFetcher):
         Returns None when ``td[1]`` (code) is missing — that row is
         malformed and gets skipped silently.
 
-        ``--`` (em-dash) maps to None via ``safe_float`` / ``safe_int``
-        in core.types.
+        ``--`` (em-dash) maps to None via ``safe_float`` in core.types.
         """
-        from ..core.types import safe_float, safe_int
+        from ..core.types import safe_float
 
         if len(tds) < 3:
             return None
@@ -703,7 +702,11 @@ class ThsFetcher(BaseFetcher):
             "change_pct": safe_float(tds[4].get_text(strip=True)) if len(tds) > 4 else None,
             "change_amount": safe_float(tds[5].get_text(strip=True)) if len(tds) > 5 else None,
             "turnover": safe_float(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
-            "volume": safe_int(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
+            # THS field/199112 上游只有 14 列,没有 成交量(手) 字段 — 现有
+            # 14 列中 idx 10 是 成交额(元),不是 成交量(股). 因为 BoardStockInfo
+            # schema 的 volume 字段语义是 成交量(股),我们必须把 volume 留 None
+            # 而不是塞成交额进去 (错把元当成股,会误导调用方).
+            "volume": None,
             "amount": safe_float(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
         }
 

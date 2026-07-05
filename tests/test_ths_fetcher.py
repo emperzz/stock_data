@@ -942,7 +942,11 @@ class TestGetBoardStocks:
         # Quote fields
         assert result[0]["price"] == 10.50
         assert result[0]["change_pct"] == 5.20
-        assert result[0]["volume"] == 100000000
+        # THS field/199112 上游没有 成交量(手) 列 — 14 列里只有 成交额(元)
+        # (idx 10). 因为 BoardStockInfo.volume 语义是 成交量(股),此处必须 None
+        # 而不是塞成交额进去 (避免把元单位当成股单位).
+        assert result[0]["volume"] is None
+        assert result[0]["amount"] == 100000000.0
 
         assert result[1]["stock_code"] == "000001"
         assert result[1]["stock_name"] == "平安银行"
