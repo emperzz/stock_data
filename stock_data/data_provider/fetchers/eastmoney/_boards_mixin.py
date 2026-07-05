@@ -76,9 +76,11 @@ class BoardsMixin:
 
     Field-code note
     ---------------
-    Board clist field semantics differ from per-stock clist:
+    Board clist field semantics:
     - Per-stock: f12=code, f14=name
-    - Board components: f14=code, f16=name
+    - Board list (concept / industry): f12=code, f14=name (since 2026-07-03 fix)
+    - Board components: f12=code, f14=name (since 2026-07-05 fix; was
+      f14=code, f16=name, which was the akshare stale-mapping bug)
     See ``_BOARD_*_FIELD_MAP`` constants in ``._endpoints``.
     """
 
@@ -412,16 +414,18 @@ class BoardsMixin:
             return []
         out: list[dict] = []
         for rec in rows:
-            code = str(rec.get("f14", "")).strip()
+            code = str(rec.get("f12", "")).strip()
             if not code:
                 continue
             stock: dict[str, Any] = {
                 "stock_code": code,
-                "stock_name": str(rec.get("f16", "")).strip(),
+                "stock_name": str(rec.get("f14", "")).strip(),
             }
             if include_quote:
                 for fc, ok in _BOARD_COMPONENTS_FIELD_MAP.items():
-                    if fc in ("f14", "f16"):  # already emitted
+                    # code (f12) and name (f14) are already emitted above —
+                    # skip them so the loop only adds the quote extras.
+                    if fc in ("f12", "f14"):
                         continue
                     stock[ok] = rec.get(fc)
             out.append(stock)

@@ -29,7 +29,10 @@ CONCEPT_LIST_FIELDS = ENDPOINTS.BOARD_LIST_CONCEPT["fields"].split(",")
 # Both endpoints use f12=code, f14=name (probed 2026-07-03; was f14=code,
 # f15/f16=name pre-fix — that mapping came from a stale akshare reference).
 INDUSTRY_LIST_FIELDS = ENDPOINTS.BOARD_LIST_INDUSTRY["fields"].split(",")
-# 成分股: 15 字段 (f2,f3,f4,f5,f6,f7,f8,f9,f14,f16,f17,f18,f20,f21,f22)
+# 成分股: 16 字段 (f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f16,f17,f18,f20,f21,f22)
+# f12=stock code, f14=stock name (probed 2026-07-05; was f14=code,
+# f16=name pre-fix — same stale akshare reference bug as the board-list
+# endpoints, see commit 4e4d9df).
 COMPONENTS_FIELDS = ENDPOINTS.BOARD_COMPONENTS["fields"].split(",")
 
 _CONCEPT_ROW_TEMPLATE = {
@@ -71,8 +74,9 @@ _COMPONENTS_ROW_TEMPLATE = {
     "f7": 3.21,
     "f8": 1.23,
     "f9": 25.6,
-    "f14": "600519",
-    "f16": "贵州茅台",
+    "f12": "600519",  # stock code (probed 2026-07-05)
+    "f14": "贵州茅台",  # stock name (probed 2026-07-05)
+    "f16": 12345678901.0,  # numeric quote field — NOT the name
     "f17": 1250.0,
     "f18": 1200.0,
     "f20": 1210.0,
@@ -329,7 +333,9 @@ def test_get_all_boards_concept_dict_format_with_subtype():
         boards = fetcher.get_all_boards(board_type="concept", source="eastmoney")
     # type is now also tagged (mirrors the per-type tag the all-types
     # branch uses, so the persistence layer's write sees a uniform shape).
-    assert boards == [{"code": "BK0001", "name": "人形机器人", "type": "concept", "subtype": "concept"}]
+    assert boards == [
+        {"code": "BK0001", "name": "人形机器人", "type": "concept", "subtype": "concept"}
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -384,12 +390,86 @@ def test_get_industry_board_stocks_parses_response():
 def test_get_concept_board_stocks_skips_rows_with_empty_code():
     fetcher = EastMoneyFetcher()
     good_row = _row_from_template(COMPONENTS_FIELDS, _COMPONENTS_ROW_TEMPLATE)
-    bad_row = _row_from_template(COMPONENTS_FIELDS, _COMPONENTS_ROW_TEMPLATE, **{"f14": ""})
+    bad_row = _row_from_template(COMPONENTS_FIELDS, _COMPONENTS_ROW_TEMPLATE, **{"f12": ""})
     mock_resp = _make_session_mock([bad_row, good_row], total=2)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         stocks = fetcher.get_concept_board_stocks("BK0001", source="eastmoney")
     assert len(stocks) == 1
     assert stocks[0]["stock_code"] == "600519"
+
+
+def test_get_concept_board_stocks_uses_f12_as_code_not_f14():
+    """回归测试 (2026-07-05 用户报告): ``stock_code`` 必须是 f12 (6 位数字),
+    ``stock_name`` 必须是 f14 (中文名). 之前实现把 f14 当作 stock_code 导致
+    ``stock_code="新睿电子"`` / ``stock_name="123.0"`` 互换 — 与 commit
+    4e4d9df 修复的 board-list 端点是同一个 stale akshare 列号 bug."""
+    fetcher = EastMoneyFetcher()
+    # Use realistic upstream values mirroring the actual user-reported shape.
+    row = _dict_row_from_template(
+        _COMPONENTS_ROW_TEMPLATE,
+        f12="002444",  # actual stock code from upstream
+        f14="新睿电子",  # actual stock name from upstream (was getting used as code)
+        f16=123.0,  # numeric quote field (was getting used as name)
+    )
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        stocks = fetcher.get_concept_board_stocks("BK1048", source="eastmoney")
+    assert len(stocks) == 1
+    assert stocks[0]["stock_code"] == "002444", (
+        f"stock_code should be f12 (6-digit), got {stocks[0]['stock_code']!r}"
+    )
+    assert stocks[0]["stock_name"] == "新睿电子", (
+        f"stock_name should be f14 (Chinese name), got {stocks[0]['stock_name']!r}"
+    )
+
+
+def test_get_concept_board_stocks_does_not_pick_f16_as_name():
+    """防护: 成分股端点 f16 是 numeric quote field, 不能误用为 stock_name.
+    之前实现错误地把 f16 当作 stock_name 来源 (stale akshare 列号错位)."""
+    fetcher = EastMoneyFetcher()
+    row = _row_from_template(
+        COMPONENTS_FIELDS,
+        _COMPONENTS_ROW_TEMPLATE,
+        **{"f16": "WRONG_NAME_F16"},
+    )
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        stocks = fetcher.get_concept_board_stocks("BK0001", source="eastmoney")
+    assert stocks[0]["stock_name"] == "贵州茅台"  # 来自 f14, 不是 f16
+
+
+def test_get_concept_board_stocks_with_quote_skips_f12_and_f14():
+    """include_quote=True 时, f12 (code) 和 f14 (name) 不应被重复加为
+    price/change_pct 等键 — 它们已作为 stock_code/stock_name 单独 emit."""
+    fetcher = EastMoneyFetcher()
+    row = _dict_row_from_template(_COMPONENTS_ROW_TEMPLATE)
+    mock_resp = _make_session_mock([row], total=1)
+    with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
+        stocks = fetcher.get_concept_board_stocks("BK0001", source="eastmoney", include_quote=True)
+    s = stocks[0]
+    # f12 (code) and f14 (name) must not be re-emitted as quote fields —
+    # they're already exposed via stock_code/stock_name above.
+    assert "f12" not in s
+    # The keys emitted by the field map (excluding code/name) — verify
+    # none of them are the stock_code or stock_name string.
+    for key in (
+        "price",
+        "change_pct",
+        "change_amount",
+        "volume",
+        "amount",
+        "amplitude",
+        "turnover_rate",
+        "pe_ratio",
+        "high",
+        "low",
+        "open",
+        "pre_close",
+        "pb_ratio",
+    ):
+        assert key in s
+        assert s[key] != "600519"
+        assert s[key] != "贵州茅台"
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +487,9 @@ def test_get_all_boards_concept_delegates():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_boards(board_type="concept", source="eastmoney")
-    assert boards == [{"code": "BK0001", "name": "人形机器人", "type": "concept", "subtype": "concept"}]
+    assert boards == [
+        {"code": "BK0001", "name": "人形机器人", "type": "concept", "subtype": "concept"}
+    ]
 
 
 def test_get_all_boards_industry_delegates():
@@ -416,7 +498,9 @@ def test_get_all_boards_industry_delegates():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_boards(board_type="industry", source="eastmoney")
-    assert boards == [{"code": "BK1001", "name": "小金属", "type": "industry", "subtype": "industry"}]
+    assert boards == [
+        {"code": "BK1001", "name": "小金属", "type": "industry", "subtype": "industry"}
+    ]
 
 
 def test_get_all_boards_index_returns_empty():

@@ -170,7 +170,10 @@ class _Endpoints:
         "url_prefixes": ["29", ""],  # 29.push2 (akshare cons) → bare push2 (fallback)
         "fs_template": "b:{board_code}+f:!50",
         "fid": "f3",
-        "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f14,f16,f17,f18,f20,f21,f22",
+        # f12=stock code, f14=stock name (probed 2026-07-05; see commits
+        # 4e4d9df + (this fix)). f16 is a numeric quote field, NOT the name
+        # — same shape as board-list endpoints.
+        "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f16,f17,f18,f20,f21,f22",
     }
 
     # -- Board K-line (push2his /api/qt/stock/kline/get) ----------------
@@ -205,8 +208,10 @@ ENDPOINTS = _Endpoints()
 # - industry board list: f12=board code, f14=board name; f16 is a numeric
 #                        quote field (NOT the name — that was the prior bug,
 #                        see commit history)
-# - board components:    f14=stock code, f16=stock name, f17=high, f18=low,
-#                        f20=open, f21=prev_close, f22=PB
+# - board components:    f12=stock code (e.g. "600519"), f14=stock name
+#                        (e.g. "贵州茅台"); f16 is a numeric quote field
+#                        (NOT the name — same shape as board-list endpoints).
+#                        f17=high, f18=low, f20=open, f21=prev_close, f22=PB
 # Note: the comment in akshare's stock_board_concept_em / industry_em source
 # has the inverse mapping (says f14=code, f15/f16=name); that's stale. Trust
 # the actual upstream probe, not the akshare column headers.
@@ -239,11 +244,14 @@ _BOARD_COMPONENTS_FIELD_MAP: dict[str, str] = {
     "f7": "amplitude",
     "f8": "turnover_rate",
     "f9": "pe_ratio",
-    "f14": "stock_code",
-    "f16": "stock_name",
+    "f12": "stock_code",
+    "f14": "stock_name",
     "f17": "high",
     "f18": "low",
     "f20": "open",
     "f21": "pre_close",
     "f22": "pb_ratio",
+    # f16: numeric quote field — semantics unknown (was wrongly claimed to
+    # be the stock name pre-2026-07-05; left unmapped so we don't expose
+    # a misleading key).
 }
