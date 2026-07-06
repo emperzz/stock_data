@@ -34,7 +34,7 @@ https://api.zhituapi.com/hs/real/ssjy/股票代码?token=token证书
 | sz | number | 总市值（元） |
 | cje | number | 成交额（元） |
 | ud | number | 涨跌额（元） |
-| v | number | 成交量（手） |
+| v | number | 成交量(万手;broker 源 `/hs/real/time/` 是手;`* 1000000` 归一到股 per spec §3.4。2026-07-06 实测:茅台 v=4.1, broker 源 v=40970, 4.1 × 10000 = 41000 ≈ 40970。⚠️ 本项目 zhitu_fetcher `* 100 * 10000` 即此) |
 | yc | number | 昨日收盘价（元） |
 | zf | number | 振幅（%） |
 | zs | number | 涨速（%） |

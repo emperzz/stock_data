@@ -320,8 +320,10 @@ fetchers that support it.
 
 实现细节 (zhitu_fetcher.py):
 
-- `get_index_realtime_quote(code)` → `/hz/real/ssjy/<code>.<SH|SZ>`(`code.market` 通过新增的 `to_zhitu_index_market_suffix` 解析,**与股票 `to_zhitu_market_suffix` 相反**:000xxx → SH,399xxx → SZ)。返回 `UnifiedRealtimeQuote`,`v` 字段是**股数**(不 ×100),无 PE/PB/市值。
-- `get_kline_data(code, ...)` 在 ZhituFetcher 中被 override,根据 `index_market_tag(code)` 派发到 `_get_index_kline_data` → `/hz/history/fsjy/<code>.<mkt>/<level>?st=YYYYMMDD&et=YYYYMMDD`。返回标准 DataFrame(`date/open/high/low/close/volume/amount/pct_chg`),`pct_chg` 由 `(close - pc) / pc * 100` 计算(智兔不返百分比字段)。
+- `get_realtime_quote(stock_code)` → `/hs/real/ssjy/<code>.<mkt>`. ⚠️ 上游 `v` 字段单位是**万手**(`* 100 * 10000 = × 1_000_000` 归一到股 per spec §3.4)。**broker 源** `/hs/real/time/` 的单位是手(`* 100`),两者不同 — 见 `docs/zhitu/05-realtime-trading.md`(2026-07-06 实测:茅台 public v=4.1, broker v=40970, 4.1 × 10000 ≈ 41000)。
+- `get_intraday_data(stock_code, period)` 走 `/hs/history/...`,同样上游 v 是**万手**;`_normalize_intraday_zhitu` 末尾 `df["volume"] * 10000 * 100` 归一。
+- `get_index_realtime_quote(code)` → `/hz/real/ssjy/<code>.<SH|SZ>`(`code.market` 通过新增的 `to_zhitu_index_market_suffix` 解析,**与股票 `to_zhitu_market_suffix` 相反**:000xxx → SH,399xxx → SZ)。返回 `UnifiedRealtimeQuote`,`v` 字段是**手**(`* 100` 归一到股 per spec §3.4),无 PE/PB/市值。
+- `get_kline_data(code, ...)` 在 ZhituFetcher 中被 override,根据 `index_market_tag(code)` 派发到 `_get_index_kline_data` → `/hz/history/fsjy/<code>.<mkt>/<level>?st=YYYYMMDD&et=YYYYMMDD`。返回标准 DataFrame(`date/open/high/low/close/volume/amount/pct_chg`),`volume` 是**手**(`* 100` 归一,2026-07-06 Myquant gm SDK 同日 v_shares / Zhitu v = 100 精确匹配);`pct_chg` 由 `(close - pc) / pc * 100` 计算(智兔不返百分比字段)。
 - `supports_kline` 分 `asset` 分流:index 接受 `d/w/m/5/15/30/60`、拒绝 1m 和 adjust;stock 仍是 5/15/30/60 分钟 + 无 adjust。
 - 港股 / 美股指数 Zhitu 不支持(只 csi),`supports_kline` 对 hk/us 一律 False,manager 自动跳过。
 

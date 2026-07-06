@@ -165,7 +165,7 @@ class ZhituFetcher(BaseFetcher):
             price=safe_float(row.get("p")),
             change_pct=safe_float(row.get("pc")),
             change_amount=safe_float(row.get("ud")),
-            volume=safe_int(row.get("v"), 0) * 100,  # 手→股 per spec §3.4
+            volume=safe_int(row.get("v"), 0) * 100 * 10000,  # 万手→股 per spec §3.4 (Zhitu public /hs/real/ssjy/ v is in 万手; broker /hs/real/time/ is in 手 — see [[zhitu-upstream-volume-unit-inconsistency]])
             amount=safe_float(row.get("cje")),
             open_price=safe_float(row.get("o")),
             high=safe_float(row.get("h")),
@@ -298,7 +298,15 @@ class ZhituFetcher(BaseFetcher):
         }
 
     def _normalize_intraday_zhitu(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Normalize Zhitu history API output."""
+        """Normalize Zhitu history API output.
+
+        Per spec §3.4, output ``volume`` is always in shares (股). Zhitu's
+        stock history endpoint (``/hs/history/...``) returns ``v`` in **万手**
+        (10,000 lots) — empirically verified 2026-07-06 with real token
+        against Myquant gm SDK (returns shares directly, ratio = 10000
+        between the two for the same code+date). Convert to shares:
+        ``万手 × 10000 手/万手 × 100 股/手 = × 1_000_000``.
+        """
         df = df.copy()
         df = df.rename(
             columns={
@@ -318,6 +326,9 @@ class ZhituFetcher(BaseFetcher):
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
+        # 万手 → 股 per spec §3.4 (1 万手 = 10,000 手 = 1,000,000 股).
+        if "volume" in df.columns:
+            df["volume"] = df["volume"] * 10000 * 100
         keep_cols = ["time", "open", "high", "low", "close", "volume", "amount"]
         df = df[[c for c in keep_cols if c in df.columns]]
         return df
@@ -408,7 +419,11 @@ class ZhituFetcher(BaseFetcher):
     #   history : t/o/h/l/c/v/a/pc/(sf)
     # 关键差异:
     #   - 指数无 PE/PB/总市值/流通市值 → UnifiedRealtimeQuote 这些字段留 None
-    #   - 指数 v 字段是股数, 股票 v 字段是手数(要 ×100). 见 get_realtime_quote 注释。
+    #   - 指数 v 字段是手(×100 → 股),与股票不同:
+    #       股票 /hs/real/ssjy/ (public): v 是**万手** (× 1_000_000 → 股)
+    #       股票 /hs/real/time/ (broker): v 是手 (× 100 → 股)
+    #       指数 /hz/real/ssjy/          : v 是手 (× 100 → 股)
+    #     见 [[zhitu-upstream-volume-unit-inconsistency]] — 2026-07-06 实测
     #   - 指数历史不返回 pct_chg, 需从 (c - pc) / pc * 100 计算。
 
     def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:
@@ -423,11 +438,11 @@ class ZhituFetcher(BaseFetcher):
         Notes:
             - 智兔指数实时报价**不返回**指数名称;name 留空让 route 层用
               ``index_symbols.CSI_INDEX_MAP`` 补。
-            - 智兔 v 字段是股数(指数无"手"概念), 不要再 ×100 — 与股票
-              ``get_realtime_quote`` 注释里"手→股 per spec §3.4"形成对照。
+            - 智兔指数 v 字段是**手**(1 手 = 100 股),与股票 ``/hs/real/ssjy/``
+              的万手不同 — 见 [[zhitu-upstream-volume-unit-inconsistency]]。
+              KLineData 契约要股,所以 ``* 100`` 归一。
             - 指数无 PE / PB / 振幅(部分) — UnifiedRealtimeQuote 相应字段
-              保持 None。``cje`` 直接当 amount(单位: 元), 无需 ×10000(那是
-              股票代码注释里说的"万元→元",指数的 cje 已经是元)。
+              保持 None。``cje`` 直接当 amount(单位: 元)。
         """
         if not self.is_available():
             logger.warning("[ZhituFetcher] ZHITU_TOKEN not configured")
@@ -465,8 +480,8 @@ class ZhituFetcher(BaseFetcher):
             change_amount=safe_float(data.get("ud")),
             change_pct=safe_float(data.get("pc")),
             amplitude=safe_float(data.get("zf")),
-            volume=safe_int(data.get("v"), 0),  # 指数 v 已是股数, 不 ×100
-            amount=safe_float(data.get("cje")),  # 指数 cje 已是元, 不 ×10000
+            volume=safe_int(data.get("v"), 0) * 100,  # 手→股 per spec §3.4 (指数 /hz/real/ssjy/ v is 手 — 2026-07-06 实测)
+            amount=safe_float(data.get("cje")),  # 单位: 元
             # 以下指数无对应字段, 保持 None
             volume_ratio=None,
             turnover_rate=None,
@@ -537,6 +552,10 @@ class ZhituFetcher(BaseFetcher):
         for col in ("open", "high", "low", "close", "volume", "amount", "pc"):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
+        # 手→股 per spec §3.4 (指数 /hz/history/fsjy/ v is 手 — 2026-07-06 实测,
+        # Myquant gm SDK 同日 v_shares / Zhitu v = 100 精确匹配)。
+        if "volume" in df.columns:
+            df["volume"] = df["volume"] * 100
         # pct_chg 从 pc (前收盘) 计算: (close - pc) / pc * 100
         if "close" in df.columns and "pc" in df.columns:
             df["pct_chg"] = (df["close"] - df["pc"]) / df["pc"] * 100

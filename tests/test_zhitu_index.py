@@ -141,8 +141,17 @@ class TestGetIndexRealtimeQuote:
         assert q.change_pct == -0.0595
         assert q.amplitude == 1.3516
         assert q.amount == 1432112821100.0
-        # 智兔指数 v 已经是股数 (不是手), 不乘 100 — 与股票 quote 行为不同。
-        assert q.volume == 590364903
+        # 智兔指数 v 是**手** (590364903), 归一到股: × 100 = 59036490300。
+        # Cross-verified 2026-07-06: Myquant gm SDK 同日 SHSE.000001
+        # v=59036490300 股 (公比 / 100 = Zhitu v), 证明 v 是手不是股。
+        assert q.volume == 59036490300
+        # 结构性不变量: 沪市指数成分股加权均价应在 5-50 元/股
+        # cje / volume 应等于成分股加权均价 (元/股)。
+        implied_per_share = q.amount / q.volume
+        assert 5.0 < implied_per_share < 50.0, (
+            f"implied per-share={implied_per_share:.2f} 元/股, "
+            f"偏离沪市合理区间 5-50 元/股 — 检查 v 单位是否还正确"
+        )
         # 指数无 PE / PB / 总市值 / 流通市值。
         assert q.pe_ratio is None
         assert q.pb_ratio is None
@@ -379,10 +388,13 @@ class TestGetKlineDataIndexDispatch:
         )
 
     @patch("stock_data.data_provider.utils.http.requests.get")
-    def test_volume_is_shares_not_lots(self, mock_get, monkeypatch):
-        """指数 volume 已经是股数, 不能再 ×100 (那会让 1m 5m 分钟线和股票 100 手混淆)。
+    def test_volume_is_shares_after_x100_normalization(self, mock_get, monkeypatch):
+        """指数 /hz/history/fsjy/ v 是**手** — 归一到股后应等于 Myquant 同日 v。
 
-        股票 _normalize_data 注释说手→股 ×100, 指数无此转换。
+        Cross-verified 2026-07-06 with real ZHITU_TOKEN + MYQUANT_TOKEN:
+        2025-07-01 Zhitu v=444356739, Myquant v=44435673900 (= 444356739 × 100)
+        2025-07-04 Zhitu v=500195210, Myquant v=50019521000
+        公比 1:100 精确匹配 — 见 [[zhitu-upstream-volume-unit-inconsistency]]。
         """
         _patch_token(monkeypatch, "test_token")
         self.fetcher._token = "test_token"
@@ -393,8 +405,15 @@ class TestGetKlineDataIndexDispatch:
 
         df = self.fetcher.get_kline_data("000001", days=4, frequency="d")
 
-        # 上游 444356739.0 已经是股数, 不能再 ×100
-        assert df.iloc[0]["volume"] == 444356739
+        # 444356739.0 (手) × 100 = 44,435,673,900 (股) — 与 Myquant 一致
+        assert df.iloc[0]["volume"] == 44435673900
+        # 结构性不变量: cje / volume 应该是合理的成分股加权均价
+        # 2025-07-01 SSE Comp: c=3457.75, a=553556536157, expected ~12.46 元/股
+        first = df.iloc[0]
+        implied = first["amount"] / first["volume"]
+        assert 5.0 < implied < 50.0, (
+            f"implied per-share={implied:.2f} 元/股, 偏离沪市合理区间"
+        )
 
     @patch("stock_data.data_provider.utils.http.requests.get")
     def test_empty_history_returns_empty_dataframe(self, mock_get, monkeypatch):

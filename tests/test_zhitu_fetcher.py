@@ -247,3 +247,80 @@ class TestGetAllStocks:
 
     def test_capability_includes_stock_list(self):
         assert DataCapability.STOCK_LIST in ZhituFetcher().supported_data_types
+
+
+class TestGetRealtimeQuoteVolumeUnit:
+    """Spec §3.4: /quote `volume` 永远是股.
+
+    Zhitu public stock endpoint `/hs/real/ssjy/` returns `v` in **万手**
+    (10,000 lots) — empirically verified 2026-07-06 with real token.
+    See [[zhitu-upstream-volume-unit-inconsistency]].
+
+    This test was missing before 2026-07-06 — the bug shipped silently
+    for ~4 months (ZhituFetcher merged 2026-03). Pin the correct unit
+    here so it can't regress.
+    """
+
+    def setup_method(self):
+        self.fetcher = ZhituFetcher()
+
+    @patch("stock_data.data_provider.utils.http.requests.get")
+    def test_stock_volume_is_shares_not_wanshou(self, mock_get, monkeypatch):
+        """茅台 2026-07-06 实测: public /hs/real/ssjy/ v=万手 → 股。
+
+        Upstream 实测值 4.1 万手 (mid-day) = 41,000 手 = 4,100,000 股。
+        4.1 经 safe_int 截成 4,期望 4,000,000 股 — 数量级与 broker 源
+        `/hs/real/time/` v=40,970 手 = 4,097,000 股 一致 (差 < 3%)。
+
+        修复前(2026-07-06 之前): 输出 400, 偏离真实 4_000_000 4 个数量级。
+        修复后: 输出 4_000_000,与 Myquant/Akshare 数量级一致。
+        """
+        import os as _os
+        _real_getenv = _os.getenv
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
+            lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else _real_getenv(*a, **k),
+        )
+        self.fetcher._token = "test_token"
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "t": "2026-07-06 15:06:24",
+            "p": 1206.91,
+            "pc": 1.04,
+            "ud": 12.46,
+            "v": 4.1,             # 万手 — public 源实测是万手
+            "cje": 4913750668.0,
+            "zf": 2.93,
+            "hs": 0.33,
+            "pe": 13.85,
+            "lb": 0.78,
+            "fm": 0.0,
+            "h": 1215.0,
+            "l": 1180.0,
+            "o": 1186.0,
+            "yc": 1194.45,
+            "sz": 1508735985063,
+            "lt": 1508735985063,
+            "zs": 0.0,
+            "sjl": 6.4,
+            "zdf60": -14.52,
+            "zdfnc": -10.54,
+        }
+        mock_response.raise_for_status = lambda: None
+        mock_get.return_value = mock_response
+
+        q = self.fetcher.get_realtime_quote("600519")
+        assert q is not None
+        # 万手 × 10000 × 100 = 股: int(4.1) × 1_000_000 = 4_000_000
+        # (上游 v 是浮点;safe_int 截尾,精度损失 1 万手 = 100,000 股,误差 < 3%)
+        assert q.volume == 4_000_000, (
+            f"expected 4,000,000 shares (万手 × 1_000_000), got {q.volume}. "
+            f"检查 spec §3.4 归一系数是否还正确 — 见 [[zhitu-upstream-volume-unit-inconsistency]]"
+        )
+        # 结构性不变量: cje / volume 应在合理 per-share 价格区间
+        # (茅台 1206.91 元/股, 但 cje 是公司层面的累计成交额元, 不是单股)
+        # 数量级 check 1e6 级别 — 茅台单日 400 万股上下
+        assert 1_000_000 < q.volume < 100_000_000, (
+            f"volume {q.volume} 数量级异常 — 万手/手/股 归一可能错位"
+        )

@@ -360,9 +360,9 @@ print(data)
 | 智兔指数接口 | 对应 `DataCapability` 标志 | 备注 |
 |---|---|---|
 | `hz/list/hszs` | n/a | 静态指数列表;本项目用 `data_provider/fetchers/index_symbols.py` 维护,不依赖智兔 |
-| `hz/real/ssjy/<code>` | `INDEX_REALTIME_QUOTE` | **已接入**(`zhitu_fetcher.get_index_realtime_quote`)。⚠️ 上游**不返回** `name` 字段;`/indices/{code}/quote` route 层用 `index_symbols.CSI_INDEX_MAP` 兜底。`v` 字段是**股数**(指数无"手"概念,不要 ×100)。无 PE/PB/总市值/流通市值。 |
+| `hz/real/ssjy/<code>` | `INDEX_REALTIME_QUOTE` | **已接入**(`zhitu_fetcher.get_index_realtime_quote`)。⚠️ 上游**不返回** `name` 字段;`/indices/{code}/quote` route 层用 `index_symbols.CSI_INDEX_MAP` 兜底。`v` 字段是**手**(`* 100` 归一到股 per spec §3.4;与同 URL 模式的股票 `/hs/real/ssjy/` 不同 — 股票 public 是**万手**,broker `/hs/real/time/` 是手;2026-07-06 实测)。无 PE/PB/总市值/流通市值。 |
 | `hz/latest/fsjy/<code>.<mkt>/<level>` | `INDEX_KLINE` | **已接入**;Manager 实际只调用 `hz/history/fsjy`(`hz/latest/fsjy` 文档存在但未实现,留作未来优化) |
-| `hz/history/fsjy/<code>.<mkt>/<level>` | `INDEX_KLINE` | **已接入**(`zhitu_fetcher._get_index_kline_data`);`pct_chg` 由 `(close - pc) / pc * 100` 自算(上游不返百分比字段);`pc == 0` 时结果为 NA |
+| `hz/history/fsjy/<code>.<mkt>/<level>` | `INDEX_KLINE` | **已接入**(`zhitu_fetcher._get_index_kline_data`);`v` 字段是**手**(`* 100` 归一到股 per spec §3.4;与 Myquant gm SDK 同日 `volume_shares / Zhitu_v` = 100 精确匹配,2026-07-06 实测);`pct_chg` 由 `(close - pc) / pc * 100` 自算(上游不返百分比字段);`pc == 0` 时结果为 NA |
 | `hz/history/{macd,ma,boll,kdj}/<code>/<level>` | n/a | **本项目已有自有 indicator 服务**(`data_provider/indicators/`),不依赖智兔 |
 
 > 当前 `/indices/*` 三端点(`/indices`、`/indices/{code}/quote`、`/indices/{code}/kline`)的实际优先级链(2026-07-06 更新):
