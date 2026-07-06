@@ -55,11 +55,11 @@ import logging
 import os
 from datetime import date
 from typing import Any
-from urllib.parse import urlparse
 
 import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
+from ..utils.url_helpers import source_domain as source_domain_from_url
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +333,7 @@ class BaiduFetcher(BaseFetcher):
         """
         url = rec["url"]
         date_str = rec["date"][:10]
-        domain = urlparse(url).netloc
+        domain = source_domain_from_url(url)
         return {
             "title": rec["title"],
             "url": url,

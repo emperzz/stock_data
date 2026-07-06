@@ -26,7 +26,6 @@ import time
 from datetime import date as _date
 from datetime import datetime, timedelta
 from importlib import resources, util
-from urllib.parse import urlparse
 
 from tenacity import (
     before_sleep_log,
@@ -41,6 +40,7 @@ from ..persistence.board import THS_CONCEPT_SUBTYPE
 from ..utils.http import json_get, json_post
 from ..utils.normalize import normalize_stock_code
 from ..utils.text import strip_em_tags
+from ..utils.url_helpers import source_domain as source_domain_from_url
 
 logger = logging.getLogger(__name__)
 
@@ -878,10 +878,7 @@ class ThsFetcher(BaseFetcher):
         out: list[dict] = []
         for r in rows:
             url = r.get("pc_url") or r.get("client_url") or r.get("mobile_url") or ""
-            try:
-                source_domain = urlparse(url).hostname or ""
-            except Exception:
-                source_domain = ""
+            source_domain = source_domain_from_url(url)
             out.append(
                 {
                     "title": str(r.get("title", "")),
@@ -1248,7 +1245,7 @@ class ThsFetcher(BaseFetcher):
         # publish_date 形如 "2026-06-30 18:28:21"; 截到日。
         publish_date = (rec.get("publish_date") or "")[:10]
         snippet = strip_em_tags(rec.get("summary") or "").replace("　", "").strip()
-        source_domain = extra.get("host_name") or urlparse(url).netloc
+        source_domain = extra.get("host_name") or source_domain_from_url(url)
         return {
             "title": title,
             "url": url,

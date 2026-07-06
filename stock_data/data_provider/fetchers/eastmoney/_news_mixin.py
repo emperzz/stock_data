@@ -32,11 +32,12 @@ import logging
 import os
 import re
 import time
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 from ...base import DataFetchError
 from ...utils.normalize import normalize_stock_code
 from ...utils.text import strip_em_tags
+from ...utils.url_helpers import source_domain as source_domain_from_url
 from ._cffi_json import cffi_json_get, cffi_json_get_resp
 from ._endpoints import UA, URLS
 
@@ -296,9 +297,7 @@ class NewsMixin:
         for rec in rows:
             try:
                 url = rec.get("Art_Url") or rec.get("Art_OriginUrl") or ""
-                source_domain = ""
-                if url:
-                    source_domain = urlparse(url).hostname or ""
+                source_domain = source_domain_from_url(url)
                 out.append({
                     "title": rec.get("Art_Title", ""),
                     "url": url,
@@ -420,7 +419,7 @@ class NewsMixin:
         return {
             "title": strip_em_tags(rec["title"]),
             "url": url,
-            "source_domain": urlparse(url).netloc,
+            "source_domain": source_domain_from_url(url),
             "publish_date": date_str,
             "snippet": snippet,
             "media_name": rec.get("mediaName", ""),

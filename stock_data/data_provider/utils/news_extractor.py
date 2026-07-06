@@ -17,6 +17,8 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from .url_helpers import source_domain as source_domain_from_url
+
 logger = logging.getLogger(__name__)
 
 _EM_BODY_STOP_KEYWORDS = ("文章来源", "责任编辑", "郑重声明", "网友评论")
@@ -55,7 +57,7 @@ class NewsContent:
             body=body,
             publish_date=publish_date,
             author=author,
-            source_domain=source_domain or urlparse(url).netloc,
+            source_domain=source_domain or source_domain_from_url(url),
             extractor=extractor,
             byte_size=len(body.encode("utf-8")),
         )
