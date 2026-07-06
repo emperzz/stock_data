@@ -254,6 +254,11 @@ class DataFetcherManager:
         """
         fetchers = candidates if candidates is not None else self._filter_by_capability(market, capability)
         errors: list[str] = []
+        # Track the last empty result so an "empty chain" (no fetcher raised
+        # AND no fetcher returned meaningful data) can return a coherent
+        # empty answer instead of a misleading "All fetchers failed" error
+        # with an empty errors list. Review 2026-07-06 finding #6.
+        last_empty_result: Any = None
         for fetcher in fetchers:
             # Circuit breaker: skip fetchers in OPEN state
             if circuit_breaker is not None and not circuit_breaker.is_available(fetcher.name):
@@ -272,12 +277,29 @@ class DataFetcherManager:
                 if circuit_breaker is not None:
                     circuit_breaker.record_success(fetcher.name)
                 return (result, fetcher.name) if return_source else result  # type: ignore[return-value]
-            # Result is None/empty — treat as soft failure for circuit breaker
+            # Result is None/empty — remember the last empty result (prefer
+            # [] over None for downstream compatibility) and treat as soft
+            # failure for circuit breaker.
+            if result is not None:
+                last_empty_result = result
             if circuit_breaker is not None:
                 circuit_breaker.record_failure(fetcher.name)
 
+        # No fetcher returned meaningful data. Three sub-cases:
+        #   (a) allow_none=True          → caller opts into (None, "")
+        #   (b) no errors at all         → every candidate returned None/[];
+        #                                  return the last empty result with
+        #                                  source="" — this is "no data
+        #                                  found", not "all failed".
+        #   (c) errors occurred           → raise the aggregated failure.
         if allow_none:
             return (None, "") if return_source else None  # type: ignore[return-value]
+        if not errors and last_empty_result is not None:
+            logger.info(
+                f"[Manager] {op_label}: all {len(fetchers)} candidates returned "
+                f"empty results (no fetcher raised)"
+            )
+            return (last_empty_result, "") if return_source else last_empty_result  # type: ignore[return-value]
         prefix = error_prefix or f"All fetchers failed for {op_label}:"
         if not errors and circuit_breaker is not None:
             raise DataFetchError(

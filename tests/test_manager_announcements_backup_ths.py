@@ -87,3 +87,36 @@ def test_get_announcements_falls_back_eastmoney_ths_then_cninfo():
     assert items == fake_items
     assert source == "CninfoFetcher"
     cninfo_patched.assert_called_once_with("300740", 10)
+
+
+def test_get_announcements_empty_chain_returns_empty_list_not_misleading_error():
+    """Regression (review 2026-07-06 finding #6): when EVERY fetcher in the
+    chain returns [] (no exceptions, just empty data), the manager must NOT
+    raise ``DataFetchError("All fetchers failed for announcements ...:")``
+    with an empty errors list — that's a misleading 5xx for what's actually
+    "no data found across all sources". The contract should be: empty chain
+    returns ``([], "")`` so the route can serve a normal empty list to
+    clients.
+    """
+    from stock_data.data_provider.base import DataFetchError
+
+    mgr = _make_manager()
+    fetchers = mgr._filter_by_capability("csi", DataCapability.ANNOUNCEMENT)
+    if not fetchers:
+        pytest.skip("No ANNOUNCEMENT-capable fetcher registered")
+
+    # Patch every candidate to return [] — no exceptions, just empty data.
+    patches = [
+        patch.object(f, "get_announcements", return_value=[]) for f in fetchers
+    ]
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        # Should NOT raise. Should return ([], "") so route serves empty list.
+        items, source = mgr.get_announcements("300740", page_size=10)
+    assert items == []
+    assert source == "", (
+        f"empty-chain source should be '' (no fetcher succeeded), got {source!r}"
+    )
