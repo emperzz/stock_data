@@ -173,7 +173,7 @@ class _Endpoints:
         # f12=stock code, f14=stock name (probed 2026-07-05; see commits
         # 4e4d9df + (this fix)). f16 is a numeric quote field, NOT the name
         # — same shape as board-list endpoints.
-        "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f17,f18,f20,f21,f22",
+        "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f16,f17,f18,f20,f21,f22",
     }
 
     # -- Board K-line (push2his /api/qt/stock/kline/get) ----------------

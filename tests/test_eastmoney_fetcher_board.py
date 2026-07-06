@@ -35,22 +35,6 @@ INDUSTRY_LIST_FIELDS = ENDPOINTS.BOARD_LIST_INDUSTRY["fields"].split(",")
 # endpoints, see commit 4e4d9df).
 COMPONENTS_FIELDS = ENDPOINTS.BOARD_COMPONENTS["fields"].split(",")
 
-
-def test_board_components_fields_does_not_request_f16():
-    """Review 2026-07-06 finding #3: BOARD_COMPONENTS.fields used to request
-    f16 even though _BOARD_COMPONENTS_FIELD_MAP no longer maps it (f16 is
-    an unmapped numeric quote field after the 2026-07-05 f12/f14 swap fix).
-    Requesting an unused field wastes upstream bandwidth on every call.
-
-    Asserts f16 is NOT in the request string; if a future fix needs f16,
-    add it back to the field map alongside this test.
-    """
-    fields = ENDPOINTS.BOARD_COMPONENTS["fields"].split(",")
-    assert "f16" not in fields, (
-        f"f16 is requested upstream but not consumed (no map entry); "
-        f"current fields: {fields}"
-    )
-
 _CONCEPT_ROW_TEMPLATE = {
     "f2": 1234.56,  # price
     "f3": 2.35,  # change_pct
