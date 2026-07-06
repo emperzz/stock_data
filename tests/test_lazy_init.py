@@ -67,18 +67,37 @@ def _install_sdk_stubs(monkeypatch):
     """Install SDK module stubs, reset mocks, reset class state, and
     force-empty token env vars so the ``_ensure_api`` path is
     deterministic regardless of dev env.
+
+    Cleanup invariant: every ``sys.modules`` mutation goes through
+    ``monkeypatch.setitem`` so the original entry is restored on
+    teardown. The previous implementation mutated ``_sys.modules``
+    directly, leaking the SimpleNamespace stubs into every later test
+    file (``import tushare`` would return the stub instead of the real
+    module) — see the tushare_index_dispatch test file for the
+    downstream symptom that surfaced this.
     """
     # ``gm.api`` must be a separate sys.modules entry — fetcher does
     # ``from gm.api import set_token`` which expects a real submodule.
+    # If a real ``gm`` is already loaded, patch its ``.api`` attribute
+    # via monkeypatch so the original value is restored on teardown.
+    # If ``gm`` isn't loaded yet, do NOT add it to sys.modules — adding
+    # a fake would mean teardown deletes a real module that a later
+    # test legitimately imports (e.g. ``import gm`` in myquant_fetcher
+    # triggered by ``MyquantFetcher()`` inside a test body).
     _gm_module = _sys.modules.get("gm")
-    if _gm_module is None:
-        _gm_module = MagicMock()
-        _sys.modules["gm"] = _gm_module
-    _gm_module.api = _gm_api_stub
-    _sys.modules["gm.api"] = _gm_api_stub
+    if _gm_module is not None:
+        # ``gm`` is a namespace package — its ``.api`` attribute isn't
+        # resolved until something does ``from gm.api import ...`` (the
+        # fetcher itself). Use ``raising=False`` so monkeypatch doesn't
+        # error if ``api`` isn't there yet.
+        monkeypatch.setattr(_gm_module, "api", _gm_api_stub, raising=False)
 
-    _sys.modules["baostock"] = _baostock_stub
-    _sys.modules["tushare"] = _tushare_stub
+    # ``gm.api`` / ``tushare`` / ``baostock`` are the three stub entries.
+    # ``monkeypatch.setitem`` auto-restores on teardown — delete the key
+    # if it was missing, or replace with the original value if present.
+    monkeypatch.setitem(_sys.modules, "gm.api", _gm_api_stub)
+    monkeypatch.setitem(_sys.modules, "tushare", _tushare_stub)
+    monkeypatch.setitem(_sys.modules, "baostock", _baostock_stub)
 
     # Force empty tokens by default. Tests that need a token set it
     # explicitly via the ``monkeypatch`` parameter.
