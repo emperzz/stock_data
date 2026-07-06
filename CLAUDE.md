@@ -228,18 +228,34 @@ Compact overview:
 
 ## Provider Frequency Support
 
-| Provider | d | w | m | 5m | 15m | 30m | 60m |
-|----------|---|---|---|----|----|-----|-----|
-| BaostockFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| AkshareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| TushareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| YfinanceFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| ZhituFetcher | ❌* | ❌* | ❌* | ✅ | ✅ | ✅ | ✅ |
-| ZzshareFetcher | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+Stock support (per `supports_kline(asset="stock")`):
+
+| Provider | d | w | m | 1m | 5m | 15m | 30m | 60m |
+|----------|---|---|---|----|----|-----|-----|-----|
+| BaostockFetcher | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| AkshareFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| TushareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| YfinanceFetcher | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| ZhituFetcher | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| ZzshareFetcher | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+Index support (per `supports_kline(asset="index")`; column "mkt" lists supported markets):
+
+| Provider | d | w | m | 1m | 5m | 15m | 30m | 60m | mkt | adjust |
+|----------|---|---|---|----|----|-----|-----|-----|-----|--------|
+| BaostockFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | csi | n/a (指数无复权) |
+| TushareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | csi | n/a |
+| AkshareFetcher | ✅ | ✅ | ✅ | ✅¹ | ✅ | ✅ | ✅ | ✅ | csi, hk² | n/a |
+| YfinanceFetcher | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | csi, hk, us | 无 hfq(Stage 2 即剔除) |
+| ZhituFetcher | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | csi | n/a |
+| MyquantFetcher | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | csi | n/a |
+
+¹ Akshare 指数 1m 走 `index_zh_a_hist_min_em`,需单日窗口(start_date=end_date),内部用 `09:30:00 - 15:00:00` 拉单日全部分时。
+² Akshare `get_index_historical` 内部只走 Sina/EM A 股 feed(实盘仅 csi),但 `supports_kline` 不剔 hk,所以 hk 指数代码会在 `get_kline_data` 中进入分支后落空。
 
 **Fallback**: Server queries providers in priority order. If provider doesn't support the requested frequency, it raises `DataFetchError` and the next provider is tried.
 
-**\*ZhituFetcher d/w/m**: the table above reflects **stock** support (5/15/30/60m only). For **indices** Zhitu supports **d/w/m + 5/15/30/60m** (no 1m) — `supports_kline` 分流。HK/US 指数仍走其他 fetcher。
+**Anti-pattern**: Don't assume "1m" works for every market — for **index** 1m, only Akshare (csi, single trading day) is wired up. Yfinance has no 1m interval upstream; Zhitu lacks a 1m endpoint; Baostock / Tushare / Myquant don't serve index minutes at all.
 
 ## Capability-Based Routing
 
@@ -314,7 +330,10 @@ fetchers that support it.
 
 **ZhituFetcher index support (added 2026-07-06)**: 智兔指数 API `/hz/` 前缀(`https://www.zhituapi.com/hsindexapi.html`)现已接入 — 文档见 [`docs/zhitu/10-indices-api.md`](docs/zhitu/10-indices-api.md)。`ZhituFetcher.supported_data_types` 已声明 `INDEX_REALTIME_QUOTE | INDEX_KLINE`,manager 现在按以下优先级链路由:
 
-- **指数 quote**: `Akshare → Yfinance → Zhitu`(Tencent 未声明 `INDEX_REALTIME_QUOTE`,不进此链;Yfinance 是 HK/US 指数 quote 的事实兜底,因为 Akshare 的 `get_index_realtime_quote` 仅服务 csi)
+- **指数 quote** (manager `_filter_by_capability(market, INDEX_REALTIME_QUOTE)` 后按 priority 排序):
+  - **CSI 指数** (csi market): `Akshare (P3) → Yfinance (P4) → Zhitu (P5)` — 三家全部有 `get_index_realtime_quote`(`akshare/fetcher.py:486` / `yfinance_fetcher.py:351` / `zhitu_fetcher.py:429`)。Tencent 未声明 `INDEX_REALTIME_QUOTE`,被 Stage 1 能力位过滤剔除(`tencent_fetcher.py:35`)
+  - **HK 指数** (hk market): `Yfinance` — Akshare 虽 `supported_markets` 含 hk,但 `get_index_realtime_quote` 内部只查 `stock_zh_index_spot_em` / `stock_zh_index_spot_sina`(A 股 feed,`akshare/fetcher.py:500-560`),对 hk 指数代码会落空返回 None,故不可靠;Zhitu `supported_markets={csi}` 被能力过滤剔除
+  - **US 指数** (us market): `Yfinance` — Akshare `supported_markets` 不含 us 被剔除;Zhitu 同上;Yfinance 是唯一路径
 - **指数 K 线 d/w/m**: `Baostock → Tushare → Akshare → Yfinance → Zhitu → Myquant`
 - **指数 K 线 5/15/30/60m**: `Akshare → Yfinance → Zhitu`(Zhitu 1m 不支持,1m 仍走原链; Myquant index `supports_kline` 只在 `period == "d"` 时返回 True,非 d 周期在 Stage 2 即被剔除(`myquant_fetcher.py:177-179`))
 
