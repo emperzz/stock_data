@@ -164,6 +164,134 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
         # Use common normalization for the rest
         return self._normalize_dataframe(df, stock_code, {})
 
+    # ---- stock K-line: get_kline_data override dispatches index → index_daily/weekly/monthly ----
+
+    def get_kline_data(
+        self,
+        stock_code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        days: int = 30,
+        frequency: str = "d",
+        adjust: str | None = None,
+    ) -> pd.DataFrame:
+        """Override base ``get_kline_data`` to dispatch on asset type.
+
+        Mirrors ``ZhituFetcher.get_kline_data`` (zhitu_fetcher.py:587) and
+        ``MyquantFetcher.get_kline_data`` (myquant_fetcher.py:202):
+        ``DataFetcherManager.get_kline_data`` is the unified K-line entry
+        for both stocks and indices — it filters by ``STOCK_KLINE`` vs
+        ``INDEX_KLINE`` capability, then calls the **same method name** on
+        every fetcher. Without this override Tushare would route index
+        requests through ``_fetch_raw_data`` → ``api.query("daily", ...)``,
+        but ``daily`` is Tushare's **stock** API; for index ``ts_code``
+        like ``000001.SH`` (SSE Composite) it returns empty data, raising
+        ``DataFetchError("Tushare returned no data for 000001")``.
+
+        Tushare's index K-line APIs are separately named:
+            index_daily, index_weekly, index_monthly
+        They accept the same ``ts_code`` / ``start_date`` / ``end_date``
+        kwargs and return the same column shape as the stock variants
+        (``ts_code, trade_date, open, high, low, close, pre_close,
+        change, pct_chg, vol, amount``) — the existing ``_normalize_data``
+        already handles the ``vol`` (手 → 股 via ×100) and ``amount``
+        (千 yuan → yuan via ×1000) conversions.
+
+        Dispatch rules (mirrors Zhitu/Myquant):
+        - ``index_market_tag`` returns non-None → index branch (CSI only;
+          minute frequencies are excluded upstream by ``supports_kline``,
+          so in practice only ``d/w/m`` reach this branch).
+        - Otherwise → fall through to ``super().get_kline_data`` (stock).
+        """
+        from datetime import datetime, timedelta
+
+        from ..utils.normalize import index_market_tag
+
+        if index_market_tag(stock_code) is not None:
+            if end_date is None:
+                end_date = datetime.now().strftime("%Y-%m-%d")
+            if start_date is None:
+                start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(
+                    days=days * 2
+                )
+                start_date = start_dt.strftime("%Y-%m-%d")
+            return self._fetch_index_kline(
+                stock_code, start_date, end_date, frequency
+            )
+        return super().get_kline_data(
+            stock_code, start_date, end_date, days, frequency, adjust
+        )
+
+    def _fetch_index_kline(
+        self,
+        index_code: str,
+        start_date: str,
+        end_date: str,
+        frequency: str,
+    ) -> pd.DataFrame:
+        """Fetch CSI index K-line via Tushare's index_daily/weekly/monthly API.
+
+        Args:
+            index_code: Index code (e.g., 000001, 000300, 399006)
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线
+
+        Returns:
+            DataFrame normalized to STANDARD_COLUMNS.
+
+        Raises:
+            DataFetchError on token absence, unsupported market, or empty
+            upstream response. Mirrors ``_fetch_raw_data`` semantics so the
+            manager's failover loop can transparently move on to the next
+            fetcher.
+        """
+        self._ensure_api()
+        if TushareFetcher._api is None:
+            raise DataFetchError("Tushare API not available (no token)")
+
+        try:
+            code = normalize_stock_code(index_code)
+            # Guard against non-CSI index codes (HK / US) — Tushare only
+            # serves CSI. ``to_tushare_format`` will raise ``ValueError`` for
+            # them, which we wrap in ``DataFetchError`` so the manager
+            # failover chain transparently moves on.
+            try:
+                ts_code = to_tushare_format(index_code)
+            except ValueError as e:
+                raise DataFetchError(str(e)) from e
+
+            start = start_date.replace("-", "")
+            end = end_date.replace("-", "")
+
+            api_map = {"d": "index_daily", "w": "index_weekly", "m": "index_monthly"}
+            api_name = api_map.get(frequency)
+            if not api_name:
+                raise DataFetchError(
+                    f"TushareFetcher index only supports d/w/m, got '{frequency}'"
+                )
+
+            logger.debug(
+                f"[TushareFetcher] Calling {api_name} for {ts_code} (no adjustment)"
+            )
+
+            df = TushareFetcher._api.query(
+                api_name,
+                ts_code=ts_code,
+                start_date=start,
+                end_date=end,
+            )
+
+            if df is None or df.empty:
+                raise DataFetchError(f"Tushare returned no data for {index_code}")
+
+            return self._normalize_data(df, code)
+
+        except DataFetchError:
+            raise
+        except Exception as e:
+            raise DataFetchError(f"TushareFetcher index fetch failed: {e}") from e
+
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Tushare (requires tick data permission)."""
         self._ensure_api()

@@ -215,7 +215,7 @@ Compact overview:
 | `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `INDEX_KLINE`, `INDEX_REALTIME_QUOTE` | none |
 | `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `STOCK_KLINE` (minute fallback), `STOCK_LIST` (P5 backup), `STOCK_BOARD`, `DIVIDEND`, `FUND_FLOW`, `HOLDER_NUM`, `INDEX_REALTIME_QUOTE`, `INDEX_KLINE` (d/w/m + 5/15/30/60m, csi only — `INDEX_KLINE` declared 2026-07-06 via `/hz/history/fsjy/<code>.<mkt>/<level>`; see `docs/zhitu/10-indices-api.md`) | `ZHITU_TOKEN` |
 | `ZzshareFetcher` | 2 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
-| `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE`, `INDEX_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
+| `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强 — 仅股票; Tencent 未声明 `INDEX_REALTIME_QUOTE`,不进指数 quote 链) | none |
 | `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `NEWS_SEARCH`, `STOCK_BOARD`, `STOCK_NEWS`, `ANNOUNCEMENT` | none |
 | `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH`, `NEWS_SEARCH` (via 问财 iWenCai) | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
@@ -303,7 +303,7 @@ fetchers that support it.
 | MyquantFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_KLINE \| STOCK_INFO` |
 | YfinanceFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| INDEX_KLINE \| INDEX_REALTIME_QUOTE` |
 | ZhituFetcher | `STOCK_REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| STOCK_KLINE \| STOCK_LIST \| STOCK_BOARD \| DIVIDEND \| FUND_FLOW \| HOLDER_NUM \| INDEX_REALTIME_QUOTE \| INDEX_KLINE` |
-| TencentFetcher | `STOCK_REALTIME_QUOTE \| INDEX_REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
+| TencentFetcher | `STOCK_REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价 — 仅股票) |
 | EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD \| STOCK_NEWS \| ANNOUNCEMENT` |
 | ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH \| NEWS_SEARCH` |
 | CninfoFetcher | `ANNOUNCEMENT` |
@@ -314,9 +314,9 @@ fetchers that support it.
 
 **ZhituFetcher index support (added 2026-07-06)**: 智兔指数 API `/hz/` 前缀(`https://www.zhituapi.com/hsindexapi.html`)现已接入 — 文档见 [`docs/zhitu/10-indices-api.md`](docs/zhitu/10-indices-api.md)。`ZhituFetcher.supported_data_types` 已声明 `INDEX_REALTIME_QUOTE | INDEX_KLINE`,manager 现在按以下优先级链路由:
 
-- **指数 quote**: `Akshare → Yfinance → Zhitu → Tencent`
+- **指数 quote**: `Akshare → Yfinance → Zhitu`(Tencent 未声明 `INDEX_REALTIME_QUOTE`,不进此链;Yfinance 是 HK/US 指数 quote 的事实兜底,因为 Akshare 的 `get_index_realtime_quote` 仅服务 csi)
 - **指数 K 线 d/w/m**: `Baostock → Tushare → Akshare → Yfinance → Zhitu → Myquant`
-- **指数 K 线 5/15/30/60m**: `Akshare → Yfinance → Zhitu → Myquant`(Zhitu 1m 不支持,1m 仍走原链)
+- **指数 K 线 5/15/30/60m**: `Akshare → Yfinance → Zhitu`(Zhitu 1m 不支持,1m 仍走原链; Myquant index `supports_kline` 只在 `period == "d"` 时返回 True,非 d 周期在 Stage 2 即被剔除(`myquant_fetcher.py:177-179`))
 
 实现细节 (zhitu_fetcher.py):
 
@@ -332,6 +332,8 @@ fetchers that support it.
 **MyquantFetcher index K-line dispatch (added 2026-07-06)**: 之前 `MyquantFetcher.get_kline_data` 继承自 `BaseFetcher`,会走 `_convert_code` → `to_myquant_format` 在指数代码上抛 `ValueError("Use to_myquant_index_format for index …")`,导致 manager 的指数 K 线 failover 链 fall through 到 Myquant 时哑火(Myquant 声明 `INDEX_KLINE` 但实际拒绝)。修复参照 Zhitu 模式:`myquant_fetcher.py:198-237` override `get_kline_data`,`index_market_tag(stock_code) is not None` 时派发到既有 `get_index_historical`(daily only),其他情况 fall through `super().get_kline_data`。
 
 `supports_kline` 也同时收紧:`myquant_fetcher.py:168-180` 现在 index asset 只在 `period == "d"` 时返回 `True`(之前 `5/15/30/60` 也返回 True,但 `get_index_historical` 立刻会抛,造成无谓 failover 跳)。stock asset 行为不变。
+
+**TushareFetcher index K-line dispatch (added 2026-07-06)**: 之前 `TushareFetcher.get_kline_data` 继承自 `BaseFetcher`,会走 `_fetch_raw_data` 调 `api.query("daily", ...)`,而 `daily` 是 Tushare 的**股票** API(不识别指数代码);指数请求(如 `000001.SH` 上证综指)走这条路径会得到空响应 → `DataFetchError("Tushare returned no data for 000001")`。TushareFetcher 因此是指数 K 线 failover 链上**沉默的死亡参与者**(`/indices/{code}/kline` 在 explorer 测试会爆这个错)。与 Myquant e420527 同形 bug。修复参照 Zhitu / Myquant 模式:`tushare_fetcher.py:169-223` override `get_kline_data`,`index_market_tag(stock_code) is not None` 时派发到 `_fetch_index_kline` (`tushare_fetcher.py:225-293`),直接调 Tushare 的 `index_daily` / `index_weekly` / `index_monthly` API(`to_tushare_format` 把 `000001` 转为 `000001.SH` 等;列 schema 与 `daily` 相同,`vol` 是手 → `_normalize_data` ×100 归一到股)。其他情况 fall through `super().get_kline_data`(stock 路径未动)。非 CSI 指数(HK/US)由 `to_tushare_format` 的 `ValueError` → `DataFetchError` 转换优雅跳过,manager failover 链无感前进。`supports_kline` 无需收紧(Tushare 之前只接受 d/w/m,index 也只 d/w/m,行为一致)。
 
 ## Symbol Conventions
 
