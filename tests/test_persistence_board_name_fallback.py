@@ -1,0 +1,109 @@
+"""Tests for stock_board_cache.get_board_name_with_fallback.
+
+Review 2026-07-06 finding #10: the /boards/{code}/stocks route was
+calling manager.get_all_boards(...) directly to resolve board names,
+violating CLAUDE.md's Persistence-Only Routing rule. Move the fallback
+loop + exception handling into persistence.board and have the route
+call the helper instead.
+"""
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from stock_data.data_provider.base import DataFetchError
+from stock_data.data_provider.persistence import board as board_mod
+
+
+@pytest.fixture(autouse=True)
+def _clean_db():
+    """Wipe stock_board before each test for isolation.
+
+    Tests share the real SQLite file (DBS aren't mocked). Without this
+    fixture, a previous run's cache rows bleed into the next test and
+    change the helper's cache-lookup outcome.
+    """
+    board_mod.init_schema()
+    conn = board_mod.get_connection()
+    conn.execute("DELETE FROM stock_board")
+    conn.commit()
+    yield
+    conn.execute("DELETE FROM stock_board")
+    conn.commit()
+
+
+def test_get_board_name_with_fallback_returns_cached_when_present():
+    """Cache hit returns cached name; no manager call."""
+    board_mod.update_cached_boards(
+        "concept",
+        "eastmoney",
+        [{"code": "BK0996", "name": "人形机器人", "type": "concept", "subtype": "concept"}],
+    )
+    manager = MagicMock()
+    name = board_mod.get_board_name_with_fallback("BK0996", "eastmoney", manager=manager)
+    assert name == "人形机器人"
+    manager.get_all_boards.assert_not_called()
+
+
+def test_get_board_name_with_fallback_returns_none_when_no_manager_and_cache_miss():
+    """Cache miss + no manager → None (caller substitutes bare board_code).
+
+    No manager = no fetcher fallback at all. Helper short-circuits and
+    returns None. The caller (route layer) substitutes the bare code.
+    """
+    name = board_mod.get_board_name_with_fallback("BK_MISSING", "eastmoney")
+    assert name is None
+
+
+def test_get_board_name_with_fallback_queries_manager_on_cache_miss():
+    """Cache miss → manager.get_all_boards called for both concept and industry."""
+    manager = MagicMock()
+    # First call (concept) returns the target board; industry never reached.
+    manager.get_all_boards.return_value = (
+        [{"code": "BK0996", "name": "人形机器人", "type": "concept"}],
+        "EastMoneyFetcher",
+    )
+    name = board_mod.get_board_name_with_fallback("BK0996", "eastmoney", manager=manager)
+    assert name == "人形机器人"
+    assert manager.get_all_boards.call_count == 1
+    # The single call should have been for concept (the first match).
+    call_kwargs = manager.get_all_boards.call_args.kwargs
+    assert call_kwargs["source"] == "eastmoney"
+    assert call_kwargs["board_type"] == "concept"
+
+
+def test_get_board_name_with_fallback_swallows_data_fetch_error():
+    """DataFetchError from manager → return None (non-fatal)."""
+    manager = MagicMock()
+    manager.get_all_boards.side_effect = DataFetchError("EM upstream down")
+    name = board_mod.get_board_name_with_fallback("BK0996", "eastmoney", manager=manager)
+    assert name is None
+
+
+def test_get_board_name_with_fallback_swallows_value_error():
+    """ValueError from manager._with_source rejection → return None."""
+    manager = MagicMock()
+    manager.get_all_boards.side_effect = ValueError("Unknown source 'foo'")
+    name = board_mod.get_board_name_with_fallback("BK0996", "eastmoney", manager=manager)
+    assert name is None
+
+
+def test_get_board_name_with_fallback_swallows_attribute_error():
+    """AttributeError when fetcher lacks get_all_boards (e.g., ThsFetcher) → None."""
+    manager = MagicMock()
+    manager.get_all_boards.side_effect = AttributeError(
+        "'ThsFetcher' object has no attribute 'get_all_boards'"
+    )
+    name = board_mod.get_board_name_with_fallback("BK0996", "ths", manager=manager)
+    assert name is None
+
+
+def test_get_board_name_with_fallback_returns_none_when_no_match_in_boards():
+    """Cache miss + fetcher returns boards but none match the code → None."""
+    manager = MagicMock()
+    manager.get_all_boards.return_value = (
+        [{"code": "BK_OTHER", "name": "其他概念"}],
+        "EastMoneyFetcher",
+    )
+    name = board_mod.get_board_name_with_fallback("BK0996", "eastmoney", manager=manager)
+    assert name is None

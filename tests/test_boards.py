@@ -318,49 +318,51 @@ class TestBoardAPIRoutes:
             assert kwargs.get("include_quote") is True
 
 
-class TestThsAlias:
-    """?source=ths must behave identically to ?source=zzshare on all list endpoints."""
+class TestThsSourceAliasMatrix:
+    """Track the per-endpoint alias matrix for ?source=ths.
 
-    @pytest.mark.parametrize(
-        "endpoint,patch_target,extra_params,return_value",
-        [
-            # (url path, persistence patch target, extra query params, mocked return)
-            #
-            # NOTE: /boards/{code}/history is intentionally EXCLUDED from this
-            # set. The history route uses `_resolve_board_history_source` which
-            # does NOT alias `ths→zzshare` (THS as a K-line source routes to
-            # ThsFetcher, not ZzshareFetcher). The alias only applies to
-            # board-list and board-stocks endpoints.
-            (
-                "/api/v1/boards?type=concept&source=ths",
-                "stock_data.data_provider.persistence.board.get_board_list",
-                {},
-                # list_boards route requires 'code'/'name' keys per BoardInfo
+    The alias direction differs by endpoint because different upstream
+    endpoints feed each route:
+
+    | Endpoint                        | ?source=ths becomes | Why |
+    |---------------------------------|---------------------|-----|
+    | /boards (list)                  | zzshare             | board-list is served by zzshare's plates_list (upstream IS THS) |
+    | /boards/{code}/stocks           | ths (no alias)      | ThsFetcher has its own q.10jqka AJAX (commit 371fa41) |
+    | /boards/{code}/history          | ths (no alias)      | ThsFetcher has board K-line; zzshare's plate_kline is 883957-only |
+    | /stocks/{code}/boards           | ths                 | ThsFetcher's stock_concept_list |
+
+    Each test pins ONE row of the matrix so a future alias change is loud.
+    """
+
+    def test_board_list_ths_aliases_to_zzshare(self, client):
+        """/api/v1/boards?source=ths aliases to zzshare (board-list is via zzshare)."""
+        with patch(
+            "stock_data.data_provider.persistence.board.get_board_list"
+        ) as mock_get:
+            mock_get.return_value = (
                 [{"code": "BK1048", "name": "互联网服务"}],
-            ),
-            (
-                "/api/v1/boards/BK1048/stocks?source=ths",
-                "stock_data.data_provider.persistence.board.get_board_stocks",
-                {},
-                # get_board_stocks route raises 404 on empty list — use a non-empty stub
+                "zzshare",
+            )
+            response = client.get("/api/v1/boards?type=concept&source=ths")
+        assert response.status_code == 200
+        assert mock_get.call_args.kwargs["source"] == "zzshare"
+
+    def test_board_stocks_ths_does_not_alias(self, client):
+        """/api/v1/boards/{code}/stocks?source=ths reaches persistence as 'ths'.
+
+        ThsFetcher has its own get_board_stocks implementation; the alias
+        was removed in commit 371fa41.
+        """
+        with patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks"
+        ) as mock_get:
+            mock_get.return_value = (
                 [{"stock_code": "600519", "stock_name": "贵州茅台"}],
-            ),
-        ],
-    )
-    def test_ths_alias_remaps_to_zzshare(
-        self, client, endpoint, patch_target, extra_params, return_value
-    ):
-        """source=ths → routes to zzshare fetcher; DB writes use source='zzshare'."""
-        url = endpoint + "".join(f"&{k}={v}" for k, v in extra_params.items())
-        with patch(patch_target) as mock_get:
-            mock_get.return_value = (return_value, "zzshare")
-            response = client.get(url)
-            assert response.status_code == 200
-            # The persistence/manager layer must have been called with
-            # source='zzshare', not source='ths'. This proves the alias remap
-            # happened upstream of the persistence boundary.
-            called_kwargs = mock_get.call_args.kwargs
-            assert called_kwargs["source"] == "zzshare"
+                "ths",
+            )
+            response = client.get("/api/v1/boards/BK1048/stocks?source=ths")
+        assert response.status_code == 200
+        assert mock_get.call_args.kwargs["source"] == "ths"
 
 
 class TestAkshareFetcherBoards:

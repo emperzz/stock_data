@@ -492,39 +492,18 @@ def get_board_stocks(
             detail={"error": "not_found", "message": f"No stocks found for board {board_code}"},
         )
 
-    # Best-effort board name resolution. Fast path: query the cached
-    # stock_board table directly (no upstream call) so a stock-list
-    # request served from cache doesn't trigger a board-list fetch.
-    # Fallback: ask the fetcher when the board-list cache is cold.
-    board_name = stock_board_cache.get_board_name(board_code, source) or board_code
-    if board_name == board_code:
-        try:
-            for bt in ("concept", "industry"):
-                boards, _ = manager.get_all_boards(
-                    source=source,
-                    board_type=bt,
-                    subtype=None,
-                )
-                match = next((b["name"] for b in boards if b["code"] == board_code), None)
-                if match:
-                    board_name = match
-                    break
-        except DataFetchError:
-            # Fetcher's own failure (network/auth/etc.). Non-fatal —
-            # we just fall back to the bare board_code as the name.
-            pass
-        except (ValueError, AttributeError) as e:
-            # ValueError: manager._with_source rejected unknown source / market / capability
-            # AttributeError: fetcher doesn't implement get_all_boards (e.g.,
-            #   ThsFetcher — has STOCK_BOARD capability for get_board_stocks but
-            #   no get_all_boards method; manager calls the missing method directly)
-            # Both are non-fatal for this endpoint. Log at DEBUG so legitimate
-            # fallback cases don't pollute logs, but real masking bugs surface
-            # at WARNING/ERROR for triage.
-            logger.debug(
-                f"[boards] board-name fallback for {board_code} (source={source}): "
-                f"{type(e).__name__}: {e}"
-            )
+    # Best-effort board name resolution. Delegates to persistence.board's
+    # helper which encapsulates the cache-first + fetcher-fallback pattern
+    # (review 2026-07-06 finding #10, CLAUDE.md Persistence-Only Routing).
+    # The helper swallows DataFetchError / ValueError / AttributeError
+    # internally; on any failure it returns None and we fall back to the
+    # bare board_code as the name.
+    board_name = (
+        stock_board_cache.get_board_name_with_fallback(
+            board_code, source, manager=manager
+        )
+        or board_code
+    )
 
     stock_list = [
         BoardStockInfo(

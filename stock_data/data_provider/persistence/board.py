@@ -10,6 +10,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
+from ..base import DataFetchError
 from . import db
 from ._refresh import DailyRefreshTracker
 from .db import get_connection, get_db_path
@@ -930,6 +931,67 @@ def get_board_name(board_code: str, source: str) -> str | None:
     )
     row = cursor.fetchone()
     return row["name"] if row else None
+
+
+def get_board_name_with_fallback(
+    board_code: str,
+    source: str,
+    manager: Any | None = None,
+) -> str | None:
+    """Resolve a board's name with cache-first, fetcher-fallback strategy.
+
+    Fast path: read from SQLite cache (no upstream call) — see
+    :func:`get_board_name` for the cold-cache behaviour.
+
+    Slow path: when the cache is cold and ``manager`` is provided,
+    ask the fetcher by calling ``manager.get_all_boards`` for each
+    board type until the target board is found. This consolidates the
+    loop + exception handling that previously lived in the route layer
+    (review 2026-07-06 finding #10, CLAUDE.md Persistence-Only Routing).
+
+    Non-fatal failures are swallowed silently (logged at DEBUG):
+
+    - ``DataFetchError``: fetcher's own network/auth failure
+    - ``ValueError``: manager._with_source rejected unknown source /
+      market / capability
+    - ``AttributeError``: fetcher doesn't implement ``get_all_boards``
+      (e.g. ThsFetcher — has STOCK_BOARD capability for
+      ``get_board_stocks`` but no ``get_all_boards`` method; manager
+      calls the missing method directly)
+
+    The route layer treats all three as "fall back to bare board_code"
+    rather than 5xx.
+
+    Args:
+        board_code: Board code (e.g. ``"BK1048"``).
+        source: Data source slug (``"eastmoney"``, ``"ths"``, etc.).
+        manager: Optional :class:`DataFetcherManager` instance. When
+            ``None``, the slow path is skipped entirely.
+
+    Returns:
+        The board name if found in cache or via fetcher, else ``None``.
+    """
+    cached = get_board_name(board_code, source)
+    if cached:
+        return cached
+    if manager is None:
+        return None
+    try:
+        for bt in ("concept", "industry"):
+            boards, _ = manager.get_all_boards(
+                source=source,
+                board_type=bt,
+                subtype=None,
+            )
+            match = next((b["name"] for b in boards if b["code"] == board_code), None)
+            if match:
+                return match
+    except (DataFetchError, ValueError, AttributeError) as e:
+        logger.debug(
+            f"[BoardCache] board-name fallback for {board_code} "
+            f"(source={source}): {type(e).__name__}: {e}"
+        )
+    return None
 
 
 def _read_boards_from_db(board_type: str, source: str, subtype: str | None = None) -> list[dict[str, Any]]:
