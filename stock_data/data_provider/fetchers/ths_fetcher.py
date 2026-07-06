@@ -935,7 +935,7 @@ class ThsFetcher(BaseFetcher):
             )
             return []
         rows = payload.get("data") or {}
-        items = rows.get("data") if isinstance(rows, dict) else []
+        items = rows.get("data") or [] if isinstance(rows, dict) else []
         out: list[dict] = []
         for r in items:
             url = r.get("pc_url") or r.get("mobile_url") or ""

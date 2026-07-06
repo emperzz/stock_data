@@ -63,6 +63,32 @@ def test_get_announcements_upstream_error_code_returns_empty(ths):
     assert items == []
 
 
+def test_get_announcements_returns_empty_when_data_is_empty_dict(ths):
+    """Regression (review 2026-07-06 finding #1): status_code=0 + data={} → [].
+
+    Previously the fetcher crashed with TypeError because
+    `rows.get('data')` returned None and the for-loop iterated None.
+    The status_code check passes (success), so we reach the data
+    parsing branch — the defensive `or []` fallback must kick in here.
+    """
+    with patch(
+        "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+        return_value={"status_code": 0, "status_msg": "success", "data": {}},
+    ):
+        items = ths.get_announcements("300740", page_size=5)
+    assert items == []
+
+
+def test_get_announcements_returns_empty_when_inner_data_is_null(ths):
+    """status_code=0 + data={data: null} → [] (covers `rows.get('data')` returns None)."""
+    with patch(
+        "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+        return_value={"status_code": 0, "status_msg": "success", "data": {"data": None}},
+    ):
+        items = ths.get_announcements("300740", page_size=5)
+    assert items == []
+
+
 def test_get_announcements_propagates_datafetcherror(ths):
     """Hard network failure raises DataFetchError (manager failover relies on this)."""
     with (
