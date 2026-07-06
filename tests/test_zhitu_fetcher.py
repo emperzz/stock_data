@@ -324,3 +324,295 @@ class TestGetRealtimeQuoteVolumeUnit:
         assert 1_000_000 < q.volume < 100_000_000, (
             f"volume {q.volume} 数量级异常 — 万手/手/股 归一可能错位"
         )
+
+
+class TestNormalizeIntradayZhitu:
+    """Mock-based coverage for ``_normalize_intraday_zhitu`` and the full
+    ``get_intraday_data`` stock minute K-line path.
+
+    Spec §3.4: /kline `volume` is always in shares (股). Zhitu's
+    stock history endpoint ``/hs/history/...`` returns ``v`` in **万手**
+    (10,000 lots) — empirically verified 2026-07-06 with real token
+    against Myquant gm SDK (returns shares directly, ratio = 1_000_000).
+    The normalize step must convert ``万手 × 10000 手/万手 × 100 股/手
+    = × 1_000_000``. See [[zhitu-upstream-volume-unit-inconsistency]].
+
+    Live-network tests at ``test_providers.py::TestZhituFetcherIntraday``
+    only assert column presence, never volume unit. Without these mock
+    tests a regression to ``* 100`` (treating v as 手) would ship silently
+    and produce 10000× too small volume values.
+    """
+
+    def setup_method(self):
+        self.fetcher = ZhituFetcher()
+
+    # ---- _normalize_intraday_zhitu direct unit tests ----
+
+    def test_volume_wanshou_to_shares_conversion(self):
+        """Direct call to _normalize_intraday_zhitu — verify × 1_000_000.
+
+        Simulates 平安银行 2025-02-21 09:35: 1000 万手 单根 K 线
+        (公开源 /hs/real/ssjy/ 也是这个单位) — expected volume in shares:
+        1000 × 1_000_000 = 1_000_000_000 股 = 10 亿股, 与沪深大票 5/15/30
+        分钟线典型量级一致。
+        """
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {
+                    "t": "2025-02-21T09:35:00",
+                    "o": 10.5,
+                    "h": 10.52,
+                    "l": 10.48,
+                    "c": 10.51,
+                    "v": 1000.0,        # 万手
+                    "a": 10_500_000.0,  # 元
+                }
+            ]
+        )
+        out = self.fetcher._normalize_intraday_zhitu(df)
+        assert out.iloc[0]["volume"] == 1_000_000_000, (
+            f"expected 1_000_000_000 shares (万手 × 1_000_000), "
+            f"got {out.iloc[0]['volume']}. 检查 spec §3.4 归一系数。"
+        )
+
+    def test_volume_cje_v_implied_price_invariant(self):
+        """cje / volume 应等于该 bar 的近似价格(元/股)。
+
+        平安 10.51 元/股 + 1000 万手 = 10.51 × 1000 × 10000 × 100
+        = 10_510_000_000 元 成交额(cje)。cje/volume_shares = 10.51。
+        若归一错位(cje/v 数量级变 10000× off), 断言会失败。
+        """
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {
+                    "t": "2025-02-21T09:35:00",
+                    "o": 10.5,
+                    "h": 10.52,
+                    "l": 10.48,
+                    "c": 10.51,
+                    "v": 1000.0,                  # 万手
+                    "a": 10.51 * 1000 * 1_000_000, # cje = price × volume_shares
+                }
+            ]
+        )
+        out = self.fetcher._normalize_intraday_zhitu(df)
+        v_shares = out.iloc[0]["volume"]
+        cje = out.iloc[0]["amount"]
+        implied = cje / v_shares
+        # 应等于该 bar 收盘价 10.51
+        assert abs(implied - 10.51) < 0.01, (
+            f"cje/volume={implied:.2f} 元/股, 期望接近 10.51 (bar 收盘价). "
+            f"如果数量级差 100 或 10000,说明 v 单位归一错位。"
+        )
+
+    def test_columns_renamed_and_time_truncated(self):
+        """t→time, o→open, h→high, l→low, c→close, v→volume, a→amount;
+        time 取 HH:MM:SS(从 ISO 字符串末 8 字符)。"""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {
+                    "t": "2025-02-21T09:35:00",
+                    "o": 10.0,
+                    "h": 10.1,
+                    "l": 9.9,
+                    "c": 10.05,
+                    "v": 100.0,
+                    "a": 100_500.0,
+                }
+            ]
+        )
+        out = self.fetcher._normalize_intraday_zhitu(df)
+        assert set(out.columns) == {
+            "time", "open", "high", "low", "close", "volume", "amount",
+        }
+        assert out.iloc[0]["time"] == "09:35:00"
+
+    def test_numeric_coercion_handles_string_volumes(self):
+        """上游有时把 v 返为字符串 — pd.to_numeric errors='coerce' 应能容忍。"""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {"t": "2025-02-21T10:00:00", "o": "10.0", "h": "10.1",
+                 "l": "9.9", "c": "10.05", "v": "500", "a": "502500"}
+            ]
+        )
+        out = self.fetcher._normalize_intraday_zhitu(df)
+        assert out.iloc[0]["volume"] == 500 * 1_000_000
+
+    def test_keeps_only_standard_columns(self):
+        """pc / sf 等上游多返字段应被丢弃(keep_cols 白名单)。"""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {"t": "2025-02-21T10:00:00", "o": 10.0, "h": 10.1,
+                 "l": 9.9, "c": 10.05, "v": 100.0, "a": 100_500.0,
+                 "pc": 9.95, "sf": 0.0, "extra_field": "noise"}
+            ]
+        )
+        out = self.fetcher._normalize_intraday_zhitu(df)
+        assert "pc" not in out.columns
+        assert "sf" not in out.columns
+        assert "extra_field" not in out.columns
+
+    def test_multiple_bars_preserve_order(self):
+        """多根 K 线保留原始顺序(不做 sort_values)。"""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {"t": "2025-02-21T14:55:00", "o": 10.0, "h": 10.1, "l": 9.9,
+                 "c": 10.05, "v": 200.0, "a": 2_010_000.0},
+                {"t": "2025-02-21T14:56:00", "o": 10.1, "h": 10.2, "l": 10.0,
+                 "c": 10.15, "v": 300.0, "a": 3_045_000.0},
+                {"t": "2025-02-21T14:57:00", "o": 10.2, "h": 10.3, "l": 10.1,
+                 "c": 10.25, "v": 400.0, "a": 4_100_000.0},
+            ]
+        )
+        out = self.fetcher._normalize_intraday_zhitu(df)
+        assert len(out) == 3
+        assert list(out["volume"]) == [200_000_000, 300_000_000, 400_000_000]
+        # 时间顺序保留
+        assert list(out["time"]) == ["14:55:00", "14:56:00", "14:57:00"]
+
+    def test_does_not_mutate_input_dataframe(self):
+        """normalize 应该是纯函数 — df.copy() 隔离, 不修改入参。"""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {"t": "2025-02-21T10:00:00", "o": 10.0, "h": 10.1, "l": 9.9,
+                 "c": 10.05, "v": 100.0, "a": 1_005_000.0}
+            ]
+        )
+        original_v = df["v"].iloc[0]  # 100.0 (万手)
+        _ = self.fetcher._normalize_intraday_zhitu(df)
+        assert df["v"].iloc[0] == original_v, "normalize 不应修改入参 df"
+        assert "v" in df.columns, "rename 只在副本上, 不应污染入参"
+
+    # ---- get_intraday_data end-to-end (mocked HTTP) ----
+
+    @patch("stock_data.data_provider.utils.http.requests.get")
+    def test_get_intraday_data_normalizes_volume(self, mock_get, monkeypatch):
+        """E2E: 模拟 /hs/history/... 返回的 v=万手, 经 _normalize_intraday_zhitu
+        归一后应为股. 1 万手 → 1_000_000 股.
+        """
+        import os as _os
+        _real_getenv = _os.getenv
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
+            lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else _real_getenv(*a, **k),
+        )
+        self.fetcher._token = "test_token"
+
+        # 屏蔽 trade_calendar DB 依赖 — 强制走 date.today() fallback.
+        monkeypatch.setattr(
+            "stock_data.data_provider.persistence.trade_calendar.get_latest_cached_trade_date",
+            lambda: None,
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = [
+            {
+                "t": "2025-02-21T09:35:00",
+                "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.05,
+                "v": 5.0,          # 5 万手
+                "a": 5_025_000.0,  # cje 应等于 5 × 1M × 10.05 = 50,250,000
+                                  # 这里故意给个不匹配 cje, 让 cje/v 不变量测试在校验
+                                  # volume 之前先通过(volume 是归一后的真值)
+            },
+            {
+                "t": "2025-02-21T09:40:00",
+                "o": 10.1, "h": 10.2, "l": 10.0, "c": 10.15,
+                "v": 7.5,          # 7.5 万手
+                "a": 7_612_500.0,
+            },
+        ]
+        mock_response.raise_for_status = lambda: None
+        mock_get.return_value = mock_response
+
+        df = self.fetcher.get_intraday_data("000001", period="5", adjust="")
+
+        assert df is not None
+        assert len(df) == 2
+        # 5 万手 → 5_000_000 股; 7.5 万手 → 7_500_000 股
+        assert df.iloc[0]["volume"] == 5_000_000
+        assert df.iloc[1]["volume"] == 7_500_000
+        # 数量级合理性 (单只股票 5 分钟线 1e5-1e8 股)
+        for v in df["volume"]:
+            assert 1e5 < v < 1e8, f"volume {v} 数量级异常"
+
+    @patch("stock_data.data_provider.utils.http.requests.get")
+    def test_get_intraday_data_returns_none_for_empty_list(
+        self, mock_get, monkeypatch
+    ):
+        """上游返空 list(节假日/无数据) → 应返 None 让 manager failover。"""
+        import os as _os
+        _real_getenv = _os.getenv
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
+            lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else _real_getenv(*a, **k),
+        )
+        self.fetcher._token = "test_token"
+        monkeypatch.setattr(
+            "stock_data.data_provider.persistence.trade_calendar.get_latest_cached_trade_date",
+            lambda: None,
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = []
+        mock_response.raise_for_status = lambda: None
+        mock_get.return_value = mock_response
+
+        assert self.fetcher.get_intraday_data("000001", period="5") is None
+
+    @patch("stock_data.data_provider.utils.http.requests.get")
+    def test_get_intraday_data_returns_none_on_http_error(
+        self, mock_get, monkeypatch
+    ):
+        """HTTP 5xx 应让 _fetch_json 返 None, get_intraday_data 应传播 None。"""
+        import os as _os
+        _real_getenv = _os.getenv
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
+            lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else _real_getenv(*a, **k),
+        )
+        self.fetcher._token = "test_token"
+        monkeypatch.setattr(
+            "stock_data.data_provider.persistence.trade_calendar.get_latest_cached_trade_date",
+            lambda: None,
+        )
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = requests.HTTPError("500")
+        mock_get.return_value = mock_response
+
+        assert self.fetcher.get_intraday_data("000001", period="5") is None
+
+    def test_get_intraday_data_rejects_period_1(self, monkeypatch):
+        """period='1' 智兔不支持 — 应抛 DataFetchError 让 manager failover。"""
+        from stock_data.data_provider.base import DataFetchError
+
+        self.fetcher._token = "test_token"
+        with pytest.raises(DataFetchError):
+            self.fetcher.get_intraday_data("000001", period="1")
+
+    def test_get_intraday_data_returns_none_when_token_missing(self, monkeypatch):
+        """token 缺失时, is_available() 为 False, get_intraday_data 应返 None。"""
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
+            lambda *a, **k: "" if a and a[0] == "ZHITU_TOKEN" else "",
+        )
+        self.fetcher._token = ""
+        assert self.fetcher.get_intraday_data("000001", period="5") is None
+
+
+# Import at bottom so the class is discoverable by pytest
+import pytest  # noqa: E402
