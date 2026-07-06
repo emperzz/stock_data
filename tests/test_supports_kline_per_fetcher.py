@@ -54,13 +54,20 @@ CASES = [
     (ZzshareFetcher, "1",   "",    "csi", "stock", True),
     (ZzshareFetcher, "w",   "",    "csi", "stock", False),
 
-    # Myquant: d + minutes full adjust; index minutes csi-only.
+    # Myquant: d + minutes full adjust for **stock**; **index is daily-only**
+    # because ``get_index_historical`` only supports ``d``. Tightened 2026-07-06
+    # so the manager's two-stage filter excludes Myquant from non-d index
+    # routing (previously Myquant would be included and immediately fail
+    # over out of ``get_index_historical``).
     (MyquantFetcher, "d",   "hfq", "csi", "stock", True),
     (MyquantFetcher, "5",   "qfq", "csi", "stock", True),
     (MyquantFetcher, "5",   "qfq", "us",  "stock", False),
-    (MyquantFetcher, "5",   "",    "csi", "index", True),
-    (MyquantFetcher, "5",   "",    "us",  "index", False),
     (MyquantFetcher, "w",   "",    "csi", "stock", False),
+    (MyquantFetcher, "d",   "",    "csi", "index", True),
+    (MyquantFetcher, "5",   "",    "csi", "index", False),
+    (MyquantFetcher, "w",   "",    "csi", "index", False),
+    (MyquantFetcher, "5",   "",    "us",  "index", False),
+    (MyquantFetcher, "d",   "",    "us",  "index", False),
 ]
 
 

@@ -166,12 +166,16 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
         set_token(token)
 
     def supports_kline(self, period, adjust, market, asset):
-        # myquant: d + 5/15/30/60 with full adjust; index minutes csi-only;
-        # stock is csi-only too (mirrors supported_markets).
+        # myquant: d + 5/15/30/60 with full adjust for stocks; **index is
+        # daily-only** because ``get_index_historical`` only supports ``"d"``.
+        # Tightening the index branch here so the manager's two-stage filter
+        # excludes Myquant from non-d index requests (otherwise it would be
+        # included and then immediately fail-over out of ``get_index_historical``).
+        # Stock is csi-only too (mirrors supported_markets).
         if market != "csi":
             return False
-        if asset == "index" and period in ("5", "15", "30", "60"):
-            return True
+        if asset == "index":
+            return period == "d"
         return period in ("d", "5", "15", "30", "60")
 
     def _map_adjust(self, adjust: str) -> int:
@@ -193,7 +197,49 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
         except ValueError as e:
             raise DataFetchError(f"Myquant does not support code {stock_code}: {e}") from e
 
-    # ---- unsupported base abstract methods ----
+    # ---- stock K-line: get_kline_data override dispatches index → get_index_historical ----
+
+    def get_kline_data(
+        self,
+        stock_code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        days: int = 30,
+        frequency: str = "d",
+        adjust: str | None = None,
+    ) -> pd.DataFrame:
+        """Override base ``get_kline_data`` to dispatch on asset type.
+
+        Mirrors ``ZhituFetcher.get_kline_data`` (zhitu_fetcher.py:587):
+        ``DataFetcherManager.get_kline_data`` is the unified K-line entry for
+        both stocks and indices — it filters by ``STOCK_KLINE`` vs
+        ``INDEX_KLINE`` capability, then calls the **same method name** on
+        every fetcher. Without this override Myquant would route index
+        requests through ``_convert_code`` → ``to_myquant_format``, which
+        explicitly rejects index codes (``ValueError("Use
+        to_myquant_index_format for index …")``). Myquant would then be a
+        silent dead participant on the index K-line failover chain.
+
+        Dispatch rules (mirrors Zhitu):
+        - ``index_market_tag`` returns non-None → index branch (CSI only;
+          non-d frequencies are excluded upstream by ``supports_kline``, so
+          in practice only ``"d"`` reaches this branch).
+        - Otherwise → fall through to ``super().get_kline_data`` (stock).
+        """
+        from datetime import datetime, timedelta
+
+        from ..utils.normalize import index_market_tag
+
+        if index_market_tag(stock_code) is not None:
+            if end_date is None:
+                end_date = datetime.now().strftime("%Y-%m-%d")
+            if start_date is None:
+                start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days * 2)
+                start_date = start_dt.strftime("%Y-%m-%d")
+            return self.get_index_historical(stock_code, start_date, end_date, frequency)
+        return super().get_kline_data(
+            stock_code, start_date, end_date, days, frequency, adjust
+        )
 
     def _fetch_raw_data(
         self,

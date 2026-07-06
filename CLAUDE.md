@@ -329,6 +329,10 @@ fetchers that support it.
 
 `/indices/{code}/quote` route 的 `name` 字段当 fetcher 上游不返回时,改用 `_resolve_index_name(index_code)` 兜底(与 `/kline` 端点行为一致)。
 
+**MyquantFetcher index K-line dispatch (added 2026-07-06)**: 之前 `MyquantFetcher.get_kline_data` 继承自 `BaseFetcher`,会走 `_convert_code` → `to_myquant_format` 在指数代码上抛 `ValueError("Use to_myquant_index_format for index …")`,导致 manager 的指数 K 线 failover 链 fall through 到 Myquant 时哑火(Myquant 声明 `INDEX_KLINE` 但实际拒绝)。修复参照 Zhitu 模式:`myquant_fetcher.py:198-237` override `get_kline_data`,`index_market_tag(stock_code) is not None` 时派发到既有 `get_index_historical`(daily only),其他情况 fall through `super().get_kline_data`。
+
+`supports_kline` 也同时收紧:`myquant_fetcher.py:168-180` 现在 index asset 只在 `period == "d"` 时返回 `True`(之前 `5/15/30/60` 也返回 True,但 `get_index_historical` 立刻会抛,造成无谓 failover 跳)。stock asset 行为不变。
+
 ## Symbol Conventions
 
 | Market | Format | Examples |
