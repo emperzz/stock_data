@@ -457,3 +457,23 @@ The non-obvious knobs worth memorizing here:
 - **Don't** override `@endpoint_meta(fetcher_method=...)` with a method name that doesn't exist on any fetcher class — startup sanity check warns but the manifest will silently produce a misleading Stage 2 entry.
 - **Don't** leak the outbound `ts_code` / `_to_xxx_ts_code` suffix into an inbound API response. The server's canonical stock_code format is **bare 6-digit** (e.g. `000034`, `600519`), enforced by `normalize_stock_code()`. Per-upstream protocol formats (Tushare `000034.SZ`, Baostock `sh.600519`, Yfinance `600519.SS`, Zhitu `600519.SH`) are an **outbound-only** concern — they live in helpers like `_to_zzshare_ts_code` / `to_tushare_format` / `to_baostock_code` that are called RIGHT BEFORE the SDK call. On the response side, always return the bare 6-digit (e.g. `ts_code.split(".")[0]`). Forgetting the inbound/outbound boundary is exactly how `ZzshareFetcher.get_board_stocks` / `get_daily_dragon_tiger` / `get_hot_topics` ended up returning `000034.SZ` instead of `000034` (fixed 2026-06-25). Same rule applies to HK (`HK00700`) and US (`AAPL`) codes — they keep their canonical form, never get re-suffixed.
 - **Don't** let a fetcher reach into a peer fetcher's package internals — even clean imports like `from akshare.datasets import get_ths_js` or `from akshare.utils import demjson` invert the dependency direction between fetchers (they're peers, not a utility layer). If fetcher X needs to vendor an upstream asset (e.g. THS's `ths.js` JS blob), copy it into `stock_data/data_provider/fetchers/<x>_assets/` (a sub-package under X's directory, must have `__init__.py`) and bundle via `[tool.hatch.build.targets.wheel.force-include]` in `pyproject.toml`. Build-time helpers (e.g. `tools/vendor_ths_js.py`) are the only place allowed to touch a peer fetcher's vendored assets to refresh them; server runtime MUST stay peer-decoupled. See [[extend-not-spawn-fetcher]] + [[vendor-not-peer-import]].
+- **Don't** invoke any OpenSpec skill in this project (`openspec-explore` / `opsx:explore`, `openspec-propose` / `opsx:propose`, `openspec-apply-change` / `opsx:apply`, `openspec-archive-change` / `opsx:archive`, `openspec-sync-specs` / `opsx:sync`). The project uses Superpowers + CLAUDE.md + `/control/api-manifest` as its spec substrate; OpenSpec is reserved for new projects. See **Skill Discipline** below for scope, rationale, and enforcement.
+
+## Skill Discipline
+
+This project's spec substrate is `CLAUDE.md` + module docstrings + `/control/api-manifest` + pytest fixtures. OpenSpec is **not** in scope here — it is reserved for new projects that start from scratch and need a spec that grows alongside the code.
+
+**Superpowers skills (in scope):** brainstorming, test-driven-development, verification-before-completion, code-review, systematic-debugging, dispatching-parallel-agents, executing-plans, writing-skills, and any other session-internal discipline skill that does not write spec artifacts into the repo.
+
+**OpenSpec skills (blocked — both naming variants):**
+- `openspec-explore` / `opsx:explore`
+- `openspec-propose` / `opsx:propose`
+- `openspec-apply-change` / `opsx:apply`
+- `openspec-archive-change` / `opsx:archive`
+- `openspec-sync-specs` / `opsx:sync`
+
+**Enforcement (belt + suspenders):**
+- **Intent layer (this section)** — every session reads CLAUDE.md and sees the rule, so the model does not try to invoke these skills even when the system reminder lists them as available.
+- **Structural layer** — `.claude/settings.json` has a `PreToolUse` hook on the `Skill` tool matcher that exits non-zero when the skill name matches `^openspec-` or `^opsx:`, so the call physically cannot reach the Skill tool. Project-local: new projects are unaffected.
+
+**When the situation feels "perfect for OpenSpec":** stop and reconsider. This project is mature; retro-fitting OpenSpec is high cost and half-applied OpenSpec is worse than no OpenSpec. If a future change genuinely breaks the assumption that CLAUDE.md + manifest + docstring are sufficient (e.g. capability drift across multiple fetchers, or AI-agent-facing contracts that need machine-readable spec), raise it with the user before enabling OpenSpec for that specific change — do not enable it unilaterally.
