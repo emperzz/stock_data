@@ -1043,15 +1043,55 @@ def _read_boards_from_db(board_type: str, source: str, subtype: str | None = Non
 
 
 def _read_board_stocks_from_db(board_code: str, source: str) -> list[dict[str, Any]]:
-    """Read board-stock list from membership table."""
-    return [
-        {
-            "stock_code": r["stock_code"],
-            "stock_name": r["stock_name"],
-            "updated_at": r["refreshed_at"],
-        }
-        for r in read_membership(board_code=board_code, source=source)
-    ]
+    """Read board-stock list from membership table.
+
+    Filters out stale rows whose stock_code is not a valid A-share 6-digit
+    code. Stale rows can be left behind by upstream field-code reshuffles
+    (e.g. review 2026-07-06 finding #2: pre-fix EastMoney stored
+    stock_code=Chinese name from f14). Without this filter, cache hits
+    would emit corrupt BoardStockInfo (code='贵州茅台') until the
+    calendar-day boundary lets the now-correct fetcher rewrite them.
+
+    Defence-in-depth: a regex check on read is cheap, and protects against
+    future upstream bugs that may write non-canonical stock_code values.
+    Rows that fail the check are skipped silently at DEBUG level — they
+    remain in the table until the next fetcher pass overwrites them.
+    """
+    out: list[dict[str, Any]] = []
+    for r in read_membership(board_code=board_code, source=source):
+        code = r["stock_code"]
+        if not _is_valid_stock_code(code):
+            logger.debug(
+                f"[BoardCache] skipping stale membership row: "
+                f"board={board_code} source={source} stock_code={code!r}"
+            )
+            continue
+        out.append(
+            {
+                "stock_code": code,
+                "stock_name": r["stock_name"],
+                "updated_at": r["refreshed_at"],
+            }
+        )
+    return out
+
+
+# A-share canonical stock_code shape: 6 ASCII digits. Matches SH (6xxxxx,
+# 688xxx), SZ (0xxxxx, 300xxx), BJ (4xxxxx, 8xxxxx). HK (HK00700) and US
+# (AAPL) are NOT in board-stock membership — the boards endpoint is
+# A-share-only. See utils/normalize.py for the canonical normaliser.
+_VALID_STOCK_CODE = __import__("re").compile(r"^\d{6}$")
+
+
+def _is_valid_stock_code(code: Any) -> bool:
+    """True iff ``code`` matches the A-share canonical 6-digit pattern.
+
+    Centralised here so future board endpoints (e.g. /boards with new
+    sources) can reuse the check. Non-strings and empty strings fail.
+    """
+    if not isinstance(code, str) or not code:
+        return False
+    return bool(_VALID_STOCK_CODE.match(code))
 
 
 def update_cached_boards(board_type: str, source: str, boards: list) -> int:
