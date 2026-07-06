@@ -35,6 +35,40 @@ INDUSTRY_LIST_FIELDS = ENDPOINTS.BOARD_LIST_INDUSTRY["fields"].split(",")
 # endpoints, see commit 4e4d9df).
 COMPONENTS_FIELDS = ENDPOINTS.BOARD_COMPONENTS["fields"].split(",")
 
+
+def test_board_components_keeps_f16_in_request_but_unmapped_in_field_map():
+    """Design invariant (review 2026-07-06): BOARD_COMPONENTS.fields requests
+    f16 upstream on purpose even though _BOARD_COMPONENTS_FIELD_MAP no longer
+    maps it. Rationale: f16 is an unmapped numeric quote field (post
+    2026-07-05 f12/f14 swap fix). Keeping it in the request means:
+      - upstream provides the data; the fetcher just doesn't surface it
+      - if a future change wants to surface f16, only the field map needs
+        updating — no request-string edit + sync dance
+      - decoupling: the fetcher is the single source of truth for what
+        the response exposes
+
+    Earlier review (finding #3) flagged this as 'wasted bandwidth' and
+    proposed removing f16 from the request string. That was a bandaid:
+    it coupled "what we expose today" with "what we receive from upstream",
+    and broke forward compatibility. User feedback redirected to the
+    keep-but-unmap pattern — this test pins the invariant.
+    """
+    from stock_data.data_provider.fetchers.eastmoney._endpoints import (
+        _BOARD_COMPONENTS_FIELD_MAP,
+    )
+
+    # f16 IS in the upstream request
+    assert "f16" in ENDPOINTS.BOARD_COMPONENTS["fields"].split(","), (
+        "f16 should be requested upstream — fetcher ignores it internally. "
+        "Removing it from the request breaks the forward-compat pattern."
+    )
+
+    # f16 is NOT in the field map (intentional, with comment in _endpoints.py)
+    assert "f16" not in _BOARD_COMPONENTS_FIELD_MAP, (
+        "f16 was added back to the field map — update this test if intentional. "
+        "Otherwise the upstream request has an unmapped field."
+    )
+
 _CONCEPT_ROW_TEMPLATE = {
     "f2": 1234.56,  # price
     "f3": 2.35,  # change_pct
