@@ -5,9 +5,10 @@ Usage:
 
 Architecture:
     - Returns list[BuildReport] (one per source). For source=None, walks
-      all 3 sources and aggregates into MultiSourceReport for the CLI.
+      all VALID_SOURCES (eastmoney / zhitu / zzshare / ths) and aggregates
+      into MultiSourceReport for the CLI.
     - Cross-source: each source runs on its own thread (per spec §3 Step 6).
-      3 sources → 3 worker threads, each owning one fetcher.
+      N sources → N worker threads, each owning one fetcher.
     - Intra-source: serial for-loop over boards. Opening concurrent threads
       against the same upstream would just hit its rate limit harder; one
       board at a time per source is the safe pattern.
@@ -69,7 +70,8 @@ def build_membership_index(
     """Walk (source, board_type) and upsert all stocks to membership.
 
     Args:
-        source: 'eastmoney' | 'zhitu' | 'zzshare' or None for all
+        source: one of VALID_SOURCES ('eastmoney' | 'zhitu' | 'zzshare' | 'ths')
+            or None for all
         board_type: 'concept' | 'industry' | 'index' | 'special' or None for all
         inter_call_sleep: (min, max) jitter range in seconds
         on_progress: optional callback(source, done, total)
@@ -77,9 +79,9 @@ def build_membership_index(
 
     Returns:
         list[BuildReport], one per source walked. For source=None, returns
-        3 reports (one per VALID_SOURCES). Each source runs on its own
-        worker thread; intra-source fetching stays serial (see module
-        docstring).
+        len(VALID_SOURCES) reports (one per VALID_SOURCES). Each source runs
+        on its own worker thread; intra-source fetching stays serial (see
+        module docstring).
     """
     if manager is None:
         raise ValueError("manager is required")
@@ -225,7 +227,8 @@ def main(argv: list[str] | None = None) -> int:
         description="Build stock_board_membership reverse index by walking all boards per source."
     )
     parser.add_argument(
-        "--source", choices=VALID_SOURCES, default=None, help="Limit to one source (default: all 3)"
+        "--source", choices=VALID_SOURCES, default=None,
+        help=f"Limit to one source (default: all {len(VALID_SOURCES)})",
     )
     parser.add_argument(
         "--type",

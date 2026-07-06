@@ -110,12 +110,17 @@ def test_per_board_failure_does_not_abort_build(fresh_db, monkeypatch):
 
 
 def test_all_sources_single_call(fresh_db, monkeypatch):
-    """source=None should iterate all 3 sources and return 3 reports in one call."""
+    """source=None should iterate all VALID_SOURCES and return one report per source.
+
+    `ths` is in VALID_SOURCES but has no `get_all_boards` (cold-fill only),
+    so it walks 0 boards — a zero-board report is still expected.
+    """
     mock = _make_manager_mock(
         {
             "eastmoney": ["BK1"],
             "zhitu": ["sw1"],
             "zzshare": ["th1"],
+            # 'ths' is not in the mock: 0 boards → 0 success_count.
         }
     )
     monkeypatch.setattr(cli_mod.time, "sleep", lambda *a, **kw: None)
@@ -126,9 +131,12 @@ def test_all_sources_single_call(fresh_db, monkeypatch):
         board_type="concept",
         manager=mock,
     )
-    assert {r.source for r in reports} == {"eastmoney", "zhitu", "zzshare"}
-    assert all(r.success_count == 1 for r in reports)
-    # 3 sources × 1 board × 3 stocks
+    assert {r.source for r in reports} == set(cli_mod.VALID_SOURCES)
+    # eastmoney/zhitu/zzshare each have 1 board → 1 success; ths has 0.
+    expected_success = {"eastmoney": 1, "zhitu": 1, "zzshare": 1, "ths": 0}
+    for r in reports:
+        assert r.success_count == expected_success[r.source]
+    # 3 sources with 1 board × 3 stocks (ths contributes 0 rows).
     total_rows = []
     for src in ("eastmoney", "zhitu", "zzshare"):
         total_rows.extend(board_mod.read_membership(source=src, stock_code="S0"))
@@ -136,7 +144,7 @@ def test_all_sources_single_call(fresh_db, monkeypatch):
 
 
 def test_cross_source_parallelism(fresh_db, monkeypatch):
-    """When source=None, all 3 sources must run on distinct worker threads."""
+    """When source=None, all VALID_SOURCES must run on distinct worker threads."""
     import threading
 
     monkeypatch.setattr(cli_mod.time, "sleep", lambda *a, **kw: None)
@@ -162,11 +170,11 @@ def test_cross_source_parallelism(fresh_db, monkeypatch):
     mock = _make_manager_mock({"eastmoney": ["BK1"], "zhitu": ["sw1"], "zzshare": ["th1"]})
     reports = cli_mod.build_membership_index(source=None, manager=mock)
 
-    assert len(reports) == 3
-    assert set(thread_ids) == {"eastmoney", "zhitu", "zzshare"}
-    # 3 sources → 3 distinct worker threads (the main thread is excluded
-    # because sources > 1 dispatches via ThreadPoolExecutor).
-    assert len(set(thread_ids.values())) == 3
+    assert len(reports) == len(cli_mod.VALID_SOURCES)
+    assert set(thread_ids) == set(cli_mod.VALID_SOURCES)
+    # One worker thread per source (the main thread is excluded because
+    # sources > 1 dispatches via ThreadPoolExecutor).
+    assert len(set(thread_ids.values())) == len(cli_mod.VALID_SOURCES)
     main_tid = threading.get_ident()
     assert all(tid != main_tid for tid in thread_ids.values()), (
         "Each source must run on its own worker thread, not the main thread"
