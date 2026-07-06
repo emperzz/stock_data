@@ -332,18 +332,19 @@ class ThsFetcher(BaseFetcher):
     def is_available(self) -> bool:
         """True only when board-K-line deps are present.
 
-        Hot-topics / north-flow / flash-news / news-search don't need
+        Six pure-HTTP THS endpoints (hot-topics / north-flow / flash-news
+        / news-search / stock-news / announcements) don't need
         ``py_mini_racer`` / ``bs4`` / ``demjson3`` or the vendored
-        ``ths.js`` — they're pure HTTP. But by project convention (see
-        ``ZhituFetcher`` and the ``data_provider/manager.py:1002``
-        registration loop), an unavailable fetcher is dropped from the
-        manager's table — meaning when is_available() returns False,
-        the four pure-HTTP THS endpoints lose their backend too.
-        Trade-off: one board-K-line dep outage costs four endpoints; in
-        our threat model (single akshare+py_mini_racer env per server)
-        that's acceptable. If you need fine-grained gating per
-        capability, the manager would need a per-capability
-        is_available variant — larger refactor, deferred.
+        ``ths.js``. But by project convention (see ``ZhituFetcher`` and
+        the ``data_provider/manager.py:1002`` registration loop), an
+        unavailable fetcher is dropped from the manager's table —
+        meaning when is_available() returns False, the six pure-HTTP
+        THS endpoints lose their backend too. Trade-off: one
+        board-K-line dep outage costs six endpoints; in our threat
+        model (single akshare+py_mini_racer env per server) that's
+        acceptable. If you need fine-grained gating per capability,
+        the manager would need a per-capability is_available variant —
+        larger refactor, deferred.
 
         The reverse is also worth catching: a process where someone
         deleted ``ths_assets/ths.js`` shouldn't silently drop a

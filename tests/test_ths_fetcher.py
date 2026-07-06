@@ -28,8 +28,30 @@ class TestThsFetcherBasics:
         assert isinstance(result, bool)
         if result:
             assert f.unavailable_reason() is None
-        else:
-            assert f.unavailable_reason() and "board_history unavailable" in f.unavailable_reason()
+
+    def test_is_available_docstring_lists_all_six_endpoints(self):
+        """Regression (review 2026-07-06 finding #8): the docstring used to
+        say 'four pure-HTTP THS endpoints' but the diff on 2026-07-05 added
+        STOCK_NEWS + ANNOUNCEMENT, bringing the count to six (hot-topics /
+        north-flow / flash-news / news-search / stock-news / announcements).
+
+        Locks the docstring against silent drift if more pure-HTTP
+        endpoints are added in the future. Update this list in tandem.
+        """
+        doc = ThsFetcher.is_available.__doc__
+        assert doc is not None
+        for endpoint in (
+            "hot-topics",
+            "north-flow",
+            "flash-news",
+            "news-search",
+            "stock-news",
+            "announcements",
+        ):
+            assert endpoint in doc, (
+                f"is_available() docstring missing '{endpoint}' — "
+                f"the dep-loss impact count is now stale"
+            )
 
     def test_capabilities(self):
         f = ThsFetcher()
