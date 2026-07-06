@@ -94,9 +94,13 @@ def get_index_quote(
             detail={"error": "not_found", "message": f"Quote not available for {index_code}"},
         )
 
+    # 上游(Akshare/Yfinance/Zhitu 指数实时报价) 不一定返回 name; 用
+    # ``_resolve_index_name`` 从 index_symbols 静态映射补 — 与 /kline 端点
+    # 的行为一致(fetcher 上游不返回 name 时用同一来源兜底)。
+    quote_name = quote.name or _resolve_index_name(index_code)
     return IndexQuote(
         code=quote.code,
-        name=quote.name or "",
+        name=quote_name,
         source=quote.source.value,
         current_price=quote.price or 0.0,
         change=quote.change_amount,
@@ -198,4 +202,3 @@ def get_index_kline(
         data=[_build_kline_data(r, _format_date) for r in records],
         source=source,
     )
-

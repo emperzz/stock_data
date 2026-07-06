@@ -3,7 +3,7 @@
 > 抓取时间：2026-06-10
 > 源站点：<https://www.zhituapi.com/hsstockapi.html>
 
-智兔数服（ZhiTuApi，网址 `https://www.zhituapi.com/`）提供 A 股及港股的金融数据 API 接口服务。本目录的文档只覆盖**沪深数据 API**（9 大分类约 60+ 个接口），不涉及基金、债券、港股、美股、期货、黄金、外汇等其它模块。
+智兔数服（ZhiTuApi，网址 `https://www.zhituapi.com/`）提供 A 股及港股的金融数据 API 接口服务。本目录的文档覆盖**沪深数据 API**：股票侧 9 大类（来自 `hsstockapi.html`，约 60+ 个接口）以及指数侧独立模块（来自 `hsindexapi.html`，见 [10-indices-api.md](10-indices-api.md)，前缀 `/hz/`）。不涉及基金、债券、港股、美股、期货、黄金、外汇等其它模块。
 
 > **关于凭证**：所有 API 均需 `token` 参数，将 `token证书` 替换为你的实际 token 即可调用。试用可使用文档示例中展示的 `ZHITU_TOKEN_LIMIT_TEST`。
 
@@ -20,6 +20,7 @@
 | [07-basic-info.md](07-basic-info.md) | **基础信息**：股票基础信息（涨停价/跌停价/流通股本/总股本等） |
 | [08-technical-indicators.md](08-technical-indicators.md) | **技术指标**：历史分时 MACD、MA、BOLL、KDJ |
 | [09-financial-statements.md](09-financial-statements.md) | **财务报表**：资产负债表、利润表、现金流量表、财务主要指标、公司股本表、十大股东、十大流通股东、股东数 |
+| [10-indices-api.md](10-indices-api.md) | **沪深指数 API**：`/hz/` 前缀独立模块 —— 指数列表、实时交易、最新/历史分时 K 线、历史 MACD/MA/BOLL/KDJ（与 `01-09` 的 `/hs/` 股票 API 平行） |
 
 ## 通用参数说明
 
@@ -104,6 +105,11 @@
 | 财务口径十大股东/十大流通 | `hs/fin/{topholder,flowholder}/<code>` |
 | 股东户数 | `hs/fin/hm/<code>` |
 | 技术指标（MACD/MA/BOLL/KDJ） | `hs/history/{macd,ma,boll,kdj}/<code>.<market>/<level>/<adj>` |
+| 指数列表 | `hz/list/hszs` |
+| 指数实时行情 | `hz/real/ssjy/<code>` |
+| 指数最新分时 K 线 | `hz/latest/fsjy/<code>.<market>/<level>` |
+| 指数历史分时 K 线 | `hz/history/fsjy/<code>.<market>/<level>` |
+| 指数技术指标（MACD/MA/BOLL/KDJ） | `hz/history/{macd,ma,boll,kdj}/<code>/<level>` |
 
 ## 与本项目 `DataFetcherManager` 的对应
 
@@ -116,5 +122,9 @@
 | `hs/fin/balance/income/cashflow/ratios` | n/a | 财务报表（**本项目暂未接入**） |
 | `hs/gs/*`（公司详情） | n/a | **本项目暂未接入** |
 | `hs/history/macd/ma/boll/kdj` | n/a | **本项目已有自有 indicator 服务**（`data_provider/indicators/`），不依赖智兔 |
+| `hz/list/hszs` | n/a | 静态指数列表；本项目用 `data_provider/fetchers/index_symbols.py` 维护 |
+| `hz/real/ssjy/<code>` | `INDEX_REALTIME_QUOTE` | **当前未接入**（`ZhituFetcher.supported_data_types` 未声明该 flag，详见 [10-indices-api.md](10-indices-api.md)） |
+| `hz/latest/fsjy/<code>.<market>/<level>`、`hz/history/fsjy/...` | `INDEX_KLINE` | **当前未接入**（同上） |
+| `hz/history/{macd,ma,boll,kdj}/<code>/<level>` | n/a | **本项目已有自有 indicator 服务**，不依赖智兔 |
 
 > 本项目 `ZhituFetcher` 当前只用了 `REALTIME_QUOTE` 与 `STOCK_ZT_POOL` 两个 capability（参考 `CLAUDE.md` 中的 fetcher 能力声明）。文档中的其它接口如需接入，可通过 `get_realtime_quote` / `get_zt_pool` 等方法 + 新增 `DataCapability` 标志位来扩展。

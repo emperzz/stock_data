@@ -24,6 +24,7 @@ from ..utils.normalize import is_hk_market, is_index_code, normalize_stock_code
 # Akshare
 # ---------------------------------------------------------------------------
 
+
 def to_akshare_format(code: str) -> str:
     """Convert to akshare query format.
 
@@ -57,6 +58,7 @@ def to_akshare_format(code: str) -> str:
 # ---------------------------------------------------------------------------
 # Baostock
 # ---------------------------------------------------------------------------
+
 
 def to_baostock_format(code: str) -> tuple[str, str]:
     """Convert to Baostock format.  Returns ``(bs_code, yw_code)``.
@@ -93,6 +95,7 @@ def to_baostock_format(code: str) -> tuple[str, str]:
 # Tencent
 # ---------------------------------------------------------------------------
 
+
 def to_tencent_prefix(code: str) -> str:
     """Convert to Tencent qt.gtimg.cn URL prefix.
 
@@ -128,6 +131,7 @@ def to_tencent_prefix(code: str) -> str:
 # EastMoney
 # ---------------------------------------------------------------------------
 
+
 def to_eastmoney_secid(code: str) -> str:
     """Build EastMoney ``secid``.
 
@@ -154,6 +158,7 @@ def to_eastmoney_secid(code: str) -> str:
 # Zhitu
 # ---------------------------------------------------------------------------
 
+
 def to_zhitu_format(code: str) -> str:
     """Convert to Zhitu format (6-digit code, no prefix).
 
@@ -176,9 +181,31 @@ def to_zhitu_market_suffix(code: str) -> str:
     return ".sz"
 
 
+def to_zhitu_index_market_suffix(code: str) -> str:
+    """Return Zhitu market suffix for a CSI index code (``.SH`` / ``.SZ``).
+
+    **Important:** Index codes use the OPPOSITE convention from stock codes
+    on the same numeric prefix — ``000xxx`` is **Shanghai** (上证综指 /
+    上证50 / 沪深300 / 中证500 / ...) for indices, but **Shenzhen** (深证
+    主板) for stocks. ``399xxx`` is Shenzhen (创业板指 / 深证成指) for
+    indices.
+
+    Examples:
+        000001 → ``.SH``   (上证综指)
+        000300 → ``.SH``   (沪深300)
+        399006 → ``.SZ``   (创业板指)
+        399001 → ``.SZ``   (深证成指)
+    """
+    code = normalize_stock_code(code)
+    if code.startswith("000"):
+        return ".SH"
+    return ".SZ"
+
+
 # ---------------------------------------------------------------------------
 # Yfinance
 # ---------------------------------------------------------------------------
+
 
 def to_yfinance_format(code: str) -> str:
     """Convert to yfinance ticker format.
@@ -241,6 +268,7 @@ def to_yfinance_format(code: str) -> str:
 # Tushare
 # ---------------------------------------------------------------------------
 
+
 def to_tushare_format(code: str) -> str:
     """Convert to Tushare ``ts_code`` format.
 
@@ -276,6 +304,7 @@ def to_tushare_format(code: str) -> str:
 # ---------------------------------------------------------------------------
 # Myquant
 # ---------------------------------------------------------------------------
+
 
 def to_myquant_format(code: str) -> str:
     """Convert to myquant ``SHSE/SZSE.{code}`` format (A-share only).

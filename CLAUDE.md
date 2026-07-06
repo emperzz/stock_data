@@ -213,7 +213,7 @@ Compact overview:
 | `BaostockFetcher` | 1 | csi | `STOCK_KLINE`, `TRADE_CALENDAR`, `INDEX_KLINE`, `DIVIDEND` | none |
 | `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_*`, `STOCK_ZT_POOL` | none |
 | `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `INDEX_KLINE`, `INDEX_REALTIME_QUOTE` | none |
-| `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `STOCK_KLINE` (minute fallback), `STOCK_LIST` (P5 backup), `STOCK_BOARD`, `DIVIDEND`, `FUND_FLOW`, `HOLDER_NUM` | `ZHITU_TOKEN` |
+| `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `STOCK_KLINE` (minute fallback), `STOCK_LIST` (P5 backup), `STOCK_BOARD`, `DIVIDEND`, `FUND_FLOW`, `HOLDER_NUM`, `INDEX_REALTIME_QUOTE`, `INDEX_KLINE` (d/w/m + 5/15/30/60m, csi only — `INDEX_KLINE` declared 2026-07-06 via `/hz/history/fsjy/<code>.<mkt>/<level>`; see `docs/zhitu/10-indices-api.md`) | `ZHITU_TOKEN` |
 | `ZzshareFetcher` | 2 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
 | `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE`, `INDEX_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none |
 | `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `NEWS_SEARCH`, `STOCK_BOARD`, `STOCK_NEWS`, `ANNOUNCEMENT` | none |
@@ -234,10 +234,12 @@ Compact overview:
 | AkshareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | TushareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | YfinanceFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| ZhituFetcher | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| ZhituFetcher | ❌* | ❌* | ❌* | ✅ | ✅ | ✅ | ✅ |
 | ZzshareFetcher | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 
 **Fallback**: Server queries providers in priority order. If provider doesn't support the requested frequency, it raises `DataFetchError` and the next provider is tried.
+
+**\*ZhituFetcher d/w/m**: the table above reflects **stock** support (5/15/30/60m only). For **indices** Zhitu supports **d/w/m + 5/15/30/60m** (no 1m) — `supports_kline` 分流。HK/US 指数仍走其他 fetcher。
 
 ## Capability-Based Routing
 
@@ -300,7 +302,7 @@ fetchers that support it.
 | TushareFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| INDEX_KLINE` |
 | MyquantFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_KLINE \| STOCK_INFO` |
 | YfinanceFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| INDEX_KLINE \| INDEX_REALTIME_QUOTE` |
-| ZhituFetcher | `STOCK_REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| STOCK_KLINE \| STOCK_LIST \| STOCK_BOARD` |
+| ZhituFetcher | `STOCK_REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| STOCK_KLINE \| STOCK_LIST \| STOCK_BOARD \| DIVIDEND \| FUND_FLOW \| HOLDER_NUM \| INDEX_REALTIME_QUOTE \| INDEX_KLINE` |
 | TencentFetcher | `STOCK_REALTIME_QUOTE \| INDEX_REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价) |
 | EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD \| STOCK_NEWS \| ANNOUNCEMENT` |
 | ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH \| NEWS_SEARCH` |
@@ -309,6 +311,21 @@ fetchers that support it.
 **Index routing design**: Each fetcher that declares an INDEX_* capability must implement the corresponding public method (`get_index_realtime_quote`, `get_index_historical`, `get_index_intraday`). The Manager calls these methods directly — no `hasattr` checks, no fallback to stock methods. Internally, a fetcher may delegate to shared data processing logic (e.g. `get_index_historical` → `get_kline_data`), but the public interface is always the dedicated index method.
 
 **Anti-pattern**: Do NOT use `supports_historical` or `supports_realtime` — these are deprecated. Use `supported_data_types` with `DataCapability` flags.
+
+**ZhituFetcher index support (added 2026-07-06)**: 智兔指数 API `/hz/` 前缀(`https://www.zhituapi.com/hsindexapi.html`)现已接入 — 文档见 [`docs/zhitu/10-indices-api.md`](docs/zhitu/10-indices-api.md)。`ZhituFetcher.supported_data_types` 已声明 `INDEX_REALTIME_QUOTE | INDEX_KLINE`,manager 现在按以下优先级链路由:
+
+- **指数 quote**: `Akshare → Yfinance → Zhitu → Tencent`
+- **指数 K 线 d/w/m**: `Baostock → Tushare → Akshare → Yfinance → Zhitu → Myquant`
+- **指数 K 线 5/15/30/60m**: `Akshare → Yfinance → Zhitu → Myquant`(Zhitu 1m 不支持,1m 仍走原链)
+
+实现细节 (zhitu_fetcher.py):
+
+- `get_index_realtime_quote(code)` → `/hz/real/ssjy/<code>.<SH|SZ>`(`code.market` 通过新增的 `to_zhitu_index_market_suffix` 解析,**与股票 `to_zhitu_market_suffix` 相反**:000xxx → SH,399xxx → SZ)。返回 `UnifiedRealtimeQuote`,`v` 字段是**股数**(不 ×100),无 PE/PB/市值。
+- `get_kline_data(code, ...)` 在 ZhituFetcher 中被 override,根据 `index_market_tag(code)` 派发到 `_get_index_kline_data` → `/hz/history/fsjy/<code>.<mkt>/<level>?st=YYYYMMDD&et=YYYYMMDD`。返回标准 DataFrame(`date/open/high/low/close/volume/amount/pct_chg`),`pct_chg` 由 `(close - pc) / pc * 100` 计算(智兔不返百分比字段)。
+- `supports_kline` 分 `asset` 分流:index 接受 `d/w/m/5/15/30/60`、拒绝 1m 和 adjust;stock 仍是 5/15/30/60 分钟 + 无 adjust。
+- 港股 / 美股指数 Zhitu 不支持(只 csi),`supports_kline` 对 hk/us 一律 False,manager 自动跳过。
+
+`/indices/{code}/quote` route 的 `name` 字段当 fetcher 上游不返回时,改用 `_resolve_index_name(index_code)` 兜底(与 `/kline` 端点行为一致)。
 
 ## Symbol Conventions
 

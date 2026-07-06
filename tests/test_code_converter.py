@@ -10,6 +10,7 @@ from stock_data.data_provider.utils import code_converter as cc
 # Akshare
 # ============================================================================
 
+
 class TestToAkshareFormat:
     def test_a_share_shanghai(self):
         assert cc.to_akshare_format("600519") == "600519"
@@ -55,6 +56,7 @@ class TestToAkshareFormat:
 # Baostock
 # ============================================================================
 
+
 class TestToBaostockFormat:
     def test_a_share_shanghai(self):
         assert cc.to_baostock_format("600519") == ("sh.600519", "600519")
@@ -97,6 +99,7 @@ class TestToBaostockFormat:
 # Tencent
 # ============================================================================
 
+
 class TestToTencentPrefix:
     def test_shanghai(self):
         assert cc.to_tencent_prefix("600519") == "sh600519"
@@ -121,6 +124,7 @@ class TestToTencentPrefix:
 # ============================================================================
 # EastMoney
 # ============================================================================
+
 
 class TestToEastMoneySecid:
     def test_shanghai(self):
@@ -158,6 +162,7 @@ class TestToEastMoneySecid:
 # Zhitu
 # ============================================================================
 
+
 class TestToZhituFormat:
     def test_shanghai(self):
         assert cc.to_zhitu_format("600519") == "600519"
@@ -184,9 +189,74 @@ class TestToZhituMarketSuffix:
         assert cc.to_zhitu_market_suffix("688111") == ".sh"
 
 
+class TestToZhituIndexMarketSuffix:
+    """CSI 指数后缀规则(与股票 helper 相反): 000xxx → SH, 399xxx → SZ。
+
+    实际生效代码路径(zhitu_fetcher.py):
+        - get_index_realtime_quote  → /hz/real/ssjy/<code>.<SH|SZ>
+        - _get_index_kline_data     → /hz/history/fsjy/<code>.<SH|SZ>/<level>
+    """
+
+    @pytest.mark.parametrize(
+        "code, expected_suffix, label",
+        [
+            ("000001", ".SH", "上证综指"),
+            ("000300", ".SH", "沪深300"),
+            ("000016", ".SH", "上证50"),
+            ("000688", ".SH", "科创50"),
+            ("000905", ".SH", "中证500"),
+        ],
+    )
+    def test_shanghai_index_000xxx(self, code, expected_suffix, label):
+        assert cc.to_zhitu_index_market_suffix(code) == expected_suffix
+
+    @pytest.mark.parametrize(
+        "code, expected_suffix, label",
+        [
+            ("399001", ".SZ", "深证成指"),
+            ("399006", ".SZ", "创业板指"),
+            ("399005", ".SZ", "中小板指"),
+        ],
+    )
+    def test_shenzhen_index_399xxx(self, code, expected_suffix, label):
+        assert cc.to_zhitu_index_market_suffix(code) == expected_suffix
+
+    def test_stock_000xxx_goes_to_sz_under_index_helper(self):
+        """股票 000xxx 用 index helper 时返 .SZ — 文档明示这是有意的。
+
+        helper 的注释解释了 000xxx 在指数里是 SH、股票里是 SZ 的对偶。
+        """
+        assert cc.to_zhitu_index_market_suffix("000001") == ".SH"  # 指数
+        # 同样的代码在股票 helper 里:
+        assert cc.to_zhitu_market_suffix("000001") == ".sz"  # 股票
+
+    def test_normalizes_prefix(self):
+        """``SH000001`` 经 normalize 后必须能识别为 SH 指数。"""
+        assert cc.to_zhitu_index_market_suffix("SH000001") == ".SH"
+        assert cc.to_zhitu_index_market_suffix("sz399006") == ".SZ"
+
+    def test_no_dead_999_branch(self):
+        """``999xxx`` 不在 CSI_INDEX_MAP(13 个), 也不被 get_index_type 归为 csi。
+
+        helper 仅对 000xxx 返回 SH, 其他全部 SZ — 999 应走 SZ 分支
+        (即使 upstream 实际不接受 999 代码; 防御性默认)。
+        """
+        assert cc.to_zhitu_index_market_suffix("999001") == ".SZ"
+
+    def test_hk_index_out_of_scope(self):
+        """HK 指数(如 HSI)Zhitu 不支持, 但 helper 在 contract 上仍返 .SZ
+        (normalize 后非数字 / 非 6 位数字, 不匹配 000 分支)。
+
+        实际 manager 不会把 HSI 路由到 Zhitu(supported_markets=csi), 这里
+        只验证 helper 不会崩。
+        """
+        assert cc.to_zhitu_index_market_suffix("HSI") == ".SZ"
+
+
 # ============================================================================
 # Yfinance
 # ============================================================================
+
 
 class TestToYfinanceFormat:
     def test_us_stock(self):
@@ -240,6 +310,7 @@ class TestToYfinanceFormat:
 # Tushare
 # ============================================================================
 
+
 class TestToTushareFormat:
     def test_a_share_shanghai(self):
         assert cc.to_tushare_format("600519") == "600519.SH"
@@ -272,6 +343,7 @@ class TestToTushareFormat:
 # ============================================================================
 # Cross-function consistency
 # ============================================================================
+
 
 class TestCrossConsistency:
     """Verify that all converters agree on market classification."""
@@ -321,61 +393,74 @@ class TestCrossConsistency:
 # Myquant
 # ====================================================================
 
+
 class TestToMyquantFormat:
     def test_shanghai_stock(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         assert to_myquant_format("600519") == "SHSE.600519"
 
     def test_shenzhen_stock(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         # 000001 is 上证指数 index — use 000002 for Shenzhen stock
         assert to_myquant_format("000002") == "SZSE.000002"
 
     def test_beijing_stock(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         # Beijing exchange codes (8xxxxx) route to SZSE prefix per myquant docs
         assert to_myquant_format("832000") == "SZSE.832000"
 
     def test_hk_raises(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         with pytest.raises(ValueError, match="does not support"):
             to_myquant_format("HK00700")
 
     def test_us_raises(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         with pytest.raises(ValueError, match="does not support"):
             to_myquant_format("AAPL")
 
     def test_index_raises(self):
         """Index code should raise to force caller to use to_myquant_index_format."""
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         with pytest.raises(ValueError, match="to_myquant_index_format"):
             to_myquant_format("000300")
 
     def test_chinext(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         assert to_myquant_format("300750") == "SZSE.300750"
 
     def test_star_market(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         assert to_myquant_format("688981") == "SHSE.688981"
 
 
 class TestToMyquantIndexFormat:
     def test_csi_shanghai(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_index_format
+
         assert to_myquant_index_format("000300") == "SHSE.000300"
 
     def test_csi_shenzhen(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_index_format
+
         assert to_myquant_index_format("399006") == "SZSE.399006"
 
     def test_non_csi_raises(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_index_format
+
         with pytest.raises(ValueError, match="non-CSI"):
             to_myquant_index_format("HSI")
 
     def test_non_index_raises(self):
         from stock_data.data_provider.utils.code_converter import to_myquant_index_format
+
         with pytest.raises(ValueError, match="Not an index"):
             to_myquant_index_format("600519")
