@@ -1130,7 +1130,7 @@ class TestBoards:
             {"plate_code": "801001", "plate_name": "芯片", "plate_type": 15, "rate": 1.5},
             {"plate_code": "801660", "plate_name": "通信", "plate_type": 15, "rate": 0.8},
         ]
-        fetcher = self._fetcher_with_api(plates_list=rows)
+        fetcher = self._fetcher_with_api(plates_rank=rows)
         boards = fetcher.get_all_boards(
             board_type="concept", subtype="同花顺概念", source="zzshare"
         )
@@ -1140,24 +1140,24 @@ class TestBoards:
         assert boards[0]["type"] == "concept"
         assert boards[0]["subtype"] == "同花顺概念"
 
-    def test_get_all_boards_filters_by_subtype(self):
+    def test_get_all_boards_subtype_mismatch_returns_empty(self):
+        # plates_rank is called per plate_type, so a non-matching subtype
+        # skips the whole type — no rows fetched.
         rows = [
             {"plate_code": "801001", "plate_name": "芯片", "plate_type": 15, "rate": 1.5},
-            {"plate_code": "881121", "plate_name": "半导体", "plate_type": 14, "rate": 0.5},
         ]
-        fetcher = self._fetcher_with_api(plates_list=rows)
+        fetcher = self._fetcher_with_api(plates_rank=rows)
         boards = fetcher.get_all_boards(
-            board_type="concept", subtype="同花顺概念", source="zzshare"
+            board_type="concept", subtype="不存在的子类", source="zzshare"
         )
-        # Only plate_type=15 (concept) matches
-        assert len(boards) == 1
-        assert boards[0]["code"] == "801001"
+        assert boards == []
+        ZzshareFetcher._api.plates_rank.assert_not_called()
 
     def test_get_all_boards_industry_via_14(self):
         rows = [
             {"plate_code": "881121", "plate_name": "半导体", "plate_type": 14, "rate": 0.5},
         ]
-        fetcher = self._fetcher_with_api(plates_list=rows)
+        fetcher = self._fetcher_with_api(plates_rank=rows)
         boards = fetcher.get_all_boards(
             board_type="industry", subtype="同花顺行业", source="zzshare"
         )
@@ -1168,7 +1168,7 @@ class TestBoards:
         rows = [
             {"plate_code": "881999", "plate_name": "题材", "plate_type": 17, "rate": 2.0},
         ]
-        fetcher = self._fetcher_with_api(plates_list=rows)
+        fetcher = self._fetcher_with_api(plates_rank=rows)
         boards = fetcher.get_all_boards(
             board_type="special", subtype="同花顺题材", source="zzshare"
         )
@@ -1179,12 +1179,117 @@ class TestBoards:
         rows = [
             {"plate_code": "801001", "plate_name": "芯片", "plate_type": 15, "rate": 1.5},
             {"plate_code": "801002", "plate_name": "通信", "plate_type": 15, "rate": 0.8},
-            {"plate_code": "881121", "plate_name": "半导体", "plate_type": 14, "rate": 0.5},
         ]
-        fetcher = self._fetcher_with_api(plates_list=rows)
+        fetcher = self._fetcher_with_api(plates_rank=rows)
         boards = fetcher.get_all_boards(board_type="concept", subtype=None, source="zzshare")
-        # Only concept (plate_type=15) match
+        # concept (plate_type=15) rows returned; no quote fields without include_quote
         assert len(boards) == 2
+        assert set(boards[0].keys()) == {"code", "name", "type", "subtype"}
+
+    def test_get_all_boards_without_quote_is_bare(self):
+        # include_quote=False must not leak raw plates_rank columns.
+        rows = [dict(self._RANK_ROW)]
+        fetcher = self._fetcher_with_api(plates_rank=rows)
+        boards = fetcher.get_all_boards(
+            board_type="concept", source="zzshare", include_quote=False
+        )
+        assert boards[0].keys() == {"code", "name", "type", "subtype"}
+        assert "change_pct" not in boards[0]
+        assert "score" not in boards[0]
+
+    # ---- include_quote=True -> plates_rank path ----
+
+    # Real plates_rank row shape (probed 2026-07-06); rate/trade_money/
+    # market_cap_cir overlap the schema, the rest are zzshare-specific.
+    _RANK_ROW = {
+        "date1": "2026-07-06",
+        "plate_name": "送转填权",
+        "plate_type": 15,
+        "score": 817,
+        "money_leader": 1150450.0,
+        "trade_money": 68171800.0,
+        "money_leader_sell": -6902100.0,
+        "market_cap_cir": 2783750000.0,
+        "plate_code": "885796",
+        "id": 975682,
+        "rate": 8.178,
+        "speed": -0.26,
+        "money_leader_buy": 8052560.0,
+        "volume_ration": 2.463,
+        "time": "2026-07-06 13:01:03",
+    }
+
+    def test_get_all_boards_include_quote_uses_plates_rank(self):
+        fetcher = self._fetcher_with_api(plates_rank=[dict(self._RANK_ROW)])
+        with patch(
+            "stock_data.data_provider.fetchers.zzshare_fetcher."
+            "get_latest_trade_date_on_or_before",
+            return_value="2026-07-06",
+        ):
+            boards = fetcher.get_all_boards(
+                board_type="concept", source="zzshare", include_quote=True
+            )
+        # plates_rank used, plates_list untouched
+        ZzshareFetcher._api.plates_rank.assert_called()
+        ZzshareFetcher._api.plates_list.assert_not_called()
+        assert len(boards) == 1
+        b = boards[0]
+        # schema keys
+        assert b["code"] == "885796"
+        assert b["name"] == "送转填权"
+        assert b["type"] == "concept"
+        assert b["change_pct"] == pytest.approx(8.178)
+        assert b["amount"] == pytest.approx(68171800.0)
+        assert b["total_mv"] == pytest.approx(2783750000.0)
+
+    def test_get_all_boards_include_quote_preserves_raw_columns(self):
+        fetcher = self._fetcher_with_api(plates_rank=[dict(self._RANK_ROW)])
+        with patch(
+            "stock_data.data_provider.fetchers.zzshare_fetcher."
+            "get_latest_trade_date_on_or_before",
+            return_value="2026-07-06",
+        ):
+            boards = fetcher.get_all_boards(
+                board_type="concept", source="zzshare", include_quote=True
+            )
+        b = boards[0]
+        # zzshare-specific columns kept verbatim on the dict
+        assert b["score"] == 817
+        assert b["speed"] == pytest.approx(-0.26)
+        assert b["volume_ration"] == pytest.approx(2.463)
+        assert b["money_leader"] == pytest.approx(1150450.0)
+
+    def test_get_all_boards_include_quote_requests_full_set(self):
+        fetcher = self._fetcher_with_api(plates_rank=[dict(self._RANK_ROW)])
+        with patch(
+            "stock_data.data_provider.fetchers.zzshare_fetcher."
+            "get_latest_trade_date_on_or_before",
+            return_value="2026-07-06",
+        ):
+            fetcher.get_all_boards(
+                board_type="concept", source="zzshare", include_quote=True
+            )
+        call = ZzshareFetcher._api.plates_rank.call_args
+        assert call.kwargs["plate_type"] == 15
+        assert call.kwargs["date1"] == "2026-07-06"
+        # unbounded limit so "all boards" semantics hold
+        assert call.kwargs["limit"] >= 100000
+
+    def test_get_all_boards_include_quote_falls_back_to_today(self):
+        fetcher = self._fetcher_with_api(plates_rank=[dict(self._RANK_ROW)])
+        # empty trade-calendar cache -> None -> today's date used
+        with patch(
+            "stock_data.data_provider.fetchers.zzshare_fetcher."
+            "get_latest_trade_date_on_or_before",
+            return_value=None,
+        ):
+            fetcher.get_all_boards(
+                board_type="concept", source="zzshare", include_quote=True
+            )
+        call = ZzshareFetcher._api.plates_rank.call_args
+        # a non-empty YYYY-MM-DD date was still passed
+        assert call.kwargs["date1"]
+        assert len(call.kwargs["date1"]) == 10
 
     def test_get_board_stocks_returns_bare_6digit_codes(self):
         """Inbound API response uses bare 6-digit code (e.g. '600519'), NOT

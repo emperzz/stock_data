@@ -545,6 +545,21 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         17: ("special", THS_SPECIAL_SUBTYPE),
     }
 
+    # zzshare plates_rank column -> shared BoardInfo schema key. Only these
+    # three columns overlap the cross-source schema; the rest of plates_rank's
+    # quote columns (speed 涨速 / score 热度分 / volume_ration 量比 /
+    # money_leader* 领涨股资金) have no schema home. They are preserved verbatim
+    # on the returned dict (fetcher keeps every upstream column) but dropped at
+    # the route boundary because BoardInfo has no field for them.
+    _PLATES_RANK_SCHEMA_MAP: dict[str, str] = {
+        "rate": "change_pct",
+        "trade_money": "amount",
+        "market_cap_cir": "total_mv",
+    }
+    # plates_rank caps at ``limit`` (default 10). Pass an effectively unbounded
+    # value so "all boards" semantics hold — the full ranked set is ~850 rows.
+    _PLATES_RANK_LIMIT = 100000
+
     def get_all_boards(
         self,
         board_type: str | None = None,
@@ -552,51 +567,53 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         source: str = "zzshare",
         include_quote: bool = False,
     ) -> list[dict]:
-        """Get boards of a given (type, subtype) from zzshare plates_list.
+        """Get boards of a given (type, subtype) from zzshare ``plates_rank``.
 
-        include_quote is accepted for interface symmetry but ignored —
-        plates_list does not expose realtime quote fields.
+        Always sourced from ``plates_rank`` (latest trade date). Each board
+        carries ``{code, name, type, subtype}``. When ``include_quote=True``
+        every upstream quote column is kept verbatim and the three that overlap
+        the shared schema (``change_pct`` / ``amount`` / ``total_mv``) are mapped
+        (see ``_PLATES_RANK_SCHEMA_MAP``). Falls back to today's date if the
+        trade-calendar cache is empty.
 
         ``board_type=None`` queries every type the source exposes (industry,
         concept, special). zzshare does not expose index boards.
         ``subtype`` is ignored when ``board_type`` is ``None`` because
         subtypes are scoped per type and the cross-type union is undefined.
         """
-        _ = source, include_quote  # accepted for Manager interface
+        _ = source  # accepted for Manager interface
         self._ensure_api()
         api = self.__class__._api
         if api is None:
             return []
+        date1 = get_latest_trade_date_on_or_before(
+            date.today().strftime("%Y-%m-%d")
+        ) or date.today().strftime("%Y-%m-%d")
         out: list[dict] = []
-        target_plate_types = [
-            pt for pt, (bt, st) in self._BOARD_TYPE_BY_PLATE_TYPE.items()
-            if board_type is None or bt == board_type
-        ]
-        for pt in target_plate_types:
+        for pt, (mapped_type, mapped_subtype) in self._BOARD_TYPE_BY_PLATE_TYPE.items():
+            if board_type is not None and mapped_type != board_type:
+                continue
+            if subtype is not None and mapped_subtype != subtype:
+                continue
             try:
-                rows = api.plates_list(plate_type=pt)
+                rows = api.plates_rank(
+                    plate_type=pt, date1=date1, limit=self._PLATES_RANK_LIMIT
+                )
             except Exception as e:
-                logger.warning(f"[ZzshareFetcher] plates_list({pt}) failed: {e}")
+                logger.warning(f"[ZzshareFetcher] plates_rank({pt}) failed: {e}")
                 continue
-            if not rows:
-                continue
-            mapped_type, mapped_subtype = self._BOARD_TYPE_BY_PLATE_TYPE[pt]
-            for row in rows:
+            for row in rows or []:
                 if not isinstance(row, dict):
                     continue
-                row_plate_type = row.get("plate_type")
-                if row_plate_type is not None and row_plate_type != pt:
-                    continue
-                if subtype is not None and mapped_subtype != subtype:
-                    continue
-                out.append(
-                    {
-                        "code": str(row.get("plate_code", "")),
-                        "name": str(row.get("plate_name", "")),
-                        "type": mapped_type,
-                        "subtype": mapped_subtype,
-                    }
-                )
+                board = dict(row) if include_quote else {}
+                board["code"] = str(row.get("plate_code", ""))
+                board["name"] = str(row.get("plate_name", ""))
+                board["type"] = mapped_type
+                board["subtype"] = mapped_subtype
+                if include_quote:
+                    for src_key, schema_key in self._PLATES_RANK_SCHEMA_MAP.items():
+                        board[schema_key] = safe_float(row.get(src_key))
+                out.append(board)
         return out
 
     def get_board_stocks(self, board_code: str, **kwargs) -> list[dict]:
