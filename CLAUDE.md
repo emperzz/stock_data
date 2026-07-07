@@ -305,8 +305,9 @@ fetchers that support it.
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
 | `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `STOCK_KLINE` |
 
-**Board K-line (`/boards/{board_code}/history`)** — source-routed across two fetchers:
-已实现于 EastMoneyFetcher (d/w/m + 5/15/30/60m via push2his) + ThsFetcher (d-only, concept/industry via d.10jqka.com.cn)。`source=zzshare` 在 route 层 alias 到 `ths`（ZzshareFetcher 自 2026-07-03 起不再提供 board K-line —— 上游 `plate_kline` 仅支持 883957 同花顺全A）。详见 `docs/superpowers/plans/2026-07-02-board-kline-eastmoney-ths.md`。
+**Board K-line (`/boards/{board_code}/history`)** — source-routed; `source=zzshare` 在 route 层 alias 到
+`ths`(ZzshareFetcher 已不提供 board K-line,详见 `docs/superpowers/plans/2026-07-02-board-kline-eastmoney-ths.md`)。
+实现: EastMoneyFetcher (d/w/m + 5/15/30/60m via push2his) + ThsFetcher (d-only, concept/industry)。
 
 **Fetcher capability declarations:**
 
@@ -330,29 +331,18 @@ fetchers that support it.
 
 **ZhituFetcher index support (added 2026-07-06)**: 智兔指数 API `/hz/` 前缀(`https://www.zhituapi.com/hsindexapi.html`)现已接入 — 文档见 [`docs/zhitu/10-indices-api.md`](docs/zhitu/10-indices-api.md)。`ZhituFetcher.supported_data_types` 已声明 `INDEX_REALTIME_QUOTE | INDEX_KLINE`,manager 现在按以下优先级链路由:
 
-- **指数 quote** (manager `_filter_by_capability(market, INDEX_REALTIME_QUOTE)` 后按 priority 排序):
-  - **CSI 指数** (csi market): `Akshare (P3) → Yfinance (P4) → Zhitu (P5)` — 三家全部有 `get_index_realtime_quote`(`akshare/fetcher.py:486` / `yfinance_fetcher.py:351` / `zhitu_fetcher.py:429`)。Tencent 未声明 `INDEX_REALTIME_QUOTE`,被 Stage 1 能力位过滤剔除(`tencent_fetcher.py:35`)
-  - **HK 指数** (hk market): `Yfinance` — Akshare 虽 `supported_markets` 含 hk,但 `get_index_realtime_quote` 内部只查 `stock_zh_index_spot_em` / `stock_zh_index_spot_sina`(A 股 feed,`akshare/fetcher.py:500-560`),对 hk 指数代码会落空返回 None,故不可靠;Zhitu `supported_markets={csi}` 被能力过滤剔除
-  - **US 指数** (us market): `Yfinance` — Akshare `supported_markets` 不含 us 被剔除;Zhitu 同上;Yfinance 是唯一路径
+- **指数 quote**: 见上文 Capability-Based Routing 表 — CSI = `Akshare→Yfinance→Zhitu`;HK/US = `Yfinance`(Akshare 内部只查 A 股 feed,Zhitu `supported_markets={csi}` 被自动剔除)。
 - **指数 K 线 d/w/m**: `Baostock → Tushare → Akshare → Yfinance → Zhitu → Myquant`
-- **指数 K 线 5/15/30/60m**: `Akshare → Yfinance → Zhitu`(Zhitu 1m 不支持,1m 仍走原链; Myquant index `supports_kline` 只在 `period == "d"` 时返回 True,非 d 周期在 Stage 2 即被剔除(`myquant_fetcher.py:177-179`))
+- **指数 K 线 5/15/30/60m**: `Akshare → Yfinance → Zhitu`(Myquant index `supports_kline` 只在 `period == "d"` 时返回 True,非 d 周期被剔除)
 
-实现细节 (zhitu_fetcher.py):
+实现细节 (`zhitu_fetcher.py` 源码 + memory `zhitu-fetcher-implements-index-api` /
+`zhitu-index-000xxx-sh-vs-sz` / `zhitu-upstream-volume-unit-inconsistency`):
+volume 单位归一 / market suffix 反转 / `supports_kline` 分流见上。`/indices/{code}/quote`
+在上游不返回 name 时 fallback 到 `_resolve_index_name(index_code)`(与 `/kline` 一致)。
 
-- `get_realtime_quote(stock_code)` → `/hs/real/ssjy/<code>.<mkt>`. ⚠️ 上游 `v` 字段单位是**万手**(`* 100 * 10000 = × 1_000_000` 归一到股 per spec §3.4)。**broker 源** `/hs/real/time/` 的单位是手(`* 100`),两者不同 — 见 `docs/zhitu/05-realtime-trading.md`(2026-07-06 实测:茅台 public v=4.1, broker v=40970, 4.1 × 10000 ≈ 41000)。
-- `get_intraday_data(stock_code, period)` 走 `/hs/history/...`,同样上游 v 是**万手**;`_normalize_intraday_zhitu` 末尾 `df["volume"] * 10000 * 100` 归一。
-- `get_index_realtime_quote(code)` → `/hz/real/ssjy/<code>.<SH|SZ>`(`code.market` 通过新增的 `to_zhitu_index_market_suffix` 解析,**与股票 `to_zhitu_market_suffix` 相反**:000xxx → SH,399xxx → SZ)。返回 `UnifiedRealtimeQuote`,`v` 字段是**手**(`* 100` 归一到股 per spec §3.4),无 PE/PB/市值。
-- `get_kline_data(code, ...)` 在 ZhituFetcher 中被 override,根据 `index_market_tag(code)` 派发到 `_get_index_kline_data` → `/hz/history/fsjy/<code>.<mkt>/<level>?st=YYYYMMDD&et=YYYYMMDD`。返回标准 DataFrame(`date/open/high/low/close/volume/amount/pct_chg`),`volume` 是**手**(`* 100` 归一,2026-07-06 Myquant gm SDK 同日 v_shares / Zhitu v = 100 精确匹配);`pct_chg` 由 `(close - pc) / pc * 100` 计算(智兔不返百分比字段)。
-- `supports_kline` 分 `asset` 分流:index 接受 `d/w/m/5/15/30/60`、拒绝 1m 和 adjust;stock 仍是 5/15/30/60 分钟 + 无 adjust。
-- 港股 / 美股指数 Zhitu 不支持(只 csi),`supports_kline` 对 hk/us 一律 False,manager 自动跳过。
-
-`/indices/{code}/quote` route 的 `name` 字段当 fetcher 上游不返回时,改用 `_resolve_index_name(index_code)` 兜底(与 `/kline` 端点行为一致)。
-
-**MyquantFetcher index K-line dispatch (added 2026-07-06)**: 之前 `MyquantFetcher.get_kline_data` 继承自 `BaseFetcher`,会走 `_convert_code` → `to_myquant_format` 在指数代码上抛 `ValueError("Use to_myquant_index_format for index …")`,导致 manager 的指数 K 线 failover 链 fall through 到 Myquant 时哑火(Myquant 声明 `INDEX_KLINE` 但实际拒绝)。修复参照 Zhitu 模式:`myquant_fetcher.py:198-237` override `get_kline_data`,`index_market_tag(stock_code) is not None` 时派发到既有 `get_index_historical`(daily only),其他情况 fall through `super().get_kline_data`。
-
-`supports_kline` 也同时收紧:`myquant_fetcher.py:168-180` 现在 index asset 只在 `period == "d"` 时返回 `True`(之前 `5/15/30/60` 也返回 True,但 `get_index_historical` 立刻会抛,造成无谓 failover 跳)。stock asset 行为不变。
-
-**TushareFetcher index K-line dispatch (added 2026-07-06)**: 之前 `TushareFetcher.get_kline_data` 继承自 `BaseFetcher`,会走 `_fetch_raw_data` 调 `api.query("daily", ...)`,而 `daily` 是 Tushare 的**股票** API(不识别指数代码);指数请求(如 `000001.SH` 上证综指)走这条路径会得到空响应 → `DataFetchError("Tushare returned no data for 000001")`。TushareFetcher 因此是指数 K 线 failover 链上**沉默的死亡参与者**(`/indices/{code}/kline` 在 explorer 测试会爆这个错)。与 Myquant e420527 同形 bug。修复参照 Zhitu / Myquant 模式:`tushare_fetcher.py:169-223` override `get_kline_data`,`index_market_tag(stock_code) is not None` 时派发到 `_fetch_index_kline` (`tushare_fetcher.py:225-293`),直接调 Tushare 的 `index_daily` / `index_weekly` / `index_monthly` API(`to_tushare_format` 把 `000001` 转为 `000001.SH` 等;列 schema 与 `daily` 相同,`vol` 是手 → `_normalize_data` ×100 归一到股)。其他情况 fall through `super().get_kline_data`(stock 路径未动)。非 CSI 指数(HK/US)由 `to_tushare_format` 的 `ValueError` → `DataFetchError` 转换优雅跳过,manager failover 链无感前进。`supports_kline` 无需收紧(Tushare 之前只接受 d/w/m,index 也只 d/w/m,行为一致)。
+**Index K-line dispatch fixes (committed 2026-07-06)**: MyquantFetcher (`myquant_fetcher.py:198-237`) 与
+TushareFetcher (`tushare_fetcher.py:169-223`) 都 override `get_kline_data`,`index_market_tag()` 命中时派发到
+对应 index API,不再 fall through 到 stock path 哑火。Myquant 同时收紧 `supports_kline` (index 仅 d)。
 
 ## Symbol Conventions
 
