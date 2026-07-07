@@ -533,16 +533,20 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             )
         return out
 
-    # Board type/subtype -> zzshare plate_type
+    # Board type/subtype -> zzshare plate_type. zzshare's plate_type=17 (题材)
+    # is unified with concept at the server boundary (subtype still carries
+    # "同花顺题材" so callers can tell plate=15 vs plate=17 apart). Industry
+    # is the only other type zzshare exposes — no index or "special" board.
     _PLATE_TYPE_BY_BOARD_TYPE: dict[str, int] = {
         "industry": 14,
         "concept": 15,
-        "special": 17,
     }
     _BOARD_TYPE_BY_PLATE_TYPE: dict[int, tuple[str, str]] = {
         14: ("industry", THS_INDUSTRY_SUBTYPE),
         15: ("concept", THS_CONCEPT_SUBTYPE),
-        17: ("special", THS_SPECIAL_SUBTYPE),
+        # plate_type=17 → concept (subtype "同花顺题材" preserves zzshare's
+        # original 题材/概念 distinction for clients that want to filter it).
+        17: ("concept", THS_SPECIAL_SUBTYPE),
     }
 
     # zzshare plates_rank column -> shared BoardInfo schema key. Only these
@@ -577,7 +581,9 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         trade-calendar cache is empty.
 
         ``board_type=None`` queries every type the source exposes (industry,
-        concept, special). zzshare does not expose index boards.
+        concept). zzshare does not expose index or special boards — the
+        upstream's plate_type=17 (题材) was unified under ``concept`` with
+        subtype="同花顺题材" on 2026-07-07 (see ``_BOARD_TYPE_BY_PLATE_TYPE``).
         ``subtype`` is ignored when ``board_type`` is ``None`` because
         subtypes are scoped per type and the cross-type union is undefined.
         """

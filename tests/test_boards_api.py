@@ -187,27 +187,55 @@ def test_list_boards_persistence_validation_error_propagates(client):
     assert "No fetcher" in str(body)
 
 
-def test_list_boards_zzshare_no_type_returns_all_three_types(client):
-    """Omitting ``type`` on a zzshare query returns concept + industry + special.
+def test_list_boards_zzshare_type_special_returns_400(client):
+    """`?source=zzshare&type=special` → 400, not silent empty 200.
 
-    zzshare's subtype table has industry/concept/special (no index).
-    Persistence is called with board_type=None; the all-types branch
-    iterates over the per-source supported types and merges the results.
-    The "mixed" origin label is used when both cache-hit and fetcher-hit
-    rows contributed (mirrors get_stock_memberships).
+    zzshare's plate_type=17 (题材) was unified under type=concept on
+    2026-07-07. The Literal at the route still accepts "special" (other
+    sources use it), but the per-source type check now rejects this
+    combination with a clear error message that points callers at the
+    new contract.
+    """
+    # Persistence must NOT be called — the validation happens at the route.
+    with patch(_PERSISTENCE_LIST_PATCH) as mock_get:
+        r = client.get("/api/v1/boards?type=special&source=zzshare")
+    assert r.status_code == 400
+    body = r.json()
+    detail = str(body.get("detail", ""))
+    assert "special" in detail
+    assert "zzshare" in detail
+    # The error message should mention the migration path.
+    assert "concept" in detail
+    mock_get.assert_not_called()
+
+
+def test_list_boards_zzshare_no_type_returns_all_supported_types(client):
+    """Omitting ``type`` on a zzshare query returns concept + industry.
+
+    zzshare's subtype table has industry + concept (no index, no special —
+    plate=17 "题材" unified under concept on 2026-07-07). Persistence is
+    called with board_type=None; the all-types branch iterates over the
+    per-source supported types and merges the results. The "mixed" origin
+    label is used when both cache-hit and fetcher-hit rows contributed
+    (mirrors get_stock_memberships).
     """
     fake_boards = [
         {"code": "BK_C1", "name": "概念1", "type": "concept", "subtype": "同花顺概念"},
+        {"code": "BK_C2", "name": "题材1", "type": "concept", "subtype": "同花顺题材"},
         {"code": "BK_I1", "name": "行业1", "type": "industry", "subtype": "同花顺行业"},
-        {"code": "BK_S1", "name": "题材1", "type": "special", "subtype": "同花顺题材"},
     ]
     with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake_boards, "mixed")) as mock_get:
         r = client.get("/api/v1/boards?source=zzshare")
     assert r.status_code == 200
     body = r.json()
-    # All three types are present in the response.
+    # concept + industry only — "special" is gone for zzshare.
     types = {b["type"] for b in body["data"]}
-    assert types == {"concept", "industry", "special"}
+    assert types == {"concept", "industry"}
+    # Both concept subtypes (plate=15 and plate=17) round-trip through the
+    # response. BoardInfo doesn't expose ``subtype`` (it's a fetcher-level
+    # detail), so the assertion is on row count + code coverage.
+    codes = {b["code"] for b in body["data"]}
+    assert codes == {"BK_C1", "BK_C2", "BK_I1"}
     # board_type=None is forwarded to persistence.
     _, kwargs = mock_get.call_args
     assert kwargs.get("board_type") is None
@@ -594,6 +622,26 @@ def test_get_stock_boards_zzshare_returns_200_with_cold_sources_when_empty(clien
     body = r.json()
     assert body["data"] == []
     assert "ths" in body["cold_sources"]
+
+
+def test_get_stock_boards_zzshare_type_special_returns_400(client):
+    """`/stocks/{code}/boards?source=zzshare&type=special` → 400.
+
+    Mirrors the `/boards?source=zzshare&type=special` 400: zzshare dropped
+    its ``special`` slot on 2026-07-07. The per-source type guard must
+    catch this BEFORE the membership helper runs, regardless of whether
+    ``subtype`` is also provided.
+    """
+    # With no subtype, the guard still fires (subtype-independent).
+    r = client.get("/api/v1/stocks/600000/boards?source=zzshare&type=special")
+    assert r.status_code == 400
+    assert "special" in str(r.json().get("detail", ""))
+    assert "zzshare" in str(r.json().get("detail", ""))
+    # With a subtype, the existing _validate_subtype also catches it.
+    r2 = client.get(
+        "/api/v1/stocks/600000/boards?source=zzshare&type=special&subtype=同花顺题材"
+    )
+    assert r2.status_code == 400
 
 
 def test_get_stock_boards_zhitu_cold_fill_returns_populated_boards(client):

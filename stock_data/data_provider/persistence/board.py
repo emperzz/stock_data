@@ -45,9 +45,12 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
     },
     "zzshare": {  # NEW
         "industry": {THS_INDUSTRY_SUBTYPE},
-        "concept": {THS_CONCEPT_SUBTYPE},
-        "special": {THS_SPECIAL_SUBTYPE},
+        # Both plate=15 (概念) and plate=17 (题材) collapse to type=concept;
+        # subtype retains the original label so callers can filter 概念 vs 题材.
+        "concept": {THS_CONCEPT_SUBTYPE, THS_SPECIAL_SUBTYPE},
         # "index" — zzshare 不暴露大盘指数板块
+        # "special" — zzshare 的"题材"已在 concept 下承载 (plate=17),
+        #             不再有独立的 special 类型
     },
     "ths": {  # NEW — stock-boards 专用 (THS basic API 仅返回 concept)
         "concept": {THS_CONCEPT_SUBTYPE},
@@ -181,6 +184,45 @@ def _validate_subtype(source: str, board_type: str, subtype: str | None) -> None
         )
 
 
+def _validate_type_for_source(source: str, board_type: str) -> None:
+    """Validate ``board_type`` against the source's declared type set.
+
+    Independent of :func:`_validate_subtype` (which returns early when no
+    subtype is given). Without this guard, a query like
+    ``?source=zzshare&type=special`` would slip through ``_validate_subtype``
+    — subtype is None so the early return fires — and reach the fetcher
+    where ``get_all_boards`` would iterate ``_BOARD_TYPE_BY_PLATE_TYPE``
+    without matching any item, silently returning ``[]`` with HTTP 200.
+
+    The 2026-07-07 unification removed zzshare's ``special`` slot (plate=17
+    题材 folded into ``concept``); this helper makes that contract explicit
+    at the route boundary so callers get a 400 with a useful error message
+    instead of a silent empty response.
+
+    Args:
+        source: data source name (e.g. ``"zzshare"``).
+        board_type: ``concept / industry / index / special``.
+
+    Raises:
+        ValueError: source unknown or ``board_type`` not in the source's
+            declared type set. The error message lists the source's
+            supported types so callers can adjust their query.
+    """
+    source_table = VALID_SUBTYPES_BY_SOURCE.get(source)
+    if source_table is None:
+        raise ValueError(
+            f"Unknown source '{source}'. Known sources: {sorted(VALID_SUBTYPES_BY_SOURCE.keys())}"
+        )
+    if board_type not in source_table:
+        raise ValueError(
+            f"Invalid type '{board_type}' for source '{source}'. "
+            f"Valid types for {source}: {sorted(source_table.keys())}. "
+            f"Note: zzshare's plate_type=17 (题材) was unified under "
+            f"type=concept with subtype='同花顺题材' on 2026-07-07; use "
+            f"type=concept&subtype=同花顺题材 instead of type=special."
+        )
+
+
 def init_schema() -> None:
     """Initialize the database schema for stock boards.
 
@@ -250,6 +292,49 @@ def init_schema() -> None:
     """)
     conn.commit()
     logger.info(f"[BoardCache] Database initialized at {get_db_path()}")
+
+    # One-time data migration: unify zzshare plate=17 (题材) into type=concept
+    # alongside plate=15 (概念). The subtype "同花顺题材" is preserved so callers
+    # can still differentiate 概念 vs 题材. Idempotent — second run is a no-op
+    # because the WHERE clause no longer matches any rows.
+    _migrate_zzshare_special_to_concept(cursor)
+    conn.commit()
+
+
+def _migrate_zzshare_special_to_concept(cursor) -> None:
+    """Rewrite zzshare ``special`` rows to ``concept`` (2026-07-07 redesign).
+
+    Background: zzshare's ``plate_type`` enumeration is ``14=行业 / 15=概念 /
+    17=题材``. Server-side the 15 and 17 buckets are unified under ``concept``
+    because their membership is the same shape (concept-style grouping) — the
+    only thing the 17 bucket adds is a Chinese label distinguishing "题材" from
+    "概念", which we keep on ``subtype`` (``同花顺题材`` vs ``同花顺概念``).
+
+    The fetcher now writes the new mapping on every refresh, but rows that
+    were cached BEFORE the change still sit in SQLite with the old shape.
+    This migration rewrites both the ``stock_board`` metadata table and the
+    ``stock_board_membership`` reverse index in a single pass per init.
+    Safe to run repeatedly; the WHERE clause excludes already-migrated rows.
+    """
+    for table in ("stock_board", "stock_board_membership"):
+        before = cursor.execute(
+            f"SELECT COUNT(*) AS n FROM {table} "
+            "WHERE source = 'zzshare' AND board_type = 'special' "
+            "AND subtype = ?",
+            (THS_SPECIAL_SUBTYPE,),
+        ).fetchone()["n"]
+        if before == 0:
+            continue
+        cursor.execute(
+            f"UPDATE {table} SET board_type = 'concept' "
+            "WHERE source = 'zzshare' AND board_type = 'special' "
+            "AND subtype = ?",
+            (THS_SPECIAL_SUBTYPE,),
+        )
+        logger.info(
+            f"[BoardCache] migrated {cursor.rowcount} zzshare/special→concept "
+            f"rows in {table} (subtype='{THS_SPECIAL_SUBTYPE}' preserved)"
+        )
 
 
 def get_board_list(

@@ -1120,7 +1120,17 @@ class TestBoards:
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
         for name, value in mocks.items():
-            setattr(fake_api, name, MagicMock(return_value=value))
+            # Caller can pass a list/dict to set ``return_value`` (the
+            # historical behaviour) OR a callable to set ``side_effect``
+            # for per-argument responses. The plates_rank side-effect form
+            # matters now that plate=15 AND plate=17 both map to concept
+            # (see ``_BOARD_TYPE_BY_PLATE_TYPE`` unification on 2026-07-07):
+            # the upstream returns different rows per plate_type, so the
+            # mock needs to as well.
+            if callable(value):
+                setattr(fake_api, name, MagicMock(side_effect=value))
+            else:
+                setattr(fake_api, name, MagicMock(return_value=value))
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
         return fetcher
@@ -1164,26 +1174,67 @@ class TestBoards:
         assert len(boards) == 1
         assert boards[0]["type"] == "industry"
 
-    def test_get_all_boards_special_via_17(self):
-        rows = [
-            {"plate_code": "881999", "plate_name": "题材", "plate_type": 17, "rate": 2.0},
-        ]
-        fetcher = self._fetcher_with_api(plates_rank=rows)
+    def test_get_all_boards_17_unified_to_concept(self):
+        # zzshare plate_type=17 (题材) is unified with plate=15 under type=concept
+        # at the server boundary; subtype retains "同花顺题材" so callers can
+        # tell the two upstream buckets apart. Querying board_type="special"
+        # against source=zzshare now returns [] because the special type is gone.
+        # Mock returns the row only for plate=17 (mirrors a day with no
+        # 概念 boards in the upstream feed).
+        def plates_rank_by_pt(plate_type, **_):
+            if plate_type == 17:
+                return [
+                    {"plate_code": "881999", "plate_name": "题材", "plate_type": 17, "rate": 2.0},
+                ]
+            return []
+
+        fetcher = self._fetcher_with_api(plates_rank=plates_rank_by_pt)
+        # Unified path: querying concept returns plate=17 rows tagged as
+        # type=concept with subtype="同花顺题材" preserved.
         boards = fetcher.get_all_boards(
-            board_type="special", subtype="同花顺题材", source="zzshare"
+            board_type="concept", subtype=None, source="zzshare"
         )
         assert len(boards) == 1
-        assert boards[0]["type"] == "special"
+        assert boards[0]["type"] == "concept"
+        assert boards[0]["subtype"] == "同花顺题材"
+        # Subtype-filtered path: querying subtype="同花顺题材" still works and
+        # returns the plate=17 row tagged as concept.
+        boards_by_subtype = fetcher.get_all_boards(
+            board_type="concept", subtype="同花顺题材", source="zzshare"
+        )
+        assert len(boards_by_subtype) == 1
+        assert boards_by_subtype[0]["type"] == "concept"
+        assert boards_by_subtype[0]["subtype"] == "同花顺题材"
+        # board_type="special" is no longer a valid entry for zzshare —
+        # _BOARD_TYPE_BY_PLATE_TYPE has no key that maps back to "special",
+        # so the fetcher's outer loop never queries upstream and returns [].
+        boards_special = fetcher.get_all_boards(
+            board_type="special", subtype=None, source="zzshare"
+        )
+        assert boards_special == []
 
     def test_get_all_boards_no_subtype_returns_all_matching_type(self):
-        rows = [
-            {"plate_code": "801001", "plate_name": "芯片", "plate_type": 15, "rate": 1.5},
-            {"plate_code": "801002", "plate_name": "通信", "plate_type": 15, "rate": 0.8},
-        ]
-        fetcher = self._fetcher_with_api(plates_rank=rows)
+        # plate=15 → 概念 rows; plate=17 → 题材 rows. The fetcher now queries
+        # both (unified under concept), so the mock has to discriminate by
+        # plate_type to mirror real upstream behaviour.
+        def plates_rank_by_pt(plate_type, **_):
+            return {
+                15: [
+                    {"plate_code": "801001", "plate_name": "芯片", "plate_type": 15, "rate": 1.5},
+                    {"plate_code": "801002", "plate_name": "通信", "plate_type": 15, "rate": 0.8},
+                ],
+                17: [
+                    {"plate_code": "881999", "plate_name": "题材A", "plate_type": 17, "rate": 2.0},
+                ],
+            }.get(plate_type, [])
+
+        fetcher = self._fetcher_with_api(plates_rank=plates_rank_by_pt)
         boards = fetcher.get_all_boards(board_type="concept", subtype=None, source="zzshare")
-        # concept (plate_type=15) rows returned; no quote fields without include_quote
-        assert len(boards) == 2
+        # All 概念 + 题材 rows come back, tagged with their per-row subtype.
+        # No quote fields without include_quote.
+        assert len(boards) == 3
+        assert {b["code"] for b in boards} == {"801001", "801002", "881999"}
+        assert {b["subtype"] for b in boards} == {"同花顺概念", "同花顺题材"}
         assert set(boards[0].keys()) == {"code", "name", "type", "subtype"}
 
     def test_get_all_boards_without_quote_is_bare(self):
@@ -1220,7 +1271,14 @@ class TestBoards:
     }
 
     def test_get_all_boards_include_quote_uses_plates_rank(self):
-        fetcher = self._fetcher_with_api(plates_rank=[dict(self._RANK_ROW)])
+        # plate=17 returns [] in this mock to keep the assertion focused on
+        # the plate=15 schema mapping (mirrors a day with no 题材 boards).
+        def plates_rank_by_pt(plate_type, **_):
+            if plate_type == 15:
+                return [dict(self._RANK_ROW)]
+            return []
+
+        fetcher = self._fetcher_with_api(plates_rank=plates_rank_by_pt)
         with patch(
             "stock_data.data_provider.fetchers.zzshare_fetcher."
             "get_latest_trade_date_on_or_before",
@@ -1243,7 +1301,12 @@ class TestBoards:
         assert b["total_mv"] == pytest.approx(2783750000.0)
 
     def test_get_all_boards_include_quote_preserves_raw_columns(self):
-        fetcher = self._fetcher_with_api(plates_rank=[dict(self._RANK_ROW)])
+        def plates_rank_by_pt(plate_type, **_):
+            if plate_type == 15:
+                return [dict(self._RANK_ROW)]
+            return []
+
+        fetcher = self._fetcher_with_api(plates_rank=plates_rank_by_pt)
         with patch(
             "stock_data.data_provider.fetchers.zzshare_fetcher."
             "get_latest_trade_date_on_or_before",
@@ -1260,7 +1323,14 @@ class TestBoards:
         assert b["money_leader"] == pytest.approx(1150450.0)
 
     def test_get_all_boards_include_quote_requests_full_set(self):
-        fetcher = self._fetcher_with_api(plates_rank=[dict(self._RANK_ROW)])
+        # Both plate=15 AND plate=17 are now queried for type=concept;
+        # the test asserts the union of plate_types was used.
+        def plates_rank_by_pt(plate_type, **_):
+            if plate_type == 15:
+                return [dict(self._RANK_ROW)]
+            return []
+
+        fetcher = self._fetcher_with_api(plates_rank=plates_rank_by_pt)
         with patch(
             "stock_data.data_provider.fetchers.zzshare_fetcher."
             "get_latest_trade_date_on_or_before",
@@ -1269,11 +1339,16 @@ class TestBoards:
             fetcher.get_all_boards(
                 board_type="concept", source="zzshare", include_quote=True
             )
-        call = ZzshareFetcher._api.plates_rank.call_args
-        assert call.kwargs["plate_type"] == 15
-        assert call.kwargs["date1"] == "2026-07-06"
-        # unbounded limit so "all boards" semantics hold
-        assert call.kwargs["limit"] >= 100000
+        # Both plate_type=15 and plate_type=17 must have been requested.
+        plate_types_called = {
+            c.kwargs["plate_type"] for c in ZzshareFetcher._api.plates_rank.call_args_list
+        }
+        assert 15 in plate_types_called
+        assert 17 in plate_types_called
+        # Every call shared the same date + unbounded limit.
+        for c in ZzshareFetcher._api.plates_rank.call_args_list:
+            assert c.kwargs["date1"] == "2026-07-06"
+            assert c.kwargs["limit"] >= 100000
 
     def test_get_all_boards_include_quote_falls_back_to_today(self):
         fetcher = self._fetcher_with_api(plates_rank=[dict(self._RANK_ROW)])
@@ -1516,10 +1591,24 @@ class TestBoardSubtypeValidation:
 
         assert "同花顺概念" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["concept"]
 
-    def test_zzshare_special_subtype(self):
+    def test_zzshare_special_subtype_collapsed_into_concept(self):
+        """zzshare plate=17 (题材) no longer maps to a standalone "special" type.
+
+        Both plate=15 (概念) and plate=17 (题材) collapse into ``concept`` at
+        the server boundary; subtype carries the original label so callers
+        can filter them. The persistence subtype table reflects this by
+        dropping the orphan "special" key and folding "同花顺题材" into the
+        "concept" set.
+        """
         from stock_data.data_provider.persistence.board import VALID_SUBTYPES_BY_SOURCE
 
-        assert "同花顺题材" in VALID_SUBTYPES_BY_SOURCE["zzshare"]["special"]
+        zzshare_types = VALID_SUBTYPES_BY_SOURCE["zzshare"]
+        # "special" type is gone for zzshare — only industry + concept remain.
+        assert "special" not in zzshare_types
+        assert set(zzshare_types.keys()) == {"industry", "concept"}
+        # The two zzshare subtypes now live under "concept".
+        assert "同花顺概念" in zzshare_types["concept"]
+        assert "同花顺题材" in zzshare_types["concept"]
 
     def test_ths_concept_subtype_constant_shared_with_persistence(self):
         """THS_CONCEPT_SUBTYPE 必须等于 VALID_SUBTYPES_BY_SOURCE['ths']['concept'].

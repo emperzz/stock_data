@@ -352,6 +352,10 @@ def list_boards(
 
     # subtype validation — early failure before manager invocation
     if type is not None:
+        # Reject unsupported source×type pairs with 400 (e.g. zzshare no
+        # longer exposes type=special — folded into concept on 2026-07-07).
+        # Without this, the fetcher would silently return [].
+        stock_board_cache._validate_type_for_source(source, type)
         stock_board_cache._validate_subtype(source, type, subtype)
 
     # sort_by requires include_quote (the sort fields are quote fields)
@@ -571,10 +575,15 @@ def get_stock_boards(
     """
     normalized_sources = _parse_stock_boards_source_csv(source)
 
-    # Per-source subtype validation (only when type is provided)
-    if type is not None and subtype is not None:
+    # Per-source validation. When ``type`` is given we must check it against
+    # every requested source — some sources don't expose the type (e.g.
+    # zzshare dropped ``special`` on 2026-07-07), and ``_validate_subtype``
+    # returns early when subtype is None so it can't catch that case.
+    if type is not None:
         for src in normalized_sources:
-            stock_board_cache._validate_subtype(src, type, subtype)
+            stock_board_cache._validate_type_for_source(src, type)
+            if subtype is not None:
+                stock_board_cache._validate_subtype(src, type, subtype)
 
     # Single shared helper — same code path for both single and multi source.
     entries, cold_sources, origin = stock_board_cache.get_stock_memberships(

@@ -332,17 +332,18 @@ def test_get_board_list_all_types_persists_each_type_separately(tmp_path, monkey
     board_mod._schema_initialized_paths.clear()
 
     # Fetcher returns per-type boards (board_type=None branch).
+    # zzshare has only industry + concept (plate=17 "题材" is unified under
+    # concept with subtype="同花顺题材" retained). The mock mirrors the
+    # new fetcher shape: one concept row per upstream subtype.
     class _MockManager:
         def get_all_boards(self, source, board_type, subtype=None, include_quote=False):
             rows = {
                 "concept": [
                     {"code": "BK_C1", "name": "概念1", "type": "concept", "subtype": "同花顺概念"},
+                    {"code": "BK_C2", "name": "题材1", "type": "concept", "subtype": "同花顺题材"},
                 ],
                 "industry": [
                     {"code": "BK_I1", "name": "行业1", "type": "industry", "subtype": "同花顺行业"},
-                ],
-                "special": [
-                    {"code": "BK_S1", "name": "题材1", "type": "special", "subtype": "同花顺题材"},
                 ],
             }
             return rows.get(board_type, []), "MockFetcher"
@@ -354,7 +355,7 @@ def test_get_board_list_all_types_persists_each_type_separately(tmp_path, monkey
         type("T", (), {"is_first_call": lambda *a: True})(),
     )
 
-    # All-types query (board_type=None) for zzshare (concept/industry/special)
+    # All-types query (board_type=None) for zzshare (concept/industry only)
     boards, origin = board_mod.get_board_list(
         None, "zzshare", refresh=True, manager=_MockManager()
     )
@@ -362,20 +363,21 @@ def test_get_board_list_all_types_persists_each_type_separately(tmp_path, monkey
     assert len(boards) == 3
     by_code = {b["code"]: b for b in boards}
     assert by_code["BK_C1"]["type"] == "concept"
+    assert by_code["BK_C2"]["type"] == "concept"  # plate=17 unified under concept
+    assert by_code["BK_C2"]["subtype"] == "同花顺题材"
     assert by_code["BK_I1"]["type"] == "industry"
-    assert by_code["BK_S1"]["type"] == "special"
 
     # Verify each type was actually persisted to its own slot.
     concept_rows = board_mod._read_boards_from_db("concept", "zzshare")
     industry_rows = board_mod._read_boards_from_db("industry", "zzshare")
-    special_rows = board_mod._read_boards_from_db("special", "zzshare")
-    assert {r["code"] for r in concept_rows} == {"BK_C1"}
+    assert {r["code"] for r in concept_rows} == {"BK_C1", "BK_C2"}
     assert {r["code"] for r in industry_rows} == {"BK_I1"}
-    assert {r["code"] for r in special_rows} == {"BK_S1"}
     # The board_type column in the DB matches the per-type cache slot.
     assert {r["board_type"] for r in concept_rows} == {"concept"}
     assert {r["board_type"] for r in industry_rows} == {"industry"}
-    assert {r["board_type"] for r in special_rows} == {"special"}
+    # zzshare no longer has a "special" slot.
+    special_rows = board_mod._read_boards_from_db("special", "zzshare")
+    assert special_rows == []
 
 
 def test_get_board_list_all_types_summary_origin_persistence(tmp_path, monkeypatch):
@@ -390,8 +392,9 @@ def test_get_board_list_all_types_summary_origin_persistence(tmp_path, monkeypat
     import stock_data.data_provider.persistence.board as board_mod
     board_mod._schema_initialized_paths.clear()
 
-    # Pre-populate every supported type for zzshare
-    for bt, code in [("concept", "BK_C"), ("industry", "BK_I"), ("special", "BK_S")]:
+    # Pre-populate every supported type for zzshare (concept + industry only;
+    # the old "special" type was unified into concept on 2026-07-07).
+    for bt, code in [("concept", "BK_C"), ("industry", "BK_I")]:
         board_mod.update_cached_boards(
             bt, "zzshare", [{"code": code, "name": bt, "subtype": bt}]
         )
@@ -416,7 +419,8 @@ def test_get_board_list_all_types_summary_origin_persistence(tmp_path, monkeypat
     )
     assert origin == "persistence"
     assert fetcher_called["count"] == 0
-    assert len(boards) == 3
+    # 2 boards: one concept + one industry (zzshare dropped special on 2026-07-07)
+    assert len(boards) == 2
 
 
 def test_get_board_list_all_types_mixed_origin(tmp_path, monkeypatch):
@@ -444,7 +448,9 @@ def test_get_board_list_all_types_mixed_origin(tmp_path, monkeypatch):
             )
 
     # Tracker: concept has been refreshed today (cache eligible),
-    # industry + special have not → cache miss on those two.
+    # industry has not → cache miss on that one. zzshare's "special" type
+    # was unified into concept on 2026-07-07, so it's no longer in the
+    # supported set.
     def _is_first_call(self, key: str) -> bool:
         return not key.startswith("concept:")
 
@@ -457,11 +463,14 @@ def test_get_board_list_all_types_mixed_origin(tmp_path, monkeypatch):
     boards, origin = board_mod.get_board_list(
         None, "zzshare", manager=_MockManager()
     )
-    # concept hits cache (persistence), industry + special hit fetcher
-    # (MockFetcher). Summary must honestly reflect the mix. The label
-    # is "mixed" — aligned with get_stock_memberships.
+    # concept hits cache (persistence), industry hits fetcher (MockFetcher).
+    # Summary must honestly reflect the mix. The label is "mixed" — aligned
+    # with get_stock_memberships.
     assert origin == "mixed"
-    assert len(boards) == 3
+    assert len(boards) == 2
+    by_code = {b["code"]: b for b in boards}
+    assert by_code["BK_C"]["type"] == "concept"  # cache hit
+    assert by_code["BK_I"]["type"] == "industry"  # fetcher hit
 
 
 def test_get_board_list_all_types_rejects_subtype(tmp_path, monkeypatch):
@@ -514,10 +523,12 @@ def test_get_board_list_all_types_skips_unsupported_types():
     boards, origin = board_mod.get_board_list(
         None, "zzshare", refresh=True, manager=_MockManager()
     )
-    # zzshare's subtype table: concept / industry / special (no index)
-    assert set(called_types) == {"concept", "industry", "special"}
+    # zzshare's subtype table: concept / industry only (no index, no special
+    # — plate=17 unified under concept on 2026-07-07)
+    assert set(called_types) == {"concept", "industry"}
     assert "index" not in called_types
-    assert len(boards) == 3
+    assert "special" not in called_types
+    assert len(boards) == 2
 
 
 def test_get_board_list_all_types_include_quote_bypasses_cache(tmp_path, monkeypatch):
@@ -539,9 +550,11 @@ def test_get_board_list_all_types_include_quote_bypasses_cache(tmp_path, monkeyp
     import stock_data.data_provider.persistence.board as board_mod
     board_mod._schema_initialized_paths.clear()
 
-    # Pre-populate every type (so a cache-hit path would otherwise be
-    # available). include_quote=True must bypass this and re-fetch.
-    for bt in ("concept", "industry", "special"):
+    # Pre-populate every supported type (so a cache-hit path would otherwise be
+    # available). include_quote=True must bypass this and re-fetch. zzshare's
+    # supported set dropped "special" on 2026-07-07 (plate=17 unified under
+    # concept).
+    for bt in ("concept", "industry"):
         board_mod.update_cached_boards(
             bt, "zzshare", [{"code": f"OLD_{bt}", "name": "old", "subtype": bt}]
         )
@@ -574,12 +587,14 @@ def test_get_board_list_all_types_include_quote_bypasses_cache(tmp_path, monkeyp
     boards, origin = board_mod.get_board_list(
         None, "zzshare", include_quote=True, manager=_SpyManager()
     )
-    # Fetcher was called for every type, not bypassed.
-    assert set(fetcher_calls) == {"concept", "industry", "special"}
+    # Fetcher was called for every supported type, not bypassed. "special" no
+    # longer in the supported set after the 2026-07-07 unification.
+    assert set(fetcher_calls) == {"concept", "industry"}
+    assert "special" not in fetcher_calls
     # Origin reflects the fetcher, not persistence.
     assert origin == "MockFetcher"
     # New data wins over old cached data.
-    assert {b["code"] for b in boards} == {"NEW_concept", "NEW_industry", "NEW_special"}
+    assert {b["code"] for b in boards} == {"NEW_concept", "NEW_industry"}
 
 
 def bt_short(bt: str) -> str:
@@ -630,3 +645,101 @@ def test_get_board_list_cache_hit_rows_carry_type_field(tmp_path, monkeypatch):
     )
     assert origin == "persistence"
     assert boards[0]["type"] == "concept"
+
+
+def test_init_schema_migrates_zzshare_special_rows_to_concept(tmp_path, monkeypatch):
+    """Pre-existing zzshare/special rows must be rewritten to type=concept
+    on the next ``init_schema()`` call so persisted data matches the new
+    unified schema (plate=15 + plate=17 both → concept). The migration
+    must touch both ``stock_board`` and ``stock_board_membership``, and
+    must preserve the ``subtype`` so callers can still tell 概念 vs 题材
+    apart. It must be idempotent — running twice is a no-op.
+    """
+    from stock_data.data_provider.persistence import db
+
+    db_file = tmp_path / "zzshare_special_migration.db"
+    monkeypatch.setattr(db, "get_db_path", lambda: db_file)
+    monkeypatch.setattr(db, "_conn", None)
+    monkeypatch.setattr(db, "_db_path", None)
+
+    import stock_data.data_provider.persistence.board as board_mod
+    board_mod._schema_initialized_paths.clear()
+
+    # Seed the DB with rows that match the OLD shape (board_type='special',
+    # subtype='同花顺题材') so the migration has something to rewrite.
+    board_mod.update_cached_boards(
+        "special",
+        "zzshare",
+        [
+            {"code": "BK_S1", "name": "题材1", "subtype": "同花顺题材"},
+            {"code": "BK_S2", "name": "题材2", "subtype": "同花顺题材"},
+        ],
+    )
+    # Membership table also needs stale rows.
+    board_mod.upsert_membership_bulk(
+        source="zzshare",
+        stocks=[
+            {"stock_code": "600000", "stock_name": "浦发银行"},
+            {"stock_code": "600036", "stock_name": "招商银行"},
+        ],
+        board_code="BK_S1",
+        board_name="题材1",
+        board_type="special",
+        subtype="同花顺题材",
+    )
+
+    # Sanity: rows are pre-migration as expected.
+    pre_concept = board_mod._read_boards_from_db("concept", "zzshare")
+    pre_special = board_mod._read_boards_from_db("special", "zzshare")
+    assert {r["code"] for r in pre_special} == {"BK_S1", "BK_S2"}
+    assert pre_concept == []
+    conn = db.get_connection()
+    pre_membership = conn.execute(
+        "SELECT board_type, subtype FROM stock_board_membership "
+        "WHERE source='zzshare' AND board_code='BK_S1'"
+    ).fetchall()
+    assert all(r["board_type"] == "special" for r in pre_membership)
+
+    # Trigger migration: reset the schema-init cache and re-init.
+    board_mod._schema_initialized_paths.clear()
+    board_mod.init_schema()
+
+    # After migration: stock_board rows are now under "concept", subtype kept.
+    post_concept = board_mod._read_boards_from_db("concept", "zzshare")
+    post_special = board_mod._read_boards_from_db("special", "zzshare")
+    assert {r["code"] for r in post_concept} == {"BK_S1", "BK_S2"}
+    assert all(r["subtype"] == "同花顺题材" for r in post_concept)
+    assert all(r["type"] == "concept" for r in post_concept)
+    assert post_special == []
+
+    # After migration: stock_board_membership rows are also rewritten.
+    post_membership = conn.execute(
+        "SELECT board_type, subtype FROM stock_board_membership "
+        "WHERE source='zzshare' AND board_code='BK_S1'"
+    ).fetchall()
+    assert len(post_membership) == 2
+    assert all(r["board_type"] == "concept" for r in post_membership)
+    assert all(r["subtype"] == "同花顺题材" for r in post_membership)
+
+    # Idempotency: running init_schema again must not touch already-migrated
+    # rows. Verify by counting rows that match the migration predicate
+    # before and after — should be 0 both times.
+    before_second = conn.execute(
+        "SELECT COUNT(*) AS n FROM stock_board "
+        "WHERE source='zzshare' AND board_type='special' "
+        "AND subtype='同花顺题材'"
+    ).fetchone()["n"]
+    board_mod._schema_initialized_paths.clear()
+    board_mod.init_schema()
+    after_second = conn.execute(
+        "SELECT COUNT(*) AS n FROM stock_board "
+        "WHERE source='zzshare' AND board_type='special' "
+        "AND subtype='同花顺题材'"
+    ).fetchone()["n"]
+    assert before_second == 0
+    assert after_second == 0
+
+    # The migrated rows must still be readable as concept after the second
+    # init — the migration didn't drop them.
+    final_concept = board_mod._read_boards_from_db("concept", "zzshare")
+    assert {r["code"] for r in final_concept} == {"BK_S1", "BK_S2"}
