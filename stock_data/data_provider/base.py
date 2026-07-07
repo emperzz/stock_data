@@ -14,6 +14,7 @@ import pandas as pd
 
 from .core.types import UnifiedRealtimeQuote
 from .utils.normalize import (
+    index_market_tag,
     is_hk_market,  # noqa: F401 — re-exported for fetchers
     is_us_market,  # noqa: F401 — re-exported for fetchers
     normalize_stock_code,
@@ -345,6 +346,76 @@ class BaseFetcher(ABC):
 
         return df
 
+    @staticmethod
+    def _resolve_kline_window(
+        start_date: str | None, end_date: str | None, days: int
+    ) -> tuple[str, str]:
+        """Fill in a (start_date, end_date) window when either is omitted.
+
+        ``end_date`` defaults to today; ``start_date`` defaults to
+        ``days * 2`` calendar days before ``end_date`` (the ×2 buffers
+        non-trading days so ~``days`` trading bars land in the window).
+        Returns ``(start_date, end_date)`` — both guaranteed non-None.
+
+        Single source of truth for the defaulting logic, reused by
+        ``get_kline_data`` and by ``_kline_with_index_dispatch`` (which must
+        resolve the window itself before handing dates to a fetcher's
+        separate index API).
+        """
+        from datetime import timedelta
+
+        if end_date is None:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+        if start_date is None:
+            start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days * 2)
+            start_date = start_dt.strftime("%Y-%m-%d")
+        return start_date, end_date
+
+    def _kline_with_index_dispatch(
+        self,
+        index_fn,
+        stock_code: str,
+        start_date: str | None,
+        end_date: str | None,
+        days: int,
+        frequency: str,
+        adjust: str | None,
+    ) -> pd.DataFrame:
+        """Dispatch a K-line request to a fetcher's **separate** index API.
+
+        Opt-in helper for fetchers whose upstream exposes index K-line via a
+        distinct API that ``_fetch_raw_data`` cannot reach — Tushare
+        (``index_daily`` ≠ ``daily``), Myquant (``to_myquant_index_format``
+        rejects index codes), Zhitu (``/hz/`` prefix). Those fetchers make
+        their ``get_kline_data`` a one-liner delegating here.
+
+        Fetchers whose ``_fetch_raw_data`` already handles index codes via a
+        symmetric upstream API (Baostock / Akshare / Yfinance) do **not** use
+        this — they don't override ``get_kline_data`` at all, so the base
+        implementation flows straight through to their ``_fetch_raw_data``.
+
+        Args:
+            index_fn: The fetcher's index-fetch method, called as
+                ``index_fn(stock_code, start_date, end_date, frequency)`` when
+                ``stock_code`` is an index code (window already resolved).
+            (remaining args mirror ``get_kline_data``)
+
+        Dispatch:
+        - ``index_market_tag(stock_code)`` non-None → index branch.
+        - Otherwise → ``BaseFetcher.get_kline_data`` (stock path). Every
+          current caller's ``super().get_kline_data`` resolves here anyway
+          (MRO: ``SDKFetcherMixin`` has no ``get_kline_data``), so calling it
+          explicitly is behavior-preserving and avoids re-dispatch recursion.
+        """
+        if index_market_tag(stock_code) is not None:
+            start_date, end_date = self._resolve_kline_window(
+                start_date, end_date, days
+            )
+            return index_fn(stock_code, start_date, end_date, frequency)
+        return BaseFetcher.get_kline_data(
+            self, stock_code, start_date, end_date, days, frequency, adjust
+        )
+
     def get_kline_data(
         self,
         stock_code: str,
@@ -368,14 +439,7 @@ class BaseFetcher(ABC):
         Returns:
             DataFrame with standard columns and technical indicators
         """
-        if end_date is None:
-            end_date = datetime.now().strftime("%Y-%m-%d")
-
-        if start_date is None:
-            from datetime import timedelta
-
-            start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days * 2)
-            start_date = start_dt.strftime("%Y-%m-%d")
+        start_date, end_date = self._resolve_kline_window(start_date, end_date, days)
 
         # Map unified adjust to provider-specific value
         provider_adjust = self._map_adjust(adjust or "")

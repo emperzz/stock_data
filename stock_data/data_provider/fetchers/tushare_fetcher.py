@@ -175,51 +175,22 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
         frequency: str = "d",
         adjust: str | None = None,
     ) -> pd.DataFrame:
-        """Override base ``get_kline_data`` to dispatch on asset type.
+        """Dispatch index codes to Tushare's separate ``index_daily/weekly/monthly``.
 
-        Mirrors ``ZhituFetcher.get_kline_data`` (zhitu_fetcher.py:587) and
-        ``MyquantFetcher.get_kline_data`` (myquant_fetcher.py:202):
-        ``DataFetcherManager.get_kline_data`` is the unified K-line entry
-        for both stocks and indices — it filters by ``STOCK_KLINE`` vs
-        ``INDEX_KLINE`` capability, then calls the **same method name** on
-        every fetcher. Without this override Tushare would route index
-        requests through ``_fetch_raw_data`` → ``api.query("daily", ...)``,
-        but ``daily`` is Tushare's **stock** API; for index ``ts_code``
-        like ``000001.SH`` (SSE Composite) it returns empty data, raising
-        ``DataFetchError("Tushare returned no data for 000001")``.
-
-        Tushare's index K-line APIs are separately named:
-            index_daily, index_weekly, index_monthly
-        They accept the same ``ts_code`` / ``start_date`` / ``end_date``
-        kwargs and return the same column shape as the stock variants
-        (``ts_code, trade_date, open, high, low, close, pre_close,
-        change, pct_chg, vol, amount``) — the existing ``_normalize_data``
-        already handles the ``vol`` (手 → 股 via ×100) and ``amount``
-        (千 yuan → yuan via ×1000) conversions.
-
-        Dispatch rules (mirrors Zhitu/Myquant):
-        - ``index_market_tag`` returns non-None → index branch (CSI only;
-          minute frequencies are excluded upstream by ``supports_kline``,
-          so in practice only ``d/w/m`` reach this branch).
-        - Otherwise → fall through to ``super().get_kline_data`` (stock).
+        Tushare's stock K-line (``_fetch_raw_data`` → ``api.query("daily")``)
+        returns empty for index ``ts_code`` like ``000001.SH``, so index
+        requests must route to the dedicated ``index_*`` APIs via
+        ``_fetch_index_kline``. Stock codes fall through to the base
+        implementation unchanged. See ``BaseFetcher._kline_with_index_dispatch``.
         """
-        from datetime import datetime, timedelta
-
-        from ..utils.normalize import index_market_tag
-
-        if index_market_tag(stock_code) is not None:
-            if end_date is None:
-                end_date = datetime.now().strftime("%Y-%m-%d")
-            if start_date is None:
-                start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(
-                    days=days * 2
-                )
-                start_date = start_dt.strftime("%Y-%m-%d")
-            return self._fetch_index_kline(
-                stock_code, start_date, end_date, frequency
-            )
-        return super().get_kline_data(
-            stock_code, start_date, end_date, days, frequency, adjust
+        return self._kline_with_index_dispatch(
+            self._fetch_index_kline,
+            stock_code,
+            start_date,
+            end_date,
+            days,
+            frequency,
+            adjust,
         )
 
     def _fetch_index_kline(

@@ -208,37 +208,21 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
         frequency: str = "d",
         adjust: str | None = None,
     ) -> pd.DataFrame:
-        """Override base ``get_kline_data`` to dispatch on asset type.
+        """Dispatch index codes to ``get_index_historical`` (CSI + daily only).
 
-        Mirrors ``ZhituFetcher.get_kline_data`` (zhitu_fetcher.py:587):
-        ``DataFetcherManager.get_kline_data`` is the unified K-line entry for
-        both stocks and indices — it filters by ``STOCK_KLINE`` vs
-        ``INDEX_KLINE`` capability, then calls the **same method name** on
-        every fetcher. Without this override Myquant would route index
-        requests through ``_convert_code`` → ``to_myquant_format``, which
-        explicitly rejects index codes (``ValueError("Use
-        to_myquant_index_format for index …")``). Myquant would then be a
-        silent dead participant on the index K-line failover chain.
-
-        Dispatch rules (mirrors Zhitu):
-        - ``index_market_tag`` returns non-None → index branch (CSI only;
-          non-d frequencies are excluded upstream by ``supports_kline``, so
-          in practice only ``"d"`` reaches this branch).
-        - Otherwise → fall through to ``super().get_kline_data`` (stock).
+        Myquant's stock path (``_convert_code`` → ``to_myquant_format``)
+        rejects index codes, so index requests route to the dedicated
+        ``get_index_historical`` API. Stock codes fall through to the base
+        implementation unchanged. See ``BaseFetcher._kline_with_index_dispatch``.
         """
-        from datetime import datetime, timedelta
-
-        from ..utils.normalize import index_market_tag
-
-        if index_market_tag(stock_code) is not None:
-            if end_date is None:
-                end_date = datetime.now().strftime("%Y-%m-%d")
-            if start_date is None:
-                start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days * 2)
-                start_date = start_dt.strftime("%Y-%m-%d")
-            return self.get_index_historical(stock_code, start_date, end_date, frequency)
-        return super().get_kline_data(
-            stock_code, start_date, end_date, days, frequency, adjust
+        return self._kline_with_index_dispatch(
+            self.get_index_historical,
+            stock_code,
+            start_date,
+            end_date,
+            days,
+            frequency,
+            adjust,
         )
 
     def _fetch_raw_data(

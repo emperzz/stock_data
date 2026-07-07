@@ -593,27 +593,22 @@ class ZhituFetcher(BaseFetcher):
         frequency: str = "d",
         adjust: str | None = None,
     ) -> pd.DataFrame:
-        """Override the base ``get_kline_data`` to dispatch on asset type.
+        """Dispatch index codes to ``_get_index_kline_data`` (``/hz/`` prefix).
 
-        For 6-digit index codes (``index_market_tag`` returns non-None), use
-        ``_get_index_kline_data`` which talks to the ``/hz/`` prefix.
-        Otherwise fall through to the base implementation (which delegates
-        to ``_fetch_raw_data`` + ``_normalize_data``; for stocks the latter
-        raises ``DataFetchError`` — Zhitu doesn't do stock historical K-line).
+        Zhitu serves index K-line via the ``/hz/`` API; it does not do stock
+        historical K-line, so stock codes fall through to the base
+        implementation (whose ``_normalize_data`` raises ``DataFetchError``).
+        See ``BaseFetcher._kline_with_index_dispatch``.
         """
-        from datetime import datetime, timedelta
-
-        from ..utils.normalize import index_market_tag
-
-        if index_market_tag(stock_code) is not None:
-            # Index branch — compute start/end if not provided
-            if end_date is None:
-                end_date = datetime.now().strftime("%Y-%m-%d")
-            if start_date is None:
-                start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days * 2)
-                start_date = start_dt.strftime("%Y-%m-%d")
-            return self._get_index_kline_data(stock_code, start_date, end_date, frequency)
-        return super().get_kline_data(stock_code, start_date, end_date, days, frequency, adjust)
+        return self._kline_with_index_dispatch(
+            self._get_index_kline_data,
+            stock_code,
+            start_date,
+            end_date,
+            days,
+            frequency,
+            adjust,
+        )
 
     # ---------- board methods ----------
 
