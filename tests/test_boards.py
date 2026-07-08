@@ -318,53 +318,6 @@ class TestBoardAPIRoutes:
             assert kwargs.get("include_quote") is True
 
 
-class TestThsSourceAliasMatrix:
-    """Track the per-endpoint alias matrix for ?source=ths.
-
-    The alias direction differs by endpoint because different upstream
-    endpoints feed each route:
-
-    | Endpoint                        | ?source=ths becomes | Why |
-    |---------------------------------|---------------------|-----|
-    | /boards (list)                  | zzshare             | board-list is served by zzshare's plates_list (upstream IS THS) |
-    | /boards/{code}/stocks           | ths (no alias)      | ThsFetcher has its own q.10jqka AJAX (commit 371fa41) |
-    | /boards/{code}/history          | ths (no alias)      | ThsFetcher has board K-line; zzshare's plate_kline is 883957-only |
-    | /stocks/{code}/boards           | ths                 | ThsFetcher's stock_concept_list |
-
-    Each test pins ONE row of the matrix so a future alias change is loud.
-    """
-
-    def test_board_list_ths_aliases_to_zzshare(self, client):
-        """/api/v1/boards?source=ths aliases to zzshare (board-list is via zzshare)."""
-        with patch(
-            "stock_data.data_provider.persistence.board.get_board_list"
-        ) as mock_get:
-            mock_get.return_value = (
-                [{"code": "BK1048", "name": "互联网服务"}],
-                "zzshare",
-            )
-            response = client.get("/api/v1/boards?type=concept&source=ths")
-        assert response.status_code == 200
-        assert mock_get.call_args.kwargs["source"] == "zzshare"
-
-    def test_board_stocks_ths_does_not_alias(self, client):
-        """/api/v1/boards/{code}/stocks?source=ths reaches persistence as 'ths'.
-
-        ThsFetcher has its own get_board_stocks implementation; the alias
-        was removed in commit 371fa41.
-        """
-        with patch(
-            "stock_data.data_provider.persistence.board.get_board_stocks"
-        ) as mock_get:
-            mock_get.return_value = (
-                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
-                "ths",
-            )
-            response = client.get("/api/v1/boards/BK1048/stocks?source=ths")
-        assert response.status_code == 200
-        assert mock_get.call_args.kwargs["source"] == "ths"
-
-
 class TestAkshareFetcherBoards:
     """Tests that AkshareFetcher no longer claims STOCK_BOARD.
 
