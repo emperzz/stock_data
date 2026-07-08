@@ -32,10 +32,10 @@
 ### 1.4 不同 source 的 board_code 语义错位
 
 THS 内部有两套 code:
-- **cid**(300xxx 概念 / 881xxx 行业):`ThsFetcher.get_board_stocks` 实际接收的参数(`q.10jqka.com.cn/gn/detail/code/{slug}/`)
-- **platecode**(885xxx 概念 / 881xxx 行业):`ThsFetcher.get_board_history` 与 K 线 d.10jqka.com.cn 使用的参数
+- **概念 cid**(300xxx):`ThsFetcher.get_board_stocks` 实际接收的参数(`q.10jqka.com.cn/gn/detail/code/{slug}/`)
+- **platecode**(885xxx 概念 / 881xxx 行业):`ThsFetcher.get_board_history` 与 K 线 d.10jqka.com.cn 使用的参数;行业没有独立 cid,`code == platecode`
 
-公开 API 当前接受的是 cid(THS 概念 slug);这跟 eastmoney 的 `BKxxxx`、zzshare 的 `plate_code`、zhitu 的 slug 都不一样,跨 source 一致性差。
+公开 API 当前接受的是概念 cid(THS 概念 slug);这跟 eastmoney 的 `BKxxxx`、zzshare 的 `plate_code`、zhitu 的 slug 都不一样,跨 source 一致性差。
 
 ---
 
@@ -170,6 +170,14 @@ def _merge_ths_zzshare_by_name(
     - ths_rows empty + zzshare_rows empty → []
     - ths_rows empty + zzshare_rows non-empty → all zzshare rows appended
     - ths_rows non-empty + zzshare_rows empty → ths rows returned as-is
+
+    Note on dedup: ThsFetcher's own internal `_merge_concept_sources`
+    (ths_fetcher.py:1300) dedups by `cid` (concept's `code` field). The
+    (code, name) dedup here is a SECOND-LAYER safety net in case the
+    ThsFetcher's internal merge missed a duplicate after zzshare rows
+    were appended. Both layers are independent; this one is
+    implementation-detail of the new helper, not a replacement of
+    ThsFetcher's existing dedup logic.
     """
 ```
 
@@ -270,10 +278,18 @@ def fetch_board_stocks_with_zzshare_fallback(
     - ThsFetcher's input is the cid; ZzshareFetcher's input is the
       platecode (which is what the public API hands us).
 
+    Caveat — ZzshareFetcher.get_board_stocks (zzshare_fetcher.py:625)
+    accepts `**kwargs` but does NOT consume `include_quote`. The choice
+    of THS-vs-zzshare by `include_quote` is therefore based purely on
+    the upstream's quote-field availability (THS has them, ZzshareFetcher
+    doesn't), not on ZzshareFetcher's handling of the flag.
+
     Returns:
         (stocks, source) — source is the fetcher name that served
         the response (always 'ths' or 'zzshare'; caller exposes it
         as-is, but writes to stock_board_membership with source='ths').
+        When both paths fail or return empty, returns ([], "") — the
+        empty-list signal flows through to the route layer's 404 path.
 
     Raises:
         DataFetchError: only when both fetcher paths raise a Hard error
@@ -286,7 +302,7 @@ def fetch_board_stocks_with_zzshare_fallback(
 1. `cid = _resolve_ths_cid_from_platecode(board_code)`
 2. 如 `cid`:尝试 `manager.get_board_stocks(board_code=cid, source="ths", include_quote=True)` — 返回非空 → (`stocks`, "ths")
 3. 如空 / 异常 / `cid is None`:尝试 `manager.get_board_stocks(board_code=board_code, source="zzshare", include_quote=True)` — 返回非空 → (`stocks`, "zzshare")
-4. 都失败 → raise / 返回 `[]`(由 caller 决定)
+4. 都失败 → `([], "")`(由 caller 路由到 404)
 
 `include_quote=False` 时主备顺序反转。
 
@@ -306,10 +322,16 @@ def get_board_stocks(
     )
     if stocks:
         update_cached_board_stocks(board_code, source="ths", stocks=stocks)
-    return stocks, "ths"  # DB 写 source='ths',但响应 origin 反映实际命中的 fetcher
+    return stocks, origin  # origin 由 helper 决定:cache hit → "persistence";cache miss → "ths"/"zzshare";都失败 → ""
 ```
 
-**关于 origin 字段**:cache hit → `"persistence"`;cache miss → 实际命中的 fetcher 名(`"ths"` 或 `"zzshare"`)。响应里的 `data_source` 字段保留这两类信息(客户端可以看到是 ThsFetcher 还是 ZzshareFetcher 兜的底),但 DB 写死 `ths`。
+**关于 origin 字段**(helper 返回值,非 hardcode):
+- cache hit → `"persistence"`
+- cache miss,ThsFetcher 主命中 → `"ths"`
+- cache miss,ZzshareFetcher 兜底命中 → `"zzshare"`
+- 两边都失败 / 空 → `""`(route 层转 404)
+
+响应里的 `data_source` 字段保留这三类信息(客户端可以看到是 ThsFetcher 还是 ZzshareFetcher 兜的底),但 DB `stock_board_membership.source` 写死 `ths`。注意:对外公开的 source 字段在响应里仍是 `ths`(route 层封装),`data_source` 是内部 origin 透传,clients 可以据此判断是否走了 fallback。
 
 ### 3.9 路由层调用适配
 
@@ -358,6 +380,8 @@ def get_board_stocks(
 list_boards(type='concept', source='ths')
   → _resolve_source('ths') == 'ths'  ✓
   → stock_board_cache.get_board_list(board_type='concept', refresh=..., include_quote=..., subtype=...)
+    (注:此调用按 §3.5 / §3.9 改后形态,source 形参已删;当前
+    call site (boards.py:383-390) 仍传 source,实现 PR 时同步改)
     → cache hit? read stock_board WHERE source='ths' AND board_type='concept'
       → return cached, origin="persistence"
     → cache miss: fetch_boards_with_zzshare_backfill(board_type='concept', ...)
@@ -414,8 +438,9 @@ fetch_board_stocks_with_zzshare_fallback(board_code='999999', include_quote=Fals
 
 ```
 list_boards(source='zzshare')
-  → _resolve_source('zzshare')  → ValueError(Invalid source)
-  → route 端:HTTPException(400, detail={"error": "invalid_source", "message": "..."})
+  → FastAPI Literal["ths", "eastmoney", "zhitu"] 校验触发 → 直接返回 422
+  (注意:route 体的 _resolve_source 是兜底,对于已在 Literal 之外的值
+  Literal 校验先于 route body 触发,根本走不到 _resolve_source)
 ```
 
 ---
@@ -424,7 +449,7 @@ list_boards(source='zzshare')
 
 | 场景 | 行为 |
 |---|---|
-| `source=zzshare` 在 boards 端点 | 400,`{"error": "invalid_source", "message": "Unknown source 'zzshare'. Valid sources: ['ths', 'eastmoney', 'zhitu']. 'zzshare' was unified under 'ths' on 2026-07-08."}` |
+| `source=zzshare` 在 boards 端点 | **422**(`FastAPI Literal` 校验在 route body 之前触发),detail 形如 `{"detail": [{"type": "enum", "loc": ["query", "source"], "msg": "Input should be 'ths', 'eastmoney' or 'zhitu'"}]}`。如未来 Literal 移除,route 体的 `_resolve_source` 兜底会抛 400 + `{"error": "invalid_source", "message": "Unknown source 'zzshare'. Valid sources: ['ths', 'eastmoney', 'zhitu']. 'zzshare' was unified under 'ths' on 2026-07-08."}` |
 | ThsFetcher 失败,ZzshareFetcher 成功 | 不报错,返回 zzshare 行,origin="zzshare" |
 | ThsFetcher 成功,ZzshareFetcher 失败 | 不报错,返回 ths 行(WARNING 日志),origin="ths" |
 | 两边都失败 | 走 `_with_source` 的 DataFetchError 路径,5xx |
@@ -506,5 +531,5 @@ list_boards(source='zzshare')
 2. **boards 端点对外只接受 `ths`** — 公共 API 表面彻底收窄;`zzshare` 退化为内部 merge / fallback 源。
 3. **DB source 写 `ths`** — 单一 source 列;`zzshare` row 不再产生。
 4. **public board_code 收 platecode(885xxx/881xxx)**,server 内部按需反查 cid — 统一 input 形态;反查永远走 persistence,不硬编码 industry==cid 分支。
-5. **删 `TestThsSourceAliasMatrix` 整 class**(用户确认 2026-07-08 chat)— 矩阵的 4 行里 2 行(boards-list、boards-stocks)已失效,另 2 行(history、reverse)在未触碰的端点里,与本次重构耦合度低,单独维护成本高于重写。改用更聚焦的 `TestThsOnly` 替代,只测 `source=ths` 公共路径(见 §7.1 新增测试)。
+5. **删 `TestThsSourceAliasMatrix` 整 class**(用户确认 2026-07-08 chat)— 类的 docstring 矩阵 4 行里 2 行(boards-list、boards-stocks)已失效,另 2 行(history、reverse)的 alias 行为在未触碰的端点里;且该 class 实际只钉了 2 个测试(boards-list alias + boards-stocks no-alias),矩阵的另外 2 行没有测试覆盖。维护成本高于重写,改用更聚焦的 `TestThsOnly` 替代,只测 `source=ths` 公共路径(见 §7.1 新增测试)。
 6. **不加 DB schema 迁移** — `STOCK_DB_INIT=true` 自动重置,dev 阶段不需要迁移。
