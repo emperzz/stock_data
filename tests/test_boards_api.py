@@ -138,22 +138,22 @@ def test_list_boards_cache_hit_returns_persistence(client):
             "name": "测试",
             "type": "concept",
             "subtype": "同花顺概念",
-            "source": "zzshare",
+            "source": "ths",
         },
     ]
     # First call: persistence returns the fetcher-sourced result
     with patch(
         _PERSISTENCE_LIST_PATCH,
-        return_value=(fake_boards, "ZzshareFetcher"),
+        return_value=(fake_boards, "ThsFetcher"),
     ) as mock_get:
-        r1 = client.get("/api/v1/boards?type=concept&source=zzshare")
+        r1 = client.get("/api/v1/boards?type=concept&source=ths")
         assert r1.status_code == 200
-        assert r1.json()["source"] == "ZzshareFetcher"
+        assert r1.json()["source"] == "ThsFetcher"
 
         # Second call (cache hit): persistence returns the cached result
         # with origin="persistence" per CLAUDE.md source-tracking matrix.
         mock_get.return_value = (fake_boards, "persistence")
-        r2 = client.get("/api/v1/boards?type=concept&source=zzshare")
+        r2 = client.get("/api/v1/boards?type=concept&source=ths")
         assert r2.status_code == 200
         assert r2.json()["source"] == "persistence"
 
@@ -161,21 +161,22 @@ def test_list_boards_cache_hit_returns_persistence(client):
 def test_list_boards_refresh_forces_fetcher_call(client):
     """refresh=true → persistence is called with refresh=True (forces upstream)."""
     fake = [{"code": "BK0001", "name": "测试"}]
-    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ZzshareFetcher")) as mock_get:
-        r = client.get("/api/v1/boards?type=concept&source=zzshare&refresh=true")
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ThsFetcher")) as mock_get:
+        r = client.get("/api/v1/boards?type=concept&source=ths&refresh=true")
     assert r.status_code == 200
     mock_get.assert_called_once()
     _, kwargs = mock_get.call_args
     assert kwargs.get("refresh") is True
-    assert kwargs.get("source") == "zzshare"
+    # After unification, get_board_list doesn't take 'source' kwarg
+    assert "source" not in kwargs
     assert kwargs.get("subtype") is None
 
 
 def test_list_boards_include_quote_forces_fetcher_call(client):
     """include_quote=true → persistence is called with include_quote=True."""
     fake = [{"code": "BK0001", "name": "测试"}]
-    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ZzshareFetcher")) as mock_get:
-        r = client.get("/api/v1/boards?type=concept&source=zzshare&include_quote=true")
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ThsFetcher")) as mock_get:
+        r = client.get("/api/v1/boards?type=concept&source=ths&include_quote=true")
     assert r.status_code == 200
     _, kwargs = mock_get.call_args
     assert kwargs.get("include_quote") is True
@@ -184,12 +185,13 @@ def test_list_boards_include_quote_forces_fetcher_call(client):
 def test_list_boards_subtype_passed_to_persistence(client):
     """subtype param is forwarded to persistence layer (validation + filter)."""
     fake = [{"code": "BK0001", "name": "测试"}]
-    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ZzshareFetcher")) as mock_get:
-        r = client.get("/api/v1/boards?type=concept&source=zzshare&subtype=同花顺概念")
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ThsFetcher")) as mock_get:
+        r = client.get("/api/v1/boards?type=concept&source=ths&subtype=同花顺概念")
     assert r.status_code == 200
     _, kwargs = mock_get.call_args
     assert kwargs.get("subtype") == "同花顺概念"
-    assert kwargs.get("source") == "zzshare"
+    # After unification, get_board_list doesn't take 'source' kwarg
+    assert "source" not in kwargs
     assert kwargs.get("board_type") == "concept"
 
 
@@ -199,7 +201,7 @@ def test_list_boards_persistence_validation_error_propagates(client):
         _PERSISTENCE_LIST_PATCH,
         side_effect=ValueError("No fetcher with name 'zzshare' is registered"),
     ):
-        r = client.get("/api/v1/boards?type=concept&source=zzshare")
+        r = client.get("/api/v1/boards?type=concept&source=ths")
     assert r.status_code == 400
     body = r.json()
     # FastAPI wraps HTTPException detail under "detail"
@@ -214,7 +216,7 @@ def test_list_boards_source_zzshare_type_special_returns_422(client):
 
 def test_list_boards_no_type_subtype_returns_400(client):
     """subtype filter without type is rejected at the route layer."""
-    r = client.get("/api/v1/boards?source=zzshare&subtype=同花顺概念")
+    r = client.get("/api/v1/boards?source=ths&subtype=同花顺概念")
     assert r.status_code == 400
 
 
@@ -231,7 +233,7 @@ def test_list_boards_no_type_response_carries_type_field(client):
         {"code": "BK_I1", "name": "行业1", "type": "industry", "subtype": "同花顺行业"},
     ]
     with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake_boards, "mixed")):
-        r = client.get("/api/v1/boards?source=zzshare")
+        r = client.get("/api/v1/boards?source=ths")
     assert r.status_code == 200
     body = r.json()
     by_code = {b["code"]: b for b in body["data"]}
@@ -305,7 +307,8 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
     assert r.status_code == 200
     args, kwargs = mock_get.call_args
     assert kwargs.get("refresh") is True
-    assert kwargs.get("source") == "eastmoney"
+    # After unification, get_board_stocks doesn't take 'source' kwarg
+    assert "source" not in kwargs
     # board_code is positional (1st arg) in the persistence signature
     assert args[0] == "BK0001"
 
@@ -448,7 +451,7 @@ def test_get_board_stocks_projects_change_amount_and_turnover_rate_null_when_abs
             return_value="多多概念",
         ),
     ):
-        r = client.get("/api/v1/boards/308709/stocks?source=zzshare")
+        r = client.get("/api/v1/boards/308709/stocks?source=ths")
     assert r.status_code == 200
     stock = r.json()["stocks"][0]
     assert stock["change_amount"] is None
