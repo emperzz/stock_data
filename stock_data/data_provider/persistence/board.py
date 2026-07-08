@@ -612,6 +612,75 @@ def _resolve_ths_cid_from_platecode(platecode: str) -> str | None:
     return row["code"] if row else None
 
 
+def _merge_ths_zzshare_by_name(
+    ths_rows: list[dict],
+    zzshare_rows: list[dict],
+) -> list[dict]:
+    """Merge THS(primary) + ZZSHARE(platecode backfill) by board name.
+
+    Rules (verified 2026-07-08):
+    - Index zzshare rows by name → platecode (in-memory dict).
+    - For each ths row:
+        * If ths_row['platecode'] is None and zzshare has same name
+          → copy platecode from zzshare into ths row (in-place dict update).
+        * Otherwise keep ths row as-is (it already has platecode, or
+          zzshare doesn't have a matching name — the row is THS-only).
+    - For each zzshare row not matched by any ths row (by name) →
+      append as-is. The row carries its own plate_code as 'code'
+      (no cid available; clients see this as a platecode-only row).
+    - Final dedup by (code, name) within the merged list to guard
+      against upstream double-emit (rare; seen once in THS gnSection
+      duplicates per 2026-07-08 notes).
+    - All output rows are tagged with source='ths' regardless of origin
+      (the public surface unifies them; DB writes follow).
+
+    Empty input edge cases:
+    - ths_rows empty + zzshare_rows empty → []
+    - ths_rows empty + zzshare_rows non-empty → all zzshare rows appended
+    - ths_rows non-empty + zzshare_rows empty → ths rows returned as-is
+
+    Note on dedup: ThsFetcher's own internal `_merge_concept_sources`
+    (ths_fetcher.py:1300) dedups by `cid` (concept's `code` field). The
+    (code, name) dedup here is a SECOND-LAYER safety net in case the
+    ThsFetcher's internal merge missed a duplicate after zzshare rows
+    were appended. Both layers are independent; this one is
+    implementation-detail of the new helper, not a replacement of
+    ThsFetcher's existing dedup logic.
+    """
+    by_name: dict[str, str] = {}
+    for r in zzshare_rows:
+        name = r.get("name", "")
+        if name and r.get("platecode"):
+            by_name[name] = r["platecode"]
+
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    ths_names: set[str] = set()
+    for r in ths_rows:
+        # Backfill platecode from zzshare when THS row lacks one
+        if not r.get("platecode") and r.get("name") in by_name:
+            r["platecode"] = by_name[r["name"]]
+        key = (r.get("code", ""), r.get("name", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        ths_names.add(r.get("name", ""))
+        r["source"] = "ths"  # tag as ths regardless of origin
+        out.append(r)
+    for r in zzshare_rows:
+        # Skip if the name is already represented by a THS row.
+        # The two rows may carry different codes (THS cid vs zzshare
+        # plate_code) but represent the same board — THS wins.
+        if r.get("name", "") in ths_names:
+            continue
+        key = (r.get("code", ""), r.get("name", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        r["source"] = "ths"
+        out.append(r)
+    return out
+
 
 def get_board_stocks(
     board_code: str,

@@ -84,3 +84,62 @@ class TestResolveThsCidFromPlatecode:
             source="zzshare",
         )
         assert board_mod._resolve_ths_cid_from_platecode("885000") is None
+
+
+class TestMergeThsZzshareByName:
+    def test_ths_wins_by_default(self):
+        """Same name in both: ths row kept, platecode from ths."""
+        ths = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
+                "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+        zz = [{"code": "885642", "name": "跨境电商", "platecode": "885642",
+               "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+        out = board_mod._merge_ths_zzshare_by_name(ths, zz)
+        assert len(out) == 1
+        assert out[0]["code"] == "301558"  # ths's cid, not zzshare's plate_code
+        assert out[0]["platecode"] == "885642"  # ths's platecode
+        assert out[0]["source"] == "ths"
+
+    def test_zzshare_backfills_missing_platecode(self):
+        """THS row platecode=None, zzshare has same name → platecode backfilled."""
+        ths = [{"code": "301558", "name": "跨境电商", "platecode": None,
+                "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+        zz = [{"code": "885642", "name": "跨境电商", "platecode": "885642",
+               "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+        out = board_mod._merge_ths_zzshare_by_name(ths, zz)
+        assert len(out) == 1
+        assert out[0]["code"] == "301558"
+        assert out[0]["platecode"] == "885642"  # ← backfilled
+
+    def test_zzshare_only_rows_appended(self):
+        """zzshare has a board ths doesn't → appended at end."""
+        ths = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
+                "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+        zz = [{"code": "885999", "name": "独此一家", "platecode": "885999",
+               "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+        out = board_mod._merge_ths_zzshare_by_name(ths, zz)
+        codes = [r["code"] for r in out]
+        assert "301558" in codes
+        assert "885999" in codes  # zzshare-only appended
+        assert out[1]["source"] == "ths"  # tagged as ths after merge
+
+    def test_dedup_by_code_and_name(self):
+        """Same (code, name) emitted twice → one row."""
+        ths = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
+                "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+        zz = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
+               "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+        out = board_mod._merge_ths_zzshare_by_name(ths, zz)
+        assert len(out) == 1
+
+    def test_empty_inputs(self):
+        assert board_mod._merge_ths_zzshare_by_name([], []) == []
+        assert board_mod._merge_ths_zzshare_by_name(
+            [], [{"code": "885999", "name": "x", "platecode": "885999",
+                  "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+        ) == [{"code": "885999", "name": "x", "platecode": "885999",
+               "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+        assert board_mod._merge_ths_zzshare_by_name(
+            [{"code": "301558", "name": "x", "platecode": "885642",
+              "type": "concept", "subtype": "同花顺概念", "source": "ths"}], []
+        ) == [{"code": "301558", "name": "x", "platecode": "885642",
+               "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
