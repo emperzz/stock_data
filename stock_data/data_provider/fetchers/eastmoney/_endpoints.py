@@ -162,7 +162,14 @@ class _Endpoints:
         "url": "https://push2.eastmoney.com/api/qt/clist/get",
         "url_prefixes": ["17", ""],  # 17.push2 (akshare) → bare push2 (fallback)
         "fs": "m:90+t:2+f:!50",
-        "fid": "f3",
+        # fid=f12 (board code, BK####) — unique key, stable pagination order.
+        # Was f3 (change_pct) before 2026-07-08: change_pct is non-unique
+        # (multiple boards share rounded f3 values, esp. on quiet days),
+        # so EM's tiebreaker at page boundaries was undefined, causing
+        # duplicate or missing rows across paginated calls. Empirical:
+        # playwright probe with fid=f12 returned 496+496 stable, dedup-free;
+        # fid=f3 was at risk of N+1 row jitter across refreshes.
+        "fid": "f12",
         "fields": "f2,f3,f4,f8,f12,f14,f16,f20,f104,f105,f128,f136",
     }
     BOARD_COMPONENTS = {

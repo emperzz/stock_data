@@ -5,9 +5,10 @@
 直接 mock HTTP 层, 反映新的 push2 clist 直连实现。
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+from curl_cffi import requests as _cffi_requests
 
 from stock_data.data_provider.base import DataCapability
 from stock_data.data_provider.fetchers.eastmoney_fetcher import (
@@ -714,8 +715,14 @@ def test_returns_empty_on_missing_data_field():
 # ---------------------------------------------------------------------------
 
 
-class _FakeRateLimitError(Exception):
-    """模拟 push2 限流时的 curl: (56) Connection closed abruptly."""
+class _FakeRateLimitError(_cffi_requests.exceptions.ConnectionError):
+    """模拟 push2 限流时的 curl: (56) Connection closed abruptly.
+
+    必须继承 ``_cffi_requests.exceptions.ConnectionError`` — tenacity 现在
+    只对真正的网络层异常 (ConnectionError / Timeout / ChunkedEncodingError)
+    做 3 次重试, http 4xx/5xx 与 JSON 解析失败走 DataFetchError fail-fast.
+    用裸 ``Exception`` 子类不会被判为 retryable, 测试对应断言要随之更新.
+    """
 
 
 def test_fetch_one_clist_page_retries_on_rate_limit():
@@ -728,9 +735,8 @@ def test_fetch_one_clist_page_retries_on_rate_limit():
         call_count["n"] += 1
         if call_count["n"] < 3:
             raise _FakeRateLimitError("curl: (56) Connection closed abruptly")
-        from unittest.mock import MagicMock
-
         m = MagicMock()
+        m.status_code = 200
         m.json.return_value = success_payload
         return m
 
@@ -771,9 +777,8 @@ def test_fetch_one_clist_page_uses_referer_for_quote_subdomain():
 
     def fake_get(url, params=None, headers=None, timeout=None, **kw):
         captured_headers.update(headers or {})
-        from unittest.mock import MagicMock
-
         m = MagicMock()
+        m.status_code = 200
         m.json.return_value = {"data": {"diff": [], "total": 0}}
         return m
 
@@ -850,21 +855,30 @@ def test_build_clist_url_variants_env_multi(monkeypatch):
 def test_fetch_clist_paginated_falls_back_to_second_url_on_first_failure():
     """第一 URL 全部重试用尽 → 试第二 URL → 成功 → 返回数据.
 
-    tenacity 默认 3 次重试, 所以 side_effect 需要 3 次 Exception 才耗尽
-    第一 URL, 第 4 次才到第二 URL.
+    tenacity 默认 3 次重试, 所以 side_effect 需要 3 次 ConnectionError
+    才耗尽第一 URL, 第 4 次才到第二 URL. 2026-07-08 收紧后必须是
+    ``_cffi_requests.exceptions.ConnectionError`` 才会被 retries; 用裸
+    ``Exception`` 现在会被立刻判为永久失败直接走 fallback.
     """
     fetcher = EastMoneyFetcher()
     from unittest.mock import MagicMock
 
     fake_resp = MagicMock()
+    fake_resp.status_code = 200
     fake_resp.json.return_value = {"data": {"diff": [], "total": 0}}
     with patch.object(
         fetcher._session,
         "get",
         side_effect=[
-            Exception("Connection closed abruptly"),  # 79.push2 attempt 1
-            Exception("Connection closed abruptly"),  # 79.push2 attempt 2
-            Exception("Connection closed abruptly"),  # 79.push2 attempt 3 (exhausted)
+            _cffi_requests.exceptions.ConnectionError(
+                "Connection closed abruptly"
+            ),  # 79.push2 attempt 1
+            _cffi_requests.exceptions.ConnectionError(
+                "Connection closed abruptly"
+            ),  # 79.push2 attempt 2
+            _cffi_requests.exceptions.ConnectionError(
+                "Connection closed abruptly"
+            ),  # 79.push2 attempt 3 (exhausted)
             fake_resp,  # bare push2 success
         ],
     ) as mock_get:
@@ -886,6 +900,56 @@ def test_fetch_clist_paginated_returns_empty_when_all_variants_fail():
     with patch.object(
         fetcher._session,
         "get",
-        side_effect=Exception("Connection closed abruptly"),
+        side_effect=_cffi_requests.exceptions.ConnectionError(
+            "Connection closed abruptly"
+        ),
     ):
         assert fetcher._fetch_clist_paginated(ENDPOINTS.BOARD_LIST_CONCEPT) == []
+
+
+def test_fetch_one_clist_page_raises_data_fetch_error_on_http_5xx():
+    """HTTP 5xx 立即抛 DataFetchError (不重试 3x, 让 URL variant 兜底).
+
+    Set 2026-07-08 - tenacity retry 现在只对网络层异常 retry, 上游确定性的
+    4xx/5xx 失败直接抛, 让外层 _fetch_clist_page_with_fallback 切 URL 试.
+    """
+    fetcher = EastMoneyFetcher()
+    from stock_data.data_provider.base import DataFetchError
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 503
+    fake_resp.text = "Service Unavailable"
+    with (
+        patch.object(fetcher._session, "get", return_value=fake_resp) as mock_get,
+        pytest.raises(DataFetchError, match="HTTP 503"),
+    ):
+        fetcher._fetch_one_clist_page(
+            "https://push2.eastmoney.com/api/qt/clist/get",
+            {"pn": 1},
+            "https://quote.eastmoney.com/",
+        )
+    assert mock_get.call_count == 1
+
+
+def test_fetch_one_clist_page_raises_data_fetch_error_on_non_json_2xx():
+    """HTTP 200 but non-JSON body 立即抛 DataFetchError (不重试 3x).
+
+    反映 push2 WAF 在被挡时返回 HTML 错误页 (200 OK + HTML) 这种刁钻场景.
+    """
+    fetcher = EastMoneyFetcher()
+    from stock_data.data_provider.base import DataFetchError
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = "<html><body>captcha</body></html>"
+    fake_resp.json.side_effect = ValueError("not JSON")
+    with (
+        patch.object(fetcher._session, "get", return_value=fake_resp) as mock_get,
+        pytest.raises(DataFetchError, match="non-JSON body"),
+    ):
+        fetcher._fetch_one_clist_page(
+            "https://push2.eastmoney.com/api/qt/clist/get",
+            {"pn": 1},
+            "https://quote.eastmoney.com/",
+        )
+    assert mock_get.call_count == 1

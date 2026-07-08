@@ -24,12 +24,14 @@ URLs / endpoint metadata consumed (all from ``._endpoints``):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
 import time
 from typing import Any
 
+from curl_cffi import requests as _cffi_requests
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -38,6 +40,7 @@ from tenacity import (
     wait_random,
 )
 
+from ...base import DataFetchError
 from ...utils.normalize import normalize_stock_code
 from ._cffi_json import cffi_json_get
 from ._endpoints import (
@@ -95,6 +98,20 @@ class BoardsMixin:
     # Inter-page delay (seconds) — slow down multi-page pulls to dodge push2
     # rate limits.
     _BOARD_PAGE_DELAY_RANGE = (1.0, 2.0)
+    # Network-layer faults worth retrying — transient TCP / TLS / DNS /
+    # timeout / chunked decode errors. HTTP 4xx/5xx replies and JSON
+    # parse errors are NOT here: those are deterministic upstream
+    # responses (the body / status is what it is), so retrying just
+    # burns 3 attempts. They're raised as ``DataFetchError`` immediately
+    # below so the outer ``_fetch_clist_page_with_fallback`` can switch
+    # URL variants on the same call instead of the same shard 3 times.
+    # Set 2026-07-08 — was ``retry_if_exception_type(Exception)`` which
+    # caught everything (incl. ``ValueError`` from JSON parse) and retried.
+    _RETRYABLE_NET_ERRORS = (
+        _cffi_requests.exceptions.ConnectionError,
+        _cffi_requests.exceptions.Timeout,
+        _cffi_requests.exceptions.ChunkedEncodingError,
+    )
 
     # ---- Push2 slist/get constants ----
 
@@ -218,26 +235,55 @@ class BoardsMixin:
         raise last_exc
 
     def _fetch_one_clist_page(self, url: str, params: dict, referer: str) -> Any:
-        """Fetch one page of a clist endpoint with tenacity retry.
+        """Fetch one page of a clist endpoint with retry on transient network errors.
 
-        Network-layer retry is split out to keep tests' mock surface small
-        — mock one "succeed" or "rate-limit failed" call without touching
-        pagination logic.
+        Tenacity retries ONLY the ``session.get()`` call on transient
+        network faults (in ``_RETRYABLE_NET_ERRORS``). HTTP 4xx/5xx and
+        non-JSON bodies fail fast as ``DataFetchError`` — those are
+        deterministic upstream replies and retrying them just wastes
+        3 attempts. The outer ``_fetch_clist_page_with_fallback`` then
+        gets the chance to switch URL variants on the same page call.
+
+        Network-layer retry is split out from validation (status check +
+        JSON parse) to keep tests' mock surface small — mock one
+        "succeed" or "rate-limit failed" call without touching pagination
+        logic.
+
+        Set 2026-07-08 — previous behaviour used ``retry_if_exception_type(Exception)``
+        which also re-ran 3 times on ``JSONDecodeError`` (upstream
+        returned HTML for an HTTP 200 reply, deterministically non-JSON).
         """
         session = self._session
 
         @retry(
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception_type(self._RETRYABLE_NET_ERRORS),
             stop=stop_after_attempt(self._BOARD_RETRY_ATTEMPTS),
             wait=wait_exponential(multiplier=1, min=1, max=8) + wait_random(0, 1),
             reraise=True,
         )
-        def _do():
+        def _do_request():
             headers = {"User-Agent": UA, "Referer": referer}
-            r = session.get(url, params=params, headers=headers, timeout=15)
-            return r.json()
+            return session.get(url, params=params, headers=headers, timeout=15)
 
-        return _do()
+        r = _do_request()
+        # Status check — 4xx/5xx is deterministic upstream behaviour for this
+        # shard; don't retry, raise so the outer URL-variant fallback can try
+        # a different CDN prefix (e.g. ``17.push2`` → ``push2`` bare).
+        if r.status_code >= 400:
+            raise DataFetchError(
+                f"[{self.name}] clist page failed: GET {url} returned "
+                f"HTTP {r.status_code}; body={r.text[:200]!r}"
+            )
+        # JSON parse — body shape is deterministic per URL; non-JSON means
+        # the endpoint returned HTML / plain text / gzip-broken stream.
+        # No retry: URL-variant fallback handles it.
+        try:
+            return r.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise DataFetchError(
+                f"[{self.name}] clist page failed: GET {url} returned "
+                f"non-JSON body: {r.text[:200]!r}"
+            ) from exc
 
     def _fetch_clist_paginated(
         self,
