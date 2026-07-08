@@ -121,20 +121,13 @@ def _resolve_board_history_source(source: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# board-stocks source validation — delegate to persistence helper.
-#
-# Differs from `_resolve_source` (used by board-list endpoints): this
-# path aliases ``zzshare → ths`` (THS basic API is the upstream for
-# stock→boards reverse lookup; zzshare SDK has no such endpoint). The
-# board-list endpoint no longer aliases in either direction — both
-# ``ths`` and ``zzshare`` are independent first-class labels there
-# (2026-07-08). The route layer here exposes both labels so existing
-# ``source=zzshare`` callers keep working while new callers can use
-# ``source=ths`` to opt into the THS-specific path.
-#
-# Source set lives in persistence.board (single source of truth) via
-# `normalize_board_stocks_source`; route just translates ValueError to
-# HTTPException(400).
+# board-stocks source validation — `zzshare` is no longer a valid label here.
+# After the 2026-07-08 unification, zzshare is not a first-class source on
+# /boards/{code}/stocks either: the Literal in get_board_stocks (boards.py:~419)
+# restricts to ("ths", "eastmoney", "zhitu"), so the route returns 422 before
+# _resolve_source runs. zzshare remains routable internally via manager._with_source
+# (used by fetch_board_stocks_with_zzshare_fallback for include_quote fallback)
+# but is never directly addressable by API clients.
 # ──────────────────────────────────────────────────────────────────────────
 
 

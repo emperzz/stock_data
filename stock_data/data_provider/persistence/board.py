@@ -76,19 +76,21 @@ VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
 
 # Stock-boards 专用 source 集合 + alias (仿照 _BOARD_HISTORY_VALID_SOURCES 模式).
 # stock-boards 端点 alias zzshare→ths: THS basic API 是真正的 stock→boards 上游;
-# zzshare SDK 没有这个端点. (board-list 端点不 alias 任何方向 — 'ths' 与
-# 'zzshare' 各自独立,因为 ThsFetcher 已实现 get_all_boards — 2026-07-08.)
+# zzshare SDK 没有这个端点. (board-list 端点 2026-07-08 后 zzshare 不再合法 —
+# source=zzshare 由 FastAPI Literal 校验返回 422,不再 alias;reverse-lookup
+# 的 zzshare→ths alias 继续生效.)
 # 注意: 'ths' 在 VALID_SUBTYPES_BY_SOURCE 里有 concept subtype (用于 stock-boards
 # 端点的 subtype 验证), 但不在 VALID_SOURCES 里 (因为它没有 get_all_boards).
 _STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
 _STOCK_BOARDS_SOURCE_ALIAS: dict[str, str] = {"zzshare": "ths"}
 
 
-# Board-stocks 专用 source 集合 (no alias map — all 4 sources are
-# independently valid). Mirrors the existing _STOCK_BOARDS_VALID_SOURCES
-# pattern from the stock-boards endpoint. The route layer's
-# _resolve_board_stocks_source uses this to decide whether to accept
-# ?source=ths as canonical (was previously aliased to zzshare).
+# Board-stocks 专用 source 集合 (3 sources — ths/eastmoney/zhitu).
+# Post-2026-07-08 unification dropped `zzshare` from the public surface;
+# zzshare is no longer valid here (Literal returns 422), but the
+# underlying ZzshareFetcher.plates_stocks is still used internally by
+# fetch_board_stocks_with_zzshare_fallback for the include_quote=False
+# primary path.
 _BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = (
     "ths", "eastmoney", "zhitu"
 )
@@ -98,14 +100,16 @@ def normalize_board_stocks_source(source: str) -> str:
     """Validate a source name for the board-stocks endpoint.
 
     Unlike ``normalize_stock_board_source`` (which aliases
-    ``zzshare → ths``), this helper does NOT alias. All four sources
+    ``zzshare → ths``), this helper does NOT alias. All three sources
     have independent ``get_board_stocks`` implementations:
 
     - ``ths``: ThsFetcher (q.10jqka.com.cn AJAX — concept boards)
     - ``eastmoney``: EastMoneyFetcher (push2his)
     - ``zhitu``: ZhituFetcher
-    - ``zzshare``: ZzshareFetcher (``plates_stocks``) — preserved for
-      back-compat; upstream IS 同花顺 but routed through the zzshare SDK
+    - ``zzshare``: ZzshareFetcher (``plates_stocks``) — *internal only*
+      (no longer a public label; used by
+      ``fetch_board_stocks_with_zzshare_fallback`` for the
+      ``include_quote=False`` primary path)
 
     Args:
         source: User-supplied source name (e.g. ``"ths"``).
