@@ -204,40 +204,6 @@ def _resolve_type_optional(board_type: str | None) -> str | None:
     return _resolve_type(board_type)
 
 
-def _parse_source_csv(raw: str | None) -> list[str]:
-    """Parse comma-separated ``?source=`` for the multi-source board-list path.
-
-    - None / empty -> all valid sources
-    - Splits on comma, strips whitespace
-    - No aliasing: ``ths`` and ``zzshare`` are independent labels
-      (ThsFetcher and ZzshareFetcher both implement get_all_boards as
-      of 2026-07-08).
-    - Dedupes (preserves first occurrence order)
-    - Raises 400 on unknown source name
-    """
-    if not raw:
-        return list(stock_board_cache.VALID_SOURCES)
-    out: list[str] = []
-    for s in raw.split(","):
-        s = s.strip()
-        if not s:
-            continue
-        if s not in stock_board_cache.VALID_SOURCES:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_source",
-                    "message": (
-                        f"Unknown source '{s}' in CSV. "
-                        f"Valid sources: {sorted(stock_board_cache.VALID_SOURCES)}"
-                    ),
-                },
-            )
-        if s not in out:
-            out.append(s)
-    return out
-
-
 def _parse_stock_boards_source_csv(raw: str | None) -> list[str]:
     """Parse ?source= for /stocks/{code}/boards — alias zzshare → ths.
 
@@ -245,11 +211,11 @@ def _parse_stock_boards_source_csv(raw: str | None) -> list[str]:
     SDK has no such endpoint (returns stub None), so we alias
     zzshare → ths here (same source data).
 
-    The board-list endpoint's _parse_source_csv does NOT alias in
-    either direction (both ``ths`` and ``zzshare`` are first-class
-    labels as of 2026-07-08). The two helpers' valid_set and
-    default-when-blank differ, so we keep them separate rather than
-    force a config-driven merge (rule-of-three not yet met).
+    The board-list endpoint does NOT alias in either direction (both
+    ``ths`` and ``zzshare`` are first-class labels as of 2026-07-08).
+    The two helpers' valid_set and default-when-blank differ, so we
+    keep them separate rather than force a config-driven merge
+    (rule-of-three not yet met).
 
     Args:
         raw: User-supplied ?source= value (may be None or comma-separated).

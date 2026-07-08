@@ -131,8 +131,7 @@ def normalize_stock_board_source(source: str) -> str:
     Applies the stock-boards alias map (zzshare → ths) and validates
     against _STOCK_BOARDS_VALID_SOURCES. The board-list endpoint
     has no aliasing in either direction (both ``ths`` and ``zzshare``
-    are first-class labels as of 2026-07-08); see
-    ``boards.py:_parse_source_csv``.
+    are first-class labels as of 2026-07-08).
 
     Args:
         source: User-supplied source name (e.g. ``"ths"``, ``"zzshare"``).
