@@ -843,3 +843,5 @@ def test_boards_stocks_valid_sources_excludes_zzshare():
     from stock_data.data_provider.persistence import board as board_mod
     assert "zzshare" not in board_mod._BOARD_STOCKS_VALID_SOURCES
     assert "ths" in board_mod._BOARD_STOCKS_VALID_SOURCES
+    assert "eastmoney" in board_mod._BOARD_STOCKS_VALID_SOURCES
+    assert "zhitu" in board_mod._BOARD_STOCKS_VALID_SOURCES
