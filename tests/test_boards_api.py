@@ -855,3 +855,13 @@ def test_get_board_list_signature_no_source_arg():
     assert "source" not in sig.parameters, (
         f"get_board_list still has 'source' param: {list(sig.parameters)}"
     )
+
+
+def test_get_board_stocks_signature_no_source_arg():
+    """get_board_stocks must drop 'source' param after unification."""
+    import inspect
+    from stock_data.data_provider.persistence import board as board_mod
+    sig = inspect.signature(board_mod.get_board_stocks)
+    assert "source" not in sig.parameters, (
+        f"get_board_stocks still has 'source' param: {list(sig.parameters)}"
+    )

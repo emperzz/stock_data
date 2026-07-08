@@ -806,72 +806,57 @@ def fetch_board_stocks_with_zzshare_fallback(
 
 def get_board_stocks(
     board_code: str,
-    source: str,
     refresh: bool = False,
     include_quote: bool = False,
     manager=None,
 ) -> tuple[list, str]:
-    """
-    Get stocks belonging to a board with automatic refresh.
+    """Get stocks belonging to a board with automatic refresh.
+
+    Cache is keyed on source='ths' (post-unification). Cache hits return
+    origin="persistence". Cache misses call
+    fetch_board_stocks_with_zzshare_fallback (THS + ZZSHARE orchestration)
+    and write back to source='ths'.
 
     Args:
-        board_code: Board code (e.g., "BK1048")
-        source: Data source (e.g., "eastmoney")
-        refresh: If True, force refresh from upstream
-        include_quote: If True, always fetch fresh realtime data from upstream
-        manager: DataFetcherManager instance. Required for fetching from upstream.
+        board_code: THS platecode (885xxx concept / 881xxx industry).
+        refresh: If True, force refresh from upstream.
+        include_quote: If True, always fetch fresh realtime data from upstream.
+        manager: DataFetcherManager instance. Required when fetching from upstream.
 
     Returns:
         Tuple of (stocks, origin) where origin is:
-          - the fetcher name (e.g. "akshare") when the data was freshly fetched
-          - "persistence" when the data was read from the SQLite cache
-        List of stock dicts: [{"stock_code": "600519", "stock_name": "贵州茅台"}, ...]
-            May include quote fields when include_quote=True.
+          - "persistence" when data was read from the SQLite cache
+          - "ths" when ThsFetcher served the response
+          - "zzshare" when ZzshareFetcher served the response (fallback)
+          - "" when both paths returned empty
+        List of stock dicts: [{"stock_code", "stock_name", ...quote}, ...]
     """
     init_schema()
 
-    # include_quote=True means always fetch fresh data, skip cache
     needs_refresh = (
-        include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:{source}")
+        include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:ths")
     )
 
     if not needs_refresh:
-        cached = _read_board_stocks_from_db(board_code, source)
+        cached = _read_board_stocks_from_db(board_code, "ths")
         if cached:
             return cached, "persistence"
 
-    # Need refresh: fetch from upstream and update cache
     if manager is None:
         raise ValueError("manager is required when refresh=True or cache miss")
 
-    # Single unified entry point — the fetcher's get_board_stocks handles
-    # concept/industry disambiguation internally (EastMoney tries concept
-    # then falls back to industry; Zhitu is type-agnostic). We still consult
-    # the SQLite board_type cache above (in the cache-hit fast path) so a
-    # known concept/industry board avoids the fetcher's fallback cost.
-    #
-    # Phase 4 (2026-07-02): capture the cached board_type and pass it
-    # through. Previously we warmed the cache but discarded the result,
-    # letting EastMoneyFetcher.get_board_stocks silently fall back to
-    # the OPPOSITE board kind when concept returned [] from a transient
-    # upstream failure (bug). Now: known board_type → direct dispatch,
-    # no fallback.
-    _board_type_entry = resolve_board_types([board_code], source).get(board_code)
-    board_type = _board_type_entry["type"] if _board_type_entry else None
-    stocks, fetcher_source = manager.get_board_stocks(
-        board_code,
-        source=source,
-        include_quote=include_quote,
-        board_type=board_type,
+    stocks, origin = fetch_board_stocks_with_zzshare_fallback(
+        board_code=board_code, include_quote=include_quote, manager=manager,
     )
 
     if stocks:
-        # Cold-fill: persists stocks to stock_board_membership via the
-        # single-write update_cached_board_stocks helper.
-        update_cached_board_stocks(board_code, source, stocks)
-        logger.info(f"[BoardCache] Refreshed {len(stocks)} stocks for board {board_code}/{source}")
+        update_cached_board_stocks(board_code, "ths", stocks)
+        logger.info(
+            f"[BoardCache] Refreshed {len(stocks)} stocks for board "
+            f"{board_code}/ths (origin={origin})"
+        )
 
-    return stocks, fetcher_source
+    return stocks, origin
 
 
 def resolve_board_types(
