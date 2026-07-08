@@ -143,3 +143,62 @@ class TestMergeThsZzshareByName:
               "type": "concept", "subtype": "同花顺概念", "source": "ths"}], []
         ) == [{"code": "301558", "name": "x", "platecode": "885642",
                "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+
+
+class TestFetchBoardsWithZzshareBackfill:
+    def test_returns_ths_rows_with_zzshare_backfill(self):
+        """THS primary + ZZSHARE backfill; merged, source='ths' on every row."""
+        from unittest.mock import MagicMock
+        ths_rows = [
+            {"code": "301558", "name": "跨境电商", "platecode": "885642",
+             "type": "concept", "subtype": "同花顺概念", "source": "ths"},
+            {"code": "301999", "name": "无名板块", "platecode": None,  # sidebar-only
+             "type": "concept", "subtype": "同花顺概念", "source": "ths"},
+        ]
+        zz_rows = [
+            {"code": "885642", "name": "跨境电商", "platecode": "885642",
+             "type": "concept", "subtype": "同花顺概念", "source": "zzshare"},
+            {"code": "885777", "name": "无名板块", "platecode": "885777",  # backfill
+             "type": "concept", "subtype": "同花顺概念", "source": "zzshare"},
+            {"code": "885888", "name": "独此一家", "platecode": "885888",  # zzshare-only
+             "type": "concept", "subtype": "同花顺概念", "source": "zzshare"},
+        ]
+        mgr = MagicMock()
+        # Real manager returns tuple[list[dict], str]
+        mgr.get_all_boards.side_effect = [(ths_rows, "ths"), (zz_rows, "zzshare")]
+
+        out = board_mod.fetch_boards_with_zzshare_backfill(
+            board_type="concept", refresh=True, include_quote=False,
+            subtype=None, manager=mgr,
+        )
+
+        # 1. THS called first
+        assert mgr.get_all_boards.call_args_list[0].kwargs["source"] == "ths"
+        # 2. ZZSHARE called second
+        assert mgr.get_all_boards.call_args_list[1].kwargs["source"] == "zzshare"
+        # 3. "无名板块" platecode backfilled from None → "885777"
+        by_code = {r["code"]: r for r in out}
+        assert by_code["301999"]["platecode"] == "885777"
+        # 4. zzshare-only "独此一家" appended
+        assert "885888" in by_code
+        # 5. All rows tagged source='ths'
+        assert all(r["source"] == "ths" for r in out)
+
+    def test_zzshare_failure_does_not_break(self):
+        """ZZSHARE upstream fails → still return THS rows + WARNING log."""
+        from unittest.mock import MagicMock
+        ths_rows = [{"code": "301558", "name": "x", "platecode": "885642",
+                     "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+        mgr = MagicMock()
+        # First call (ths) returns data; second call (zzshare) raises
+        mgr.get_all_boards.side_effect = [
+            (ths_rows, "ths"),
+            Exception("upstream 503"),
+        ]
+
+        out = board_mod.fetch_boards_with_zzshare_backfill(
+            board_type="concept", refresh=True, include_quote=False,
+            subtype=None, manager=mgr,
+        )
+        assert len(out) == 1
+        assert out[0]["code"] == "301558"

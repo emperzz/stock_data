@@ -682,6 +682,84 @@ def _merge_ths_zzshare_by_name(
     return out
 
 
+def fetch_boards_with_zzshare_backfill(
+    board_type: str | None,
+    refresh: bool,
+    include_quote: bool,
+    subtype: str | None,
+    manager,
+) -> list[dict]:
+    """Return unified board list with ths as primary, zzshare as platecode backfill.
+
+    Behavior:
+    - Always writes source='ths' to the cache (single source).
+    - Always calls both ThsFetcher and ZzshareFetcher; merge by name.
+    - When board_type is None, iterates every type VALID_SUBTYPES_BY_SOURCE['ths']
+      supports (currently concept + industry; index/special are NOT exposed by
+      ths — they fall through to persistence for eastmoney/zhitu callers).
+    - When subtype is given, applies after merge (post-filter in memory).
+    - When include_quote=True, the include_quote flag is forwarded to both
+      ThsFetcher and ZzshareFetcher; zzshare's quote fields are sparse
+      (only change_pct/amount/total_mv) so post-merge rows may have None
+      for fields THS doesn't supply either.
+
+    Returns:
+        list of {code, name, type, subtype, source, platecode, ...quote}
+        where source='ths' on every row (zzshare rows are tagged with the
+        same label after merge; the distinction is internal).
+
+    Raises:
+        DataFetchError: ThsFetcher's call failed. ZzshareFetcher failures
+        are logged at WARNING and treated as empty list (best-effort
+        backfill; primary path is THS).
+    """
+    types_to_fetch: list[str]
+    if board_type is None:
+        # Iterate every type ths supports (concept + industry currently).
+        # Falls back to "concept" if the metadata table is somehow empty.
+        ths_table = VALID_SUBTYPES_BY_SOURCE.get("ths", {})
+        types_to_fetch = list(ths_table.keys()) or ["concept", "industry"]
+    elif board_type in ("concept", "industry"):
+        types_to_fetch = [board_type]
+    else:
+        # index / special are not exposed by ths; return empty
+        return []
+
+    out: list[dict] = []
+    for bt in types_to_fetch:
+        ths_rows: list[dict] = []
+        try:
+            ths_rows, _ = manager.get_all_boards(
+                source="ths", board_type=bt, subtype=None, include_quote=include_quote,
+            )
+        except DataFetchError as e:
+            logger.warning(
+                f"[BoardCache] fetch_boards_with_zzshare_backfill: "
+                f"ths({bt}) failed: {e}"
+            )
+            # ThsFetcher failure is fatal for this bt — skip it.
+            continue
+
+        zz_rows: list[dict] = []
+        try:
+            zz_rows, _ = manager.get_all_boards(
+                source="zzshare", board_type=bt, subtype=None, include_quote=include_quote,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[BoardCache] fetch_boards_with_zzshare_backfill: "
+                f"zzshare({bt}) failed (best-effort): {e}"
+            )
+            zz_rows = []
+
+        merged = _merge_ths_zzshare_by_name(ths_rows, zz_rows)
+        # Subtype filter is applied per-type post-merge (in-memory).
+        if subtype is not None:
+            merged = [r for r in merged if r.get("subtype") == subtype]
+        out.extend(merged)
+    return out
+
+
 def get_board_stocks(
     board_code: str,
     source: str,
