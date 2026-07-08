@@ -769,7 +769,7 @@ def fetch_board_stocks_with_zzshare_fallback(
         except Exception as e:
             logger.warning(
                 f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"ths failed (will fallback to zzshare): {e}"
+                f"ths(board_code={board_code}) failed (will fallback to zzshare): {e}"
             )
         try:
             rows = _try_zzshare()
@@ -778,7 +778,7 @@ def fetch_board_stocks_with_zzshare_fallback(
         except Exception as e:
             logger.warning(
                 f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"zzshare failed: {e}"
+                f"zzshare(board_code={board_code}) failed: {e}"
             )
         return [], ""
     else:
@@ -790,7 +790,7 @@ def fetch_board_stocks_with_zzshare_fallback(
         except Exception as e:
             logger.warning(
                 f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"zzshare failed (will fallback to ths): {e}"
+                f"zzshare(board_code={board_code}) failed (will fallback to ths): {e}"
             )
         try:
             rows = _try_ths()
@@ -799,7 +799,7 @@ def fetch_board_stocks_with_zzshare_fallback(
         except Exception as e:
             logger.warning(
                 f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"ths failed: {e}"
+                f"ths(board_code={board_code}) failed: {e}"
             )
         return [], ""
 
