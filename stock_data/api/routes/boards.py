@@ -311,8 +311,8 @@ def list_boards(
             "(concept / industry / index / special) for the given source."
         ),
     ),
-    source: Literal["eastmoney", "zhitu", "zzshare", "ths"] = Query(
-        ..., description="Data source (REQUIRED). All four sources are independent."
+    source: Literal["ths", "eastmoney", "zhitu"] = Query(
+        ..., description="Data source (REQUIRED). 'zzshare' was unified under 'ths' on 2026-07-08."
     ),
     subtype: str | None = Query(
         None,
@@ -382,7 +382,6 @@ def list_boards(
     try:
         boards, origin = stock_board_cache.get_board_list(
             board_type=type,
-            source=source,
             refresh=refresh,
             include_quote=include_quote,
             subtype=subtype,
