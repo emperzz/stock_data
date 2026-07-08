@@ -581,6 +581,38 @@ def _get_all_board_types(
     return combined, summary
 
 
+def _resolve_ths_cid_from_platecode(platecode: str) -> str | None:
+    """Resolve THS code (cid) for a platecode via the stock_board cache.
+
+    Single SELECT against stock_board. The same query handles both
+    concept boards (cid ≠ platecode: 300xxx vs 885xxx) and industry
+    boards (cid == platecode: 881xxx) — for industry the row's
+    ``code`` column stores 881xxx, so the lookup returns the same
+    value back. No special-casing by length or prefix; the data
+    layer is the single source of truth.
+
+    Args:
+        platecode: THS platecode (e.g. '885642' for concept,
+            '881270' for industry).
+
+    Returns:
+        The THS code (cid for concept, == platecode for industry),
+        or None if no row matches. Callers treat None as
+        "no cid available — skip ThsFetcher path, rely on zzshare".
+    """
+    init_schema()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT code FROM stock_board "
+        "WHERE platecode = ? AND source = 'ths' LIMIT 1",
+        (platecode,),
+    )
+    row = cursor.fetchone()
+    return row["code"] if row else None
+
+
+
 def get_board_stocks(
     board_code: str,
     source: str,
