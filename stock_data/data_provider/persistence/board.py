@@ -702,6 +702,9 @@ def fetch_boards_with_zzshare_backfill(
       ThsFetcher and ZzshareFetcher; zzshare's quote fields are sparse
       (only change_pct/amount/total_mv) so post-merge rows may have None
       for fields THS doesn't supply either.
+    - ``refresh`` is accepted for call-site symmetry with the surrounding
+      ``get_board_list`` wrapper (which decides cache vs. fresh fetch);
+      this helper always fetches fresh data and ignores the value.
 
     Returns:
         list of {code, name, type, subtype, source, platecode, ...quote}
