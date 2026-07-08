@@ -264,7 +264,7 @@ def _parse_stock_boards_source_csv(raw: str | None) -> list[str]:
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块清单（支持实时报价、排序、截断）",
+    summary="板块清单 (ths; 内部合并 zzshare 补 platecode) — ?source=zzshare 已下线",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
 )
@@ -408,7 +408,8 @@ def list_boards(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块成分股 (ths/eastmoney/zhitu/zzshare — no alias)",
+    summary="板块成分股 (ths/eastmoney/zhitu; ?source=zzshare 已下线; "
+            "include_quote=false 走 zzshare 优先, 失败 fallback 到 ths)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_stocks",
