@@ -1042,6 +1042,26 @@ class ThsFetcher(BaseFetcher):
     _THS_INDUSTRY_INDEX_URL = "https://q.10jqka.com.cn/thshy/"
     _THS_BOARD_LIST_TIMEOUT = 15
 
+    # Realtime fields the /boards response shape promises for every row.
+    # The list is intentionally verbose so the backfill loop in
+    # ``get_all_boards`` can guarantee uniform shape across concept +
+    # industry + sidebar-only + gnSection-only rows. Sidebar-only
+    # concept rows and (default) industry rows get None for each
+    # entry. ``include_quote=True`` on industry populates the bulk
+    # of these from the rank table.
+    _REALTIME_BOARD_FIELDS: tuple[str, ...] = (
+        "change_pct",
+        "volume",
+        "amount",
+        "net_inflow",
+        "up_count",
+        "down_count",
+        "avg_price",
+        "leading_stock",
+        "leading_stock_price",
+        "leading_stock_pct",
+    )
+
     def get_all_boards(
         self,
         board_type: str | None = None,
@@ -1077,15 +1097,20 @@ class ThsFetcher(BaseFetcher):
                 ``None`` fans out to both and concatenates the results.
             subtype: optional ``THS_CONCEPT_SUBTYPE`` / ``THS_INDUSTRY_SUBTYPE``
                 filter. ``None`` returns every subtype the type exposes.
-            include_quote: accepted for interface parity. Currently
-                ignored — change_pct and net_inflow are always carried
-                on concept rows (from gnSection) when present; industry
-                rows have no real-time fields from the sidebar source.
+            include_quote: when True, industry boards are enriched with
+                change_pct + net_inflow from the rank table at
+                ``/thshy/index/field/199112/.../ajax/1/`` (2 pages).
+                Concept boards always carry these fields when gnSection
+                has them (the rank table is not used for concept — it
+                only lists industries). For rows that lack a real-time
+                value the field is set to ``None`` rather than omitted,
+                so the response shape is uniform across all rows.
 
         Returns:
-            ``list[dict]`` — see shape above. Empty list on upstream
-            failure (no board list available); the persistence layer
-            treats empty + non-"persistence" origin as a partial
+            ``list[dict]`` — every row carries ``change_pct`` and
+            ``net_inflow`` keys (None when unavailable). Empty list on
+            upstream failure (no board list available); the persistence
+            layer treats empty + non-"persistence" origin as a partial
             failure and logs a WARNING.
 
         Raises:
@@ -1107,18 +1132,28 @@ class ThsFetcher(BaseFetcher):
 
         out: list[dict] = []
         for bt in types_to_fetch:
-            rows = (
-                self._fetch_ths_concept_boards()
-                if bt == "concept"
-                else self._fetch_ths_industry_boards()
-            )
-            # Tag + subtype the per-type rows. We never override the
-            # upstream-supplied fields (platecode, change_pct, net_inflow).
+            if bt == "concept":
+                rows = self._fetch_ths_concept_boards()
+            else:
+                rows = self._fetch_ths_industry_boards(include_quote=include_quote)
+            # Tag + subtype the per-type rows. The per-row enrichment
+            # helpers above already set realtime fields where the
+            # upstream supplied them; here we tag the row and backfill
+            # missing keys with None so every row has a uniform shape
+            # (no "key present or absent" branching for the caller).
             for r in rows:
                 r["type"] = bt
                 r["subtype"] = (
                     THS_CONCEPT_SUBTYPE if bt == "concept" else THS_INDUSTRY_SUBTYPE
                 )
+                # Uniform shape: every row carries the full set of
+                # realtime fields. Concept rows from gnSection get
+                # change_pct + net_inflow; sidebar-only concept rows
+                # and (by default) industry rows get None for
+                # everything. The downstream consumer can rely on key
+                # presence — no ``if "change_pct" in r`` branching.
+                for k in ThsFetcher._REALTIME_BOARD_FIELDS:
+                    r.setdefault(k, None)
             if subtype is not None:
                 rows = [r for r in rows if r.get("subtype") == subtype]
             out.extend(rows)
@@ -1291,16 +1326,25 @@ class ThsFetcher(BaseFetcher):
 
     # -- industry: /thshy/ ---------------------------------------------
 
-    def _fetch_ths_industry_boards(self) -> list[dict]:
-        """Single GET /thshy/ → sidebar (881xxx platecodes).
+    def _fetch_ths_industry_boards(self, *, include_quote: bool = False) -> list[dict]:
+        """Single GET /thshy/ → sidebar (881xxx platecodes), optionally enriched.
 
         Industries don't have a hidden-input data blob like /gn/ does.
         The sidebar ``.cate_items a[href*="/thshy/detail/code/"]`` is
-        the only HTML source; the page's data-table renders via JS
-        (no SSR data) so we don't get change_pct / net_inflow from
-        the index page. Clients wanting quote data for an industry
-        should use ``/boards/{code}/stocks`` + ``get_board_history``
-        on a per-industry basis.
+        the primary source.
+
+        Real-time fields are absent from the sidebar — those live in
+        the rank table on ``/thshy/index/field/199112/.../ajax/1/``.
+        When ``include_quote=True`` we also fetch that paginated rank
+        table (2 pages, 90 industries total — the rank table is a
+        complete list as of 2026-07-08) and merge by name.
+
+        The merge is a NAME lookup because the rank table only
+        carries board names (no platecode column). Names in both
+        sources are upstream-curated so collisions are rare; the
+        merge still tolerates them by last-write-wins. Every
+        realtime field is overridden in-place — there is no field
+        we keep from the sidebar row, since the sidebar has none.
 
         For industry, ``code`` IS the platecode (881xxx). We still
         emit ``platecode`` redundantly in the response so the
@@ -1310,6 +1354,15 @@ class ThsFetcher(BaseFetcher):
         rows = self._parse_ths_thshy_sidebar(html)
         for r in rows:
             r["platecode"] = r["code"]  # industry code == platecode
+        if include_quote:
+            quotes_by_name = self._fetch_ths_industry_summary()
+            for r in rows:
+                q = quotes_by_name.get(r["name"]) or {}
+                # Apply every realtime field the rank table carries
+                # (None when upstream didn't supply). Non-quote fields
+                # (code / name / source) are preserved from the sidebar.
+                for k, v in q.items():
+                    r[k] = v
         return rows
 
     @staticmethod
@@ -1322,10 +1375,7 @@ class ThsFetcher(BaseFetcher):
         industry boards.
 
         No gnSection-style hidden input exists on /thshy/, so this
-        single source is the full list. (akshare's industry version
-        falls back to a paginated ajax endpoint to fill in quote
-        fields; we don't because the board-list cache stores
-        metadata only — see CLAUDE.md persistence rules.)
+        single source is the full list.
         """
         from bs4 import BeautifulSoup
 
@@ -1342,6 +1392,116 @@ class ThsFetcher(BaseFetcher):
                 if not slug or not name:
                     continue
                 out.append({"code": slug, "name": name, "source": "ths"})
+        return out
+
+    # Industry rank/summary endpoint — paginated, carries change_pct and
+    # net_inflow. 2 pages, 50 + 40 = 90 industries (verified 2026-07-08:
+    # the rank table is the COMPLETE industry set, not a top-N subset).
+    _THS_INDUSTRY_SUMMARY_URL = (
+        "http://q.10jqka.com.cn/thshy/index/field/199112/order/desc/page/{page}/ajax/1/"
+    )
+    _THS_INDUSTRY_SUMMARY_MAX_PAGES = 5  # safety cap; observed: 2
+
+    def _fetch_ths_industry_summary(self) -> dict[str, dict]:
+        """Fetch the industry rank table; return ``{name: <all realtime fields>}``.
+
+        The value dict mirrors the per-row shape produced by
+        :meth:`_parse_ths_industry_summary_page` (every realtime
+        column the rank table carries — change_pct / volume / amount /
+        net_inflow / up_count / down_count / avg_price / leading_stock
+        / leading_stock_price / leading_stock_pct). Callers merge by
+        name into the sidebar rows.
+
+        Returns an empty dict on hard failure (network / parse); callers
+        then leave every realtime field as None rather than failing
+        the whole board-list request. The rank table is a "today's
+        performance leaderboard" ordered by 涨跌幅; an empty page is
+        the end-of-pagination signal.
+        """
+        from bs4 import BeautifulSoup
+
+        out: dict[str, dict] = {}
+        for page in range(1, self._THS_INDUSTRY_SUMMARY_MAX_PAGES + 1):
+            url = self._THS_INDUSTRY_SUMMARY_URL.format(page=page)
+            headers = {
+                "User-Agent": THS_UA,
+                "Referer": self._THS_INDUSTRY_INDEX_URL,
+                "X-Requested-With": "XMLHttpRequest",
+                "Cookie": f"v={self._v_token()}",
+            }
+            try:
+                r = self._http_get(url, headers=headers, timeout=self._THS_BOARD_LIST_TIMEOUT)
+                if not (200 <= r.status_code < 300):
+                    logger.warning(
+                        f"[ThsFetcher] industry summary page={page} "
+                        f"HTTP {r.status_code}"
+                    )
+                    break
+                # Industry rank table is GBK-encoded (verified 2026-07-08);
+                # requests will auto-pick GBK from Content-Type but we set
+                # it explicitly to defend against a charset-less response.
+                r.encoding = "gbk"
+                rows = self._parse_ths_industry_summary_page(r.text or "")
+            except Exception as e:
+                logger.warning(f"[ThsFetcher] industry summary page={page} failed: {e}")
+                break
+            if not rows:
+                break
+            for row in rows:
+                name = row.pop("name")
+                out[name] = row
+        return out
+
+    @staticmethod
+    def _parse_ths_industry_summary_page(html: str) -> list[dict]:
+        """Parse one industry rank table page → list of {name, ...realtime fields}.
+
+        Table columns (verified 2026-07-08):
+            0:  序号                 (ignored)
+            1:  板块                 (name)
+            2:  涨跌幅(%)            (change_pct, %)
+            3:  总成交量(万手)        (volume, 万手)
+            4:  总成交额(亿元)        (amount, 亿元)
+            5:  净流入(亿元)          (net_inflow, 亿元)
+            6:  上涨家数              (up_count)
+            7:  下跌家数              (down_count)
+            8:  均价                 (avg_price, 元/股)
+            9:  领涨股                (leading_stock)
+            10: 领涨股-最新价         (leading_stock_price, 元)
+            11: 领涨股-涨跌幅(%)     (leading_stock_pct, %)
+
+        We extract every realtime column so the response shape is
+        uniform across rows (None when the source has no value).
+        Returns ``[]`` for empty / non-table pages so the caller's
+        page-loop terminates on the first empty page.
+        """
+        from bs4 import BeautifulSoup
+        from ..core.types import safe_float, safe_int
+
+        soup = BeautifulSoup(html or "", features="lxml")
+        out: list[dict] = []
+        for tr in soup.select("tbody tr"):
+            tds = tr.find_all("td")
+            if len(tds) < 6:
+                continue
+            name = tds[1].get_text(strip=True)
+            if not name:
+                continue
+            out.append(
+                {
+                    "name": name,
+                    "change_pct": safe_float(tds[2].get_text(strip=True)) if len(tds) > 2 else None,
+                    "volume": safe_int(tds[3].get_text(strip=True)) if len(tds) > 3 else None,
+                    "amount": safe_float(tds[4].get_text(strip=True)) if len(tds) > 4 else None,
+                    "net_inflow": safe_float(tds[5].get_text(strip=True)) if len(tds) > 5 else None,
+                    "up_count": safe_int(tds[6].get_text(strip=True)) if len(tds) > 6 else None,
+                    "down_count": safe_int(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
+                    "avg_price": safe_float(tds[8].get_text(strip=True)) if len(tds) > 8 else None,
+                    "leading_stock": tds[9].get_text(strip=True) if len(tds) > 9 else None,
+                    "leading_stock_price": safe_float(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
+                    "leading_stock_pct": safe_float(tds[11].get_text(strip=True)) if len(tds) > 11 else None,
+                }
+            )
         return out
 
     # -- shared HTTP ----------------------------------------------------

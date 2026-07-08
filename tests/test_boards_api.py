@@ -47,6 +47,61 @@ def test_list_boards_invalid_source_returns_400(client):
     assert r.status_code in (400, 422)
 
 
+def test_list_boards_source_ths_passes_ths_to_persistence(client):
+    """?source=ths on /boards routes to ThsFetcher (no alias as of 2026-07-08).
+
+    Previously the board-list endpoint aliased 'ths' → 'zzshare' (mirroring
+    the old stock-boards reverse-lookup direction). After ThsFetcher gained
+    get_all_boards, the alias was removed: each source label is a
+    first-class citizen on /boards and is served by its own fetcher.
+    """
+    fake_concept = [
+        {
+            "code": "300188",
+            "name": "移动支付",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "source": "ths",
+            "platecode": "885333",
+            "change_pct": 1.39,
+            "net_inflow": 8.91,
+        }
+    ]
+    with patch(
+        "stock_data.data_provider.persistence.board.get_board_list",
+        return_value=(fake_concept, "ThsFetcher"),
+    ) as mock_get:
+        r = client.get("/api/v1/boards?type=concept&source=ths")
+    assert r.status_code == 200
+    # Persistence was called with source='ths' (NOT aliased to zzshare).
+    _, kwargs = mock_get.call_args
+    assert kwargs.get("source") == "ths"
+    assert r.json()["source"] == "ThsFetcher"
+
+
+def test_list_boards_source_zzshare_still_works(client):
+    """?source=zzshare remains a valid label on /boards after the ths→zzshare
+    alias removal — both labels are first-class and routed independently."""
+    fake_zz = [
+        {
+            "code": "BK1048",
+            "name": "互联网服务",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "source": "zzshare",
+        }
+    ]
+    with patch(
+        "stock_data.data_provider.persistence.board.get_board_list",
+        return_value=(fake_zz, "ZzshareFetcher"),
+    ) as mock_get:
+        r = client.get("/api/v1/boards?type=concept&source=zzshare")
+    assert r.status_code == 200
+    _, kwargs = mock_get.call_args
+    assert kwargs.get("source") == "zzshare"  # NOT aliased
+    assert r.json()["source"] == "ZzshareFetcher"
+
+
 def test_list_boards_zhitu_returns_zhitu_boards(client):
     """GET /boards?source=zhitu&type=concept returns Zhitu boards."""
     fake_boards = [

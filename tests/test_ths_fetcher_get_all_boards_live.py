@@ -53,6 +53,25 @@ _THSHY_FIXTURE = """
 </body></html>
 """
 
+# A minimal /thshy/index/field/199112/.../ajax/1/ page fixture: 2 rows
+# with the full realtime column set (12 columns).
+_INDUSTRY_SUMMARY_FIXTURE = """
+<html><body>
+<table>
+  <thead>
+    <tr><th>序号</th><th>板块</th><th>涨跌幅(%)</th><th>总成交量(万手)</th>
+        <th>总成交额(亿元)</th><th>净流入(亿元)</th><th>上涨家数</th>
+        <th>下跌家数</th><th>均价</th><th>领涨股</th><th>最新价</th>
+        <th>涨跌幅(%)</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>半导体</td><td>1.24</td><td>4214</td><td>3897</td><td>111.17</td><td>102</td><td>77</td><td>92.49</td><td>灿芯股份</td><td>118.04</td><td>20.00</td></tr>
+    <tr><td>2</td><td>白酒</td><td>-0.40</td><td>95</td><td>52</td><td>-0.46</td><td>6</td><td>13</td><td>54.81</td><td>洋河股份</td><td>38.28</td><td>0.92</td></tr>
+  </tbody>
+</table>
+</body></html>
+"""
+
 
 class TestParseGnSectionFixture:
     """Lock the gnSection JSON parser behavior against a minimal fixture."""
@@ -168,6 +187,101 @@ class TestMergeConceptSources:
         assert merged[0]["name"] == "移动支付"
 
 
+class TestParseIndustrySummary:
+    """Lock the /thshy/index/.../ajax/1/ rank-table parser behavior."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_parses_all_realtime_columns(self):
+        """Every column the rank table carries is extracted — the response
+        shape contract requires all 10 realtime fields on every row.
+        """
+        rows = self.fetcher._parse_ths_industry_summary_page(_INDUSTRY_SUMMARY_FIXTURE)
+        assert len(rows) == 2
+        semi = next(r for r in rows if r["name"] == "半导体")
+        # 12 columns → 11 realtime fields (name is the key, not in the dict)
+        assert semi["change_pct"] == 1.24
+        assert semi["volume"] == 4214  # 万手
+        assert semi["amount"] == 3897.0  # 亿元
+        assert semi["net_inflow"] == 111.17
+        assert semi["up_count"] == 102
+        assert semi["down_count"] == 77
+        assert semi["avg_price"] == 92.49
+        assert semi["leading_stock"] == "灿芯股份"
+        assert semi["leading_stock_price"] == 118.04
+        assert semi["leading_stock_pct"] == 20.00
+
+    def test_parses_negative_change_pct(self):
+        rows = self.fetcher._parse_ths_industry_summary_page(_INDUSTRY_SUMMARY_FIXTURE)
+        bj = next(r for r in rows if r["name"] == "白酒")
+        assert bj["change_pct"] == -0.40
+        assert bj["net_inflow"] == -0.46
+        assert bj["leading_stock"] == "洋河股份"
+
+    def test_returns_empty_on_blank_html(self):
+        assert self.fetcher._parse_ths_industry_summary_page("") == []
+        assert self.fetcher._parse_ths_industry_summary_page(
+            "<html><body><table></table></body></html>"
+        ) == []
+
+    def test_skips_short_rows(self):
+        # Row with <6 cells (missing net_inflow) is dropped
+        bad = """<html><body><table><tbody>
+            <tr><td>1</td><td>X</td><td>1.0</td></tr>
+        </tbody></table></body></html>"""
+        assert self.fetcher._parse_ths_industry_summary_page(bad) == []
+
+
+class TestUniformResponseShape:
+    """Lock the contract: every row has change_pct + net_inflow keys (None if missing)."""
+
+    def setup_method(self):
+        self.fetcher = ThsFetcher()
+
+    def test_concept_sidebar_only_row_has_null_quote_fields(self):
+        """Sidebar-only concept rows (no platecode) carry None for every
+        realtime field, not omitted keys."""
+        gn_section: list[dict] = []  # no gnSection data
+        sidebar = [
+            {"code": "301558", "name": "阿里巴巴概念", "source": "ths"},
+        ]
+        merged = self.fetcher._merge_concept_sources(gn_section, sidebar)
+        row = merged[0]
+        # The merge helper doesn't add the realtime keys; get_all_boards
+        # backfills via setdefault over _REALTIME_BOARD_FIELDS. Mimic
+        # that here so the test exercises the same contract.
+        for k in ThsFetcher._REALTIME_BOARD_FIELDS:
+            row.setdefault(k, None)
+        for k in ThsFetcher._REALTIME_BOARD_FIELDS:
+            assert k in row, f"sidebar-only row missing realtime key: {k}"
+            assert row[k] is None, f"sidebar-only row.{k} should be None"
+
+    def test_concept_gnsection_row_has_quote_fields_populated(self):
+        """gnSection rows carry change_pct + net_inflow (already verified
+        in TestParseGnSectionFixture; here we lock the post-merge
+        expectation that get_all_boards does NOT clobber them)."""
+        gn_section = [
+            {
+                "code": "300188",
+                "name": "移动支付",
+                "platecode": "885333",
+                "source": "ths",
+                "change_pct": 1.39,
+                "net_inflow": 8.91,
+            }
+        ]
+        sidebar: list[dict] = []
+        merged = self.fetcher._merge_concept_sources(gn_section, sidebar)
+        row = merged[0]
+        # Simulate the get_all_boards backfill (should be a no-op for
+        # already-populated fields; others get None).
+        for k in ThsFetcher._REALTIME_BOARD_FIELDS:
+            row.setdefault(k, None)
+        assert row["change_pct"] == 1.39
+        assert row["net_inflow"] == 8.91
+
+
 # ── Live-network smoke tests ─────────────────────────────────────────
 
 @pytest.fixture(scope="module")
@@ -267,3 +381,59 @@ def test_ths_get_all_boards_rejects_invalid_board_type(ths):
     """board_type=index is not supported by ThsFetcher."""
     with pytest.raises(DataFetchError, match="board_type"):
         ths.get_all_boards(board_type="index")
+
+
+@pytest.mark.live_network
+def test_ths_get_all_boards_industry_with_quote_enrichment(ths):
+    """include_quote=True on industry fetches the rank table and populates
+    every realtime field on every row (when the name matches)."""
+    rows = ths.get_all_boards(board_type="industry", include_quote=True)
+    assert isinstance(rows, list)
+    assert len(rows) > 60, f"expected >60 industry boards, got {len(rows)}"
+
+    # Every row must have the full realtime field set (None when no upstream match)
+    for r in rows:
+        for k in ThsFetcher._REALTIME_BOARD_FIELDS:
+            assert k in r, f"industry row missing realtime key: {k}"
+        assert r["type"] == "industry"
+
+    # Verify a known board is enriched with the FULL field set
+    semi = next((r for r in rows if r["name"] == "半导体"), None)
+    assert semi is not None, "半导体 should be in the industry board list"
+    # Every realtime field should be populated for 半导体 (rank-table
+    # always has top-50-by-cap entries).
+    for k in ("change_pct", "net_inflow", "volume", "amount", "up_count",
+              "down_count", "avg_price", "leading_stock",
+              "leading_stock_price", "leading_stock_pct"):
+        assert semi[k] is not None, f"半导体.{k} should be populated, got None"
+
+
+@pytest.mark.live_network
+def test_ths_get_all_boards_industry_without_quote_enrichment(ths):
+    """include_quote=False (default) leaves every realtime field as None."""
+    rows = ths.get_all_boards(board_type="industry", include_quote=False)
+    for r in rows:
+        for k in ThsFetcher._REALTIME_BOARD_FIELDS:
+            assert r[k] is None, f"industry row.{k} should be None when include_quote=False"
+
+
+@pytest.mark.live_network
+def test_ths_get_all_boards_uniform_shape(ths):
+    """Both concept and industry must emit every realtime field key
+    (None when not populated) so consumers don't have to branch on
+    key presence."""
+    concept_rows = ths.get_all_boards(board_type="concept", include_quote=True)
+    industry_rows = ths.get_all_boards(board_type="industry", include_quote=True)
+
+    required_keys = {
+        "code", "name", "type", "subtype", "source", "platecode",
+        *ThsFetcher._REALTIME_BOARD_FIELDS,
+    }
+    for r in concept_rows:
+        assert required_keys.issubset(r.keys()), (
+            f"concept row missing keys: {required_keys - set(r.keys())}"
+        )
+    for r in industry_rows:
+        assert required_keys.issubset(r.keys()), (
+            f"industry row missing keys: {required_keys - set(r.keys())}"
+        )

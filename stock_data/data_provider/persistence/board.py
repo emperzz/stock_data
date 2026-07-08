@@ -75,8 +75,9 @@ VALID_SOURCES: tuple[str, ...] = ("eastmoney", "zhitu", "zzshare", "ths")
 
 
 # Stock-boards 专用 source 集合 + alias (仿照 _BOARD_HISTORY_VALID_SOURCES 模式).
-# board-list 端点继续用 ths→zzshare alias (zzshare 的 plates_list 上游 = THS);
-# stock-boards 端点反转为 zzshare→ths alias (THS basic API 是真正的 stock→boards 上游).
+# stock-boards 端点 alias zzshare→ths: THS basic API 是真正的 stock→boards 上游;
+# zzshare SDK 没有这个端点. (board-list 端点不 alias 任何方向 — 'ths' 与
+# 'zzshare' 各自独立,因为 ThsFetcher 已实现 get_all_boards — 2026-07-08.)
 # 注意: 'ths' 在 VALID_SUBTYPES_BY_SOURCE 里有 concept subtype (用于 stock-boards
 # 端点的 subtype 验证), 但不在 VALID_SOURCES 里 (因为它没有 get_all_boards).
 _STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
@@ -128,8 +129,10 @@ def normalize_stock_board_source(source: str) -> str:
     """Alias + validate a source name for the stock-boards endpoint.
 
     Applies the stock-boards alias map (zzshare → ths) and validates
-    against _STOCK_BOARDS_VALID_SOURCES. The board-list endpoint uses
-    the opposite alias direction (ths → zzshare); see boards.py:_resolve_source.
+    against _STOCK_BOARDS_VALID_SOURCES. The board-list endpoint
+    has no aliasing in either direction (both ``ths`` and ``zzshare``
+    are first-class labels as of 2026-07-08); see
+    ``boards.py:_parse_source_csv``.
 
     Args:
         source: User-supplied source name (e.g. ``"ths"``, ``"zzshare"``).

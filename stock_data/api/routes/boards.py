@@ -53,15 +53,15 @@ _TYPES = stock_board_cache.VALID_BOARD_TYPES
 
 
 def _resolve_source(source: str) -> str:
-    """Normalize alias + validate; raise HTTPException(400) on invalid.
+    """Validate the source name; raise HTTPException(400) on invalid.
 
-    Aliases are remapped to their canonical source name BEFORE the
-    canonical-source validation, so the canonical `VALID_SOURCES` set
-    stays free of alias names (e.g., `ths` never reaches the DB).
+    No aliasing: ``source=ths`` is now served directly by ThsFetcher
+    (added 2026-07-08). The historical ``ths → zzshare`` alias that
+    existed when ThsFetcher had no forward board listing has been
+    removed; each source label is now a first-class citizen on this
+    endpoint. zzshare remains a valid label too (ZzshareFetcher still
+    owns its own upstream path).
     """
-    # ths alias: zzshare's plates_list 上游就是同花顺数据,客户端用 ths/zzshare 等价。
-    if source == "ths":
-        source = "zzshare"
     if source not in _SOURCES:
         raise HTTPException(
             status_code=400,
@@ -75,15 +75,17 @@ def _resolve_source(source: str) -> str:
 
 # ──────────────────────────────────────────────────────────────────────────
 # board-history source routing — aliases ``zzshare`` → ``ths``.
-# Different from `_resolve_source` (used by board-list endpoints): THS as a
-# board K-line source routes to ThsFetcher (different code system, different
-# upstream from zzshare's plates_list). The persistence layer's
-# `ths→zzshare` alias still applies to board listings / stocks — only this
-# route uses the reversed alias (`zzshare→ths`), because zzshare's
-# `plate_kline` upstream only supports 883957 同花顺全A and therefore
-# ZzshareFetcher has no K-line implementation. Both `source=zzshare` and
-# `source=ths` are now served by ThsFetcher, preserving backward compat for
-# existing callers.
+# Different from `_resolve_source` (board-list endpoints): THS as a
+# board K-line source routes to ThsFetcher (different code system,
+# different upstream from zzshare's plates_list). The board-list
+# endpoint also accepts `source=ths` directly (no alias) as of
+# 2026-07-08, since ThsFetcher now has a forward board listing.
+# Only the board-history route still aliases `zzshare → ths`,
+# because zzshare's `plate_kline` upstream only supports 883957
+# 同花顺全A and therefore ZzshareFetcher has no K-line
+# implementation. Both `source=zzshare` and `source=ths` are served
+# by ThsFetcher here, preserving backward compat for existing
+# callers.
 # ──────────────────────────────────────────────────────────────────────────
 _BOARD_HISTORY_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney")
 
@@ -121,12 +123,12 @@ def _resolve_board_history_source(source: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 # board-stocks source validation — delegate to persistence helper.
 #
-# Differs from `_resolve_source` (used by board-list endpoints): that
-# helper aliases ``ths → zzshare`` because zzshare's ``plates_list``
-# upstream IS 同花顺 and the board-list endpoint has only ever been
-# wired through ZzshareFetcher. The board-stocks endpoint is now
-# served by ThsFetcher when ``source=ths`` is requested (new THS AJAX
-# endpoint). The route layer exposes both labels so existing
+# Differs from `_resolve_source` (used by board-list endpoints): this
+# path aliases ``zzshare → ths`` (THS basic API is the upstream for
+# stock→boards reverse lookup; zzshare SDK has no such endpoint). The
+# board-list endpoint no longer aliases in either direction — both
+# ``ths`` and ``zzshare`` are independent first-class labels there
+# (2026-07-08). The route layer here exposes both labels so existing
 # ``source=zzshare`` callers keep working while new callers can use
 # ``source=ths`` to opt into the THS-specific path.
 #
@@ -203,11 +205,13 @@ def _resolve_type_optional(board_type: str | None) -> str | None:
 
 
 def _parse_source_csv(raw: str | None) -> list[str]:
-    """Parse ?source=ths,zhitu,eastmoney -> ['zzshare', 'zhitu', 'eastmoney'] (normalized).
+    """Parse comma-separated ``?source=`` for the multi-source board-list path.
 
     - None / empty -> all valid sources
     - Splits on comma, strips whitespace
-    - Remaps 'ths' -> 'zzshare' (route-layer alias, matches _resolve_source)
+    - No aliasing: ``ths`` and ``zzshare`` are independent labels
+      (ThsFetcher and ZzshareFetcher both implement get_all_boards as
+      of 2026-07-08).
     - Dedupes (preserves first occurrence order)
     - Raises 400 on unknown source name
     """
@@ -218,8 +222,6 @@ def _parse_source_csv(raw: str | None) -> list[str]:
         s = s.strip()
         if not s:
             continue
-        if s == "ths":
-            s = "zzshare"
         if s not in stock_board_cache.VALID_SOURCES:
             raise HTTPException(
                 status_code=400,
@@ -239,14 +241,15 @@ def _parse_source_csv(raw: str | None) -> list[str]:
 def _parse_stock_boards_source_csv(raw: str | None) -> list[str]:
     """Parse ?source= for /stocks/{code}/boards — alias zzshare → ths.
 
-    与 _parse_source_csv (board-list 用, alias 方向是 ths→zzshare) 相反:
-    THS basic API 是 stock→boards 反查的真正上游; zzshare SDK 没有这个端点
-    (返回 stub None), 所以这里让 zzshare alias 到 ths (数据本来同源)。
+    THS basic API is the stock→boards reverse-lookup upstream; zzshare
+    SDK has no such endpoint (returns stub None), so we alias
+    zzshare → ths here (same source data).
 
-    核心 CSV 解析逻辑 (split/strip/dedup) 与 _parse_source_csv 重复 5 行 —
-    不抽公共 helper, 因为两端点的 alias 方向 / valid set / 默认集合都不同,
-    强行复用 = 配置化函数, 可读性下降。两个端点各自一个聚焦 helper
-    (rule of three 之后再考虑抽公共)。
+    The board-list endpoint's _parse_source_csv does NOT alias in
+    either direction (both ``ths`` and ``zzshare`` are first-class
+    labels as of 2026-07-08). The two helpers' valid_set and
+    default-when-blank differ, so we keep them separate rather than
+    force a config-driven merge (rule-of-three not yet met).
 
     Args:
         raw: User-supplied ?source= value (may be None or comma-separated).
@@ -309,7 +312,7 @@ def list_boards(
         ),
     ),
     source: Literal["eastmoney", "zhitu", "zzshare", "ths"] = Query(
-        ..., description="Data source (REQUIRED). 'ths' is an alias for 'zzshare'."
+        ..., description="Data source (REQUIRED). All four sources are independent."
     ),
     subtype: str | None = Query(
         None,
@@ -417,9 +420,11 @@ def list_boards(
                 amount=b.get("amount"),
                 turnover_rate=b.get("turnover_rate"),
                 total_mv=b.get("total_mv"),
+                net_inflow=b.get("net_inflow"),
                 up_count=b.get("up_count"),
                 down_count=b.get("down_count"),
                 leading_stock=b.get("leading_stock"),
+                leading_stock_price=b.get("leading_stock_price"),
                 leading_stock_pct=b.get("leading_stock_pct"),
             )
             for b in boards

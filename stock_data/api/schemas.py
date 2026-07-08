@@ -307,6 +307,13 @@ class BoardInfo(BaseModel):
     total_mv: float | None = Field(
         default=None, description="Total market value (requires include_quote=True)"
     )
+    net_inflow: float | None = Field(
+        default=None,
+        description=(
+            "Net inflow (资金净流入) in 亿元 (CNY 100M units). "
+            "Industry rank table only; None for sources/types that don't expose it."
+        ),
+    )
     up_count: int | None = Field(
         default=None, description="Number of rising stocks (requires include_quote=True)"
     )
@@ -315,6 +322,13 @@ class BoardInfo(BaseModel):
     )
     leading_stock: str | None = Field(
         default=None, description="Leading stock name (requires include_quote=True)"
+    )
+    leading_stock_price: float | None = Field(
+        default=None,
+        description=(
+            "Leading stock's latest price in CNY. "
+            "Industry rank table only; None when upstream doesn't expose it."
+        ),
     )
     leading_stock_pct: float | None = Field(
         default=None, description="Leading stock change percent (requires include_quote=True)"
