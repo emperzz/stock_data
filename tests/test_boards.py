@@ -220,7 +220,13 @@ class TestBoardAPIRoutes:
             assert "price" in data["stocks"][0]
 
     def test_get_boards_with_refresh(self, client):
-        """Test GET /api/v1/boards?refresh=true forces refresh."""
+        """Test GET /api/v1/boards?refresh=true forces refresh.
+
+        Post-unification (2026-07-08): the route no longer forwards
+        ``source`` to ``stock_board_cache.get_board_list`` — the cache
+        key is now hardcoded to source='ths' inside the persistence
+        layer. We assert ``refresh=True`` is forwarded instead.
+        """
         with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = (
                 [
@@ -236,20 +242,26 @@ class TestBoardAPIRoutes:
             response = client.get("/api/v1/boards?type=concept&source=eastmoney&refresh=true")
             assert response.status_code == 200
             mock_get.assert_called_once()
-            # source= passed as keyword arg
+            # refresh= passed as keyword arg; source is no longer forwarded.
             _, kwargs = mock_get.call_args
-            assert kwargs.get("source") == "eastmoney"
+            assert kwargs.get("refresh") is True
 
     def test_get_boards_with_source(self, client):
-        """Test GET /api/v1/boards?source=eastmoney (zhitu would be 400 from literal)."""
+        """Test GET /api/v1/boards?source=eastmoney still routes through persistence.
+
+        Post-unification: ``source`` is no longer in the persistence call
+        kwargs (the cache key is fixed to 'ths'). The route still validates
+        ``source`` against the Literal and forwards ``board_type``.
+        """
         with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = ([], "EastMoneyFetcher")
             response = client.get("/api/v1/boards?type=concept&source=eastmoney")
             assert response.status_code == 200
             mock_get.assert_called_once()
+            # source is no longer forwarded to persistence; board_type is.
             _, kwargs = mock_get.call_args
-            # source is passed as keyword arg
-            assert kwargs.get("source") == "eastmoney"
+            assert "source" not in kwargs
+            assert kwargs.get("board_type") == "concept"
 
     def test_get_boards_with_include_quote(self, client):
         """Test GET /api/v1/boards?include_quote=true passes include_quote to manager."""

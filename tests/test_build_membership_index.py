@@ -114,12 +114,14 @@ def test_all_sources_single_call(fresh_db, monkeypatch):
 
     `ths` is in VALID_SOURCES but has no `get_all_boards` (cold-fill only),
     so it walks 0 boards — a zero-board report is still expected.
+
+    Post-unification (2026-07-08): VALID_SOURCES = ("ths", "eastmoney", "zhitu");
+    "zzshare" is no longer in the source set.
     """
     mock = _make_manager_mock(
         {
             "eastmoney": ["BK1"],
             "zhitu": ["sw1"],
-            "zzshare": ["th1"],
             # 'ths' is not in the mock: 0 boards → 0 success_count.
         }
     )
@@ -132,15 +134,15 @@ def test_all_sources_single_call(fresh_db, monkeypatch):
         manager=mock,
     )
     assert {r.source for r in reports} == set(cli_mod.VALID_SOURCES)
-    # eastmoney/zhitu/zzshare each have 1 board → 1 success; ths has 0.
-    expected_success = {"eastmoney": 1, "zhitu": 1, "zzshare": 1, "ths": 0}
+    # eastmoney/zhitu each have 1 board → 1 success; ths has 0.
+    expected_success = {"eastmoney": 1, "zhitu": 1, "ths": 0}
     for r in reports:
         assert r.success_count == expected_success[r.source]
-    # 3 sources with 1 board × 3 stocks (ths contributes 0 rows).
+    # 2 sources with 1 board × 3 stocks (ths contributes 0 rows).
     total_rows = []
-    for src in ("eastmoney", "zhitu", "zzshare"):
+    for src in ("eastmoney", "zhitu"):
         total_rows.extend(board_mod.read_membership(source=src, stock_code="S0"))
-    assert len(total_rows) == 3
+    assert len(total_rows) == 2
 
 
 def test_cross_source_parallelism(fresh_db, monkeypatch):
@@ -167,7 +169,7 @@ def test_cross_source_parallelism(fresh_db, monkeypatch):
 
     monkeypatch.setattr(cli_mod, "_build_one_source", spy)
 
-    mock = _make_manager_mock({"eastmoney": ["BK1"], "zhitu": ["sw1"], "zzshare": ["th1"]})
+    mock = _make_manager_mock({"ths": ["BK1"], "eastmoney": ["BK1"], "zhitu": ["sw1"]})
     reports = cli_mod.build_membership_index(source=None, manager=mock)
 
     assert len(reports) == len(cli_mod.VALID_SOURCES)
