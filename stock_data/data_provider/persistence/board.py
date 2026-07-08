@@ -52,24 +52,25 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
         # "special" — zzshare 的"题材"已在 concept 下承载 (plate=17),
         #             不再有独立的 special 类型
     },
-    "ths": {  # NEW — stock-boards 专用 (THS basic API 仅返回 concept)
+    "ths": {  # stock-boards 专用 (THS basic API 仅返回 concept); 行业 / 概念
+              # 前向 board 清单由 ThsFetcher.get_all_boards 提供 (2026-07-08).
         "concept": {THS_CONCEPT_SUBTYPE},
-        # industry / special / index 暂不支持 (THS stock_concept_list 端点特性)
+        "industry": {THS_INDUSTRY_SUBTYPE},
+        # special / index 暂不支持
     },
 }
 
 # Valid board types and sources — forward-board listings (board-list,
 # board-stocks, build_membership_index). NOT derived from
-# VALID_SUBTYPES_BY_SOURCE because 'ths' is in that table for stock-boards
-# reverse lookup (basic.10jqka.com.cn stock_concept_list), but has no
-# forward board listing (no get_all_boards method). Forward-board sources
-# are exactly the set with a get_all_boards implementation.
+# VALID_SUBTYPES_BY_SOURCE because 'ths' now lives in BOTH places:
+# - stock-boards reverse lookup (basic.10jqka.com.cn stock_concept_list)
+# - forward board listing (ThsFetcher.get_all_boards, 2026-07-08)
+# Forward-board sources are exactly the set with a get_all_boards
+# implementation.
 VALID_BOARD_TYPES: tuple[str, ...] = ("concept", "industry", "index", "special")
 # Forward-board sources: each must have BOTH get_all_boards AND
-# get_board_stocks implementations. 'ths' has only get_board_stocks
-# (no board-list endpoint), so a /boards?source=ths call will 503 at
-# the manager layer via _with_source — which is the correct semantic
-# (the source is registered but lacks the requested capability).
+# get_board_stocks implementations. 'ths' satisfies both since
+# ThsFetcher.get_all_boards landed (2026-07-08).
 VALID_SOURCES: tuple[str, ...] = ("eastmoney", "zhitu", "zzshare", "ths")
 
 
@@ -241,7 +242,11 @@ def init_schema() -> None:
     _schema_initialized_paths.add(path)
     conn = get_connection()
     cursor = conn.cursor()
-    # Board list table — metadata only; realtime quotes come from API
+    # Board list table — metadata only; realtime quotes come from API.
+    # `platecode` is the cross-source join key (THS industry `code` is itself
+    # the platecode; THS concept has separate `code` (cid) + `platecode`
+    # (885xxx used by d.10jqka.com.cn/v4/line/bk_{platecode}/). NULL for
+    # sources that don't expose it (eastmoney / zhitu).
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stock_board (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,10 +255,18 @@ def init_schema() -> None:
             board_type TEXT NOT NULL,
             subtype TEXT,
             source TEXT NOT NULL,
+            platecode TEXT,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(code, source)
         )
     """)
+    # Forward-compat ALTER for pre-2026-07-08 databases (added platecode
+    # column to stock_board alongside ThsFetcher.get_all_boards). Idempotent
+    # — when the column already exists, the ALTER errors with
+    # "duplicate column name" which we swallow. Per the user's note this is
+    # a dev project; we don't run a full backfill — rows written before this
+    # change keep platecode=NULL until their next daily refresh.
+    _add_platecode_column_if_missing(cursor)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_stock_board_type ON stock_board(board_type)
     """)
@@ -299,6 +312,28 @@ def init_schema() -> None:
     # because the WHERE clause no longer matches any rows.
     _migrate_zzshare_special_to_concept(cursor)
     conn.commit()
+
+
+def _add_platecode_column_if_missing(cursor) -> None:
+    """Ensure the ``stock_board.platecode`` column exists.
+
+    Added 2026-07-08 alongside ThsFetcher.get_all_boards. New databases get
+    the column via the CREATE TABLE statement in init_schema; pre-existing
+    databases get it via ALTER. Swallows the "duplicate column" error so
+    re-running init_schema on a current schema is a no-op.
+    """
+    cursor.execute("PRAGMA table_info(stock_board)")
+    cols = {row["name"] for row in cursor.fetchall()}
+    if "platecode" in cols:
+        return
+    try:
+        cursor.execute("ALTER TABLE stock_board ADD COLUMN platecode TEXT")
+        logger.info("[BoardCache] added stock_board.platecode column (forward-compat migration)")
+    except sqlite3.OperationalError as e:
+        # "duplicate column name" — already added by a concurrent process.
+        # Safe to ignore.
+        if "duplicate column" not in str(e):
+            raise
 
 
 def _migrate_zzshare_special_to_concept(cursor) -> None:
@@ -1098,13 +1133,13 @@ def _read_boards_from_db(board_type: str, source: str, subtype: str | None = Non
     cursor = conn.cursor()
     if subtype is None:
         cursor.execute(
-            """SELECT code, name, board_type, subtype, source, updated_at
+            """SELECT code, name, board_type, subtype, source, platecode, updated_at
                FROM stock_board WHERE board_type = ? AND source = ? ORDER BY name""",
             (board_type, source),
         )
     else:
         cursor.execute(
-            """SELECT code, name, board_type, subtype, source, updated_at
+            """SELECT code, name, board_type, subtype, source, platecode, updated_at
                FROM stock_board
                WHERE board_type = ? AND source = ? AND subtype = ?
                ORDER BY name""",
@@ -1121,6 +1156,7 @@ def _read_boards_from_db(board_type: str, source: str, subtype: str | None = Non
             "board_type": row["board_type"],
             "subtype": row["subtype"],
             "source": row["source"],
+            "platecode": row["platecode"],
             "updated_at": row["updated_at"],
         }
         for row in rows
@@ -1207,10 +1243,18 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
 
             cursor.executemany(
                 """INSERT OR REPLACE INTO stock_board
-                (code, name, board_type, subtype, source, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)""",
+                (code, name, board_type, subtype, source, platecode, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 [
-                    (b["code"], b["name"], board_type, b.get("subtype") or "", source, now)
+                    (
+                        b["code"],
+                        b["name"],
+                        board_type,
+                        b.get("subtype") or "",
+                        source,
+                        b.get("platecode"),
+                        now,
+                    )
                     for b in boards
                 ],
             )

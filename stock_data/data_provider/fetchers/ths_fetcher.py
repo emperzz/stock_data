@@ -36,7 +36,7 @@ from tenacity import (
 )
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
-from ..persistence.board import THS_CONCEPT_SUBTYPE
+from ..persistence.board import THS_CONCEPT_SUBTYPE, THS_INDUSTRY_SUBTYPE
 from ..utils.http import json_get, json_post
 from ..utils.normalize import normalize_stock_code
 from ..utils.text import strip_em_tags
@@ -1004,6 +1004,373 @@ class ThsFetcher(BaseFetcher):
             for r in rows
             if r.get("quote_code")
         ]
+
+    # ------------------------------------------------------------------
+    # 板块清单 (All Boards) — concept + industry
+    # ------------------------------------------------------------------
+    #
+    # Strategy (designed 2026-07-08, mirrors the upstream-rendered DOM rather
+    # than akshare's paginated ajax/1/ path):
+    #
+    #   - Concept: single GET /gn/  → two data blobs coexist on the page:
+    #       (a) `<input id="gnSection" value="{...}">` hidden input — 295
+    #           boards, carries platecode + cid + platename + change_pct +
+    #           net_inflow. The "今日热门" subset (boards with today's
+    #           trade data), not a full list.
+    #       (b) `.cate_items a[href*="/gn/detail/code/"]` sidebar — 351
+    #           boards (full A–Z + 数字 index), only cid + name, no
+    #           platecode. Covers 88 boards that gnSection misses.
+    #     Merge by cid: gnSection rows are primary (carry platecode +
+    #     real-time fields), sidebar fills missing names. ~383 unique.
+    #
+    #   - Industry: single GET /thshy/ → `.cate_items a[href*="/thshy/detail/code/"]`
+    #     sidebar. No equivalent gnSection on the industry page; code IS
+    #     the platecode (881xxx), no separate cid. ~80–90 industries.
+    #
+    # For industry the upstream returns fewer fields (no change_pct /
+    # net_inflow on the sidebar). If callers need quote data, use
+    # the existing /boards/{code}/stocks + get_board_history path; the
+    # board-list endpoint stays metadata-only (consistent with the
+    # persistence layer's "realtime quotes never go in SQLite" rule —
+    # see stock_data.data_provider.persistence.board CLAUDE.md).
+    #
+    # Network auth: both endpoints sit behind the same `v=` cookie the
+    # board-K-line path uses; reuse `_get_ths_v_token` so the V8 VM
+    # stays warm across the call.
+
+    _THS_CONCEPT_INDEX_URL = "https://q.10jqka.com.cn/gn/"
+    _THS_INDUSTRY_INDEX_URL = "https://q.10jqka.com.cn/thshy/"
+    _THS_BOARD_LIST_TIMEOUT = 15
+
+    def get_all_boards(
+        self,
+        board_type: str | None = None,
+        subtype: str | None = None,
+        include_quote: bool = False,  # accepted for interface parity; ignored
+        source: str = "ths",  # accepted for Manager interface parity
+        **kwargs,
+    ) -> list[dict]:
+        """THS concept + industry board list via q.10jqka.com.cn index pages.
+
+        Returns unified rows shaped like other fetchers' get_all_boards:
+            ``{code, name, type, subtype, source, platecode, change_pct?, net_inflow?}``
+
+        - For **concept**: ``code`` = THS concept id (cid, 300xxx);
+          ``platecode`` = 885xxx used by d.10jqka.com.cn/v4/line/bk_*/
+          (i.e. the same ``<input id="clid">`` value that
+          ``get_board_history`` resolves for concept K-line).
+        - For **industry**: ``code`` = platecode (881xxx) — they are the
+          same thing for industries, since THS doesn't expose a
+          separate cid for industry boards (verified 2026-07-08: the
+          ``/thshy/detail/code/881272/`` detail page's ``<input id=clid>``
+          returns 881272, identical to the URL slug).
+        - ``platecode`` may be ``None`` for concept rows that appear
+          only in the sidebar (88 of ~383 on a typical snapshot) — the
+          sidebar doesn't carry platecode. Reverse-filling them by
+          fetching ``/gn/detail/code/{cid}/`` would cost 88 extra
+          requests on every refresh; out of scope. Clients that need
+          the platecode for K-line can resolve on demand via
+          ``get_board_history`` (which already does the clid lookup).
+
+        Args:
+            board_type: ``"concept"`` / ``"industry"`` / ``None`` (both).
+                ``None`` fans out to both and concatenates the results.
+            subtype: optional ``THS_CONCEPT_SUBTYPE`` / ``THS_INDUSTRY_SUBTYPE``
+                filter. ``None`` returns every subtype the type exposes.
+            include_quote: accepted for interface parity. Currently
+                ignored — change_pct and net_inflow are always carried
+                on concept rows (from gnSection) when present; industry
+                rows have no real-time fields from the sidebar source.
+
+        Returns:
+            ``list[dict]`` — see shape above. Empty list on upstream
+            failure (no board list available); the persistence layer
+            treats empty + non-"persistence" origin as a partial
+            failure and logs a WARNING.
+
+        Raises:
+            DataFetchError: v-token mint failed, HTTP non-2xx on either
+                index page, or HTML parse error (gnSection JSON
+                malformed).
+        """
+        _ = source  # accepted for Manager interface; ThsFetcher has no per-call source override
+        types_to_fetch: list[str]
+        if board_type is None:
+            types_to_fetch = ["concept", "industry"]
+        elif board_type in ("concept", "industry"):
+            types_to_fetch = [board_type]
+        else:
+            raise DataFetchError(
+                f"[ThsFetcher] get_all_boards: board_type must be "
+                f"'concept' / 'industry' / None (got {board_type!r})"
+            )
+
+        out: list[dict] = []
+        for bt in types_to_fetch:
+            rows = (
+                self._fetch_ths_concept_boards()
+                if bt == "concept"
+                else self._fetch_ths_industry_boards()
+            )
+            # Tag + subtype the per-type rows. We never override the
+            # upstream-supplied fields (platecode, change_pct, net_inflow).
+            for r in rows:
+                r["type"] = bt
+                r["subtype"] = (
+                    THS_CONCEPT_SUBTYPE if bt == "concept" else THS_INDUSTRY_SUBTYPE
+                )
+            if subtype is not None:
+                rows = [r for r in rows if r.get("subtype") == subtype]
+            out.extend(rows)
+        return out
+
+    # -- concept: /gn/ -------------------------------------------------
+
+    def _fetch_ths_concept_boards(self) -> list[dict]:
+        """Single GET /gn/ → merge gnSection + sidebar.
+
+        Returns rows keyed by cid. gnSection rows are primary (carry
+        platecode + real-time fields). Sidebar rows fill in any
+        boards gnSection misses (~88, all without platecode).
+
+        Deduplicates by cid; if both sources carry the same cid, the
+        gnSection row wins (it has the richer payload). Sidebar rows
+        with no cid are dropped (malformed).
+
+        Returns ``[]`` on hard failure (HTML parse / network). The
+        per-row exceptions on individual sidebar links are swallowed
+        so a single bad link doesn't fail the whole list.
+        """
+        html = self._http_get_ths_board_index(self._THS_CONCEPT_INDEX_URL)
+        gn_section = self._parse_gn_section(html)
+        sidebar = self._parse_ths_gn_sidebar(html)
+        return self._merge_concept_sources(gn_section, sidebar)
+
+    @staticmethod
+    def _parse_gn_section(html: str) -> list[dict]:
+        """Extract boards from ``<input id="gnSection" value="{json}">``.
+
+        The value is HTML-encoded JSON: &quot; → ", &amp; → &. The
+        decoded payload is a dict keyed by a numeric rank, each value
+        carrying platecode / platename / cid / zjjlr / zfl + an
+        anonymous date-key field (e.g. "199112") whose value is the
+        board's intraday change_pct (%). The "zfl" key is a private
+        THS field whose meaning is not publicly documented (verified
+        2026-07-08: does NOT match stock count, rank, or any rendered
+        label on the detail page) — we drop it on the way out.
+
+        Malformed rows (missing cid or platecode) are skipped at
+        DEBUG level (~15 rows/snapshot from gnSection lack a cid; not
+        a fetcher bug — see inline comment). Bad JSON raises
+        DataFetchError (a 200 OK with broken JSON is an upstream
+        change, not a transient fault).
+        """
+        import json as _json
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html or "", features="lxml")
+        node = soup.find("input", attrs={"id": "gnSection"})
+        if node is None:
+            return []
+        raw = node.get("value") or ""
+        if not raw:
+            return []
+        decoded = raw.replace("&quot;", '"').replace("&amp;", "&")
+        try:
+            payload = _json.loads(decoded)
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] get_all_boards: malformed gnSection JSON: {e}"
+            ) from e
+        out: list[dict] = []
+        for entry in payload.values():
+            if not isinstance(entry, dict):
+                continue
+            cid = str(entry.get("cid", "")).strip()
+            platecode = str(entry.get("platecode", "")).strip()
+            name = str(entry.get("platename", "")).strip()
+            if not cid or not platecode or not name:
+                # Brand-new boards sometimes appear in gnSection before
+                # upstream assigns a cid (verified 2026-07-08: ~15 rows in
+                # a typical snapshot, platecode populated but cid empty).
+                # The sidebar will fill in any rows that already have a
+                # cid; the rest we drop. Not a fetcher bug — log at DEBUG
+                # so the count is visible without spamming WARNING.
+                logger.debug(
+                    f"[ThsFetcher] gnSection row missing required field: "
+                    f"cid={cid!r} platecode={platecode!r} name={name!r}"
+                )
+                continue
+            row: dict = {
+                "code": cid,
+                "name": name,
+                "platecode": platecode,
+                "source": "ths",
+            }
+            # Real-time fields from gnSection. The numeric key (e.g.
+            # "199112") is a date-style label whose value is the
+            # intraday change_pct (%). We probe for it without baking
+            # the magic number into the fetcher so an upstream rename
+            # is a one-line change.
+            for k, v in entry.items():
+                if k in ("cid", "platecode", "platename", "zjjlr", "zfl"):
+                    continue
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    # First non-meta numeric field is the change_pct
+                    # carrier. The break guarantees a single assignment.
+                    row["change_pct"] = float(v)
+                    break
+            zjjlr = entry.get("zjjlr")
+            if isinstance(zjjlr, (int, float)) and not isinstance(zjjlr, bool):
+                row["net_inflow"] = float(zjjlr)  # 单位: 亿元
+            out.append(row)
+        return out
+
+    @staticmethod
+    def _parse_ths_gn_sidebar(html: str) -> list[dict]:
+        """Extract (cid, name) pairs from the /gn/ index sidebar.
+
+        Mirrors the parsing akshare does in ``_get_stock_board_concept_name_ths``
+        but returns a list of dicts (akshare returns a {name: code} dict,
+        which loses order). We only need the slug from the URL — name
+        comes from the anchor text.
+
+        Robust to a single bad <a>: it logs and skips rather than
+        aborting the whole board list.
+        """
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html or "", features="lxml")
+        out: list[dict] = []
+        # Scope to .cate_items so we don't accidentally pick up
+        # detail-page links from any other sidebar block on /gn/.
+        for items_div in soup.select(".cate_items"):
+            for a in items_div.select("a"):
+                href = a.get("href") or ""
+                if "/gn/detail/code/" not in href:
+                    continue
+                parts = [p for p in href.split("/") if p]
+                slug = parts[-1] if parts else ""
+                name = a.get_text(strip=True)
+                if not slug or not name:
+                    logger.debug(
+                        f"[ThsFetcher] sidebar anchor missing slug or name: "
+                        f"href={href!r}"
+                    )
+                    continue
+                out.append({"code": slug, "name": name, "source": "ths"})
+        return out
+
+    @staticmethod
+    def _merge_concept_sources(
+        gn_section: list[dict], sidebar: list[dict]
+    ) -> list[dict]:
+        """Merge gnSection (primary) + sidebar (fallback for missing names).
+
+        - gnSection rows always win (they carry platecode + real-time).
+        - Sidebar-only rows are appended; their ``platecode`` is set
+          to ``None`` so callers can detect "no K-line via platecode"
+          and fall back to ``get_board_history``'s clid lookup.
+        - Duplicates within either source (e.g. gnSection repeating
+          the same cid twice in a single snapshot) are de-duped by cid.
+        """
+        by_cid: dict[str, dict] = {}
+        for r in gn_section:
+            by_cid[r["code"]] = r
+        for r in sidebar:
+            cid = r["code"]
+            if cid in by_cid:
+                # Fill missing name (gnSection should already have it,
+                # but a malformed upstream that left name empty benefits).
+                if not by_cid[cid].get("name") and r.get("name"):
+                    by_cid[cid]["name"] = r["name"]
+                continue
+            # Sidebar-only: no platecode available, leave None.
+            by_cid[cid] = {**r, "platecode": None}
+        return list(by_cid.values())
+
+    # -- industry: /thshy/ ---------------------------------------------
+
+    def _fetch_ths_industry_boards(self) -> list[dict]:
+        """Single GET /thshy/ → sidebar (881xxx platecodes).
+
+        Industries don't have a hidden-input data blob like /gn/ does.
+        The sidebar ``.cate_items a[href*="/thshy/detail/code/"]`` is
+        the only HTML source; the page's data-table renders via JS
+        (no SSR data) so we don't get change_pct / net_inflow from
+        the index page. Clients wanting quote data for an industry
+        should use ``/boards/{code}/stocks`` + ``get_board_history``
+        on a per-industry basis.
+
+        For industry, ``code`` IS the platecode (881xxx). We still
+        emit ``platecode`` redundantly in the response so the
+        ``/boards`` response shape is uniform across concept/industry.
+        """
+        html = self._http_get_ths_board_index(self._THS_INDUSTRY_INDEX_URL)
+        rows = self._parse_ths_thshy_sidebar(html)
+        for r in rows:
+            r["platecode"] = r["code"]  # industry code == platecode
+        return rows
+
+    @staticmethod
+    def _parse_ths_thshy_sidebar(html: str) -> list[dict]:
+        """Extract (platecode, name) pairs from the /thshy/ index sidebar.
+
+        Industry slugs are 6-digit decimal but the leading 3 digits are
+        always 881 (e.g. 881121 半导体, 881273 白酒). The slug is the
+        ``code`` and the platecode — no separate cid exists for
+        industry boards.
+
+        No gnSection-style hidden input exists on /thshy/, so this
+        single source is the full list. (akshare's industry version
+        falls back to a paginated ajax endpoint to fill in quote
+        fields; we don't because the board-list cache stores
+        metadata only — see CLAUDE.md persistence rules.)
+        """
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html or "", features="lxml")
+        out: list[dict] = []
+        for items_div in soup.select(".cate_items"):
+            for a in items_div.select("a"):
+                href = a.get("href") or ""
+                if "/thshy/detail/code/" not in href:
+                    continue
+                parts = [p for p in href.split("/") if p]
+                slug = parts[-1] if parts else ""
+                name = a.get_text(strip=True)
+                if not slug or not name:
+                    continue
+                out.append({"code": slug, "name": name, "source": "ths"})
+        return out
+
+    # -- shared HTTP ----------------------------------------------------
+
+    def _http_get_ths_board_index(self, url: str) -> str:
+        """GET a THS index page with the v-token cookie.
+
+        Distinct from the per-year board-K-line HTTP helper because:
+        - No ``Referer`` / ``Host`` overrides needed (we're not
+          hitting d.10jqka.com.cn).
+        - GBK-decoding NOT needed (the index pages are UTF-8).
+        - Timeout can be shorter (single page, not part of a year loop).
+
+        Returns body on 2xx. Raises DataFetchError on non-2xx so the
+        upstream failure surfaces in the response / 503 path.
+        """
+        headers = {"User-Agent": THS_UA, "Cookie": f"v={self._v_token()}"}
+        try:
+            r = self._http_get(url, headers=headers, timeout=self._THS_BOARD_LIST_TIMEOUT)
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] get_all_boards: GET {url} failed: {e}"
+            ) from e
+        if not (200 <= r.status_code < 300):
+            raise DataFetchError(
+                f"[ThsFetcher] get_all_boards: GET {url} HTTP {r.status_code} "
+                f"({len(r.content)}B body)"
+            )
+        return r.text or ""
 
     # ------------------------------------------------------------------
     # 热点题材 (Hot Topics)
