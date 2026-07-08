@@ -202,3 +202,90 @@ class TestFetchBoardsWithZzshareBackfill:
         )
         assert len(out) == 1
         assert out[0]["code"] == "301558"
+
+class TestFetchBoardStocksWithZzshareFallback:
+    def _mgr(self, ths_return, zz_return, ths_raise=False, zz_raise=False):
+        from unittest.mock import MagicMock
+        mgr = MagicMock()
+        def ths_call(*a, **kw):
+            if ths_raise:
+                raise Exception('ths 503')
+            return ths_return
+        def zz_call(*a, **kw):
+            if zz_raise:
+                raise Exception('zz 503')
+            return zz_return
+        mgr.get_board_stocks.side_effect = lambda *a, **kw: (
+            ths_call(*a, **kw) if kw.get('source') == 'ths' else zz_call(*a, **kw)
+        )
+        return mgr
+
+    def test_include_quote_true_prefers_ths(self, mock_cid_resolver):
+        ths_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'ths')
+        zz_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare')
+        mgr = self._mgr(ths_return, zz_return)
+        with mock_cid_resolver({('885642',): '301558'}):
+            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code='885642', include_quote=True, manager=mgr,
+            )
+        assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
+        assert origin == 'ths'
+        ths_call = [c for c in mgr.get_board_stocks.call_args_list
+                    if c.kwargs.get('source') == 'ths'][0]
+        assert ths_call.kwargs['board_code'] == '301558'
+
+    def test_include_quote_false_prefers_zzshare(self):
+        ths_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'ths')
+        zz_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare')
+        mgr = self._mgr(ths_return, zz_return)
+        stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+            board_code='885642', include_quote=False, manager=mgr,
+        )
+        assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
+        assert origin == 'zzshare'
+        zz_call = mgr.get_board_stocks.call_args_list[0]
+        assert zz_call.kwargs['board_code'] == '885642'
+        assert zz_call.kwargs['source'] == 'zzshare'
+
+    def test_ths_fallback_when_zzshare_empty(self, mock_cid_resolver):
+        ths_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'ths')
+        zz_return = ([], 'zzshare')
+        mgr = self._mgr(ths_return, zz_return)
+        with mock_cid_resolver({('885642',): '301558'}):
+            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code='885642', include_quote=False, manager=mgr,
+            )
+        assert origin == 'ths'
+        assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
+
+    def test_zzshare_fallback_when_ths_fails(self, mock_cid_resolver):
+        ths_return = ([], 'ths')
+        zz_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare')
+        mgr = self._mgr(ths_return, zz_return, ths_raise=True)
+        with mock_cid_resolver({('885642',): '301558'}):
+            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code='885642', include_quote=True, manager=mgr,
+            )
+        assert origin == 'zzshare'
+        assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
+
+    def test_both_empty_returns_empty_origin_empty(self, mock_cid_resolver):
+        mgr = self._mgr(([], 'ths'), ([], 'zzshare'))
+        with mock_cid_resolver({('999999',): None}):
+            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code='999999', include_quote=False, manager=mgr,
+            )
+        assert stocks == []
+        assert origin == ''
+
+
+@pytest.fixture
+def mock_cid_resolver(monkeypatch):
+    from contextlib import contextmanager
+    @contextmanager
+    def _ctx(mapping):
+        def fake(platecode):
+            return mapping.get((platecode,))
+        monkeypatch.setattr(board_mod, '_resolve_ths_cid_from_platecode', fake)
+        yield
+    return _ctx

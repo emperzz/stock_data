@@ -708,6 +708,102 @@ def fetch_boards_with_zzshare_backfill(
     return out
 
 
+def fetch_board_stocks_with_zzshare_fallback(
+    board_code: str,
+    include_quote: bool,
+    manager,
+) -> tuple[list[dict], str]:
+    """Get stocks for a board with source-aware primary/fallback order.
+
+    Strategy:
+    - include_quote=False (default): ZzshareFetcher.plates_stocks first
+      (anonymous SDK call, fast, no v-token required). On empty/error,
+      fallback to ThsFetcher.
+    - include_quote=True: ThsFetcher first (THS AJAX returns quote
+      fields natively). On empty/error, fallback to ZzshareFetcher.
+    - When ThsFetcher is invoked, look up the cid via
+      _resolve_ths_cid_from_platecode; if not found, skip THS path
+      and return zzshare's result (or empty).
+    - ThsFetcher's input is the cid; ZzshareFetcher's input is the
+      platecode (which is what the public API hands us).
+
+    Caveat -- ZzshareFetcher.get_board_stocks (zzshare_fetcher.py:625)
+    accepts **kwargs but does NOT consume include_quote. The choice
+    of THS-vs-zzshare by include_quote is therefore based purely on
+    the upstream's quote-field availability (THS has them, ZzshareFetcher
+    does not), not on ZzshareFetcher's handling of the flag.
+
+    Returns:
+        (stocks, source) -- source is the fetcher name that served
+        the response (always 'ths' or 'zzshare'; caller exposes it
+        as-is, but writes to stock_board_membership with source='ths').
+        When both paths fail or return empty, returns ([], "") -- the
+        empty-list signal flows through to the route layer's 404 path.
+
+    Raises:
+        DataFetchError: only when both fetcher paths raise a Hard error
+        (network / 5xx). Empty results are returned as-is (treated as
+        'no stocks in this board' -> caller -> 404).
+    """
+    def _try_zzshare() -> list[dict]:
+        rows, _ = manager.get_board_stocks(
+            board_code=board_code, source="zzshare", include_quote=include_quote,
+        )
+        return rows
+
+    def _try_ths() -> list[dict]:
+        cid = _resolve_ths_cid_from_platecode(board_code)
+        if not cid:
+            return []
+        rows, _ = manager.get_board_stocks(
+            board_code=cid, source="ths", include_quote=include_quote,
+        )
+        return rows
+
+    if include_quote:
+        # ThsFetcher first
+        try:
+            rows = _try_ths()
+            if rows:
+                return rows, "ths"
+        except Exception as e:
+            logger.warning(
+                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
+                f"ths failed (will fallback to zzshare): {e}"
+            )
+        try:
+            rows = _try_zzshare()
+            if rows:
+                return rows, "zzshare"
+        except Exception as e:
+            logger.warning(
+                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
+                f"zzshare failed: {e}"
+            )
+        return [], ""
+    else:
+        # ZzshareFetcher first
+        try:
+            rows = _try_zzshare()
+            if rows:
+                return rows, "zzshare"
+        except Exception as e:
+            logger.warning(
+                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
+                f"zzshare failed (will fallback to ths): {e}"
+            )
+        try:
+            rows = _try_ths()
+            if rows:
+                return rows, "ths"
+        except Exception as e:
+            logger.warning(
+                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
+                f"ths failed: {e}"
+            )
+        return [], ""
+
+
 def get_board_stocks(
     board_code: str,
     source: str,
