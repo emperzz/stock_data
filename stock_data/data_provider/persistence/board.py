@@ -71,7 +71,7 @@ VALID_BOARD_TYPES: tuple[str, ...] = ("concept", "industry", "index", "special")
 # Forward-board sources: each must have BOTH get_all_boards AND
 # get_board_stocks implementations. 'ths' satisfies both since
 # ThsFetcher.get_all_boards landed (2026-07-08).
-VALID_SOURCES: tuple[str, ...] = ("eastmoney", "zhitu", "zzshare", "ths")
+VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
 
 
 # Stock-boards 专用 source 集合 + alias (仿照 _BOARD_HISTORY_VALID_SOURCES 模式).
@@ -90,7 +90,7 @@ _STOCK_BOARDS_SOURCE_ALIAS: dict[str, str] = {"zzshare": "ths"}
 # _resolve_board_stocks_source uses this to decide whether to accept
 # ?source=ths as canonical (was previously aliased to zzshare).
 _BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = (
-    "eastmoney", "zhitu", "zzshare", "ths"
+    "ths", "eastmoney", "zhitu"
 )
 
 

@@ -827,3 +827,19 @@ def test_get_board_history_zzshare_aliases_to_ths(client):
     assert r.status_code == 200, r.text
     # Confirm the manager was called with source='ths' (alias applied).
     assert spy.call_args.kwargs.get("source") == "ths"
+
+
+def test_boards_valid_sources_excludes_zzshare():
+    """After unification, VALID_SOURCES must not include 'zzshare'."""
+    from stock_data.data_provider.persistence import board as board_mod
+    assert "zzshare" not in board_mod.VALID_SOURCES
+    assert "ths" in board_mod.VALID_SOURCES
+    assert "eastmoney" in board_mod.VALID_SOURCES
+    assert "zhitu" in board_mod.VALID_SOURCES
+
+
+def test_boards_stocks_valid_sources_excludes_zzshare():
+    """_BOARD_STOCKS_VALID_SOURCES must not include 'zzshare' either."""
+    from stock_data.data_provider.persistence import board as board_mod
+    assert "zzshare" not in board_mod._BOARD_STOCKS_VALID_SOURCES
+    assert "ths" in board_mod._BOARD_STOCKS_VALID_SOURCES
