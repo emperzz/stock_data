@@ -450,13 +450,12 @@ def list_boards(
 @map_errors
 def get_board_stocks(
     board_code: str = Path(max_length=30, description="Board code"),
-    source: Literal["ths", "eastmoney", "zhitu", "zzshare"] = Query(
+    source: Literal["ths", "eastmoney", "zhitu"] = Query(
         ...,
         description=(
-            "Data source (REQUIRED). All four sources are independently "
-            "valid: `ths` (ThsFetcher via q.10jqka.com.cn AJAX), "
-            "`eastmoney` (push2his), `zhitu`, "
-            "`zzshare` (plates_stocks — upstream IS 同花顺 data)."
+            "Data source (REQUIRED). 'zzshare' was unified under 'ths' "
+            "on 2026-07-08. include_quote=false → ZZSHARE primary, THS "
+            "fallback. include_quote=true → THS primary, ZZSHARE fallback."
         ),
     ),
     include_quote: bool = Query(False, description="Include realtime quote data"),
@@ -486,7 +485,6 @@ def get_board_stocks(
         # being silently dropped.
         stocks, origin = stock_board_cache.get_board_stocks(
             board_code,
-            source=source,
             refresh=refresh,
             include_quote=include_quote,
             manager=manager,
