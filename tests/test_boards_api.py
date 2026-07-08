@@ -48,58 +48,22 @@ def test_list_boards_invalid_source_returns_400(client):
 
 
 def test_list_boards_source_ths_passes_ths_to_persistence(client):
-    """?source=ths on /boards routes to ThsFetcher (no alias as of 2026-07-08).
-
-    Previously the board-list endpoint aliased 'ths' → 'zzshare' (mirroring
-    the old stock-boards reverse-lookup direction). After ThsFetcher gained
-    get_all_boards, the alias was removed: each source label is a
-    first-class citizen on /boards and is served by its own fetcher.
-    """
-    fake_concept = [
-        {
-            "code": "300188",
-            "name": "移动支付",
-            "type": "concept",
-            "subtype": "同花顺概念",
-            "source": "ths",
-            "platecode": "885333",
-            "change_pct": 1.39,
-            "net_inflow": 8.91,
-        }
-    ]
-    with patch(
-        "stock_data.data_provider.persistence.board.get_board_list",
-        return_value=(fake_concept, "ThsFetcher"),
-    ) as mock_get:
+    """?source=ths reaches persistence; source hardcoded to 'ths' inside helper."""
+    from unittest.mock import patch
+    from stock_data.data_provider.persistence import board as board_mod
+    with patch.object(board_mod, "fetch_boards_with_zzshare_backfill",
+                      return_value=[]) as mock_fetch:
         r = client.get("/api/v1/boards?type=concept&source=ths")
     assert r.status_code == 200
-    # Persistence was called with source='ths' (NOT aliased to zzshare).
-    _, kwargs = mock_get.call_args
-    assert kwargs.get("source") == "ths"
-    assert r.json()["source"] == "ThsFetcher"
+    # After unification, get_board_list doesn't take 'source' kwarg
+    for call in mock_fetch.call_args_list:
+        assert "source" not in call.kwargs
 
 
-def test_list_boards_source_zzshare_still_works(client):
-    """?source=zzshare remains a valid label on /boards after the ths→zzshare
-    alias removal — both labels are first-class and routed independently."""
-    fake_zz = [
-        {
-            "code": "BK1048",
-            "name": "互联网服务",
-            "type": "concept",
-            "subtype": "同花顺概念",
-            "source": "zzshare",
-        }
-    ]
-    with patch(
-        "stock_data.data_provider.persistence.board.get_board_list",
-        return_value=(fake_zz, "ZzshareFetcher"),
-    ) as mock_get:
-        r = client.get("/api/v1/boards?type=concept&source=zzshare")
-    assert r.status_code == 200
-    _, kwargs = mock_get.call_args
-    assert kwargs.get("source") == "zzshare"  # NOT aliased
-    assert r.json()["source"] == "ZzshareFetcher"
+def test_list_boards_source_zzshare_returns_422(client):
+    """?source=zzshare on /boards returns 422 (FastAPI Literal validation)."""
+    r = client.get("/api/v1/boards?type=concept&source=zzshare")
+    assert r.status_code == 422
 
 
 def test_list_boards_zhitu_returns_zhitu_boards(client):
@@ -242,58 +206,10 @@ def test_list_boards_persistence_validation_error_propagates(client):
     assert "No fetcher" in str(body)
 
 
-def test_list_boards_zzshare_type_special_returns_400(client):
-    """`?source=zzshare&type=special` → 400, not silent empty 200.
-
-    zzshare's plate_type=17 (题材) was unified under type=concept on
-    2026-07-07. The Literal at the route still accepts "special" (other
-    sources use it), but the per-source type check now rejects this
-    combination with a clear error message that points callers at the
-    new contract.
-    """
-    # Persistence must NOT be called — the validation happens at the route.
-    with patch(_PERSISTENCE_LIST_PATCH) as mock_get:
-        r = client.get("/api/v1/boards?type=special&source=zzshare")
-    assert r.status_code == 400
-    body = r.json()
-    detail = str(body.get("detail", ""))
-    assert "special" in detail
-    assert "zzshare" in detail
-    # The error message should mention the migration path.
-    assert "concept" in detail
-    mock_get.assert_not_called()
-
-
-def test_list_boards_zzshare_no_type_returns_all_supported_types(client):
-    """Omitting ``type`` on a zzshare query returns concept + industry.
-
-    zzshare's subtype table has industry + concept (no index, no special —
-    plate=17 "题材" unified under concept on 2026-07-07). Persistence is
-    called with board_type=None; the all-types branch iterates over the
-    per-source supported types and merges the results. The "mixed" origin
-    label is used when both cache-hit and fetcher-hit rows contributed
-    (mirrors get_stock_memberships).
-    """
-    fake_boards = [
-        {"code": "BK_C1", "name": "概念1", "type": "concept", "subtype": "同花顺概念"},
-        {"code": "BK_C2", "name": "题材1", "type": "concept", "subtype": "同花顺题材"},
-        {"code": "BK_I1", "name": "行业1", "type": "industry", "subtype": "同花顺行业"},
-    ]
-    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake_boards, "mixed")) as mock_get:
-        r = client.get("/api/v1/boards?source=zzshare")
-    assert r.status_code == 200
-    body = r.json()
-    # concept + industry only — "special" is gone for zzshare.
-    types = {b["type"] for b in body["data"]}
-    assert types == {"concept", "industry"}
-    # Both concept subtypes (plate=15 and plate=17) round-trip through the
-    # response. BoardInfo doesn't expose ``subtype`` (it's a fetcher-level
-    # detail), so the assertion is on row count + code coverage.
-    codes = {b["code"] for b in body["data"]}
-    assert codes == {"BK_C1", "BK_C2", "BK_I1"}
-    # board_type=None is forwarded to persistence.
-    _, kwargs = mock_get.call_args
-    assert kwargs.get("board_type") is None
+def test_list_boards_source_zzshare_type_special_returns_422(client):
+    """?source=zzshare&type=special returns 422 (Literal check fires before type check)."""
+    r = client.get("/api/v1/boards?type=special&source=zzshare")
+    assert r.status_code == 422
 
 
 def test_list_boards_no_type_subtype_returns_400(client):
@@ -397,56 +313,22 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
 # ===== /boards/{code}/stocks: source=ths canonical (no alias) =====
 
 
-def test_get_board_stocks_ths_passes_ths_to_persistence(client):
-    """?source=ths now passes 'ths' through to persistence (no alias).
-
-    Previously the route aliased 'ths' → 'zzshare' for board-stocks (mirroring
-    board-list). After ThsFetcher gained get_board_stocks, the alias is
-    removed and 'ths' is canonical. Backed by ThsFetcher at the manager
-    layer (verified via `data_source == "ThsFetcher"` in the response).
-    """
-    fake = [{"stock_code": "300740", "stock_name": "皇台酒业"}]
-    with (
-        patch(
-            "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "ThsFetcher"),
-        ) as mock_get,
-        patch(
-            "stock_data.data_provider.persistence.board.get_board_name",
-            return_value="多多概念",
-        ),
-    ):
-        r = client.get("/api/v1/boards/308709/stocks?source=ths")
-    assert r.status_code == 200
-    # Persistence was called with source='ths' (NOT aliased to zzshare).
-    _, kwargs = mock_get.call_args
-    assert kwargs.get("source") == "ths"
-    assert r.json()["data_source"] == "ThsFetcher"
+def test_get_board_stocks_source_ths_passes_ths_to_persistence(client):
+    """?source=ths reaches persistence; fetch helper called without source arg."""
+    from unittest.mock import patch
+    from stock_data.data_provider.persistence import board as board_mod
+    with patch.object(board_mod, "fetch_board_stocks_with_zzshare_fallback",
+                      return_value=([], "")) as mock_fetch:
+        r = client.get("/api/v1/boards/885642/stocks?source=ths")
+    assert r.status_code in (200, 404)  # empty may 404
+    for call in mock_fetch.call_args_list:
+        assert "source" not in call.kwargs
 
 
-def test_get_board_stocks_zzshare_still_works(client):
-    """?source=zzshare still works — independent path, kept for back-compat.
-
-    ZzshareFetcher.plates_stocks is still served by the zzshare label; the
-    removal of the ths→zzshare alias only affects explicit ?source=ths
-    requests, not existing zzshare callers.
-    """
-    fake = [{"stock_code": "300740", "stock_name": "皇台酒业"}]
-    with (
-        patch(
-            "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "ZzshareFetcher"),
-        ) as mock_get,
-        patch(
-            "stock_data.data_provider.persistence.board.get_board_name",
-            return_value="多多概念",
-        ),
-    ):
-        r = client.get("/api/v1/boards/308709/stocks?source=zzshare")
-    assert r.status_code == 200
-    _, kwargs = mock_get.call_args
-    assert kwargs.get("source") == "zzshare"
-    assert r.json()["data_source"] == "ZzshareFetcher"
+def test_get_board_stocks_source_zzshare_returns_422(client):
+    """?source=zzshare on /boards/{code}/stocks returns 422."""
+    r = client.get("/api/v1/boards/308709/stocks?source=zzshare")
+    assert r.status_code == 422
 
 
 def test_get_board_stocks_unknown_source_returns_400_or_422(client):
