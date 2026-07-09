@@ -222,10 +222,12 @@ class TestBoardAPIRoutes:
     def test_get_boards_with_refresh(self, client):
         """Test GET /api/v1/boards?refresh=true forces refresh.
 
-        Post-unification (2026-07-08): the route no longer forwards
-        ``source`` to ``stock_board_cache.get_board_list`` — the cache
-        key is now hardcoded to source='ths' inside the persistence
-        layer. We assert ``refresh=True`` is forwarded instead.
+        The route forwards both ``refresh=True`` and ``source=source``
+        to ``stock_board_cache.get_board_list``; the persistence layer
+        keys the cache + refresh tracker on (board_type, source). This
+        test pins the ``refresh=True`` half; source-routing is covered
+        by ``test_get_boards_with_source`` and the api-level tests in
+        ``test_boards_api.py``.
         """
         with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = (
@@ -242,9 +244,9 @@ class TestBoardAPIRoutes:
             response = client.get("/api/v1/boards?type=concept&source=eastmoney&refresh=true")
             assert response.status_code == 200
             mock_get.assert_called_once()
-            # refresh= passed as keyword arg; source is no longer forwarded.
             _, kwargs = mock_get.call_args
             assert kwargs.get("refresh") is True
+            assert kwargs.get("source") == "eastmoney"
 
     def test_get_boards_with_source(self, client):
         """Test GET /api/v1/boards?source=eastmoney routes source to persistence."""
@@ -324,8 +326,18 @@ class TestBoardAPIRoutes:
             assert kwargs.get("include_quote") is True
 
 
-class TestThsOnly:
-    """Post-unification: boards endpoints accept only ths/eastmoney/zhitu."""
+class TestBoardsSourceUnification:
+    """Boards endpoints after ths+zzshare unification (2026-07-08).
+
+    Covers two surfaces of the same change:
+    - /boards: source=zzshare returns 422 (Literal rejects); source=ths
+      routes to the persistence helper that internally merges zzshare
+      for platecode backfill.
+    - /boards/{code}/stocks: ths and zzshare are no longer public
+      sources on the Literal but ZzshareFetcher still serves as the
+      include_quote=False primary with ThsFetcher as fallback (and
+      vice versa for include_quote=True).
+    """
 
     def test_boards_list_source_zzshare_returns_422(self, client):
         """/api/v1/boards?source=zzshare returns 422 (FastAPI Literal rejects)."""

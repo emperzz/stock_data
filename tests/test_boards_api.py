@@ -67,18 +67,26 @@ def test_list_boards_source_zzshare_returns_422(client):
 
 
 def test_list_boards_zhitu_returns_zhitu_boards(client):
-    """GET /boards?source=zhitu&type=concept returns Zhitu boards."""
+    """GET /boards?source=zhitu&type=concept returns Zhitu boards.
+
+    Post-fix: persistence layer's ``get_board_list`` returns the
+    user-supplied source slug (``"zhitu"``) as origin for fresh
+    fetcher calls, NOT the fetcher's class name (``"ZhituFetcher"``).
+    This aligns the response's ``source`` field with the documented
+    source-tracking contract (lowercase slug). See CLAUDE.md
+    "Source Tracking" section.
+    """
     fake_boards = [
         {"code": "sw_mt", "name": "A股-申万行业-煤炭", "type": "industry", "subtype": "申万行业"},
     ]
     with patch(
         _PERSISTENCE_LIST_PATCH,
-        return_value=(fake_boards, "ZhituFetcher"),
+        return_value=(fake_boards, "zhitu"),
     ):
         r = client.get("/api/v1/boards?type=concept&source=zhitu")
     assert r.status_code == 200
     body = r.json()
-    assert body["source"] == "ZhituFetcher"
+    assert body["source"] == "zhitu"
     assert body["data"][0]["code"] == "sw_mt"
 
 
@@ -87,6 +95,26 @@ def test_list_boards_invalid_subtype_returns_400(client):
     r = client.get("/api/v1/boards?type=concept&source=eastmoney&subtype=热门概念")
     # EastMoney has subtype=concept, not 热门概念
     assert r.status_code == 400
+
+
+def test_list_boards_eastmoney_unsupported_type_returns_400(client):
+    """?type=index/special&source=eastmoney → 400.
+
+    EastMoneyFetcher.get_all_boards returns [] for index/special (no
+    upstream classification). VALID_SUBTYPES_BY_SOURCE['eastmoney']
+    must NOT declare these types — otherwise the route validator
+    silently lets the request through, the fetcher returns [], and
+    the caller gets a 200 with an empty data array instead of a
+    clear 400 explaining eastmoney doesn't expose that type.
+    """
+    for unsupported in ("index", "special"):
+        r = client.get(f"/api/v1/boards?type={unsupported}&source=eastmoney")
+        assert r.status_code == 400, (
+            f"type={unsupported}&source=eastmoney should be 400, got {r.status_code}"
+        )
+        body = r.json()
+        assert "eastmoney" in str(body)
+        assert unsupported in str(body)
 
 
 def test_list_boards_eastmoney_default_subtype_ok(client):
@@ -237,6 +265,117 @@ def test_list_boards_no_type_response_carries_type_field(client):
     by_code = {b["code"]: b for b in body["data"]}
     assert by_code["BK_C1"]["type"] == "concept"
     assert by_code["BK_I1"]["type"] == "industry"
+
+
+def test_list_boards_no_type_eastmoney_iterates_only_concept_industry(client):
+    """All-types query for source=eastmoney iterates ONLY concept+industry.
+
+    Regression for 4abad92 + Finding 7: post-fix, the all-types loop
+    in ``_get_all_board_types`` uses ``VALID_SUBTYPES_BY_SOURCE[source]``
+    (not the old hardcoded ``"ths"``). Eastmoney's entry has only
+    concept + industry (index/special were removed because
+    ``EastMoneyFetcher.get_all_boards`` returns ``[]`` for those
+    types), so the loop must NOT call ``manager.get_all_boards`` with
+    board_type in {index, special}.
+
+    Mocking strategy:
+    - ``manager.get_all_boards`` is patched (we don't want real network).
+    - ``update_cached_boards`` is patched to a no-op (no real DB writes
+      that would pollute later tests).
+    - ``_refresh_tracker.is_first_call`` is forced to True so we
+      always hit the fetcher path regardless of test ordering.
+    """
+    from unittest.mock import MagicMock, patch as _patch
+    from stock_data.data_provider.persistence import board as board_mod
+
+    call_log: list[tuple[str, str | None]] = []
+    mgr = MagicMock()
+
+    def fake_get_all_boards(*, source, board_type=None, subtype=None, include_quote=False):
+        call_log.append((source, board_type))
+        return (
+            [{
+                "code": f"BK_{board_type}",
+                "name": f"{board_type} test",
+                "type": board_type,
+                "subtype": board_type,
+                "source": source,
+            }],
+            source,
+        )
+
+    mgr.get_all_boards.side_effect = fake_get_all_boards
+    forced_refresh = type("T", (), {"is_first_call": lambda *a: True})()
+
+    with _patch("stock_data.api.routes.boards.get_manager", return_value=mgr), \
+         _patch.object(board_mod, "update_cached_boards", return_value=0), \
+         _patch.object(board_mod, "_refresh_tracker", forced_refresh):
+        r = client.get("/api/v1/boards?source=eastmoney")
+
+    assert r.status_code == 200
+    called_types = {bt for src, bt in call_log}
+    assert called_types == {"concept", "industry"}, (
+        f"source=eastmoney should iterate only concept+industry; got {called_types}"
+    )
+    for src, bt in call_log:
+        assert src == "eastmoney", f"unexpected source={src} for eastmoney query"
+
+    body = r.json()
+    by_type = {b["type"]: b for b in body["data"]}
+    assert set(by_type.keys()) == {"concept", "industry"}
+    assert "index" not in by_type
+    assert "special" not in by_type
+    # origin label is the user-supplied slug (post-fix contract).
+    assert body["source"] == "eastmoney"
+
+
+def test_list_boards_no_type_zhitu_iterates_all_four_types(client):
+    """All-types query for source=zhitu iterates all 4 VALID_SUBTYPES_BY_SOURCE[zhitu] types.
+
+    Inverse case to the eastmoney test: zhitu genuinely serves
+    concept / industry / index / special upstream, so the loop must
+    call ``manager.get_all_boards`` once per (board_type, source='zhitu')
+    pair. Pairs with the eastmoney test to lock in the source-driven
+    loop behavior across both ends of VALID_SUBTYPES_BY_SOURCE.
+    """
+    from unittest.mock import MagicMock, patch as _patch
+    from stock_data.data_provider.persistence import board as board_mod
+
+    call_log: list[tuple[str, str | None]] = []
+    mgr = MagicMock()
+
+    def fake_get_all_boards(*, source, board_type=None, subtype=None, include_quote=False):
+        call_log.append((source, board_type))
+        return (
+            [{
+                "code": f"ZH_{board_type}",
+                "name": f"{board_type} test",
+                "type": board_type,
+                "subtype": board_type,
+                "source": source,
+            }],
+            source,
+        )
+
+    mgr.get_all_boards.side_effect = fake_get_all_boards
+    forced_refresh = type("T", (), {"is_first_call": lambda *a: True})()
+
+    with _patch("stock_data.api.routes.boards.get_manager", return_value=mgr), \
+         _patch.object(board_mod, "update_cached_boards", return_value=0), \
+         _patch.object(board_mod, "_refresh_tracker", forced_refresh):
+        r = client.get("/api/v1/boards?source=zhitu")
+
+    assert r.status_code == 200
+    called_types = {bt for src, bt in call_log}
+    assert called_types == {"concept", "industry", "index", "special"}, (
+        f"source=zhitu should iterate all 4 types; got {called_types}"
+    )
+    for src, bt in call_log:
+        assert src == "zhitu"
+
+    body = r.json()
+    by_type = {b["type"]: b for b in body["data"]}
+    assert set(by_type.keys()) == {"concept", "industry", "index", "special"}
 
 
 # ===== get_board_stocks =====

@@ -34,8 +34,12 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
     "eastmoney": {
         "concept": {"concept"},
         "industry": {"industry"},
-        "index": {"index"},
-        "special": {"special"},
+        # "index" — EastMoneyFetcher.get_all_boards returns [] for index
+        #            (no upstream board-index classification). Declaring
+        #            it here previously let requests through the route
+        #            validator and silently return 200 with an empty list
+        #            at the fetcher; the route layer now 400s instead.
+        # "special" — same: EastMoneyFetcher.get_all_boards returns [].
     },
     "zhitu": {
         "industry": {"申万行业", "申万二级", "证监会行业"},

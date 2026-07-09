@@ -1,8 +1,11 @@
 """Board endpoints (concept / industry / index / special) + ZT/DT/ZBGC pools.
 
 ``source`` query parameter is REQUIRED and selects the fetcher:
-- ``eastmoney``: EastMoneyFetcher (akshare EM backend)
-- ``zhitu``: ZhituFetcher (zhituapi.com)
+- ``ths``: ThsFetcher primary, ZzshareFetcher for platecode backfill
+  (internal merge, public surface tagged source='ths').
+- ``eastmoney``: EastMoneyFetcher (akshare EM backend). Supports
+  concept + industry only — no index/special classification upstream.
+- ``zhitu``: ZhituFetcher (zhituapi.com).
 
 Each source has its own board classification system; failover between
 sources is intentionally not supported (different code systems).
@@ -257,7 +260,7 @@ def _parse_stock_boards_source_csv(raw: str | None) -> list[str]:
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块清单 (ths; 内部合并 zzshare 补 platecode) — ?source=zzshare 已下线",
+    summary="板块清单 (ths/eastmoney/zhitu; ths 内部合并 zzshare 补 platecode) — ?source=zzshare 已下线",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
 )
