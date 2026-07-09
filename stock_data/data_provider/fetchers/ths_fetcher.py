@@ -831,6 +831,157 @@ class ThsFetcher(BaseFetcher):
         return all_rows
 
     # ------------------------------------------------------------------
+    # 板块实时行情 (Board Realtime Quote) — q.10jqka.com.cn 概念详情页 .heading
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_board_realtime(soup) -> dict:
+        """Parse the .heading block of /gn/detail/code/{cid}/ into a quote dict.
+
+        Units are kept as upstream (NOT converted): volume=万手 (safe_int),
+        amount=亿元, net_inflow=亿元 — matches the existing industry-rank
+        parser and BoardInfo's live convention. Prices/change are 指数点.
+
+        Sign: displayed text is magnitude; direction comes from CSS classes
+        (arr-rise/arr-fall on .board-xj for change; c-rise/c-fall on the
+        资金净流入 dd for net inflow).
+
+        Raises:
+            DataFetchError: .heading block absent (page shape changed /
+                board not found).
+        """
+        from ..core.types import safe_float, safe_int
+
+        heading = soup.select_one(".heading")
+        if heading is None:
+            raise DataFetchError("[ThsFetcher] board realtime: .heading block not found")
+
+        hq = heading.select_one(".board-hq")
+        h3 = hq.select_one("h3") if hq else None
+        code_span = h3.select_one("span") if h3 else None
+        board_code = code_span.get_text(strip=True) if code_span else ""
+        # name = h3 text minus the code span
+        if code_span:
+            code_span.extract()
+        board_name = h3.get_text(strip=True) if h3 else ""
+
+        xj = hq.select_one(".board-xj") if hq else None
+        price = safe_float(xj.get_text(strip=True)) if xj else None
+        change_is_fall = bool(xj and "arr-fall" in (xj.get("class") or []))
+
+        zdf = hq.select_one(".board-zdf") if hq else None
+        change_amount = change_pct = None
+        if zdf:
+            parts = zdf.get_text().split()  # str.split() also splits \xa0 (nbsp)
+            if len(parts) >= 1:
+                change_amount = safe_float(parts[0])
+            if len(parts) >= 2:
+                change_pct = safe_float(parts[1].rstrip("%"))
+
+        def _signed(v, is_fall):
+            return (-abs(v) if is_fall else v) if v is not None else None
+
+        change_amount = _signed(change_amount, change_is_fall)
+        change_pct = _signed(change_pct, change_is_fall)
+
+        out: dict = {
+            "board_code": board_code,
+            "board_name": board_name,
+            "price": price,
+            "change_amount": change_amount,
+            "change_pct": change_pct,
+            "open": None, "prev_close": None, "high": None, "low": None,
+            "volume": None, "amount": None,
+            "up_count": None, "down_count": None,
+            "net_inflow": None, "rank": None,
+        }
+
+        for dl in heading.select(".board-infos dl"):
+            dt = dl.select_one("dt")
+            dd = dl.select_one("dd")
+            if not dt or not dd:
+                continue
+            label = dt.get_text(strip=True)
+            if label == "今开":
+                out["open"] = safe_float(dd.get_text(strip=True))
+            elif label == "昨收":
+                out["prev_close"] = safe_float(dd.get_text(strip=True))
+            elif label == "最低":
+                out["low"] = safe_float(dd.get_text(strip=True))
+            elif label == "最高":
+                out["high"] = safe_float(dd.get_text(strip=True))
+            elif label.startswith("成交量"):
+                out["volume"] = safe_int(dd.get_text(strip=True))  # 万手
+            elif label == "涨幅排名":
+                out["rank"] = dd.get_text(strip=True) or None
+            elif label == "涨跌家数":
+                spans = dd.select("span")
+                if len(spans) >= 2:
+                    out["up_count"] = safe_int(spans[0].get_text(strip=True))
+                    out["down_count"] = safe_int(spans[1].get_text(strip=True))
+            elif label.startswith("资金净流入"):
+                v = safe_float(dd.get_text(strip=True))  # 亿元
+                is_fall = "c-fall" in (dd.get("class") or [])
+                out["net_inflow"] = _signed(v, is_fall)
+            elif label.startswith("成交额"):
+                out["amount"] = safe_float(dd.get_text(strip=True))  # 亿元
+        return out
+
+    def get_board_realtime(
+        self,
+        board_code: str,
+        *,
+        board_type: str | None = None,  # accepted for interface parity; unused
+        **kwargs,
+    ) -> dict:
+        """THS board-level realtime quote via q.10jqka.com.cn concept detail page.
+
+        Args:
+            board_code: THS platecode (e.g. ``"885595"``). Resolved to the
+                URL cid (e.g. ``"301546"``) via the stock_board cache; when
+                resolution misses (cold cache / input already a cid), the
+                input is used as-is in the URL.
+
+        Returns:
+            dict with keys: board_code (platecode), board_name, price,
+            change_amount, change_pct, open, prev_close, high, low, volume
+            (万手), amount (亿元), up_count, down_count, net_inflow (亿元), rank,
+            cid.
+
+        Raises:
+            DataFetchError: upstream non-2xx / network failure / .heading absent.
+        """
+        from ..persistence.board import _resolve_ths_cid_from_platecode
+
+        cid = _resolve_ths_cid_from_platecode(board_code) or board_code
+        url = _CONCEPT_DETAIL_URL.format(slug=cid)
+        headers = {
+            "User-Agent": THS_UA,
+            "Referer": _CONCEPT_DETAIL_URL.format(slug=cid),
+            "Cookie": f"v={self._v_token()}",
+        }
+        try:
+            r = self._http_get(url, headers=headers, timeout=15)
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] board_realtime({board_code}) network failed: {e}"
+            ) from e
+        if not (200 <= r.status_code < 300):
+            raise DataFetchError(
+                f"[ThsFetcher] board_realtime({board_code}) HTTP {r.status_code}"
+            )
+        r.encoding = "gbk"
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(r.text or "", features="lxml")
+        out = self._parse_board_realtime(soup)
+        out["cid"] = cid
+        # Prefer the platecode the client passed if the page didn't echo one.
+        if not out.get("board_code"):
+            out["board_code"] = board_code
+        return out
+
+    # ------------------------------------------------------------------
     # 股票所属概念 (stock_concept_list — basic.10jqka.com.cn)
     # ------------------------------------------------------------------
 
