@@ -88,10 +88,14 @@ class TestResolveThsCidFromPlatecode:
 
 class TestMergeThsZzshareByName:
     def test_ths_wins_by_default(self):
-        """Same name in both: ths row kept, platecode from ths."""
+        """Same name in both: ths row kept (cid=3xxxxx), platecode from ths.
+
+        Realistic ZzshareFetcher output has no separate 'platecode' field —
+        the plate_code value lives under 'code' only.
+        """
         ths = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
                 "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
-        zz = [{"code": "885642", "name": "跨境电商", "platecode": "885642",
+        zz = [{"code": "885642", "name": "跨境电商",
                "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
         out = board_mod._merge_ths_zzshare_by_name(ths, zz)
         assert len(out) == 1
@@ -100,10 +104,17 @@ class TestMergeThsZzshareByName:
         assert out[0]["source"] == "ths"
 
     def test_zzshare_backfills_missing_platecode(self):
-        """THS row platecode=None, zzshare has same name → platecode backfilled."""
+        """THS sidebar-only row (platecode=None), zzshare has same name →
+        platecode backfilled from zzshare's plate_code (r['code']).
+
+        Realistic ZzshareFetcher output: no 'platecode' field — backfill
+        must read r['code'] on the zzshare row, not r['platecode'].
+        Regression test for the production bug where 412/797 rows in
+        stock_board had platecode=NULL because backfill never fired.
+        """
         ths = [{"code": "301558", "name": "跨境电商", "platecode": None,
                 "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
-        zz = [{"code": "885642", "name": "跨境电商", "platecode": "885642",
+        zz = [{"code": "885642", "name": "跨境电商",
                "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
         out = board_mod._merge_ths_zzshare_by_name(ths, zz)
         assert len(out) == 1
@@ -111,33 +122,54 @@ class TestMergeThsZzshareByName:
         assert out[0]["platecode"] == "885642"  # ← backfilled
 
     def test_zzshare_only_rows_appended(self):
-        """zzshare has a board ths doesn't → appended at end."""
+        """zzshare has a board ths doesn't → appended with platecode=code.
+
+        Appending rows must also carry platecode so the DB write in
+        update_cached_boards doesn't store NULL. Realistic zzshare input
+        has no separate platecode field; the merge helper must promote
+        r['code'] (the plate_code) into r['platecode'] before the append,
+        so the persisted row has a non-NULL platecode.
+        """
         ths = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
                 "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
-        zz = [{"code": "885999", "name": "独此一家", "platecode": "885999",
+        zz = [{"code": "885999", "name": "独此一家",
                "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
         out = board_mod._merge_ths_zzshare_by_name(ths, zz)
         codes = [r["code"] for r in out]
         assert "301558" in codes
         assert "885999" in codes  # zzshare-only appended
-        assert out[1]["source"] == "ths"  # tagged as ths after merge
+        appended = next(r for r in out if r["code"] == "885999")
+        assert appended["source"] == "ths"
+        # NEW contract: appended zzshare-only row MUST have platecode set
+        # (so the DB write stores a non-NULL value).
+        assert appended["platecode"] == "885999", (
+            f"expected platecode='885999' (from zzshare.code), "
+            f"got {appended.get('platecode')!r}"
+        )
 
     def test_dedup_by_code_and_name(self):
-        """Same (code, name) emitted twice → one row."""
+        """Same (code, name) emitted twice → one row. Both fetchers may emit
+        the same cid in rare overlap cases — dedup must still hold."""
         ths = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
                 "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
-        zz = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
+        zz = [{"code": "301558", "name": "跨境电商",
                "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
         out = board_mod._merge_ths_zzshare_by_name(ths, zz)
         assert len(out) == 1
 
     def test_empty_inputs(self):
         assert board_mod._merge_ths_zzshare_by_name([], []) == []
-        assert board_mod._merge_ths_zzshare_by_name(
-            [], [{"code": "885999", "name": "x", "platecode": "885999",
+        # Realistic zzshare-only: no 'platecode' key — backfill must promote
+        # r['code'] into r['platecode'] before persisting.
+        out = board_mod._merge_ths_zzshare_by_name(
+            [], [{"code": "885999", "name": "x",
                   "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
-        ) == [{"code": "885999", "name": "x", "platecode": "885999",
-               "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+        )
+        assert len(out) == 1
+        assert out[0]["code"] == "885999"
+        assert out[0]["platecode"] == "885999"
+        assert out[0]["source"] == "ths"
+        # ths-only sanity check.
         assert board_mod._merge_ths_zzshare_by_name(
             [{"code": "301558", "name": "x", "platecode": "885642",
               "type": "concept", "subtype": "同花顺概念", "source": "ths"}], []
@@ -155,12 +187,14 @@ class TestFetchBoardsWithZzshareBackfill:
             {"code": "301999", "name": "无名板块", "platecode": None,  # sidebar-only
              "type": "concept", "subtype": "同花顺概念", "source": "ths"},
         ]
+        # Realistic ZzshareFetcher output: no 'platecode' key — the plate_code
+        # value lives under 'code' only.
         zz_rows = [
-            {"code": "885642", "name": "跨境电商", "platecode": "885642",
+            {"code": "885642", "name": "跨境电商",
              "type": "concept", "subtype": "同花顺概念", "source": "zzshare"},
-            {"code": "885777", "name": "无名板块", "platecode": "885777",  # backfill
+            {"code": "885777", "name": "无名板块",  # backfills THS via name
              "type": "concept", "subtype": "同花顺概念", "source": "zzshare"},
-            {"code": "885888", "name": "独此一家", "platecode": "885888",  # zzshare-only
+            {"code": "885888", "name": "独此一家",  # zzshare-only
              "type": "concept", "subtype": "同花顺概念", "source": "zzshare"},
         ]
         mgr = MagicMock()
@@ -176,11 +210,13 @@ class TestFetchBoardsWithZzshareBackfill:
         assert mgr.get_all_boards.call_args_list[0].kwargs["source"] == "ths"
         # 2. ZZSHARE called second
         assert mgr.get_all_boards.call_args_list[1].kwargs["source"] == "zzshare"
-        # 3. "无名板块" platecode backfilled from None → "885777"
+        # 3. "无名板块" platecode backfilled from None → "885777" (from zz.code)
         by_code = {r["code"]: r for r in out}
         assert by_code["301999"]["platecode"] == "885777"
-        # 4. zzshare-only "独此一家" appended
+        # 4. zzshare-only "独此一家" appended, with platecode=code (regression:
+        #    pre-fix this row had platecode=None → DB wrote NULL on persist).
         assert "885888" in by_code
+        assert by_code["885888"]["platecode"] == "885888"
         # 5. All rows tagged source='ths'
         assert all(r["source"] == "ths" for r in out)
 

@@ -14,20 +14,23 @@ specific bug.
 import pytest
 
 from stock_data.data_provider.persistence import board as board_mod
+from stock_data.data_provider.persistence import db as db_mod
 
 
 @pytest.fixture(autouse=True)
-def _clean_db():
-    """Wipe membership and board tables before each test for isolation."""
+def _clean_db(tmp_path, monkeypatch):
+    """Use a tmp_path DB instead of the production stock_cache.db.
+
+    Older fixtures in this file deleted rows from the real DB, which
+    silently nuked user data whenever this test ran. Switch to a
+    per-test tmp_path DB so tests cannot affect production state.
+    """
+    monkeypatch.setattr(db_mod, "_db_path", None)
+    monkeypatch.setattr(db_mod, "_conn", None)
+    board_mod._schema_initialized_paths = set()
+    monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "test.db"))
     board_mod.init_schema()
-    conn = board_mod.get_connection()
-    conn.execute("DELETE FROM stock_board_membership")
-    conn.execute("DELETE FROM stock_board")
-    conn.commit()
     yield
-    conn.execute("DELETE FROM stock_board_membership")
-    conn.execute("DELETE FROM stock_board")
-    conn.commit()
 
 
 def _insert_membership_row(

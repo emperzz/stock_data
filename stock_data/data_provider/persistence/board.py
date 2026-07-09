@@ -588,44 +588,44 @@ def _merge_ths_zzshare_by_name(
 ) -> list[dict]:
     """Merge THS(primary) + ZZSHARE(platecode backfill) by board name.
 
-    Rules (verified 2026-07-08):
-    - Index zzshare rows by name → platecode (in-memory dict).
-    - For each ths row:
-        * If ths_row['platecode'] is None and zzshare has same name
-          → copy platecode from zzshare into ths row (in-place dict update).
-        * Otherwise keep ths row as-is (it already has platecode, or
-          zzshare doesn't have a matching name — the row is THS-only).
-    - For each zzshare row not matched by any ths row (by name) →
-      append as-is. The row carries its own plate_code as 'code'
-      (no cid available; clients see this as a platecode-only row).
-    - Final dedup by (code, name) within the merged list to guard
-      against upstream double-emit (rare; seen once in THS gnSection
-      duplicates per 2026-07-08 notes).
-    - All output rows are tagged with source='ths' regardless of origin
-      (the public surface unifies them; DB writes follow).
+    Cross-source asymmetry (verified 2026-07-09): ZzshareFetcher stores
+    the plate_code value under ``code`` and does NOT emit a separate
+    ``platecode`` field. Earlier versions of this helper built the
+    backfill index by reading ``r.get("platecode")`` on zzshare rows —
+    always None — which silently disabled the backfill and caused
+    412/797 rows in ``stock_board`` to be persisted with ``platecode=NULL``.
+    We normalize zzshare rows to promote ``code`` → ``platecode`` here
+    so the same merge logic works against real fetcher output.
 
-    **In-place mutation**: Both ``ths_rows`` and ``zzshare_rows`` dicts
-    are mutated in-place — ``platecode`` (ths rows, when backfilled from
-    zzshare) and ``source`` (all rows, set to ``"ths"``) are written
-    directly into the caller's dict objects. The returned ``out`` list
-    contains references to the same dicts, not copies. Callers must not
-    reuse the input lists after calling this function.
+    Contract:
+      - Every output row carries ``platecode`` (non-NULL when a code is
+        known) and ``source='ths'`` regardless of origin.
+      - THS rows that already carry ``platecode`` are kept as-is.
+      - THS sidebar-only rows (platecode=None) are backfilled by name
+        from the matching zzshare row's ``code`` (the plate_code).
+      - zzshare rows not matched by any THS row are appended; their
+        ``platecode`` is set to their own ``code``.
+      - Dedup by (code, name) guards against upstream double-emit
+        (rare; seen once in THS gnSection duplicates 2026-07-08). This
+        is a second-layer safety net behind ThsFetcher's own internal
+        `_merge_concept_sources` dedup (ths_fetcher.py:1300).
+
+    **In-place mutation**: Both input lists' dicts are mutated in place
+    (``platecode`` backfilled or promoted, ``source='ths'`` set on
+    every row). Callers must not reuse the input lists after this call.
 
     Empty input edge cases:
-    - ths_rows empty + zzshare_rows empty → []
-    - ths_rows empty + zzshare_rows non-empty → all zzshare rows appended
-    - ths_rows non-empty + zzshare_rows empty → ths rows returned as-is
-
-    Note on dedup: ThsFetcher's own internal `_merge_concept_sources`
-    (ths_fetcher.py:1300) dedups by `cid` (concept's `code` field). The
-    (code, name) dedup here is a SECOND-LAYER safety net in case the
-    ThsFetcher's internal merge missed a duplicate after zzshare rows
-    were appended. Both layers are independent; this one is
-    implementation-detail of the new helper, not a replacement of
-    ThsFetcher's existing dedup logic.
+      - ths=[] + zz=[] → []
+      - ths=[] + zz=non-empty → all zzshare rows appended
+      - ths=non-empty + zz=[] → ths rows returned as-is
     """
+    # ZzshareFetcher.get_all_boards does not emit a 'platecode' field —
+    # its plate_code value lives under 'code' only. Promote it here so
+    # the backfill index below can read r['platecode'] uniformly.
     by_name: dict[str, str] = {}
     for r in zzshare_rows:
+        if r.get("platecode") is None and r.get("code"):
+            r["platecode"] = r["code"]
         name = r.get("name", "")
         if name and r.get("platecode"):
             by_name[name] = r["platecode"]
@@ -634,7 +634,6 @@ def _merge_ths_zzshare_by_name(
     seen: set[tuple[str, str]] = set()
     ths_names: set[str] = set()
     for r in ths_rows:
-        # Backfill platecode from zzshare when THS row lacks one
         if not r.get("platecode") and r.get("name") in by_name:
             r["platecode"] = by_name[r["name"]]
         key = (r.get("code", ""), r.get("name", ""))
@@ -642,12 +641,11 @@ def _merge_ths_zzshare_by_name(
             continue
         seen.add(key)
         ths_names.add(r.get("name", ""))
-        r["source"] = "ths"  # tag as ths regardless of origin
+        r["source"] = "ths"
         out.append(r)
     for r in zzshare_rows:
-        # Skip if the name is already represented by a THS row.
-        # The two rows may carry different codes (THS cid vs zzshare
-        # plate_code) but represent the same board — THS wins.
+        # Same name already represented by a THS row — THS wins (THS cid
+        # is the canonical code; zzshare's plate_code is metadata).
         if r.get("name", "") in ths_names:
             continue
         key = (r.get("code", ""), r.get("name", ""))
