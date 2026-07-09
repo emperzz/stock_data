@@ -139,3 +139,30 @@ def test_get_board_realtime_raises_on_http_error():
     ):
         with pytest.raises(DataFetchError):
             f.get_board_realtime("885595")
+
+
+def test_manager_get_board_realtime_routes_to_source():
+    """manager.get_board_realtime routes by source via _with_source, returns (dict, name)."""
+    from stock_data.data_provider.manager import DataFetcherManager
+    from stock_data.data_provider.base import DataCapability
+
+    mgr = DataFetcherManager.__new__(DataFetcherManager)
+
+    captured = {}
+
+    def fake_with_source(source, capability, market, op_label, call):
+        captured["source"] = source
+        captured["capability"] = capability
+        captured["market"] = market
+        fake_fetcher = MagicMock()
+        fake_fetcher.name = "ths"
+        fake_fetcher.get_board_realtime.return_value = {"board_name": "央企国企改革"}
+        return call(fake_fetcher)
+
+    with patch.object(mgr, "_with_source", side_effect=fake_with_source):
+        result, name = mgr.get_board_realtime("885595", "ths")
+    assert result["board_name"] == "央企国企改革"
+    assert name == "ths"
+    assert captured["capability"] == DataCapability.STOCK_BOARD
+    assert captured["market"] == "csi"
+    assert captured["source"] == "ths"

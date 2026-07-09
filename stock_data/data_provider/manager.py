@@ -853,6 +853,25 @@ class DataFetcherManager:
         )
         return result, name
 
+    def get_board_realtime(
+        self,
+        board_code: str,
+        source: str,
+    ) -> tuple[dict, str]:
+        """Get board-level realtime quote from the named source (source-routed).
+
+        No failover — board classification systems differ across sources.
+        Currently only ThsFetcher implements ``get_board_realtime``; other
+        sources raise AttributeError inside the call (caller decides fallback).
+        """
+        return self._with_source(
+            source=source,
+            capability=DataCapability.STOCK_BOARD,
+            market="csi",
+            op_label=f"board realtime {board_code} ({source})",
+            call=lambda f: (f.get_board_realtime(board_code), f.name),
+        )
+
     # ---------- eastmoney datacenter endpoints ----------
 
     def get_dragon_tiger(self, code: str, trade_date: str = "") -> tuple[dict, str]:
