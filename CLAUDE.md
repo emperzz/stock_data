@@ -172,7 +172,7 @@ to invoke the fetcher method directly (bypassing manager failover).
    `UnknownFetcher / UnknownMethod / FetcherUnavailable / TypeError / <ExceptionName>`,
    each with optional traceback.
 
-### `fetcher_method` overrides (3 known)
+### `fetcher_method` overrides (5 known)
 
 `@endpoint_meta(fetcher_method=...)` pins the method when the capability's
 default isn't right:
@@ -217,7 +217,7 @@ Compact overview:
 | `ZzshareFetcher` | 2 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
 | `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强 — 仅股票; Tencent 未声明 `INDEX_REALTIME_QUOTE`,不进指数 quote 链) | none |
 | `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `NEWS_SEARCH`, `STOCK_BOARD`, `STOCK_NEWS`, `ANNOUNCEMENT` | none |
-| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH`, `NEWS_SEARCH` (via 问财 iWenCai) | none |
+| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH`, `NEWS_SEARCH` (via 问财 iWenCai), `STOCK_BOARD` (board K-line concept/industry, d-only — 2026-07-08), `STOCK_NEWS` (basic.10jqka.com.cn 个股新闻 P7 备份), `ANNOUNCEMENT` (basic.10jqka.com.cn 个股公告 P7 备份) | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
 | `MyquantFetcher` | 9 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_KLINE`, `STOCK_INFO` (last-resort backup; richer sources win) | `MYQUANT_TOKEN` |
@@ -279,10 +279,10 @@ fetchers that support it.
 | `get_realtime_quote` | `STOCK_REALTIME_QUOTE` (ZzshareFetcher P2) |
 | `get_stock_name` | n/a — handled by `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
 | `get_trade_calendar` | `TRADE_CALENDAR` (ZzshareFetcher P2) |
-| `get_all_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P2) |
-| `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P2) |
-| `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover) (ZzshareFetcher P2) |
-| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; eastmoney/ths; `source=zzshare` is aliased to `ths` at the route layer — see board-history note below) |
+| `get_all_boards` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu` — `zzshare` unified under `ths` on 2026-07-08) |
+| `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu`; `zzshare` is no longer a public label here — returns 422) |
+| `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu`; `source=zzshare` is still aliased to `ths` at the route layer for backward compat) |
+| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; valid sources: `ths` (d-only, concept/industry — `board_type` required) / `eastmoney` (d/w/m + 5/15/30/60m); `source=zzshare` is aliased to `ths` because ZzshareFetcher has no K-line impl) |
 | `get_index_realtime_quote` | `INDEX_REALTIME_QUOTE` |
 | `get_index_historical` | `INDEX_KLINE` |
 | `get_kline_data` (index) | `INDEX_KLINE` |
@@ -305,9 +305,7 @@ fetchers that support it.
 | `get_indicator_catalog` (no routing needed) | n/a — pure compute |
 | `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `STOCK_KLINE` |
 
-**Board K-line (`/boards/{board_code}/history`)** — source-routed; `source=zzshare` 在 route 层 alias 到
-`ths`(ZzshareFetcher 已不提供 board K-line,详见 `docs/superpowers/plans/2026-07-02-board-kline-eastmoney-ths.md`)。
-实现: EastMoneyFetcher (d/w/m + 5/15/30/60m via push2his) + ThsFetcher (d-only, concept/industry)。
+**Board K-line (`/boards/{board_code}/history`)** — source-routed; valid sources: `ths` (d-only, concept/industry — `board_type` is required, 422 if missing) and `eastmoney` (d/w/m + 5/15/30/60m via push2his). `source=zzshare` 在 route 层 alias 到 `ths`(ZzshareFetcher 已不提供 board K-line; 800-day date range cap 来自 EastMoneyFetcher 的 `lmt=800` ceiling, 超出返回 400 `date_range_too_wide`)。Zhitu 不在 valid 集合中 — 无 board K-line 上游。详见 `docs/superpowers/plans/2026-07-02-board-kline-eastmoney-ths.md`。
 
 **Fetcher capability declarations:**
 
@@ -322,7 +320,7 @@ fetchers that support it.
 | ZhituFetcher | `STOCK_REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| STOCK_KLINE \| STOCK_LIST \| STOCK_BOARD \| DIVIDEND \| FUND_FLOW \| HOLDER_NUM \| INDEX_REALTIME_QUOTE \| INDEX_KLINE` |
 | TencentFetcher | `STOCK_REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价 — 仅股票) |
 | EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD \| STOCK_NEWS \| ANNOUNCEMENT` |
-| ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH \| NEWS_SEARCH` |
+| ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD \| STOCK_NEWS \| ANNOUNCEMENT` |
 | CninfoFetcher | `ANNOUNCEMENT` |
 
 **Index routing design**: Each fetcher that declares an INDEX_* capability must implement the corresponding public method (`get_index_realtime_quote`, `get_index_historical`, `get_index_intraday`). The Manager calls these methods directly — no `hasattr` checks, no fallback to stock methods. Internally, a fetcher may delegate to shared data processing logic (e.g. `get_index_historical` → `get_kline_data`), but the public interface is always the dedicated index method.
@@ -333,7 +331,7 @@ fetchers that support it.
 
 - **指数 quote**: 见上文 Capability-Based Routing 表 — CSI = `Akshare→Yfinance→Zhitu`;HK/US = `Yfinance`(Akshare 内部只查 A 股 feed,Zhitu `supported_markets={csi}` 被自动剔除)。
 - **指数 K 线 d/w/m**: `Baostock → Tushare → Akshare → Yfinance → Zhitu → Myquant`
-- **指数 K 线 5/15/30/60m**: `Akshare → Yfinance → Zhitu`(Myquant index `supports_kline` 只在 `period == "d"` 时返回 True,非 d 周期被剔除)
+- **指数 K 线 5/15/30/60m**: `Akshare → Yfinance → Zhitu`(Myquant index `supports_kline` 只在 `period == "d"` 时返回 True,非 d 周期被剔除; Zhitu `supports_kline` 覆盖 `d/w/m + 5/15/30/60`,csi only)
 
 实现细节 (`zhitu_fetcher.py` 源码 + memory `zhitu-fetcher-implements-index-api` /
 `zhitu-index-000xxx-sh-vs-sz` / `zhitu-upstream-volume-unit-inconsistency`):

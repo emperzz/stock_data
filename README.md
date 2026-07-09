@@ -14,6 +14,7 @@ Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / 
 ## Features
 
 - **Multi-source aggregation** (12 fetchers): Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Myquant, Baidu
+- **Board data** (concept / industry / index / special): source-routed across `ths` (concept + industry, d-only K-line), `eastmoney` (concept + industry, d/w/m + minutes K-line), `zhitu` (all 4 types, no K-line); `zzshare` unified under `ths` since 2026-07-08.
 - **Automatic failover**: priority-based source selection with capability-routed fallback
 - **Circuit breaker**: prevents cascading failures from unavailable sources
 - **Persistent metadata cache**: SQLite for stock lists, board metadata, trade calendar, ZT/DT/ZBGC pools (separate from in-process TTLCache)
@@ -541,33 +542,53 @@ incompatible board classification systems (EastMoney: concept/industry;
 Zhitu: type × subtype), so failover between sources is intentionally
 not supported.
 
-Available sources: `eastmoney`, `zhitu`.
+**Available source labels (post 2026-07-08 unification):**
+- `ths` — ThsFetcher (concept + industry, d-only K-line; internally
+  merges ZzshareFetcher for platecode backfill)
+- `eastmoney` — EastMoneyFetcher (concept + industry only; no
+  index/special classification upstream; d/w/m + 5/15/30/60m K-line)
+- `zhitu` — ZhituFetcher (concept / industry / index / special; no K-line)
+
+**`zzshare` aliases:**
+- `/boards` and `/boards/{code}/stocks` — `zzshare` is **not** a valid
+  source label; it returns 422 (was unified under `ths` on 2026-07-08).
+  The underlying ZzshareFetcher is still used internally for
+  platecode backfill on `?source=ths` board-list and as primary
+  `include_quote=false` fallback on `/boards/{code}/stocks`.
+- `/stocks/{code}/boards` — `zzshare` is accepted as alias for `ths`
+  (THS basic API is the shared upstream).
+- `/boards/{code}/history` — `zzshare` is accepted and aliased to
+  `ths` (ZzshareFetcher has no K-line implementation; upstream
+  `plate_kline` only supports 883957 同花顺全A).
 
 ```bash
 # Board list (concept / industry / index / special)
-GET /api/v1/boards?type=concept&source=eastmoney
+GET /api/v1/boards?type=concept&source=ths
 GET /api/v1/boards?type=industry&source=eastmoney&include_quote=true
 GET /api/v1/boards?type=industry&source=zhitu&subtype=申万行业
+GET /api/v1/boards?type=concept&source=ths&subtype=同花顺概念
 
 # Board stocks
 GET /api/v1/boards/BK1048/stocks?source=eastmoney
-GET /api/v1/boards/BK1048/stocks?source=eastmoney&include_quote=true
+GET /api/v1/boards/BK1048/stocks?source=ths&include_quote=true
 
-# Stock → boards mapping (Zhitu only)
-GET /api/v1/stocks/000001/boards?source=zhitu
+# Stock → boards mapping (multi-source; default = all valid sources)
+GET /api/v1/stocks/000001/boards?source=ths
 GET /api/v1/stocks/000001/boards?source=zhitu&type=concept&subtype=热门概念
+GET /api/v1/stocks/000001/boards?source=ths,eastmoney,zhitu   # multi-source aggregation
 
-# Board K-line (stub — 501 Not Implemented)
-GET /api/v1/boards/BK1048/history?source=eastmoney
+# Board K-line (THS: d-only, board_type required; EastMoney: multi-frequency)
+GET /api/v1/boards/BK1048/history?source=eastmoney&frequency=d
+GET /api/v1/boards/881270/history?source=ths&frequency=d&board_type=industry
 ```
 
 **Parameters for `GET /boards`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `type` | string | Required | Board type: `concept`, `industry`, `index`, `special` |
-| `source` | string | Required | Data source: `eastmoney` or `zhitu` |
+| `type` | string | null (all) | Board type: `concept`, `industry`, `index`, `special`. Omit to return every type the source exposes. `eastmoney` only supports `concept` + `industry`; `?type=index` / `?type=special` returns 400 on `source=eastmoney`. |
+| `source` | string | Required | Data source: `ths`, `eastmoney`, or `zhitu` |
 | `subtype` | string | null | Source-specific subtype (e.g. `申万行业` for zhitu). Validated per (source, type) pair. |
-| `include_quote` | bool | `false` | Include realtime price/change/market data (EastMoney only; Zhitu ignores) |
+| `include_quote` | bool | `false` | Include realtime price/change/market data (EastMoney only; ThsFetcher + Zhitu ignore) |
 | `sort_by` | string | null | Sort by: `change_pct`, `volume`, `amount`, `price` (requires `include_quote=true`) |
 | `sort_order` | string | `desc` | Sort order: `asc` or `desc` |
 | `limit` | int | null | Max items (1-500) |
@@ -576,13 +597,19 @@ GET /api/v1/boards/BK1048/history?source=eastmoney
 **Response (with `include_quote=false`, default):**
 ```json
 {
-  "source": "EastMoneyFetcher",
+  "source": "ths",
   "data": [
-    {"code": "BK1048", "name": "互联网服务"},
-    {"code": "BK0891", "name": "云计算"}
+    {"code": "301558", "name": "互联网服务", "type": "concept", "subtype": "同花顺概念"},
+    {"code": "881270", "name": "白酒", "type": "industry", "subtype": "同花顺行业"}
   ]
 }
 ```
+
+`source` here is the **actual origin** (fetcher name on cache miss;
+`"persistence"` on cache hit). It does not always equal the user-supplied
+`source` query param — `source=ths` board-list internally merges THS
++ ZzshareFetcher platecode backfill but the public surface tags both
+as `source="ths"`.
 
 **Response (with `include_quote=true`):**
 ```json
@@ -592,6 +619,7 @@ GET /api/v1/boards/BK1048/history?source=eastmoney
     {
       "code": "BK1048",
       "name": "互联网服务",
+      "type": "concept",
       "price": 1850.5,
       "change_pct": 2.35,
       "change_amount": 42.3,
@@ -611,18 +639,55 @@ GET /api/v1/boards/BK1048/history?source=eastmoney
 **Parameters for `GET /boards/{board_code}/stocks`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `source` | string | Required | Data source: `eastmoney` or `zhitu` |
-| `include_quote` | bool | `false` | Include realtime price/change/volume data for each stock |
+| `source` | string | Required | Data source: `ths`, `eastmoney`, or `zhitu`. `?source=zzshare` returns 422. |
+| `include_quote` | bool | `false` | Include realtime quote fields (THS populates by default; EastMoney requires `true`; Zzshare/Zhitu emit no quote fields — affected fields are `null`, not omitted) |
 | `refresh` | bool | `false` | Force fetch latest from upstream |
+
+This endpoint returns two source fields:
+- `query_source` — the user-supplied `?source=` value (canonicalized)
+- `data_source` — the actual origin (`fetcher name` on cache miss;
+  `"persistence"` on cache hit)
 
 **Parameters for `GET /stocks/{stock_code}/boards`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `source` | string | Required | Data source (currently only `zhitu` supported; `eastmoney` returns 501) |
+| `source` | string | null (all) | Comma-separated sources (`ths,eastmoney,zhitu`). `zzshare` is accepted as alias for `ths`. Omit for all valid sources. |
 | `type` | string | null | Filter by board type |
 | `subtype` | string | null | Filter by source-specific subtype |
+| `cold_fill` | bool | `false` | Opt-in lazy-fill on cold data for `ths` / `zhitu` / `eastmoney`. Default `false` (cold data surfaces in `cold_sources` instead). |
 
-**Source-specific subtype values (zhitu):**
+Multi-source aggregation: the response `source` field is `"merged"`
+when more than one source is requested; the `cold_sources` array lists
+sources with no cached data (so the caller can decide whether to retry
+with `cold_fill=true`).
+
+**Parameters for `GET /boards/{board_code}/history`:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `source` | string | Required | Data source: `ths` (d-only) or `eastmoney` (d/w/m + 5/15/30/60m). `zzshare` is accepted and aliased to `ths`. |
+| `frequency` | string | `d` | K-line frequency. `eastmoney` supports `d / w / m / 5m / 15m / 30m / 60m`; `ths` is `d`-only (other frequencies raise 4xx). |
+| `start_date` | string | null | Start date (YYYY-MM-DD). Range width is capped at 800 days; exceeds → 400 `date_range_too_wide`. |
+| `end_date` | string | null | End date (YYYY-MM-DD). Defaults to today. |
+| `days` | int | 30 | Days (used when `start_date` is not given). 1-800. |
+| `board_type` | string | null | **Required** when `source=ths` (`concept` or `industry` — ThsFetcher uses two incompatible code systems; 422 if missing). Ignored for `eastmoney`. |
+
+**Source-specific subtype values:**
+
+`ths`:
+| Type | Valid subtypes |
+|------|---------------|
+| `concept` | `同花顺概念`, `同花顺题材` (zzshare plate=17 题材 folded into concept with subtype preserved) |
+| `industry` | `同花顺行业` |
+
+`eastmoney`:
+| Type | Valid subtypes |
+|------|---------------|
+| `concept` | `concept` (mirror of type) |
+| `industry` | `industry` (mirror of type) |
+| `index` | **not supported** — returns 400 |
+| `special` | **not supported** — returns 400 |
+
+`zhitu`:
 | Type | Valid subtypes |
 |------|---------------|
 | `industry` | `申万行业`, `申万二级`, `证监会行业` |
@@ -630,13 +695,14 @@ GET /api/v1/boards/BK1048/history?source=eastmoney
 | `index` | `分类`, `指数成分`, `大盘指数` |
 | `special` | `风险警示`, `次新股`, `沪港通`, `深港通` |
 
-**EastMoney** subtype is a mirror of type (`concept`, `industry`, `index`, `special`).
-
 **Caching behavior for board endpoints:**
-- Results are cached in `stock_data/stock_cache.db` (SQLite)
-- `include_quote=true` fetches fresh data from upstream AND updates cache
-- `refresh=true` forces upstream fetch and updates cache
-- First call of each day triggers a refresh from upstream
+- Results are cached in `stock_data/stock_cache.db` (SQLite), keyed by
+  `(board_type, source)` with optional `subtype`.
+- `include_quote=true` fetches fresh data from upstream AND updates cache.
+- `refresh=true` forces upstream fetch and updates cache.
+- First call of each day triggers a refresh from upstream (cold path
+  → upstream call → upsert; warm path → cache hit returns
+  `source="persistence"`).
 
 ---
 
@@ -1080,11 +1146,17 @@ All responses carrying fetched data include a `source: str` field with one of th
 
 `source` is optional in the schema and defaults to `""`. Older clients may ignore it.
 
-**Board endpoints**: the `source` field in the response echoes the fetcher
-name (e.g. `"EastMoneyFetcher"`, `"ZhituFetcher"`). Board data is
-source-routed — different sources use incompatible classification
-systems, so the source in the response always matches the `source`
-query parameter.
+**Board endpoints**: the `source` field in the response echoes the actual
+data origin (fetcher name on cache miss; `"persistence"` on cache hit).
+Board data is source-routed — different sources use incompatible
+classification systems, so the source in the response generally matches
+the `source` query parameter, with two exceptions:
+- `source=ths` on `/boards` internally merges `ThsFetcher` +
+  `ZzshareFetcher` (platecode backfill); the public surface tags both
+  as `source="ths"`.
+- `/boards/{code}/stocks` returns **two** source fields:
+  `query_source` (user-supplied `?source=`, canonicalized) and
+  `data_source` (actual origin: fetcher name or `"persistence"`).
 
 `/stocks` and `/calendar` currently do NOT expose `source` (their response models have no such field) — the persistence origin is still computed and discarded. This is a YAGNI choice; if needed later, add `source: str` to those response models and the route layer is already wired to pass it through.
 
@@ -1226,26 +1298,27 @@ The server automatically routes requests to the appropriate data source based on
 |----------|--------|------|
 | 0 | Tushare | Requires `TUSHARE_TOKEN` |
 | 1 | Baostock | Free, no token |
-| 2 | Zzshare | A-share multi-capability (d/5/15/30/60/股票列表/交易日历/板块/龙虎榜/热点题材/公司画像); anonymous-capable, `ZZSHARE_TOKEN` optional (only `stock_info` + `uplimit_stocks` need it) |
+| 2 | Zzshare | A-share multi-capability (d/5/15/30/60/股票列表/交易日历/板块/龙虎榜/热点题材/公司画像); anonymous-capable, `ZZSHARE_TOKEN` optional (only `stock_info` + `uplimit_stocks` need it). **Board endpoints: not a public source label** since 2026-07-08 unification; still used internally for platecode backfill on `?source=ths` board-list and as primary `include_quote=false` fallback on `/boards/{code}/stocks`. |
 | 3 | Akshare | Fallback (also serves 1m, no adjust) |
 | 4 | Yfinance | Fallback |
 | 5 | Zhitu | Realtime quotes + 公司画像 + 板块 (含 stock→boards), minute fallback (5/15/30/60), requires `ZHITU_TOKEN` |
 | 5 | Tencent | Enhanced quotes (PE/PB/市值/涨跌停价), HTTP only |
-| 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报/快讯/新闻/板块/个股资讯/公告 |
-| 7 | THS | 热点题材/北向资金/快讯 (backup) |
+| 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报/快讯/新闻/板块 (concept+industry only) /个股资讯/公告 |
+| 7 | THS | 热点题材/北向资金/快讯 (backup) / 板块 K 线 (d-only, concept+industry) / 个股新闻 + 个股公告 P7 备份 |
 | 7 | Baidu | 新闻搜索 (backup for EastMoney), requires `BAIDU_API_KEY` |
 | 8 | Cninfo | 公告检索 |
-| 9 | Myquant | Last-resort backup (d/w/m/minute/quote/index), requires `MYQUANT_TOKEN` |
+| 9 | Myquant | Last-resort backup (d/w/m/minute/quote/index-d), requires `MYQUANT_TOKEN` |
 
 ### A-share Indices (CSI)
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 0 | Tushare | Requires API token, uses `index_daily` API |
+| 0 | Tushare | Requires API token, uses `index_daily` API; d/w/m only (no minutes) |
 | 1 | Baostock | Uses `sh.XXXXXX` / `sz.XXXXXX` format; d/w/m only (no minutes) |
-| 3 | Akshare | Uses `index_zh_a_hist` API |
-| 4 | Yfinance | Uses `.SS` / `.SZ` suffix |
-| 9 | Myquant | Last-resort backup; serves 5/15/30/60 minutes for CSI indices |
+| 3 | Akshare | Uses `index_zh_a_hist` API; full d/w/m + 5/15/30/60m; 1m via `index_zh_a_hist_min_em` (single-day window) |
+| 4 | Yfinance | Uses `.SS` / `.SZ` suffix; d/w/m + 5/15/30/60m; no 1m; no hfq |
+| 5 | Zhitu | `/hz/history/fsjy/<code>.<mkt>/<level>` — added 2026-07-06; d/w/m + 5/15/30/60m; csi only; no adjust (指数无复权) |
+| 9 | Myquant | Last-resort backup; **d only** for indices (no minutes) |
 
 ### US Stocks
 
@@ -1279,19 +1352,38 @@ The server automatically routes requests to the appropriate data source based on
 
 ## Frequency Support
 
-| Provider | Daily (d) | Weekly (w) | Monthly (m) | Minute (1m/5m/15m/30m/60m) |
-|----------|-----------|------------|-------------|------------------------------|
-| Baostock | ✅ | ✅ | ✅ | ✅ (5m/15m/30m/60m, csi stocks only — not indices) |
-| Tushare | ✅ | ✅ | ✅ | ❌ |
-| Akshare | ✅ | ✅ | ✅ | ✅ (1m/5m/15m/30m/60m; 1m refuses adjust) |
-| Yfinance | ✅ | ✅ | ✅ | ✅ (5m/15m/30m/60m — no 1m; refuses hfq) |
-| Zhitu | ❌ | ❌ | ❌ | ✅ (5m/15m/30m/60m only; no 1m; no adjust) |
-| Zzshare | ✅ | ❌ | ❌ | ✅ (1m/5m/15m/30m/60m; refuses adjust on minutes) |
-| Myquant | ✅ | ✅ | ✅ | ✅ (5m/15m/30m/60m — no 1m; csi only) |
+**Stocks (csi):**
+
+| Provider | d | w | m | 1m | 5m | 15m | 30m | 60m |
+|----------|---|---|---|----|----|-----|-----|-----|
+| Baostock | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Akshare | ✅ | ✅ | ✅ | ✅¹ | ✅ | ✅ | ✅ | ✅ |
+| Tushare | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Yfinance | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅² |
+| Zhitu | ❌ | ❌ | ❌ | ❌ | ✅³ | ✅³ | ✅³ | ✅³ |
+| Zzshare | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Myquant | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+
+¹ Akshare 1m 走 `stock_zh_a_hist_min_em`,需单日窗口(start_date=end_date),1m 拒绝 adjust。
+² Yfinance 拒绝 hfq(Stage 2 即剔除);HK/US 股票同 5m-60m。
+³ Zhitu 股票 K 线强制 5/15/30/60 minute,无 d/w/m(分钟回退);无 qfq/hfq。
+
+**Indices (csi, no adjust 适用 — 指数无复权):**
+
+| Provider | d | w | m | 1m | 5m | 15m | 30m | 60m |
+|----------|---|---|---|----|----|-----|-----|-----|
+| Baostock | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Tushare | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Akshare | ✅ | ✅ | ✅ | ✅⁴ | ✅ | ✅ | ✅ | ✅ |
+| Yfinance | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅² |
+| Zhitu | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Myquant | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+⁴ Akshare 指数 1m 走 `index_zh_a_hist_min_em`,需单日窗口(start_date=end_date)。
 
 **Notes:**
-- Baostock does NOT support minute frequency for CSI indices (only csi stocks).
-- 1-minute data is served by Akshare (no adjust) and Zzshare (no adjust); Zhitu / Myquant / Yfinance do not support 1m.
+- 1-minute stock data: Akshare + Zzshare; Zhitu / Yfinance / Myquant / Baostock / Tushare do not support 1m.
+- 1-minute index data: only Akshare (csi, single-day window). Zhitu has no 1m endpoint; Myquant index is d-only.
 - Minute-line K-line is only available for A-share stocks and CSI indices (not US/HK stocks or US indices). Use `period=5m` etc. on `/stocks/{code}/kline` or `/indices/{code}/kline` — there is no separate `/intraday` route.
 
 ---
