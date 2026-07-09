@@ -28,12 +28,25 @@ and docs/zzshare/05-dragon-tiger.md for upstream field tables):
   (default) — aggregating institutional trades needs a discriminator field
   on zzshare trader rows (EastMoney uses ``OPERATEDEPT_CODE == "0"``); the
   semantics of zzshare's ``type`` field are not yet probed (TODO).
+  When the stock is not on the list that day, upstream returns the
+  same outer dict shape but WITHOUT the inner ``detail`` key (only
+  ``traders`` may be present, possibly empty). ``get_dragon_tiger``
+  treats absence of the inner ``detail`` key as "stock not on list"
+  and emits ``records=[]`` (the seats branch still runs if ``traders``
+  is present).
+  Drives ``get_dragon_tiger`` (sole upstream call after the 2026-07-09
+  refactor that removed the ``lhb_stock_history`` fallback).
 
 - ``lhb_stock_history(stock_code)`` — historical dragon-tiger summary per
   stock. Upstream row keys: ``buy_in, date, quote_change, t_icon, t_type``
   (NOT ``trade_date``; no ``reason`` or ``turnover`` fields — only
-  ``quote_change`` is available, which is a different metric). Drives the
-  fallback path in ``get_dragon_tiger`` when ``lhb_detail`` is unavailable.
+  ``quote_change`` is available, which is a different metric). As of
+  2026-07-09, no fetcher method calls this — ``get_dragon_tiger`` was
+  switched to ``lhb_detail``-only (the prior ``lhb_detail→lhb_stock_history``
+  fallback design in
+  docs/superpowers/specs/2026-06-29-zzshare-min-kline-and-index-fallback-design.md
+  is voided). The SDK still exposes this endpoint; only the fetcher
+  integration changed.
 
 - ``lhb_trader_history(trader_name)`` — cross-stock history for a trader seat.
   Not currently consumed by any fetcher method.
@@ -769,52 +782,68 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             "stocks": out_stocks,
         }
 
-    def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> dict:
-        """个股龙虎榜 via zzshare lhb_detail + lhb_stock_history.
+    def get_dragon_tiger(self, code: str, trade_date: str = "") -> dict:
+        """个股龙虎榜 via zzshare ``lhb_detail``.
+
+        Single-call design: ``lhb_detail(date1, stock_code)`` returns a
+        ``dict`` of the shape ``{"detail": {...}, "traders": [...]}``.
+        Per-day aggregate fields (date / reason / net_buy) come from
+        ``detail``; per-seat fields come from ``traders``.
 
         Returns ``{records[], seats{buy, sell}, institution}`` matching
         ``DragonTigerResponse`` schema (api/schemas.py):
 
         - records: ``[{date, reason, net_buy_wan, turnover_pct}]``
-          Always populated from ``lhb_stock_history(stock_code=...)``
-          (full upstream history), filtered client-side to
-          ``[trade_date - look_back, trade_date]`` when ``trade_date``
-          is provided; when ``trade_date`` is empty, returns the full
-          history list. zzshare ``lhb_stock_history`` does NOT accept a
-          date-range parameter, so the filter is done locally — the
-          alternative would be N+1 detail calls.
-          - ``date``: ISO ``YYYY-MM-DD`` from upstream ``date`` field
-          - ``net_buy_wan``: ``buy_in / 10000`` rounded to 1 decimal
-          - ``reason``: empty string — ``lhb_stock_history`` does NOT
-            return a reason field (``up_reason`` is only in ``lhb_list``)
-          - ``turnover_pct``: 0.0 — ``lhb_stock_history`` only has
-            ``quote_change``, which is a different metric
+          At most one entry — for the requested ``trade_date``. Built
+          from the ``detail`` portion of the upstream response:
+          - ``date``: the requested ``trade_date`` (ISO ``YYYY-MM-DD``)
+          - ``reason``: upstream ``detail.up_reason`` (e.g.
+            "涨幅偏离值达7%"). Empty string when ``detail`` is absent
+            (the stock was not on the dragon-tiger list that day).
+          - ``net_buy_wan``: ``detail.buy_in / 10000`` rounded to 1
+            decimal. ``0.0`` when ``detail`` is absent.
+          - ``turnover_pct``: ``0.0`` — zzshare ``lhb_detail`` does
+            NOT return a turnover field; EastMoneyFetcher has
+            ``TURNOVERRATE`` upstream. (Same gap that previously
+            existed when using ``lhb_stock_history``.)
+          ``records`` is empty when the upstream returns no ``detail``
+          (stock not on list that day) or when ``trade_date`` resolves
+          to empty via the trade-calendar fallback.
         - seats: ``{buy: [{name, buy_wan, sell_wan, net_wan}], sell: [...]}`` (万元)
-          built from ``detail["traders"]`` (real upstream shape is
-          ``dict {detail: {...}, traders: [...]}, NOT a list)``. Each
-          trader row is pushed ONCE — to ``seats["buy"]`` if
-          ``row.type == 1`` (买入侧排行) or to ``seats["sell"]`` if
-          ``row.type == 2`` (卖出侧排行) — and carries the full
-          ``buy_wan / sell_wan / net_wan`` triple derived from the same
-          row's ``buy_amount / sell_amount`` values. The same trader
-          can appear in BOTH lists if it's in the top-N of both sides
-          on the same day (its ``buy_amount/sell_amount`` may differ
-          between the two list entries — each is a per-side snapshot).
-          Probe (000004 on 2025-05-13): 10 trader rows for 6 unique
-          names; type distribution {1: 5, 2: 5}.
+          built from ``detail["traders"]``. Each trader row is pushed
+          ONCE — to ``seats["buy"]`` if ``row.type == 1`` (买入侧排行)
+          or to ``seats["sell"]`` if ``row.type == 2`` (卖出侧排行) —
+          and carries the full ``buy_wan / sell_wan / net_wan`` triple
+          derived from the same row's ``buy_amount / sell_amount``
+          values. The same trader can appear in BOTH lists if it's in
+          the top-N of both sides on the same day (its
+          ``buy_amount/sell_amount`` may differ between the two list
+          entries — each is a per-side snapshot). Probe (000004 on
+          2025-05-13): 10 trader rows for 6 unique names; type
+          distribution {1: 5, 2: 5}.
         - institution: ``{buy_amt: 0, sell_amt: 0, net_amt: 0}`` default.
-          Aggregating institutional trades requires a discriminator field
-          on zzshare trader rows (EastMoney uses ``OPERATEDEPT_CODE == "0"``);
-          zzshare's ``type`` field discriminates buy/sell side, NOT
-          institution-vs-brokerage — left as TODO.
+          Aggregating institutional trades requires a discriminator
+          field on zzshare trader rows (EastMoney uses
+          ``OPERATEDEPT_CODE == "0"``); zzshare's ``type`` field
+          discriminates buy/sell side, NOT institution-vs-brokerage —
+          left as TODO.
 
         Args:
             code: 6-digit stock code (bare, no suffix).
-            trade_date: optional ``YYYY-MM-DD``; when empty, history
-                records are unfiltered (full list) and the detail
-                branch is skipped (since detail requires a date).
-            look_back: number of days back from ``trade_date`` (or
-                today) to include in records; default 30.
+            trade_date: optional ``YYYY-MM-DD``; when empty, resolved
+                via ``get_latest_trade_date_on_or_before(today)`` (same
+                fallback ``get_daily_dragon_tiger`` uses). If the
+                trade calendar returns empty too, the fetcher skips
+                the upstream call and returns empty records + seats.
+
+        Note: ``lhb_stock_history`` was removed from this method on
+        2026-07-09 — it is no longer called from any fetcher path. The
+        SDK still exposes it for ad-hoc upstream queries, but the
+        per-stock fetcher now uses ``lhb_detail`` exclusively. The
+        previous ``lhb_detail→lhb_stock_history`` fallback design
+        ratified in
+        docs/superpowers/specs/2026-06-29-zzshare-min-kline-and-index-fallback-design.md
+        is voided by this refactor.
 
         See docs/zzshare/05-dragon-tiger.md for the upstream field tables.
         """
@@ -823,11 +852,18 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         if api is None:
             raise DataFetchError("ZzshareFetcher zzshare SDK 不可用")
         bare_code = normalize_stock_code(code)
-        date_str = _to_yyyymmdd(trade_date) if trade_date else ""
+        # Resolve trade_date: explicit value → as-is; empty → today
+        # via trade calendar (same pattern get_daily_dragon_tiger uses).
+        if trade_date:
+            date_str = _to_yyyymmdd(trade_date)
+        else:
+            date_str = _to_yyyymmdd(
+                get_latest_trade_date_on_or_before(date.today().strftime("%Y-%m-%d")) or ""
+            )
         records: list[dict] = []
         seats: dict[str, list] = {"buy": [], "sell": []}
-        # 1) Try detail (per-day seats) — upstream returns dict {detail, traders}.
-        # Skipped when trade_date is empty (detail requires a date).
+        # detail requires a date — if trade_date unresolvable, skip the
+        # upstream call entirely and return empty payload (no exception).
         if date_str:
             try:
                 raw = api.lhb_detail(date1=date_str, stock_code=bare_code)
@@ -835,6 +871,26 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             except Exception as e:
                 logger.warning(f"[ZzshareFetcher] lhb_detail failed: {e}")
                 detail = None
+            # Build records[0] from the per-day aggregate. Only when
+            # upstream returned an INNER `detail` key does this stock
+            # actually appear on the list for `trade_date` — the outer
+            # dict is also truthy when only `traders` is present (the
+            # not-on-list shape), so we must check the inner aggregate
+            # explicitly to avoid emitting a phantom record with
+            # all-zero fields. See MUST FIX #1 in the review.
+            detail_meta = detail.get("detail") if detail else None
+            if detail_meta:
+                buy_in = safe_float(detail_meta.get("buy_in")) or 0.0
+                records.append(
+                    {
+                        "date": trade_date
+                        or datetime.strptime(date_str, "%Y%m%d").strftime("%Y-%m-%d"),
+                        "reason": str(detail_meta.get("up_reason") or ""),
+                        "net_buy_wan": round(buy_in / 10000, 1),
+                        # lhb_detail has no turnover field upstream.
+                        "turnover_pct": 0.0,
+                    }
+                )
             traders = (detail or {}).get("traders") if detail else None
             if traders:
                 for row in traders:
@@ -861,56 +917,6 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
                         seats["buy"].append(seat)
                     elif side == 2:
                         seats["sell"].append(seat)
-        # 2) Always pull lhb_stock_history for records (independent of
-        # detail success). lhb_stock_history doesn't accept a date
-        # range, so we fetch the full list and filter client-side.
-        try:
-            history = api.lhb_stock_history(stock_code=bare_code)
-        except Exception as e:
-            logger.warning(f"[ZzshareFetcher] lhb_stock_history failed: {e}")
-            history = None
-        if history and isinstance(history, list):
-            # Compute [start_date, end_date] window:
-            # - end_date = trade_date (if given) else None (no filter)
-            # - start_date = end_date - look_back days
-            # When trade_date is empty, no filter is applied and the
-            # full upstream history is returned. This avoids a dependency
-            # on the trade-calendar cache (which can be empty in tests
-            # or before the first refresh).
-            end_date: date | None = None
-            if date_str:
-                try:
-                    end_date = datetime.strptime(date_str, "%Y%m%d").date()
-                except ValueError:
-                    end_date = None
-            start_date = end_date - timedelta(days=look_back) if end_date else None
-            for row in history:
-                if not isinstance(row, dict):
-                    continue
-                row_date_str = str(row.get("date", ""))
-                if not row_date_str:
-                    continue
-                if start_date and end_date:
-                    # Filter to window
-                    try:
-                        row_date = datetime.strptime(row_date_str, "%Y-%m-%d").date()
-                    except ValueError:
-                        continue
-                    if row_date < start_date or row_date > end_date:
-                        continue
-                buy_in = safe_float(row.get("buy_in"))
-                records.append(
-                    {
-                        "date": row_date_str,
-                        # lhb_stock_history has no `reason` field upstream;
-                        # `up_reason` is only available via `lhb_list`.
-                        "reason": "",
-                        "net_buy_wan": round(buy_in / 10000, 1) if buy_in else 0.0,
-                        # lhb_stock_history has no turnover field (only
-                        # `quote_change`, a different metric).
-                        "turnover_pct": 0.0,
-                    }
-                )
         return {
             "records": records,
             "seats": seats,

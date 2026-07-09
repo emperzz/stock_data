@@ -838,7 +838,7 @@ GET /api/v1/stocks/{code}/dividend?page_size=20
 
 **个股龙虎榜:**
 ```bash
-GET /api/v1/stocks/{code}/dragon-tiger?trade_date=2026-05-20&look_back=30
+GET /api/v1/stocks/{code}/dragon-tiger?trade_date=2026-05-20
 ```
 
 ```json
@@ -856,6 +856,8 @@ GET /api/v1/stocks/{code}/dragon-tiger?trade_date=2026-05-20&look_back=30
   "source": "eastmoney"
 }
 ```
+
+> 单日查询:`records` 最多包含一条对应 `trade_date` 的上榜记录;不传 `trade_date` 时默认查询最新一个交易日。
 
 **全市场龙虎榜:**
 ```bash

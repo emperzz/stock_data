@@ -170,8 +170,8 @@ def make_index_quote_cache_key(index_code: str) -> str:
     return f"idx_quote:{index_code}"
 
 
-def make_dragon_tiger_cache_key(stock_code: str, trade_date: str, look_back: int) -> str:
-    return f"dt:{stock_code}:{trade_date}:{look_back}"
+def make_dragon_tiger_cache_key(stock_code: str, trade_date: str) -> str:
+    return f"dt:{stock_code}:{trade_date}"
 
 
 def make_daily_dragon_tiger_cache_key(trade_date: str, min_net_buy: float | None) -> str:

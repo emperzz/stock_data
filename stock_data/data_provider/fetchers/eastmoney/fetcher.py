@@ -450,22 +450,21 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
     # 龙虎榜 (Dragon Tiger Board) — per-stock
     # ==================================================================
 
-    def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> dict:
-        """Get dragon tiger board data for a single stock.
+    def get_dragon_tiger(self, code: str, trade_date: str = "") -> dict:
+        """Get dragon tiger board data for a single stock on ``trade_date``.
+
+        Single-day query: the datacenter filter pins TRADE_DATE to the
+        requested date only (no window). When ``trade_date`` is empty,
+        defaults to today.
 
         Returns: {records: [...], seats: {buy: [...], sell: [...]}, institution: {...}}
         """
         code = normalize_stock_code(code)
         if not trade_date:
             trade_date = datetime.now().strftime("%Y-%m-%d")
-        start = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=look_back)).strftime(
-            "%Y-%m-%d"
-        )
 
         ep = ENDPOINTS.DRAGON_TIGER
-        filter_str = (
-            f"(TRADE_DATE>='{start}')(TRADE_DATE<='{trade_date}')(SECURITY_CODE=\"{code}\")"
-        )
+        filter_str = f"(TRADE_DATE='{trade_date}')(SECURITY_CODE=\"{code}\")"
         data = self._datacenter_query(ep, filter_str=filter_str)
 
         records = []

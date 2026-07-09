@@ -296,18 +296,17 @@ def get_kline(
 @map_errors
 @cache_endpoint(
     cache_fn=lambda *args, **kwargs: get_dragontiger_cache(),
-    key_builder=lambda stock_code, trade_date, look_back: make_dragon_tiger_cache_key(
-        stock_code, trade_date, look_back
+    key_builder=lambda stock_code, trade_date: make_dragon_tiger_cache_key(
+        stock_code, trade_date
     ),
     hit_label="dragontiger",
 )
 def get_dragon_tiger(
     stock_code: str = Path(max_length=20),
     trade_date: str = Query(default="", description="Trade date (YYYY-MM-DD)"),
-    look_back: int = Query(default=30, ge=1, le=365),
 ) -> DragonTigerResponse:
     manager = get_manager()
-    data, source = manager.get_dragon_tiger(stock_code, trade_date, look_back)
+    data, source = manager.get_dragon_tiger(stock_code, trade_date)
     stock_name = stock_list.get_stock_name(stock_code, manager=manager)
     seats_data = data.get("seats", {})
     return DragonTigerResponse(

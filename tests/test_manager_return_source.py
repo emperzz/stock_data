@@ -43,7 +43,7 @@ class _MockFetcher:
         | DataCapability.ANNOUNCEMENT
     )
 
-    def get_dragon_tiger(self, code, trade_date, look_back):
+    def get_dragon_tiger(self, code, trade_date):
         return {
             "records": [],
             "seats": {"buy": [], "sell": []},
@@ -107,7 +107,7 @@ def mock_manager():
 
 
 def test_get_dragon_tiger_returns_tuple(mock_manager):
-    data, source = mock_manager.get_dragon_tiger("600519", "", 30)
+    data, source = mock_manager.get_dragon_tiger("600519", "")
     assert source == "mock_fetcher"
     assert isinstance(data, dict)
 
@@ -186,7 +186,7 @@ def test_get_announcements_returns_tuple(mock_manager):
 @pytest.mark.parametrize(
     "method_name, args",
     [
-        ("get_dragon_tiger", ("600519", "", 30)),
+        ("get_dragon_tiger", ("600519", "")),
         ("get_daily_dragon_tiger", ("", None)),
         ("get_margin_trading", ("600519", 30)),
         ("get_block_trade", ("600519", 20)),

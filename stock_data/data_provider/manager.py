@@ -855,10 +855,10 @@ class DataFetcherManager:
 
     # ---------- eastmoney datacenter endpoints ----------
 
-    def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> tuple[dict, str]:
+    def get_dragon_tiger(self, code: str, trade_date: str = "") -> tuple[dict, str]:
         return self._with_failover(
             DataCapability.DRAGON_TIGER, "csi", f"dragon_tiger {code}",
-            lambda f: f.get_dragon_tiger(code, trade_date, look_back),
+            lambda f: f.get_dragon_tiger(code, trade_date),
             return_source=True,
         )
 

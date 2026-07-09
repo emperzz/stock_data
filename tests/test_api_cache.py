@@ -38,12 +38,12 @@ class TestCacheKeyBuilders:
     """Test cache key generation for each API endpoint."""
 
     def test_dragon_tiger_key_format(self):
-        key = make_dragon_tiger_cache_key("600519", "2024-01-15", 30)
-        assert key == "dt:600519:2024-01-15:30"
+        key = make_dragon_tiger_cache_key("600519", "2024-01-15")
+        assert key == "dt:600519:2024-01-15"
 
-    def test_dragon_tiger_key_look_back_variations(self):
-        assert make_dragon_tiger_cache_key("000001", "2024-03-01", 7) == "dt:000001:2024-03-01:7"
-        assert make_dragon_tiger_cache_key("000001", "2024-03-01", 90) == "dt:000001:2024-03-01:90"
+    def test_dragon_tiger_key_empty_trade_date(self):
+        key = make_dragon_tiger_cache_key("000001", "")
+        assert key == "dt:000001:"
 
     def test_daily_dragon_tiger_key_with_min_net_buy(self):
         key = make_daily_dragon_tiger_cache_key("2024-01-15", 1000.0)
@@ -131,15 +131,15 @@ class TestCacheKeyUniqueness:
     """Test that different parameters produce different keys."""
 
     def test_different_codes_different_keys(self):
-        assert make_dragon_tiger_cache_key("600519", "2024-01-15", 30) != make_dragon_tiger_cache_key(
-            "000001", "2024-01-15", 30
+        assert make_dragon_tiger_cache_key("600519", "2024-01-15") != make_dragon_tiger_cache_key(
+            "000001", "2024-01-15"
         )
         assert make_margin_cache_key("600519", 30) != make_margin_cache_key("000001", 30)
         assert make_reports_cache_key("600519", 3) != make_reports_cache_key("000001", 3)
 
     def test_different_dates_different_keys(self):
-        assert make_dragon_tiger_cache_key("600519", "2024-01-15", 30) != make_dragon_tiger_cache_key(
-            "600519", "2024-01-16", 30
+        assert make_dragon_tiger_cache_key("600519", "2024-01-15") != make_dragon_tiger_cache_key(
+            "600519", "2024-01-16"
         )
         assert make_hot_topics_cache_key("2024-01-15") != make_hot_topics_cache_key("2024-01-16")
         assert make_pools_cache_key("zt", "2024-01-15") != make_pools_cache_key("zt", "2024-01-16")
@@ -147,11 +147,3 @@ class TestCacheKeyUniqueness:
     def test_different_page_sizes_different_keys(self):
         assert make_margin_cache_key("600519", 10) != make_margin_cache_key("600519", 30)
         assert make_announcements_cache_key("600519", 10) != make_announcements_cache_key("600519", 100)
-
-    def test_different_look_back_different_keys(self):
-        assert make_dragon_tiger_cache_key("600519", "2024-01-15", 7) != make_dragon_tiger_cache_key(
-            "600519", "2024-01-15", 30
-        )
-        assert make_dragon_tiger_cache_key("600519", "2024-01-15", 90) != make_dragon_tiger_cache_key(
-            "600519", "2024-01-15", 30
-        )
