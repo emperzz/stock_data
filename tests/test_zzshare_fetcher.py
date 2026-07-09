@@ -1436,18 +1436,54 @@ class TestDragonTiger:
         # Bare 6-digit code (NOT '000078.SZ' — tushare suffix is outbound only)
         assert data["stocks"][0]["code"] == "000078"
         assert data["stocks"][0]["name"] == "海王生物"
-        assert data["stocks"][0]["net_buy"] == 1e8
+        # net_buy_wan (万元) — upstream buy_in=1e8 元 → 10000.0 万元
+        assert data["stocks"][0]["net_buy_wan"] == 10000.0
+        # zzshare lhb_list does NOT provide close / buy_wan / sell_wan upstream
+        # and they cannot be derived (circ_price/capitalization are 元 not shares;
+        # turnover is full-day total, not lhb-only buy+sell). Fetcher OMITS
+        # these keys; DailyDragonTigerStock schema defaults them to None.
+        # We verify via the schema (Pydantic) rather than the dict directly,
+        # because route layer does DailyDragonTigerStock(**s).
+        from stock_data.api.schemas import DailyDragonTigerStock
+        validated = DailyDragonTigerStock(**data["stocks"][0])
+        assert validated.close is None
+        assert validated.buy_wan is None
+        assert validated.sell_wan is None
+        assert validated.change_pct == 10.0
+        assert validated.turnover_pct == 8.5
+        assert validated.reason == "涨幅偏离值达7%"
+        # change_pct (upstream quote_change=10.0)
+        assert data["stocks"][0]["change_pct"] == 10.0
+        # turnover_pct (NOT turnover_rate — schema name); upstream turnover_ratio=8.5
+        assert data["stocks"][0]["turnover_pct"] == 8.5
+        # No extraneous fields — output is a strict subset of DailyDragonTigerStock schema
+        stock_keys = set(data["stocks"][0].keys())
+        expected_keys = {
+            "code", "name", "reason", "change_pct",
+            "net_buy_wan", "turnover_pct",
+        }
+        assert stock_keys == expected_keys, (
+            f"unexpected fields: {stock_keys - expected_keys}; "
+            f"missing: {expected_keys - stock_keys}"
+        )
 
     def test_daily_dragon_tiger_min_net_buy_filter(self):
+        """min_net_buy is in 万元 (per route description at routes/data.py).
+        Filter must compare against net_buy_wan, NOT raw yuan buy_in.
+
+        buy_in=5e7 (元) = 5000.0 wan — below 10000.0 wan threshold → filtered.
+        buy_in=2e8 (元) = 20000.0 wan — above threshold → kept.
+        """
         rows = [
             {"stock_code": "000078", "stock_name": "A", "buy_in": 5e7},
             {"stock_code": "600519", "stock_name": "B", "buy_in": 2e8},
         ]
         fetcher = self._fetcher_with_api(lhb_list=rows)
-        data = fetcher.get_daily_dragon_tiger("2026-05-20", 1e8)
-        # Only stock with buy_in >= 1e8 (100M) survives.
+        data = fetcher.get_daily_dragon_tiger("2026-05-20", 10000.0)
+        # Only stock with net_buy_wan >= 10000.0 (i.e. raw buy_in >= 1e8) survives.
         assert data["total"] == 1
         assert data["stocks"][0]["code"] == "600519"
+        assert data["stocks"][0]["net_buy_wan"] == 20000.0
 
     def test_daily_dragon_tiger_empty_returns_zeros(self):
         fetcher = self._fetcher_with_api(lhb_list=[])
@@ -1457,27 +1493,151 @@ class TestDragonTiger:
         assert data["stocks"] == []
 
     def test_dragon_tiger_uses_detail(self):
-        detail = [
-            {"trader_name": "东方证券绍兴解放南路营业部", "buy": 1e8, "sell": 5e7, "net": 5e7},
-            {"trader_name": "华泰证券深圳益田路荣超商务中心", "buy": 5e7, "sell": 3e7, "net": 2e7},
-        ]
-        fetcher = self._fetcher_with_api(lhb_detail=detail)
-        data = fetcher.get_dragon_tiger("000078", "2026-05-20", 30)
-        assert "seats" in data
-        # 2 buy seats and 2 sell seats
-        assert len(data["seats"]["buy"]) == 2
-        assert len(data["seats"]["sell"]) == 2
-        assert data["seats"]["buy"][0]["name"] == "东方证券绍兴解放南路营业部"
-
-    def test_dragon_tiger_falls_back_to_stock_history(self):
-        """When lhb_detail returns empty, try lhb_stock_history."""
+        """lhb_detail returns dict {detail: {...}, traders: [...]}.
+        Per-trader rows have trader_name / buy_amount / sell_amount / type
+        (real upstream field names). Real probe (000004 on 2025-05-13):
+        10 trader rows for 6 unique names, type distribution {1: 5, 2: 5}.
+        type=1 → 买入侧排行行, type=2 → 卖出侧排行行. Each row pushed
+        ONCE to seats["buy"] or seats["sell"] by type, with the full
+        buy_wan/sell_wan/net_wan triple derived from that row's
+        buy_amount/sell_amount (NOT zero-padded on the unused side).
+        """
+        detail = {
+            "detail": {
+                "stock_code": "000078",
+                "buy_in": 1.5e8,
+                "buy_total": 2.0e8,
+                "sell_total": 5.0e7,
+                "join_num": 2,
+                "up_reason": "日涨幅偏离值达7%",
+            },
+            "traders": [
+                # 2 type=1 (买入侧) rows
+                {
+                    "trader_name": "东方证券绍兴解放南路营业部",
+                    "buy_amount": 1.0e8,
+                    "sell_amount": 5.0e7,
+                    "rank": 1,
+                    "type": 1,
+                },
+                {
+                    "trader_name": "华泰证券深圳益田路荣超商务中心",
+                    "buy_amount": 5.0e7,
+                    "sell_amount": 3.0e7,
+                    "rank": 2,
+                    "type": 1,
+                },
+                # 1 type=2 (卖出侧) row — same trader as the first one
+                # (in real data a top-N trader often appears on both sides)
+                {
+                    "trader_name": "东方证券绍兴解放南路营业部",
+                    "buy_amount": 8.0e7,
+                    "sell_amount": 6.0e7,
+                    "rank": 1,
+                    "type": 2,
+                },
+            ],
+        }
+        # lhb_stock_history stub: returns nothing so records stays empty
+        # under this test (we only assert seats here).
         fetcher = self._fetcher_with_api(
-            lhb_detail=[],  # empty
-            lhb_stock_history=[{"trade_date": "2026-05-15", "buy_in": 5e7, "reason": "涨幅偏离"}],
+            lhb_detail=detail, lhb_stock_history=[]
         )
         data = fetcher.get_dragon_tiger("000078", "2026-05-20", 30)
-        # records should have at least 1 entry from history
-        assert len(data["records"]) >= 1
+        assert "seats" in data
+        # 2 type=1 rows → seats["buy"] has 2; 1 type=2 row → seats["sell"] has 1
+        assert len(data["seats"]["buy"]) == 2
+        assert len(data["seats"]["sell"]) == 1
+        # First buy seat (type=1): full triple from buy_amount=1e8, sell_amount=5e7
+        first_buy = data["seats"]["buy"][0]
+        assert first_buy["name"] == "东方证券绍兴解放南路营业部"
+        assert first_buy["buy_wan"] == 10000.0
+        assert first_buy["sell_wan"] == 5000.0  # NOT 0.0 — full triple
+        assert first_buy["net_wan"] == 5000.0  # buy - sell
+        # Sell seat (type=2): full triple from buy_amount=8e7, sell_amount=6e7
+        first_sell = data["seats"]["sell"][0]
+        assert first_sell["name"] == "东方证券绍兴解放南路营业部"
+        assert first_sell["buy_wan"] == 8000.0
+        assert first_sell["sell_wan"] == 6000.0
+        assert first_sell["net_wan"] == 2000.0  # buy - sell
+        # Institution is left empty (TODO; type field is buy/sell side,
+        # not institution-vs-brokerage discriminator).
+        assert data["institution"] == {"buy_amt": 0, "sell_amt": 0, "net_amt": 0}
+
+    def test_dragon_tiger_records_filtered_by_look_back(self):
+        """records come from lhb_stock_history, filtered client-side to
+        [trade_date - look_back, trade_date]. lhb_stock_history does NOT
+        accept a date range upstream, so the filter is local.
+        """
+        fetcher = self._fetcher_with_api(
+            lhb_detail=None,
+            lhb_stock_history=[
+                {"date": "2026-05-10", "buy_in": 1.0e7, "quote_change": 5.0,
+                 "t_icon": None, "t_type": 0},
+                {"date": "2026-05-15", "buy_in": 2.0e7, "quote_change": 5.0,
+                 "t_icon": None, "t_type": 0},
+                {"date": "2026-05-20", "buy_in": 3.0e7, "quote_change": 5.0,
+                 "t_icon": None, "t_type": 0},
+                {"date": "2026-05-25", "buy_in": 4.0e7, "quote_change": 5.0,
+                 "t_icon": None, "t_type": 0},
+            ],
+        )
+        # look_back=7 days from trade_date=2026-05-20 → window [05-13, 05-20]
+        data = fetcher.get_dragon_tiger("000078", "2026-05-20", 7)
+        assert len(data["records"]) == 2
+        dates = {r["date"] for r in data["records"]}
+        assert dates == {"2026-05-15", "2026-05-20"}
+        # 2026-05-20 record net_buy_wan = 3.0e7 / 10000 = 3000.0
+        rec_today = next(r for r in data["records"] if r["date"] == "2026-05-20")
+        assert rec_today["net_buy_wan"] == 3000.0
+
+    def test_dragon_tiger_records_unfiltered_when_no_trade_date(self):
+        """When trade_date is empty, records return the full history list."""
+        fetcher = self._fetcher_with_api(
+            lhb_detail=None,
+            lhb_stock_history=[
+                {"date": "2026-05-10", "buy_in": 1.0e7, "quote_change": 5.0,
+                 "t_icon": None, "t_type": 0},
+                {"date": "2026-05-20", "buy_in": 2.0e7, "quote_change": 5.0,
+                 "t_icon": None, "t_type": 0},
+            ],
+        )
+        data = fetcher.get_dragon_tiger("000078", "", 30)
+        assert len(data["records"]) == 2
+
+    def test_dragon_tiger_falls_back_to_stock_history(self):
+        """Even when lhb_detail returns empty/None, lhb_stock_history is
+        still queried for records (records are NOT behind the detail branch
+        anymore — they're independently populated).
+
+        Real upstream `lhb_stock_history(stock_code=...)` returns rows keyed
+        [buy_in, date, quote_change, t_icon, t_type] (NO trade_date, NO reason).
+        Records must conform to DragonTigerRecord schema (date / reason /
+        net_buy_wan / turnover_pct, with net_buy_wan converted from raw yuan
+        to 万元). turnover_pct stays 0.0 since upstream has no turnover field
+        (only quote_change, which is a different metric).
+        """
+        fetcher = self._fetcher_with_api(
+            lhb_detail=None,  # upstream returned None / unavailable
+            lhb_stock_history=[
+                {
+                    "date": "2026-05-15",
+                    "buy_in": 5.0e7,  # 5000 万 = 5000.0 wan
+                    "quote_change": 10.0,
+                    "t_icon": None,
+                    "t_type": 0,
+                },
+            ],
+        )
+        data = fetcher.get_dragon_tiger("000078", "2026-05-20", 30)
+        assert len(data["records"]) == 1
+        rec = data["records"][0]
+        assert rec["date"] == "2026-05-15"
+        assert rec["net_buy_wan"] == 5000.0  # yuan / 10000 → wan
+        # reason not in upstream lhb_stock_history; stays empty
+        assert rec["reason"] == ""
+        # turnover_pct not in upstream lhb_stock_history; stays 0.0
+        assert rec["turnover_pct"] == 0.0
 
     def test_daily_dragon_tiger_uses_trade_calendar_when_date_empty(self, monkeypatch):
         """When trade_date is empty, fall back to the latest trade date <= today."""

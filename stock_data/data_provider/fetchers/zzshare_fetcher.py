@@ -9,6 +9,34 @@ for most endpoints — see docs/zzshare/10-rate-limits.md).
 Most endpoints are anonymous-capable; only stock_info and uplimit_stocks
 require a token. The fetcher is_available() returns True as long as the
 SDK is importable, even without a token.
+
+Dragon-tiger endpoints (see ``get_dragon_tiger`` / ``get_daily_dragon_tiger``
+and docs/zzshare/05-dragon-tiger.md for upstream field tables):
+
+- ``lhb_list(date1)``         — full market dragon-tiger summary per day.
+  Drives ``get_daily_dragon_tiger``. Upstream row keys:
+  ``stock_code, stock_name, concepts, amplitude, quote_change, turnover,
+  turnover_ratio, capitalization, circ_price, buy_in, join_num, up_reason,
+  t_type, d3`` (plus accessory ``t_icon / buy_group_icons / sell_group_icons
+  / up_desc``).
+
+- ``lhb_detail(date1, stock_code)`` — per-day seat-level detail for a stock.
+  Upstream shape is ``dict {detail: {...}, traders: [...]}`` — NOT a list.
+  Per-trader keys: ``trader_name, buy_amount, sell_amount, rank, type,
+  reason_type, trader_id, group_id, group_icon, youzi_icon``. NOTE: the
+  fetcher currently emits ``institution={buy_amt:0, sell_amt:0, net_amt:0}``
+  (default) — aggregating institutional trades needs a discriminator field
+  on zzshare trader rows (EastMoney uses ``OPERATEDEPT_CODE == "0"``); the
+  semantics of zzshare's ``type`` field are not yet probed (TODO).
+
+- ``lhb_stock_history(stock_code)`` — historical dragon-tiger summary per
+  stock. Upstream row keys: ``buy_in, date, quote_change, t_icon, t_type``
+  (NOT ``trade_date``; no ``reason`` or ``turnover`` fields — only
+  ``quote_change`` is available, which is a different metric). Drives the
+  fallback path in ``get_dragon_tiger`` when ``lhb_detail`` is unavailable.
+
+- ``lhb_trader_history(trader_name)`` — cross-stock history for a trader seat.
+  Not currently consumed by any fetcher method.
 """
 
 import importlib.util
@@ -674,8 +702,30 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
     ) -> dict:
         """全市场龙虎榜 via zzshare lhb_list.
 
-        Returns ``{date, total, stocks[]}`` matching the manager's
-        contract. ``min_net_buy`` filters rows whose buy_in < threshold.
+        Returns ``{date, total, stocks[]}`` matching the
+        ``DailyDragonTigerStock`` schema (api/schemas.py), with all
+        monetary fields in 万元 (1 wan = 10000 元). ``min_net_buy`` is
+        also in 万元 and filters rows whose net buy is below threshold
+        (per route description at ``routes/data.py``).
+
+        Field-mapping notes for zzshare path:
+        - ``close``: zzshare ``lhb_list`` does NOT return a close price
+          field, AND ``close`` cannot be derived from ``circ_price`` /
+          ``capitalization`` (both are 元 values, not share counts).
+          Fetcher omits the key; schema defaults to None.
+          EastMoneyFetcher has ``CLOSE_PRICE`` upstream.
+        - ``buy_wan`` / ``sell_wan``: zzshare ``lhb_list`` does NOT split
+          buy/sell; only the net value ``buy_in`` is provided. Cannot be
+          derived from ``turnover`` (which is the full-day total turnover
+          for the stock, not the 龙虎榜-tracked buy+sell). Fetcher omits
+          both keys; schema defaults to None. EastMoneyFetcher has
+          ``BILLBOARD_BUY_AMT`` / ``BILLBOARD_SELL_AMT`` upstream.
+        - ``net_buy_wan``: derived from upstream ``buy_in`` (元) by
+          ``buy_in / 10000`` rounded to 1 decimal.
+        - ``change_pct``: upstream ``quote_change``.
+        - ``turnover_pct``: upstream ``turnover_ratio`` (already a
+          percentage).
+        - ``reason``: upstream ``up_reason``.
         """
         self._ensure_api()
         api = self.__class__._api
@@ -698,22 +748,19 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             if not isinstance(row, dict):
                 continue
             buy_in = safe_float(row.get("buy_in")) or 0.0
-            if min_net_buy is not None and buy_in < min_net_buy:
+            net_buy_wan = round(buy_in / 10000, 1) if buy_in else 0.0
+            if min_net_buy is not None and net_buy_wan < min_net_buy:
                 continue
             stock_code = str(row.get("stock_code", "")).strip()
             out_stocks.append(
                 {
                     "code": stock_code,
                     "name": str(row.get("stock_name", "")),
-                    "net_buy": buy_in,
-                    "amplitude": safe_float(row.get("amplitude")),
-                    "change_pct": safe_float(row.get("quote_change")),
-                    "turnover": safe_float(row.get("turnover")),
-                    "turnover_rate": safe_float(row.get("turnover_ratio")),
-                    "join_num": safe_int(row.get("join_num")),
                     "reason": str(row.get("up_reason", "")),
-                    "t_type": safe_int(row.get("t_type")),
-                    "d3": safe_float(row.get("d3")),
+                    # close / buy_wan / sell_wan omitted intentionally — see docstring
+                    "change_pct": round(safe_float(row.get("quote_change")) or 0.0, 2),
+                    "net_buy_wan": net_buy_wan,
+                    "turnover_pct": round(safe_float(row.get("turnover_ratio")) or 0.0, 2),
                 }
             )
         return {
@@ -723,10 +770,53 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         }
 
     def get_dragon_tiger(self, code: str, trade_date: str = "", look_back: int = 30) -> dict:
-        """个股龙虎榜 via zzshare lhb_detail, fallback lhb_stock_history.
+        """个股龙虎榜 via zzshare lhb_detail + lhb_stock_history.
 
         Returns ``{records[], seats{buy, sell}, institution}`` matching
-        the manager's per-stock contract.
+        ``DragonTigerResponse`` schema (api/schemas.py):
+
+        - records: ``[{date, reason, net_buy_wan, turnover_pct}]``
+          Always populated from ``lhb_stock_history(stock_code=...)``
+          (full upstream history), filtered client-side to
+          ``[trade_date - look_back, trade_date]`` when ``trade_date``
+          is provided; when ``trade_date`` is empty, returns the full
+          history list. zzshare ``lhb_stock_history`` does NOT accept a
+          date-range parameter, so the filter is done locally — the
+          alternative would be N+1 detail calls.
+          - ``date``: ISO ``YYYY-MM-DD`` from upstream ``date`` field
+          - ``net_buy_wan``: ``buy_in / 10000`` rounded to 1 decimal
+          - ``reason``: empty string — ``lhb_stock_history`` does NOT
+            return a reason field (``up_reason`` is only in ``lhb_list``)
+          - ``turnover_pct``: 0.0 — ``lhb_stock_history`` only has
+            ``quote_change``, which is a different metric
+        - seats: ``{buy: [{name, buy_wan, sell_wan, net_wan}], sell: [...]}`` (万元)
+          built from ``detail["traders"]`` (real upstream shape is
+          ``dict {detail: {...}, traders: [...]}, NOT a list)``. Each
+          trader row is pushed ONCE — to ``seats["buy"]`` if
+          ``row.type == 1`` (买入侧排行) or to ``seats["sell"]`` if
+          ``row.type == 2`` (卖出侧排行) — and carries the full
+          ``buy_wan / sell_wan / net_wan`` triple derived from the same
+          row's ``buy_amount / sell_amount`` values. The same trader
+          can appear in BOTH lists if it's in the top-N of both sides
+          on the same day (its ``buy_amount/sell_amount`` may differ
+          between the two list entries — each is a per-side snapshot).
+          Probe (000004 on 2025-05-13): 10 trader rows for 6 unique
+          names; type distribution {1: 5, 2: 5}.
+        - institution: ``{buy_amt: 0, sell_amt: 0, net_amt: 0}`` default.
+          Aggregating institutional trades requires a discriminator field
+          on zzshare trader rows (EastMoney uses ``OPERATEDEPT_CODE == "0"``);
+          zzshare's ``type`` field discriminates buy/sell side, NOT
+          institution-vs-brokerage — left as TODO.
+
+        Args:
+            code: 6-digit stock code (bare, no suffix).
+            trade_date: optional ``YYYY-MM-DD``; when empty, history
+                records are unfiltered (full list) and the detail
+                branch is skipped (since detail requires a date).
+            look_back: number of days back from ``trade_date`` (or
+                today) to include in records; default 30.
+
+        See docs/zzshare/05-dragon-tiger.md for the upstream field tables.
         """
         self._ensure_api()
         api = self.__class__._api
@@ -736,45 +826,99 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         date_str = _to_yyyymmdd(trade_date) if trade_date else ""
         records: list[dict] = []
         seats: dict[str, list] = {"buy": [], "sell": []}
-        # 1) Try detail (per-day seats)
-        try:
-            detail = api.lhb_detail(date1=date_str, stock_code=bare_code) if date_str else None
-        except Exception as e:
-            logger.warning(f"[ZzshareFetcher] lhb_detail failed: {e}")
-            detail = None
-        if detail and isinstance(detail, list):
-            for row in detail:
-                if not isinstance(row, dict):
-                    continue
-                trader = str(row.get("trader_name", ""))
-                buy_amt = safe_float(row.get("buy")) or 0.0
-                sell_amt = safe_float(row.get("sell")) or 0.0
-                if buy_amt > 0:
-                    seats["buy"].append({"name": trader, "amount": buy_amt})
-                if sell_amt > 0:
-                    seats["sell"].append({"name": trader, "amount": sell_amt})
-        # 2) If detail empty, fall back to stock history
-        if not seats["buy"] and not seats["sell"]:
+        # 1) Try detail (per-day seats) — upstream returns dict {detail, traders}.
+        # Skipped when trade_date is empty (detail requires a date).
+        if date_str:
             try:
-                history = api.lhb_stock_history(stock_code=bare_code)
+                raw = api.lhb_detail(date1=date_str, stock_code=bare_code)
+                detail: dict | None = raw if isinstance(raw, dict) else None
             except Exception as e:
-                logger.warning(f"[ZzshareFetcher] lhb_stock_history failed: {e}")
-                history = None
-            if history and isinstance(history, list):
-                for row in history:
+                logger.warning(f"[ZzshareFetcher] lhb_detail failed: {e}")
+                detail = None
+            traders = (detail or {}).get("traders") if detail else None
+            if traders:
+                for row in traders:
                     if not isinstance(row, dict):
                         continue
-                    records.append(
-                        {
-                            "date": str(row.get("trade_date", "")),
-                            "net_buy": safe_float(row.get("buy_in")),
-                            "reason": str(row.get("reason", "")),
-                        }
-                    )
+                    trader = str(row.get("trader_name", ""))
+                    buy_amt = safe_float(row.get("buy_amount")) or 0.0
+                    sell_amt = safe_float(row.get("sell_amount")) or 0.0
+                    # Always emit the full buy_wan/sell_wan/net_wan triple
+                    # from the same row, so consumers can read whichever
+                    # side they need without re-querying.
+                    seat = {
+                        "name": trader,
+                        "buy_wan": round(buy_amt / 10000, 1),
+                        "sell_wan": round(sell_amt / 10000, 1),
+                        "net_wan": round((buy_amt - sell_amt) / 10000, 1),
+                    }
+                    # Side discriminator: type=1 → 买入侧排行 → seats["buy"];
+                    # type=2 → 卖出侧排行 → seats["sell"]. A seat may
+                    # appear in BOTH lists if it's in the top-N on both
+                    # sides.
+                    side = row.get("type")
+                    if side == 1:
+                        seats["buy"].append(seat)
+                    elif side == 2:
+                        seats["sell"].append(seat)
+        # 2) Always pull lhb_stock_history for records (independent of
+        # detail success). lhb_stock_history doesn't accept a date
+        # range, so we fetch the full list and filter client-side.
+        try:
+            history = api.lhb_stock_history(stock_code=bare_code)
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] lhb_stock_history failed: {e}")
+            history = None
+        if history and isinstance(history, list):
+            # Compute [start_date, end_date] window:
+            # - end_date = trade_date (if given) else None (no filter)
+            # - start_date = end_date - look_back days
+            # When trade_date is empty, no filter is applied and the
+            # full upstream history is returned. This avoids a dependency
+            # on the trade-calendar cache (which can be empty in tests
+            # or before the first refresh).
+            end_date: date | None = None
+            if date_str:
+                try:
+                    end_date = datetime.strptime(date_str, "%Y%m%d").date()
+                except ValueError:
+                    end_date = None
+            start_date = end_date - timedelta(days=look_back) if end_date else None
+            for row in history:
+                if not isinstance(row, dict):
+                    continue
+                row_date_str = str(row.get("date", ""))
+                if not row_date_str:
+                    continue
+                if start_date and end_date:
+                    # Filter to window
+                    try:
+                        row_date = datetime.strptime(row_date_str, "%Y-%m-%d").date()
+                    except ValueError:
+                        continue
+                    if row_date < start_date or row_date > end_date:
+                        continue
+                buy_in = safe_float(row.get("buy_in"))
+                records.append(
+                    {
+                        "date": row_date_str,
+                        # lhb_stock_history has no `reason` field upstream;
+                        # `up_reason` is only available via `lhb_list`.
+                        "reason": "",
+                        "net_buy_wan": round(buy_in / 10000, 1) if buy_in else 0.0,
+                        # lhb_stock_history has no turnover field (only
+                        # `quote_change`, a different metric).
+                        "turnover_pct": 0.0,
+                    }
+                )
         return {
             "records": records,
             "seats": seats,
-            "institution": {},
+            # TODO(zzshare): institution aggregation needs probe of trader.type
+            # semantics — EastMoney uses OPERATEDEPT_CODE=="0" discriminator;
+            # zzshare's type field is side (buy/sell), not institution vs
+            # brokerage. Left empty until a discriminator field is identified.
+            "institution": {"buy_amt": 0, "sell_amt": 0, "net_amt": 0},
         }
 
     def get_hot_topics(self, date_str: str = "") -> list[dict]:

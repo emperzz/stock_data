@@ -558,11 +558,20 @@ class DailyDragonTigerStock(BaseModel):
     code: str = Field(description="股票代码")
     name: str = Field(default="", description="股票名称")
     reason: str = Field(default="", description="上榜原因")
-    close: float = Field(default=0, description="收盘价")
+    close: float | None = Field(
+        default=None,
+        description="收盘价(元);上游无此字段时为 null (e.g. zzshare lhb_list)",
+    )
     change_pct: float = Field(default=0, description="涨跌幅(%)")
     net_buy_wan: float = Field(default=0, description="净买入(万元)")
-    buy_wan: float = Field(default=0, description="买入金额(万元)")
-    sell_wan: float = Field(default=0, description="卖出金额(万元)")
+    buy_wan: float | None = Field(
+        default=None,
+        description="买入金额(万元);上游未拆分 buy/sell 时为 null (e.g. zzshare lhb_list 仅返回净买入 buy_in)",
+    )
+    sell_wan: float | None = Field(
+        default=None,
+        description="卖出金额(万元);上游未拆分 buy/sell 时为 null (e.g. zzshare lhb_list 仅返回净买入 buy_in)",
+    )
     turnover_pct: float = Field(default=0, description="换手率(%)")
 
 
