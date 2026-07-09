@@ -1121,23 +1121,53 @@ def upsert_membership_for_stock_boards(
 def _read_membership_entries(
     stock_code: str, sources: list[str], cursor
 ) -> tuple[list[dict], set[str]]:
-    """Read membership rows for a stock from the given sources. Returns (entries, present_sources)."""
+    """Read membership rows for a stock from the given sources. Returns (entries, present_sources).
+
+    Read-time override (added 2026-07-09): LEFT JOIN ``stock_board`` on
+    ``(board_code, source)`` so each entry's ``name`` / ``type`` / ``subtype``
+    prefer the authoritative stock_board values over the membership row's
+    cached copy. This neutralises the legacy bug where
+    ``update_cached_board_stocks`` wrote ``board_name = board_code`` and
+    ``board_type = ''`` / ``subtype = NULL`` to membership when stock_board
+    was empty at write time. Once stock_board is populated (e.g. via the
+    next board-list refresh), reads pick up the correct values immediately
+    without rewriting the stale membership rows.
+
+    Fallback: when stock_board has no row for the (board_code, source) pair,
+    the membership row's stored values are kept — matches the route layer's
+    existing fallback contract for boards that were never written to
+    stock_board (see ``get_board_name_with_fallback``).
+    """
     placeholders = ",".join("?" * len(sources))
     cursor.execute(
-        f"""SELECT board_code, stock_code, source, board_name, stock_name,
-                   board_type, subtype
-           FROM stock_board_membership
-           WHERE stock_code = ? AND source IN ({placeholders})
-           ORDER BY source, board_code""",
+        f"""SELECT m.board_code, m.stock_code, m.source,
+                   m.board_name, m.stock_name, m.board_type, m.subtype,
+                   sb.name AS sb_name,
+                   sb.board_type AS sb_board_type,
+                   sb.subtype AS sb_subtype
+           FROM stock_board_membership m
+           LEFT JOIN stock_board sb
+             ON sb.code = m.board_code AND sb.source = m.source
+           WHERE m.stock_code = ? AND m.source IN ({placeholders})
+           ORDER BY m.source, m.board_code""",
         (stock_code, *sources),
     )
     raw_rows = cursor.fetchall()
     entries = [
         {
             "code": r["board_code"],
-            "name": r["board_name"],
-            "type": r["board_type"],
-            "subtype": r["subtype"] or "",
+            # Authoritative name/type/subtype from stock_board when present;
+            # otherwise the membership row's stored value (legacy fallback).
+            "name": r["sb_name"] if r["sb_name"] is not None else r["board_name"],
+            "type": (
+                r["sb_board_type"]
+                if r["sb_board_type"] is not None
+                else r["board_type"]
+            ),
+            "subtype": (
+                (r["sb_subtype"] if r["sb_subtype"] is not None else r["subtype"])
+                or ""
+            ),
             "source": r["source"],
         }
         for r in raw_rows

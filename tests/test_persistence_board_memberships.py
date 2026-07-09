@@ -243,3 +243,289 @@ class TestGetStockMembershipsColdFill:
         assert cold == ["ths"]
         assert origin == "cold_fill_empty"
         mock_manager.get_stock_boards.assert_called_once_with("830799", source="ths")
+
+
+class TestGetStockMembershipsBoardNameOverride:
+    """When stock_board_membership.board_name equals board_code (legacy write
+    from update_cached_board_stocks pre-2026-07-09, when stock_board was
+    empty at write time), get_stock_memberships MUST resolve name from
+    the authoritative stock_board table, not from the membership row.
+
+    Root cause (pre-fix): update_cached_board_stocks fell back to
+    ``board_name = board_code`` when stock_board had no row for the
+    (code, source) pair. That stale value is what's persisted in
+    stock_board_membership.board_name, and _read_membership_entries
+    previously trusted it. Result: /stocks/{code}/boards from
+    persistence returned ``name == code``.
+
+    Fix: at read time, LEFT JOIN stock_board on (board_code, source)
+    and use stock_board.name when available; fall back to the
+    membership row's board_name otherwise (legacy boards absent from
+    the board-list cache).
+    """
+
+    def test_returns_name_from_stock_board_over_membership_stale_code(self, fresh_db):
+        """stock_board has the real name; membership row stores board_code.
+
+        Membership row is the legacy buggy state (board_name == board_code).
+        Read path must return the authoritative stock_board.name.
+        """
+        conn = db_mod.get_connection()
+        # Authoritative name in stock_board
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK1001", "白酒", "industry", "industry", "eastmoney"),
+        )
+        # Membership row with the legacy buggy value (board_name = board_code)
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
+             "industry", "industry", "2026-07-01 00:00:00"),
+        )
+        conn.commit()
+
+        entries, _, _ = board_mod.get_stock_memberships(
+            stock_code="600519", sources=["eastmoney"]
+        )
+        assert len(entries) == 1
+        assert entries[0]["code"] == "BK1001"
+        # The fix: name comes from stock_board, NOT from membership's stale value.
+        assert entries[0]["name"] == "白酒", (
+            f"expected authoritative name from stock_board; got {entries[0]['name']!r} "
+            f"(== code means the membership row's stale board_name leaked through)"
+        )
+
+    def test_falls_back_to_membership_board_name_when_stock_board_missing(self, fresh_db):
+        """stock_board has no row for (code, source) → fall back to membership row.
+
+        The legacy buggy value (board_name == board_code) still surfaces,
+        but only when stock_board genuinely has no authoritative row. This
+        matches the pre-fix behavior for boards that were never written to
+        stock_board — the route layer's get_board_name_with_fallback
+        separately handles those.
+        """
+        conn = db_mod.get_connection()
+        # No stock_board row for BK9999 → fallback path
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BK9999", "600519", "eastmoney", "BK9999", "贵州茅台",
+             "concept", "concept", "2026-07-01 00:00:00"),
+        )
+        conn.commit()
+
+        entries, _, _ = board_mod.get_stock_memberships(
+            stock_code="600519", sources=["eastmoney"]
+        )
+        assert len(entries) == 1
+        assert entries[0]["code"] == "BK9999"
+        # No stock_board row → fall back to membership's stored board_name
+        assert entries[0]["name"] == "BK9999"
+        # Type/subtype also fall back to membership's stored values
+        assert entries[0]["type"] == "concept"
+        assert entries[0]["subtype"] == "concept"
+
+    def test_keeps_membership_name_when_both_agree(self, fresh_db):
+        """stock_board.name == stock_board_membership.board_name → no change.
+
+        Sanity check: when both layers agree (the normal post-fix write
+        path), the read path returns that value verbatim.
+        """
+        conn = db_mod.get_connection()
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK1001", "白酒", "industry", "industry", "eastmoney"),
+        )
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BK1001", "600519", "eastmoney", "白酒", "贵州茅台",
+             "industry", "industry", "2026-07-09 00:00:00"),
+        )
+        conn.commit()
+
+        entries, _, _ = board_mod.get_stock_memberships(
+            stock_code="600519", sources=["eastmoney"]
+        )
+        assert len(entries) == 1
+        assert entries[0]["name"] == "白酒"
+
+    def test_override_is_source_scoped(self, fresh_db):
+        """stock_board row under source='eastmoney' only overrides the matching source.
+
+        The same board_code under a different source (no stock_board row for
+        it) keeps the membership row's stored name. Verifies the JOIN is
+        scoped to (code, source), not just (code).
+        """
+        conn = db_mod.get_connection()
+        # Only eastmoney has stock_board row
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK1001", "白酒-eastmoney", "industry", "industry", "eastmoney"),
+        )
+        # zhitu row has the same code but no stock_board counterpart
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BK1001", "600519", "zhitu", "BK1001", "贵州茅台",
+             "industry", "industry", "2026-07-01 00:00:00"),
+        )
+        conn.commit()
+
+        entries, _, _ = board_mod.get_stock_memberships(
+            stock_code="600519", sources=["zhitu"]
+        )
+        assert len(entries) == 1
+        # zhitu has no stock_board row → fall back to membership's board_name
+        assert entries[0]["name"] == "BK1001"
+
+    def test_returns_board_type_from_stock_board_over_membership_stale_empty(self, fresh_db):
+        """stock_board has the real board_type; membership row stores '' (legacy bug).
+
+        Same root cause as the name override: update_cached_board_stocks fell
+        back to ``board_type = ''`` when stock_board had no row at write time.
+        Read path must return the authoritative stock_board.board_type.
+        """
+        conn = db_mod.get_connection()
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK1001", "白酒", "industry", "industry", "eastmoney"),
+        )
+        # Legacy buggy state: board_type = '' (the pre-fix fallback)
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
+             "", "industry", "2026-07-01 00:00:00"),
+        )
+        conn.commit()
+
+        entries, _, _ = board_mod.get_stock_memberships(
+            stock_code="600519", sources=["eastmoney"]
+        )
+        assert len(entries) == 1
+        # The fix: board_type comes from stock_board, NOT from membership's empty value.
+        assert entries[0]["type"] == "industry", (
+            f"expected authoritative type from stock_board; got {entries[0]['type']!r} "
+            f"(empty means the membership row's stale board_type leaked through)"
+        )
+
+    def test_returns_subtype_from_stock_board_over_membership_stale_empty(self, fresh_db):
+        """stock_board has the real subtype; membership row stores NULL.
+
+        Symmetric to name/type override. update_cached_board_stocks fell
+        back to ``subtype = NULL`` when stock_board had no row at write
+        time. Read path must return the authoritative stock_board.subtype.
+        """
+        conn = db_mod.get_connection()
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK1001", "白酒", "industry", "industry", "eastmoney"),
+        )
+        # Legacy buggy state: subtype = NULL (the pre-fix fallback)
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
+             "industry", None, "2026-07-01 00:00:00"),
+        )
+        conn.commit()
+
+        entries, _, _ = board_mod.get_stock_memberships(
+            stock_code="600519", sources=["eastmoney"]
+        )
+        assert len(entries) == 1
+        # The fix: subtype comes from stock_board, NOT from membership's NULL.
+        assert entries[0]["subtype"] == "industry"
+
+    def test_override_applies_to_name_type_subtype_together(self, fresh_db):
+        """One read returns all three fields overridden by stock_board in a single pass."""
+        conn = db_mod.get_connection()
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK1001", "白酒", "industry", "industry", "eastmoney"),
+        )
+        # All three fields buggy: name=code, type='', subtype=NULL
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
+             "", None, "2026-07-01 00:00:00"),
+        )
+        conn.commit()
+
+        entries, _, _ = board_mod.get_stock_memberships(
+            stock_code="600519", sources=["eastmoney"]
+        )
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["name"] == "白酒"
+        assert e["type"] == "industry"
+        assert e["subtype"] == "industry"
+
+    def test_override_source_scoped_in_mixed_response(self, fresh_db):
+        """Multi-source query: each row overrides only by its own (code, source).
+
+        eastmoney has a stock_board row (so its membership row gets the
+        override); zhitu does NOT (so its row keeps the membership value).
+        One query, one response, both behaviors visible side-by-side.
+        """
+        conn = db_mod.get_connection()
+        # eastmoney authoritative row
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("BK1001", "白酒-eastmoney", "industry", "industry", "eastmoney"),
+        )
+        # eastmoney membership: buggy
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
+             "", None, "2026-07-01 00:00:00"),
+        )
+        # zhitu membership: no stock_board counterpart — keeps legacy values
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("BK1001", "600519", "zhitu", "BK1001-zhitu-fallback", "贵州茅台",
+             "concept", "concept", "2026-07-01 00:00:00"),
+        )
+        conn.commit()
+
+        entries, _, _ = board_mod.get_stock_memberships(
+            stock_code="600519", sources=["eastmoney", "zhitu"]
+        )
+        by_source = {e["source"]: e for e in entries}
+        assert set(by_source) == {"eastmoney", "zhitu"}
+        # eastmoney: override applied
+        assert by_source["eastmoney"]["name"] == "白酒-eastmoney"
+        assert by_source["eastmoney"]["type"] == "industry"
+        # zhitu: no stock_board row → fallback to membership's stored values
+        assert by_source["zhitu"]["name"] == "BK1001-zhitu-fallback"
+        assert by_source["zhitu"]["type"] == "concept"
