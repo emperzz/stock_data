@@ -1123,20 +1123,30 @@ def _read_membership_entries(
 ) -> tuple[list[dict], set[str]]:
     """Read membership rows for a stock from the given sources. Returns (entries, present_sources).
 
-    Read-time override (added 2026-07-09): LEFT JOIN ``stock_board`` on
-    ``(board_code, source)`` so each entry's ``name`` / ``type`` / ``subtype``
-    prefer the authoritative stock_board values over the membership row's
-    cached copy. This neutralises the legacy bug where
-    ``update_cached_board_stocks`` wrote ``board_name = board_code`` and
-    ``board_type = ''`` / ``subtype = NULL`` to membership when stock_board
-    was empty at write time. Once stock_board is populated (e.g. via the
-    next board-list refresh), reads pick up the correct values immediately
-    without rewriting the stale membership rows.
+    Read-time override (added 2026-07-09): LEFT JOIN ``stock_board`` so each
+    entry's ``name`` / ``type`` / ``subtype`` prefer the authoritative
+    stock_board values over the membership row's cached copy. This
+    neutralises the legacy bug where ``update_cached_board_stocks`` wrote
+    ``board_name = board_code`` and ``board_type = ''`` / ``subtype = NULL``
+    to membership when stock_board was empty at write time. Once stock_board
+    is populated (e.g. via the next board-list refresh), reads pick up the
+    correct values immediately without rewriting the stale membership rows.
 
-    Fallback: when stock_board has no row for the (board_code, source) pair,
-    the membership row's stored values are kept — matches the route layer's
-    existing fallback contract for boards that were never written to
-    stock_board (see ``get_board_name_with_fallback``).
+    THS concept-board quirk (added 2026-07-09): membership stores
+    ``board_code = platecode`` (885xxx), but stock_board stores
+    ``code = cid`` (3xxxxx) with ``platecode = 885xxx``. A naive
+    ``sb.code = m.board_code`` JOIN misses these rows. The OR-pattern
+    ``sb.code = m.board_code OR sb.platecode = m.board_code`` covers all
+    sources uniformly: for eastmoney/zhitu ``platecode`` is NULL so the
+    second arm evaluates to FALSE; for THS concept the first arm misses
+    but the second matches via platecode; for THS industry both arms
+    match (code == platecode == 881xxx) but the UNIQUE(code, source)
+    constraint guarantees at most one row.
+
+    Fallback: when stock_board has no row for the (board_code, source)
+    pair, the membership row's stored values are kept — matches the route
+    layer's existing fallback contract for boards that were never written
+    to stock_board (see ``get_board_name_with_fallback``).
     """
     placeholders = ",".join("?" * len(sources))
     cursor.execute(
@@ -1147,7 +1157,8 @@ def _read_membership_entries(
                    sb.subtype AS sb_subtype
            FROM stock_board_membership m
            LEFT JOIN stock_board sb
-             ON sb.code = m.board_code AND sb.source = m.source
+             ON sb.source = m.source
+            AND (sb.code = m.board_code OR sb.platecode = m.board_code)
            WHERE m.stock_code = ? AND m.source IN ({placeholders})
            ORDER BY m.source, m.board_code""",
         (stock_code, *sources),

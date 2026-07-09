@@ -529,3 +529,48 @@ class TestGetStockMembershipsBoardNameOverride:
         # zhitu: no stock_board row → fallback to membership's stored values
         assert by_source["zhitu"]["name"] == "BK1001-zhitu-fallback"
         assert by_source["zhitu"]["type"] == "concept"
+
+    def test_ths_concept_override_matches_via_platecode_not_code(self, fresh_db):
+        """THS concept boards: membership stores board_code=platecode (885xxx),
+        stock_board stores code=cid (3xxxxx) with platecode=885xxx.
+
+        The naive JOIN ``sb.code = m.board_code`` misses these rows because
+        cid != platecode. The fix joins on ``sb.code OR sb.platecode`` so the
+        platecode arm picks up THS concept boards. Without this override, the
+        user sees ``name=board_code`` for every THS concept membership row.
+
+        Reproduces the exact user-reported symptom: stock_code=000688,
+        board_code=885652 (THS concept), name/board_type/subtype all buggy.
+        """
+        conn = db_mod.get_connection()
+        # stock_board row mimicking ThsFetcher.get_all_boards output:
+        # code = cid, platecode = the 885xxx the public API uses
+        conn.execute(
+            "INSERT INTO stock_board (code, name, board_type, subtype, source, platecode) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("300351", "东百集团", "concept", "同花顺概念", "ths", "885652"),
+        )
+        # membership row with the buggy legacy values (board_code = platecode,
+        # NOT cid; board_name = board_code; board_type = ''; subtype = NULL)
+        conn.execute(
+            "INSERT INTO stock_board_membership "
+            "(board_code, stock_code, source, board_name, stock_name, "
+            " board_type, subtype, refreshed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("885652", "000688", "ths", "885652", "国华人寿",
+             "", None, "2026-07-01 00:00:00"),
+        )
+        conn.commit()
+
+        entries, _, _ = board_mod.get_stock_memberships(
+            stock_code="000688", sources=["ths"]
+        )
+        assert len(entries) == 1
+        e = entries[0]
+        # The fix: the platecode arm of the JOIN matches 885652.
+        assert e["code"] == "885652"
+        assert e["name"] == "东百集团", (
+            f"expected override name from stock_board; got {e['name']!r}"
+        )
+        assert e["type"] == "concept"
+        assert e["subtype"] == "同花顺概念"
