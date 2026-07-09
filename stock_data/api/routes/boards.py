@@ -34,6 +34,7 @@ from ..schemas import (
     BoardInfo,
     BoardKlineResponse,
     BoardListResponse,
+    BoardQuoteResponse,
     BoardStockInfo,
     BoardStocksResponse,
     ErrorResponse,
@@ -494,6 +495,51 @@ def get_board_stocks(
         stocks=stock_list,
         query_source=source,
         data_source=origin,
+    )
+
+
+@router.get(
+    "/boards/{board_code}/quote",
+    response_model=BoardQuoteResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid source"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["boards"],
+)
+@endpoint_meta(
+    summary="板块实时行情 (ths; 开盘/涨跌幅/涨跌家数/净流入 等 — q.10jqka 概念详情页)",
+    markets=["csi"],
+    capabilities=["STOCK_BOARD"],
+    fetcher_method="get_board_realtime",
+)
+@map_errors
+def get_board_quote(
+    board_code: str = Path(max_length=30, description="Board platecode (e.g. 885595)"),
+    source: Literal["ths"] = Query(
+        ..., description="Data source (REQUIRED). Only 'ths' is implemented."
+    ),
+) -> BoardQuoteResponse:
+    """Get board-level realtime quote. Source-routed, no failover (ths only)."""
+    manager = get_manager()
+    quote, origin = manager.get_board_realtime(board_code, source=source)
+    return BoardQuoteResponse(
+        board_code=quote.get("board_code") or board_code,
+        board_name=quote.get("board_name", ""),
+        source=origin,
+        price=quote.get("price"),
+        change_pct=quote.get("change_pct"),
+        change_amount=quote.get("change_amount"),
+        open=quote.get("open"),
+        high=quote.get("high"),
+        low=quote.get("low"),
+        prev_close=quote.get("prev_close"),
+        volume=quote.get("volume"),
+        amount=quote.get("amount"),
+        net_inflow=quote.get("net_inflow"),
+        up_count=quote.get("up_count"),
+        down_count=quote.get("down_count"),
+        rank=quote.get("rank"),
     )
 
 

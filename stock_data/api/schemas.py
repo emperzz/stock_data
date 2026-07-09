@@ -369,6 +369,27 @@ class BoardStocksResponse(BaseModel):
     data_source: str = Field(default="", description="实际数据来源 fetcher 名 或 'persistence'")
 
 
+class BoardQuoteResponse(BaseModel):
+    """Response for board realtime quote endpoint (`/boards/{board_code}/quote`)."""
+
+    board_code: str = Field(description="Board platecode (e.g. 885595)")
+    board_name: str = Field(default="", description="Board name")
+    source: str = Field(default="", description="数据来源 fetcher 名 (当前仅 ths)")
+    price: float | None = Field(default=None, description="板块指数/现价 (指数点)")
+    change_pct: float | None = Field(default=None, description="涨跌幅 (%)")
+    change_amount: float | None = Field(default=None, description="涨跌额 (指数点)")
+    open: float | None = Field(default=None, description="今开 (指数点)")
+    high: float | None = Field(default=None, description="最高 (指数点)")
+    low: float | None = Field(default=None, description="最低 (指数点)")
+    prev_close: float | None = Field(default=None, description="昨收 (指数点)")
+    volume: int | None = Field(default=None, description="成交量 (万手)")
+    amount: float | None = Field(default=None, description="成交额 (亿元)")
+    net_inflow: float | None = Field(default=None, description="资金净流入 (亿元)")
+    up_count: int | None = Field(default=None, description="上涨家数")
+    down_count: int | None = Field(default=None, description="下跌家数")
+    rank: str | None = Field(default=None, description="涨幅排名 (e.g. '229/389')")
+
+
 class BoardKlineResponse(BaseModel):
     """Response for board K-line endpoint (`/boards/{board_code}/history`)."""
 
