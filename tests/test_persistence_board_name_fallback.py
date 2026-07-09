@@ -107,3 +107,43 @@ def test_get_board_name_with_fallback_returns_none_when_no_match_in_boards():
     )
     name = board_mod.get_board_name_with_fallback("BK0996", "eastmoney", manager=manager)
     assert name is None
+
+
+def test_get_board_name_matches_ths_concept_by_platecode():
+    """THS concept board: input is platecode (885xxx) but stock_board stores code=cid.
+
+    Regression for the board.name==code bug: get_board_name must match on
+    platecode too (mirrors _read_membership_entries' OR-join fix, 2026-07-09).
+    """
+    board_mod.update_cached_boards(
+        "concept",
+        "ths",
+        [{"code": "301546", "name": "央企国企改革", "platecode": "885595"}],
+    )
+    # Client addresses the board by platecode (885595), not cid.
+    assert board_mod.get_board_name("885595", "ths") == "央企国企改革"
+    # cid still works (industry boards pass code==platecode).
+    assert board_mod.get_board_name("301546", "ths") == "央企国企改革"
+
+
+def test_get_board_name_platecode_or_no_false_match_for_eastmoney():
+    """eastmoney rows have platecode=NULL → OR's second arm is UNKNOWN, no false hit."""
+    board_mod.update_cached_boards(
+        "concept",
+        "eastmoney",
+        [{"code": "BK0996", "name": "人形机器人"}],  # platecode defaults to NULL
+    )
+    assert board_mod.get_board_name("BK0996", "eastmoney") == "人形机器人"
+    assert board_mod.get_board_name("885595", "eastmoney") is None
+
+
+def test_get_board_name_with_fallback_matches_platecode_in_slow_path():
+    """Slow path (manager.get_all_boards) must also compare platecode."""
+    from unittest.mock import MagicMock
+    manager = MagicMock()
+    manager.get_all_boards.return_value = (
+        [{"code": "301546", "name": "央企国企改革", "platecode": "885595"}],
+        "ThsFetcher",
+    )
+    name = board_mod.get_board_name_with_fallback("885595", "ths", manager=manager)
+    assert name == "央企国企改革"

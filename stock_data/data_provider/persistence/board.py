@@ -1327,9 +1327,13 @@ def get_board_name(board_code: str, source: str) -> str | None:
     init_schema()
     conn = get_connection()
     cursor = conn.cursor()
+    # Match on code OR platecode: THS concept boards are addressed by
+    # platecode (885xxx) but stored with code=cid (3xxxxx), platecode=885xxx.
+    # eastmoney/zhitu rows have platecode=NULL so the second arm is UNKNOWN
+    # (never TRUE) — no false positives. Mirrors _read_membership_entries.
     cursor.execute(
-        "SELECT name FROM stock_board WHERE code = ? AND source = ? LIMIT 1",
-        (board_code, source),
+        "SELECT name FROM stock_board WHERE (code = ? OR platecode = ?) AND source = ? LIMIT 1",
+        (board_code, board_code, source),
     )
     row = cursor.fetchone()
     return row["name"] if row else None
@@ -1385,7 +1389,11 @@ def get_board_name_with_fallback(
                 board_type=bt,
                 subtype=None,
             )
-            match = next((b["name"] for b in boards if b["code"] == board_code), None)
+            match = next(
+                (b["name"] for b in boards
+                 if board_code in (b.get("code"), b.get("platecode"))),
+                None,
+            )
             if match:
                 return match
     except (DataFetchError, ValueError, AttributeError) as e:
