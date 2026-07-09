@@ -167,8 +167,7 @@ def test_list_boards_refresh_forces_fetcher_call(client):
     mock_get.assert_called_once()
     _, kwargs = mock_get.call_args
     assert kwargs.get("refresh") is True
-    # After unification, get_board_list doesn't take 'source' kwarg
-    assert "source" not in kwargs
+    assert kwargs.get("source") == "ths"
     assert kwargs.get("subtype") is None
 
 
@@ -190,8 +189,7 @@ def test_list_boards_subtype_passed_to_persistence(client):
     assert r.status_code == 200
     _, kwargs = mock_get.call_args
     assert kwargs.get("subtype") == "同花顺概念"
-    # After unification, get_board_list doesn't take 'source' kwarg
-    assert "source" not in kwargs
+    assert kwargs.get("source") == "ths"
     assert kwargs.get("board_type") == "concept"
 
 
@@ -732,14 +730,15 @@ def test_boards_stocks_valid_sources_excludes_zzshare():
     assert "zhitu" in board_mod._BOARD_STOCKS_VALID_SOURCES
 
 
-def test_get_board_list_signature_no_source_arg():
-    """get_board_list must drop 'source' param after unification."""
+def test_get_board_list_signature_has_source_arg():
+    """get_board_list must accept 'source' param (default 'ths') for source routing."""
     import inspect
     from stock_data.data_provider.persistence import board as board_mod
     sig = inspect.signature(board_mod.get_board_list)
-    assert "source" not in sig.parameters, (
-        f"get_board_list still has 'source' param: {list(sig.parameters)}"
+    assert "source" in sig.parameters, (
+        f"get_board_list missing 'source' param: {list(sig.parameters)}"
     )
+    assert sig.parameters["source"].default == "ths"
 
 
 def test_get_board_stocks_signature_no_source_arg():

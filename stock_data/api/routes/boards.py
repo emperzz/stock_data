@@ -341,6 +341,7 @@ def list_boards(
     try:
         boards, origin = stock_board_cache.get_board_list(
             board_type=type,
+            source=source,
             refresh=refresh,
             include_quote=include_quote,
             subtype=subtype,

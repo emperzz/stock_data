@@ -247,20 +247,14 @@ class TestBoardAPIRoutes:
             assert kwargs.get("refresh") is True
 
     def test_get_boards_with_source(self, client):
-        """Test GET /api/v1/boards?source=eastmoney still routes through persistence.
-
-        Post-unification: ``source`` is no longer in the persistence call
-        kwargs (the cache key is fixed to 'ths'). The route still validates
-        ``source`` against the Literal and forwards ``board_type``.
-        """
+        """Test GET /api/v1/boards?source=eastmoney routes source to persistence."""
         with patch(_PERSISTENCE_PATCH) as mock_get:
             mock_get.return_value = ([], "EastMoneyFetcher")
             response = client.get("/api/v1/boards?type=concept&source=eastmoney")
             assert response.status_code == 200
             mock_get.assert_called_once()
-            # source is no longer forwarded to persistence; board_type is.
             _, kwargs = mock_get.call_args
-            assert "source" not in kwargs
+            assert kwargs.get("source") == "eastmoney"
             assert kwargs.get("board_type") == "concept"
 
     def test_get_boards_with_include_quote(self, client):
