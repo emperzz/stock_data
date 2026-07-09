@@ -102,3 +102,75 @@ def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
     # Verify membership was populated (cache is keyed on 'ths')
     rows = board_mod.read_membership(board_code="BK1001", source="ths")
     assert len(rows) == 3
+
+
+def test_board_stocks_include_quote_fills_board_block(client):
+    """include_quote=true → board block populated from manager.get_board_realtime."""
+    from unittest.mock import patch
+    from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.persistence import board as board_mod
+
+    quote = {
+        "board_code": "885595", "board_name": "央企国企改革",
+        "price": 2934.39, "change_pct": 0.37, "change_amount": 10.92,
+        "volume": 15343, "amount": 2642.50, "net_inflow": 34.79,
+        "up_count": 175, "down_count": 207,
+    }
+    with patch.object(
+        board_mod, "get_board_stocks",
+        return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths"),
+    ), patch.object(
+        board_mod, "get_board_name_with_fallback", return_value="央企国企改革"
+    ), patch.object(
+        mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(quote, "ths")
+    ):
+        r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=true")
+    assert r.status_code == 200
+    board = r.json()["board"]
+    assert board["name"] == "央企国企改革"
+    assert board["price"] == 2934.39
+    assert board["up_count"] == 175
+    assert board["net_inflow"] == 34.79
+
+
+def test_board_stocks_include_quote_false_no_realtime_call(client):
+    """include_quote=false → get_board_realtime NOT called; board is code+name only."""
+    from unittest.mock import patch
+    from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.persistence import board as board_mod
+
+    with patch.object(
+        board_mod, "get_board_stocks",
+        return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths"),
+    ), patch.object(
+        board_mod, "get_board_name_with_fallback", return_value="央企国企改革"
+    ), patch.object(
+        mgr_mod.DataFetcherManager, "get_board_realtime"
+    ) as mock_rt:
+        r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=false")
+    assert r.status_code == 200
+    assert r.json()["board"]["price"] is None
+    mock_rt.assert_not_called()
+
+
+def test_board_stocks_include_quote_best_effort_on_failure(client):
+    """get_board_realtime failure → board falls back to code+name, no 500."""
+    from unittest.mock import patch
+    from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.persistence import board as board_mod
+    from stock_data.data_provider.base import DataFetchError
+
+    with patch.object(
+        board_mod, "get_board_stocks",
+        return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths"),
+    ), patch.object(
+        board_mod, "get_board_name_with_fallback", return_value="央企国企改革"
+    ), patch.object(
+        mgr_mod.DataFetcherManager, "get_board_realtime",
+        side_effect=DataFetchError("upstream down"),
+    ):
+        r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=true")
+    assert r.status_code == 200
+    board = r.json()["board"]
+    assert board["name"] == "央企国企改革"
+    assert board["price"] is None

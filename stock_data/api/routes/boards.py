@@ -490,8 +490,35 @@ def get_board_stocks(
         for s in stocks
     ]
 
+    # include_quote=true → also pull the board-level realtime quote (THS
+    # only). Best-effort: any routing/upstream/missing-method failure falls
+    # back to code+name. Mirrors /boards/{code}/history's direct manager call
+    # (non-cacheable board read-through; CLAUDE.md persistence-only carve-out).
+    board_info = BoardInfo(code=board_code, name=board_name)
+    if include_quote:
+        try:
+            quote, _ = manager.get_board_realtime(board_code, source=source)
+        except (DataFetchError, ValueError, AttributeError) as e:
+            logger.debug(
+                f"[boards] board realtime quote unavailable for {board_code} "
+                f"(source={source}): {type(e).__name__}: {e}"
+            )
+        else:
+            board_info = BoardInfo(
+                code=board_code,
+                name=board_name,
+                price=quote.get("price"),
+                change_pct=quote.get("change_pct"),
+                change_amount=quote.get("change_amount"),
+                volume=quote.get("volume"),
+                amount=quote.get("amount"),
+                net_inflow=quote.get("net_inflow"),
+                up_count=quote.get("up_count"),
+                down_count=quote.get("down_count"),
+            )
+
     return BoardStocksResponse(
-        board=BoardInfo(code=board_code, name=board_name),
+        board=board_info,
         stocks=stock_list,
         query_source=source,
         data_source=origin,
