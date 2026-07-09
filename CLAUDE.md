@@ -172,7 +172,7 @@ to invoke the fetcher method directly (bypassing manager failover).
    `UnknownFetcher / UnknownMethod / FetcherUnavailable / TypeError / <ExceptionName>`,
    each with optional traceback.
 
-### `fetcher_method` overrides (5 known)
+### `fetcher_method` overrides (6 known)
 
 `@endpoint_meta(fetcher_method=...)` pins the method when the capability's
 default isn't right:
@@ -182,6 +182,7 @@ default isn't right:
 | `/boards/{board_code}/stocks` | `STOCK_BOARD` | `get_board_stocks` |
 | `/stocks/{stock_code}/boards` | `STOCK_BOARD` | `get_stock_boards` |
 | `/boards/{board_code}/history` | `STOCK_BOARD` | `get_board_history` |
+| `/boards/{board_code}/quote` | `STOCK_BOARD` | `get_board_realtime` |
 | `/dragon-tiger/daily` | `DRAGON_TIGER` | `get_daily_dragon_tiger` |
 | `/stocks/{stock_code}/fund-flow/daily` | `FUND_FLOW` | `get_fund_flow_120d` |
 
@@ -217,7 +218,7 @@ Compact overview:
 | `ZzshareFetcher` | 2 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
 | `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强 — 仅股票; Tencent 未声明 `INDEX_REALTIME_QUOTE`,不进指数 quote 链) | none |
 | `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `NEWS_SEARCH`, `STOCK_BOARD`, `STOCK_NEWS`, `ANNOUNCEMENT` | none |
-| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH`, `NEWS_SEARCH` (via 问财 iWenCai), `STOCK_BOARD` (board K-line concept/industry, d-only — 2026-07-08), `STOCK_NEWS` (basic.10jqka.com.cn 个股新闻 P7 备份), `ANNOUNCEMENT` (basic.10jqka.com.cn 个股公告 P7 备份) | none |
+| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH`, `NEWS_SEARCH` (via 问财 iWenCai), `STOCK_BOARD` (board K-line concept/industry, d-only — 2026-07-08; + `get_board_realtime` 板块实时行情 via q.10jqka /gn/detail/code/{cid}/), `STOCK_NEWS` (basic.10jqka.com.cn 个股新闻 P7 备份), `ANNOUNCEMENT` (basic.10jqka.com.cn 个股公告 P7 备份) | none |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
 | `MyquantFetcher` | 9 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_KLINE`, `STOCK_INFO` (last-resort backup; richer sources win) | `MYQUANT_TOKEN` |
@@ -283,6 +284,7 @@ fetchers that support it.
 | `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu`; `zzshare` is no longer a public label here — returns 422) |
 | `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu`; `source=zzshare` is still aliased to `ths` at the route layer for backward compat) |
 | `get_board_history` | `STOCK_BOARD` (source-routed, no failover; valid sources: `ths` (d-only, concept/industry — `board_type` required) / `eastmoney` (d/w/m + 5/15/30/60m); `source=zzshare` is aliased to `ths` because ZzshareFetcher has no K-line impl) |
+| `get_board_realtime` | `STOCK_BOARD` (source-routed, no failover; ths only — board-level realtime quote via q.10jqka concept detail page /gn/detail/code/{cid}/) |
 | `get_index_realtime_quote` | `INDEX_REALTIME_QUOTE` |
 | `get_index_historical` | `INDEX_KLINE` |
 | `get_kline_data` (index) | `INDEX_KLINE` |

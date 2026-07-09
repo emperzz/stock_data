@@ -57,7 +57,7 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
         #             不再有独立的 special 类型
     },
     "ths": {  # stock-boards 专用 (THS basic API 仅返回 concept); 行业 / 概念
-              # 前向 board 清单由 ThsFetcher.get_all_boards 提供 (2026-07-08).
+        # 前向 board 清单由 ThsFetcher.get_all_boards 提供 (2026-07-08).
         "concept": {THS_CONCEPT_SUBTYPE},
         "industry": {THS_INDUSTRY_SUBTYPE},
         # special / index 暂不支持
@@ -95,9 +95,7 @@ _STOCK_BOARDS_SOURCE_ALIAS: dict[str, str] = {"zzshare": "ths"}
 # underlying ZzshareFetcher.plates_stocks is still used internally by
 # fetch_board_stocks_with_zzshare_fallback for the include_quote=False
 # primary path.
-_BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = (
-    "ths", "eastmoney", "zhitu"
-)
+_BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
 
 
 def normalize_board_stocks_source(source: str) -> str:
@@ -436,9 +434,7 @@ def get_board_list(
         )
 
     needs_refresh = (
-        refresh
-        or include_quote
-        or _refresh_tracker.is_first_call(f"{board_type}:{source}")
+        refresh or include_quote or _refresh_tracker.is_first_call(f"{board_type}:{source}")
     )
 
     if not needs_refresh:
@@ -451,20 +447,23 @@ def get_board_list(
 
     if source == "ths":
         boards = fetch_boards_with_zzshare_backfill(
-            board_type=board_type, refresh=refresh,
-            include_quote=include_quote, subtype=None, manager=manager,
+            board_type=board_type,
+            refresh=refresh,
+            include_quote=include_quote,
+            subtype=None,
+            manager=manager,
         )
     else:
         boards, _ = manager.get_all_boards(
-            source=source, board_type=board_type,
-            subtype=None, include_quote=include_quote,
+            source=source,
+            board_type=board_type,
+            subtype=None,
+            include_quote=include_quote,
         )
 
     if boards:
         update_cached_boards(board_type, source, boards)
-        logger.info(
-            f"[BoardCache] Refreshed {len(boards)} boards for {board_type}/{source}"
-        )
+        logger.info(f"[BoardCache] Refreshed {len(boards)} boards for {board_type}/{source}")
 
     if subtype is not None:
         boards = [b for b in boards if b.get("subtype") == subtype]
@@ -534,8 +533,7 @@ def _get_all_board_types(
             if not code or code in seen_codes:
                 if code in seen_codes:
                     logger.debug(
-                        f"[BoardCache] dropping duplicate code '{code}' "
-                        f"(kept first occurrence)"
+                        f"[BoardCache] dropping duplicate code '{code}' (kept first occurrence)"
                     )
                 continue
             seen_codes.add(code)
@@ -574,8 +572,7 @@ def _resolve_ths_cid_from_platecode(platecode: str) -> str | None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT code FROM stock_board "
-        "WHERE platecode = ? AND source = 'ths' LIMIT 1",
+        "SELECT code FROM stock_board WHERE platecode = ? AND source = 'ths' LIMIT 1",
         (platecode,),
     )
     row = cursor.fetchone()
@@ -708,12 +705,14 @@ def fetch_boards_with_zzshare_backfill(
         ths_rows: list[dict] = []
         try:
             ths_rows, _ = manager.get_all_boards(
-                source="ths", board_type=bt, subtype=None, include_quote=include_quote,
+                source="ths",
+                board_type=bt,
+                subtype=None,
+                include_quote=include_quote,
             )
         except DataFetchError as e:
             logger.warning(
-                f"[BoardCache] fetch_boards_with_zzshare_backfill: "
-                f"ths({bt}) failed: {e}"
+                f"[BoardCache] fetch_boards_with_zzshare_backfill: ths({bt}) failed: {e}"
             )
             # ThsFetcher failure is fatal for this bt — skip it.
             continue
@@ -721,7 +720,10 @@ def fetch_boards_with_zzshare_backfill(
         zz_rows: list[dict] = []
         try:
             zz_rows, _ = manager.get_all_boards(
-                source="zzshare", board_type=bt, subtype=None, include_quote=include_quote,
+                source="zzshare",
+                board_type=bt,
+                subtype=None,
+                include_quote=include_quote,
             )
         except Exception as e:
             logger.warning(
@@ -775,9 +777,12 @@ def fetch_board_stocks_with_zzshare_fallback(
         (network / 5xx). Empty results are returned as-is (treated as
         'no stocks in this board' -> caller -> 404).
     """
+
     def _try_zzshare() -> list[dict]:
         rows, _ = manager.get_board_stocks(
-            board_code=board_code, source="zzshare", include_quote=include_quote,
+            board_code=board_code,
+            source="zzshare",
+            include_quote=include_quote,
         )
         return rows
 
@@ -786,7 +791,9 @@ def fetch_board_stocks_with_zzshare_fallback(
         if not cid:
             return []
         rows, _ = manager.get_board_stocks(
-            board_code=cid, source="ths", include_quote=include_quote,
+            board_code=cid,
+            source="ths",
+            include_quote=include_quote,
         )
         return rows
 
@@ -863,9 +870,7 @@ def get_board_stocks(
     """
     init_schema()
 
-    needs_refresh = (
-        include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:ths")
-    )
+    needs_refresh = include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:ths")
 
     if not needs_refresh:
         cached = _read_board_stocks_from_db(board_code, "ths")
@@ -876,7 +881,9 @@ def get_board_stocks(
         raise ValueError("manager is required when refresh=True or cache miss")
 
     stocks, origin = fetch_board_stocks_with_zzshare_fallback(
-        board_code=board_code, include_quote=include_quote, manager=manager,
+        board_code=board_code,
+        include_quote=include_quote,
+        manager=manager,
     )
 
     if stocks:
@@ -1168,15 +1175,8 @@ def _read_membership_entries(
             # Authoritative name/type/subtype from stock_board when present;
             # otherwise the membership row's stored value (legacy fallback).
             "name": r["sb_name"] if r["sb_name"] is not None else r["board_name"],
-            "type": (
-                r["sb_board_type"]
-                if r["sb_board_type"] is not None
-                else r["board_type"]
-            ),
-            "subtype": (
-                (r["sb_subtype"] if r["sb_subtype"] is not None else r["subtype"])
-                or ""
-            ),
+            "type": (r["sb_board_type"] if r["sb_board_type"] is not None else r["board_type"]),
+            "subtype": ((r["sb_subtype"] if r["sb_subtype"] is not None else r["subtype"]) or ""),
             "source": r["source"],
         }
         for r in raw_rows
@@ -1265,9 +1265,7 @@ def get_stock_memberships(
                     source=cold_src,
                 )
                 # Re-read to include newly written rows
-                entries, present_sources = _read_membership_entries(
-                    stock_code, sources, cursor
-                )
+                entries, present_sources = _read_membership_entries(stock_code, sources, cursor)
 
     # Apply type/subtype filters (post-query, in-memory)
     if type is not None:
@@ -1390,8 +1388,7 @@ def get_board_name_with_fallback(
                 subtype=None,
             )
             match = next(
-                (b["name"] for b in boards
-                 if board_code in (b.get("code"), b.get("platecode"))),
+                (b["name"] for b in boards if board_code in (b.get("code"), b.get("platecode"))),
                 None,
             )
             if match:
@@ -1404,7 +1401,9 @@ def get_board_name_with_fallback(
     return None
 
 
-def _read_boards_from_db(board_type: str, source: str, subtype: str | None = None) -> list[dict[str, Any]]:
+def _read_boards_from_db(
+    board_type: str, source: str, subtype: str | None = None
+) -> list[dict[str, Any]]:
     """Read board list from database (metadata only).
 
     Args:

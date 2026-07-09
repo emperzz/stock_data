@@ -407,7 +407,7 @@ def list_boards(
 )
 @endpoint_meta(
     summary="板块成分股 (ths/eastmoney/zhitu; ?source=zzshare 已下线; "
-            "include_quote=false 走 zzshare 优先, 失败 fallback 到 ths)",
+    "include_quote=false 走 zzshare 优先, 失败 fallback 到 ths)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_stocks",
@@ -470,9 +470,7 @@ def get_board_stocks(
     # internally; on any failure it returns None and we fall back to the
     # bare board_code as the name.
     board_name = (
-        stock_board_cache.get_board_name_with_fallback(
-            board_code, source, manager=manager
-        )
+        stock_board_cache.get_board_name_with_fallback(board_code, source, manager=manager)
         or board_code
     )
 

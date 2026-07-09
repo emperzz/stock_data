@@ -29,15 +29,14 @@ _HEADING_UP = """
 """
 
 # Synthetic falling board: flip board-xj to arr-fall and net-inflow dd to c-fall.
-_HEADING_DOWN = (
-    _HEADING_UP
-    .replace('board-xj arr-rise', 'board-xj arr-fall')
-    .replace('<dd class="c-rise">34.79</dd>', '<dd class="c-fall">34.79</dd>')
+_HEADING_DOWN = _HEADING_UP.replace("board-xj arr-rise", "board-xj arr-fall").replace(
+    '<dd class="c-rise">34.79</dd>', '<dd class="c-fall">34.79</dd>'
 )
 
 
 def _parse(html):
     from bs4 import BeautifulSoup
+
     return ThsFetcher._parse_board_realtime(BeautifulSoup(html, features="lxml"))
 
 
@@ -85,11 +84,13 @@ def test_get_board_realtime_resolves_cid_and_hits_detail_url():
         r.encoding = "gbk"
         return r
 
-    with patch(
-        "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
-        return_value="301546",
-    ), patch.object(ThsFetcher, "_http_get", side_effect=fake_get), patch.object(
-        ThsFetcher, "_v_token", return_value="tok"
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            return_value="301546",
+        ),
+        patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
+        patch.object(ThsFetcher, "_v_token", return_value="tok"),
     ):
         d = f.get_board_realtime("885595")
     assert "/gn/detail/code/301546/" in captured["url"]
@@ -110,19 +111,23 @@ def test_get_board_realtime_falls_back_to_input_when_cid_unresolved():
         r.encoding = "gbk"
         return r
 
-    with patch(
-        "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
-        return_value=None,
-    ), patch.object(ThsFetcher, "_http_get", side_effect=fake_get), patch.object(
-        ThsFetcher, "_v_token", return_value="tok"
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            return_value=None,
+        ),
+        patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
+        patch.object(ThsFetcher, "_v_token", return_value="tok"),
     ):
         f.get_board_realtime("301546")
     assert "/gn/detail/code/301546/" in captured["url"]
 
 
 def test_get_board_realtime_raises_on_http_error():
-    from stock_data.data_provider.base import DataFetchError
     import pytest
+
+    from stock_data.data_provider.base import DataFetchError
+
     f = ThsFetcher.__new__(ThsFetcher)
 
     def fake_get(url, headers=None, timeout=None, **kw):
@@ -131,20 +136,22 @@ def test_get_board_realtime_raises_on_http_error():
         r.content = b""
         return r
 
-    with patch(
-        "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
-        return_value="301546",
-    ), patch.object(ThsFetcher, "_http_get", side_effect=fake_get), patch.object(
-        ThsFetcher, "_v_token", return_value="tok"
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            return_value="301546",
+        ),
+        patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
+        patch.object(ThsFetcher, "_v_token", return_value="tok"),
+        pytest.raises(DataFetchError),
     ):
-        with pytest.raises(DataFetchError):
-            f.get_board_realtime("885595")
+        f.get_board_realtime("885595")
 
 
 def test_manager_get_board_realtime_routes_to_source():
     """manager.get_board_realtime routes by source via _with_source, returns (dict, name)."""
-    from stock_data.data_provider.manager import DataFetcherManager
     from stock_data.data_provider.base import DataCapability
+    from stock_data.data_provider.manager import DataFetcherManager
 
     mgr = DataFetcherManager.__new__(DataFetcherManager)
 

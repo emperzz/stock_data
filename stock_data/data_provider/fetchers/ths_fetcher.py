@@ -890,10 +890,16 @@ class ThsFetcher(BaseFetcher):
             "price": price,
             "change_amount": change_amount,
             "change_pct": change_pct,
-            "open": None, "prev_close": None, "high": None, "low": None,
-            "volume": None, "amount": None,
-            "up_count": None, "down_count": None,
-            "net_inflow": None, "rank": None,
+            "open": None,
+            "prev_close": None,
+            "high": None,
+            "low": None,
+            "volume": None,
+            "amount": None,
+            "up_count": None,
+            "down_count": None,
+            "net_inflow": None,
+            "rank": None,
         }
 
         for dl in heading.select(".board-infos dl"):
@@ -967,9 +973,7 @@ class ThsFetcher(BaseFetcher):
                 f"[ThsFetcher] board_realtime({board_code}) network failed: {e}"
             ) from e
         if not (200 <= r.status_code < 300):
-            raise DataFetchError(
-                f"[ThsFetcher] board_realtime({board_code}) HTTP {r.status_code}"
-            )
+            raise DataFetchError(f"[ThsFetcher] board_realtime({board_code}) HTTP {r.status_code}")
         r.encoding = "gbk"
         from bs4 import BeautifulSoup
 
@@ -1294,9 +1298,7 @@ class ThsFetcher(BaseFetcher):
             # (no "key present or absent" branching for the caller).
             for r in rows:
                 r["type"] = bt
-                r["subtype"] = (
-                    THS_CONCEPT_SUBTYPE if bt == "concept" else THS_INDUSTRY_SUBTYPE
-                )
+                r["subtype"] = THS_CONCEPT_SUBTYPE if bt == "concept" else THS_INDUSTRY_SUBTYPE
                 # Uniform shape: every row carries the full set of
                 # realtime fields. Concept rows from gnSection get
                 # change_pct + net_inflow; sidebar-only concept rows
@@ -1439,18 +1441,13 @@ class ThsFetcher(BaseFetcher):
                 slug = parts[-1] if parts else ""
                 name = a.get_text(strip=True)
                 if not slug or not name:
-                    logger.debug(
-                        f"[ThsFetcher] sidebar anchor missing slug or name: "
-                        f"href={href!r}"
-                    )
+                    logger.debug(f"[ThsFetcher] sidebar anchor missing slug or name: href={href!r}")
                     continue
                 out.append({"code": slug, "name": name, "source": "ths"})
         return out
 
     @staticmethod
-    def _merge_concept_sources(
-        gn_section: list[dict], sidebar: list[dict]
-    ) -> list[dict]:
+    def _merge_concept_sources(gn_section: list[dict], sidebar: list[dict]) -> list[dict]:
         """Merge gnSection (primary) + sidebar (fallback for missing names).
 
         - gnSection rows always win (they carry platecode + real-time).
@@ -1584,8 +1581,7 @@ class ThsFetcher(BaseFetcher):
                 r = self._http_get(url, headers=headers, timeout=self._THS_BOARD_LIST_TIMEOUT)
                 if not (200 <= r.status_code < 300):
                     logger.warning(
-                        f"[ThsFetcher] industry summary page={page} "
-                        f"HTTP {r.status_code}"
+                        f"[ThsFetcher] industry summary page={page} HTTP {r.status_code}"
                     )
                     break
                 # Industry rank table is GBK-encoded (verified 2026-07-08);
@@ -1649,8 +1645,12 @@ class ThsFetcher(BaseFetcher):
                     "down_count": safe_int(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
                     "avg_price": safe_float(tds[8].get_text(strip=True)) if len(tds) > 8 else None,
                     "leading_stock": tds[9].get_text(strip=True) if len(tds) > 9 else None,
-                    "leading_stock_price": safe_float(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
-                    "leading_stock_pct": safe_float(tds[11].get_text(strip=True)) if len(tds) > 11 else None,
+                    "leading_stock_price": safe_float(tds[10].get_text(strip=True))
+                    if len(tds) > 10
+                    else None,
+                    "leading_stock_pct": safe_float(tds[11].get_text(strip=True))
+                    if len(tds) > 11
+                    else None,
                 }
             )
         return out
@@ -1673,9 +1673,7 @@ class ThsFetcher(BaseFetcher):
         try:
             r = self._http_get(url, headers=headers, timeout=self._THS_BOARD_LIST_TIMEOUT)
         except Exception as e:
-            raise DataFetchError(
-                f"[ThsFetcher] get_all_boards: GET {url} failed: {e}"
-            ) from e
+            raise DataFetchError(f"[ThsFetcher] get_all_boards: GET {url} failed: {e}") from e
         if not (200 <= r.status_code < 300):
             raise DataFetchError(
                 f"[ThsFetcher] get_all_boards: GET {url} HTTP {r.status_code} "

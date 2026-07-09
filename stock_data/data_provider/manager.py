@@ -77,10 +77,7 @@ class DataFetcherManager:
         """
         self._fetchers_by_name = {f.name: f for f in self._fetchers}
         self._slug_index = {
-            slug: f
-            for f in self._fetchers
-            for slug in [self._derive_slug(f.name)]
-            if slug
+            slug: f for f in self._fetchers for slug in [self._derive_slug(f.name)] if slug
         }
 
     def add_fetcher(self, fetcher: BaseFetcher) -> None:
@@ -184,9 +181,7 @@ class DataFetcherManager:
                         target = f
                         break
         if target is None:
-            raise ValueError(
-                f"No fetcher with name {source!r} is registered"
-            )
+            raise ValueError(f"No fetcher with name {source!r} is registered")
         if market not in target.supported_markets:
             raise ValueError(
                 f"Fetcher {target.name!r} does not support market {market!r} "
@@ -252,7 +247,9 @@ class DataFetcherManager:
         Raises:
             DataFetchError: when all fetchers fail and ``allow_none`` is False.
         """
-        fetchers = candidates if candidates is not None else self._filter_by_capability(market, capability)
+        fetchers = (
+            candidates if candidates is not None else self._filter_by_capability(market, capability)
+        )
         errors: list[str] = []
         # Track the last empty result so an "empty chain" (no fetcher raised
         # AND no fetcher returned meaningful data) can return a coherent
@@ -342,13 +339,11 @@ class DataFetcherManager:
         Delegates to ``_candidates`` with KLINE capability and
         ``supports_kline`` check.
         """
-        cap = (
-            DataCapability.INDEX_KLINE if asset == "index"
-            else DataCapability.STOCK_KLINE
-        )
+        cap = DataCapability.INDEX_KLINE if asset == "index" else DataCapability.STOCK_KLINE
         adj = adjust or ""
         return self._candidates(
-            market, cap,
+            market,
+            cap,
             lambda f: f.supports_kline(frequency, adj, market, asset),
         )
 
@@ -393,7 +388,8 @@ class DataFetcherManager:
 
         cap = DataCapability.INDEX_KLINE if asset == "index" else DataCapability.STOCK_KLINE
         return self._with_failover(
-            cap, market,
+            cap,
+            market,
             f"kline {stock_code} {frequency}",
             lambda f: f.get_kline_data(stock_code, start_date, end_date, days, frequency, adjust),
             return_source=True,
@@ -440,7 +436,9 @@ class DataFetcherManager:
             return fetcher.get_all_stocks(fetcher_market)
 
         return self._with_failover(
-            DataCapability.STOCK_LIST, market, f"all_stocks {market}",
+            DataCapability.STOCK_LIST,
+            market,
+            f"all_stocks {market}",
             _call,
             return_source=True,
             allow_none=True,
@@ -470,9 +468,7 @@ class DataFetcherManager:
 
     # ---------- stock news (per-stock feed) ----------
 
-    def get_stock_news(
-        self, code: str, limit: int = 20
-    ) -> tuple[list[dict], str]:
+    def get_stock_news(self, code: str, limit: int = 20) -> tuple[list[dict], str]:
         """Get stock-specific news feed via STOCK_NEWS-capable fetchers.
 
         Capability-based routing: only fetchers that declare ``STOCK_NEWS``
@@ -522,7 +518,8 @@ class DataFetcherManager:
         ``supports_quote`` check.
         """
         return self._candidates(
-            market, capability,
+            market,
+            capability,
             lambda f: f.supports_quote(market),
         )
 
@@ -541,7 +538,8 @@ class DataFetcherManager:
             raise DataFetchError(f"No fetcher supports quote market={market}")
 
         return self._with_failover(
-            DataCapability.STOCK_REALTIME_QUOTE, market,
+            DataCapability.STOCK_REALTIME_QUOTE,
+            market,
             f"quote {stock_code}",
             lambda f: f.get_realtime_quote(stock_code),
             circuit_breaker=REALTIME_CIRCUIT_BREAKER,
@@ -617,8 +615,10 @@ class DataFetcherManager:
             succeeds; the persistence layer unpacks this to forward
             the fetcher name as the response's origin.
         """
+
         def _fetch(fetcher: BaseFetcher) -> list[dict] | None:
             return fetcher.get_zt_pool(pool_type, date)
+
         return self._with_failover(
             DataCapability.STOCK_ZT_POOL,
             "csi",
@@ -655,6 +655,7 @@ class DataFetcherManager:
                 query_date = latest
             else:
                 from datetime import date as date_cls
+
                 query_date = date_cls.today().strftime("%Y-%m-%d")
 
         stocks, origin = get_pool(
@@ -692,7 +693,8 @@ class DataFetcherManager:
             raise DataFetchError(f"No fetcher supports quote market={index_type}")
 
         return self._with_failover(
-            DataCapability.INDEX_REALTIME_QUOTE, index_type,
+            DataCapability.INDEX_REALTIME_QUOTE,
+            index_type,
             f"index_quote {index_code}",
             lambda f: f.get_index_realtime_quote(index_code),
             circuit_breaker=REALTIME_CIRCUIT_BREAKER,
@@ -778,6 +780,7 @@ class DataFetcherManager:
             is only used to steer the fetcher, never returned in the
             result.
         """
+
         def call(f):
             kwargs = {"source": source, "include_quote": include_quote}
             # Only pass board_type when explicitly set — keeps the call
@@ -796,9 +799,7 @@ class DataFetcherManager:
         )
         return stocks, name
 
-    def get_stock_boards(
-        self, stock_code: str, source: str
-    ) -> tuple[list[dict] | None, str]:
+    def get_stock_boards(self, stock_code: str, source: str) -> tuple[list[dict] | None, str]:
         """Get boards a stock belongs to from the named source.
 
         Returns ``(None, name)`` if the fetcher signals "no data" (vs empty list).
@@ -876,42 +877,56 @@ class DataFetcherManager:
 
     def get_dragon_tiger(self, code: str, trade_date: str = "") -> tuple[dict, str]:
         return self._with_failover(
-            DataCapability.DRAGON_TIGER, "csi", f"dragon_tiger {code}",
+            DataCapability.DRAGON_TIGER,
+            "csi",
+            f"dragon_tiger {code}",
             lambda f: f.get_dragon_tiger(code, trade_date),
             return_source=True,
         )
 
-    def get_daily_dragon_tiger(self, trade_date: str = "", min_net_buy: float | None = None) -> tuple[dict, str]:
+    def get_daily_dragon_tiger(
+        self, trade_date: str = "", min_net_buy: float | None = None
+    ) -> tuple[dict, str]:
         return self._with_failover(
-            DataCapability.DRAGON_TIGER, "csi", "daily dragon_tiger",
+            DataCapability.DRAGON_TIGER,
+            "csi",
+            "daily dragon_tiger",
             lambda f: f.get_daily_dragon_tiger(trade_date, min_net_buy),
             return_source=True,
         )
 
     def get_margin_trading(self, code: str, page_size: int = 30) -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.MARGIN_TRADING, "csi", f"margin_trading {code}",
+            DataCapability.MARGIN_TRADING,
+            "csi",
+            f"margin_trading {code}",
             lambda f: f.get_margin_trading(code, page_size),
             return_source=True,
         )
 
     def get_block_trade(self, code: str, page_size: int = 20) -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.BLOCK_TRADE, "csi", f"block_trade {code}",
+            DataCapability.BLOCK_TRADE,
+            "csi",
+            f"block_trade {code}",
             lambda f: f.get_block_trade(code, page_size),
             return_source=True,
         )
 
     def get_holder_num_change(self, code: str, page_size: int = 10) -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.HOLDER_NUM, "csi", f"holder_num {code}",
+            DataCapability.HOLDER_NUM,
+            "csi",
+            f"holder_num {code}",
             lambda f: f.get_holder_num_change(code, page_size),
             return_source=True,
         )
 
     def get_dividend(self, code: str, page_size: int = 20) -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.DIVIDEND, "csi", f"dividend {code}",
+            DataCapability.DIVIDEND,
+            "csi",
+            f"dividend {code}",
             lambda f: f.get_dividend(code, page_size),
             return_source=True,
         )
@@ -919,21 +934,27 @@ class DataFetcherManager:
     def get_stock_info(self, code: str) -> tuple[dict, str]:
         """拉取公司画像 (A 股). Failover: Zhitu (P4) → Myquant (P9)."""
         return self._with_failover(
-            DataCapability.STOCK_INFO, "csi", f"stock_info {code}",
+            DataCapability.STOCK_INFO,
+            "csi",
+            f"stock_info {code}",
             lambda f: f.get_stock_info(code),
             return_source=True,
         )
 
     def get_fund_flow_minute(self, code: str) -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.FUND_FLOW, "csi", f"fund_flow_minute {code}",
+            DataCapability.FUND_FLOW,
+            "csi",
+            f"fund_flow_minute {code}",
             lambda f: f.get_fund_flow_minute(code),
             return_source=True,
         )
 
     def get_fund_flow_120d(self, code: str) -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.FUND_FLOW, "csi", f"fund_flow_120d {code}",
+            DataCapability.FUND_FLOW,
+            "csi",
+            f"fund_flow_120d {code}",
             lambda f: f.get_fund_flow_120d(code),
             return_source=True,
         )
@@ -942,28 +963,36 @@ class DataFetcherManager:
 
     def get_hot_topics(self, date_str: str = "") -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.HOT_TOPICS, "csi", "hot_topics",
+            DataCapability.HOT_TOPICS,
+            "csi",
+            "hot_topics",
             lambda f: f.get_hot_topics(date_str),
             return_source=True,
         )
 
     def get_north_flow(self) -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.NORTH_FLOW, "csi", "north_flow",
+            DataCapability.NORTH_FLOW,
+            "csi",
+            "north_flow",
             lambda f: f.get_north_flow(),
             return_source=True,
         )
 
     def get_reports(self, code: str, max_pages: int = 5) -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.RESEARCH_REPORT, "csi", f"reports {code}",
+            DataCapability.RESEARCH_REPORT,
+            "csi",
+            f"reports {code}",
             lambda f: f.get_reports(code, max_pages),
             return_source=True,
         )
 
     def get_announcements(self, code: str, page_size: int = 30) -> tuple[list[dict], str]:
         return self._with_failover(
-            DataCapability.ANNOUNCEMENT, "csi", f"announcements {code}",
+            DataCapability.ANNOUNCEMENT,
+            "csi",
+            f"announcements {code}",
             lambda f: f.get_announcements(code, page_size),
             return_source=True,
         )
@@ -979,7 +1008,9 @@ class DataFetcherManager:
             DataFetchError: when no fetcher can serve the PDF.
         """
         path, source = self._with_failover(
-            DataCapability.RESEARCH_REPORT, "csi", f"report_pdf {report_id}",
+            DataCapability.RESEARCH_REPORT,
+            "csi",
+            f"report_pdf {report_id}",
             lambda f: f.download_report_pdf(report_id),
             return_source=True,
         )
@@ -1035,7 +1066,7 @@ def create_default_manager() -> DataFetcherManager:
         AkshareFetcher,
         YfinanceFetcher,
         ZhituFetcher,
-        ZzshareFetcher,   # NEW (P5; placed after Zhitu for human-readable order)
+        ZzshareFetcher,  # NEW (P5; placed after Zhitu for human-readable order)
         TencentFetcher,
         EastMoneyFetcher,
         BaiduFetcher,

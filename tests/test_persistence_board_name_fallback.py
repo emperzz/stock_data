@@ -140,6 +140,7 @@ def test_get_board_name_platecode_or_no_false_match_for_eastmoney():
 def test_get_board_name_with_fallback_matches_platecode_in_slow_path():
     """Slow path (manager.get_all_boards) must also compare platecode."""
     from unittest.mock import MagicMock
+
     manager = MagicMock()
     manager.get_all_boards.return_value = (
         [{"code": "301546", "name": "央企国企改革", "platecode": "885595"}],
