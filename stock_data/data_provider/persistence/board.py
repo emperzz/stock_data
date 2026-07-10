@@ -747,7 +747,7 @@ def fetch_board_stocks_with_zzshare_fallback(
     source: str,
     include_quote: bool,
     manager,
-) -> tuple[list[dict], str, str]:
+) -> tuple[list[dict], str, str, str | None]:
     """Get stocks for a board — STRICTLY source-routed with one cross-source fallback.
 
     Behaviour rules per source (per the 2026-07-10 optimization
@@ -784,7 +784,7 @@ def fetch_board_stocks_with_zzshare_fallback(
         manager: Required. ``DataFetcherManager`` instance.
 
     Returns:
-        ``(stocks, source_label, effective_source)`` — 3-tuple:
+        ``(stocks, source_label, effective_source, reason)`` — 4-tuple:
           - ``stocks``: list of stock dicts (potentially empty).
           - ``source_label``: fetcher name matching the user's
             ``?source=`` (the *requested* source). For all branches
@@ -795,6 +795,12 @@ def fetch_board_stocks_with_zzshare_fallback(
             differs from ``source_label``, the route response carries
             an actionable ``effective_source`` field so the client can
             tell the response came from a fallback fetcher.
+          - ``reason``: optional annotation for the empty-result case.
+            Currently only one value: ``"cid_unresolved"`` — when
+            ``_resolve_ths_cid_from_platecode`` returned ``None`` and
+            the helper could not perform any fetch. ``None`` for all
+            other branches. The route layer maps ``reason="cid_unresolved"``
+            to a 422 response (see ``api/routes/boards.py``).
 
     Raises:
         DataFetchError: the chosen fetcher raised and no fallback was
@@ -809,7 +815,7 @@ def fetch_board_stocks_with_zzshare_fallback(
         if include_quote:
             cid = _resolve_ths_cid_from_platecode(board_code)
             if not cid:
-                return [], "ths", "ths"
+                return [], "ths", "ths", "cid_unresolved"
             try:
                 rows, _ = manager.get_board_stocks(
                     board_code=cid,
@@ -849,7 +855,7 @@ def fetch_board_stocks_with_zzshare_fallback(
         # THS fallback path (include_quote=False from user).
         cid = _resolve_ths_cid_from_platecode(board_code)
         if not cid:
-            return [], "ths", "ths"   # cid unresolved → empty; no fetch happened
+            return [], "ths", "ths", "cid_unresolved"   # cid unresolved → empty; no fetch happened
         try:
             rows, _ = manager.get_board_stocks(
                 board_code=cid,
@@ -869,7 +875,7 @@ def fetch_board_stocks_with_zzshare_fallback(
             )
         except DataFetchError:
             raise
-        return rows, "zzshare", "zzshare"
+        return rows, "zzshare", "zzshare", None
 
     if source in ("eastmoney", "zhitu"):
         try:
@@ -880,7 +886,7 @@ def fetch_board_stocks_with_zzshare_fallback(
             )
         except DataFetchError:
             raise
-        return rows, source, source
+        return rows, source, source, None
 
     raise ValueError(
         f"fetch_board_stocks_with_zzshare_fallback: unsupported source {source!r}"
@@ -893,7 +899,7 @@ def get_board_stocks(
     refresh: bool = False,
     include_quote: bool = False,
     manager=None,
-) -> tuple[list, str, str]:
+) -> tuple[list, str, str, str | None]:
     """Get stocks belonging to a board with automatic refresh.
 
     Cache is keyed on the public board_code (not on source — different
@@ -928,13 +934,19 @@ def get_board_stocks(
         manager: DataFetcherManager instance. Required when fetching from upstream.
 
     Returns:
-        Tuple of (stocks, origin, effective_source) where:
+        Tuple of (stocks, origin, effective_source, reason) where:
           - ``origin`` is ``"persistence"`` (cache hit) or the requested
             fetcher slug (cache miss path), as before.
           - ``effective_source`` is always populated to the fetcher
             slug that actually served the response — *post-fix* this is
             always a non-empty string. ``query_source vs effective_source``
             at the route layer tells the client whether the fallback fired.
+          - ``reason``: optional annotation, currently only
+            ``"cid_unresolved"`` when the THS cid-index cache missed
+            for the board_code and no fetch was attempted. ``None`` in
+            all other cases. The route layer maps
+            ``reason="cid_unresolved"`` to HTTP 422; ``None`` (or any
+            other empty-result case) maps to HTTP 404.
           - ``stocks`` is the list of stock dicts as before.
     """
     init_schema()
@@ -953,12 +965,12 @@ def get_board_stocks(
             # is not surfaced here. The route layer reports
             # ``origin="persistence"``; clients that need the actual
             # upstream should pass ?refresh=true.
-            return cached, "persistence", "ths"
+            return cached, "persistence", "ths", None
 
     if manager is None:
         raise ValueError("manager is required when refresh=True or cache miss")
 
-    stocks, origin, effective_source = fetch_board_stocks_with_zzshare_fallback(
+    stocks, origin, effective_source, reason = fetch_board_stocks_with_zzshare_fallback(
         board_code=board_code,
         source=source,
         include_quote=include_quote,
@@ -972,7 +984,7 @@ def get_board_stocks(
             f"{board_code}/ths (origin={origin}, effective_source={effective_source})"
         )
 
-    return stocks, origin, effective_source
+    return stocks, origin, effective_source, reason
 
 
 def resolve_board_types(
