@@ -824,7 +824,7 @@ def fetch_board_stocks_with_zzshare_fallback(
                 )
             except DataFetchError:
                 raise
-            return rows, "ths", "ths"
+            return rows, "ths", "ths", None
 
         # include_quote=False: prefer zzshare (lighter request, no
         # quote enrichment). Fall back to ths on any DataFetchError
@@ -845,7 +845,7 @@ def fetch_board_stocks_with_zzshare_fallback(
             )
         else:
             if rows:
-                return rows, "ths", "zzshare"
+                return rows, "ths", "zzshare", None
             logger.info(
                 f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
                 f"zzshare returned 0 rows for board={board_code}; "
@@ -864,7 +864,7 @@ def fetch_board_stocks_with_zzshare_fallback(
             )
         except DataFetchError:
             raise
-        return rows, "ths", "ths"
+        return rows, "ths", "ths", None
 
     if source == "zzshare":
         try:
