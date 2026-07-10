@@ -654,12 +654,12 @@ This endpoint returns two source fields:
 | `source` | string | null (all) | Comma-separated sources (`ths,eastmoney,zhitu`). `zzshare` is accepted as alias for `ths`. Omit for all valid sources. |
 | `type` | string | null | Filter by board type |
 | `subtype` | string | null | Filter by source-specific subtype |
-| `cold_fill` | bool | `false` | Opt-in lazy-fill on cold data for `ths` / `zhitu` / `eastmoney`. Default `false` (cold data surfaces in `cold_sources` instead). |
 
 Multi-source aggregation: the response `source` field is `"merged"`
 when more than one source is requested; the `cold_sources` array lists
-sources with no cached data (so the caller can decide whether to retry
-with `cold_fill=true`).
+sources with no cached data (the caller can decide whether to retry
+against those sources — removed 2026-07-10; reverse lookup relies on
+startup backfill or returns `cold_sources` on miss).
 
 **Parameters for `GET /boards/{board_code}/history`:**
 | Parameter | Type | Default | Description |
