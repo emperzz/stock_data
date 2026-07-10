@@ -1378,6 +1378,18 @@ def get_board_metadata(
     row = cursor.fetchone()
     if row is None:
         return None
+    # Migration gap detection (F2): the board_type column was added in a
+    # forward-compat migration. Legacy rows from before that migration
+    # have board_type=NULL. Surface this with a warning so operators
+    # can spot the migration debt — the route layer treats this case
+    # the same as a cache miss (board.type=null in the response), but
+    # the call site can now distinguish "no row" from "row without type".
+    if not row["board_type"]:
+        logger.warning(
+            f"[BoardCache] stock_board row exists for board_code={board_code!r} "
+            f"source={source!r} but board_type column is NULL/empty — likely "
+            f"a pre-migration row. Refresh the board list to backfill type."
+        )
     return {
         "name": row["name"],
         "type": row["board_type"],

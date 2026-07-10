@@ -373,6 +373,16 @@ The fetcher API surface (`manager.*`) has exactly two consumers:
 
 Anti-pattern: `manager.get_board_stocks(...)` in `api/routes/boards.py`. Add a new method to `stock_board_cache` instead.
 
+### Board Cache Source-Normalization (post-unification)
+
+`/boards/{code}/stocks` advertises "strict source routing" on the route layer (the user's `?source=` is plumbed through to the fetcher), **but the underlying SQLite cache (`stock_board_membership`) is keyed on `source='ths'` regardless of which fetcher served the response.** This is the post-2026-07-08 unification policy:
+
+- **Why**: different sources normalize to the same THS platecode (e.g. eastmoney and ths both store `885595` for the same concept board). Per-source cache keys would force each source to cold-start its own cache row for the same board, doubling cold-path latency for no data-fidelity gain.
+- **What it means in practice**: a user passing `?source=eastmoney` who hits a ths cache row will get ths data with `data_source='persistence'`. The user's `?source=` is only honored on the cache-miss / refresh path (where `update_cached_board_stocks` always writes under `source='ths'`).
+- **User-visible contract**: `data_source='persistence'` does NOT mean the user's `?source=` was used — it means *some* fetcher served the request and the result was cached. The actual fetcher that served the most recent refresh is in the log, not the response.
+
+If a future change requires per-source cache isolation (e.g. eastmoney-specific data fidelity concerns), change `update_cached_board_stocks(board_code, "ths", ...)` (board.py:900) to use the real origin label. Track this as a breaking change.
+
 ### Indicator Computation
 Pure DataFrame transformer at the orchestration boundary:
 1. `routes.py` calls `manager.get_kline_data(code, days=max(days, lookback))`
