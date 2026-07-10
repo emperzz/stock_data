@@ -130,6 +130,41 @@ class DataFetcherManager:
             name = name[:-7]
         return name.lower()
 
+    def get_fetcher(self, source: str) -> BaseFetcher:
+        """Look up a fetcher instance by its source slug (or full class name).
+
+        Public API for the route layer — use this when you need to inspect
+        a fetcher's capabilities (e.g. ``hasattr(fetcher, "get_board_realtime")``)
+        *before* dispatching through ``_with_source``. Avoids reaching into
+        the private ``_slug_index`` or iterating ``self._fetchers`` from
+        outside the manager.
+
+        Args:
+            source: Fetcher name. Accepts the slug form (e.g. ``"ths"``,
+                case-insensitive) or the full fetcher class name (e.g.
+                ``"ThsFetcher"``). Slug match is preferred; full-name
+                match is the fallback — same convention as
+                :meth:`_with_source`.
+
+        Returns:
+            The registered :class:`BaseFetcher` instance.
+
+        Raises:
+            ValueError: when no fetcher matches the requested name.
+                The exception message names the source slug.
+        """
+        target: BaseFetcher | None = None
+        with self._lock:
+            target = self._slug_index.get(source.lower())
+            if target is None:
+                for f in self._fetchers:
+                    if f.name.lower() == source.lower():
+                        target = f
+                        break
+        if target is None:
+            raise ValueError(f"No fetcher with name {source!r} is registered")
+        return target
+
     def _with_source(
         self,
         source: str,
@@ -137,6 +172,8 @@ class DataFetcherManager:
         market: str,
         op_label: str,
         call: Callable[[BaseFetcher], T],
+        *,
+        method_name: str | None = None,
     ) -> T:
         """Run ``call(fetcher)`` on the single fetcher whose name matches ``source``.
 
@@ -158,6 +195,14 @@ class DataFetcherManager:
             op_label: Short label for the log message.
             call: Fetcher-bound function whose return value is forwarded
                 to the caller as-is.
+            method_name: Optional method name to verify exists on the
+                chosen fetcher. When provided, the fetcher is checked
+                with ``hasattr`` before ``call`` runs; missing methods
+                raise ``ValueError`` (caller decides how to surface
+                — typically 400 / 404 / 422 with a clear message).
+                This prevents AttributeError → 500 leaks when the route
+                picks a fetcher that has the capability flag but does
+                not implement the specific method.
 
         Returns:
             Whatever ``call(fetcher)`` returns.
@@ -165,8 +210,9 @@ class DataFetcherManager:
         Raises:
             ValueError: when no fetcher matches the requested source,
                 or the matching fetcher does not declare ``capability`` /
-                does not support ``market``. The exception message names
-                the cause and the missing flag.
+                does not support ``market`` / does not implement
+                ``method_name``. The exception message names the cause
+                and the missing flag / method.
             Exception: any exception raised inside ``call`` propagates
                 unchanged — no failover is attempted.
         """
@@ -191,6 +237,13 @@ class DataFetcherManager:
             raise ValueError(
                 f"Fetcher {target.name!r} does not declare capability {capability!r} "
                 f"required for {op_label}"
+            )
+        if method_name is not None and not hasattr(target, method_name):
+            raise ValueError(
+                f"Fetcher {target.name!r} does not implement {method_name!r} "
+                f"(required for {op_label}). "
+                f"This is a capability-flag mismatch: the fetcher declares "
+                f"{capability.name!r} but does not implement the specific method."
             )
         logger.info(f"[Manager] {target.name} {op_label} via explicit source routing")
         return call(target)
@@ -858,19 +911,36 @@ class DataFetcherManager:
         self,
         board_code: str,
         source: str,
+        *,
+        board_type: str | None = None,
     ) -> tuple[dict, str]:
         """Get board-level realtime quote from the named source (source-routed).
 
         No failover — board classification systems differ across sources.
         Currently only ThsFetcher implements ``get_board_realtime``; other
-        sources raise AttributeError inside the call (caller decides fallback).
+        sources fail fast with a ``ValueError`` (not AttributeError) — the
+        route layer maps that to 400/422 with a clear ``unsupported``
+        error instead of letting a 500 leak.
+
+        ``method_name="get_board_realtime"`` triggers the
+        capability-flag/method-implementation pre-check in
+        :meth:`_with_source`. A fetcher that declares STOCK_BOARD but
+        doesn't implement the method (today: EastMoneyFetcher, ZhituFetcher)
+        raises ValueError before the call lambda runs.
+
+        ``board_type`` is plumbed through to the fetcher so the
+        concept/industry decision is data-driven (via the stock_board
+        cache) rather than magic-string-based (legacy ``"881"`` prefix).
+        When the caller passes None, the fetcher does a one-shot
+        ``get_board_metadata`` fallback — see ThsFetcher for details.
         """
         return self._with_source(
             source=source,
             capability=DataCapability.STOCK_BOARD,
             market="csi",
             op_label=f"board realtime {board_code} ({source})",
-            call=lambda f: (f.get_board_realtime(board_code), f.name),
+            call=lambda f: (f.get_board_realtime(board_code, board_type=board_type), f.name),
+            method_name="get_board_realtime",
         )
 
     # ---------- eastmoney datacenter endpoints ----------
