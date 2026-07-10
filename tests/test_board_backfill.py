@@ -83,3 +83,50 @@ def test_phase1_writes_to_stock_board(fresh_db, monkeypatch):
     assert len(industry_rows) == 1
     # phase2 untouched (no boards had membership data)
     assert report.phase2.success == 0
+
+
+def test_full_sweep_writes_membership(fresh_db, monkeypatch):
+    """Phase 2: 3 boards × 2 stocks each → membership rows written."""
+    boards = [
+        {"code": "301558", "name": "B1", "type": "concept",
+         "subtype": "同花顺概念", "platecode": "885001"},
+        {"code": "301559", "name": "B2", "type": "concept",
+         "subtype": "同花顺概念", "platecode": "885002"},
+        {"code": "881001", "name": "B3", "type": "industry",
+         "subtype": "同花顺行业", "platecode": "881001"},
+    ]
+    mock = MagicMock()
+
+    # filter by board_type so fetch_boards_with_zzshare_backfill's per-type
+    # loop emits each board exactly once across the (concept, industry) sweep.
+    def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
+        if source == "ths":
+            filtered = [b for b in boards if board_type is None or b.get("type") == board_type]
+            return (filtered, "ths")
+        return ([], source)
+
+    mock.get_all_boards.side_effect = get_all_boards
+
+    def get_board_stocks(board_code, source, include_quote):
+        assert source == "zzshare"
+        if board_code == "885002":
+            return ([{"stock_code": "000002", "stock_name": "Stock-2"}], "zzshare")
+        return ([
+            {"stock_code": "000001", "stock_name": "Stock-1"},
+            {"stock_code": "000002", "stock_name": "Stock-2"},
+        ], "zzshare")
+
+    mock.get_board_stocks.side_effect = get_board_stocks
+    monkeypatch.setattr("time.sleep", lambda *_a, **_kw: None)
+
+    report = run_ths_board_backfill(mock, inter_call_sleep_s=0.0)
+
+    assert report.phase2.success == 3
+    assert report.phase2_boards_committed == 3
+    # membership upserts key on platecode (not the THS board code), so query by platecode.
+    rows = []
+    for bk in ("885001", "885002", "881001"):
+        rows.extend(board_mod.read_membership(board_code=bk, source="ths"))
+    assert len(rows) == 5
+    for bk in ("885001", "885002", "881001"):
+        assert any(r["stock_code"] == "000002" for r in rows if r["board_code"] == bk)

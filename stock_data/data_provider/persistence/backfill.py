@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sqlite3
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -18,11 +19,14 @@ from typing import Callable
 
 from fastapi import FastAPI
 
+from ..base import DataFetchError
 from .board import (
     fetch_boards_with_zzshare_backfill,
     init_schema,
     update_cached_boards,
+    upsert_membership_bulk,
 )
+from .db import get_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +109,71 @@ def run_ths_board_backfill(
         report.phase1.success, report.phase1.duration_s,
     )
 
+    # ── Phase 2: stock_board_membership ──────────────────────────────
+    t1 = time.time()
+    self_conn = sqlite3.connect(str(get_db_path()), timeout=30)
+    try:
+        try:
+            self_conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc):
+                raise
+            logger.debug("[Startup/Backfill] WAL pragma busy: %r", exc)
+
+        total_p2 = len(boards_merged)
+        for idx, board in enumerate(boards_merged):
+            platecode = board.get("platecode")
+            if not platecode:
+                logger.debug("[Startup/Backfill] skipping board %s (no platecode)",
+                             board.get("code"))
+                continue
+            try:
+                rows, _ = manager.get_board_stocks(
+                    board_code=platecode,
+                    source="zzshare",
+                    include_quote=False,
+                )
+            except (DataFetchError, Exception) as e:
+                report.phase2.errors += 1
+                if len(report.phase2.error_samples) < 20:
+                    report.phase2.error_samples.append(
+                        f"{platecode}: {type(e).__name__}: {e}")
+                logger.warning("[Startup/Backfill] phase 2 board %s failed: %s",
+                               platecode, e)
+            else:
+                if rows:
+                    upsert_membership_bulk(
+                        source="ths",
+                        stocks=rows,
+                        board_code=platecode,
+                        board_name=board.get("name", ""),
+                        board_type=board.get("type", ""),
+                        subtype=board.get("subtype") or "",
+                        conn=self_conn,
+                    )
+                    report.phase2.success += 1
+                    report.phase2_boards_committed += 1
+            finally:
+                time.sleep(inter_call_sleep_s)
+
+            # Progress every 50 boards
+            done = idx + 1
+            if done % 50 == 0 and on_progress:
+                on_progress("ths", done, total_p2)
+            if done % 50 == 0:
+                logger.info(
+                    "[Startup/Backfill] phase 2 progress=%d/%d errors=%d elapsed=%.0fs",
+                    done, total_p2, report.phase2.errors,
+                    time.time() - t1,
+                )
+    finally:
+        self_conn.close()
+
+    report.phase2.duration_s = time.time() - t1
+    logger.info(
+        "[Startup/Backfill] phase 2 wrote %d boards (%d errors) in %.1fs",
+        report.phase2.success, report.phase2.errors, report.phase2.duration_s,
+    )
     return report
 
 
