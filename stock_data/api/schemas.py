@@ -367,6 +367,26 @@ class BoardStocksResponse(BaseModel):
     stocks: list[BoardStockInfo] = Field(default_factory=list, description="Stocks in the board")
     query_source: str = Field(default="eastmoney", description="用户请求时传入的 source 参数")
     data_source: str = Field(default="", description="实际数据来源 fetcher 名 或 'persistence'")
+    # Realtime quote block metadata (only meaningful when include_quote=true).
+    # Pre-2026-07-10 the realtime failure path was silent (board.price=null
+    # + debug log); post-2026-07-10 these fields give the client an explicit
+    # signal so they can distinguish "no quote requested" / "quote succeeded"
+    # / "source doesn't support quote" / "upstream failed".
+    quote_source: str | None = Field(
+        default=None,
+        description=(
+            "板块实时行情数据来源 (ths / null). 与 query_source 解耦: "
+            "成分股走 query_source, 但实时行情目前仅 ths 实现. None 表示未请求或未拉到."
+        ),
+    )
+    quote_error: str | None = Field(
+        default=None,
+        description=(
+            "实时行情失败原因: 'unsupported' (source 不实现 get_board_realtime) / "
+            "'board_type_unresolved' (持久化层无 board_type 数据) / "
+            "'upstream_failed: <reason>' (上游异常) / null (成功或未请求)."
+        ),
+    )
 
 
 class BoardQuoteResponse(BaseModel):
@@ -374,7 +394,15 @@ class BoardQuoteResponse(BaseModel):
 
     board_code: str = Field(description="Board platecode (e.g. 885595)")
     board_name: str = Field(default="", description="Board name")
-    source: str = Field(default="", description="数据来源 fetcher 名 (当前仅 ths)")
+    source: str = Field(
+        default="",
+        description=(
+            "实际数据来源 fetcher 实现名 (当前仅 ths). 这是 fetcher 的实现身份, "
+            "不是用户可选参数 — /boards/{code}/quote 路由不接受 ?source= 查询参数, "
+            "因为只有 ThsFetcher 实现了 get_board_realtime. 当其他 fetcher "
+            "实现该方法后, 此字段会反映实际被调用的 fetcher 名."
+        ),
+    )
     price: float | None = Field(default=None, description="板块指数/现价 (指数点)")
     change_pct: float | None = Field(default=None, description="涨跌幅 (%)")
     change_amount: float | None = Field(default=None, description="涨跌额 (指数点)")
@@ -382,7 +410,15 @@ class BoardQuoteResponse(BaseModel):
     high: float | None = Field(default=None, description="最高 (指数点)")
     low: float | None = Field(default=None, description="最低 (指数点)")
     prev_close: float | None = Field(default=None, description="昨收 (指数点)")
-    volume: int | None = Field(default=None, description="成交量 (万手)")
+    volume: int | None = Field(
+        default=None,
+        description=(
+            "成交量 (万手, 整数). 上游 (q.10jqka 概念详情页) 返回的是浮点字符串 "
+            "(如 '15343.80'), fetcher 用 safe_int 截断为 int — 精度损失约 0.005% "
+            "(约 80,000 股 / 1.5 亿手). 下游消费者如需小数精度应直接调用 fetcher "
+            "层 (Stage 2: /control/fetcher-test) 或在 route 层把字段类型升级为 float."
+        ),
+    )
     amount: float | None = Field(default=None, description="成交额 (亿元)")
     net_inflow: float | None = Field(default=None, description="资金净流入 (亿元)")
     up_count: int | None = Field(default=None, description="上涨家数")

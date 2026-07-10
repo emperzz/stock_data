@@ -490,50 +490,98 @@ def get_board_stocks(
         for s in stocks
     ]
 
-    # include_quote=true → also pull the board-level realtime quote (THS only).
-    # Best-effort: any routing/upstream/missing-method failure falls back
-    # to code+name. The realtime call is hardcoded to source="ths" because
-    # only ThsFetcher implements get_board_realtime (mirrors the
-    # /boards/{code}/quote route's hardcoded source). Mirrors
-    # /boards/{code}/history's direct manager call (non-cacheable
-    # board read-through; CLAUDE.md persistence-only carve-out).
+    # include_quote=true → also pull the board-level realtime quote.
+    # Post-2026-07-10: the quote call is no longer hardcoded to ths. The
+    # route honors the user's `?source=` for the realtime block too — but
+    # only when the chosen fetcher actually implements
+    # `get_board_realtime`. Currently only ThsFetcher does; eastmoney /
+    # zhitu will surface a clear `quote_error="unsupported"` instead of
+    # silently swapping to ths (the legacy behavior that motivated A1).
     #
-    # Type/subtype are populated from stock_board cache (no upstream call)
-    # so the route returns a fully-tagged board block. On cache miss they
-    # fall back to None — better than re-querying upstream.
-    cached_metadata = stock_board_cache.get_board_metadata(board_code, source)
-    board_info_kwargs: dict = {"code": board_code, "name": board_name}
-    if cached_metadata:
-        board_info_kwargs["type"] = cached_metadata["type"]
-    board_info = BoardInfo(**board_info_kwargs)
+    # On any failure (source unsupported / board_type unresolvable /
+    # upstream exception) the route fills `quote_source` + `quote_error`
+    # so the client can distinguish "no quote requested" / "quote
+    # succeeded" / "source doesn't support quote" / "upstream failed".
+    # The BoardInfo block always carries code+name+type from the
+    # stock_board cache when available; quote fields are only added on
+    # success.
+    quote_source: str | None = None
+    quote_error: str | None = None
+    quote_data: dict | None = None
+    cached_type: str | None = None
+
     if include_quote:
+        # Pre-check: does the user's chosen fetcher implement
+        # get_board_realtime? Uses the new manager.get_fetcher() public
+        # API (B2) + hasattr probe. Avoids hitting the fetcher just to
+        # catch AttributeError.
         try:
-            quote, _ = manager.get_board_realtime(board_code, source="ths")
-        except (DataFetchError, ValueError, AttributeError) as e:
-            logger.debug(
-                f"[boards] board realtime quote unavailable for {board_code} "
-                f"(ths only): {type(e).__name__}: {e}"
-            )
+            quote_fetcher = manager.get_fetcher(source)
+        except ValueError as e:
+            # Unknown source — should be unreachable because the route's
+            # Literal already 422'd, but defensive.
+            quote_error = f"unsupported: {e}"
         else:
-            board_info = BoardInfo(
-                code=board_code,
-                name=board_name,
-                type=board_info_kwargs.get("type"),  # propagated from cache above
-                price=quote.get("price"),
-                change_pct=quote.get("change_pct"),
-                change_amount=quote.get("change_amount"),
-                volume=quote.get("volume"),
-                amount=quote.get("amount"),
-                net_inflow=quote.get("net_inflow"),
-                up_count=quote.get("up_count"),
-                down_count=quote.get("down_count"),
-            )
+            if not hasattr(quote_fetcher, "get_board_realtime"):
+                quote_error = "unsupported"
+            else:
+                # Resolve board_type from the cache (C2). The cache is
+                # the source of truth — fetcher's internal fallback is
+                # reserved for callers that bypass the route (e.g. Stage 2
+                # fetcher-test). On cache miss, surface a clear error.
+                cached_metadata = stock_board_cache.get_board_metadata(
+                    board_code, "ths"
+                )
+                if cached_metadata and cached_metadata.get("type"):
+                    cached_type = cached_metadata["type"]
+                    try:
+                        quote_data, quote_source = manager.get_board_realtime(
+                            board_code,
+                            source=source,
+                            board_type=cached_type,
+                        )
+                    except DataFetchError as e:
+                        quote_error = f"upstream_failed: {e}"
+                        logger.warning(
+                            f"[boards] realtime quote upstream failed for "
+                            f"board {board_code} (source={source}): {e}"
+                        )
+                    except ValueError as e:
+                        # manager.get_board_realtime can raise ValueError
+                        # when the fetcher does not implement the method
+                        # (B1: pre-check in _with_source). This is a
+                        # belt-and-suspenders path — the hasattr check
+                        # above should already have caught it.
+                        quote_error = f"unsupported: {e}"
+                else:
+                    quote_error = "board_type_unresolved"
+
+    # Build BoardInfo once (D2). Quote fields are merged on success only.
+    board_info_kwargs: dict = {"code": board_code, "name": board_name}
+    if cached_type is not None:
+        board_info_kwargs["type"] = cached_type
+    if quote_data is not None:
+        board_info_kwargs.update(
+            {
+                "price": quote_data.get("price"),
+                "change_pct": quote_data.get("change_pct"),
+                "change_amount": quote_data.get("change_amount"),
+                "volume": quote_data.get("volume"),
+                "amount": quote_data.get("amount"),
+                "net_inflow": quote_data.get("net_inflow"),
+                "up_count": quote_data.get("up_count"),
+                "down_count": quote_data.get("down_count"),
+            }
+        )
+    board_info = BoardInfo(**board_info_kwargs)
 
     return BoardStocksResponse(
         board=board_info,
         stocks=stock_list,
         query_source=source,
         data_source=origin,
+        quote_source=quote_source,
+        quote_error=quote_error,
     )
 
 
@@ -562,9 +610,36 @@ def get_board_quote(
     ``get_board_realtime``, so the Literal is hard-coded inside rather
     than exposed as a required ``?source=`` (clients were hitting a 422
     because the only valid value was made mandatory).
+
+    board_type is sourced from the stock_board cache (single source of
+    truth). On cache miss / missing type the route returns 422 with a
+    clear ``board_type_unresolved`` error — the fetcher's own fallback
+    is reserved for callers that bypass this layer (e.g. /control/fetcher-test).
     """
     manager = get_manager()
-    quote, origin = manager.get_board_realtime(board_code, source="ths")
+    # Look up board_type from the cache; the fetcher trusts the caller's
+    # classification (post-2026-07-10: no more "881" magic string). The
+    # cache is keyed on (code OR platecode, source='ths') — see
+    # stock_board_cache.get_board_metadata.
+    metadata = stock_board_cache.get_board_metadata(board_code, "ths")
+    board_type = metadata.get("type") if metadata else None
+    if not board_type:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "board_type_unresolved",
+                "message": (
+                    f"Cannot determine board type for platecode={board_code!r}. "
+                    f"The stock_board cache has no row (or no ``type`` column "
+                    f"value) for this code. Run the board-list refresh to "
+                    f"populate the cache, or pass a valid board_code."
+                ),
+                "board_code": board_code,
+            },
+        )
+    quote, origin = manager.get_board_realtime(
+        board_code, source="ths", board_type=board_type
+    )
     return BoardQuoteResponse(
         board_code=quote.get("board_code") or board_code,
         board_name=quote.get("board_name", ""),

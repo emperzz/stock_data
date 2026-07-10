@@ -142,15 +142,26 @@ def test_board_stocks_include_quote_fills_board_block(client):
             return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths"),
         ),
         patch.object(board_mod, "get_board_name_with_fallback", return_value="央企国企改革"),
+        # C2: route now requires board_type from the cache to dispatch the
+        # realtime call. Mock the metadata lookup.
+        patch.object(
+            board_mod,
+            "get_board_metadata",
+            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+        ),
         patch.object(mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(quote, "ths")),
     ):
         r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=true")
     assert r.status_code == 200
-    board = r.json()["board"]
+    body = r.json()
+    board = body["board"]
     assert board["name"] == "央企国企改革"
     assert board["price"] == 2934.39
     assert board["up_count"] == 175
     assert board["net_inflow"] == 34.79
+    # A1: explicit quote_source / quote_error signaling.
+    assert body["quote_source"] == "ths"
+    assert body["quote_error"] is None
 
 
 def test_board_stocks_include_quote_false_no_realtime_call(client):
@@ -176,7 +187,12 @@ def test_board_stocks_include_quote_false_no_realtime_call(client):
 
 
 def test_board_stocks_include_quote_best_effort_on_failure(client):
-    """get_board_realtime failure → board falls back to code+name, no 500."""
+    """get_board_realtime failure → board falls back to code+name, no 500.
+
+    Post-2026-07-10 (A1): the failure is now visible in the response
+    via ``quote_error``. Clients can distinguish upstream failure from
+    "no quote requested" by reading this field.
+    """
     from unittest.mock import patch
 
     from stock_data.data_provider import manager as mgr_mod
@@ -190,6 +206,12 @@ def test_board_stocks_include_quote_best_effort_on_failure(client):
             return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths"),
         ),
         patch.object(board_mod, "get_board_name_with_fallback", return_value="央企国企改革"),
+        # C2: route requires board_type from cache before calling the fetcher.
+        patch.object(
+            board_mod,
+            "get_board_metadata",
+            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+        ),
         patch.object(
             mgr_mod.DataFetcherManager,
             "get_board_realtime",
@@ -198,9 +220,15 @@ def test_board_stocks_include_quote_best_effort_on_failure(client):
     ):
         r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=true")
     assert r.status_code == 200
-    board = r.json()["board"]
+    body = r.json()
+    board = body["board"]
     assert board["name"] == "央企国企改革"
     assert board["price"] is None
+    # A1: explicit error signaling. quote_source is None, quote_error
+    # describes the failure.
+    assert body["quote_source"] is None
+    assert body["quote_error"] is not None
+    assert "upstream_failed" in body["quote_error"]
 
 
 def test_board_stocks_board_block_has_type_from_cache(client):
@@ -245,7 +273,12 @@ def test_board_stocks_board_block_has_type_from_cache(client):
 
 
 def test_board_stocks_board_block_type_none_on_cache_miss(client):
-    """board.type is null when the cache has no row for this board code."""
+    """board.type is null when the cache has no row for this board code.
+
+    Post-2026-07-10 (A1): cache miss also surfaces a ``quote_error``
+    because the route can't dispatch the realtime call without
+    board_type. The error message names the missing piece.
+    """
     from unittest.mock import patch
 
     from stock_data.data_provider import manager as mgr_mod
@@ -265,8 +298,88 @@ def test_board_stocks_board_block_type_none_on_cache_miss(client):
             mgr_mod.DataFetcherManager,
             "get_board_realtime",
             side_effect=DataFetchError("upstream down"),
-        ),
+        ) as mgr_call,
     ):
         r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=true")
     assert r.status_code == 200
-    assert r.json()["board"]["type"] is None
+    body = r.json()
+    assert body["board"]["type"] is None
+    # A1: cache miss for board_type → quote_error names the gap.
+    assert body["quote_source"] is None
+    assert body["quote_error"] == "board_type_unresolved"
+    # Fetcher must NOT be called when board_type is unresolvable.
+    mgr_call.assert_not_called()
+
+
+def test_board_stocks_unsupported_source_returns_quote_error(client):
+    """?source=eastmoney&include_quote=true → quote_error='unsupported'.
+
+    EastMoneyFetcher declares STOCK_BOARD but does not implement
+    ``get_board_realtime``. The route pre-checks with hasattr via
+    manager.get_fetcher (B2) and returns a clear ``quote_error`` so
+    the client knows the chosen source doesn't support quote.
+    """
+    from unittest.mock import patch
+
+    from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.persistence import board as board_mod
+
+    with (
+        patch.object(
+            board_mod,
+            "get_board_stocks",
+            return_value=([{"stock_code": "600519", "stock_name": "x"}], "eastmoney"),
+        ),
+        patch.object(board_mod, "get_board_name_with_fallback", return_value="x"),
+        patch.object(
+            mgr_mod.DataFetcherManager, "get_board_realtime"
+        ) as mgr_call,
+    ):
+        r = client.get(
+            "/api/v1/boards/885595/stocks?source=eastmoney&include_quote=true"
+        )
+    assert r.status_code == 200
+    body = r.json()
+    # Stocks still served by eastmoney — that part of the contract is
+    # unchanged. The realtime block is the only thing that fails.
+    assert body["data_source"] == "eastmoney"
+    assert body["board"]["price"] is None
+    # A1: explicit error signaling.
+    assert body["quote_source"] is None
+    assert body["quote_error"] == "unsupported"
+    # Fetcher must NOT be called when source doesn't implement the method.
+    mgr_call.assert_not_called()
+
+
+def test_board_stocks_include_quote_false_does_not_lookup_metadata(client):
+    """include_quote=false → get_board_metadata is NOT called (D3 efficiency).
+
+    Pre-A1 the route looked up board metadata on every call regardless
+    of include_quote. Post-A1 the lookup is gated on include_quote=true
+    only, so the common (no-quote) path skips the extra DB query.
+    """
+    from unittest.mock import patch
+
+    from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.persistence import board as board_mod
+
+    with (
+        patch.object(
+            board_mod,
+            "get_board_stocks",
+            return_value=([{"stock_code": "600519", "stock_name": "x"}], "ths"),
+        ),
+        patch.object(board_mod, "get_board_name_with_fallback", return_value="x"),
+        patch.object(board_mod, "get_board_metadata") as meta_call,
+        patch.object(mgr_mod.DataFetcherManager, "get_board_realtime") as mgr_call,
+    ):
+        r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=false")
+    assert r.status_code == 200
+    body = r.json()
+    # No realtime requested → no quote fields populated.
+    assert body["quote_source"] is None
+    assert body["quote_error"] is None
+    # Crucially: get_board_metadata must NOT be called on the no-quote
+    # path. Pre-A1 this was an unconditional DB hit.
+    meta_call.assert_not_called()
+    mgr_call.assert_not_called()

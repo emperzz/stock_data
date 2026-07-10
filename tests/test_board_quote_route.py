@@ -41,12 +41,23 @@ def test_board_quote_no_source_param_works(client):
     Query only added a 422-class failure mode for callers who forgot the
     trailing query string). The route must work without ?source= and
     internally route to ths.
+
+    Post-2026-07-10: the route also requires a stock_board cache hit to
+    resolve board_type. The cache lookup is mocked here to keep the test
+    independent of the DB.
     """
     from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.persistence import board as board_mod
 
-    with patch.object(
-        mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(_QUOTE, "ths")
-    ) as mgr_call:
+    with (
+        patch.object(
+            board_mod, "get_board_metadata",
+            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+        ),
+        patch.object(
+            mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(_QUOTE, "ths")
+        ) as mgr_call,
+    ):
         r = client.get("/api/v1/boards/885595/quote")
     assert r.status_code == 200
     body = r.json()
@@ -57,18 +68,27 @@ def test_board_quote_no_source_param_works(client):
     assert body["net_inflow"] == 34.79
     assert body["rank"] == "229/389"
     assert body["source"] == "ths"
-    # Route internally routes to ths unconditionally
+    # Route internally routes to ths unconditionally, and forwards
+    # board_type from the cache (C2: persistence is the source of truth).
     args, _kwargs = mgr_call.call_args
     assert args[0] == "885595"
     assert _kwargs.get("source") == "ths"
+    assert _kwargs.get("board_type") == "concept"
 
 
 def test_board_quote_extra_source_query_ignored(client):
     """/boards/{code}/quote?source=anything is accepted; source is not a route param."""
     from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.persistence import board as board_mod
 
-    with patch.object(
-        mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(_QUOTE, "ths")
+    with (
+        patch.object(
+            board_mod, "get_board_metadata",
+            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+        ),
+        patch.object(
+            mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(_QUOTE, "ths")
+        ),
     ):
         # Pass a non-existing source query — should NOT 422 since the route
         # no longer declares a source param at all.
@@ -79,11 +99,41 @@ def test_board_quote_extra_source_query_ignored(client):
 def test_board_quote_upstream_error_returns_503(client):
     from stock_data.data_provider import manager as mgr_mod
     from stock_data.data_provider.base import DataFetchError
+    from stock_data.data_provider.persistence import board as board_mod
 
-    with patch.object(
-        mgr_mod.DataFetcherManager,
-        "get_board_realtime",
-        side_effect=DataFetchError("upstream down"),
+    with (
+        patch.object(
+            board_mod, "get_board_metadata",
+            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+        ),
+        patch.object(
+            mgr_mod.DataFetcherManager,
+            "get_board_realtime",
+            side_effect=DataFetchError("upstream down"),
+        ),
     ):
         r = client.get("/api/v1/boards/885595/quote")
     assert r.status_code == 503
+
+
+def test_board_quote_422_when_cache_misses(client):
+    """Cache miss for board_type → 422 with clear error.
+
+    Post-2026-07-10 (C2): the route refuses to call the fetcher when the
+    stock_board cache has no row for the board. Failure is loud and
+    actionable — the client can refresh the board list and retry.
+    """
+    from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.persistence import board as board_mod
+
+    with (
+        patch.object(board_mod, "get_board_metadata", return_value=None),
+        patch.object(mgr_mod.DataFetcherManager, "get_board_realtime") as mgr_call,
+    ):
+        r = client.get("/api/v1/boards/885595/quote")
+    assert r.status_code == 422
+    body = r.json()
+    assert body["detail"]["error"] == "board_type_unresolved"
+    assert "885595" in body["detail"]["message"]
+    # Fetcher MUST NOT be called when board_type is unresolvable.
+    mgr_call.assert_not_called()
