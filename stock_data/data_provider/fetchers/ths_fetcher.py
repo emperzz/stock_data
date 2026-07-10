@@ -865,10 +865,9 @@ class ThsFetcher(BaseFetcher):
         # Scope per P1 (2026-07-10): ONLY 401/403 are tolerated as
         # boundary signals (raised as ``ThsBoundarySignalError``, a
         # ``DataFetchError`` subclass). 5xx (real upstream failure) and
-        # network errors still propagate so the route returns 5xx, the
-        # circuit breaker can trip, and ops dashboards see the upstream
-        # breakage — silent partial data on real failure is worse than
-        # a 5xx.
+        # network errors still propagate so the route returns 5xx and
+        # ops dashboards see the upstream breakage as 5xx rate — silent
+        # partial data on real failure is worse than a 5xx.
         all_rows: list[dict] = []
         for page in range(1, _MAX_BOARD_STOCKS_PAGES + 1):
             try:

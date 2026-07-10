@@ -409,22 +409,17 @@ cache (`needs_refresh` is forced by `include_quote`) and re-fetch via THS,
 so clients don't see "apparent None quotes" — but if you want to force a
 fresh THS fetch on already-cached data, pass `?refresh=true`.
 
-### Circuit breaker interaction with THS beyond-data 401s
+### Board endpoint failure observability
 
-Post-2026-07-10: `ThsFetcher.get_board_stocks`'s pagination loop tolerates
-401/403 responses on **beyond-data** pages (i.e. after at least one page
-has returned rows). 5xx and network errors on the same path still
-propagate, but the beyond-data 401 case is treated as graceful
-end-of-pagination — see `ThsBoundarySignalError` and the test
-`test_401_after_data_treated_as_end_of_pagination`.
-
-**Ops impact**: previously, a beyond-data 401 raised a `DataFetchError`
-that counted toward the THS circuit-breaker failure budget. After this
-fix, those boundary 401s **no longer trip the breaker**; only real upstream
-failures (5xx / network / first-page failures) do. Real upstream failure
-visibility on ops dashboards is preserved; the breaker remains meaningful
-for genuine THS outages. If you monitor per-source CB state, expect a
-slight reduction in false-positive trips on small boards.
+Board endpoints route through `DataFetcherManager._with_source`, which
+does **not** integrate with the per-source `CircuitBreaker`. THS
+outages on a board path therefore do **not** show up as CB state
+changes — they surface as 5xx error rate. If you need CB-protected
+failover, use a non-board endpoint (K-line, realtime quote) that
+routes through `_with_failover` instead. (Documented 2026-07-10; the
+previously-stated claim that "real THS board failures can trip the
+circuit breaker" was incorrect — board methods have never been
+CB-integrated.)
 
 ### Indicator Computation
 Pure DataFrame transformer at the orchestration boundary:
