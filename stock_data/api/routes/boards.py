@@ -406,7 +406,7 @@ def list_boards(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块成分股 (ths/eastmoney/zhitu; ?source=zzshare 已下线; 严格按用户选择的 source 路由, 无跨源 fallback)",
+    summary="板块成分股 (ths/eastmoney/zhitu; ?source=zzshare 已下线; source=ths&include_quote=false 内部可能走 ZZSHARE primary + THS fallback, 通过 effective_source 字段暴露实际服务 fetcher)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_stocks",
@@ -418,9 +418,15 @@ def get_board_stocks(
         ...,
         description=(
             "Data source (REQUIRED). 'zzshare' was unified under 'ths' "
-            "on 2026-07-08. Strictly source-routed: the chosen fetcher "
-            "is the only one invoked; failures propagate (no silent "
-            "fallback to a sibling source)."
+            "on 2026-07-08. Source-routing with one cross-source "
+            "fallback: for `source='ths'&include_quote=False` the server "
+            "may invoke ZZSHARE first and fall back to THS on empty / "
+            "upstream error. The actual fetcher that served the request "
+            "is exposed via `BoardStocksResponse.effective_source` — "
+            "compare against this `query_source` to detect fallback. "
+            "For `source='eastmoney'|'zhitu'` or when `include_quote=True`, "
+            "the chosen fetcher is the only one invoked and failures "
+            "propagate as 5xx."
         ),
     ),
     include_quote: bool = Query(False, description="Include realtime quote data"),
