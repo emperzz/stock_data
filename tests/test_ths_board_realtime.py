@@ -92,7 +92,7 @@ def test_get_board_realtime_resolves_cid_and_hits_detail_url():
         patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
         patch.object(ThsFetcher, "_v_token", return_value="tok"),
     ):
-        d = f.get_board_realtime("885595")
+        d = f.get_board_realtime("885595", board_type="concept")
     assert "/gn/detail/code/301546/" in captured["url"]
     assert d["board_name"] == "央企国企改革"
 
@@ -105,8 +105,9 @@ def test_get_board_realtime_falls_back_to_input_when_cid_unresolved():
     all-None data. The new contract: a concept/industry-board code that
     can't resolve a cid must raise loudly (no silent bogus response).
 
-    Industry boards (881xxx prefix) are still allowed to use the
-    platecode directly — see test below for the carve-out.
+    Post-2026-07-10: the legacy ``board_code.startswith("881")`` magic
+    is gone. Concept/industry is decided by the caller's ``board_type=``
+    kwarg (or the cache fallback); concept boards MUST resolve a cid.
     """
     import pytest
 
@@ -123,18 +124,20 @@ def test_get_board_realtime_falls_back_to_input_when_cid_unresolved():
         patch.object(ThsFetcher, "_v_token", return_value="tok"),
         pytest.raises(DataFetchError, match="cid"),
     ):
-        f.get_board_realtime("885595")
+        f.get_board_realtime("885595", board_type="concept")
 
     # Upstream must NOT be called when cid resolution fails (no point
     # spending the HTTP round-trip on a request we know will be empty).
     http_get.assert_not_called()
 
 
-def test_get_board_realtime_industry_platecode_uses_platecode_as_cid():
-    """Industry boards (881xxx prefix) → cid === platecode, no lookup needed.
+def test_get_board_realtime_industry_board_type_uses_platecode_as_cid():
+    """Industry boards (board_type='industry') → cid === platecode, no lookup needed.
 
-    THS industry boards use the 881xxx platecode as their own cid, so the
-    cid-resolution miss is not an error — fall through with platecode-as-cid.
+    Post-2026-07-10: industry/concept decision comes from the ``board_type=``
+    kwarg, NOT from a platecode-prefix magic string. The fetcher trusts
+    the caller's classification; cid resolution is skipped for industry
+    boards (the URL path uses the platecode directly).
     """
     f = ThsFetcher.__new__(ThsFetcher)
     captured = {}
@@ -151,14 +154,109 @@ def test_get_board_realtime_industry_platecode_uses_platecode_as_cid():
     with (
         patch(
             "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
-            return_value=None,  # industry uses its own platecode as cid
+            return_value=None,  # industry doesn't even call this
+        ) as cid_resolver,
+        patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
+        patch.object(ThsFetcher, "_v_token", return_value="tok"),
+    ):
+        d = f.get_board_realtime("881270", board_type="industry")
+    assert "/gn/detail/code/881270/" in captured["url"]
+    assert d["board_name"] == "银行"
+    # Industry boards must NOT call the cid resolver.
+    cid_resolver.assert_not_called()
+
+
+def test_get_board_realtime_falls_back_to_cache_for_board_type():
+    """board_type=None → fetcher queries stock_board cache via get_board_metadata.
+
+    The cache is the source of truth for board classification. When the
+    caller doesn't pass ``board_type``, the fetcher does a one-shot
+    ``get_board_metadata(board_code, 'ths')`` lookup; if that returns a
+    row with a non-empty ``type``, it's used as the board_type.
+    """
+    f = ThsFetcher.__new__(ThsFetcher)
+    captured = {}
+
+    def fake_get(url, headers=None, timeout=None, **kw):
+        captured["url"] = url
+        r = MagicMock()
+        r.status_code = 200
+        r.content = b"x" * 100
+        r.text = _HEADING_UP
+        r.encoding = "gbk"
+        return r
+
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_metadata",
+            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+        ),
+        patch(
+            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            return_value="301546",
         ),
         patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
         patch.object(ThsFetcher, "_v_token", return_value="tok"),
     ):
-        d = f.get_board_realtime("881270")
-    assert "/gn/detail/code/881270/" in captured["url"]
-    assert d["board_name"] == "银行"
+        d = f.get_board_realtime("885595")  # no board_type kwarg
+    assert "/gn/detail/code/301546/" in captured["url"]
+    assert d["board_name"] == "央企国企改革"
+
+
+def test_get_board_realtime_raises_when_board_type_unresolvable():
+    """board_type=None AND cache miss → DataFetchError with clear message.
+
+    Failure contract: when neither the caller nor the cache can provide
+    ``board_type``, the fetcher must fail loudly with a message that
+    names the missing piece — no silent "881 prefix" magic, no
+    all-None response from a known-empty upstream page.
+    """
+    import pytest
+
+    from stock_data.data_provider.base import DataFetchError
+
+    f = ThsFetcher.__new__(ThsFetcher)
+
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_metadata",
+            return_value=None,  # cache miss
+        ),
+        patch.object(ThsFetcher, "_http_get") as http_get,
+        patch.object(ThsFetcher, "_v_token", return_value="tok"),
+        pytest.raises(DataFetchError, match="cannot determine board_type"),
+    ):
+        f.get_board_realtime("885595")  # no board_type kwarg
+
+    # No HTTP call — fail fast.
+    http_get.assert_not_called()
+
+
+def test_get_board_realtime_raises_when_cache_row_missing_type():
+    """Cache hit but board_type column is None → fail with same message.
+
+    Mirrors the legacy-row case: a stock_board row exists but its
+    ``type`` field is NULL (e.g. pre-migration). The fetcher treats
+    this the same as a cache miss.
+    """
+    import pytest
+
+    from stock_data.data_provider.base import DataFetchError
+
+    f = ThsFetcher.__new__(ThsFetcher)
+
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board.get_board_metadata",
+            return_value={"name": "x", "type": None, "subtype": ""},
+        ),
+        patch.object(ThsFetcher, "_http_get") as http_get,
+        patch.object(ThsFetcher, "_v_token", return_value="tok"),
+        pytest.raises(DataFetchError, match="cannot determine board_type"),
+    ):
+        f.get_board_realtime("885595")
+
+    http_get.assert_not_called()
 
 
 def test_get_board_realtime_raises_on_http_error():
@@ -183,7 +281,7 @@ def test_get_board_realtime_raises_on_http_error():
         patch.object(ThsFetcher, "_v_token", return_value="tok"),
         pytest.raises(DataFetchError),
     ):
-        f.get_board_realtime("885595")
+        f.get_board_realtime("885595", board_type="concept")
 
 
 def test_manager_get_board_realtime_routes_to_source():
@@ -195,10 +293,11 @@ def test_manager_get_board_realtime_routes_to_source():
 
     captured = {}
 
-    def fake_with_source(source, capability, market, op_label, call):
+    def fake_with_source(source, capability, market, op_label, call, **kwargs):
         captured["source"] = source
         captured["capability"] = capability
         captured["market"] = market
+        captured["method_name"] = kwargs.get("method_name")
         fake_fetcher = MagicMock()
         fake_fetcher.name = "ths"
         fake_fetcher.get_board_realtime.return_value = {"board_name": "央企国企改革"}
@@ -211,3 +310,5 @@ def test_manager_get_board_realtime_routes_to_source():
     assert captured["capability"] == DataCapability.STOCK_BOARD
     assert captured["market"] == "csi"
     assert captured["source"] == "ths"
+    # B1: method_name is plumbed through to enable capability/method pre-check
+    assert captured["method_name"] == "get_board_realtime"

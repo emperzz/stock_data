@@ -937,23 +937,31 @@ class ThsFetcher(BaseFetcher):
         self,
         board_code: str,
         *,
-        board_type: str | None = None,  # accepted for interface parity; unused
+        board_type: str | None = None,
         **kwargs,
     ) -> dict:
         """THS board-level realtime quote via q.10jqka.com.cn concept detail page.
 
         Args:
-            board_code: THS platecode (e.g. ``"885595"``). Resolved to the
-                URL cid (e.g. ``"301546"``) via the stock_board cache; when
-                resolution misses, the call falls into two cases:
-                  * Industry boards (881xxx prefix): the platecode IS the
-                    cid (per THS naming) — used as-is in the URL.
-                  * Concept boards (any other prefix): the cid is required
-                    because q.10jqka's path param is the cid, not the
-                    platecode. A missing cid means the upstream will return
-                    an empty stub page, so we raise ``DataFetchError``
-                    instead of silently consuming a no-op HTTP call and
-                    returning an all-None dict.
+            board_code: THS platecode (e.g. ``"885595"`` for concept,
+                ``"881270"`` for industry).
+            board_type: Board classification (``"concept"`` / ``"industry"``).
+                Source of truth: the ``stock_board`` cache (column
+                ``board_type``). The route layer is expected to look this up
+                and pass it explicitly. If omitted, the fetcher does a
+                one-shot cache fallback (``get_board_metadata``) — this is
+                a safety net, not the primary path. The legacy
+                ``board_code.startswith("881")`` magic-string check has
+                been removed; ``board_type`` is now the only discriminator.
+
+                For ``board_type="industry"``: platecode IS the URL cid
+                (per THS naming, e.g. 881272 → /gn/detail/code/881272/).
+                For ``board_type="concept"`` (or any non-industry): the cid
+                is resolved via the stock_board cache's platecode→cid
+                mapping. If the cid can't be resolved, the upstream page
+                would be empty, so we raise ``DataFetchError`` early
+                instead of spending the HTTP round-trip on a known-empty
+                page.
 
         Returns:
             dict with keys: board_code (platecode), board_name, price,
@@ -962,25 +970,47 @@ class ThsFetcher(BaseFetcher):
             cid.
 
         Raises:
-            DataFetchError: cid unresolved for a non-industry platecode /
-                upstream non-2xx / network failure / .heading absent.
+            DataFetchError: ``board_type`` cannot be determined (caller
+                did not pass it AND the stock_board cache has no row)
+                / cid unresolved for a non-industry platecode / upstream
+                non-2xx / network failure / .heading absent.
         """
+        # Resolve board_type: caller-provided takes precedence; otherwise
+        # try the public cache helper. The legacy "881 prefix" magic
+        # string has been removed (post-2026-07-10 review); the cache is
+        # now the single source of truth for "industry vs concept".
+        if board_type is None:
+            from ..persistence.board import get_board_metadata
+
+            meta = get_board_metadata(board_code, "ths")
+            if meta and meta.get("type"):
+                board_type = meta["type"]
+            else:
+                raise DataFetchError(
+                    f"[ThsFetcher] board_realtime: cannot determine board_type "
+                    f"for platecode={board_code!r}. The caller did not pass "
+                    f"``board_type`` and the stock_board cache has no row for "
+                    f"this code. (Concept/industry classification is required "
+                    f"to build the upstream URL — pass it explicitly or "
+                    f"ensure the board is in the stock_board cache.)"
+                )
+
+        # Resolve the URL cid from board_type. Industry boards use their
+        # platecode directly; concept boards (and other non-industry
+        # types) require a platecode→cid translation that's stored in
+        # stock_board.
         from ..persistence.board import _resolve_ths_cid_from_platecode
 
-        cid = _resolve_ths_cid_from_platecode(board_code)
-        if not cid:
-            # Industry boards (881xxx) use the platecode as their own cid;
-            # that's a known carve-out and the upstream returns real data.
-            # Anything else (concept boards like 885xxx) MUST resolve — we
-            # can't substitute the platecode because the URL path uses the
-            # cid, and the resulting page is empty.
-            if not board_code.startswith("881"):
+        if board_type == "industry":
+            cid = board_code
+        else:
+            cid = _resolve_ths_cid_from_platecode(board_code)
+            if not cid:
                 raise DataFetchError(
                     f"[ThsFetcher] board_realtime: no THS cid resolved for "
-                    f"platecode={board_code!r}; cannot fetch realtime quote "
-                    f"(concept boards require platecode→cid via stock_board cache)"
+                    f"platecode={board_code!r} (board_type={board_type!r}). "
+                    f"Concept boards require platecode→cid via stock_board cache."
                 )
-            cid = board_code
         url = _CONCEPT_DETAIL_URL.format(slug=cid)
         headers = {
             "User-Agent": THS_UA,
