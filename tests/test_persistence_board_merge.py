@@ -273,7 +273,7 @@ class TestFetchBoardStocksWithZzshareFallback:
                         'zzshare'),
         })
         with mock_cid_resolver({('885642',): '301558'}):
-            stocks, origin, _effective_source = board_mod.fetch_board_stocks_with_zzshare_fallback(
+            stocks, origin, _effective_source, _reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
                 board_code='885642', source='ths',
                 include_quote=True, manager=mgr,
             )
@@ -290,7 +290,7 @@ class TestFetchBoardStocksWithZzshareFallback:
         mgr = self._mgr({
             'zzshare': ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare'),
         })
-        stocks, origin, _effective_source = board_mod.fetch_board_stocks_with_zzshare_fallback(
+        stocks, origin, _effective_source, _reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
             board_code='885642', source='zzshare',
             include_quote=False, manager=mgr,
         )
@@ -315,7 +315,7 @@ class TestFetchBoardStocksWithZzshareFallback:
             'ths': ([{'stock_code': '300740', 'stock_name': 'ths-row'}], 'ths'),
         })
         with mock_cid_resolver({('885642',): '301558'}):
-            stocks, origin, effective_source = board_mod.fetch_board_stocks_with_zzshare_fallback(
+            stocks, origin, effective_source, _reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
                 board_code='885642', source='ths',
                 include_quote=False, manager=mgr,
             )
@@ -361,7 +361,7 @@ class TestFetchBoardStocksWithZzshareFallback:
             'ths': ([{'stock_code': 'x'}], 'ths'),
         })
         with mock_cid_resolver({('999999',): None}):
-            stocks, origin, effective_source = board_mod.fetch_board_stocks_with_zzshare_fallback(
+            stocks, origin, effective_source, _reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
                 board_code='999999', source='ths',
                 include_quote=False, manager=mgr,
             )

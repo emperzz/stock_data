@@ -87,9 +87,10 @@ def test_get_board_stocks_returns_tuple(monkeypatch):
     # After unification: get_board_stocks no longer takes 'source' (always 'ths'
     # internally). Origin is now determined by which fetcher served the request
     # (ths or zzshare fallback path), not by the mock's reported source.
-    # Post-2026-07-10: returns (stocks, origin, effective_source) — the third
-    # element tells the client which fetcher actually served (P4 contract).
-    stocks, origin, effective_source = board.get_board_stocks(
+    # Post-2026-07-10: returns (stocks, origin, effective_source, reason) — the
+    # 3rd element tells the client which fetcher actually served (P4 contract),
+    # the 4th is a "cid_unresolved" reason when the THS cid-index cache missed.
+    stocks, origin, effective_source, reason = board.get_board_stocks(
         "BK0001", refresh=True, manager=_MockManager()
     )
     assert isinstance(stocks, list)
@@ -98,6 +99,8 @@ def test_get_board_stocks_returns_tuple(monkeypatch):
     assert origin in ("zzshare", "ths", "")
     # effective_source is always populated (P4 contract).
     assert effective_source in ("zzshare", "ths", "")
+    # reason is None on the success path (mock manager always returns rows).
+    assert reason is None
 
 
 def test_get_stock_list_returns_tuple(monkeypatch):

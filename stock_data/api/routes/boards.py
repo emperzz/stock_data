@@ -454,7 +454,7 @@ def get_board_stocks(
         # persistence/board::fetch_board_stocks_with_zzshare_fallback);
         # ``effective_source`` tells the client which fetcher served the
         # response. Compare against ``query_source`` to detect fallback.
-        stocks, origin, effective_source = stock_board_cache.get_board_stocks(
+        stocks, origin, effective_source, reason = stock_board_cache.get_board_stocks(
             board_code,
             source=source,
             refresh=refresh,
@@ -465,6 +465,31 @@ def get_board_stocks(
         raise HTTPException(status_code=400, detail={"error": str(e)}) from e
 
     if not stocks:
+        # F2 (2026-07-10): when the persistence helper reports
+        # reason="cid_unresolved", the THS cid-index cache missed for
+        # this board_code. The board may genuinely exist upstream;
+        # a force-refresh can warm the index. Return 422 (not 404) so
+        # clients can distinguish "board doesn't exist" from
+        # "configuration missing" — the latter is fixable by an
+        # operator, the former is a hard 404.
+        if reason == "cid_unresolved":
+            logger.warning(
+                f"[boards] /boards/{board_code}/stocks: THS cid not in "
+                f"cache; source={source}; returning 422 cid_unresolved"
+            )
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "cid_unresolved",
+                    "message": (
+                        f"THS concept cid for platecode {board_code!r} "
+                        f"is not in the local cid-index cache. Pass "
+                        f"?refresh=true to force a cid resolution, or "
+                        f"check that the board_code is a valid THS "
+                        f"concept/industry platecode."
+                    ),
+                },
+            )
         raise HTTPException(
             status_code=404,
             detail={"error": "not_found", "message": f"No stocks found for board {board_code}"},
