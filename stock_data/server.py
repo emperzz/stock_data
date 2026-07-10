@@ -89,13 +89,14 @@ async def lifespan(app: FastAPI):
 
     # ----- THS board backfill on startup (opt-in via env) -----
     # Inside function body (not module top) — only imported when env=true.
-    # Keeps cold-start path zero extra imports. Task ref stored on
-    # app.state.backfill_task so the shutdown hook below can cancel it.
+    # Keeps cold-start path zero extra imports. schedule_*_on_startup itself
+    # wraps the worker in asyncio.create_task and stores the task ref on
+    # app.state.backfill_task; the shutdown hook below awaits it.
     if os.getenv("BOARD_BACKFILL_ON_STARTUP", "false").lower() == "true":
         from .data_provider.persistence.backfill import (
             schedule_ths_board_backfill_on_startup,
         )
-        asyncio.create_task(schedule_ths_board_backfill_on_startup(app))
+        schedule_ths_board_backfill_on_startup(app)
         logger.info("[Startup] THS board backfill scheduled (BOARD_BACKFILL_ON_STARTUP=true)")
     else:
         logger.info("[Startup] THS board backfill skipped (set BOARD_BACKFILL_ON_STARTUP=true to enable)")
@@ -103,15 +104,28 @@ async def lifespan(app: FastAPI):
     yield
 
     # ----- Cancel in-flight backfill so Ctrl-C / SIGTERM doesn't leak state -----
+    # Two-step cancel: (1) flip the cooperative cancel event the worker
+    # checks between boards so the sync loop exits within at most one
+    # iteration; (2) await the task so the asyncio.Task transitions to done
+    # and the done_callback logs any exception. Task.cancel() alone won't
+    # interrupt the asyncio.to_thread worker — sync code can't observe
+    # CancelledError — so the event is what actually stops the worker.
+    backfill_cancel = getattr(app.state, "backfill_cancel", None)
+    if backfill_cancel is not None:
+        backfill_cancel.set()
+
     backfill_task = getattr(app.state, "backfill_task", None)
-    if backfill_task and not backfill_task.done():
-        backfill_task.cancel()
+    if backfill_task is not None and not backfill_task.done():
         try:
             await backfill_task
         except (asyncio.CancelledError, Exception) as e:
-            logger.info(f"[Shutdown] THS board backfill cancelled ({type(e).__name__})")
+            logger.info(
+                f"[Shutdown] THS board backfill task ended ({type(e).__name__})"
+            )
     if hasattr(app.state, "backfill_task"):
         del app.state.backfill_task
+    if hasattr(app.state, "backfill_cancel"):
+        del app.state.backfill_cancel
 
     logger.info("Shutting down Stock Data Server")
 
