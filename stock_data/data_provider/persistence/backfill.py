@@ -178,4 +178,15 @@ def run_ths_board_backfill(
 
 
 async def schedule_ths_board_backfill_on_startup(app: FastAPI) -> asyncio.Task:
-    raise NotImplementedError
+    """Spawn the backfill in a worker thread; return the task for caller.
+
+    The caller (``server.py:lifespan``) stores the returned task on
+    ``app.state.backfill_task`` to cancel it on shutdown. The actual
+    sync work runs in ``asyncio.to_thread`` so the event loop is not
+    blocked by ~17min of fetcher sleeps.
+    """
+    task = asyncio.create_task(
+        asyncio.to_thread(run_ths_board_backfill, app.state.manager)
+    )
+    app.state.backfill_task = task
+    return task

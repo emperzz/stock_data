@@ -282,3 +282,24 @@ def test_rate_limit_enforced_without_token(monkeypatch, fresh_db):
     elapsed = time.monotonic() - t0
 
     assert elapsed >= 5.7, f"elapsed={elapsed:.2f}s, expected >= 5.7s"
+
+
+def test_schedule_returns_task_and_sets_app_state(monkeypatch, fresh_db):
+    """The async schedule puts a task on app.state.backfill_task."""
+    import asyncio
+    from stock_data.data_provider.persistence import backfill
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.state.manager = MagicMock()
+    app.state.manager.get_all_boards.return_value = ([], "ths")
+    app.state.manager.get_board_stocks.return_value = ([], "zzshare")
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(backfill.asyncio, "to_thread", fake_to_thread)
+
+    task = asyncio.run(backfill.schedule_ths_board_backfill_on_startup(app))
+    assert task.done()
+    assert getattr(app.state, "backfill_task", None) is not None
