@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -43,18 +42,18 @@ class PhaseStats:
 class BackfillReport:
     phase1: PhaseStats = field(default_factory=PhaseStats)
     phase2: PhaseStats = field(default_factory=PhaseStats)
-    phase1_boards_emitted: int = 0
-    phase2_boards_committed: int = 0
+    phase1_boards_emitted: int = 0     # boards returned by fetch_boards_with_zzshare_backfill
+    phase2_boards_committed: int = 0   # boards whose membership upsert fired
 
 
-# Stub implementations: filled in by later tasks
+# ── Stub implementations: filled in by Tasks 2-3 ──────────────────────────
 def run_ths_board_backfill(
     manager,
     *,
     inter_call_sleep_s: float | None = None,
     include_quote: bool = False,
-    on_progress=None,
-):
+    on_progress: Callable[[str, int, int], None] | None = None,
+) -> BackfillReport:
     raise NotImplementedError
 
 
