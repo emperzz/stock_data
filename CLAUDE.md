@@ -127,6 +127,7 @@ The non-obvious behaviors worth memorizing here are:
 - **Index indicators** share the same `KLineData` response shape as stocks — the orchestrator in `routes.py` (`_apply_indicators`, `_parse_indicators_param`) handles lookback expansion and truncation identically.
 - **Historical K-line** uses `STANDARD_COLUMNS` (`date, open, high, low, close, volume, amount, pct_chg`).
 - **`StockInfo.exchange`** is `"SH"` / `"SZ"` / `"BJ"` when known, else `null` (Zhitu / Myquant populate it; Baostock / Akshare do not).
+- **`BoardStocksResponse.effective_source`** (post-2026-07-10): always populated to the fetcher slug that actually served the upstream call (`ths` / `zzshare` / `eastmoney` / `zhitu`). Compare against `query_source` (the user's `?source=`) to detect whether the internal ZZSHARE primary + THS fallback chain fired for `?source=ths&include_quote=false` (see "Board Cache Source-Normalization" below).
 
 ## Source Tracking (new)
 
@@ -281,7 +282,7 @@ fetchers that support it.
 | `get_stock_name` | n/a — handled by `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
 | `get_trade_calendar` | `TRADE_CALENDAR` (ZzshareFetcher P2) |
 | `get_all_boards` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu` — `zzshare` unified under `ths` on 2026-07-08) |
-| `get_board_stocks` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu`; `zzshare` is no longer a public label here — returns 422) |
+| `get_board_stocks` | `STOCK_BOARD` (source-routed, public source labels: `ths` / `eastmoney` / `zhitu`; `zzshare` is not a public label here — returns 422). **One internal cross-source fallback (2026-07-10):** `source='ths'` + `include_quote=False` → ZZSHARE primary, THS fallback (see `persistence.board::fetch_board_stocks_with_zzshare_fallback`). For `include_quote=True`, THS is mandatory (ZZSHARE emits no quote fields; falling back would silently degrade the response). `effective_source` field on the response exposes which fetcher actually served. |
 | `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu`; `source=zzshare` is still aliased to `ths` at the route layer for backward compat) |
 | `get_board_history` | `STOCK_BOARD` (source-routed, no failover; valid sources: `ths` (d-only, concept/industry — `board_type` required) / `eastmoney` (d/w/m + 5/15/30/60m); `source=zzshare` is aliased to `ths` because ZzshareFetcher has no K-line impl) |
 | `get_board_realtime` | `STOCK_BOARD` (source-routed, no failover; ths only — board-level realtime quote via q.10jqka concept detail page /gn/detail/code/{cid}/) |
@@ -382,6 +383,48 @@ Anti-pattern: `manager.get_board_stocks(...)` in `api/routes/boards.py`. Add a n
 - **User-visible contract**: `data_source='persistence'` does NOT mean the user's `?source=` was used — it means *some* fetcher served the request and the result was cached. The actual fetcher that served the most recent refresh is in the log, not the response.
 
 If a future change requires per-source cache isolation (e.g. eastmoney-specific data fidelity concerns), change `update_cached_board_stocks(board_code, "ths", ...)` (board.py:900) to use the real origin label. Track this as a breaking change.
+
+### `effective_source` (post-2026-07-10) — disambiguating fallback from primary
+
+On `/boards/{code}/stocks`, the response carries **both** of:
+  * `query_source` — the user's `?source=` (verbatim, after Literal validation).
+  * `data_source` — `'persistence'` (cache hit) or the requested fetcher slug.
+  * **`effective_source`** — the fetcher that *actually served* the upstream call (always populated, per P4 contract).
+
+For `source='ths'` + `include_quote=False` requests, the helper at
+`persistence/board.py::fetch_board_stocks_with_zzshare_fallback` runs an
+internal **ZZSHARE primary + THS fallback** chain. `effective_source` makes
+the difference observable: `query_source='ths'` + `effective_source='zzshare'`
+means ZZSHARE primary served, the THS leg was not needed; `effective_source='ths'`
+means ZZSHARE failed or returned empty and THS fallback served.
+
+Pre-2026-07-10 this distinction was *implicit* (silent cross-source
+fallback). Clients should compare `effective_source` vs `query_source` to
+detect fallback and avoid parsing `data_source` ambiguously.
+
+**Side effect**: when ZZSHARE serves the fallback path, the cached rows
+lack quote fields (ZZSHARE emits only `stock_code / stock_name / exchange`).
+A subsequent `?include_quote=true` request with the same date will skip the
+cache (`needs_refresh` is forced by `include_quote`) and re-fetch via THS,
+so clients don't see "apparent None quotes" — but if you want to force a
+fresh THS fetch on already-cached data, pass `?refresh=true`.
+
+### Circuit breaker interaction with THS beyond-data 401s
+
+Post-2026-07-10: `ThsFetcher.get_board_stocks`'s pagination loop tolerates
+401/403 responses on **beyond-data** pages (i.e. after at least one page
+has returned rows). 5xx and network errors on the same path still
+propagate, but the beyond-data 401 case is treated as graceful
+end-of-pagination — see `ThsBoundarySignalError` and the test
+`test_401_after_data_treated_as_end_of_pagination`.
+
+**Ops impact**: previously, a beyond-data 401 raised a `DataFetchError`
+that counted toward the THS circuit-breaker failure budget. After this
+fix, those boundary 401s **no longer trip the breaker**; only real upstream
+failures (5xx / network / first-page failures) do. Real upstream failure
+visibility on ops dashboards is preserved; the breaker remains meaningful
+for genuine THS outages. If you monitor per-source CB state, expect a
+slight reduction in false-positive trips on small boards.
 
 ### Indicator Computation
 Pure DataFrame transformer at the orchestration boundary:
@@ -502,6 +545,7 @@ The non-obvious knobs worth memorizing here:
 - **Don't** leak the outbound `ts_code` / `_to_xxx_ts_code` suffix into an inbound API response. The server's canonical stock_code format is **bare 6-digit** (e.g. `000034`, `600519`), enforced by `normalize_stock_code()`. Per-upstream protocol formats (Tushare `000034.SZ`, Baostock `sh.600519`, Yfinance `600519.SS`, Zhitu `600519.SH`) are an **outbound-only** concern — they live in helpers like `_to_zzshare_ts_code` / `to_tushare_format` / `to_baostock_code` that are called RIGHT BEFORE the SDK call. On the response side, always return the bare 6-digit (e.g. `ts_code.split(".")[0]`). Forgetting the inbound/outbound boundary is exactly how `ZzshareFetcher.get_board_stocks` / `get_daily_dragon_tiger` / `get_hot_topics` ended up returning `000034.SZ` instead of `000034` (fixed 2026-06-25). Same rule applies to HK (`HK00700`) and US (`AAPL`) codes — they keep their canonical form, never get re-suffixed.
 - **Don't** let a fetcher reach into a peer fetcher's package internals — even clean imports like `from akshare.datasets import get_ths_js` or `from akshare.utils import demjson` invert the dependency direction between fetchers (they're peers, not a utility layer). If fetcher X needs to vendor an upstream asset (e.g. THS's `ths.js` JS blob), copy it into `stock_data/data_provider/fetchers/<x>_assets/` (a sub-package under X's directory, must have `__init__.py`) and bundle via `[tool.hatch.build.targets.wheel.force-include]` in `pyproject.toml`. Build-time helpers (e.g. `tools/vendor_ths_js.py`) are the only place allowed to touch a peer fetcher's vendored assets to refresh them; server runtime MUST stay peer-decoupled. See [[extend-not-spawn-fetcher]] + [[vendor-not-peer-import]].
 - **Don't** invoke any OpenSpec skill in this project (`openspec-explore` / `opsx:explore`, `openspec-propose` / `opsx:propose`, `openspec-apply-change` / `opsx:apply`, `openspec-archive-change` / `opsx:archive`, `openspec-sync-specs` / `opsx:sync`). The project uses Superpowers + CLAUDE.md + `/control/api-manifest` as its spec substrate; OpenSpec is reserved for new projects. See **Skill Discipline** below for scope, rationale, and enforcement.
+- **Don't** treat `data_source` on `/boards/{code}/stocks` as the user's fetcher choice — read `effective_source` instead. As of 2026-07-10 the helper transparently falls back from THS to ZZSHARE (or vice-versa) for `include_quote=false` requests on `source='ths'`; clients that compare `query_source` vs `data_source` to detect fallback will get false positives (cache hit reports `'persistence'`, real upstream serving reports `'ths'`/`'zzshare'`). The `effective_source` field is the only reliable fallback detector; `data_source=='persistence'` means "from cache" regardless of which fetcher originally wrote the row.
 
 ## Skill Discipline
 

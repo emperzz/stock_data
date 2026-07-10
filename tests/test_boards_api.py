@@ -50,6 +50,7 @@ def test_list_boards_invalid_source_returns_400(client):
 def test_list_boards_source_ths_passes_ths_to_persistence(client):
     """?source=ths reaches persistence; source hardcoded to 'ths' inside helper."""
     from unittest.mock import patch
+
     from stock_data.data_provider.persistence import board as board_mod
     with patch.object(board_mod, "fetch_boards_with_zzshare_backfill",
                       return_value=[]) as mock_fetch:
@@ -189,7 +190,7 @@ def test_list_boards_cache_hit_returns_persistence(client):
 def test_list_boards_refresh_forces_fetcher_call(client):
     """refresh=true → persistence is called with refresh=True (forces upstream)."""
     fake = [{"code": "BK0001", "name": "测试"}]
-    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ThsFetcher")) as mock_get:
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ths")) as mock_get:
         r = client.get("/api/v1/boards?type=concept&source=ths&refresh=true")
     assert r.status_code == 200
     mock_get.assert_called_once()
@@ -202,7 +203,7 @@ def test_list_boards_refresh_forces_fetcher_call(client):
 def test_list_boards_include_quote_forces_fetcher_call(client):
     """include_quote=true → persistence is called with include_quote=True."""
     fake = [{"code": "BK0001", "name": "测试"}]
-    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ThsFetcher")) as mock_get:
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ths")) as mock_get:
         r = client.get("/api/v1/boards?type=concept&source=ths&include_quote=true")
     assert r.status_code == 200
     _, kwargs = mock_get.call_args
@@ -212,7 +213,7 @@ def test_list_boards_include_quote_forces_fetcher_call(client):
 def test_list_boards_subtype_passed_to_persistence(client):
     """subtype param is forwarded to persistence layer (validation + filter)."""
     fake = [{"code": "BK0001", "name": "测试"}]
-    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ThsFetcher")) as mock_get:
+    with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ths")) as mock_get:
         r = client.get("/api/v1/boards?type=concept&source=ths&subtype=同花顺概念")
     assert r.status_code == 200
     _, kwargs = mock_get.call_args
@@ -285,7 +286,9 @@ def test_list_boards_no_type_eastmoney_iterates_only_concept_industry(client):
     - ``_refresh_tracker.is_first_call`` is forced to True so we
       always hit the fetcher path regardless of test ordering.
     """
-    from unittest.mock import MagicMock, patch as _patch
+    from unittest.mock import MagicMock
+    from unittest.mock import patch as _patch
+
     from stock_data.data_provider.persistence import board as board_mod
 
     call_log: list[tuple[str, str | None]] = []
@@ -338,7 +341,9 @@ def test_list_boards_no_type_zhitu_iterates_all_four_types(client):
     pair. Pairs with the eastmoney test to lock in the source-driven
     loop behavior across both ends of VALID_SUBTYPES_BY_SOURCE.
     """
-    from unittest.mock import MagicMock, patch as _patch
+    from unittest.mock import MagicMock
+    from unittest.mock import patch as _patch
+
     from stock_data.data_provider.persistence import board as board_mod
 
     call_log: list[tuple[str, str | None]] = []
@@ -390,7 +395,7 @@ def test_get_board_stocks_returns_404_on_empty(client):
     """Empty stocks → 404."""
     with patch(
         "stock_data.data_provider.persistence.board.get_board_stocks",
-        return_value=([], "EastMoneyFetcher"),
+        return_value=([], "eastmoney", "eastmoney"),
     ):
         r = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney")
     assert r.status_code == 404
@@ -413,13 +418,14 @@ def test_get_board_stocks_cache_hit_returns_persistence(client):
         ),
     ):
         # First call: fetcher-sourced
-        mock_get.return_value = (fake, "EastMoneyFetcher")
+        mock_get.return_value = (fake, "eastmoney", "eastmoney")
         r1 = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney")
         assert r1.status_code == 200
-        assert r1.json()["data_source"] == "EastMoneyFetcher"
+        assert r1.json()["data_source"] == "eastmoney"
 
-        # Second call: cache hit
-        mock_get.return_value = (fake, "persistence")
+        # Second call: cache hit — origin is persistence; effective_source
+        # is the historical fetcher label (we keep 'eastmoney' here).
+        mock_get.return_value = (fake, "persistence", "eastmoney")
         r2 = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney")
         assert r2.status_code == 200
         assert r2.json()["data_source"] == "persistence"
@@ -437,7 +443,7 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "eastmoney"),
+            return_value=(fake, "eastmoney", "eastmoney"),
         ) as mock_get,
         patch(
             "stock_data.data_provider.persistence.board.get_board_name",
@@ -466,9 +472,10 @@ def test_get_board_stocks_source_ths_passes_ths_to_persistence(client):
     falling back to a sibling source.
     """
     from unittest.mock import patch
+
     from stock_data.data_provider.persistence import board as board_mod
     with patch.object(board_mod, "fetch_board_stocks_with_zzshare_fallback",
-                      return_value=([], "")) as mock_fetch:
+                      return_value=([], "ths", "ths")) as mock_fetch:
         r = client.get("/api/v1/boards/885642/stocks?source=ths")
     assert r.status_code in (200, 404)  # empty may 404
     assert mock_fetch.call_count >= 1
@@ -518,7 +525,7 @@ def test_get_board_stocks_projects_amount_from_fetcher_output(client):
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "ThsFetcher"),
+            return_value=(fake, "ths", "ths"),
         ),
         patch(
             "stock_data.data_provider.persistence.board.get_board_name",
@@ -558,7 +565,7 @@ def test_get_board_stocks_projects_change_amount_and_turnover_rate(client):
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "ThsFetcher"),
+            return_value=(fake, "ths", "ths"),
         ),
         patch(
             "stock_data.data_provider.persistence.board.get_board_name",
@@ -593,7 +600,7 @@ def test_get_board_stocks_projects_change_amount_and_turnover_rate_null_when_abs
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "ZzshareFetcher"),
+            return_value=(fake, "zzshare", "zzshare"),
         ),
         patch(
             "stock_data.data_provider.persistence.board.get_board_name",
@@ -625,7 +632,7 @@ def test_get_board_stocks_ths_falls_back_when_get_all_boards_unavailable(client)
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "ThsFetcher"),
+            return_value=(fake, "ths", "ths"),
         ),
         # Cache miss for board name → triggers the upstream fallback path.
         patch(
@@ -649,7 +656,8 @@ def test_get_board_stocks_ths_falls_back_when_get_all_boards_unavailable(client)
     # Bare board_code returned as name when fallback cannot resolve.
     assert body["board"]["code"] == "308709"
     assert body["board"]["name"] == "308709"
-    assert body["data_source"] == "ThsFetcher"
+    assert body["data_source"] == "ths"
+    assert body["effective_source"] == "ths"
     assert len(body["stocks"]) == 1
 
 
@@ -884,6 +892,7 @@ def test_boards_stocks_valid_sources_excludes_zzshare():
 def test_get_board_list_signature_has_source_arg():
     """get_board_list must accept 'source' param (default 'ths') for source routing."""
     import inspect
+
     from stock_data.data_provider.persistence import board as board_mod
     sig = inspect.signature(board_mod.get_board_list)
     assert "source" in sig.parameters, (
@@ -902,6 +911,7 @@ def test_get_board_stocks_signature_has_source_kwarg():
     fallback.
     """
     import inspect
+
     from stock_data.data_provider.persistence import board as board_mod
     sig = inspect.signature(board_mod.get_board_stocks)
     assert "source" in sig.parameters, (

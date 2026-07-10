@@ -448,8 +448,13 @@ def get_board_stocks(
         # origin="persistence" (per CLAUDE.md source-tracking matrix).
         # refresh=true now actually forces an upstream refresh instead of
         # being silently dropped. ``source`` is plumbed straight through
-        # to honor user choice (no silent fallback to a sibling fetcher).
-        stocks, origin = stock_board_cache.get_board_stocks(
+        # for the include_quote=True path (strict-routed). For
+        # include_quote=False the helper transparently falls back to
+        # ZZSHARE first when source='ths' (see
+        # persistence/board::fetch_board_stocks_with_zzshare_fallback);
+        # ``effective_source`` tells the client which fetcher served the
+        # response. Compare against ``query_source`` to detect fallback.
+        stocks, origin, effective_source = stock_board_cache.get_board_stocks(
             board_code,
             source=source,
             refresh=refresh,
@@ -580,6 +585,7 @@ def get_board_stocks(
         stocks=stock_list,
         query_source=source,
         data_source=origin,
+        effective_source=effective_source,
         quote_source=quote_source,
         quote_error=quote_error,
     )

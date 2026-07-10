@@ -45,6 +45,28 @@ from ..utils.url_helpers import source_domain as source_domain_from_url
 logger = logging.getLogger(__name__)
 
 
+class ThsBoundarySignalError(DataFetchError):
+    """Internal signal: 401/403 on a THS page AFTER data was received.
+
+    Used by ``get_board_stocks``'s pagination loop to distinguish THS
+    upstream's "no more data" boundary signal from a real upstream
+    failure. Subclassing ``DataFetchError`` keeps the public exception
+    surface unchanged — other callers that catch ``DataFetchError`` still
+    see these raises; only the pagination loop looks for this specific
+    subtype.
+
+    ``status_code`` is the HTTP status (401 or 403) that triggered the
+    raise, preserved for observability and tests.
+    """
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+_BOUNDARY_TOLERATED_STATUSES: frozenset[int] = frozenset({401, 403})
+
+
 # ---------------------------------------------------------------------------
 # v-token cache (F2 from PR2 review)
 # ---------------------------------------------------------------------------
@@ -749,10 +771,18 @@ class ThsFetcher(BaseFetcher):
                 f"[ThsFetcher] board_stocks({concept_id}, page={page}) network failed: {e}"
             ) from e
         if not (200 <= r.status_code < 300):
-            raise DataFetchError(
+            # 401/403 → raise a *subclass* of DataFetchError that the
+            # pagination loop recognises as THS's "no more data"
+            # boundary signal. Other statuses raise the base
+            # DataFetchError so a real upstream failure still surfaces
+            # as 5xx at the route layer and trips the circuit breaker.
+            msg = (
                 f"[ThsFetcher] board_stocks({concept_id}, page={page}) "
                 f"HTTP {r.status_code} ({len(r.content)}B body)"
             )
+            if r.status_code in _BOUNDARY_TOLERATED_STATUSES:
+                raise ThsBoundarySignalError(msg, status_code=r.status_code)
+            raise DataFetchError(msg)
         # Force GBK decoding BEFORE reading .text. requests defaults to
         # ISO-8859-1 when Content-Type has charset (gbk) but the body is
         # actually gbk-encoded — a documented requests behavior.
@@ -822,9 +852,39 @@ class ThsFetcher(BaseFetcher):
         # Hard cap exists because a buggy upstream that returns 10 rows
         # forever (instead of empty past page N) would otherwise loop
         # indefinitely.
+        #
+        # On pages PAST the data boundary THS upstream routinely returns
+        # a small 401/403 body instead of a clean empty body — they
+        # obscure the boundary to discourage scraping. If we've already
+        # received data on prior pages, that's not a real failure: it's
+        # their signal that there's nothing left, and we treat it as
+        # graceful end-of-pagination so callers get the rows we DO have
+        # instead of a 5xx (reproduction: 885652 has 15 stocks across
+        # pages 1+2, then page 3 returns 401/417B body).
+        #
+        # Scope per P1 (2026-07-10): ONLY 401/403 are tolerated as
+        # boundary signals (raised as ``ThsBoundarySignalError``, a
+        # ``DataFetchError`` subclass). 5xx (real upstream failure) and
+        # network errors still propagate so the route returns 5xx, the
+        # circuit breaker can trip, and ops dashboards see the upstream
+        # breakage — silent partial data on real failure is worse than
+        # a 5xx.
         all_rows: list[dict] = []
         for page in range(1, _MAX_BOARD_STOCKS_PAGES + 1):
-            rows = self._fetch_ths_board_stocks_page(board_code, page)
+            try:
+                rows = self._fetch_ths_board_stocks_page(board_code, page)
+            except ThsBoundarySignalError as e:
+                # First-page failure: no rows yet → upstream is
+                # actually broken. Surface the error so the route can
+                # return 5xx instead of a silent empty list.
+                if not all_rows:
+                    raise
+                logger.info(
+                    f"[ThsFetcher] board_stocks({board_code}, page={page}) "
+                    f"HTTP {e.status_code} on beyond-data page; treating as "
+                    f"end of pagination ({len(all_rows)} rows collected so far)"
+                )
+                break
             if not rows:
                 break
             all_rows.extend(rows)
@@ -1405,6 +1465,7 @@ class ThsFetcher(BaseFetcher):
         change, not a transient fault).
         """
         import json as _json
+
         from bs4 import BeautifulSoup
 
         soup = BeautifulSoup(html or "", features="lxml")
@@ -1617,7 +1678,6 @@ class ThsFetcher(BaseFetcher):
         performance leaderboard" ordered by 涨跌幅; an empty page is
         the end-of-pagination signal.
         """
-        from bs4 import BeautifulSoup
 
         out: dict[str, dict] = {}
         for page in range(1, self._THS_INDUSTRY_SUMMARY_MAX_PAGES + 1):
@@ -1674,6 +1734,7 @@ class ThsFetcher(BaseFetcher):
         page-loop terminates on the first empty page.
         """
         from bs4 import BeautifulSoup
+
         from ..core.types import safe_float, safe_int
 
         soup = BeautifulSoup(html or "", features="lxml")

@@ -367,6 +367,19 @@ class BoardStocksResponse(BaseModel):
     stocks: list[BoardStockInfo] = Field(default_factory=list, description="Stocks in the board")
     query_source: str = Field(default="eastmoney", description="用户请求时传入的 source 参数")
     data_source: str = Field(default="", description="实际数据来源 fetcher 名 或 'persistence'")
+    # 成分股实际 upstream (post-2026-07-10 optimization).
+    # 总是填充 (P4): 主要 fetcher 链 = 'ths' / 'zzshare' / 'eastmoney' / 'zhitu'.
+    # 当 query_source == effective_source 时未触发 fallback; 不同时表示
+    # source='ths' + include_quote=False 路径内部 fallback 到 ZZSHARE.
+    effective_source: str | None = Field(
+        default=None,
+        description=(
+            "实际服务本响应的 fetcher 名称 (ths / zzshare / eastmoney / zhitu). "
+            "路由层总是填充——None 只在直构造 Pydantic 模型 (如 schema 测试) 不传参时出现. "
+            "区别于 query_source 即可判 fallback: "
+            "query_source='ths' 且 effective_source='zzshare' 表示走 ZZSHARE fallback."
+        ),
+    )
     # Realtime quote block metadata (only meaningful when include_quote=true).
     # Pre-2026-07-10 the realtime failure path was silent (board.price=null
     # + debug log); post-2026-07-10 these fields give the client an explicit

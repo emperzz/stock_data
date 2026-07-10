@@ -1292,7 +1292,14 @@ class TestGetBoardStocks:
         assert result[19]["stock_code"] == "300849"
 
     def test_raises_data_fetch_error_on_http_failure(self):
-        """HTTP non-2xx → DataFetchError."""
+        """HTTP non-2xx on the FIRST page → DataFetchError (real failure).
+
+        The first page is the only page where a non-2xx is fatal — we have
+        no rows yet, so we can't tell whether the upstream is down or just
+        signalling an out-of-range page. The next test
+        (``test_401_after_data_treated_as_end_of_pagination``) locks the
+        beyond-data tolerance contract.
+        """
 
         class _Bad:
             status_code = 401
@@ -1303,6 +1310,181 @@ class TestGetBoardStocks:
         with (
             patch.object(ThsFetcher, "_http_get", return_value=_Bad()),
             pytest.raises(DataFetchError, match="board_stocks"),
+        ):
+            self.fetcher.get_board_stocks("308709")
+
+    def test_401_after_data_treated_as_end_of_pagination(self):
+        """HTTP 401 on a beyond-data page → graceful end-of-pagination.
+
+        Repro for the user-reported bug
+        /api/v1/boards/885652/stocks?source=ths&include_quote=false
+        → ``[ThsFetcher] board_stocks(300351, page=3) HTTP 401 (417B body)``.
+
+        THS upstream routinely obscures the end-of-pagination boundary by
+        returning a small 401/403 on the page PAST the data. When we've
+        already received data on prior pages, that's not a real failure —
+        it's their signal that there's nothing left, and we treat it as
+        end-of-data so callers get the rows we DO have instead of a 5xx.
+
+        Scope: only 401/403 are tolerated. 5xx (real upstream failure)
+        and network errors still propagate — see
+        ``test_5xx_after_data_still_raises`` and
+        ``test_network_error_after_data_still_raises``.
+        """
+        page1_html = self._build_html(
+            [
+                [
+                    str(i + 1),
+                    f"3007{40 + i:02d}",
+                    f"股票{i}",
+                    "10.00",
+                    "1.00",
+                    "0.10",
+                    "0.05",
+                    "0.80",
+                    "1.00",
+                    "1.50",
+                    "100000000",
+                    "500000000",
+                    "5250000000",
+                    "30.0",
+                ]
+                for i in range(10)
+            ]
+        )
+        page2_html = self._build_html(
+            [
+                [
+                    str(i + 11),
+                    f"3008{40 + i:02d}",
+                    f"股票{i + 10}",
+                    "10.00",
+                    "1.00",
+                    "0.10",
+                    "0.05",
+                    "0.80",
+                    "1.00",
+                    "1.50",
+                    "100000000",
+                    "500000000",
+                    "5250000000",
+                    "30.0",
+                ]
+                for i in range(5)
+            ]
+        )
+
+        class _EndOfPagination:
+            """THS's 'we have no more data' signal — sometimes a clean
+            200 empty body, sometimes a small 401/403 body."""
+            status_code = 401
+            encoding = "utf-8"
+            text = "<html>Unauthorized</html>"
+            content = b"<html>Unauthorized</html>"
+
+        responses = [
+            self._make_response(page1_html),
+            self._make_response(page2_html),
+            _EndOfPagination(),
+        ]
+
+        with patch.object(ThsFetcher, "_http_get", side_effect=responses) as mock_get:
+            result = self.fetcher.get_board_stocks("308709")
+
+        # 15 rows from pages 1+2; page 3's 401 was tolerated.
+        assert len(result) == 15
+        assert result[0]["stock_code"] == "300740"
+        assert result[14]["stock_code"] == "300844"
+        # 3 HTTP calls made (page 1, page 2, page 3 with 401 — loop broke).
+        assert mock_get.call_count == 3
+
+    def test_5xx_after_data_still_raises(self):
+        """A 5xx on a beyond-data page is NOT tolerated — still raises.
+
+        Guards the P1 product decision: only 401/403 are upstream
+        boundary signals. 5xx means the upstream is genuinely broken,
+        and surfacing it (so the route returns 5xx, the circuit breaker
+        can trip, ops can see it) is more important than silently
+        returning partial data.
+        """
+        page1_html = self._build_html(
+            [
+                [
+                    str(i + 1),
+                    f"3007{40 + i:02d}",
+                    f"股票{i}",
+                    "10.00",
+                    "1.00",
+                    "0.10",
+                    "0.05",
+                    "0.80",
+                    "1.00",
+                    "1.50",
+                    "100000000",
+                    "500000000",
+                    "5250000000",
+                    "30.0",
+                ]
+                for i in range(10)
+            ]
+        )
+
+        class _ServerError:
+            status_code = 503
+            encoding = "utf-8"
+            text = "<html>upstream down</html>"
+            content = b"<html>upstream down</html>"
+
+        responses = [
+            self._make_response(page1_html),
+            _ServerError(),  # 503 — NOT a boundary signal; must raise
+        ]
+
+        with (
+            patch.object(ThsFetcher, "_http_get", side_effect=responses),
+            pytest.raises(DataFetchError, match="HTTP 503"),
+        ):
+            self.fetcher.get_board_stocks("308709")
+
+    def test_network_error_after_data_still_raises(self):
+        """A network error on a beyond-data page is NOT tolerated — still raises.
+
+        Same P1 rationale: only 401/403 are upstream boundary signals.
+        ConnectionError indicates a real transport problem that the
+        route / circuit breaker should see, not partial data.
+        """
+        page1_html = self._build_html(
+            [
+                [
+                    str(i + 1),
+                    f"3007{40 + i:02d}",
+                    f"股票{i}",
+                    "10.00",
+                    "1.00",
+                    "0.10",
+                    "0.05",
+                    "0.80",
+                    "1.00",
+                    "1.50",
+                    "100000000",
+                    "500000000",
+                    "5250000000",
+                    "30.0",
+                ]
+                for i in range(10)
+            ]
+        )
+
+        import requests as _requests
+
+        responses = [
+            self._make_response(page1_html),
+            _requests.ConnectionError("refused"),
+        ]
+
+        with (
+            patch.object(ThsFetcher, "_http_get", side_effect=responses),
+            pytest.raises(DataFetchError, match="network failed"),
         ):
             self.fetcher.get_board_stocks("308709")
 
@@ -1331,3 +1513,33 @@ class TestGetBoardStocks:
                 board_type="concept",
             )
         assert result == []
+
+
+    def test_ths_boundary_signal_error_is_subclass_of_data_fetch_error(self):
+        """ThsBoundarySignalError is a DataFetchError subclass; carries status_code.
+
+        Locks the public exception surface: callers that catch
+        DataFetchError (the broader category) still see boundary
+        signals, and ``status_code`` is observable for observability
+        + tests.
+        """
+        from stock_data.data_provider.fetchers.ths_fetcher import (
+            ThsBoundarySignalError,
+        )
+
+        err = ThsBoundarySignalError("test", status_code=401)
+        # Public contract: subclass relationship + status_code attribute.
+        assert isinstance(err, DataFetchError)
+        assert err.status_code == 401
+        assert "test" in str(err)
+
+        # Boundary tolerance frozenset is the single source of truth.
+        from stock_data.data_provider.fetchers.ths_fetcher import (
+            _BOUNDARY_TOLERATED_STATUSES,
+        )
+
+        assert 401 in _BOUNDARY_TOLERATED_STATUSES
+        assert 403 in _BOUNDARY_TOLERATED_STATUSES
+        # 5xx / 200 / 302 must NOT be tolerated.
+        assert 503 not in _BOUNDARY_TOLERATED_STATUSES
+        assert 200 not in _BOUNDARY_TOLERATED_STATUSES

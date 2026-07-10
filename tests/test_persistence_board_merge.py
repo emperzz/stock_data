@@ -240,12 +240,19 @@ class TestFetchBoardsWithZzshareBackfill:
         assert out[0]["code"] == "301558"
 
 class TestFetchBoardStocksWithZzshareFallback:
-    """Tests for the strict source-routing contract (post-2026-07-10 fix).
+    """Tests for the source-routing contract.
 
-    Pre-fix the helper silently picked THS-vs-zzshare internally based on
-    ``include_quote``, with the other as a quiet fallback. Post-fix the
-    helper honors the user-chosen ``source=`` strictly — no silent
-    cross-source fallback under any condition.
+    Post-2026-07-10 the helper applies ONE cross-source fallback:
+        ``source='ths'`` + ``include_quote=False`` → ZZSHARE primary,
+        THS fallback on empty/error.
+
+    For all other source/includes (source='zzshare', 'eastmoney', 'zhitu',
+    or source='ths' + include_quote=True) the helper is strict-routed —
+    no silent cross-source fallback. ``include_quote=True`` is THS-only
+    because ZZSHARE emits no quote fields; falling back there would
+    silently degrade the response to null quotes. See CLAUDE.md "Board
+    Cache Source-Normalization → effective_source" for the user-visible
+    contract on the response shape.
     """
 
     def _mgr(self, by_source_return):
@@ -266,7 +273,7 @@ class TestFetchBoardStocksWithZzshareFallback:
                         'zzshare'),
         })
         with mock_cid_resolver({('885642',): '301558'}):
-            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+            stocks, origin, _effective_source = board_mod.fetch_board_stocks_with_zzshare_fallback(
                 board_code='885642', source='ths',
                 include_quote=True, manager=mgr,
             )
@@ -283,7 +290,7 @@ class TestFetchBoardStocksWithZzshareFallback:
         mgr = self._mgr({
             'zzshare': ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare'),
         })
-        stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+        stocks, origin, _effective_source = board_mod.fetch_board_stocks_with_zzshare_fallback(
             board_code='885642', source='zzshare',
             include_quote=False, manager=mgr,
         )
@@ -293,22 +300,32 @@ class TestFetchBoardStocksWithZzshareFallback:
         assert zz_call.kwargs['source'] == 'zzshare'
         assert zz_call.kwargs['board_code'] == '885642'   # platecode as-is
 
-    def test_source_ths_empty_does_not_fallback(self, mock_cid_resolver):
-        """source='ths' returning empty → stays empty, no silent zzshare call."""
+    def test_zzshare_empty_triggers_ths_fallback(self, mock_cid_resolver):
+        """source='ths' returning empty rows → falls back to ZZSHARE.
+
+        Post-2026-07-10 optimization: ``source='ths'`` +
+        ``include_quote=False`` prefers ZZSHARE first (lighter
+        request), and falls back to THS only when ZZSHARE returns 0 rows
+        or raises. This test covers the second-half behaviour: empty
+        rows on the ZZSHARE leg (return value [] from the mgr for
+        'zzshare') triggers THS as the fallback fetch.
+        """
         mgr = self._mgr({
-            'ths': ([], 'ths'),
-            'zzshare': ([{'stock_code': '300740', 'stock_name': 'fallback-row'}],
-                        'zzshare'),
+            'zzshare': ([], 'zzshare'),         # leg 1: empty → triggers fallback
+            'ths': ([{'stock_code': '300740', 'stock_name': 'ths-row'}], 'ths'),
         })
         with mock_cid_resolver({('885642',): '301558'}):
-            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+            stocks, origin, effective_source = board_mod.fetch_board_stocks_with_zzshare_fallback(
                 board_code='885642', source='ths',
                 include_quote=False, manager=mgr,
             )
-        assert stocks == []
-        assert origin == 'ths'   # explicit label even on empty
-        # Strict routing: zzshare must NOT be invoked.
-        assert mgr.get_board_stocks.call_count == 1
+        assert stocks == [{'stock_code': '300740', 'stock_name': 'ths-row'}]
+        assert origin == 'ths'
+        # effective_source reports 'ths' even though requested source was 'ths'
+        # AND a fallback was attempted — the THS leg actually served.
+        assert effective_source == 'ths'
+        # Both zzshare (empty) and ths (served) attempts; cid resolved too.
+        assert mgr.get_board_stocks.call_count == 2
 
     def test_source_ths_raises_propagates_no_fallback(self, mock_cid_resolver):
         """source='ths' raising → DataFetchError propagates; NO zzshare fallback."""
@@ -330,17 +347,29 @@ class TestFetchBoardStocksWithZzshareFallback:
         assert mgr.get_board_stocks.call_count == 1
 
     def test_cid_unresolved_returns_empty_label_ths(self, mock_cid_resolver):
-        """cid resolution miss → empty rows + 'ths' label (no upstream call)."""
-        mgr = self._mgr({'ths': ([{'stock_code': 'x'}], 'ths')})
+        """cid resolution miss → ZZSHARE leg ran (no cid needed), THS leg skipped.
+
+        ZZSHARE doesn't need the cid (it accepts the platecode
+        directly), so the ZZSHARE leg still runs when cid resolution
+        misses. The THS fallback leg is then skipped because cid is
+        required for the THS URL. Effective source is 'zzshare' on the
+        empty path because the THS leg didn't actually fire
+        (``effective_source` is only updated when a leg completes).
+        """
+        mgr = self._mgr({
+            'zzshare': ([{'stock_code': 'x', 'stock_name': 'x'}], 'zzshare'),
+            'ths': ([{'stock_code': 'x'}], 'ths'),
+        })
         with mock_cid_resolver({('999999',): None}):
-            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+            stocks, origin, effective_source = board_mod.fetch_board_stocks_with_zzshare_fallback(
                 board_code='999999', source='ths',
                 include_quote=False, manager=mgr,
             )
-        assert stocks == []
+        assert stocks == [{'stock_code': 'x', 'stock_name': 'x'}]
         assert origin == 'ths'
-        # Upstream must NOT be called — cid miss means no URL to hit.
-        assert mgr.get_board_stocks.call_count == 0
+        assert effective_source == 'zzshare'
+        # One ZZSHARE call (success — not the THS path, which requires cid).
+        assert mgr.get_board_stocks.call_count == 1
 
     def test_unsupported_source_raises_value_error(self):
         """Unknown source slug → ValueError (route layer maps to 400)."""

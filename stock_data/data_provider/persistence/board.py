@@ -102,16 +102,18 @@ def normalize_board_stocks_source(source: str) -> str:
     """Validate a source name for the board-stocks endpoint.
 
     Unlike ``normalize_stock_board_source`` (which aliases
-    ``zzshare → ths``), this helper does NOT alias. All three sources
-    have independent ``get_board_stocks`` implementations:
+    ``zzshare → ths``), this helper does NOT alias. Public surface
+    accepts the three source labels whose fetcher owns the route:
 
     - ``ths``: ThsFetcher (q.10jqka.com.cn AJAX — concept boards)
     - ``eastmoney``: EastMoneyFetcher (push2his)
     - ``zhitu``: ZhituFetcher
-    - ``zzshare``: ZzshareFetcher (``plates_stocks``) — *internal only*
-      (no longer a public label; used by
-      ``fetch_board_stocks_with_zzshare_fallback`` for the
-      ``include_quote=False`` primary path)
+
+    ``zzshare`` is *internal only* (post-2026-07-08 unification): no
+    longer a public label. It's invoked transparently by
+    ``fetch_board_stocks_with_zzshare_fallback`` as a *fallback* for
+    ``source='ths'`` + ``include_quote=False`` requests — see that
+    helper's docstring for the routing rules.
 
     Args:
         source: User-supplied source name (e.g. ``"ths"``).
@@ -745,74 +747,118 @@ def fetch_board_stocks_with_zzshare_fallback(
     source: str,
     include_quote: bool,
     manager,
-) -> tuple[list[dict], str]:
-    """Get stocks for a board — STRICTLY source-routed (no silent fallback).
+) -> tuple[list[dict], str, str]:
+    """Get stocks for a board — STRICTLY source-routed with one cross-source fallback.
 
-    Historically this helper took only ``board_code`` / ``include_quote``
-    and silently picked THS-vs-zzshare internally (with each side as a
-    fallback for the other). That hid two real defects from upstream
-    callers:
+    Behaviour rules per source (per the 2026-07-10 optimization
+    discussion; effective_source is ALWAYS populated, per the P4 product
+    decision):
 
-    1. ``?source=ths`` calls were silently swapped to zzshare when THS
-       returned empty (e.g. concept board where cid resolution missed).
-    2. THS raising ``DataFetchError`` was swallowed by a zzshare retry
-       and reported as ``data_source='zzshare'`` to the user.
+    - ``source='ths'``:
+        * ``include_quote=True`` → THS is the only fetcher that emits
+          realtime quote fields (price / change_pct / amount / …). On
+          ``DataFetchError``, propagate so the route returns 5xx
+          (zzshare fallback is forbidden here — its stocks carry no
+          quote fields and the response shape would silently degrade).
+        * ``include_quote=False`` → prefer zzshare first (lighter
+          request, no quote enrichment needed); on zzshare
+          ``DataFetchError`` OR empty-rows, fall back to THS. The
+          route layer surfaces the actual fetcher via the
+          ``effective_source`` field so the client can tell whether
+          fallback fired.
 
-    The route now passes the user-chosen ``source`` straight through and
-    this helper honors it: only the requested fetcher is invoked, no
-    cross-source fallback. Behaviour rules per source:
-
-    - ``source='ths'``: try to resolve platecode→cid. If resolved, call
-      ThsFetcher with the cid. If the resolution misses (cid=None),
-      return ``([], 'ths')`` (no row, but caller can attribute the empty
-      result to ths by its label). If the call returns empty rows, also
-      return ``([], 'ths')``. If the call raises, the exception
-      **propagates** so the route returns 5xx.
-    - ``source='zzshare'``: call ZzshareFetcher with the platecode. Same
-      propagation rule for hard errors.
+    - ``source='zzshare'`` (internal label only; Literal at the route
+      layer rejects it post-2026-07-08 unification): call ZzshareFetcher
+      with the platecode. Errors propagate.
     - ``source='eastmoney'`` / ``source='zhitu'``: call the named
       fetcher with the platecode (these fetchers do not require cid
-      translation).
+      translation). Errors propagate.
 
     Args:
-        board_code: Public platecode (e.g. ``'885642'``). For ``ths``,
+        board_code: Public platecode (e.g. ``'885642'``). For ``ths``
             the helper looks up the THS concept cid internally.
-        source: Fetcher slug (``'ths'``, ``'zzshare'``, ``'eastmoney'``,
-            ``'zhitu'``). Strictly honored.
-        include_quote: Forwarded to the fetcher. Affects data shape
-            only, not routing.
+        source: Fetcher slug. One of ``'ths'``, ``'zzshare'``,
+            ``'eastmoney'``, ``'zhitu'``.
+        include_quote: Forwarded to the fetcher. Affects routing
+            inside the THS branch (above).
         manager: Required. ``DataFetcherManager`` instance.
 
     Returns:
-        ``(stocks, source_label)``. ``source_label`` is the fetcher
-        name that served the rows. Three concrete outcomes:
-          - ``(rows, label)`` — chosen fetcher returned rows.
-          - ``([], label)``   — chosen fetcher returned empty rows OR
-            (for ``'ths'``) cid resolution missed.
-          - ``([], '')``      — never reaches the fetcher; occurs only
-            for unsupported source slugs (raises ``ValueError`` instead,
-            so this case is unreachable in practice).
-        The empty case flows through to the route layer's 404 path.
+        ``(stocks, source_label, effective_source)`` — 3-tuple:
+          - ``stocks``: list of stock dicts (potentially empty).
+          - ``source_label``: fetcher name matching the user's
+            ``?source=`` (the *requested* source). For all branches
+            except the THS+include_quote=False fallback path, this
+            equals ``effective_source``.
+          - ``effective_source``: the fetcher name that *actually
+            served* the response (per P4: ALWAYS populated). When it
+            differs from ``source_label``, the route response carries
+            an actionable ``effective_source`` field so the client can
+            tell the response came from a fallback fetcher.
 
     Raises:
-        DataFetchError: the chosen fetcher raised. Propagates so the
-        route layer returns 5xx (rather than masking the error with
-        a sibling source's response).
+        DataFetchError: the chosen fetcher raised and no fallback was
+            applicable (or the fallback also raised). Propagates so
+            the route layer returns 5xx rather than masking the error.
         ValueError: ``source`` is not one of the four supported slugs.
     """
     if source == "ths":
+        # include_quote=True: THS is mandatory — zzshare has no quote
+        # fields, falling back would silently degrade the response to
+        # null quotes. Propagate any failure unchanged.
+        if include_quote:
+            cid = _resolve_ths_cid_from_platecode(board_code)
+            if not cid:
+                return [], "ths", "ths"
+            try:
+                rows, _ = manager.get_board_stocks(
+                    board_code=cid,
+                    source="ths",
+                    include_quote=True,
+                )
+            except DataFetchError:
+                raise
+            return rows, "ths", "ths"
+
+        # include_quote=False: prefer zzshare (lighter request, no
+        # quote enrichment). Fall back to ths on any DataFetchError
+        # OR zzshare-returned-empty (consistent with prior behaviour
+        # that 404 was treated as 'nothing here'). Both branches
+        # populate effective_source so the client sees what fired.
+        try:
+            rows, _ = manager.get_board_stocks(
+                board_code=board_code,
+                source="zzshare",
+                include_quote=False,
+            )
+        except DataFetchError as zz_err:
+            logger.info(
+                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
+                f"zzshare raised for board={board_code}; "
+                f"falling back to ths ({type(zz_err).__name__}: {zz_err})"
+            )
+        else:
+            if rows:
+                return rows, "ths", "zzshare"
+            logger.info(
+                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
+                f"zzshare returned 0 rows for board={board_code}; "
+                f"falling back to ths"
+            )
+
+        # THS fallback path (include_quote=False from user).
         cid = _resolve_ths_cid_from_platecode(board_code)
         if not cid:
-            return [], "ths"   # cid unresolved → caller gets empty + 'ths' label
+            return [], "ths", "ths"   # cid unresolved → empty; no fetch happened
         try:
             rows, _ = manager.get_board_stocks(
                 board_code=cid,
                 source="ths",
-                include_quote=include_quote,
+                include_quote=False,
             )
         except DataFetchError:
-            raise   # propagate — no silent fallback
-        return rows, "ths"
+            raise
+        return rows, "ths", "ths"
 
     if source == "zzshare":
         try:
@@ -823,7 +869,7 @@ def fetch_board_stocks_with_zzshare_fallback(
             )
         except DataFetchError:
             raise
-        return rows, "zzshare"
+        return rows, "zzshare", "zzshare"
 
     if source in ("eastmoney", "zhitu"):
         try:
@@ -834,7 +880,7 @@ def fetch_board_stocks_with_zzshare_fallback(
             )
         except DataFetchError:
             raise
-        return rows, source
+        return rows, source, source
 
     raise ValueError(
         f"fetch_board_stocks_with_zzshare_fallback: unsupported source {source!r}"
@@ -847,14 +893,30 @@ def get_board_stocks(
     refresh: bool = False,
     include_quote: bool = False,
     manager=None,
-) -> tuple[list, str]:
+) -> tuple[list, str, str]:
     """Get stocks belonging to a board with automatic refresh.
 
     Cache is keyed on the public board_code (not on source — different
     sources all normalize to the same THS platecode). Cache hits return
     origin="persistence". Cache misses call
-    ``fetch_board_stocks_with_zzshare_fallback`` which strictly honors
-    the user-chosen ``source`` (no silent cross-source fallback).
+    ``fetch_board_stocks_with_zzshare_fallback`` which (post-2026-07-10):
+      * Strictly honors the user-chosen ``source`` for the *primary*
+        route.
+      * For ``source='ths'`` + ``include_quote=False`` only, prefers
+        ZZSHARE first and falls back to THS (see the helper docstring).
+      * Exposes ``effective_source`` so the route / client can tell
+        whether a fallback fired.
+
+    Note (P3, 2026-07-10): rows written into the cache are always
+    tagged with ``source='ths'`` regardless of the upstream that
+    served them (post-unification policy). When ZZSHARE served the
+    fetch, the cached rows **lack quote fields** (zzshare emits only
+    stock_code / stock_name / exchange). The next caller using
+    ``?include_quote=true`` will still bypass the cache (the
+    ``needs_refresh`` flag forces a fresh THS fetch), so they don't
+    see "apparent None quotes". Pass ``?refresh=true`` if you need to
+    force a fresh THS fetch *and* the data is currently a ZZSHARE-served
+    cache row.
 
     Args:
         board_code: THS platecode (885xxx concept / 881xxx industry).
@@ -866,11 +928,14 @@ def get_board_stocks(
         manager: DataFetcherManager instance. Required when fetching from upstream.
 
     Returns:
-        Tuple of (stocks, origin) where origin is:
-          - "persistence" when data was read from the SQLite cache
-          - the fetcher name (e.g. ``'ths'``) when that fetcher served the response
-          - "" when the chosen fetcher returned empty
-        List of stock dicts: [{"stock_code", "stock_name", ...quote}, ...]
+        Tuple of (stocks, origin, effective_source) where:
+          - ``origin`` is ``"persistence"`` (cache hit) or the requested
+            fetcher slug (cache miss path), as before.
+          - ``effective_source`` is always populated to the fetcher
+            slug that actually served the response — *post-fix* this is
+            always a non-empty string. ``query_source vs effective_source``
+            at the route layer tells the client whether the fallback fired.
+          - ``stocks`` is the list of stock dicts as before.
     """
     init_schema()
 
@@ -884,12 +949,16 @@ def get_board_stocks(
     if not needs_refresh:
         cached = _read_board_stocks_from_db(board_code, "ths")
         if cached:
-            return cached, "persistence"
+            # Cache hit: the upstream that originally wrote the row
+            # is not surfaced here. The route layer reports
+            # ``origin="persistence"``; clients that need the actual
+            # upstream should pass ?refresh=true.
+            return cached, "persistence", "ths"
 
     if manager is None:
         raise ValueError("manager is required when refresh=True or cache miss")
 
-    stocks, origin = fetch_board_stocks_with_zzshare_fallback(
+    stocks, origin, effective_source = fetch_board_stocks_with_zzshare_fallback(
         board_code=board_code,
         source=source,
         include_quote=include_quote,
@@ -900,10 +969,10 @@ def get_board_stocks(
         update_cached_board_stocks(board_code, "ths", stocks)
         logger.info(
             f"[BoardCache] Refreshed {len(stocks)} stocks for board "
-            f"{board_code}/ths (origin={origin})"
+            f"{board_code}/ths (origin={origin}, effective_source={effective_source})"
         )
 
-    return stocks, origin
+    return stocks, origin, effective_source
 
 
 def resolve_board_types(

@@ -148,7 +148,7 @@ class TestBoardAPIRoutes:
                     {"stock_code": "600519", "stock_name": "贵州茅台"},
                     {"stock_code": "000001", "stock_name": "平安银行"},
                 ],
-                "EastMoneyFetcher",
+                "eastmoney",
             )
             mock_get_boards.return_value = (
                 [
@@ -346,8 +346,9 @@ class TestBoardsSourceUnification:
 
     def test_boards_list_source_ths_passes_through(self, client):
         """/api/v1/boards?source=ths reaches persistence; source hardcoded to 'ths'."""
+        from unittest.mock import patch
+
         from stock_data.data_provider.persistence import board as board_mod
-        from unittest.mock import patch, MagicMock
         with patch.object(board_mod, "fetch_boards_with_zzshare_backfill",
                           return_value=[]) as mock_backfill:
             response = client.get("/api/v1/boards?type=concept&source=ths")
@@ -362,17 +363,37 @@ class TestBoardsSourceUnification:
         assert response.status_code == 422
 
     def test_board_stocks_strict_source_routing_include_quote_false(self, client):
-        """?source=ths&include_quote=false: only THS fetcher is called (no zzshare primary).
+        """?source=ths&include_quote=false: ZZSHARE primary, THS fallback.
 
-        Strict source-routing — the user's chosen source is honored. No
-        silent fallback to a sibling source behind the user's back.
+        Post-2026-07-10 optimization: ``?source=ths`` is the only source
+        that allows cross-source fallback (per the user's plan). For
+        ``include_quote=False`` the helper prefers ZZSHARE first and only
+        falls back to THS when ZZSHARE returns 0 rows or raises. This
+        test covers the **fallback-to-THS** branch by having the
+        mocked ZZSHARE leg return 0 rows.
+
+        For ``include_quote=True``, ZZSHARE is forbidden as primary
+        (it carries no quote fields) — see
+        ``test_board_stocks_include_quote_true_strict_ths_routing``.
         """
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         from stock_data.data_provider.persistence import board as board_mod
+
+        call_records: list[dict] = []
+
+        def fake_mgr_get(board_code, *, source, include_quote=False, **_kw):
+            """Returns rows only on THS leg; on ZZSHARE leg returns [].
+            Records each call so the assertion below can inspect ordering."""
+            call_records.append({"source": source, "include_quote": include_quote,
+                                 "board_code": board_code})
+            if source == "ths":
+                return [{"stock_code": "300740", "stock_name": "x"}], "ths"
+            return [], "zzshare"
+
         mgr = MagicMock()
-        mgr.get_board_stocks.return_value = (
-            [{"stock_code": "300740", "stock_name": "x"}], "ths",
-        )
+        mgr.get_board_stocks.side_effect = fake_mgr_get
+
         with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
                           return_value="301558"), \
              patch.object(board_mod, "update_cached_board_stocks",
@@ -382,15 +403,21 @@ class TestBoardsSourceUnification:
                 "/api/v1/boards/885642/stocks?source=ths&include_quote=false"
             )
         assert response.status_code == 200
-        # Exactly one call, to ths with the cid-translated board code.
-        assert mgr.get_board_stocks.call_count == 1
-        first_call = mgr.get_board_stocks.call_args_list[0]
-        assert first_call.kwargs["source"] == "ths"
-        assert first_call.kwargs["board_code"] == "301558"
+        body = response.json()
+        # Two legs: ZZSHARE primary (0 rows), then THS fallback (1 row).
+        assert len(call_records) == 2
+        assert call_records[0]["source"] == "zzshare"
+        assert call_records[1]["source"] == "ths"
+        assert call_records[1]["board_code"] == "301558"   # cid translated
+        # Response carries effective_source='ths' (the leg that served).
+        assert body["effective_source"] == "ths"
+        assert body["data_source"] == "ths"
+        assert len(body["stocks"]) == 1
 
     def test_board_stocks_include_quote_true_strict_ths_routing(self, client):
         """?source=ths&include_quote=true: only THS is called; zzshare is NOT tried."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         from stock_data.data_provider.persistence import board as board_mod
         mgr = MagicMock()
         mgr.get_board_stocks.return_value = (
@@ -420,7 +447,8 @@ class TestBoardsSourceUnification:
         propagate (so the route layer returns 5xx), not be papered over
         with a sibling fetcher's response.
         """
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         from stock_data.data_provider.persistence import board as board_mod
         mgr = MagicMock()
         # Strict routing makes a single attempt; zzshare side_effect is
@@ -449,9 +477,10 @@ class TestBoardsSourceUnification:
 
     def test_board_stocks_ths_raises_propagates_5xx(self, client):
         """?source=ths: THS raising propagates to 5xx — no silent zzshare swap."""
-        from unittest.mock import patch, MagicMock
-        from stock_data.data_provider.persistence import board as board_mod
+        from unittest.mock import MagicMock, patch
+
         from stock_data.data_provider.base import DataFetchError
+        from stock_data.data_provider.persistence import board as board_mod
         mgr = MagicMock()
         mgr.get_board_stocks.side_effect = DataFetchError("ths 503")
         with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
@@ -586,6 +615,10 @@ class TestBoardSchemas:
         assert len(response.stocks) == 1
         assert response.query_source == "eastmoney"
         assert response.data_source == "akshare"
+        # Post-2026-07-10: effective_source defaults to None when callers
+        # construct BoardStocksResponse directly (e.g. schema-level tests).
+        # The route layer always passes the value through.
+        assert response.effective_source is None
 
     def test_board_stock_info_with_quote(self):
         """Test BoardStockInfo with quote data."""
