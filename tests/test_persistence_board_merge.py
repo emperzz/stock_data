@@ -380,6 +380,44 @@ class TestFetchBoardStocksWithZzshareFallback:
                 include_quote=False, manager=mgr,
             )
 
+    def test_cid_unresolved_returns_reason(self, mock_cid_resolver):
+        """source='ths' + cid=None → returns 4-tuple with reason='cid_unresolved'.
+
+        Regression test for F2 (2026-07-10). When the cid-index cache
+        misses for a board_code, the helper cannot perform any fetch
+        and surfaces ``reason='cid_unresolved'`` so the route layer
+        can map it to HTTP 422 (instead of masquerading as a 404
+        "Board not found" for a board that genuinely exists upstream).
+        """
+        from stock_data.data_provider.persistence import board as board_mod
+
+        # include_quote=True branch — cid=None short-circuits before any fetcher call.
+        with mock_cid_resolver({('885642',): None}):
+            stocks, origin, effective_source, reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code='885642', source='ths',
+                include_quote=True, manager=None,
+            )
+        assert stocks == []
+        assert origin == 'ths'
+        assert effective_source == 'ths'
+        assert reason == 'cid_unresolved'
+
+        # And the include_quote=False THS-fallback branch — same behavior.
+        # The ZZSHARE leg also short-circuits when cid=None? No — ZZSHARE
+        # doesn't need the cid. But with a NoOp manager the ZZSHARE
+        # leg would still be tried; for this test we want to focus on
+        # the THS-fallback path, so use a manager that returns 0 rows
+        # for the zzshare leg too.
+        from unittest.mock import MagicMock
+        mgr = MagicMock()
+        mgr.get_board_stocks.return_value = ([], 'zzshare')
+        with mock_cid_resolver({('885642',): None}):
+            stocks, origin, effective_source, reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code='885642', source='ths',
+                include_quote=False, manager=mgr,
+            )
+        assert reason == 'cid_unresolved'
+
 
 @pytest.fixture
 def mock_cid_resolver(monkeypatch):
