@@ -401,6 +401,27 @@ def test_get_board_stocks_returns_404_on_empty(client):
     assert r.status_code == 404
 
 
+def test_cid_unresolved_returns_422(client):
+    """cid-index miss → HTTP 422 with error='cid_unresolved'.
+
+    Regression test for F2 (2026-07-10). The persistence helper now
+    reports ``reason='cid_unresolved'`` when the THS cid-index cache
+    misses for the board_code; the route layer maps this to 422 so
+    operators can distinguish "board doesn't exist" (404) from
+    "cid-index needs warming" (422).
+    """
+    with patch(
+        "stock_data.data_provider.persistence.board.get_board_stocks",
+        return_value=([], "ths", "ths", "cid_unresolved"),
+    ):
+        r = client.get("/api/v1/boards/885642/stocks?source=ths&include_quote=true")
+    assert r.status_code == 422
+    body = r.json()
+    assert body["detail"]["error"] == "cid_unresolved"
+    assert "885642" in body["detail"]["message"]
+    assert "?refresh=true" in body["detail"]["message"]
+
+
 # ===== Regression: /boards/{code}/stocks cache hit returns "persistence" =====
 
 
