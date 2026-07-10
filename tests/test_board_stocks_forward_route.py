@@ -69,19 +69,28 @@ def test_get_board_stocks_reads_from_membership_table(fresh_db, monkeypatch):
 def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
     """Cold path: membership empty → fetcher called → upsert → return.
 
-    Post-unification: cache is keyed on source='ths' and the helper
-    fetch_board_stocks_with_zzshare_fallback serves via ZzshareFetcher
-    (origin='zzshare') or ThsFetcher (origin='ths') based on include_quote.
-    With include_quote=False (default), zzshare is tried first.
+    Post-strict-routing (2026-07-10): ``get_board_stocks`` honors the
+    caller's ``source=`` strictly. There is no more include_quote-driven
+    zzshare↔THS auto-preference — callers that want zzshare can pass
+    ``source='zzshare'`` explicitly. This test exercises the THS path.
     """
     # Seed stock_board so board_name/board_type resolve on lazy-fill
+    # and so _resolve_ths_cid_from_platecode(885642) returns a cid we
+    # can route against.
     board_mod.update_cached_boards(
         board_type="concept",
         source="ths",
-        boards=[{"code": "BK1001", "name": "白酒", "subtype": "concept"}],
+        boards=[
+            {
+                "code": "301558",       # upstream cid used in mock return
+                "name": "白酒",
+                "subtype": "concept",
+                "platecode": "885642",
+            },
+        ],
     )
 
-    # Mock manager returns 3 stocks
+    # Mock manager returns 3 stocks when THS path is invoked
     mock_manager = MagicMock()
     mock_manager.get_board_stocks.return_value = (
         [
@@ -93,14 +102,17 @@ def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
     )
 
     stocks, origin = board_mod.get_board_stocks(
-        board_code="BK1001",
+        board_code="885642",     # platecode
+        source="ths",
         manager=mock_manager,
     )
-    # zzshare path runs first (include_quote=False), so origin is 'zzshare'.
-    assert origin == "zzshare"
+    # Strict routing: only THS is invoked.
+    assert origin == "ths"
     assert len(stocks) == 3
-    # Verify membership was populated (cache is keyed on 'ths')
-    rows = board_mod.read_membership(board_code="BK1001", source="ths")
+    assert mock_manager.get_board_stocks.call_count == 1
+    # Verify membership was populated (cache is keyed on the platecode
+    # that the route layer passed in, with source='ths').
+    rows = board_mod.read_membership(board_code="885642", source="ths")
     assert len(rows) == 3
 
 

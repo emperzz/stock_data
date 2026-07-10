@@ -742,120 +742,125 @@ def fetch_boards_with_zzshare_backfill(
 
 def fetch_board_stocks_with_zzshare_fallback(
     board_code: str,
+    source: str,
     include_quote: bool,
     manager,
 ) -> tuple[list[dict], str]:
-    """Get stocks for a board with source-aware primary/fallback order.
+    """Get stocks for a board — STRICTLY source-routed (no silent fallback).
 
-    Strategy:
-    - include_quote=False (default): ZzshareFetcher.plates_stocks first
-      (anonymous SDK call, fast, no v-token required). On empty/error,
-      fallback to ThsFetcher.
-    - include_quote=True: ThsFetcher first (THS AJAX returns quote
-      fields natively). On empty/error, fallback to ZzshareFetcher.
-    - When ThsFetcher is invoked, look up the cid via
-      _resolve_ths_cid_from_platecode; if not found, skip THS path
-      and return zzshare's result (or empty).
-    - ThsFetcher's input is the cid; ZzshareFetcher's input is the
-      platecode (which is what the public API hands us).
+    Historically this helper took only ``board_code`` / ``include_quote``
+    and silently picked THS-vs-zzshare internally (with each side as a
+    fallback for the other). That hid two real defects from upstream
+    callers:
 
-    Caveat -- ZzshareFetcher.get_board_stocks (zzshare_fetcher.py:625)
-    accepts **kwargs but does NOT consume include_quote. The choice
-    of THS-vs-zzshare by include_quote is therefore based purely on
-    the upstream's quote-field availability (THS has them, ZzshareFetcher
-    does not), not on ZzshareFetcher's handling of the flag.
+    1. ``?source=ths`` calls were silently swapped to zzshare when THS
+       returned empty (e.g. concept board where cid resolution missed).
+    2. THS raising ``DataFetchError`` was swallowed by a zzshare retry
+       and reported as ``data_source='zzshare'`` to the user.
+
+    The route now passes the user-chosen ``source`` straight through and
+    this helper honors it: only the requested fetcher is invoked, no
+    cross-source fallback. Behaviour rules per source:
+
+    - ``source='ths'``: try to resolve platecode→cid. If resolved, call
+      ThsFetcher with the cid. If the resolution misses (cid=None),
+      return ``([], 'ths')`` (no row, but caller can attribute the empty
+      result to ths by its label). If the call returns empty rows, also
+      return ``([], 'ths')``. If the call raises, the exception
+      **propagates** so the route returns 5xx.
+    - ``source='zzshare'``: call ZzshareFetcher with the platecode. Same
+      propagation rule for hard errors.
+    - ``source='eastmoney'`` / ``source='zhitu'``: call the named
+      fetcher with the platecode (these fetchers do not require cid
+      translation).
+
+    Args:
+        board_code: Public platecode (e.g. ``'885642'``). For ``ths``,
+            the helper looks up the THS concept cid internally.
+        source: Fetcher slug (``'ths'``, ``'zzshare'``, ``'eastmoney'``,
+            ``'zhitu'``). Strictly honored.
+        include_quote: Forwarded to the fetcher. Affects data shape
+            only, not routing.
+        manager: Required. ``DataFetcherManager`` instance.
 
     Returns:
-        (stocks, source) -- source is the fetcher name that served
-        the response (always 'ths' or 'zzshare'; caller exposes it
-        as-is, but writes to stock_board_membership with source='ths').
-        When both paths fail or return empty, returns ([], "") -- the
-        empty-list signal flows through to the route layer's 404 path.
+        ``(stocks, source_label)``. ``source_label`` is the fetcher
+        name that served the rows. Three concrete outcomes:
+          - ``(rows, label)`` — chosen fetcher returned rows.
+          - ``([], label)``   — chosen fetcher returned empty rows OR
+            (for ``'ths'``) cid resolution missed.
+          - ``([], '')``      — never reaches the fetcher; occurs only
+            for unsupported source slugs (raises ``ValueError`` instead,
+            so this case is unreachable in practice).
+        The empty case flows through to the route layer's 404 path.
 
     Raises:
-        DataFetchError: only when both fetcher paths raise a Hard error
-        (network / 5xx). Empty results are returned as-is (treated as
-        'no stocks in this board' -> caller -> 404).
+        DataFetchError: the chosen fetcher raised. Propagates so the
+        route layer returns 5xx (rather than masking the error with
+        a sibling source's response).
+        ValueError: ``source`` is not one of the four supported slugs.
     """
-
-    def _try_zzshare() -> list[dict]:
-        rows, _ = manager.get_board_stocks(
-            board_code=board_code,
-            source="zzshare",
-            include_quote=include_quote,
-        )
-        return rows
-
-    def _try_ths() -> list[dict]:
+    if source == "ths":
         cid = _resolve_ths_cid_from_platecode(board_code)
         if not cid:
-            return []
-        rows, _ = manager.get_board_stocks(
-            board_code=cid,
-            source="ths",
-            include_quote=include_quote,
-        )
-        return rows
+            return [], "ths"   # cid unresolved → caller gets empty + 'ths' label
+        try:
+            rows, _ = manager.get_board_stocks(
+                board_code=cid,
+                source="ths",
+                include_quote=include_quote,
+            )
+        except DataFetchError:
+            raise   # propagate — no silent fallback
+        return rows, "ths"
 
-    if include_quote:
-        # ThsFetcher first
+    if source == "zzshare":
         try:
-            rows = _try_ths()
-            if rows:
-                return rows, "ths"
-        except Exception as e:
-            logger.warning(
-                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"ths(board_code={board_code}) failed (will fallback to zzshare): {e}"
+            rows, _ = manager.get_board_stocks(
+                board_code=board_code,
+                source="zzshare",
+                include_quote=include_quote,
             )
+        except DataFetchError:
+            raise
+        return rows, "zzshare"
+
+    if source in ("eastmoney", "zhitu"):
         try:
-            rows = _try_zzshare()
-            if rows:
-                return rows, "zzshare"
-        except Exception as e:
-            logger.warning(
-                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"zzshare(board_code={board_code}) failed: {e}"
+            rows, _ = manager.get_board_stocks(
+                board_code=board_code,
+                source=source,
+                include_quote=include_quote,
             )
-        return [], ""
-    else:
-        # ZzshareFetcher first
-        try:
-            rows = _try_zzshare()
-            if rows:
-                return rows, "zzshare"
-        except Exception as e:
-            logger.warning(
-                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"zzshare(board_code={board_code}) failed (will fallback to ths): {e}"
-            )
-        try:
-            rows = _try_ths()
-            if rows:
-                return rows, "ths"
-        except Exception as e:
-            logger.warning(
-                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"ths(board_code={board_code}) failed: {e}"
-            )
-        return [], ""
+        except DataFetchError:
+            raise
+        return rows, source
+
+    raise ValueError(
+        f"fetch_board_stocks_with_zzshare_fallback: unsupported source {source!r}"
+    )
 
 
 def get_board_stocks(
     board_code: str,
+    source: str = "ths",
     refresh: bool = False,
     include_quote: bool = False,
     manager=None,
 ) -> tuple[list, str]:
     """Get stocks belonging to a board with automatic refresh.
 
-    Cache is keyed on source='ths' (post-unification). Cache hits return
+    Cache is keyed on the public board_code (not on source — different
+    sources all normalize to the same THS platecode). Cache hits return
     origin="persistence". Cache misses call
-    fetch_board_stocks_with_zzshare_fallback (THS + ZZSHARE orchestration)
-    and write back to source='ths'.
+    ``fetch_board_stocks_with_zzshare_fallback`` which strictly honors
+    the user-chosen ``source`` (no silent cross-source fallback).
 
     Args:
         board_code: THS platecode (885xxx concept / 881xxx industry).
+        source: User's chosen fetcher; defaults to ``'ths'`` for
+            backward compatibility with the pre-strict-routing callers.
+            Strictly routed downstream.
         refresh: If True, force refresh from upstream.
         include_quote: If True, always fetch fresh realtime data from upstream.
         manager: DataFetcherManager instance. Required when fetching from upstream.
@@ -863,13 +868,17 @@ def get_board_stocks(
     Returns:
         Tuple of (stocks, origin) where origin is:
           - "persistence" when data was read from the SQLite cache
-          - "ths" when ThsFetcher served the response
-          - "zzshare" when ZzshareFetcher served the response (fallback)
-          - "" when both paths returned empty
+          - the fetcher name (e.g. ``'ths'``) when that fetcher served the response
+          - "" when the chosen fetcher returned empty
         List of stock dicts: [{"stock_code", "stock_name", ...quote}, ...]
     """
     init_schema()
 
+    # Tracker key intentionally stays at "ths" — the SQLite cache is keyed
+    # on (board_code, source='ths') regardless of which fetcher originally
+    # populated it (post-unification policy). Per-source tracker keys would
+    # mean non-ths callers always miss the cache, bypassing it even after
+    # ths has populated the same row.
     needs_refresh = include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:ths")
 
     if not needs_refresh:
@@ -882,6 +891,7 @@ def get_board_stocks(
 
     stocks, origin = fetch_board_stocks_with_zzshare_fallback(
         board_code=board_code,
+        source=source,
         include_quote=include_quote,
         manager=manager,
     )

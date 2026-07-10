@@ -361,58 +361,18 @@ class TestBoardsSourceUnification:
         response = client.get("/api/v1/boards/885642/stocks?source=zzshare")
         assert response.status_code == 422
 
-    def test_board_stocks_include_quote_false_prefers_zzshare(self, client):
-        """/boards/{code}/stocks?include_quote=false → ZZSHARE primary, THS fallback."""
-        from unittest.mock import patch, MagicMock
-        from stock_data.data_provider.persistence import board as board_mod
-        mgr = MagicMock()
-        mgr.get_board_stocks.return_value = (
-            [{"stock_code": "300740", "stock_name": "x"}], "zzshare",
-        )
-        # Prevent this test from writing to the shared DB and breaking
-        # the cache-hit path for the include_quote=false tests that follow.
-        with patch.object(board_mod, "update_cached_board_stocks",
-                          return_value=0), \
-             patch("stock_data.api.routes.boards.get_manager", return_value=mgr):
-            response = client.get(
-                "/api/v1/boards/885642/stocks?source=ths&include_quote=false"
-            )
-        assert response.status_code == 200
-        first_call = mgr.get_board_stocks.call_args_list[0]
-        assert first_call.kwargs["source"] == "zzshare"
-        assert first_call.kwargs["board_code"] == "885642"  # platecode, not cid
+    def test_board_stocks_strict_source_routing_include_quote_false(self, client):
+        """?source=ths&include_quote=false: only THS fetcher is called (no zzshare primary).
 
-    def test_board_stocks_include_quote_true_prefers_ths(self, client):
-        """/boards/{code}/stocks?include_quote=true → THS primary, ZZSHARE fallback."""
+        Strict source-routing — the user's chosen source is honored. No
+        silent fallback to a sibling source behind the user's back.
+        """
         from unittest.mock import patch, MagicMock
         from stock_data.data_provider.persistence import board as board_mod
         mgr = MagicMock()
         mgr.get_board_stocks.return_value = (
             [{"stock_code": "300740", "stock_name": "x"}], "ths",
         )
-        # Mock the cid resolution to return a known cid
-        with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
-                          return_value="301558"), \
-             patch.object(board_mod, "update_cached_board_stocks",
-                          return_value=0), \
-             patch("stock_data.api.routes.boards.get_manager", return_value=mgr):
-            response = client.get(
-                "/api/v1/boards/885642/stocks?source=ths&include_quote=true"
-            )
-        assert response.status_code == 200
-        first_call = mgr.get_board_stocks.call_args_list[0]
-        assert first_call.kwargs["source"] == "ths"
-        assert first_call.kwargs["board_code"] == "301558"  # translated cid
-
-    def test_board_stocks_ths_fallback_when_zzshare_empty(self, client):
-        """include_quote=false, zzshare empty → THS fallback (origin='ths')."""
-        from unittest.mock import patch, MagicMock
-        from stock_data.data_provider.persistence import board as board_mod
-        mgr = MagicMock()
-        mgr.get_board_stocks.side_effect = [
-            ([], "zzshare"),  # primary empty
-            ([{"stock_code": "300740", "stock_name": "x"}], "ths"),  # fallback hits
-        ]
         with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
                           return_value="301558"), \
              patch.object(board_mod, "update_cached_board_stocks",
@@ -422,17 +382,55 @@ class TestBoardsSourceUnification:
                 "/api/v1/boards/885642/stocks?source=ths&include_quote=false"
             )
         assert response.status_code == 200
-        body = response.json()
-        assert body["data_source"] == "ths"  # origin reflects fallback fetcher
+        # Exactly one call, to ths with the cid-translated board code.
+        assert mgr.get_board_stocks.call_count == 1
+        first_call = mgr.get_board_stocks.call_args_list[0]
+        assert first_call.kwargs["source"] == "ths"
+        assert first_call.kwargs["board_code"] == "301558"
 
-    def test_board_stocks_zzshare_fallback_when_ths_fails(self, client):
-        """include_quote=true, THS raises → ZZSHARE fallback (origin='zzshare')."""
+    def test_board_stocks_include_quote_true_strict_ths_routing(self, client):
+        """?source=ths&include_quote=true: only THS is called; zzshare is NOT tried."""
         from unittest.mock import patch, MagicMock
         from stock_data.data_provider.persistence import board as board_mod
         mgr = MagicMock()
+        mgr.get_board_stocks.return_value = (
+            [{"stock_code": "300740", "stock_name": "x"}], "ths",
+        )
+        with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
+                          return_value="301558"), \
+             patch.object(board_mod, "update_cached_board_stocks",
+                          return_value=0), \
+             patch("stock_data.api.routes.boards.get_manager", return_value=mgr):
+            response = client.get(
+                "/api/v1/boards/885642/stocks?source=ths&include_quote=true"
+            )
+        assert response.status_code == 200
+        # Strict routing: only one source attempt.
+        assert mgr.get_board_stocks.call_count == 1
+        first_call = mgr.get_board_stocks.call_args_list[0]
+        assert first_call.kwargs["source"] == "ths"
+        assert first_call.kwargs["board_code"] == "301558"
+
+    def test_board_stocks_no_ths_zzshare_silent_fallback(self, client):
+        """?source=ths&include_quote=true: THS raising → NO fallback to zzshare.
+
+        Previously the persistence helper silently fell back to zzshare,
+        returning ``data_source='zzshare'`` even when the user explicitly
+        chose ths. The new contract is: a chosen source's failure must
+        propagate (so the route layer returns 5xx), not be papered over
+        with a sibling fetcher's response.
+        """
+        from unittest.mock import patch, MagicMock
+        from stock_data.data_provider.persistence import board as board_mod
+        mgr = MagicMock()
+        # Strict routing makes a single attempt; zzshare side_effect is
+        # never reached. If the implementation violates the contract,
+        # the call_count assertion below catches it.
         mgr.get_board_stocks.side_effect = [
-            Exception("ths 503"),  # primary raises
-            ([{"stock_code": "300740", "stock_name": "x"}], "zzshare"),
+            ([{"stock_code": "300740", "stock_name": "x"}], "ths"),
+            # second call (which should NOT happen under strict routing)
+            ([{"stock_code": "999999", "stock_name": "should-not-be-called"}],
+             "zzshare"),
         ]
         with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
                           return_value="301558"), \
@@ -443,8 +441,31 @@ class TestBoardsSourceUnification:
                 "/api/v1/boards/885642/stocks?source=ths&include_quote=true"
             )
         assert response.status_code == 200
-        body = response.json()
-        assert body["data_source"] == "zzshare"
+        # Strict routing: zzshare is never invoked.
+        assert mgr.get_board_stocks.call_count == 1
+        # And the first (and only) call must be source=ths with the cid.
+        first_call = mgr.get_board_stocks.call_args_list[0]
+        assert first_call.kwargs["source"] == "ths"
+
+    def test_board_stocks_ths_raises_propagates_5xx(self, client):
+        """?source=ths: THS raising propagates to 5xx — no silent zzshare swap."""
+        from unittest.mock import patch, MagicMock
+        from stock_data.data_provider.persistence import board as board_mod
+        from stock_data.data_provider.base import DataFetchError
+        mgr = MagicMock()
+        mgr.get_board_stocks.side_effect = DataFetchError("ths 503")
+        with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
+                          return_value="301558"), \
+             patch.object(board_mod, "update_cached_board_stocks",
+                          return_value=0), \
+             patch("stock_data.api.routes.boards.get_manager", return_value=mgr):
+            response = client.get(
+                "/api/v1/boards/885642/stocks?source=ths&include_quote=true"
+            )
+        # Strict routing surfaces the THS failure as a server error
+        # (the route's @map_errors turns DataFetchError into 503/502).
+        assert response.status_code in (502, 503, 500)
+        assert mgr.get_board_stocks.call_count == 1  # zzshare NOT tried
 
 
 class TestAkshareFetcherBoards:

@@ -240,79 +240,116 @@ class TestFetchBoardsWithZzshareBackfill:
         assert out[0]["code"] == "301558"
 
 class TestFetchBoardStocksWithZzshareFallback:
-    def _mgr(self, ths_return, zz_return, ths_raise=False, zz_raise=False):
+    """Tests for the strict source-routing contract (post-2026-07-10 fix).
+
+    Pre-fix the helper silently picked THS-vs-zzshare internally based on
+    ``include_quote``, with the other as a quiet fallback. Post-fix the
+    helper honors the user-chosen ``source=`` strictly — no silent
+    cross-source fallback under any condition.
+    """
+
+    def _mgr(self, by_source_return):
+        """Mock manager that returns different rows based on kwargs['source']."""
         from unittest.mock import MagicMock
+
         mgr = MagicMock()
-        def ths_call(*a, **kw):
-            if ths_raise:
-                raise Exception('ths 503')
-            return ths_return
-        def zz_call(*a, **kw):
-            if zz_raise:
-                raise Exception('zz 503')
-            return zz_return
-        mgr.get_board_stocks.side_effect = lambda *a, **kw: (
-            ths_call(*a, **kw) if kw.get('source') == 'ths' else zz_call(*a, **kw)
-        )
+        def side_effect(*a, **kw):
+            return by_source_return.get(kw.get('source'), ([], 'unknown'))
+        mgr.get_board_stocks.side_effect = side_effect
         return mgr
 
-    def test_include_quote_true_prefers_ths(self, mock_cid_resolver):
-        ths_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'ths')
-        zz_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare')
-        mgr = self._mgr(ths_return, zz_return)
+    def test_source_ths_routes_to_ths_only(self, mock_cid_resolver):
+        """source='ths' → only ThsFetcher is called (zzshare NOT tried)."""
+        mgr = self._mgr({
+            'ths': ([{'stock_code': '300740', 'stock_name': 'x'}], 'ths'),
+            'zzshare': ([{'stock_code': '300740', 'stock_name': 'should-not-be-called'}],
+                        'zzshare'),
+        })
         with mock_cid_resolver({('885642',): '301558'}):
             stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='885642', include_quote=True, manager=mgr,
+                board_code='885642', source='ths',
+                include_quote=True, manager=mgr,
             )
         assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
         assert origin == 'ths'
-        ths_call = [c for c in mgr.get_board_stocks.call_args_list
-                    if c.kwargs.get('source') == 'ths'][0]
-        assert ths_call.kwargs['board_code'] == '301558'
+        # Only the THS call should have happened.
+        assert mgr.get_board_stocks.call_count == 1
+        ths_call = mgr.get_board_stocks.call_args_list[0]
+        assert ths_call.kwargs['source'] == 'ths'
+        assert ths_call.kwargs['board_code'] == '301558'   # cid translated
 
-    def test_include_quote_false_prefers_zzshare(self):
-        ths_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'ths')
-        zz_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare')
-        mgr = self._mgr(ths_return, zz_return)
+    def test_source_zzshare_routes_to_zzshare_with_platecode(self):
+        """source='zzshare' → ZzshareFetcher called with platecode (no cid translation)."""
+        mgr = self._mgr({
+            'zzshare': ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare'),
+        })
         stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
-            board_code='885642', include_quote=False, manager=mgr,
+            board_code='885642', source='zzshare',
+            include_quote=False, manager=mgr,
         )
         assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
         assert origin == 'zzshare'
         zz_call = mgr.get_board_stocks.call_args_list[0]
-        assert zz_call.kwargs['board_code'] == '885642'
         assert zz_call.kwargs['source'] == 'zzshare'
+        assert zz_call.kwargs['board_code'] == '885642'   # platecode as-is
 
-    def test_ths_fallback_when_zzshare_empty(self, mock_cid_resolver):
-        ths_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'ths')
-        zz_return = ([], 'zzshare')
-        mgr = self._mgr(ths_return, zz_return)
+    def test_source_ths_empty_does_not_fallback(self, mock_cid_resolver):
+        """source='ths' returning empty → stays empty, no silent zzshare call."""
+        mgr = self._mgr({
+            'ths': ([], 'ths'),
+            'zzshare': ([{'stock_code': '300740', 'stock_name': 'fallback-row'}],
+                        'zzshare'),
+        })
         with mock_cid_resolver({('885642',): '301558'}):
             stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='885642', include_quote=False, manager=mgr,
-            )
-        assert origin == 'ths'
-        assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
-
-    def test_zzshare_fallback_when_ths_fails(self, mock_cid_resolver):
-        ths_return = ([], 'ths')
-        zz_return = ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare')
-        mgr = self._mgr(ths_return, zz_return, ths_raise=True)
-        with mock_cid_resolver({('885642',): '301558'}):
-            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='885642', include_quote=True, manager=mgr,
-            )
-        assert origin == 'zzshare'
-        assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
-
-    def test_both_empty_returns_empty_origin_empty(self, mock_cid_resolver):
-        mgr = self._mgr(([], 'ths'), ([], 'zzshare'))
-        with mock_cid_resolver({('999999',): None}):
-            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='999999', include_quote=False, manager=mgr,
+                board_code='885642', source='ths',
+                include_quote=False, manager=mgr,
             )
         assert stocks == []
-        assert origin == ''
+        assert origin == 'ths'   # explicit label even on empty
+        # Strict routing: zzshare must NOT be invoked.
+        assert mgr.get_board_stocks.call_count == 1
+
+    def test_source_ths_raises_propagates_no_fallback(self, mock_cid_resolver):
+        """source='ths' raising → DataFetchError propagates; NO zzshare fallback."""
+        from stock_data.data_provider.base import DataFetchError
+
+        mgr = self._mgr({'ths': ([], 'ths')})
+
+        def ths_side_effect(*a, **kw):
+            raise DataFetchError('ths 503')
+
+        mgr.get_board_stocks.side_effect = ths_side_effect
+        with mock_cid_resolver({('885642',): '301558'}), \
+             pytest.raises(DataFetchError):
+            board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code='885642', source='ths',
+                include_quote=True, manager=mgr,
+            )
+        # Single attempt to THS, then the exception propagates.
+        assert mgr.get_board_stocks.call_count == 1
+
+    def test_cid_unresolved_returns_empty_label_ths(self, mock_cid_resolver):
+        """cid resolution miss → empty rows + 'ths' label (no upstream call)."""
+        mgr = self._mgr({'ths': ([{'stock_code': 'x'}], 'ths')})
+        with mock_cid_resolver({('999999',): None}):
+            stocks, origin = board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code='999999', source='ths',
+                include_quote=False, manager=mgr,
+            )
+        assert stocks == []
+        assert origin == 'ths'
+        # Upstream must NOT be called — cid miss means no URL to hit.
+        assert mgr.get_board_stocks.call_count == 0
+
+    def test_unsupported_source_raises_value_error(self):
+        """Unknown source slug → ValueError (route layer maps to 400)."""
+        mgr = self._mgr({})
+        with pytest.raises(ValueError, match="unsupported source"):
+            board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code='885642', source='bogus',
+                include_quote=False, manager=mgr,
+            )
 
 
 @pytest.fixture

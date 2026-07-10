@@ -406,8 +406,7 @@ def list_boards(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块成分股 (ths/eastmoney/zhitu; ?source=zzshare 已下线; "
-    "include_quote=false 走 zzshare 优先, 失败 fallback 到 ths)",
+    summary="板块成分股 (ths/eastmoney/zhitu; ?source=zzshare 已下线; 严格按用户选择的 source 路由, 无跨源 fallback)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_stocks",
@@ -419,8 +418,9 @@ def get_board_stocks(
         ...,
         description=(
             "Data source (REQUIRED). 'zzshare' was unified under 'ths' "
-            "on 2026-07-08. include_quote=false → ZZSHARE primary, THS "
-            "fallback. include_quote=true → THS primary, ZZSHARE fallback."
+            "on 2026-07-08. Strictly source-routed: the chosen fetcher "
+            "is the only one invoked; failures propagate (no silent "
+            "fallback to a sibling source)."
         ),
     ),
     include_quote: bool = Query(False, description="Include realtime quote data"),
@@ -447,9 +447,11 @@ def get_board_stocks(
         # Route through the persistence layer so cache hits return
         # origin="persistence" (per CLAUDE.md source-tracking matrix).
         # refresh=true now actually forces an upstream refresh instead of
-        # being silently dropped.
+        # being silently dropped. ``source`` is plumbed straight through
+        # to honor user choice (no silent fallback to a sibling fetcher).
         stocks, origin = stock_board_cache.get_board_stocks(
             board_code,
+            source=source,
             refresh=refresh,
             include_quote=include_quote,
             manager=manager,
@@ -488,18 +490,21 @@ def get_board_stocks(
         for s in stocks
     ]
 
-    # include_quote=true → also pull the board-level realtime quote (THS
-    # only). Best-effort: any routing/upstream/missing-method failure falls
-    # back to code+name. Mirrors /boards/{code}/history's direct manager call
-    # (non-cacheable board read-through; CLAUDE.md persistence-only carve-out).
+    # include_quote=true → also pull the board-level realtime quote (THS only).
+    # Best-effort: any routing/upstream/missing-method failure falls back
+    # to code+name. The realtime call is hardcoded to source="ths" because
+    # only ThsFetcher implements get_board_realtime (mirrors the
+    # /boards/{code}/quote route's hardcoded source). Mirrors
+    # /boards/{code}/history's direct manager call (non-cacheable
+    # board read-through; CLAUDE.md persistence-only carve-out).
     board_info = BoardInfo(code=board_code, name=board_name)
     if include_quote:
         try:
-            quote, _ = manager.get_board_realtime(board_code, source=source)
+            quote, _ = manager.get_board_realtime(board_code, source="ths")
         except (DataFetchError, ValueError, AttributeError) as e:
             logger.debug(
                 f"[boards] board realtime quote unavailable for {board_code} "
-                f"(source={source}): {type(e).__name__}: {e}"
+                f"(ths only): {type(e).__name__}: {e}"
             )
         else:
             board_info = BoardInfo(
@@ -533,7 +538,7 @@ def get_board_stocks(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块实时行情 (ths; 开盘/涨跌幅/涨跌家数/净流入 等 — q.10jqka 概念详情页)",
+    summary="板块实时行情 (ths 唯一实现; 开盘/涨跌幅/涨跌家数/净流入 等 — q.10jqka 概念详情页). 无需 query 参数。",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_realtime",
@@ -541,13 +546,16 @@ def get_board_stocks(
 @map_errors
 def get_board_quote(
     board_code: str = Path(max_length=30, description="Board platecode (e.g. 885595)"),
-    source: Literal["ths"] = Query(
-        ..., description="Data source (REQUIRED). Only 'ths' is implemented."
-    ),
 ) -> BoardQuoteResponse:
-    """Get board-level realtime quote. Source-routed, no failover (ths only)."""
+    """Get board-level realtime quote. Source-routed to ths (only impl), no failover.
+
+    Note: ``source`` is not a route parameter — only ``ths`` implements
+    ``get_board_realtime``, so the Literal is hard-coded inside rather
+    than exposed as a required ``?source=`` (clients were hitting a 422
+    because the only valid value was made mandatory).
+    """
     manager = get_manager()
-    quote, origin = manager.get_board_realtime(board_code, source=source)
+    quote, origin = manager.get_board_realtime(board_code, source="ths")
     return BoardQuoteResponse(
         board_code=quote.get("board_code") or board_code,
         board_name=quote.get("board_name", ""),

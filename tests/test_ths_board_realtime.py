@@ -98,7 +98,44 @@ def test_get_board_realtime_resolves_cid_and_hits_detail_url():
 
 
 def test_get_board_realtime_falls_back_to_input_when_cid_unresolved():
-    """cid resolution miss → use board_code as-is in the URL."""
+    """cid resolution miss for a non-industry platecode → DataFetchError.
+
+    Before: the fetcher silently used the platecode as the URL ``cid``,
+    hit q.10jqka, got HTTP 200, parsed an empty .heading block, returned
+    all-None data. The new contract: a concept/industry-board code that
+    can't resolve a cid must raise loudly (no silent bogus response).
+
+    Industry boards (881xxx prefix) are still allowed to use the
+    platecode directly — see test below for the carve-out.
+    """
+    import pytest
+
+    from stock_data.data_provider.base import DataFetchError
+
+    f = ThsFetcher.__new__(ThsFetcher)
+
+    with (
+        patch(
+            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            return_value=None,
+        ),
+        patch.object(ThsFetcher, "_http_get") as http_get,
+        patch.object(ThsFetcher, "_v_token", return_value="tok"),
+        pytest.raises(DataFetchError, match="cid"),
+    ):
+        f.get_board_realtime("885595")
+
+    # Upstream must NOT be called when cid resolution fails (no point
+    # spending the HTTP round-trip on a request we know will be empty).
+    http_get.assert_not_called()
+
+
+def test_get_board_realtime_industry_platecode_uses_platecode_as_cid():
+    """Industry boards (881xxx prefix) → cid === platecode, no lookup needed.
+
+    THS industry boards use the 881xxx platecode as their own cid, so the
+    cid-resolution miss is not an error — fall through with platecode-as-cid.
+    """
     f = ThsFetcher.__new__(ThsFetcher)
     captured = {}
 
@@ -107,20 +144,21 @@ def test_get_board_realtime_falls_back_to_input_when_cid_unresolved():
         r = MagicMock()
         r.status_code = 200
         r.content = b"x" * 100
-        r.text = _HEADING_UP
+        r.text = _HEADING_UP.replace("885595", "881270").replace("央企国企改革", "银行")
         r.encoding = "gbk"
         return r
 
     with (
         patch(
             "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
-            return_value=None,
+            return_value=None,  # industry uses its own platecode as cid
         ),
         patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
         patch.object(ThsFetcher, "_v_token", return_value="tok"),
     ):
-        f.get_board_realtime("301546")
-    assert "/gn/detail/code/301546/" in captured["url"]
+        d = f.get_board_realtime("881270")
+    assert "/gn/detail/code/881270/" in captured["url"]
+    assert d["board_name"] == "银行"
 
 
 def test_get_board_realtime_raises_on_http_error():

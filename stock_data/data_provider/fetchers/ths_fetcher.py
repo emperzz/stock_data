@@ -945,8 +945,15 @@ class ThsFetcher(BaseFetcher):
         Args:
             board_code: THS platecode (e.g. ``"885595"``). Resolved to the
                 URL cid (e.g. ``"301546"``) via the stock_board cache; when
-                resolution misses (cold cache / input already a cid), the
-                input is used as-is in the URL.
+                resolution misses, the call falls into two cases:
+                  * Industry boards (881xxx prefix): the platecode IS the
+                    cid (per THS naming) — used as-is in the URL.
+                  * Concept boards (any other prefix): the cid is required
+                    because q.10jqka's path param is the cid, not the
+                    platecode. A missing cid means the upstream will return
+                    an empty stub page, so we raise ``DataFetchError``
+                    instead of silently consuming a no-op HTTP call and
+                    returning an all-None dict.
 
         Returns:
             dict with keys: board_code (platecode), board_name, price,
@@ -955,11 +962,25 @@ class ThsFetcher(BaseFetcher):
             cid.
 
         Raises:
-            DataFetchError: upstream non-2xx / network failure / .heading absent.
+            DataFetchError: cid unresolved for a non-industry platecode /
+                upstream non-2xx / network failure / .heading absent.
         """
         from ..persistence.board import _resolve_ths_cid_from_platecode
 
-        cid = _resolve_ths_cid_from_platecode(board_code) or board_code
+        cid = _resolve_ths_cid_from_platecode(board_code)
+        if not cid:
+            # Industry boards (881xxx) use the platecode as their own cid;
+            # that's a known carve-out and the upstream returns real data.
+            # Anything else (concept boards like 885xxx) MUST resolve — we
+            # can't substitute the platecode because the URL path uses the
+            # cid, and the resulting page is empty.
+            if not board_code.startswith("881"):
+                raise DataFetchError(
+                    f"[ThsFetcher] board_realtime: no THS cid resolved for "
+                    f"platecode={board_code!r}; cannot fetch realtime quote "
+                    f"(concept boards require platecode→cid via stock_board cache)"
+                )
+            cid = board_code
         url = _CONCEPT_DETAIL_URL.format(slug=cid)
         headers = {
             "User-Agent": THS_UA,

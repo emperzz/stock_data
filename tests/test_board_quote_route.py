@@ -33,25 +33,21 @@ _QUOTE = {
 }
 
 
-def test_board_quote_source_required(client):
-    """source is required → 422."""
-    r = client.get("/api/v1/boards/885595/quote")
-    assert r.status_code == 422
+def test_board_quote_no_source_param_works(client):
+    """/boards/{code}/quote has only one impl (ths); no source param needed → 200.
 
-
-def test_board_quote_rejects_non_ths_source(client):
-    """Literal['ths'] rejects eastmoney/zhitu at the FastAPI layer (422)."""
-    r = client.get("/api/v1/boards/885595/quote?source=eastmoney")
-    assert r.status_code == 422
-
-
-def test_board_quote_returns_fields(client):
+    Regression test for the route accepting an implicit source=ths (the
+    source literal was already locked to 'ths', so making it a required
+    Query only added a 422-class failure mode for callers who forgot the
+    trailing query string). The route must work without ?source= and
+    internally route to ths.
+    """
     from stock_data.data_provider import manager as mgr_mod
 
     with patch.object(
         mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(_QUOTE, "ths")
-    ):
-        r = client.get("/api/v1/boards/885595/quote?source=ths")
+    ) as mgr_call:
+        r = client.get("/api/v1/boards/885595/quote")
     assert r.status_code == 200
     body = r.json()
     assert body["board_code"] == "885595"
@@ -61,6 +57,23 @@ def test_board_quote_returns_fields(client):
     assert body["net_inflow"] == 34.79
     assert body["rank"] == "229/389"
     assert body["source"] == "ths"
+    # Route internally routes to ths unconditionally
+    args, _kwargs = mgr_call.call_args
+    assert args[0] == "885595"
+    assert _kwargs.get("source") == "ths"
+
+
+def test_board_quote_extra_source_query_ignored(client):
+    """/boards/{code}/quote?source=anything is accepted; source is not a route param."""
+    from stock_data.data_provider import manager as mgr_mod
+
+    with patch.object(
+        mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(_QUOTE, "ths")
+    ):
+        # Pass a non-existing source query — should NOT 422 since the route
+        # no longer declares a source param at all.
+        r = client.get("/api/v1/boards/885595/quote?source=eastmoney")
+    assert r.status_code == 200
 
 
 def test_board_quote_upstream_error_returns_503(client):
@@ -72,5 +85,5 @@ def test_board_quote_upstream_error_returns_503(client):
         "get_board_realtime",
         side_effect=DataFetchError("upstream down"),
     ):
-        r = client.get("/api/v1/boards/885595/quote?source=ths")
+        r = client.get("/api/v1/boards/885595/quote")
     assert r.status_code == 503

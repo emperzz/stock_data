@@ -426,15 +426,19 @@ def test_get_board_stocks_cache_hit_returns_persistence(client):
 
 
 def test_get_board_stocks_refresh_forces_persistence_refresh(client):
-    """refresh=true is forwarded to persistence layer (no longer silently dropped)."""
+    """refresh=true is forwarded to persistence layer (no longer silently dropped).
+
+    Post-strict-routing: ``get_board_stocks`` now takes ``source=`` (so the
+    route can pass the user's choice down to the helper for strict
+    honoring). This test confirms both ``refresh=True`` and ``source``
+    are plumbed through.
+    """
     fake = [{"stock_code": "600519", "stock_name": "贵州茅台"}]
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "EastMoneyFetcher"),
+            return_value=(fake, "eastmoney"),
         ) as mock_get,
-        # Fast-path: skip the fetcher-fallback board-name lookup (would
-        # otherwise trigger a real network call to EastMoney).
         patch(
             "stock_data.data_provider.persistence.board.get_board_name",
             return_value="互联网服务",
@@ -444,8 +448,8 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
     assert r.status_code == 200
     args, kwargs = mock_get.call_args
     assert kwargs.get("refresh") is True
-    # After unification, get_board_stocks doesn't take 'source' kwarg
-    assert "source" not in kwargs
+    # Strict routing: source IS now a kwarg (the route layer plumbs it).
+    assert kwargs.get("source") == "eastmoney"
     # board_code is positional (1st arg) in the persistence signature
     assert args[0] == "BK0001"
 
@@ -454,15 +458,23 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
 
 
 def test_get_board_stocks_source_ths_passes_ths_to_persistence(client):
-    """?source=ths reaches persistence; fetch helper called without source arg."""
+    """?source=ths reaches persistence; fetch helper receives source='ths'.
+
+    Strict source-routing: the user's ``?source=`` is forwarded all the
+    way down to ``fetch_board_stocks_with_zzshare_fallback`` so that the
+    helper can route to the requested fetcher without ever silently
+    falling back to a sibling source.
+    """
     from unittest.mock import patch
     from stock_data.data_provider.persistence import board as board_mod
     with patch.object(board_mod, "fetch_board_stocks_with_zzshare_fallback",
                       return_value=([], "")) as mock_fetch:
         r = client.get("/api/v1/boards/885642/stocks?source=ths")
     assert r.status_code in (200, 404)  # empty may 404
-    for call in mock_fetch.call_args_list:
-        assert "source" not in call.kwargs
+    assert mock_fetch.call_count >= 1
+    # Strict routing: the helper MUST receive source='ths'.
+    first_call = mock_fetch.call_args_list[0]
+    assert first_call.kwargs.get("source") == "ths"
 
 
 def test_get_board_stocks_source_zzshare_returns_422(client):
@@ -880,11 +892,18 @@ def test_get_board_list_signature_has_source_arg():
     assert sig.parameters["source"].default == "ths"
 
 
-def test_get_board_stocks_signature_no_source_arg():
-    """get_board_stocks must drop 'source' param after unification."""
+def test_get_board_stocks_signature_has_source_kwarg():
+    """get_board_stocks accepts source='' for strict source routing (post-2026-07-10).
+
+    Previously (after ths+zzshare unification) the helper dropped 'source' and
+    let the fallback helper decide internally. The strict-routing refactor
+    brought 'source' back as a required kwarg so callers can route their
+    board-stocks request to the chosen fetcher without silent cross-source
+    fallback.
+    """
     import inspect
     from stock_data.data_provider.persistence import board as board_mod
     sig = inspect.signature(board_mod.get_board_stocks)
-    assert "source" not in sig.parameters, (
-        f"get_board_stocks still has 'source' param: {list(sig.parameters)}"
+    assert "source" in sig.parameters, (
+        f"get_board_stocks missing 'source' param: {list(sig.parameters)}"
     )
