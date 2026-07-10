@@ -11,10 +11,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable
 
 from fastapi import FastAPI
+
+from .board import (
+    fetch_boards_with_zzshare_backfill,
+    init_schema,
+    update_cached_boards,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +62,50 @@ def run_ths_board_backfill(
     include_quote: bool = False,
     on_progress: Callable[[str, int, int], None] | None = None,
 ) -> BackfillReport:
-    raise NotImplementedError
+    """Two-phase sync backfill. See spec §3.1."""
+    if inter_call_sleep_s is None:
+        inter_call_sleep_s = _auto_rate_limit_s()
+
+    report = BackfillReport()
+    init_schema()  # idempotent
+
+    # Phase 1: stock_board
+    t0 = time.time()
+    try:
+        boards_merged = fetch_boards_with_zzshare_backfill(
+            board_type=None,
+            refresh=True,
+            include_quote=include_quote,
+            subtype=None,
+            manager=manager,
+        )
+    except Exception as e:
+        report.phase1.errors += 1
+        report.phase1.error_samples.append(f"phase1 fetch: {type(e).__name__}: {e}")
+        report.phase1.duration_s = time.time() - t0
+        logger.exception("[Startup/Backfill] phase 1 fetch raised: %s", e)
+        return report
+
+    report.phase1_boards_emitted = len(boards_merged)
+    if not boards_merged:
+        report.phase1.duration_s = time.time() - t0
+        logger.warning("[Startup/Backfill] phase 1 returned 0 boards; skipping phase 2")
+        return report
+
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for b in boards_merged:
+        grouped[b["type"]].append(b)
+
+    for bt, bucket in grouped.items():
+        if bt in ("concept", "industry"):
+            report.phase1.success += update_cached_boards(bt, "ths", bucket)
+    report.phase1.duration_s = time.time() - t0
+    logger.info(
+        "[Startup/Backfill] phase 1 wrote %d boards in %.1fs",
+        report.phase1.success, report.phase1.duration_s,
+    )
+
+    return report
 
 
 async def schedule_ths_board_backfill_on_startup(app: FastAPI) -> asyncio.Task:
