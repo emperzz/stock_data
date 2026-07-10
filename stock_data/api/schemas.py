@@ -377,7 +377,9 @@ class BoardStocksResponse(BaseModel):
             "实际服务本响应的 fetcher 名称 (ths / zzshare / eastmoney / zhitu). "
             "路由层总是填充——None 只在直构造 Pydantic 模型 (如 schema 测试) 不传参时出现. "
             "区别于 query_source 即可判 fallback: "
-            "query_source='ths' 且 effective_source='zzshare' 表示走 ZZSHARE fallback."
+            "query_source='ths' 且 effective_source='zzshare' 表示走 ZZSHARE fallback. "
+            "缓存命中时该字段固定为 'ths' (因为 stock_board_membership 表不存 per-row origin 列); "
+            "需要暴露真实 upstream 时传 ?refresh=true."
         ),
     )
     # Realtime quote block metadata (only meaningful when include_quote=true).
