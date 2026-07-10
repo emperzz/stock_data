@@ -16,6 +16,7 @@ import os
 
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -86,7 +87,32 @@ async def lifespan(app: FastAPI):
     app.state.manager = _get_manager()
     logger.info("[Startup] app.state.manager wired for explorer manifest")
 
+    # ----- THS board backfill on startup (opt-in via env) -----
+    # Inside function body (not module top) — only imported when env=true.
+    # Keeps cold-start path zero extra imports. Task ref stored on
+    # app.state.backfill_task so the shutdown hook below can cancel it.
+    if os.getenv("BOARD_BACKFILL_ON_STARTUP", "false").lower() == "true":
+        from .data_provider.persistence.backfill import (
+            schedule_ths_board_backfill_on_startup,
+        )
+        asyncio.create_task(schedule_ths_board_backfill_on_startup(app))
+        logger.info("[Startup] THS board backfill scheduled (BOARD_BACKFILL_ON_STARTUP=true)")
+    else:
+        logger.info("[Startup] THS board backfill skipped (set BOARD_BACKFILL_ON_STARTUP=true to enable)")
+
     yield
+
+    # ----- Cancel in-flight backfill so Ctrl-C / SIGTERM doesn't leak state -----
+    backfill_task = getattr(app.state, "backfill_task", None)
+    if backfill_task and not backfill_task.done():
+        backfill_task.cancel()
+        try:
+            await backfill_task
+        except (asyncio.CancelledError, Exception) as e:
+            logger.info(f"[Shutdown] THS board backfill cancelled ({type(e).__name__})")
+    if hasattr(app.state, "backfill_task"):
+        del app.state.backfill_task
+
     logger.info("Shutting down Stock Data Server")
 
 
