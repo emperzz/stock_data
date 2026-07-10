@@ -868,6 +868,20 @@ class ThsFetcher(BaseFetcher):
         # network errors still propagate so the route returns 5xx and
         # ops dashboards see the upstream breakage as 5xx rate — silent
         # partial data on real failure is worse than a 5xx.
+        #
+        # Sticky boundary (2026-07-10 trade-off): the first 401/403
+        # after any data has been received ends the pagination loop
+        # immediately, even if subsequent pages would have contained
+        # more rows. This is the simplest way to interpret THS's
+        # "no more data" signal, but it can silently truncate boards
+        # whose upstream returns transient 401/403 mid-pagination.
+        # The _MAX_BOARD_STOCKS_PAGES=50 cap is the only guard
+        # against infinite loops on a buggy upstream; it does not
+        # protect against partial data on a healthy upstream with
+        # flaky 401s. If truncation becomes a recurring issue, the
+        # proper fix is a retry-with-backoff loop, not to relax the
+        # sticky-boundary rule. See
+        # ``tests/test_ths_fetcher.py::TestGetBoardStocks::test_mid_pagination_401_truncates_without_retry``.
         all_rows: list[dict] = []
         for page in range(1, _MAX_BOARD_STOCKS_PAGES + 1):
             try:

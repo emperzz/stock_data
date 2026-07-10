@@ -1514,6 +1514,88 @@ class TestGetBoardStocks:
             )
         assert result == []
 
+    def test_mid_pagination_401_truncates_without_retry(self):
+        """First 401/403 after data ends the loop, even if more pages exist.
+
+        Locks the 'sticky boundary' trade-off documented in
+        ``get_board_stocks``'s docstring. The 3-call sequence is
+        page1=10 rows → page2=401 → page3=10 rows; the test asserts
+        that the fetcher returns only page1's 10 rows and the
+        pagination loop does NOT issue page3.
+
+        Pairs with ``test_401_after_data_treated_as_end_of_pagination``
+        which covers the *last-page* 401 case (page1=10 → page2=5 →
+        page3=401). Together they pin the full behavior: any 401/403
+        after data is the boundary, regardless of whether more data
+        would have followed.
+        """
+        page1_html = self._build_html(
+            [
+                [
+                    str(i + 1),
+                    f"3007{40 + i:02d}",
+                    f"股票{i}",
+                    "10.00",
+                    "1.00",
+                    "0.10",
+                    "0.05",
+                    "0.80",
+                    "1.00",
+                    "1.50",
+                    "100000000",
+                    "500000000",
+                    "5250000000",
+                    "30.0",
+                ]
+                for i in range(10)
+            ]
+        )
+        # page3 is constructed but the test asserts the loop never consumes it.
+        page3_html = self._build_html(
+            [
+                [
+                    str(i + 11),
+                    f"3008{40 + i:02d}",
+                    f"股票{i + 10}",
+                    "10.00",
+                    "1.00",
+                    "0.10",
+                    "0.05",
+                    "0.80",
+                    "1.00",
+                    "1.50",
+                    "100000000",
+                    "500000000",
+                    "5250000000",
+                    "30.0",
+                ]
+                for i in range(10)
+            ]
+        )
+
+        class _MidPaginationAuth:
+            """THS returning 401 mid-pagination (NOT on the last page)."""
+            status_code = 401
+            encoding = "utf-8"
+            text = "<html>Unauthorized</html>"
+            content = b"<html>Unauthorized</html>"
+
+        responses = [
+            self._make_response(page1_html),
+            _MidPaginationAuth(),
+            self._make_response(page3_html),  # would-be-ignored
+        ]
+
+        with patch.object(ThsFetcher, "_http_get", side_effect=responses) as mock_get:
+            result = self.fetcher.get_board_stocks("308709")
+
+        # Only page1's 10 rows — page3 was never issued.
+        assert len(result) == 10
+        assert result[0]["stock_code"] == "300740"
+        assert result[9]["stock_code"] == "300749"
+        # Loop broke on page2; page3 was never issued.
+        assert mock_get.call_count == 2
+
 
     def test_ths_boundary_signal_error_is_subclass_of_data_fetch_error(self):
         """ThsBoundarySignalError is a DataFetchError subclass; carries status_code.
