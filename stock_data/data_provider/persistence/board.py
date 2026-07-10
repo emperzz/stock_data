@@ -1347,6 +1347,44 @@ def get_board_name(board_code: str, source: str) -> str | None:
     return row["name"] if row else None
 
 
+def get_board_metadata(
+    board_code: str, source: str
+) -> dict[str, Any] | None:
+    """Look up full board metadata (name + type + subtype) from the SQLite cache.
+
+    Same fast-path semantics as :func:`get_board_name` — single-row read
+    against ``stock_board``, matching on ``code OR platecode`` so THS
+    platecodes (885xxx) resolve to their internal cid rows. No upstream
+    fallback; returns ``None`` on cache miss.
+
+    Args:
+        board_code: Board code (e.g. ``"BK1048"`` or ``"885595"``).
+        source: Data source slug (``"ths"``, ``"eastmoney"``, etc.).
+
+    Returns:
+        Dict ``{"name": str, "type": str, "subtype": str}`` if a row
+        exists; ``None`` on cache miss. ``type`` and ``subtype`` mirror
+        the cache column values verbatim (may be empty string for older
+        rows where the column was added in a forward-compat migration).
+    """
+    init_schema()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name, board_type, subtype FROM stock_board "
+        "WHERE (code = ? OR platecode = ?) AND source = ? LIMIT 1",
+        (board_code, board_code, source),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    return {
+        "name": row["name"],
+        "type": row["board_type"],
+        "subtype": row["subtype"] or "",
+    }
+
+
 def get_board_name_with_fallback(
     board_code: str,
     source: str,

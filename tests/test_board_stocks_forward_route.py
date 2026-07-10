@@ -201,3 +201,72 @@ def test_board_stocks_include_quote_best_effort_on_failure(client):
     board = r.json()["board"]
     assert board["name"] == "央企国企改革"
     assert board["price"] is None
+
+
+def test_board_stocks_board_block_has_type_from_cache(client):
+    """board.type is populated from the stock_board cache (not null).
+
+    Regression test: previously the route built BoardInfo(code, name)
+    without setting ``type``, serializing as ``"type": null``. The fix
+    plumbs ``board_type`` from the SQLite ``stock_board`` cache into the
+    response so callers can split the result by type without re-querying.
+    """
+    from unittest.mock import patch
+
+    from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.base import DataFetchError
+    from stock_data.data_provider.persistence import board as board_mod
+
+    with (
+        patch.object(
+            board_mod,
+            "get_board_stocks",
+            return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths"),
+        ),
+        patch.object(board_mod, "get_board_name_with_fallback", return_value="央企国企改革"),
+        # Cache hits: route should plug board_type='concept' into BoardInfo.
+        patch.object(
+            board_mod,
+            "get_board_metadata",
+            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+        ),
+        patch.object(
+            mgr_mod.DataFetcherManager,
+            "get_board_realtime",
+            side_effect=DataFetchError("upstream down"),
+        ),
+    ):
+        r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=true")
+    assert r.status_code == 200
+    board = r.json()["board"]
+    assert board["type"] == "concept"
+    assert board["code"] == "885595"
+    assert board["name"] == "央企国企改革"
+
+
+def test_board_stocks_board_block_type_none_on_cache_miss(client):
+    """board.type is null when the cache has no row for this board code."""
+    from unittest.mock import patch
+
+    from stock_data.data_provider import manager as mgr_mod
+    from stock_data.data_provider.base import DataFetchError
+    from stock_data.data_provider.persistence import board as board_mod
+
+    with (
+        patch.object(
+            board_mod,
+            "get_board_stocks",
+            return_value=([{"stock_code": "600519", "stock_name": "x"}], "ths"),
+        ),
+        patch.object(board_mod, "get_board_name_with_fallback", return_value="x"),
+        # Cache miss: helper returns None.
+        patch.object(board_mod, "get_board_metadata", return_value=None),
+        patch.object(
+            mgr_mod.DataFetcherManager,
+            "get_board_realtime",
+            side_effect=DataFetchError("upstream down"),
+        ),
+    ):
+        r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=true")
+    assert r.status_code == 200
+    assert r.json()["board"]["type"] is None

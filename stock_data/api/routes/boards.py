@@ -497,7 +497,15 @@ def get_board_stocks(
     # /boards/{code}/quote route's hardcoded source). Mirrors
     # /boards/{code}/history's direct manager call (non-cacheable
     # board read-through; CLAUDE.md persistence-only carve-out).
-    board_info = BoardInfo(code=board_code, name=board_name)
+    #
+    # Type/subtype are populated from stock_board cache (no upstream call)
+    # so the route returns a fully-tagged board block. On cache miss they
+    # fall back to None — better than re-querying upstream.
+    cached_metadata = stock_board_cache.get_board_metadata(board_code, source)
+    board_info_kwargs: dict = {"code": board_code, "name": board_name}
+    if cached_metadata:
+        board_info_kwargs["type"] = cached_metadata["type"]
+    board_info = BoardInfo(**board_info_kwargs)
     if include_quote:
         try:
             quote, _ = manager.get_board_realtime(board_code, source="ths")
@@ -510,6 +518,7 @@ def get_board_stocks(
             board_info = BoardInfo(
                 code=board_code,
                 name=board_name,
+                type=board_info_kwargs.get("type"),  # propagated from cache above
                 price=quote.get("price"),
                 change_pct=quote.get("change_pct"),
                 change_amount=quote.get("change_amount"),
