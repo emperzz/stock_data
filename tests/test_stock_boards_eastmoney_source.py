@@ -1,11 +1,9 @@
-"""Smoke test: /stocks/{code}/boards?source=eastmoney triggers eastmoney cold-fill.
+"""Smoke test: /stocks/{code}/boards?source=eastmoney routing.
 
 Verifies the eastmoney branch in ``stock_board_cache.get_stock_memberships``
-mirrors the zhitu pattern: when the persistence cache is empty for eastmoney
-and cold_fill=true, the fetcher is called and rows are written via
-``upsert_membership_for_stock_boards``. When the fetcher returns ``None``
-(invalid stock code), the response is a 200 with eastmoney in ``cold_sources``
-(no 500).
+when the persistence cache is empty for eastmoney. When the fetcher returns
+``None`` (invalid stock code), the response is a 200 with eastmoney in
+``cold_sources`` (no 500).
 
 The live test at the bottom (``test_stocks_boards_eastmoney_source_live``)
 hits the real upstream and is tagged ``@pytest.mark.live_network`` so the
@@ -27,60 +25,6 @@ def _make_fake_manager(*, boards, fetcher_name="EastMoneyFetcher"):
     return mgr
 
 
-def test_eastmoney_source_lazy_fill_writes_membership(client):
-    """Happy path: empty cache + cold_fill=true -> fetcher called, rows upserted.
-
-    Mirrors ``test_get_stock_boards_zhitu_cold_fill_returns_populated_boards``
-    for eastmoney (Task 6).
-    """
-    from stock_data.data_provider.persistence import board as board_mod
-
-    stock_code = "600876"  # arbitrary — clear any prior membership rows first
-    board_mod.init_schema()
-    conn = board_mod.get_connection()
-    conn.execute(
-        "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
-    )
-    conn.commit()
-
-    fake_boards = [
-        {
-            "code": "BK0438", "name": "食品饮料",
-            "type": "industry", "subtype": "industry",
-            "change_pct": 0.34, "change_amount": 81.80,
-            "leading_stock_code": "600872",
-            "leading_stock_name": "中炬高新",
-        },
-        {
-            "code": "BK0481", "name": "光伏设备",
-            "type": "industry", "subtype": "industry",
-            "change_pct": -1.12, "change_amount": -42.30,
-            "leading_stock_code": "601012",
-            "leading_stock_name": "隆基绿能",
-        },
-    ]
-    try:
-        with patch(
-            "stock_data.data_provider.manager.DataFetcherManager.get_stock_boards",
-            return_value=(fake_boards, "EastMoneyFetcher"),
-        ):
-            r = client.get(
-                f"/api/v1/stocks/{stock_code}/boards?source=eastmoney&cold_fill=true"
-            )
-        assert r.status_code == 200
-        body = r.json()
-        assert body["stock_code"] == stock_code
-        assert len(body["data"]) == 2
-        assert body["cold_sources"] == []
-        # Single-source eastmoney cold-fill -> origin reflects fresh fetcher hit
-        assert body["source"] == "eastmoney"
-        # All entries are tagged with source=eastmoney
-        assert all(e["source"] == "eastmoney" for e in body["data"])
-    finally:
-        conn.execute(
-            "DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,)
-        )
-        conn.commit()
 
 
 def test_eastmoney_source_invalid_code_returns_200_with_cold_sources(client):
@@ -97,35 +41,6 @@ def test_eastmoney_source_invalid_code_returns_200_with_cold_sources(client):
     assert "eastmoney" in body["cold_sources"]
 
 
-def test_eastmoney_lazy_fill_skipped_when_manager_missing(monkeypatch, tmp_path):
-    """When cold_fill=true but manager is None, the persistence layer should
-    gracefully skip the fetch and return whatever is in the cache.
-
-    This guards against a regression where the new eastmoney branch could
-    dereference a None manager (the zhitu branch already has this guard via
-    ``manager is not None``).
-    """
-    from stock_data.data_provider.persistence import board as board_mod
-    from stock_data.data_provider.persistence import db as db_mod
-
-    # Fresh DB so we don't see stale eastmoney rows from the dev cache.
-    monkeypatch.setattr(db_mod, "_db_path", None)
-    monkeypatch.setattr(db_mod, "_conn", None)
-    board_mod._schema_initialized_paths = set()
-    monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "no_manager.db"))
-    board_mod.init_schema()
-
-    # No cache rows, manager=None, cold_fill=True -> empty entries, eastmoney in cold_sources,
-    # and importantly: no exception, no 500.
-    entries, cold_sources, origin = board_mod.get_stock_memberships(
-        stock_code="600519",
-        sources=["eastmoney"],
-        cold_fill=True,
-        manager=None,
-    )
-    assert entries == []
-    assert cold_sources == ["eastmoney"]
-    assert origin == "persistence"
 
 
 def test_eastmoney_source_routes_through_persistence_layer(client):

@@ -686,10 +686,9 @@ def test_get_board_stocks_ths_falls_back_when_get_all_boards_unavailable(client)
 
 
 def test_get_stock_boards_zhitu_returns_200_with_cold_sources_when_empty(client):
-    """No zhitu data + cold_fill=False (default) -> 200 + cold_sources=['zhitu'].
+    """No zhitu data -> 200 + cold_sources=['zhitu'].
 
-    Auto-cold-fill is removed; callers must opt in with ?cold_fill=true.
-    The route no longer raises 404 -- cold data surfaces in cold_sources.
+    The route does not raise 404 -- cold data surfaces in cold_sources.
     """
     # Use a stock code unlikely to have prior membership data so the route
     # takes the empty-membership path.
@@ -760,48 +759,6 @@ def test_get_stock_boards_zzshare_type_special_returns_400(client):
         "/api/v1/stocks/600000/boards?source=zzshare&type=special&subtype=同花顺题材"
     )
     assert r2.status_code == 400
-
-
-def test_get_stock_boards_zhitu_cold_fill_returns_populated_boards(client):
-    """Happy path: source=zhitu + cold_fill=true triggers zhitu lazy-fill.
-
-    The cold-fill triggers a fetcher call (zhitu has the only native reverse
-    API); the upserted rows surface in data with source='zhitu', and
-    cold_sources is empty.
-    """
-    from stock_data.data_provider.persistence import board as board_mod
-
-    stock_code = "800999"
-    board_mod.init_schema()
-    conn = board_mod.get_connection()  # type: ignore[attr-defined]
-    conn.execute("DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,))
-    conn.commit()
-
-    fake_boards = [
-        {"code": "sw_yx", "name": "A股-申万行业-银行", "type": "industry", "subtype": "申万行业"},
-        {
-            "code": "chgn_700532",
-            "name": "A股-热门概念-MSCI中国",
-            "type": "concept",
-            "subtype": "热门概念",
-        },
-    ]
-    try:
-        with patch(
-            "stock_data.data_provider.manager.DataFetcherManager.get_stock_boards",
-            return_value=(fake_boards, "ZhituFetcher"),
-        ):
-            r = client.get(f"/api/v1/stocks/{stock_code}/boards?source=zhitu&cold_fill=true")
-        assert r.status_code == 200
-        body = r.json()
-        assert body["stock_code"] == stock_code
-        assert len(body["data"]) == 2
-        assert body["cold_sources"] == []
-        # zhitu lazy-fill triggered -> origin reflects fresh fetcher hit
-        assert body["source"] == "zhitu"
-    finally:
-        conn.execute("DELETE FROM stock_board_membership WHERE stock_code = ?", (stock_code,))
-        conn.commit()
 
 
 # ===== get_board_history (ths / eastmoney) =====

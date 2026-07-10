@@ -49,9 +49,9 @@ class TestGetStockMemberships:
         assert origin == "persistence"
 
     def test_single_source_cold_no_fill(self, fresh_db):
-        """Single source, no data, cold_fill=False → cold=[source], origin='persistence'."""
+        """Single source, no data → cold=[source], origin='persistence'."""
         entries, cold, origin = board_mod.get_stock_memberships(
-            stock_code="600519", sources=["zhitu"], cold_fill=False
+            stock_code="600519", sources=["zhitu"]
         )
         assert entries == []
         assert cold == ["zhitu"]
@@ -173,76 +173,6 @@ class TestResolveBoardTypes:
         em = board_mod.resolve_board_types(["sw_yx"], source="eastmoney")
         assert zhitu["sw_yx"]["subtype"] == "申万行业"
         assert em["sw_yx"]["subtype"] == "industry"
-
-
-class TestGetStockMembershipsColdFill:
-    """Cold-fill behavior: only triggers for zhitu, only when cold_fill=True."""
-
-    def test_cold_fill_true_writes_to_membership_and_returns_zhitu_origin(self, fresh_db, monkeypatch):
-        """cold_fill=True + cold zhitu data → fetcher called, rows upserted, origin='zhitu'."""
-        # Mock manager that returns boards for the cold zhitu path
-        mock_manager = MagicMock()
-        mock_manager.get_stock_boards.return_value = (
-            [
-                {"code": "sw_yx", "name": "SW", "type": "industry", "subtype": "申万行业"},
-                {"code": "chgn_700532", "name": "MSCI中国", "type": "concept", "subtype": "热门概念"},
-            ],
-            "zhitu",
-        )
-
-        # Seed stock_list so the upsert path can resolve stock_name
-        from stock_data.data_provider.persistence import stock_list as stock_list_mod
-
-        stock_list_mod._schema_initialized_paths = set()
-        stock_list_mod.init_schema()
-        conn = db_mod.get_connection()
-        conn.execute("INSERT INTO stock_list (code, name, market) VALUES ('600519', '贵州茅台', 'csi')")
-        conn.commit()
-
-        # Stock has no zhitu data in membership yet → cold-fill should fire
-        entries, cold, origin = board_mod.get_stock_memberships(
-            stock_code="600519", sources=["zhitu"], cold_fill=True, manager=mock_manager
-        )
-
-        # Fetcher was called
-        mock_manager.get_stock_boards.assert_called_once_with("600519", source="zhitu")
-
-        # Rows were written to membership
-        conn = db_mod.get_connection()
-        rows = conn.execute(
-            "SELECT board_code, source FROM stock_board_membership WHERE stock_code='600519'"
-        ).fetchall()
-        assert len(rows) == 2
-        assert {r["source"] for r in rows} == {"zhitu"}
-
-        # Return values reflect the cold-fill
-        assert len(entries) == 2
-        assert {e["source"] for e in entries} == {"zhitu"}
-        assert cold == []
-        assert origin == "zhitu"
-
-    def test_cold_fill_empty_when_fetcher_returns_no_rows(self, fresh_db, monkeypatch):
-        """cold_fill=True + fetcher returns [] → origin='cold_fill_empty'.
-
-        区分于 cache-miss (origin='persistence') 和 cold-fill-写入 (origin=fetcher 名)。
-        触发场景: 北交所 (4/8 前缀) 调 source=ths + cold_fill=True → ThsFetcher
-        早退返回 [],但网络层逻辑已生效 (或本想生效)。这个 sentinel 让上层能
-        区分"没有命中缓存" 与 "命中了但上游拒绝/不支持"。
-        """
-        mock_manager = MagicMock()
-        mock_manager.get_stock_boards.return_value = ([], "ths")  # 上游返回空
-
-        from stock_data.data_provider.persistence import stock_list as stock_list_mod
-        stock_list_mod._schema_initialized_paths = set()
-        stock_list_mod.init_schema()
-
-        entries, cold, origin = board_mod.get_stock_memberships(
-            stock_code="830799", sources=["ths"], cold_fill=True, manager=mock_manager
-        )
-        assert entries == []
-        assert cold == ["ths"]
-        assert origin == "cold_fill_empty"
-        mock_manager.get_stock_boards.assert_called_once_with("830799", source="ths")
 
 
 class TestGetStockMembershipsBoardNameOverride:

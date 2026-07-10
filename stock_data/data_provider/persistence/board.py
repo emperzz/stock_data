@@ -1281,14 +1281,16 @@ def get_stock_memberships(
     sources: list[str],
     type: str | None = None,
     subtype: str | None = None,
-    cold_fill: bool = False,
     manager=None,
 ) -> tuple[list[dict], list[str], str]:
     """Single source of truth for stock→boards reverse lookup.
 
-    Reads stock_board_membership for each requested source, applies
-    type/subtype filters, and (optionally) triggers ths / zhitu / eastmoney
-    cold-fill for sources with no data when cold_fill=True.
+    Reads stock_board_membership for each requested source and applies
+    type/subtype filters. Cold-fill (on-request fetcher-triggered population)
+    has been removed — reverse lookup relies on the startup backfill
+    (see ``persistence.backfill``) or accepts a cache miss surfaced via
+    ``cold_sources``. The ``manager`` parameter is kept for API stability
+    but is no longer used inside this function.
 
     Args:
         stock_code: 6-digit stock code (e.g. '600519').
@@ -1297,29 +1299,17 @@ def get_stock_memberships(
                  when the caller used either label). May be empty.
         type: optional board type filter (concept/industry/index/special).
         subtype: optional source-specific subtype filter.
-        cold_fill: if True and source='ths' / 'zhitu' / 'eastmoney' has no data,
-                   call the corresponding fetcher to populate membership
-                   (write-through upsert). Other sources never trigger cold-fill.
-        manager: DataFetcherManager instance. Required when cold_fill=True.
+        manager: DataFetcherManager instance. Unused after the cold-fill
+                  removal; kept for backward-compatible call signatures.
 
     Returns:
         (entries, cold_sources, origin_summary)
         - entries: list of {code, name, type, subtype, source}, one dict per row.
-        - cold_sources: subset of `sources` with no data after cold_fill attempt.
+        - cold_sources: subset of `sources` with no data in the cache.
         - origin_summary:
             - "persistence" — entries from SQLite cache (no fetcher calls); also used
-                              when entries is empty (cache miss, no cold-fill)
-            - "cold_fill_empty" — cold_fill=True was attempted, fetcher was queried,
-                              but returned no rows for any cold-fill source. Distinct
-                              from "persistence" so the route layer doesn't mislead
-                              users into thinking the network was never hit
-                              (e.g. 北交所 early-return case for source=ths).
-            - "ths" / "zhitu" / "eastmoney" — cold-fill triggered and that source is
-                              now in the result (network was hit, fresh data was
-                              written). When multiple cold-fill sources wrote, the
-                              single-source summary reflects whichever source was
-                              actually queried; multi-source collapses to "mixed".
-            - "mixed"       — multi-source query with entries (no cold-fill happened)
+                              when entries is empty (cache miss)
+            - "mixed"       — multi-source query with entries
             - ""            — sources was empty (early return)
 
     Caller decides how to expose origin_summary in the top-level response
@@ -1335,29 +1325,6 @@ def get_stock_memberships(
 
     entries, present_sources = _read_membership_entries(stock_code, sources, cursor)
 
-    # Cold-fill: ths / zhitu / eastmoney have upstream reverse APIs; only when cold_fill=True.
-    # Track which sources we ATTEMPTED to cold-fill, separately from which wrote rows —
-    # used downstream to distinguish "fetcher returned empty" from "cache miss".
-    coldfill_attempted: set[str] = set()
-    if cold_fill and manager is not None:
-        from .stock_list import get_stock_name as _get_stock_name
-
-        for cold_src in ("ths", "zhitu", "eastmoney"):  # ths 加首位 (新实现)
-            if cold_src not in sources or cold_src in present_sources:
-                continue
-            coldfill_attempted.add(cold_src)
-            boards, _ = manager.get_stock_boards(stock_code, source=cold_src)
-            if boards:
-                stock_name = _get_stock_name(stock_code) or ""
-                upsert_membership_for_stock_boards(
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    boards=boards,
-                    source=cold_src,
-                )
-                # Re-read to include newly written rows
-                entries, present_sources = _read_membership_entries(stock_code, sources, cursor)
-
     # Apply type/subtype filters (post-query, in-memory)
     if type is not None:
         entries = [e for e in entries if e["type"] == type]
@@ -1369,25 +1336,7 @@ def get_stock_memberships(
 
     # Origin summary
     if not entries:
-        # Empty entries: distinguish "cache miss, no cold-fill" from
-        # "cold-fill attempted but fetcher returned []". The latter case
-        # (e.g. BSE stock queried via source=ths, where the fetcher
-        # early-returns without hitting upstream) would otherwise look
-        # identical to a clean cache miss.
-        if coldfill_attempted:
-            origin_summary = "cold_fill_empty"
-        else:
-            origin_summary = "persistence"
-    elif cold_fill and manager is not None:
-        # Cold-fill actually wrote data; signal which source(s) hit the network.
-        # Single-source query takes the queried source's name; multi-source uses "mixed".
-        coldfill_sources = {"ths", "zhitu", "eastmoney"} & {e["source"] for e in entries}
-        if coldfill_sources and len(sources) == 1:
-            origin_summary = next(iter(coldfill_sources))
-        elif coldfill_sources or len(sources) > 1:
-            origin_summary = "mixed"
-        else:
-            origin_summary = "persistence"
+        origin_summary = "persistence"
     elif len(sources) > 1:
         origin_summary = "mixed"
     else:
