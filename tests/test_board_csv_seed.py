@@ -1,10 +1,8 @@
 """Tests for persistence.board_csv module (CSV seed for stock_board + membership)."""
+
 from __future__ import annotations
 
 import logging
-import os
-import re
-from pathlib import Path
 
 import pytest
 
@@ -58,9 +56,7 @@ def test_seed_eastmoney_3col_fills_defaults(fresh_db, tmp_path):
     """
     csv_path = tmp_path / "stock_board_eastmoney.csv"
     csv_path.write_text(
-        "board_type,board_code,board_name\n"
-        "industry,BK1627,综合Ⅲ\n"
-        "concept,BK1701,融资融券\n",
+        "board_type,board_code,board_name\nindustry,BK1627,综合Ⅲ\nconcept,BK1701,融资融券\n",
         encoding="utf-8-sig",
     )
 
@@ -121,8 +117,7 @@ def test_seed_membership_skips_invalid_stock_code(fresh_db, tmp_path, caplog):
         n = board_csv.seed_membership_from_csv(csv_path)
     assert n == 2
     assert any(
-        "invalid stock_code" in r.message and "贵州茅台" in r.message
-        for r in caplog.records
+        "invalid stock_code" in r.message and "贵州茅台" in r.message for r in caplog.records
     ), f"expected invalid_code warning; got: {[r.message for r in caplog.records]}"
 
 
@@ -150,18 +145,14 @@ def test_seed_full_schema_skips_wrong_source_row(fresh_db, tmp_path, caplog):
 
     # Summary warning should mention count=1 and source='eastmoney'
     summary_records = [
-        r for r in caplog.records
-        if "wrong source" in r.message and "1 rows" in r.message
+        r for r in caplog.records if "wrong source" in r.message and "1 rows" in r.message
     ]
     assert len(summary_records) == 1, (
-        f"expected exactly one summary warning; got: "
-        f"{[r.message for r in caplog.records]}"
+        f"expected exactly one summary warning; got: {[r.message for r in caplog.records]}"
     )
 
     # Verify the wrong-source row was NOT inserted
-    rows = board_mod.read_membership(
-        board_code="885002", source="ths"
-    )
+    rows = board_mod.read_membership(board_code="885002", source="ths")
     assert rows == []
 
 
@@ -211,9 +202,7 @@ def test_seed_all_from_backup_dir_missing_files(tmp_path, caplog):
     ):
         results = board_csv.seed_all_from_backup_dir(empty_dir)
     assert results == {}
-    not_found_warnings = [
-        r for r in caplog.records if "not found" in r.message
-    ]
+    not_found_warnings = [r for r in caplog.records if "not found" in r.message]
     assert len(not_found_warnings) == 3
 
 

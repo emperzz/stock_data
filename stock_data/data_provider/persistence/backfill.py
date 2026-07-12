@@ -246,13 +246,20 @@ def run_ths_board_backfill(
     return report
 
 
-async def schedule_ths_board_backfill_on_startup(app: FastAPI) -> asyncio.Task:
+def schedule_ths_board_backfill_on_startup(app: FastAPI) -> asyncio.Task:
     """Spawn the backfill in a worker thread; return the task for caller.
 
     The caller (``server.py:lifespan``) stores the returned task on
     ``app.state.backfill_task`` for shutdown coordination. Sync work runs
-    in ``asyncio.to_thread`` so the event loop is not blocked by ~17min of
-    fetcher sleeps.
+    in ``asyncio.to_thread`` so the event loop is not blocked by the ~17
+    minute wall-clock budget of fetcher sleeps.
+
+    Note: NOT ``async def`` — the body only builds a sync ``threading.Event``
+    and calls the sync ``asyncio.create_task()``. Declaring it ``async def``
+    would return a coroutine that the caller must ``await``; ``server.py``
+    calls it without ``await`` from inside the lifespan asyncgen, and a
+    missed ``await`` silently swallows the whole startup backfill
+    (``RuntimeWarning: coroutine ... was never awaited``).
 
     Two startup-bug fixes live here:
 

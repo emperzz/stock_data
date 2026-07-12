@@ -11,6 +11,7 @@ test DB fixture.
 
 Reference: docs/superpowers/specs/2026-07-12-csv-seed-for-board-cache-design.md
 """
+
 from __future__ import annotations
 
 import csv
@@ -24,10 +25,17 @@ from .db import get_connection
 
 logger = logging.getLogger(__name__)
 
-_STOCK_BOARD_COLS = {"code", "name", "board_type", "subtype", "source",
-                     "platecode", "updated_at"}
-_MEMBERSHIP_COLS = {"board_code", "stock_code", "source", "board_name",
-                    "stock_name", "board_type", "subtype", "refreshed_at"}
+_STOCK_BOARD_COLS = {"code", "name", "board_type", "subtype", "source", "platecode", "updated_at"}
+_MEMBERSHIP_COLS = {
+    "board_code",
+    "stock_code",
+    "source",
+    "board_name",
+    "stock_name",
+    "board_type",
+    "subtype",
+    "refreshed_at",
+}
 _EASTMONEY_COLS = {"board_type", "board_code", "board_name"}
 
 _VALID_STOCK_CODE = re.compile(r"^\d{6}$")
@@ -46,7 +54,7 @@ def _validate_csv_columns(path: Path, required: set[str]) -> None:
         try:
             header = next(reader)
         except StopIteration:
-            raise ValueError(f"{path} is empty")
+            raise ValueError(f"{path} is empty") from None
     missing = required - set(header)
     if missing:
         raise ValueError(f"{path} missing required columns: {sorted(missing)}")
@@ -89,19 +97,25 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
     skipped_wrong_source_samples: list[str] = []
     for r in _open_csv(csv_path):
         if r["source"] != source:
-            skipped_wrong_source_samples.append(
-                f"code={r.get('code')!r} source={r['source']!r}"
-            )
+            skipped_wrong_source_samples.append(f"code={r.get('code')!r} source={r['source']!r}")
             continue
-        rows.append((
-            r["code"], r["name"], r["board_type"], r["subtype"] or "",
-            r["source"], r["platecode"] or None, now,
-        ))
+        rows.append(
+            (
+                r["code"],
+                r["name"],
+                r["board_type"],
+                r["subtype"] or "",
+                r["source"],
+                r["platecode"] or None,
+                now,
+            )
+        )
     if skipped_wrong_source_samples:
         logger.warning(
-            "[CSVSeed] %s: %d rows had wrong source (expected %r); "
-            "first samples: %s",
-            csv_path.name, len(skipped_wrong_source_samples), source,
+            "[CSVSeed] %s: %d rows had wrong source (expected %r); first samples: %s",
+            csv_path.name,
+            len(skipped_wrong_source_samples),
+            source,
             skipped_wrong_source_samples[:3],
         )
     if not rows:
@@ -116,7 +130,10 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
         )
     logger.info(
         "[CSVSeed] %s: wrote %d boards (source=%s, skipped=%d)",
-        csv_path.name, len(rows), source, len(skipped_wrong_source_samples),
+        csv_path.name,
+        len(rows),
+        source,
+        len(skipped_wrong_source_samples),
     )
     return len(rows)
 
@@ -130,13 +147,17 @@ def _seed_eastmoney_board_csv(csv_path: Path) -> int:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
     for r in _open_csv(csv_path):
-        rows.append((
-            r["board_code"], r["board_name"], r["board_type"],
-            r["board_type"],   # subtype = board_type (eastmoney 唯一合法 subtype)
-            "eastmoney",       # source hardcoded
-            None,              # platecode = NULL
-            now,
-        ))
+        rows.append(
+            (
+                r["board_code"],
+                r["board_name"],
+                r["board_type"],
+                r["board_type"],  # subtype = board_type (eastmoney 唯一合法 subtype)
+                "eastmoney",  # source hardcoded
+                None,  # platecode = NULL
+                now,
+            )
+        )
     if not rows:
         logger.warning("[CSVSeed] %s: 0 rows after validation", csv_path.name)
         return 0
@@ -147,8 +168,7 @@ def _seed_eastmoney_board_csv(csv_path: Path) -> int:
                VALUES (?,?,?,?,?,?,?)""",
             rows,
         )
-    logger.info("[CSVSeed] %s: wrote %d boards (eastmoney)",
-                csv_path.name, len(rows))
+    logger.info("[CSVSeed] %s: wrote %d boards (eastmoney)", csv_path.name, len(rows))
     return len(rows)
 
 
@@ -178,14 +198,23 @@ def seed_membership_from_csv(csv_path: Path) -> int:
         if not (isinstance(code, str) and _VALID_STOCK_CODE.match(code)):
             logger.warning(
                 "[CSVSeed] %s: invalid stock_code=%r; skipped",
-                csv_path.name, code,
+                csv_path.name,
+                code,
             )
             skipped_invalid_code += 1
             continue
-        rows.append((
-            r["board_code"], code, r["source"], r["board_name"],
-            r["stock_name"], r["board_type"], r["subtype"] or "", now,
-        ))
+        rows.append(
+            (
+                r["board_code"],
+                code,
+                r["source"],
+                r["board_name"],
+                r["stock_name"],
+                r["board_type"],
+                r["subtype"] or "",
+                now,
+            )
+        )
     if not rows:
         return 0
     with conn:
@@ -196,8 +225,12 @@ def seed_membership_from_csv(csv_path: Path) -> int:
                VALUES (?,?,?,?,?,?,?,?)""",
             rows,
         )
-    logger.info("[CSVSeed] %s: wrote %d membership rows (skipped=%d)",
-                csv_path.name, len(rows), skipped_invalid_code)
+    logger.info(
+        "[CSVSeed] %s: wrote %d membership rows (skipped=%d)",
+        csv_path.name,
+        len(rows),
+        skipped_invalid_code,
+    )
     return len(rows)
 
 
@@ -213,8 +246,7 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
     """
     results: dict[str, int] = {}
     if not backup_dir.exists():
-        logger.warning("[CSVSeed] backup_dir %s does not exist; skipping all",
-                       backup_dir)
+        logger.warning("[CSVSeed] backup_dir %s does not exist; skipping all", backup_dir)
         return results
 
     ths_board = backup_dir / "stock_board_ths.csv"
@@ -222,34 +254,27 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
         try:
             results["stock_board_ths"] = seed_stock_board_from_csv("ths", ths_board)
         except ValueError as e:
-            logger.error("[CSVSeed] %s: schema error: %s; skipping",
-                         ths_board.name, e)
+            logger.error("[CSVSeed] %s: schema error: %s; skipping", ths_board.name, e)
     else:
-        logger.warning("[CSVSeed] %s not found; skipping ths stock_board seed",
-                       ths_board)
+        logger.warning("[CSVSeed] %s not found; skipping ths stock_board seed", ths_board)
 
     ths_member = backup_dir / "stock_board_membership_ths.csv"
     if ths_member.exists():
         try:
             results["stock_board_membership_ths"] = seed_membership_from_csv(ths_member)
         except ValueError as e:
-            logger.error("[CSVSeed] %s: schema error: %s; skipping",
-                         ths_member.name, e)
+            logger.error("[CSVSeed] %s: schema error: %s; skipping", ths_member.name, e)
     else:
-        logger.warning("[CSVSeed] %s not found; skipping ths membership seed",
-                       ths_member)
+        logger.warning("[CSVSeed] %s not found; skipping ths membership seed", ths_member)
 
     em_board = backup_dir / "stock_board_eastmoney.csv"
     if em_board.exists():
         try:
-            results["stock_board_eastmoney"] = seed_stock_board_from_csv(
-                "eastmoney", em_board)
+            results["stock_board_eastmoney"] = seed_stock_board_from_csv("eastmoney", em_board)
         except ValueError as e:
-            logger.error("[CSVSeed] %s: schema error: %s; skipping",
-                         em_board.name, e)
+            logger.error("[CSVSeed] %s: schema error: %s; skipping", em_board.name, e)
     else:
-        logger.warning("[CSVSeed] %s not found; skipping eastmoney stock_board seed",
-                       em_board)
+        logger.warning("[CSVSeed] %s not found; skipping eastmoney stock_board seed", em_board)
 
     return results
 

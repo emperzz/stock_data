@@ -308,7 +308,14 @@ def test_schedule_returns_task_and_sets_app_state(monkeypatch, fresh_db):
 
     monkeypatch.setattr(backfill.asyncio, "to_thread", fake_to_thread)
 
-    task = asyncio.run(backfill.schedule_ths_board_backfill_on_startup(app))
+    async def _run_and_drain():
+        # schedule_* is intentionally sync (NOT async def) — body only calls
+        # asyncio.create_task() which needs a running loop, hence the wrapper.
+        task = backfill.schedule_ths_board_backfill_on_startup(app)
+        await task  # let fake_to_thread run the sync body to completion
+        return task
+
+    task = asyncio.run(_run_and_drain())
     assert task.done()
     assert getattr(app.state, "backfill_task", None) is not None
     # The shutdown coordination primitive — set by schedule_*, read by server.py.
@@ -355,7 +362,19 @@ def test_schedule_logs_exception_via_done_callback(monkeypatch, fresh_db, caplog
     with caplog.at_level(
         logging.ERROR, logger="stock_data.data_provider.persistence.backfill"
     ):
-        asyncio.run(backfill.schedule_ths_board_backfill_on_startup(app))
+        async def _run_and_drain():
+            # schedule_* is intentionally sync (NOT async def) — see note in
+            # the schedule_smoke test above.
+            task = backfill.schedule_ths_board_backfill_on_startup(app)
+            try:
+                await task
+            except RuntimeError:
+                # We deliberately raised inside the worker to verify
+                # done_callback logs it; the await re-raises, but that's
+                # expected — the log capture is what we assert on below.
+                pass
+
+        asyncio.run(_run_and_drain())
 
     # The done_callback fires _on_done which calls logger.exception —
     # message must mention "unhandled" or "raised".
