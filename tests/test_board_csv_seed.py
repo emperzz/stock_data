@@ -79,3 +79,24 @@ def test_seed_eastmoney_3col_fills_defaults(fresh_db, tmp_path):
     assert len(concept_rows) == 1
     assert concept_rows[0]["code"] == "BK1701"
     assert concept_rows[0]["subtype"] == "concept"
+
+
+def test_seed_membership_with_valid_codes(fresh_db, tmp_path):
+    """8-col membership CSV → all rows written to stock_board_membership."""
+    csv_path = tmp_path / "stock_board_membership_ths.csv"
+    csv_path.write_text(
+        "board_code,stock_code,source,board_name,stock_name,"
+        "board_type,subtype,refreshed_at\n"
+        "885002,600519,ths,白酒,贵州茅台,concept,同花顺概念,2026-07-12 17:30:00\n"
+        "885002,000858,ths,白酒,五粮液,concept,同花顺概念,2026-07-12 17:30:00\n",
+        encoding="utf-8-sig",
+    )
+
+    n = board_csv.seed_membership_from_csv(csv_path)
+    assert n == 2
+
+    rows = board_mod.read_membership(board_code="885002", source="ths")
+    assert len(rows) == 2
+    stock_codes = {r["stock_code"] for r in rows}
+    assert stock_codes == {"600519", "000858"}
+    assert any(r["stock_name"] == "贵州茅台" for r in rows)
