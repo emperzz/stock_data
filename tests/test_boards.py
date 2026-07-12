@@ -375,6 +375,12 @@ class TestBoardsSourceUnification:
         For ``include_quote=True``, ZZSHARE is forbidden as primary
         (it carries no quote fields) — see
         ``test_board_stocks_include_quote_true_strict_ths_routing``.
+
+        ``?refresh=true`` is added to bypass the per-day refresh tracker
+        + on-disk SQLite cache (both module/singleton-scoped). Without it,
+        the route's cache-hit branch short-circuits and the manager leg
+        mocks below are never invoked. The test is asserting the two-leg
+        fallback chain, so the call site must be the cold-path branch.
         """
         from unittest.mock import MagicMock, patch
 
@@ -400,7 +406,7 @@ class TestBoardsSourceUnification:
                           return_value=0), \
              patch("stock_data.api.routes.boards.get_manager", return_value=mgr):
             response = client.get(
-                "/api/v1/boards/885642/stocks?source=ths&include_quote=false"
+                "/api/v1/boards/885642/stocks?source=ths&include_quote=false&refresh=true"
             )
         assert response.status_code == 200
         body = response.json()

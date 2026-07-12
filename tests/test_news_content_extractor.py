@@ -7,7 +7,26 @@ during spec validation (2026-06-16 playwright).
 """
 import pytest
 
+from stock_data.data_provider.utils import news_extractor
 from stock_data.data_provider.utils.news_extractor import NewsContentExtractor
+
+
+@pytest.fixture(autouse=True)
+def bypass_ssrf(monkeypatch):
+    """Disable ``_is_private_ip`` for these tests.
+
+    The extraction logic under test does NOT need real DNS — these tests
+    always pass ``html=html`` so no upstream fetch happens. The validation
+    in :func:`_validate_url` would otherwise fail on hosts that don't
+    resolve on this particular dev box (``example.com`` DNS returns
+    ``gaierror`` here), which is environment-specific noise that has
+    nothing to do with the extraction contract. SSRF protection is
+    covered separately by integration / smoke tests, not unit tests of
+    the HTML parser.
+    """
+    monkeypatch.setattr(news_extractor, "_is_private_ip", lambda host: False)
+    yield
+
 
 # ---------------------- Default handler ----------------------
 

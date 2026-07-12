@@ -491,13 +491,20 @@ def test_get_board_stocks_source_ths_passes_ths_to_persistence(client):
     way down to ``fetch_board_stocks_with_zzshare_fallback`` so that the
     helper can route to the requested fetcher without ever silently
     falling back to a sibling source.
+
+    ``?refresh=true`` forces the cold-path branch: without it, both
+    ``persistence.board._refresh_tracker`` (module-level singleton that
+    marks per-day) and the on-disk SQLite cache can short-circuit the
+    call before it ever reaches the helper under test. The test is
+    asserting that the helper IS called, so the call site must be the
+    cold-path branch.
     """
     from unittest.mock import patch
 
     from stock_data.data_provider.persistence import board as board_mod
     with patch.object(board_mod, "fetch_board_stocks_with_zzshare_fallback",
                       return_value=([], "ths", "ths", None)) as mock_fetch:
-        r = client.get("/api/v1/boards/885642/stocks?source=ths")
+        r = client.get("/api/v1/boards/885642/stocks?source=ths&refresh=true")
     assert r.status_code in (200, 404)  # empty may 404
     assert mock_fetch.call_count >= 1
     # Strict routing: the helper MUST receive source='ths'.
