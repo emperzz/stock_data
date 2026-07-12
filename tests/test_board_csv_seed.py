@@ -163,3 +163,27 @@ def test_seed_full_schema_skips_wrong_source_row(fresh_db, tmp_path, caplog):
         board_code="885002", source="ths"
     )
     assert rows == []
+
+
+def test_seed_missing_columns_raises_value_error(fresh_db, tmp_path):
+    """缺必需列 → ValueError(被 seed_all_from_backup_dir 包成 log error, 不致命)."""
+    csv_path = tmp_path / "stock_board_ths.csv"
+    csv_path.write_text(
+        "code,name,board_type,subtype,source,updated_at\n"  # missing platecode
+        "885001,煤炭,industry,同花顺行业,ths,2026-07-12 17:30:00\n",
+        encoding="utf-8-sig",
+    )
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        board_csv.seed_stock_board_from_csv("ths", csv_path)
+
+    # seed_all_from_backup_dir should swallow the ValueError (log error + skip)
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    (backup_dir / "stock_board_ths.csv").write_text(
+        csv_path.read_text(encoding="utf-8-sig"),
+        encoding="utf-8-sig",
+    )
+    results = board_csv.seed_all_from_backup_dir(backup_dir)
+    # ths board skipped due to schema error; nothing else to load
+    assert "stock_board_ths" not in results
