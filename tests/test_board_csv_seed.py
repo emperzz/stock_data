@@ -100,3 +100,66 @@ def test_seed_membership_with_valid_codes(fresh_db, tmp_path):
     stock_codes = {r["stock_code"] for r in rows}
     assert stock_codes == {"600519", "000858"}
     assert any(r["stock_name"] == "贵州茅台" for r in rows)
+
+
+def test_seed_membership_skips_invalid_stock_code(fresh_db, tmp_path, caplog):
+    """无效 stock_code (非 6 位数字) warning + skip, 其余行写入."""
+    csv_path = tmp_path / "stock_board_membership_ths.csv"
+    csv_path.write_text(
+        "board_code,stock_code,source,board_name,stock_name,"
+        "board_type,subtype,refreshed_at\n"
+        "885002,600519,ths,白酒,贵州茅台,concept,同花顺概念,2026-07-12 17:30:00\n"
+        "885002,贵州茅台,ths,白酒,五粮液,concept,同花顺概念,2026-07-12 17:30:00\n"
+        "885002,000858,ths,白酒,五粮液,concept,同花顺概念,2026-07-12 17:30:00\n",
+        encoding="utf-8-sig",
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="stock_data.data_provider.persistence.board_csv",
+    ):
+        n = board_csv.seed_membership_from_csv(csv_path)
+    assert n == 2
+    assert any(
+        "invalid stock_code" in r.message and "贵州茅台" in r.message
+        for r in caplog.records
+    ), f"expected invalid_code warning; got: {[r.message for r in caplog.records]}"
+
+
+def test_seed_full_schema_skips_wrong_source_row(fresh_db, tmp_path, caplog):
+    """CSV 里混一行 source='eastmoney' → 该行被 skip, summary warning 触发.
+
+    验证 wrong-source 行被跳过(不写入 DB)+ 一条 summary warning(不是逐行
+    warning, 避免 5000 行 spam)。
+    """
+    csv_path = tmp_path / "stock_board_ths.csv"
+    csv_path.write_text(
+        "code,name,board_type,subtype,source,platecode,updated_at\n"
+        "885001,煤炭,industry,同花顺行业,ths,881001,2026-07-12 17:30:00\n"
+        "885002,白酒,concept,同花顺概念,eastmoney,885002,2026-07-12 17:30:00\n"
+        "885003,医药,concept,同花顺概念,ths,885003,2026-07-12 17:30:00\n",
+        encoding="utf-8-sig",
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="stock_data.data_provider.persistence.board_csv",
+    ):
+        n = board_csv.seed_stock_board_from_csv("ths", csv_path)
+    assert n == 2  # only 2 rows with source='ths'
+
+    # Summary warning should mention count=1 and source='eastmoney'
+    summary_records = [
+        r for r in caplog.records
+        if "wrong source" in r.message and "1 rows" in r.message
+    ]
+    assert len(summary_records) == 1, (
+        f"expected exactly one summary warning; got: "
+        f"{[r.message for r in caplog.records]}"
+    )
+
+    # Verify the wrong-source row was NOT inserted
+    rows = board_mod.read_membership(
+        board_code="885002", source="ths"
+    )
+    assert rows == []
