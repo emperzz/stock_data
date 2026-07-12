@@ -174,6 +174,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from .db import get_connection
+from . import board as board_mod
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,7 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
         FileNotFoundError: csv_path doesn't exist.
         ValueError: schema mismatch (missing required columns).
     """
+    board_mod.init_schema()  # idempotent; safe to call before INSERT
     if not csv_path.exists():
         raise FileNotFoundError(csv_path)
 
@@ -231,22 +233,29 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
 
 def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
     """Full-schema 7-col CSV path (THS uses this)."""
+    board_mod.init_schema()  # idempotent; safe to call before INSERT
     conn = get_connection()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
-    skipped_wrong_source = 0
+    skipped_wrong_source_samples: list[str] = []
     for r in _open_csv(csv_path):
         if r["source"] != source:
-            logger.warning(
-                "[CSVSeed] %s: row source=%r != expected %r; skipped",
-                csv_path.name, r["source"], source,
+            skipped_wrong_source_samples.append(
+                f"code={r.get('code')!r} source={r['source']!r}"
             )
-            skipped_wrong_source += 1
             continue
         rows.append((
             r["code"], r["name"], r["board_type"], r["subtype"] or "",
             r["source"], r["platecode"] or None, now,
         ))
+    if skipped_wrong_source_samples:
+        # One summary warning with first 3 samples — avoids WARN spam when
+        # many rows are wrong-source.
+        logger.warning(
+            "[CSVSeed] %s: %d rows had wrong source (expected %r); first samples: %s",
+            csv_path.name, len(skipped_wrong_source_samples), source,
+            skipped_wrong_source_samples[:3],
+        )
     if not rows:
         logger.warning("[CSVSeed] %s: 0 rows after validation", csv_path.name)
         return 0
@@ -258,13 +267,14 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
             rows,
         )
     logger.info("[CSVSeed] %s: wrote %d boards (source=%s, skipped=%d)",
-                csv_path.name, len(rows), source, skipped_wrong_source)
+                csv_path.name, len(rows), source, len(skipped_wrong_source_samples))
     return len(rows)
 
 
 def _seed_eastmoney_board_csv(csv_path: Path) -> int:
     """3-col CSV path. Fills source='eastmoney', subtype=board_type,
     platecode=NULL, updated_at=NOW."""
+    board_mod.init_schema()  # idempotent; safe to call before INSERT
     _validate_csv_columns(csv_path, _EASTMONEY_COLS)
     conn = get_connection()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -304,6 +314,7 @@ def seed_membership_from_csv(csv_path: Path) -> int:
     Raises:
         FileNotFoundError, ValueError.
     """
+    board_mod.init_schema()  # idempotent; safe to call before INSERT
     if not csv_path.exists():
         raise FileNotFoundError(csv_path)
     _validate_csv_columns(csv_path, _MEMBERSHIP_COLS)
@@ -451,7 +462,7 @@ __all__ = [
 | 单个 CSV 文件不存在 (ths/eastmoney/membership) | `seed_all_from_backup_dir` 每个文件前 | log warning,跳过该文件,继续下一个 | ❌ |
 | CSV 缺少必需列 | `_validate_csv_columns` | raise ValueError → caller log error + 跳过该文件 | ❌ |
 | CSV 为空文件 (无 header) | `_validate_csv_columns` (StopIteration) | raise ValueError → 同上 | ❌ |
-| CSV 单行 `source` ≠ 期望 source (THS full-schema) | `_seed_full_schema_board_csv` 循环内 | log warning + skip 该行,继续 | ❌ |
+| CSV 单行 `source` ≠ 期望 source (THS full-schema) | `_seed_full_schema_board_csv` 循环内 | 收集样本,end-of-file 输出**一条** summary warning(带前 3 个样本)+ skip 该行,继续。避免逐行 WARN 刷屏 | ❌ |
 | CSV 单行 `stock_code` 不是 6 位数字 (membership) | `seed_membership_from_csv` 循环内 | log warning + skip 该行,继续 | ❌ |
 | CSV encoding 错误 (非 utf-8/utf-8-sig) | `open()` 直接抛 UnicodeDecodeError | 异常向上冒泡,该文件失败,其余仍跑 | ⚠️ |
 | `STOCK_DB_INIT=false` | 不调用 `seed_all_from_backup_dir` | 完全跳过 CSV 加载 | n/a |
@@ -502,7 +513,7 @@ CSV 中的 `updated_at` 是导出时刻的快照,但 loader 永远用 `datetime.
 | `stock_data/data_provider/persistence/board_csv.py` | ~150 | Python 模块,随 wheel 发布 |
 | `stock_data/stock_data_backup/stock_board_ths.csv` | ~385 行 × 7 列 ≈ 50KB | 数据备份,从当前 DB `source='ths'` 导出 |
 | `stock_data/stock_data_backup/stock_board_membership_ths.csv` | ~5000+ 行 × 8 列 ≈ 500KB | 数据备份,从当前 DB 导出 |
-| `stock_data/stock_data_backup/stock_board_eastmoney.csv` | 993 行 × 3 列 ≈ 70KB | 重命名自 `boards_akshare_name_em.csv` |
+| `stock_data/stock_data_backup/stock_board_eastmoney.csv` | 992 行 × 3 列 ≈ 31KB | 重命名自 `boards_akshare_name_em.csv` |
 | `tests/test_board_csv_seed.py` | ~250 | 单元测试 |
 
 ### 6.2 修改文件 (4 个)
@@ -529,13 +540,16 @@ CSV 中的 `updated_at` 是导出时刻的快照,但 loader 永远用 `datetime.
 *.csv
 # ... existing SQLite ignore lines ...
 
-# Repo-managed CSV seed backups (force-tracked; loader reads on STOCK_DB_INIT=true)
-!stock_data/stock_data_backup/
+# Repo-managed CSV seed backups (force-tracked; loader reads on STOCK_DB_INIT=true).
+# Negation pattern must include *.csv explicitly because gitignore rules
+# match against the full path — a bare directory negation wouldn't
+# override the project-wide *.csv exclusion above.
+!stock_data/stock_data_backup/*.csv
 ```
 
 ### 6.5 .env.example 新增段落
 
-在现有 `STOCK_DB_INIT` 和 `BOARD_BACKFILL_ON_STARTUP` 段落之间,插入:
+**在 `BOARD_BACKFILL_ON_STARTUP` 段落之后(line 125)追加**(不插入两个段落之间,避免错位):
 
 ```bash
 # === CSV seed on STOCK_DB_INIT=true ===
@@ -609,7 +623,7 @@ with open('stock_data/stock_data_backup/stock_board_membership_ths.csv', 'w',
 | 6 | `test_seed_missing_columns_raises_value_error` | 缺 `platecode` 列 → ValueError,被 caller 包成 log error 不致命 |
 | 7 | `test_seed_all_from_backup_dir_missing_dir` | `backup_dir` 不存在 → 返回空 dict,log warning |
 | 8 | `test_seed_all_from_backup_dir_missing_files` | 目录存在但 3 个文件全缺 → 每个都 warning,返回空 dict |
-| 9 | `test_seed_all_from_backup_dir_partial_files` | 只有 ths board 在 → 返回 `{'stock_board_ths': N}`,其余 warning |
+| 9 | `test_seed_all_from_backup_dir_partial_files` | 只有 ths board 在 → 返回 `{'stock_board_ths': N}`,**且 `stock_board_membership_ths` 和 `stock_board_eastmoney` 这两个 key 不在结果 dict 里**(§5.2.5: missing entries are absent, NOT present-with-zero) |
 | 10 | `test_seed_idempotent_re_run` | 同 CSV 跑两次 → 行数不变(INSERT OR REPLACE) |
 
 ### 7.3 测试风格参考
@@ -627,7 +641,10 @@ def fresh_db(tmp_path, monkeypatch):
 
 
 def test_seed_eastmoney_3col_fills_defaults(fresh_db, tmp_path):
-    """3 列 eastmoney CSV: source/subtype/platecode 由 loader 填充。"""
+    """3 列 eastmoney CSV: source/subtype/platecode 由 loader 填充。
+
+    同时验证 industry 和 concept 两类行都被正确处理(subtype=board_type)。
+    """
     csv_path = tmp_path / "stock_board_eastmoney.csv"
     csv_path.write_text(
         "board_type,board_code,board_name\n"
@@ -639,12 +656,18 @@ def test_seed_eastmoney_3col_fills_defaults(fresh_db, tmp_path):
     n = board_csv.seed_stock_board_from_csv("eastmoney", csv_path)
     assert n == 2
 
-    rows = board_mod._read_boards_from_db("industry", "eastmoney")
-    assert len(rows) == 1
-    assert rows[0]["code"] == "BK1627"
-    assert rows[0]["subtype"] == "industry"   # subtype = board_type
-    assert rows[0]["platecode"] is None      # eastmoney 没有 platecode
-    assert rows[0]["source"] == "eastmoney"
+    industry_rows = board_mod._read_boards_from_db("industry", "eastmoney")
+    assert len(industry_rows) == 1
+    assert industry_rows[0]["code"] == "BK1627"
+    assert industry_rows[0]["subtype"] == "industry"   # subtype = board_type
+    assert industry_rows[0]["platecode"] is None       # eastmoney 没有 platecode
+    assert industry_rows[0]["source"] == "eastmoney"
+
+    # concept 行也必须正确写入(否则只验了 industry 一半覆盖)
+    concept_rows = board_mod._read_boards_from_db("concept", "eastmoney")
+    assert len(concept_rows) == 1
+    assert concept_rows[0]["code"] == "BK1701"
+    assert concept_rows[0]["subtype"] == "concept"
 
 
 def test_seed_membership_skips_invalid_stock_code(fresh_db, tmp_path, caplog):
