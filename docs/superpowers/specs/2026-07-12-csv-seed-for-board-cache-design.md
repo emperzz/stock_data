@@ -3,7 +3,7 @@
 > 日期: 2026-07-12
 > 范围: 在 `STOCK_DB_INIT=true` 时,从 `stock_data_backup/` 加载 CSV 备份到 `stock_board` 和 `stock_board_membership`,与 `BOARD_BACKFILL_ON_STARTUP=true` 的上游 backfill 解耦
 > 性质: **persistence 层 + lifespan startup + 文件结构**。零 fetcher 侵入,零 capability 改动
-> 状态: 已通过 brainstorming,§1-§6 全部 approved
+> 状态: 已通过 brainstorming,§1-§6 全部 approved(§7 测试策略 + §8 开放问题由 spec doc 自行扩展)
 
 ---
 
