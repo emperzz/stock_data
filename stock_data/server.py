@@ -59,6 +59,20 @@ async def lifespan(app: FastAPI):
             "tables. All previously cached metadata will be lost."
         )
         persistence.reset_all()
+
+        # ----- CSV seed from stock_data_backup/ (opt-out via missing files) -----
+        # When STOCK_DB_INIT=true, after reset_all() the tables are empty. Re-seed
+        # from the repo-managed CSV backups so the server has data immediately,
+        # without paying the ~17min upstream backfill cost. If
+        # BOARD_BACKFILL_ON_STARTUP=true also fires below, the upstream refresh
+        # will overwrite the CSV data shortly after.
+        from pathlib import Path
+        backup_dir = Path(__file__).parent / "stock_data_backup"
+        seed_results = persistence.seed_all_from_backup_dir(backup_dir)
+        if seed_results:
+            logger.info("[Startup] CSV seed complete: %s", seed_results)
+        else:
+            logger.info("[Startup] CSV seed skipped (no files in %s)", backup_dir)
     else:
         persistence.init_schema()
         logger.info("[Startup] Persistence schema ensured (STOCK_DB_INIT=false)")
