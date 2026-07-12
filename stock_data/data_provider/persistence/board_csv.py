@@ -66,9 +66,9 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
         FileNotFoundError: csv_path doesn't exist.
         ValueError: schema mismatch (missing required columns).
     """
-    board_mod.init_schema()  # idempotent; safe to call before INSERT
     if not csv_path.exists():
         raise FileNotFoundError(csv_path)
+    board_mod.init_schema()  # idempotent; safe to call before INSERT
 
     if source == "eastmoney":
         return _seed_eastmoney_board_csv(csv_path)
@@ -138,6 +138,7 @@ def _seed_eastmoney_board_csv(csv_path: Path) -> int:
             now,
         ))
     if not rows:
+        logger.warning("[CSVSeed] %s: 0 rows after validation", csv_path.name)
         return 0
     with conn:
         conn.executemany(
@@ -163,9 +164,9 @@ def seed_membership_from_csv(csv_path: Path) -> int:
     Raises:
         FileNotFoundError, ValueError.
     """
-    board_mod.init_schema()
     if not csv_path.exists():
         raise FileNotFoundError(csv_path)
+    board_mod.init_schema()
     _validate_csv_columns(csv_path, _MEMBERSHIP_COLS)
 
     conn = get_connection()
