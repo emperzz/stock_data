@@ -236,3 +236,27 @@ def test_seed_all_from_backup_dir_partial_files(fresh_db, tmp_path):
     # Explicitly assert the other two keys are absent (not present-with-zero)
     assert "stock_board_membership_ths" not in results
     assert "stock_board_eastmoney" not in results
+
+
+def test_seed_idempotent_re_run(fresh_db, tmp_path):
+    """同 CSV 跑两次 → 行数不变 (INSERT OR REPLACE)."""
+    csv_path = tmp_path / "stock_board_ths.csv"
+    csv_path.write_text(
+        "code,name,board_type,subtype,source,platecode,updated_at\n"
+        "885001,煤炭,industry,同花顺行业,ths,881001,2026-07-12 17:30:00\n"
+        "885002,白酒,concept,同花顺概念,ths,885002,2026-07-12 17:30:00\n",
+        encoding="utf-8-sig",
+    )
+
+    n1 = board_csv.seed_stock_board_from_csv("ths", csv_path)
+    rows_after_first = board_mod._read_boards_from_db("industry", "ths")
+    rows_after_first += board_mod._read_boards_from_db("concept", "ths")
+    first_count = len(rows_after_first)
+
+    n2 = board_csv.seed_stock_board_from_csv("ths", csv_path)
+    rows_after_second = board_mod._read_boards_from_db("industry", "ths")
+    rows_after_second += board_mod._read_boards_from_db("concept", "ths")
+    second_count = len(rows_after_second)
+
+    assert n1 == 2 and n2 == 2
+    assert first_count == second_count == 2
