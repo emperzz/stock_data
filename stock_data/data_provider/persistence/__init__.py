@@ -11,7 +11,7 @@ Public top-level API (called by server.py lifespan):
 The `STOCK_DB_INIT` env var on server startup decides which one runs.
 """
 
-from . import board, pool_daily, stock_list, trade_calendar
+from . import board, board_csv, pool_daily, stock_list, trade_calendar
 
 # board CRUD
 from .board import (
@@ -20,6 +20,7 @@ from .board import (
     update_cached_board_stocks,
     update_cached_boards,
 )
+from .board_csv import seed_all_from_backup_dir
 from .db import get_connection, get_db_path
 
 # pool_daily CRUD (unified table replacing cache's 3 tables)
@@ -50,6 +51,7 @@ from .trade_calendar import (
 __all__ = [
     # Submodules
     "board",
+    "board_csv",
     "pool_daily",
     "stock_list",
     "trade_calendar",
@@ -75,6 +77,8 @@ __all__ = [
     "get_board_stocks",
     "update_cached_boards",
     "update_cached_board_stocks",
+    # Board CSV seed (cold-path bootstrap from on-disk CSV files)
+    "seed_all_from_backup_dir",
     # Pool daily CRUD
     "get_pool_cached",
     "save_pool",
