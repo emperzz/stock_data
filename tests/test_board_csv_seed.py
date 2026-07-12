@@ -187,3 +187,52 @@ def test_seed_missing_columns_raises_value_error(fresh_db, tmp_path):
     results = board_csv.seed_all_from_backup_dir(backup_dir)
     # ths board skipped due to schema error; nothing else to load
     assert "stock_board_ths" not in results
+
+
+def test_seed_all_from_backup_dir_missing_dir(tmp_path, caplog):
+    """backup_dir 不存在 → 返回空 dict, log warning."""
+    missing = tmp_path / "does_not_exist"
+    with caplog.at_level(
+        logging.WARNING,
+        logger="stock_data.data_provider.persistence.board_csv",
+    ):
+        results = board_csv.seed_all_from_backup_dir(missing)
+    assert results == {}
+    assert any("does not exist" in r.message for r in caplog.records)
+
+
+def test_seed_all_from_backup_dir_missing_files(tmp_path, caplog):
+    """目录存在但 3 个文件全缺 → 每个都 warning, 返回空 dict."""
+    empty_dir = tmp_path / "empty_backup"
+    empty_dir.mkdir()
+    with caplog.at_level(
+        logging.WARNING,
+        logger="stock_data.data_provider.persistence.board_csv",
+    ):
+        results = board_csv.seed_all_from_backup_dir(empty_dir)
+    assert results == {}
+    not_found_warnings = [
+        r for r in caplog.records if "not found" in r.message
+    ]
+    assert len(not_found_warnings) == 3
+
+
+def test_seed_all_from_backup_dir_partial_files(fresh_db, tmp_path):
+    """只有 ths board 在 → 返回 {'stock_board_ths': N}, 其余 key 不在 dict 里.
+
+    关键: missing entries are absent (NOT present-with-zero) — spec §5.2.5
+    """
+    backup_dir = tmp_path / "partial_backup"
+    backup_dir.mkdir()
+    (backup_dir / "stock_board_ths.csv").write_text(
+        "code,name,board_type,subtype,source,platecode,updated_at\n"
+        "885001,煤炭,industry,同花顺行业,ths,881001,2026-07-12 17:30:00\n",
+        encoding="utf-8-sig",
+    )
+    # membership + eastmoney files intentionally absent
+
+    results = board_csv.seed_all_from_backup_dir(backup_dir)
+    assert results == {"stock_board_ths": 1}
+    # Explicitly assert the other two keys are absent (not present-with-zero)
+    assert "stock_board_membership_ths" not in results
+    assert "stock_board_eastmoney" not in results
