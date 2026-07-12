@@ -86,6 +86,7 @@ __all__ = [
     "get_pool_count",
 ]
 
+
 def init_schema() -> None:
     """Idempotently create all tables (CREATE TABLE IF NOT EXISTS). Safe to call on every startup."""
     stock_list.init_schema()
@@ -117,8 +118,7 @@ def reset_all() -> None:
     conn = get_connection()
     with conn:
         rows = conn.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
         for (name,) in rows:
             conn.execute(f"DROP TABLE IF EXISTS {name}")

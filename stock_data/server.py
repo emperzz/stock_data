@@ -67,6 +67,7 @@ async def lifespan(app: FastAPI):
         # BOARD_BACKFILL_ON_STARTUP=true also fires below, the upstream refresh
         # will overwrite the CSV data shortly after.
         from pathlib import Path
+
         backup_dir = Path(__file__).parent / "stock_data_backup"
         seed_results = persistence.seed_all_from_backup_dir(backup_dir)
         if seed_results:
@@ -110,10 +111,13 @@ async def lifespan(app: FastAPI):
         from .data_provider.persistence.backfill import (
             schedule_ths_board_backfill_on_startup,
         )
+
         schedule_ths_board_backfill_on_startup(app)
         logger.info("[Startup] THS board backfill scheduled (BOARD_BACKFILL_ON_STARTUP=true)")
     else:
-        logger.info("[Startup] THS board backfill skipped (set BOARD_BACKFILL_ON_STARTUP=true to enable)")
+        logger.info(
+            "[Startup] THS board backfill skipped (set BOARD_BACKFILL_ON_STARTUP=true to enable)"
+        )
 
     yield
 
@@ -133,9 +137,7 @@ async def lifespan(app: FastAPI):
         try:
             await backfill_task
         except (asyncio.CancelledError, Exception) as e:
-            logger.info(
-                f"[Shutdown] THS board backfill task ended ({type(e).__name__})"
-            )
+            logger.info(f"[Shutdown] THS board backfill task ended ({type(e).__name__})")
     if hasattr(app.state, "backfill_task"):
         del app.state.backfill_task
     if hasattr(app.state, "backfill_cancel"):
