@@ -48,3 +48,34 @@ def test_seed_stock_board_ths_full_schema(fresh_db, tmp_path):
     concept_rows = board_mod._read_boards_from_db("concept", "ths")
     assert len(concept_rows) == 1
     assert concept_rows[0]["code"] == "885002"
+
+
+def test_seed_eastmoney_3col_fills_defaults(fresh_db, tmp_path):
+    """3-col eastmoney CSV: source/subtype/platecode 由 loader 填充.
+
+    Verifies both industry AND concept rows are written correctly
+    (not just industry — avoids half-coverage regression).
+    """
+    csv_path = tmp_path / "stock_board_eastmoney.csv"
+    csv_path.write_text(
+        "board_type,board_code,board_name\n"
+        "industry,BK1627,综合Ⅲ\n"
+        "concept,BK1701,融资融券\n",
+        encoding="utf-8-sig",
+    )
+
+    n = board_csv.seed_stock_board_from_csv("eastmoney", csv_path)
+    assert n == 2
+
+    industry_rows = board_mod._read_boards_from_db("industry", "eastmoney")
+    assert len(industry_rows) == 1
+    assert industry_rows[0]["code"] == "BK1627"
+    assert industry_rows[0]["subtype"] == "industry"
+    assert industry_rows[0]["platecode"] is None
+    assert industry_rows[0]["source"] == "eastmoney"
+
+    # concept 行也必须正确写入(否则只验了 industry 一半覆盖)
+    concept_rows = board_mod._read_boards_from_db("concept", "eastmoney")
+    assert len(concept_rows) == 1
+    assert concept_rows[0]["code"] == "BK1701"
+    assert concept_rows[0]["subtype"] == "concept"
