@@ -98,6 +98,12 @@ worktrees/
 /stock_data/stock_cache.db-shm
 /stock_data/stock_cache.db-wal
 
+# Repo-managed CSV seed backups (force-tracked; loader reads on STOCK_DB_INIT=true).
+# Negation pattern includes *.csv explicitly because gitignore rules match
+# against the full path — a bare directory negation wouldn't override the
+# project-wide *.csv exclusion above.
+!stock_data/stock_data_backup/*.csv
+
 # Playwright MCP browser session caches
 .playwright-mcp/
 
