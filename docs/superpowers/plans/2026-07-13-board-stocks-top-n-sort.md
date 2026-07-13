@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Extend `GET /boards/{board_code}/stocks` with `?sort_by`, `?sort_order`, `?top_n` query params. THS upstream already supports all 11 of these sort fields via its `field/<column_code>/order/<dir>/` URL pattern (probed 2026-07-13 against board 301546 / 央企国企改革). When the upstream's 50-stock login wall truncates results, automatically fill in the missing members via ZZSHARE (no quote fields).
+**Goal:** Extend `GET /boards/{board_code}/stocks` with `?sort_by`, `?sort_order`, `?top_n` query params. THS upstream already supports all 11 of these sort fields via its `field/<column_code>/order/<dir>/` URL pattern (probed 2026-07-13 against board 301085 / 芯片概念). When the upstream's 50-stock login wall truncates results, automatically fill in the missing members via ZZSHARE (no quote fields).
 
 **Architecture:** 8 layered commits (A→H). Schema `BoardStockInfo` grows by 6 fields (THS 14-column parser currently ignores idx 6/8/9/11/12/13). Schema `BoardStocksResponse` grows by 5 echo fields. THS fetcher gets a sort-field code map + new kwargs. `DataFetcherManager.get_board_stocks` grows 3 keyword-only kwargs and forwards them. Route layer adds cross-validation that mirror sibling `/boards` UX. Persistence layer wraps `fetch_board_stocks_with_zzshare_fallback` with a 50-stock heuristic that triggers a single ZZSHARE membership fill-in. Each commit is independently revertable.
 
@@ -24,7 +24,7 @@
 | 6 | `stock_data/CLAUDE.md` | Modify | Document 11 sortable fields + persistence backfill policy |
 | 7 | `tests/test_ths_fetcher.py` | Modify | Add 8 new tests for sort/top_n/parse |
 | 8 | `tests/test_boards_api.py` | Modify | Add 7 new tests for route validation + truncation semantics |
-| 9 | `tests/fixtures/ths_board_301546_page1.html` | Create | Offline HTML fixture: real upstream page-1 body for board 301546 |
+| 9 | `tests/fixtures/ths_board_301085_page1.html` | Create | Offline HTML fixture: real upstream page-1 body for board 301085 |
 
 **Dependency order** (compile-time safety): A → B → C → D → E → F. Commits G+H land last. D before F (manager must forward kwargs before persistence uses them).
 
@@ -182,10 +182,10 @@ class TestBoardStocksUrlTemplate:
             _BOARD_STOCKS_URL_TEMPLATE,
         )
         url = _BOARD_STOCKS_URL_TEMPLATE.format(
-            concept_id="301546", field_code="10", order="desc", page=1
+            concept_id="301085", field_code="10", order="desc", page=1
         )
         assert url == (
-            "https://q.10jqka.com.cn/gn/detail/code/301546"
+            "https://q.10jqka.com.cn/gn/detail/code/301085"
             "/field/10/order/desc/page/1/ajax/1/"
         )
 ```
@@ -270,7 +270,7 @@ class TestGetBoardStocksTopNAndSort:
         fetcher = self._board_stocks_test_target()
         with pytest.raises(DataFetchError, match="sort_by='p_e'"):
             fetcher.get_board_stocks(
-                board_code="301546", top_n=10, sort_by="p_e", sort_order="desc",
+                board_code="301085", top_n=10, sort_by="p_e", sort_order="desc",
             )
 
     def test_get_board_stocks_rejects_invalid_sort_order(self):
@@ -278,7 +278,7 @@ class TestGetBoardStocksTopNAndSort:
         fetcher = self._board_stocks_test_target()
         with pytest.raises(DataFetchError, match="sort_order='random'"):
             fetcher.get_board_stocks(
-                board_code="301546", top_n=10, sort_by="change_pct", sort_order="random",
+                board_code="301085", top_n=10, sort_by="change_pct", sort_order="random",
             )
 
     def test_get_board_stocks_top_n_clamped_to_50(self):
@@ -287,7 +287,7 @@ class TestGetBoardStocksTopNAndSort:
         # 间接通过 mock 验证: top_n=200 时内部只翻 ceil(50/10)+1=6 页.
         with patch.object(fetcher, "_fetch_ths_board_stocks_page", return_value=[]) as mock_page:
             fetcher.get_board_stocks(
-                board_code="301546", top_n=200, sort_by="change_pct", sort_order="desc",
+                board_code="301085", top_n=200, sort_by="change_pct", sort_order="desc",
             )
         # _MAX_BOARD_STOCKS_PAGES=50 是 hard cap, top_n=200 应被 clamp 到 50 → ceil(50/10)+2=7 page attempts.
         # 注意计划用 +2 buffer: max_pages = ceil(top_n/10) + 1
@@ -301,7 +301,7 @@ class TestGetBoardStocksTopNAndSort:
             mock_get.return_value.text = "<table></table>"
             mock_get.return_value.status_code = 200
             fetcher._fetch_ths_board_stocks_page(
-                "301546", 1, field_code="10", order="desc",
+                "301085", 1, field_code="10", order="desc",
             )
             called_url = mock_get.call_args[0][0]
             assert "field/10/" in called_url
@@ -328,7 +328,7 @@ def _fetch_ths_board_stocks_page(
     """Fetch one page of THS board stocks (10 rows per page).
 
     Args:
-        concept_id: THS concept slug (e.g. "301546").
+        concept_id: THS concept slug (e.g. "301085").
         page: Page number (1-based).
         field_code: THS upstream column code for sort key.
             Defaults to "199112" (change_pct desc). 2026-07-13 probe
@@ -662,7 +662,7 @@ def test_manager_forwards_sort_kwargs_to_ths_fetcher():
         fake_ths_fetcher.name,
     )) as mock_with_source:
         manager.get_board_stocks(
-            board_code="885595", source="ths", include_quote=True,
+            board_code="885756", source="ths", include_quote=True,
             sort_by="price", sort_order="asc", top_n=10,
         )
         # 找到 call 闭包并取出 kwargs.
@@ -805,7 +805,7 @@ def test_persistence_get_board_stocks_returns_6_tuple():
                       return_value=(fake_ths_response, "ths", "ths", None)), \
          patch.object(stock_board_cache, "update_cached_board_stocks", return_value=1):
         result = stock_board_cache.get_board_stocks(
-            board_code="885595", source="ths", refresh=True,
+            board_code="885756", source="ths", refresh=True,
             include_quote=True, manager=manager,
             sort_by="change_pct", sort_order="desc", top_n=10,
         )
@@ -839,7 +839,7 @@ def test_heuristic_triggers_zzshare_when_ths_returns_50():
                       return_value=(zz_suffix, "zzshare")) as mock_zz, \
          patch.object(stock_board_cache, "update_cached_board_stocks", return_value=60):
         result = stock_board_cache.get_board_stocks(
-            board_code="885595", source="ths", refresh=True,
+            board_code="885756", source="ths", refresh=True,
             include_quote=True, manager=manager,
             sort_by="change_pct", sort_order="desc", top_n=50,
         )
@@ -866,7 +866,7 @@ def test_heuristic_short_circuit_when_ths_below_50():
          patch.object(manager, "get_board_stocks") as mock_zz, \
          patch.object(stock_board_cache, "update_cached_board_stocks", return_value=30):
         result = stock_board_cache.get_board_stocks(
-            board_code="885595", source="ths", refresh=True,
+            board_code="885756", source="ths", refresh=True,
             include_quote=True, manager=manager,
             sort_by="change_pct", sort_order="desc", top_n=50,
         )
@@ -1122,7 +1122,7 @@ class TestBoardStocksTopNAndSort:
            return_value=([], "persistence", "ths", None, False, 0))
     def test_default_request_no_new_fields(self, mock_pers):
         """不传 sort/top_n 时 response 行为不变 (quote_* echo 全部 None)."""
-        r = client.get("/api/v1/boards/885595/stocks?source=ths")
+        r = client.get("/api/v1/boards/885756/stocks?source=ths")
         assert r.status_code == 200
         body = r.json()
         assert body["quote_truncated"] is False
@@ -1137,7 +1137,7 @@ class TestBoardStocksTopNAndSort:
     def test_sort_by_echoed_back(self, mock_pers):
         """?sort_by=price 返回时 echo 回 quote_sort_by."""
         r = client.get(
-            "/api/v1/boards/885595/stocks?source=ths&include_quote=true&"
+            "/api/v1/boards/885756/stocks?source=ths&include_quote=true&"
             "sort_by=price&sort_order=asc&top_n=10"
         )
         assert r.status_code == 200
@@ -1150,7 +1150,7 @@ class TestBoardStocksTopNAndSort:
     def test_sort_by_with_non_ths_source_returns_400(self):
         """source='eastmoney' + sort_by=price → 400 invalid_combination (route cross-validation)."""
         r = client.get(
-            "/api/v1/boards/885595/stocks?source=eastmoney&include_quote=true"
+            "/api/v1/boards/885756/stocks?source=eastmoney&include_quote=true"
             "&sort_by=price"
         )
         assert r.status_code == 400
@@ -1163,7 +1163,7 @@ class TestBoardStocksTopNAndSort:
     def test_sort_by_without_include_quote_returns_400(self):
         """?sort_by=price 不带 include_quote=true → 400 (与 /boards sibling 一致)."""
         r = client.get(
-            "/api/v1/boards/885595/stocks?source=ths"
+            "/api/v1/boards/885756/stocks?source=ths"
             "&sort_by=price"
         )
         assert r.status_code == 400
@@ -1173,14 +1173,14 @@ class TestBoardStocksTopNAndSort:
     def test_top_n_above_50_returns_422(self):
         """Query(le=50) → FastAPI 自带 422 validation."""
         r = client.get(
-            "/api/v1/boards/885595/stocks?source=ths&include_quote=true&top_n=100"
+            "/api/v1/boards/885756/stocks?source=ths&include_quote=true&top_n=100"
         )
         assert r.status_code == 422
 
     def test_sort_by_invalid_literal_returns_422(self):
         """Literal[...] 校验 → 422."""
         r = client.get(
-            "/api/v1/boards/885595/stocks?source=ths&include_quote=true"
+            "/api/v1/boards/885756/stocks?source=ths&include_quote=true"
             "&sort_by=magic"
         )
         assert r.status_code == 422
@@ -1382,27 +1382,27 @@ Persistence 调用从 4-tuple 升 6-tuple; source 同步透传 sort/top_n.
 ## Task 8: Tests — fixture + integration coverage (Commit G)
 
 **Files:**
-- Create: `tests/fixtures/ths_board_301546_page1.html`
+- Create: `tests/fixtures/ths_board_301085_page1.html`
 - Create: `tests/test_boards_stocks_truncation_integration.py`
 
 - [ ] **Step 8.1: Create offline fixture**
 
-Capture a real upstream page-1 HTML for board 301546 and save as `tests/fixtures/ths_board_301546_page1.html`:
+Capture a real upstream page-1 HTML for board 301085 and save as `tests/fixtures/ths_board_301085_page1.html`:
 
 ```bash
 # Once: capture real upstream (live_network mark — single shot)
 python -c "
 import requests
 r = requests.get(
-    'https://q.10jqka.com.cn/gn/detail/code/301546/field/199112/order/desc/page/1/ajax/1/',
+    'https://q.10jqka.com.cn/gn/detail/code/301085/field/199112/order/desc/page/1/ajax/1/',
     headers={'User-Agent': 'Mozilla/5.0 Windows NT 10.0; Win64 Chrome/117.0.0.0',
-             'Referer': 'https://q.10jqka.com.cn/gn/detail/code/301546/',
+             'Referer': 'https://q.10jqka.com.cn/gn/detail/code/301085/',
              'X-Requested-With': 'XMLHttpRequest'},
     timeout=10,
 )
 r.encoding = 'gbk'
 import pathlib
-pathlib.Path('tests/fixtures/ths_board_301546_page1.html').write_text(r.text, encoding='gbk')
+pathlib.Path('tests/fixtures/ths_board_301085_page1.html').write_text(r.text, encoding='gbk')
 "
 ```
 
@@ -1422,7 +1422,7 @@ import pytest
 from stock_data.api.routes import reset_manager
 
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ths_board_301546_page1.html"
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ths_board_301085_page1.html"
 
 
 @pytest.fixture(autouse=True)
@@ -1455,7 +1455,7 @@ def test_integration_top_n_10_with_real_fixture():
         mock_get.return_value.content = fake_html.encode("gbk")
 
         rows = fetcher.get_board_stocks(
-            board_code="301546", top_n=10,
+            board_code="301085", top_n=10,
             sort_by="change_pct", sort_order="desc",
         )
 
@@ -1487,7 +1487,7 @@ def test_integration_top_n_3_truncates_after_first_page():
         mock_get.return_value.content = fake_html.encode("gbk")
 
         rows = fetcher.get_board_stocks(
-            board_code="301546", top_n=3,
+            board_code="301085", top_n=3,
             sort_by="change_pct", sort_order="desc",
         )
 
@@ -1513,7 +1513,7 @@ Expected: All pass (default skip live_network)
 Run: `ruff check .`
 Expected: No new issues
 
-- [ ] **Step 8.6: Run live_network smoke test (one-shot, 302546真实)**
+- [ ] **Step 8.6: Run live_network smoke test (one-shot, 301085真实)**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_boards_stocks_truncation_integration.py -m live_network -v --runxfail`
 Expected: `test_integration_top_n_10_with_real_fixture` and `test_integration_top_n_3_truncates_after_first_page` PASS or XFAIL (CI / upstream occasionally flaky)
@@ -1521,10 +1521,10 @@ Expected: `test_integration_top_n_10_with_real_fixture` and `test_integration_to
 - [ ] **Step 8.7: Commit**
 
 ```bash
-git add tests/fixtures/ths_board_301546_page1.html tests/test_boards_stocks_truncation_integration.py
+git add tests/fixtures/ths_board_301085_page1.html tests/test_boards_stocks_truncation_integration.py
 git commit -m "test(boards): real-upstream fixture + integration coverage for top_n path
 
-tests/fixtures/ths_board_301546_page1.html: 10 行真实 upstream HTML
+tests/fixtures/ths_board_301085_page1.html: 10 行真实 upstream HTML
 (实测于 2026-07-13, 14 列 GBK 编码). 供离线 fast feedback 测试用.
 
 tests/test_boards_stocks_truncation_integration.py 3 个测试:

@@ -4,7 +4,7 @@
 > 范围: `/boards/{board_code}/stocks` 端点 + `ThsFetcher.get_board_stocks` + `BoardStockInfo` schema
 > 性质: **feature** —— 解决 THS 上游 50-stock hard cap + 暴露全部 11 个排序键 + 持久化层补全
 > 关联 commit: 紧跟 `46ff6cb`（暴露 `amount`）和 2026-07-05 的 `change_amount` / `turnover_rate` 半修复
-> 设计来源: 本会话 playwright 实测 THS 上游（302546 央企国企改革 / 板内 400 只成分股）
+> 设计来源: 本会话 playwright 实测 THS 上游（301085 芯片概念 / 板内 400 只成分股）
 
 ---
 
@@ -24,7 +24,7 @@
     `2034120`=市盈率、`3475914`=流通市值
 - 我之前的结论（只支持涨跌幅排序）是错的 —— 我误把 `field/199112` 当作"14 列字段集标识符"。它是涨跌幅的列代码。
 - page 6+ 的 50 只 hard cap **与排序字段无关**：任何排序键，page 6+ 都返回 `<script>location.href=login` 的 JS stub（session 200，无 401/403）。
-- 板块 301546 央企国企改革（platecode 885595）实测有 **400 只成分股**（40 页 × 10/页），远超 50。
+- 板块 301085 芯片概念（platecode 885756）实测有 **400 只成分股**（40 页 × 10/页），远超 50。
 - 当前 `ThsFetcher.get_board_stocks` 翻页硬 cap 是 `_MAX_BOARD_STOCKS_PAGES = 50`（= 500 attempts），实际大多被 upstream login wall 在 page 6 截断。client 不传 sort_by 时只拿到前 50 by 涨跌幅 desc，**无任何告警**。
 - 当前 `include_quote=false` 路径走 ZZSHARE primary + THS fallback，能拿到全 400 只成员（无 quote 字段）。
 - 当前 `BoardStockInfo` schema 只有 7 个 quote 字段（price/change_pct/change_amount/volume/amount/turnover_rate），6 个新字段（volume_ratio / amplitude / change_speed / pe_ratio / float_market_cap / free_float_shares）虽然上游有产但 schema 边界吞掉（类似 2026-07-05 的 "half-fix"）。
@@ -276,7 +276,7 @@ _BOARD_STOCKS_URL_TEMPLATE = (
 )
 
 # THS 上游列代码（来自页面 <th a field="...">）→ python attr 名字
-# Field code 来源：实测 browser 抓 301546 概念详情页 <th a field="...">
+# Field code 来源：实测 browser 抓 301085 概念详情页 <th a field="...">
 # 2026-07-13 playwright probe.
 _THS_BOARD_STOCKS_SORT_FIELD_MAP: dict[str, str] = {
     "change_pct":        "199112",   # 涨跌幅(%)
@@ -416,7 +416,7 @@ def _fetch_ths_board_stocks_page(
     """Fetch one page of THS board stocks (10 rows per page).
 
     Args:
-        concept_id: THS concept slug (e.g. "301546").
+        concept_id: THS concept slug (e.g. "301085").
         page: Page number (1-based).
         field_code: THS upstream column code for sort key.
             Defaults to "199112" (change_pct). 2026-07-13 probe
@@ -601,7 +601,7 @@ return final_stocks, origin, es, reason, quote_truncated, cached_count
 | 30 | 30 | ❌ 不调用 | 0 | False | 30 | 30 (THS, 全带 quote, 已在 sort 序) |
 | 50 | 50 | ✅ 调用 | 0 (50 = 50) | True（保守） | 50 | 50（全带 quote） |
 | 60 | 50 | ✅ 调用 | 10 | True | 60 | 50 (THS, sort 序) + 10 (ZZSHARE, 无序) |
-| 400（302546） | 50 | ✅ 调用 | 350 | True | 400 | 50 (THS, sort 序) + 350 (ZZSHARE, 无序) |
+| 400（301085） | 50 | ✅ 调用 | 350 | True | 400 | 50 (THS, sort 序) + 350 (ZZSHARE, 无序) |
 | cold + ZZSHARE 失败 | 50 | ❌ 失败 | 0 | True（保守） | cached_count | 50 (THS, sort 序) |
 
 **关键不变量**：
@@ -704,7 +704,7 @@ route query param → persistence.get_board_stocks(**)         接受 sort_by/so
                 → (_fetch_ths_board_stocks_page uses field_code/order)
 ```
 
-**cid 解析位置（INFO from review）**：`fetch_board_stocks_with_zzshare_fallback` 在 `source='ths'` 分支内部**自己**调 `_resolve_ths_cid_from_platecode(board_code)`（`persistence/board.py:816`），把 THS concept id (如 `301546`) 解析出来再传给 manager。Route 层永远只看公开 platecode (`885595`)，cid 是持久化层的事。Spec 4.1 数据流示例里写的 `board_code="301546"` 仅用于说明 manager-level 调用；实际入参是 platecode。
+**cid 解析位置（INFO from review）**：`fetch_board_stocks_with_zzshare_fallback` 在 `source='ths'` 分支内部**自己**调 `_resolve_ths_cid_from_platecode(board_code)`（`persistence/board.py:816`），把 THS concept id (如 `301085`) 解析出来再传给 manager。Route 层永远只看公开 platecode (`885756`)，cid 是持久化层的事。Spec 4.1 数据流示例里写的 `board_code="301085"` 仅用于说明 manager-level 调用；实际入参是 platecode。
 
 ---
 
@@ -764,32 +764,32 @@ class TestBoardStocksTopN:
 
 #### 3.5.3 fixture 新增
 
-`tests/fixtures/ths_board_301546_page1.html` —— 抓取 page 1 的真实 HTML（10 行）作为离线 fixture，已实测确认数据 row 数与列结构稳定。
+`tests/fixtures/ths_board_301085_page1.html` —— 抓取 page 1 的真实 HTML（10 行）作为离线 fixture，已实测确认数据 row 数与列结构稳定。
 
 ---
 
 ## 4. 数据流（端到端）
 
-### 4.1 完整请求流（include_quote=True, sort_by=change_pct, top_n=10, board=302546）
+### 4.1 完整请求流（include_quote=True, sort_by=change_pct, top_n=10, board=301085）
 
 ```
-client → GET /boards/885595/stocks?source=ths&include_quote=true
+client → GET /boards/885756/stocks?source=ths&include_quote=true
                   &sort_by=change_pct&sort_order=desc&top_n=10
 
 routes/boards.py:get_board_stocks
   ├─ Literal checks: sort_by, sort_order, top_n (Top_n Query(le=50) → may 422)
   ├─ persistence.board.get_board_stocks(
-  │     board_code="885595", source="ths",
+  │     board_code="885756", source="ths",
   │     include_quote=True,
   │     sort_by="change_pct", sort_order="desc", top_n=10,
   │   )
-  │   ├─ _read_board_stocks_from_db("885595", "ths") → cached_count=400 (warm cache)
+  │   ├─ _read_board_stocks_from_db("885756", "ths") → cached_count=400 (warm cache)
   │   ├─ fetch_board_stocks_with_zzshare_fallback(
   │   │     source='ths', include_quote=True,
   │   │     sort_by='change_pct', sort_order='desc', top_n=10
   │   │   )
   │   │   └─ manager.get_board_stocks(
-  │   │         board_code="301546" (cid resolved from platecode),
+  │   │         board_code="301085" (cid resolved from platecode),
   │   │         source='ths', include_quote=True,
   │   │         top_n=10, sort_by='change_pct', sort_order='desc'
   │   │       )
@@ -800,10 +800,10 @@ routes/boards.py:get_board_stocks
   │   │
   │   ├─ ths_count = 10 < THS_HARD_CAP (50) → quote_truncated = False
   │   │
-  │   └─ update_cached_board_stocks("885595", "ths", 10 stocks)
+  │   └─ update_cached_board_stocks("885756", "ths", 10 stocks)
   │       (按 CLAUDE.md, 只写 stock_code / stock_name, 不写 quote 字段)
   │
-  ├─ 继续调用 manager.get_board_realtime("885595", source='ths', board_type='concept')
+  ├─ 继续调用 manager.get_board_realtime("885756", source='ths', board_type='concept')
   │     → 板块级 quote 数据 (含今开/最高/涨跌家数/资金净流入) (与本设计无关, 既有逻辑)
   │
   └─ BoardStocksResponse(
@@ -822,7 +822,7 @@ routes/boards.py:get_board_stocks
      )
 ```
 
-### 4.2 Truncation 路径（include_quote=True, top_n=50, board=302546 真实场景）
+### 4.2 Truncation 路径（include_quote=True, top_n=50, board=301085 真实场景）
 
 ```
 1. THS 上游 → 50 行带 quote
@@ -841,7 +841,7 @@ routes/boards.py:get_board_stocks
    - stocks 列表 length = 400
 ```
 
-### 4.3 Truncation 不发生路径（include_quote=True, top_n=10, board=302546）
+### 4.3 Truncation 不发生路径（include_quote=True, top_n=10, board=301085）
 
 ```
 1. THS 上游 → 10 行带 quote (top_n=10)
@@ -856,7 +856,7 @@ routes/boards.py:get_board_stocks
 
 ### 4.4 board_level cid 解析位置（INFO）
 
-数据流示例 4.1 写 `manager.get_board_stocks(board_code="301546")` 仅为示意 manager-level shape。**实际 caller 是 platecode**（`885595`），cid→platecode 翻译由 `fetch_board_stocks_with_zzshare_fallback` 在 `source='ths'` 分支**内部**通过 `_resolve_ths_cid_from_platecode(board_code)` 完成（`persistence/board.py:816`）。Route 层完全不需要知道 cid 是什么。
+数据流示例 4.1 写 `manager.get_board_stocks(board_code="301085")` 仅为示意 manager-level shape。**实际 caller 是 platecode**（`885756`），cid→platecode 翻译由 `fetch_board_stocks_with_zzshare_fallback` 在 `source='ths'` 分支**内部**通过 `_resolve_ths_cid_from_platecode(board_code)` 完成（`persistence/board.py:816`）。Route 层完全不需要知道 cid 是什么。
 
 ```
 1. THS 上游 → 10 行带 quote (top_n=10)
@@ -960,11 +960,11 @@ routes/boards.py:get_board_stocks
 - [ ] `persistence/board.py`: include_quote=True 路径加 THS_HARD_CAP heuristic + ZZSHARE 补全 + merge + 回写 cache
 - [ ] `tests/test_ths_fetcher.py`: 7 个新测试
 - [ ] `tests/test_boards_api.py`: 7 个新测试
-- [ ] `tests/fixtures/ths_board_301546_page1.html`: 离线 fixture（10 行真实 upstream HTML）
+- [ ] `tests/fixtures/ths_board_301085_page1.html`: 离线 fixture（10 行真实 upstream HTML）
 - [ ] `pytest tests/test_boards_api.py tests/test_ths_fetcher.py` 全过
 - [ ] `pytest`（默认 skip live_network）全过
 - [ ] `ruff check .` 无 issue
-- [ ] Live-network 测试手工跑一次 302546 验证 quote_truncated=true + total_in_board=400
+- [ ] Live-network 测试手工跑一次 301085 验证 quote_truncated=true + total_in_board=400
 - [ ] Live-network 测试手工跑一次 999999 (5 只 board) 验证 quote_truncated=false + 无 ZZSHARE 调用
 - [ ] 更新 CLAUDE.md "Provider API Documentation" 表，ths board-stocks 上游描述加入列代码映射
 
