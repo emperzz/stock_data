@@ -1,5 +1,5 @@
 """
-zzshare fetcher for A-share multi-capability (Priority 5, default).
+zzshare fetcher for A-share multi-capability (Priority 2, default).
 
 API: zzshare Python SDK (https://github.com/zzquant/zzshare, PyPI: ``zzshare``).
 Client class: ``zzshare.client.DataApi``.

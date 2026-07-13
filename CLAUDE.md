@@ -14,7 +14,7 @@ A Python-based local stock data aggregation server that:
 Four layers, top-down:
 
 1. **API Layer (FastAPI)** — declarative routes; metadata-driven via `@endpoint_meta`.
-2. **IndicatorService (pure compute)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC`. Sits on top of the manager; no fetcher involvement. See `data_provider/indicators/` for the full descriptor registry and add-an-indicator conventions.
+2. **Indicator compute layer (module functions)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC`. Sits on top of the manager; no fetcher involvement. See `data_provider/indicators/` for the full descriptor registry and add-an-indicator conventions.
 3. **DataFetcherManager** — capability-routed, priority-based failover + circuit breaker + TTLCache. See `data_provider/manager.py`.
 4. **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Zzshare · Tencent · EastMoney · Ths · Cninfo · Myquant · Baidu` (12 fetchers; details in each module's docstring).
 
@@ -23,7 +23,7 @@ Four layers, top-down:
 Top-level (full layout — see `ls -R stock_data/` for the complete file list):
 
 - `stock_data/server.py` — FastAPI app entry point.
-- `stock_data/api/` — `routes.py` (all `/stocks/...` endpoints), `schemas.py` (Pydantic response models), `cache.py` (TTLCache), `endpoint_meta.py` (`@endpoint_meta` + `REGISTRY`).
+- `stock_data/api/` — `routes/` (package: `stocks.py`, `indices.py`, `boards.py`, `data.py`, `news.py`, `calendar.py`, `health.py`, `helpers.py`, `errors.py`), `schemas.py` (Pydantic response models), `cache.py` (TTLCache), `endpoint_meta.py` (`@endpoint_meta` + `REGISTRY`).
 - `stock_data/explorer/` — `/explorer/` HTML UI + `/control/*` management router. `mount(app)` is the only entry point; see `__init__.py` for startup sanity checks.
 - `stock_data/data_provider/base.py` — `BaseFetcher` ABC, `DataCapability` flag enum, `DataFetchError`.
 - `stock_data/data_provider/manager.py` — `DataFetcherManager` (capability routing, circuit breaker, failover).
@@ -36,7 +36,7 @@ Top-level (full layout — see `ls -R stock_data/` for the complete file list):
 ## Core Components
 
 ### `data_provider/base.py`
-- `BaseFetcher`: Abstract base defining `_fetch_raw_data()`, `_normalize_data()`, `get_kline_data()`, `get_realtime_quote()`
+- `BaseFetcher`: Abstract base defining `_normalize_data()` (`@abstractmethod`), `_fetch_raw_data()` (default raises `DataFetchError`; K-line fetchers override), `get_kline_data()`, `get_realtime_quote()`. Also provides `SDKFetcherMixin` for Tushare/Baostock/Myquant SDK init.
 - `DataCapability`: Flag enum for fetcher capability declarations (see below)
 - `DataFetchError`: Exception class
 - `STANDARD_COLUMNS`: Standardized K-line column names
@@ -72,7 +72,7 @@ Top-level (full layout — see `ls -R stock_data/` for the complete file list):
 - `is_us_market()`, `is_hk_market()`: Market detection utilities
 
 ### `api/endpoint_meta.py`
-Per-route metadata used by the explorer manifest. Each route in `api/routes.py`
+Per-route metadata used by the explorer manifest. Each route in `api/routes/`
 is decorated with `@endpoint_meta(summary=..., markets=[...], capabilities=[...])`,
 which stores an `EndpointMeta` (frozen dataclass: `summary / markets / capabilities`)
 in a module-level `REGISTRY: dict[Callable, EndpointMeta]`.
@@ -106,7 +106,7 @@ endpoints. Mounted by `stock_data.server` via `explorer.mount(app)`.
   and `CAPABILITY_LABELS` (DataCapability flag → `{label, icon}`).
 - **`explorer/static/index.html`** — Single-page interactive docs. Fetches
   `/control/api-manifest` on load and renders a sidebar with search, market
-  filter, capability filter, and a right-side response panel. Includes a
+  filter, fetcher filter, and a right-side response panel. Includes a
   manifest-fetch-failure error banner (in `.main`, not the top bar).
 
 ### `data_provider/indicators/`
@@ -161,8 +161,10 @@ to invoke the fetcher method directly (bypassing manager failover).
 ### Data flow
 
 1. `GET /control/api-manifest` returns endpoints with a new `fetchers[]`
-   field. Each entry is `{name, method, priority, capabilities, signature}`
-   where `name` is the fetcher class name (e.g. `BaostockFetcher`).
+   field. Each entry is `{name, method, priority, capabilities, signature, available, reason}`
+   where `name` is the fetcher class name (e.g. `BaostockFetcher`),
+   `available` indicates whether the fetcher is currently usable (config/token present),
+   and `reason` explains why it's unavailable (null when available).
 2. The manifest builder uses `data_provider.base.CAPABILITY_TO_METHOD`
    (and `EndpointMeta.fetcher_method` override) to figure out the right
    method per fetcher.
@@ -173,7 +175,7 @@ to invoke the fetcher method directly (bypassing manager failover).
    `UnknownFetcher / UnknownMethod / FetcherUnavailable / TypeError / <ExceptionName>`,
    each with optional traceback.
 
-### `fetcher_method` overrides (6 known)
+### `fetcher_method` overrides (6 known + 1 per-fetcher)
 
 `@endpoint_meta(fetcher_method=...)` pins the method when the capability's
 default isn't right:
@@ -184,8 +186,13 @@ default isn't right:
 | `/stocks/{stock_code}/boards` | `STOCK_BOARD` | `get_stock_boards` |
 | `/boards/{board_code}/history` | `STOCK_BOARD` | `get_board_history` |
 | `/boards/{board_code}/quote` | `STOCK_BOARD` | `get_board_realtime` |
-| `/dragon-tiger/daily` | `DRAGON_TIGER` | `get_daily_dragon_tiger` |
+| `/dragon-tiger` | `DRAGON_TIGER` | `get_daily_dragon_tiger` |
 | `/stocks/{stock_code}/fund-flow/daily` | `FUND_FLOW` | `get_fund_flow_120d` |
+
+Additionally, the manifest builder has a per-fetcher override:
+`_ZHITU_STOCK_KLINE_METHOD = "get_intraday_data"` — when the capability is
+`STOCK_KLINE` and the fetcher is `ZhituFetcher`, the manifest uses
+`get_intraday_data` instead of the default `get_kline_data`.
 
 **Board endpoints are source-routed**: the `?source=` query parameter selects
 the fetcher (e.g. `eastmoney`, `zhitu`). Different sources use incompatible
@@ -203,157 +210,96 @@ for all board methods.
 - **Don't** rely on `/control/fetcher-test` from external networks — it's
   127.0.0.1-only via the control router.
 
-## Provider API Documentation
+## Fetcher & Capability Routing
 
-Each fetcher's module docstring is the **canonical spec** (URL endpoints, request/response fields, units, rate limits, capability set). Read the docstring of the fetcher you're touching before changing its behavior. Per-provider official upstream references are mirrored under `docs/baostock/`, `docs/zhitu/`, `docs/myquant/`.
-
-Compact overview:
-
-| Fetcher | Priority | Markets | Capabilities (in addition to defaults) | Auth |
-|---|---|---|---|---|
-| `TushareFetcher` | 0 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `INDEX_KLINE` | `TUSHARE_TOKEN` |
-| `BaostockFetcher` | 1 | csi | `STOCK_KLINE`, `TRADE_CALENDAR`, `INDEX_KLINE`, `DIVIDEND` | none |
-| `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_*`, `STOCK_ZT_POOL` | none |
-| `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `INDEX_KLINE`, `INDEX_REALTIME_QUOTE` | none |
-| `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE`, `STOCK_ZT_POOL`, `STOCK_INFO`, `STOCK_KLINE` (minute fallback), `STOCK_LIST` (P5 backup), `STOCK_BOARD`, `DIVIDEND`, `FUND_FLOW`, `HOLDER_NUM`, `INDEX_REALTIME_QUOTE`, `INDEX_KLINE` (d/w/m + 5/15/30/60m, csi only — `INDEX_KLINE` declared 2026-07-06 via `/hz/history/fsjy/<code>.<mkt>/<level>`; see `docs/zhitu/10-indices-api.md`) | `ZHITU_TOKEN` |
-| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `STOCK_BOARD`, `STOCK_ZT_POOL`, `DRAGON_TIGER`, `HOT_TOPICS`, `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) |
-| `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强 — 仅股票; Tencent 未声明 `INDEX_REALTIME_QUOTE`,不进指数 quote 链) | none |
-| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER`, `MARGIN_TRADING`, `BLOCK_TRADE`, `HOLDER_NUM`, `DIVIDEND`, `FUND_FLOW`, `RESEARCH_REPORT`, `NEWS_FLASH`, `NEWS_SEARCH`, `STOCK_BOARD`, `STOCK_NEWS`, `ANNOUNCEMENT` | none |
-| `ThsFetcher` | 7 | csi | `HOT_TOPICS`, `NORTH_FLOW`, `NEWS_FLASH`, `NEWS_SEARCH` (via 问财 iWenCai), `STOCK_BOARD` (board K-line concept/industry, d-only — 2026-07-08; + `get_board_realtime` 板块实时行情 via q.10jqka /gn/detail/code/{cid}/; **`get_board_stocks` 支持 11 列 sort_by + top_n≤50 + ZZSHARE 自动补全 (2026-07-13)**), `STOCK_NEWS` (basic.10jqka.com.cn 个股新闻 P7 备份), `ANNOUNCEMENT` (basic.10jqka.com.cn 个股公告 P7 备份) | none |
-| `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` (backup for EastMoney news) | `BAIDU_API_KEY` |
-| `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none |
-| `MyquantFetcher` | 9 | csi | `STOCK_KLINE`, `STOCK_REALTIME_QUOTE`, `STOCK_LIST`, `TRADE_CALENDAR`, `INDEX_KLINE`, `STOCK_INFO` (last-resort backup; richer sources win) | `MYQUANT_TOKEN` |
-
-**Default priority is overridable** via `*_PRIORITY` env vars (see [Configuration](#configuration)). The lower the priority number, the earlier the fetcher is tried in the failover chain.
-
-**`BaiduFetcher` (news-search only)**: POST to `https://qianfan.baidubce.com/v2/ai_search/web_search` with `Authorization: Bearer <BAIDU_API_KEY>`. Backup source for `EastMoneyFetcher.search_news`; details (request body schema, `top_k` ≤ 50 cap, 1500/month free quota) in `baidu_fetcher.py`'s docstring.
-
-## Provider Frequency Support
-
-Stock support (per `supports_kline(asset="stock")`):
-
-| Provider | d | w | m | 1m | 5m | 15m | 30m | 60m |
-|----------|---|---|---|----|----|-----|-----|-----|
-| BaostockFetcher | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| AkshareFetcher | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| TushareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| YfinanceFetcher | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| ZhituFetcher | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| ZzshareFetcher | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-
-Index support (per `supports_kline(asset="index")`; column "mkt" lists supported markets):
-
-| Provider | d | w | m | 1m | 5m | 15m | 30m | 60m | mkt | adjust |
-|----------|---|---|---|----|----|-----|-----|-----|-----|--------|
-| BaostockFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | csi | n/a (指数无复权) |
-| TushareFetcher | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | csi | n/a |
-| AkshareFetcher | ✅ | ✅ | ✅ | ✅¹ | ✅ | ✅ | ✅ | ✅ | csi, hk² | n/a |
-| YfinanceFetcher | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | csi, hk, us | 无 hfq(Stage 2 即剔除) |
-| ZhituFetcher | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | csi | n/a |
-| MyquantFetcher | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | csi | n/a |
-
-¹ Akshare 指数 1m 走 `index_zh_a_hist_min_em`,需单日窗口(start_date=end_date),内部用 `09:30:00 - 15:00:00` 拉单日全部分时。
-² Akshare `get_index_historical` 内部只走 Sina/EM A 股 feed(实盘仅 csi),但 `supports_kline` 不剔 hk,所以 hk 指数代码会在 `get_kline_data` 中进入分支后落空。
-
-**Fallback**: Server queries providers in priority order. If provider doesn't support the requested frequency, it raises `DataFetchError` and the next provider is tried.
-
-**Anti-pattern**: Don't assume "1m" works for every market — for **index** 1m, only Akshare (csi, single trading day) is wired up. Yfinance has no 1m interval upstream; Zhitu lacks a 1m endpoint; Baostock / Tushare / Myquant don't serve index minutes at all.
-
-## Capability-Based Routing
+Each fetcher's module docstring is the **canonical spec** (URL endpoints, request/response fields, units, rate limits). Per-provider official upstream references are mirrored under `docs/baostock/`, `docs/zhitu/`, `docs/myquant/`.
 
 Every fetcher declares its capabilities via `supported_data_types: DataCapability` (the `Flag` enum is defined in `data_provider/base.py`).
 
 **Hard rule**: EVERY data access method in `DataFetcherManager` MUST route through
 `_filter_by_capability(market, capability)`. Never hardcode a specific fetcher class
 (e.g. `AkshareFetcher()`) — that bypasses priority-based failover and is forbidden.
-If a new data type needs routing, add a capability flag and declare it on the
-fetchers that support it.
-
-`DataFetcherManager._filter_by_capability(market, capability)` filters fetchers by market AND capability flag. Each data method routes through this filter:
-
-| API Method | Capability Used |
-|------------|----------------|
-| `get_kline_data` (d/w/m, stocks) | `STOCK_KLINE` (ZzshareFetcher P2) |
-| `get_kline_data` (5/15/30/60m, stocks) | `STOCK_KLINE` (ZzshareFetcher P2) |
-| `get_kline_data` (1m, stocks) | `STOCK_KLINE` (AkshareFetcher P3, no adjust) |
-| `get_kline_data` (d/w/m, indices) | `INDEX_KLINE` |
-| `get_kline_data` (5/15/30/60m, indices) | `INDEX_KLINE` (MyquantFetcher P9) |
-| `get_realtime_quote` | `STOCK_REALTIME_QUOTE` (ZzshareFetcher P2) |
-| `get_stock_name` | n/a — handled by `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
-| `get_trade_calendar` | `TRADE_CALENDAR` (ZzshareFetcher P2) |
-| `get_all_boards` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu` — `zzshare` unified under `ths` on 2026-07-08) |
-| `get_board_stocks` | `STOCK_BOARD` (source-routed, public source labels: `ths` / `eastmoney` / `zhitu`; `zzshare` is not a public label here — returns 422). **One internal cross-source fallback (2026-07-10):** `source='ths'` + `include_quote=False` → ZZSHARE primary, THS fallback (see `persistence.board::fetch_board_stocks_with_zzshare_fallback`). For `include_quote=True`, THS is mandatory (ZZSHARE emits no quote fields; falling back would silently degrade the response). `effective_source` field on the response exposes which fetcher actually served. **(2026-07-13)** When `include_quote=true`, route accepts `?sort_by={11 keys}` `?sort_order=asc|desc` `?top_n=1..50`. include_quote=true always invokes a single ZZSHARE membership call to fill remaining unquoted members (Task 7 fix, post-2026-07-13); `quote_truncated=true` iff that fill added rows OR ZZSHARE itself failed. |
-| `get_stock_boards` | `STOCK_BOARD` (source-routed, no failover; public source labels: `ths` / `eastmoney` / `zhitu`; `source=zzshare` is still aliased to `ths` at the route layer for backward compat) |
-| `get_board_history` | `STOCK_BOARD` (source-routed, no failover; valid sources: `ths` (d-only, concept/industry — `board_type` required) / `eastmoney` (d/w/m + 5/15/30/60m); `source=zzshare` is aliased to `ths` because ZzshareFetcher has no K-line impl) |
-| `get_board_realtime` | `STOCK_BOARD` (source-routed, no failover; ths only — board-level realtime quote via q.10jqka concept detail page /gn/detail/code/{cid}/) |
-| `get_index_realtime_quote` | `INDEX_REALTIME_QUOTE` |
-| `get_index_historical` | `INDEX_KLINE` |
-| `get_kline_data` (index) | `INDEX_KLINE` |
-| `get_zt_pool` | `STOCK_ZT_POOL` (ZzshareFetcher P2) |
-| `get_dragon_tiger` | `DRAGON_TIGER` (ZzshareFetcher P2) |
-| `get_margin_trading` | `MARGIN_TRADING` |
-| `get_block_trade` | `BLOCK_TRADE` |
-| `get_holder_num_change` | `HOLDER_NUM` |
-| `get_dividend` | `DIVIDEND` |
-| `get_fund_flow_minute` / `get_fund_flow_120d` | `FUND_FLOW` |
-| `get_hot_topics` | `HOT_TOPICS` (ZzshareFetcher P2) |
-| `get_north_flow` | `NORTH_FLOW` |
-| `get_reports` | `RESEARCH_REPORT` |
-| `get_announcements` | `ANNOUNCEMENT` |
-| `get_flash_news` | `NEWS_FLASH` (EastMoney P6 → ThsFetcher P7) |
-| `search_news` | `NEWS_SEARCH` (EastMoney P6 → ThsFetcher / BaiduFetcher P7) |
-| `get_stock_news` | `STOCK_NEWS` (EastMoney P6; np-listapi per-stock feed — `/stocks/{code}/news`) |
-| `get_news_content` (URL extractor; no fetcher routing) | n/a — pure utility in `utils/news_extractor.py` |
-| `get_stock_info` | `STOCK_INFO` (ZzshareFetcher P2) |
-| `get_indicator_catalog` (no routing needed) | n/a — pure compute |
-| `get_history` w/ `?indicators=` (orchestrator) | n/a — `IndicatorService` on top of `STOCK_KLINE` |
-
-**Board K-line (`/boards/{board_code}/history`)** — source-routed; valid sources: `ths` (d-only, concept/industry — `board_type` is required, 422 if missing) and `eastmoney` (d/w/m + 5/15/30/60m via push2his). `source=zzshare` 在 route 层 alias 到 `ths`(ZzshareFetcher 已不提供 board K-line; 800-day date range cap 来自 EastMoneyFetcher 的 `lmt=800` ceiling, 超出返回 400 `date_range_too_wide`)。Zhitu 不在 valid 集合中 — 无 board K-line 上游。详见 `docs/superpowers/plans/2026-07-02-board-kline-eastmoney-ths.md`。
-
-**Fetcher capability declarations:**
-
-| Fetcher | Capabilities |
-|---------|-------------|
-| BaiduFetcher | `NEWS_SEARCH` |
-| BaostockFetcher | `STOCK_KLINE \| TRADE_CALENDAR \| INDEX_KLINE` |
-| AkshareFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_REALTIME_QUOTE \| INDEX_KLINE \| STOCK_ZT_POOL` |
-| TushareFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| INDEX_KLINE` |
-| MyquantFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| STOCK_LIST \| TRADE_CALENDAR \| INDEX_KLINE \| STOCK_INFO` |
-| YfinanceFetcher | `STOCK_KLINE \| STOCK_REALTIME_QUOTE \| INDEX_KLINE \| INDEX_REALTIME_QUOTE` |
-| ZhituFetcher | `STOCK_REALTIME_QUOTE \| STOCK_ZT_POOL \| STOCK_INFO \| STOCK_KLINE \| STOCK_LIST \| STOCK_BOARD \| DIVIDEND \| FUND_FLOW \| HOLDER_NUM \| INDEX_REALTIME_QUOTE \| INDEX_KLINE` |
-| TencentFetcher | `STOCK_REALTIME_QUOTE` (增强字段: PE/PB/市值/涨跌停价 — 仅股票) |
-| EastMoneyFetcher | `DRAGON_TIGER \| MARGIN_TRADING \| BLOCK_TRADE \| HOLDER_NUM \| DIVIDEND \| FUND_FLOW \| RESEARCH_REPORT \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD \| STOCK_NEWS \| ANNOUNCEMENT` |
-| ThsFetcher | `HOT_TOPICS \| NORTH_FLOW \| NEWS_FLASH \| NEWS_SEARCH \| STOCK_BOARD \| STOCK_NEWS \| ANNOUNCEMENT` |
-| CninfoFetcher | `ANNOUNCEMENT` |
-
-**Index routing design**: Each fetcher that declares an INDEX_* capability must implement the corresponding public method (`get_index_realtime_quote`, `get_index_historical`, `get_index_intraday`). The Manager calls these methods directly — no `hasattr` checks, no fallback to stock methods. Internally, a fetcher may delegate to shared data processing logic (e.g. `get_index_historical` → `get_kline_data`), but the public interface is always the dedicated index method.
 
 **Anti-pattern**: Do NOT use `supports_historical` or `supports_realtime` — these are deprecated. Use `supported_data_types` with `DataCapability` flags.
 
-**ZhituFetcher index support (added 2026-07-06)**: 智兔指数 API `/hz/` 前缀(`https://www.zhituapi.com/hsindexapi.html`)现已接入 — 文档见 [`docs/zhitu/10-indices-api.md`](docs/zhitu/10-indices-api.md)。`ZhituFetcher.supported_data_types` 已声明 `INDEX_REALTIME_QUOTE | INDEX_KLINE`,manager 现在按以下优先级链路由:
+### Fetcher overview
 
-- **指数 quote**: 见上文 Capability-Based Routing 表 — CSI = `Akshare→Yfinance→Zhitu`;HK/US = `Yfinance`(Akshare 内部只查 A 股 feed,Zhitu `supported_markets={csi}` 被自动剔除)。
-- **指数 K 线 d/w/m**: `Baostock → Tushare → Akshare → Yfinance → Zhitu → Myquant`
-- **指数 K 线 5/15/30/60m**: `Akshare → Yfinance → Zhitu`(Myquant index `supports_kline` 只在 `period == "d"` 时返回 True,非 d 周期被剔除; Zhitu `supports_kline` 覆盖 `d/w/m + 5/15/30/60`,csi only)
+| Fetcher | P | Markets | Capabilities | Auth | Notes |
+|---|---|---|---|---|---|
+| `TushareFetcher` | 0 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` | `TUSHARE_TOKEN` | |
+| `BaostockFetcher` | 1 | csi | `STOCK_KLINE` `TRADE_CALENDAR` `INDEX_KLINE` `DIVIDEND` | none | |
+| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_POOL` `DRAGON_TIGER` `HOT_TOPICS` `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) | Board endpoints: not a public source label (unified under `ths`) |
+| `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` `STOCK_ZT_POOL` | none | |
+| `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` `INDEX_REALTIME_QUOTE` | none | |
+| `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE` `STOCK_ZT_POOL` `STOCK_INFO` `STOCK_KLINE` (minute fallback) `STOCK_LIST` `STOCK_BOARD` `DIVIDEND` `FUND_FLOW` `HOLDER_NUM` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` | `ZHITU_TOKEN` | Index K-line via `/hz/` prefix |
+| `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none | |
+| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER` `MARGIN_TRADING` `BLOCK_TRADE` `HOLDER_NUM` `DIVIDEND` `FUND_FLOW` `RESEARCH_REPORT` `NEWS_FLASH` `NEWS_SEARCH` `STOCK_BOARD` `STOCK_NEWS` `ANNOUNCEMENT` | none | |
+| `ThsFetcher` | 7 | csi | `HOT_TOPICS` `NORTH_FLOW` `NEWS_FLASH` `NEWS_SEARCH` `STOCK_BOARD` `STOCK_NEWS` `ANNOUNCEMENT` | none | Board K-line d-only; `get_board_stocks` supports sort_by + top_n |
+| `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` | `BAIDU_API_KEY` | Backup for EastMoney news |
+| `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none | |
+| `MyquantFetcher` | 9 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_KLINE` `STOCK_INFO` | `MYQUANT_TOKEN` | Last-resort backup |
 
-实现细节 (`zhitu_fetcher.py` 源码 + memory `zhitu-fetcher-implements-index-api` /
-`zhitu-index-000xxx-sh-vs-sz` / `zhitu-upstream-volume-unit-inconsistency`):
-volume 单位归一 / market suffix 反转 / `supports_kline` 分流见上。`/indices/{code}/quote`
-在上游不返回 name 时 fallback 到 `_resolve_index_name(index_code)`(与 `/kline` 一致)。
+**Default priority is overridable** via `*_PRIORITY` env vars (see [Configuration](#configuration)). The lower the priority number, the earlier the fetcher is tried in the failover chain.
 
-**Index K-line dispatch fixes (committed 2026-07-06)**: MyquantFetcher (`myquant_fetcher.py:198-237`) 与
-TushareFetcher (`tushare_fetcher.py:169-223`) 都 override `get_kline_data`,`index_market_tag()` 命中时派发到
-对应 index API,不再 fall through 到 stock path 哑火。Myquant 同时收紧 `supports_kline` (index 仅 d)。
+### API → Capability routing
+
+`DataFetcherManager._filter_by_capability(market, capability)` filters fetchers by market AND capability flag. Board methods use `_with_source()` (source-routed, no failover) instead of `_with_failover()`.
+
+| API Method | Capability | Notes |
+|---|---|---|
+| `get_kline_data` (d/w/m) | `STOCK_KLINE` | ZzshareFetcher P2 primary |
+| `get_kline_data` (5/15/30/60m) | `STOCK_KLINE` | ZzshareFetcher P2 primary |
+| `get_kline_data` (1m) | `STOCK_KLINE` | AkshareFetcher P3, no adjust |
+| `get_kline_data` (index d/w/m) | `INDEX_KLINE` | Baostock→Tushare→Akshare→Yfinance→Zhitu→Myquant |
+| `get_kline_data` (index 5/15/30/60m) | `INDEX_KLINE` | Akshare→Yfinance→Zhitu |
+| `get_realtime_quote` | `STOCK_REALTIME_QUOTE` | ZzshareFetcher P2 primary |
+| `get_index_realtime_quote` | `INDEX_REALTIME_QUOTE` | CSI: Akshare→Yfinance→Zhitu; HK/US: Yfinance |
+| `get_stock_name` | n/a | `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
+| `get_trade_calendar` | `TRADE_CALENDAR` | ZzshareFetcher P2 primary |
+| `get_zt_pool` | `STOCK_ZT_POOL` | ZzshareFetcher P2 primary |
+| `get_dragon_tiger` | `DRAGON_TIGER` | ZzshareFetcher P2 primary |
+| `get_margin_trading` | `MARGIN_TRADING` | |
+| `get_block_trade` | `BLOCK_TRADE` | |
+| `get_holder_num_change` | `HOLDER_NUM` | |
+| `get_dividend` | `DIVIDEND` | |
+| `get_fund_flow_*` | `FUND_FLOW` | |
+| `get_hot_topics` | `HOT_TOPICS` | ZzshareFetcher P2 primary |
+| `get_north_flow` | `NORTH_FLOW` | |
+| `get_reports` / `get_report_pdf` | `RESEARCH_REPORT` | |
+| `get_announcements` | `ANNOUNCEMENT` | |
+| `fetch_flash_news` | `NEWS_FLASH` | EastMoney P6 → ThsFetcher P7 |
+| `search_news` | `NEWS_SEARCH` | EastMoney P6 → ThsFetcher / BaiduFetcher P7 |
+| `get_stock_news` | `STOCK_NEWS` | EastMoney P6 sole provider |
+| `get_stock_info` | `STOCK_INFO` | Zhitu P5 → Myquant P9 |
+| `get_news_content` | n/a | Pure utility in `utils/news_extractor.py` |
+| `get_indicator_catalog` | n/a | Pure compute |
+| `get_history` w/ `?indicators=` | n/a | `indicator_service.compute()` on top of `STOCK_KLINE` |
+
+**Board endpoints** (source-routed, `_with_source()`, no failover):
+
+| API Method | Valid sources | Notes |
+|---|---|---|
+| `get_all_boards` | `ths` `eastmoney` `zhitu` | `zzshare` unified under `ths` |
+| `get_board_stocks` | `ths` `eastmoney` `zhitu` | `zzshare` returns 422. `source=ths` + `include_quote=False` → ZZSHARE primary + THS fallback; `effective_source` exposes which served. |
+| `get_stock_boards` | `ths` `eastmoney` `zhitu` | `zzshare` aliased to `ths` |
+| `get_board_history` | `ths` (d-only) `eastmoney` (d/w/m+minutes) | `zzshare` aliased to `ths`; `board_type` required for `ths`; 800-day cap |
+| `get_board_realtime` | `ths` | Board realtime quote via q.10jqka |
+
+### Index routing notes
+
+Each fetcher that declares an INDEX_* capability must implement the corresponding public method (`get_index_realtime_quote`, `get_index_historical`). The Manager calls these methods directly — no `hasattr` checks, no fallback to stock methods. MyquantFetcher and TushareFetcher override `get_kline_data` to dispatch to their index API when `index_market_tag()` matches.
 
 ## Symbol Conventions
 
-| Market | Format | Examples |
-|--------|--------|----------|
-| A-share (Shanghai) | 6 digits + `.SS` | `600519.SS`, `000001.SZ` |
-| A-share (Shenzhen) | 6 digits + `.SZ` | `000001.SZ` |
-| HK stocks | `HK` + 5 digits | `HK00700`, `HK01810` |
-| US stocks | 1-5 letters | `AAPL`, `TSLA` |
-| US indices | Mapped to yfinance | `SPX` → `^GSPC` |
+**Canonical format** (server-side): bare 6-digit for A-share (`600519`), `HK` + 5 digits for HK (`HK00700`), 1-5 letters for US (`AAPL`). `normalize_stock_code()` handles all input variants.
+
+| Market | API path format | Outbound SDK examples |
+|--------|----------------|----------------------|
+| A-share | `600519` | Tushare `600519.SS`, Baostock `sh.600519`, Yfinance `600519.SS` |
+| HK | `HK00700` | Yfinance `0700.HK` |
+| US | `AAPL` | Yfinance `AAPL` |
+| CSI indices | `000300` | Zhitu `000300.SH` |
+| US indices | `SPX` | Yfinance `^GSPC` |
 
 ## Key Design Patterns
 
@@ -361,7 +307,7 @@ Cross-cutting behaviors implemented in `data_provider/manager.py` / `data_provid
 
 - **Circuit breaker** — per-source state machine: `CLOSED → OPEN (after N failures) → HALF_OPEN (probe) → CLOSED (recover)`. Threshold and cooldown configurable.
 - **Rate limiting / anti-banning** — random 1.5-3.0s jitter, rotating `User-Agent` pool, exponential backoff on retry (via `tenacity`).
-- **Market-aware routing** — request market is inferred from the stock code; A-share → Baostock → Akshare failover; US → Yfinance; HK → Akshare / Tencent / Yfinance. See [Capability-Based Routing](#capability-based-routing) for the capability side.
+- **Market-aware routing** — request market is inferred from the stock code; A-share → Baostock → Akshare failover; US → Yfinance; HK → Akshare / Tencent / Yfinance. See [Fetcher & Capability Routing](#fetcher--capability-routing) for the capability side.
 - **Code normalization** — `normalize_stock_code()` accepts `SH600519` / `sz000001` / `HK00700` and returns the canonical 6-digit or `HK`-prefixed form (see `data_provider/utils/normalize.py`).
 
 ### Persistence-Only Routing (board endpoints)
@@ -425,7 +371,7 @@ CB-integrated.)
 Pure DataFrame transformer at the orchestration boundary:
 1. `routes.py` calls `manager.get_kline_data(code, days=max(days, lookback))`
    — `lookback` is the maximum across the requested indicators.
-2. The returned DataFrame is handed to `IndicatorService.compute(df, spec)`.
+2. The returned DataFrame is handed to `indicator_service.compute(df, spec)`.
 3. The service iterates `INDICATOR_REGISTRY` once per requested indicator,
    calls the corresponding `calc*` function, and merges the per-bar
    result dicts onto the DataFrame as an `indicators` column.
@@ -497,21 +443,20 @@ Interactive web docs live at `stock_data/explorer/static/index.html` (the
 `stock_data/explorer/` subpackage) and are mounted at `/explorer/` when the
 server runs. After `python -m stock_data.server`, open
 `http://localhost:8888/explorer/`. The page supports Try-it, search,
-market/capability filtering, dark theme, and an optional Test Instance
-subprocess (controlled from the sidebar).
+market/fetcher filtering, and dark theme.
 
 **Source of truth is server-side**, not the HTML. The page fetches
 `GET /control/api-manifest` on load, which is generated by
 `explorer/manifest.build_manifest(app)` reflecting `app.routes` + the
 `@endpoint_meta` decorator on each route. To add or change an endpoint's
-explorer metadata, edit the `@endpoint_meta(...)` call in `api/routes.py` —
+explorer metadata, edit the `@endpoint_meta(...)` call in `api/routes/` —
 the manifest rebuilds on the next request.
 
 The `/control/*` management endpoints live alongside at the same prefix.
 
 ## Configuration
 
-`.env.example` is the canonical reference (66 lines, all env vars + comments).
+`.env.example` is the canonical reference (~140 lines, all env vars + comments).
 The non-obvious knobs worth memorizing here:
 
 - `STOCK_DB_INIT=true` — **DROPs and recreates** all persistence tables on boot. Use only in dev/test. Any other value is treated as `false` (idempotent `CREATE IF NOT EXISTS`).

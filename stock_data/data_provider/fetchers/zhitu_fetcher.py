@@ -1,5 +1,5 @@
 """
-Zhitu fetcher for A-share realtime quote (Priority 99).
+Zhitu fetcher for A-share realtime quote + index K-line (Priority 5).
 
 API: https://api.zhituapi.com/hs/real/ssjy/{stock_code}?token={token}
 Token configured via ZHITU_TOKEN environment variable.

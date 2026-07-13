@@ -5,7 +5,7 @@ A local stock data aggregation server that integrates 12 upstream stock data API
 **Four layers in one server:**
 
 - **API Layer (FastAPI)** — declarative routes; metadata-driven via `@endpoint_meta`.
-- **IndicatorService (pure compute)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC` (14 built-in). Sits on top of the manager; no fetcher involvement.
+- **Indicator compute layer (module functions)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC` (14 built-in). Sits on top of the manager; no fetcher involvement.
 - **DataFetcherManager** — capability-routed, priority-based failover + circuit breaker + TTLCache.
 - **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Zzshare · Tencent · EastMoney · THS · Cninfo · Myquant · Baidu` (12 fetchers).
 
@@ -25,7 +25,7 @@ Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / 
 - **News**: 关键词搜索 (EastMoney → Baidu 备份) / 7×24 快讯 (EastMoney → THS 备份) / 正文提取
 - **Fundamentals**: 公司画像 (Zhitu → Myquant) / 研报检索+PDF下载 / 公告检索
 - **Technical indicators** (pure compute, 14 built-in): MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC — attach to K-line via `?indicators=ma,macd,kdj`
-- **API Explorer** (`/explorer/`): interactive docs, search, market/capability filters, Stage 2 fetcher drill-down
+- **API Explorer** (`/explorer/`): interactive docs, search, market/fetcher filters, Stage 2 fetcher drill-down
 
 ## Quick Start
 
@@ -861,7 +861,7 @@ GET /api/v1/stocks/{code}/dragon-tiger?trade_date=2026-05-20
 
 **全市场龙虎榜:**
 ```bash
-GET /api/v1/dragon-tiger/daily?trade_date=2026-05-20&min_net_buy=5000
+GET /api/v1/dragon-tiger?trade_date=2026-05-20&min_net_buy=5000
 ```
 
 ---
@@ -1166,13 +1166,13 @@ the `source` query parameter, with two exceptions:
 
 ## API Explorer
 
-An interactive docs UI is mounted at `/explorer/` (after `python -m stock_data.server`, open `http://localhost:8888/explorer/`). It is generated server-side from `app.routes` + the `@endpoint_meta` decorator on each route — the page fetches `GET /control/api-manifest` on load and renders a sidebar with search, market filter, capability filter, and a right-side response panel.
+An interactive docs UI is mounted at `/explorer/` (after `python -m stock_data.server`, open `http://localhost:8888/explorer/`). It is generated server-side from `app.routes` + the `@endpoint_meta` decorator on each route — the page fetches `GET /control/api-manifest` on load and renders a sidebar with search, market filter, fetcher filter, and a right-side response panel.
 
 **Features:**
 
 - **Search** — filter by endpoint path / summary
 - **Market filter** — `csi` / `hk` / `us`
-- **Capability filter** — `REALTIME_QUOTE` / `HISTORICAL_DWM` / `NEWS_FLASH` / etc.
+- **Fetcher filter** — `BaostockFetcher` / `AkshareFetcher` / `YfinanceFetcher` / etc.
 - **Fetcher drill-down** (Stage 2) — collapsible section under each endpoint showing every fetcher that can serve it, with method signature + a `Test` button that posts to `POST /control/fetcher-test` to invoke the fetcher directly (bypassing the manager's circuit breaker / capability filter)
 
 **Management endpoints (`/control/*`):**
@@ -1346,9 +1346,8 @@ The server automatically routes requests to the appropriate data source based on
 
 | Priority | Source | Note |
 |----------|--------|------|
-| 4 | Yfinance | Uses `^HSI`, `^HSCE` format |
+| 4 | Yfinance | Primary, uses `^HSI`, `^HSCE` format |
 | 3 | Akshare | Fallback |
-| 1 | Akshare | Fallback |
 
 ---
 

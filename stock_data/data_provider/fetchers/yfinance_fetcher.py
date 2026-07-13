@@ -1,5 +1,5 @@
 """
-Yfinance fetcher for US stocks and indices (Priority 3).
+Yfinance fetcher for US stocks and indices (Priority 4).
 
 Also supports A-share via .SS/.SZ suffixes and HK via .HK suffix.
 Stooq is used as fallback for US stocks.
