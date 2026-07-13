@@ -69,9 +69,30 @@ async def lifespan(app: FastAPI):
         from pathlib import Path
 
         backup_dir = Path(__file__).parent / "stock_data_backup"
-        seed_results = persistence.seed_all_from_backup_dir(backup_dir)
+        # Outer try/except: per-file errors are caught inside
+        # seed_all_from_backup_dir (logged + skipped), but an unexpected
+        # exception (e.g. NoneType, MemoryError on a giant CSV) would
+        # otherwise crash lifespan and leave the DB in a reset+partial
+        # state. Server should boot with empty cache rather than not at all.
+        seed_results: dict = {}
+        try:
+            seed_results = persistence.seed_all_from_backup_dir(backup_dir)
+        except Exception:
+            logger.exception(
+                "[Startup] CSV seed crashed mid-iteration; DB is in "
+                "reset+partial state. Server continuing with partial or "
+                "empty board cache — set BOARD_BACKFILL_ON_STARTUP=true or "
+                "restore stock_data_backup/*.csv to recover."
+            )
         if seed_results:
             logger.info("[Startup] CSV seed complete: %s", seed_results)
+        elif backup_dir.exists() and any(backup_dir.glob("*.csv")):
+            # CSVs present but seed produced {} — seed_all_from_backup_dir
+            # already logged a summary ERROR ("All N CSV file(s) failed").
+            # Avoid the misleading "no files in ..." message here.
+            logger.error(
+                "[Startup] CSV seed produced 0 rows; check ERROR logs above for details."
+            )
         else:
             logger.info("[Startup] CSV seed skipped (no files in %s)", backup_dir)
     else:

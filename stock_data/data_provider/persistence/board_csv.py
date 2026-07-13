@@ -17,15 +17,30 @@ from __future__ import annotations
 import csv
 import logging
 import re
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 from . import board as board_mod
 from .db import get_connection
 
+# Exceptions caught per-file by seed_all_from_backup_dir's per-source try/except.
+# Anything outside this set propagates out of the orchestrator (and is the
+# server.py lifespan caller's responsibility to handle — see server.py:73-79).
+_NON_FATAL_SEED_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ValueError,
+    OSError,  # FileNotFoundError, PermissionError, disk-full mid-iteration
+    UnicodeDecodeError,  # malformed UTF-8 byte mid-CSV
+    csv.Error,  # malformed row, wrong delimiter, etc.
+    sqlite3.Error,  # IntegrityError, OperationalError, DatabaseError
+    KeyError,  # malformed row with missing column (DictReader yields None normally,
+    #         but explicit r["x"] on an empty header would raise)
+    IndexError,  # defensive: row shorter than header
+)
+
 logger = logging.getLogger(__name__)
 
-_STOCK_BOARD_COLS = {"code", "name", "board_type", "subtype", "source", "platecode", "updated_at"}
+_STOCK_BOARD_COLS = {"code", "name", "board_type", "subtype", "source", "platecode"}
 _MEMBERSHIP_COLS = {
     "board_code",
     "stock_code",
@@ -34,11 +49,20 @@ _MEMBERSHIP_COLS = {
     "stock_name",
     "board_type",
     "subtype",
-    "refreshed_at",
 }
 _EASTMONEY_COLS = {"board_type", "board_code", "board_name"}
 
 _VALID_STOCK_CODE = re.compile(r"^\d{6}$")
+
+# Sources supported by seed_stock_board_from_csv. The two CSV shapes
+# (full-schema 7-col THS, legacy 3-col eastmoney) correspond to the two
+# loaders; any other source value would silently filter every row.
+_SUPPORTED_STOCK_BOARD_SOURCES: frozenset[str] = frozenset({"ths", "eastmoney"})
+
+# Cap on how many sample rows are retained for the EOF summary warning.
+# Without this, a 100k+ row CSV with all-bad rows would accumulate 100k
+# sample strings in memory (each ~30 chars) just to log 3 of them.
+_MAX_SAMPLE_RETAINED: int = 3
 
 
 def _open_csv(path: Path) -> csv.DictReader:
@@ -71,9 +95,14 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
         Number of rows inserted/updated.
 
     Raises:
+        ValueError: source not in {'ths', 'eastmoney'} or schema mismatch.
         FileNotFoundError: csv_path doesn't exist.
-        ValueError: schema mismatch (missing required columns).
     """
+    if source not in _SUPPORTED_STOCK_BOARD_SOURCES:
+        raise ValueError(
+            f"Unsupported source {source!r}. Valid sources: "
+            f"{sorted(_SUPPORTED_STOCK_BOARD_SOURCES)}"
+        )
     if not csv_path.exists():
         raise FileNotFoundError(csv_path)
     board_mod.init_schema()  # idempotent; safe to call before INSERT
@@ -89,15 +118,27 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
 
     Wrong-source rows are collected and reported as ONE summary warning at
     EOF (with first 3 samples) — avoids WARN spam with 5000+ rows.
+    Empty ``code`` rows are counted (no sample collection — the wrong-source
+    case above already proves the value is `r["code"]`-shaped; an empty
+    string isn't worth logging verbatim) and skipped, since
+    UNIQUE(code, source) would silently collapse them otherwise.
     """
-    board_mod.init_schema()  # idempotent; safe to call before INSERT
     conn = get_connection()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
     skipped_wrong_source_samples: list[str] = []
+    skipped_wrong_source_count = 0
+    skipped_empty_code_count = 0
     for r in _open_csv(csv_path):
         if r["source"] != source:
-            skipped_wrong_source_samples.append(f"code={r.get('code')!r} source={r['source']!r}")
+            if len(skipped_wrong_source_samples) < _MAX_SAMPLE_RETAINED:
+                skipped_wrong_source_samples.append(
+                    f"code={r.get('code')!r} source={r['source']!r}"
+                )
+            skipped_wrong_source_count += 1
+            continue
+        if not r.get("code"):
+            skipped_empty_code_count += 1
             continue
         rows.append(
             (
@@ -110,13 +151,19 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
                 now,
             )
         )
-    if skipped_wrong_source_samples:
+    if skipped_wrong_source_count:
         logger.warning(
             "[CSVSeed] %s: %d rows had wrong source (expected %r); first samples: %s",
             csv_path.name,
-            len(skipped_wrong_source_samples),
+            skipped_wrong_source_count,
             source,
-            skipped_wrong_source_samples[:3],
+            skipped_wrong_source_samples,
+        )
+    if skipped_empty_code_count:
+        logger.warning(
+            "[CSVSeed] %s: %d rows had empty code; skipped (would collide on UNIQUE)",
+            csv_path.name,
+            skipped_empty_code_count,
         )
     if not rows:
         logger.warning("[CSVSeed] %s: 0 rows after validation", csv_path.name)
@@ -129,34 +176,75 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
             rows,
         )
     logger.info(
-        "[CSVSeed] %s: wrote %d boards (source=%s, skipped=%d)",
+        "[CSVSeed] %s: wrote %d boards (source=%s, wrong_source=%d, empty_code=%d)",
         csv_path.name,
         len(rows),
         source,
-        len(skipped_wrong_source_samples),
+        skipped_wrong_source_count,
+        skipped_empty_code_count,
     )
     return len(rows)
 
 
 def _seed_eastmoney_board_csv(csv_path: Path) -> int:
     """3-col CSV path. Fills source='eastmoney', subtype=board_type,
-    platecode=NULL, updated_at=NOW."""
-    board_mod.init_schema()
+    platecode=NULL, updated_at=NOW.
+
+    Invalid rows (empty board_code or board_type not in
+    ``VALID_SUBTYPES_BY_SOURCE['eastmoney']``) are skipped with a
+    sample+count summary, mirroring the THS loader's pattern.
+    """
     _validate_csv_columns(csv_path, _EASTMONEY_COLS)
+    valid_types = set(board_mod.VALID_SUBTYPES_BY_SOURCE.get("eastmoney", {}).keys())
     conn = get_connection()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
+    skipped_empty_code_samples: list[str] = []
+    skipped_empty_code_count = 0
+    skipped_invalid_type_samples: list[str] = []
+    skipped_invalid_type_count = 0
     for r in _open_csv(csv_path):
+        code = r.get("board_code")
+        btype = r.get("board_type")
+        if not code:
+            if len(skipped_empty_code_samples) < _MAX_SAMPLE_RETAINED:
+                skipped_empty_code_samples.append(
+                    f"board_name={r.get('board_name')!r}"
+                )
+            skipped_empty_code_count += 1
+            continue
+        if btype not in valid_types:
+            if len(skipped_invalid_type_samples) < _MAX_SAMPLE_RETAINED:
+                skipped_invalid_type_samples.append(
+                    f"code={code!r} board_type={btype!r}"
+                )
+            skipped_invalid_type_count += 1
+            continue
         rows.append(
             (
-                r["board_code"],
+                code,
                 r["board_name"],
-                r["board_type"],
-                r["board_type"],  # subtype = board_type (eastmoney 唯一合法 subtype)
+                btype,
+                btype,  # subtype = board_type (eastmoney 唯一合法 subtype)
                 "eastmoney",  # source hardcoded
                 None,  # platecode = NULL
                 now,
             )
+        )
+    if skipped_empty_code_count:
+        logger.warning(
+            "[CSVSeed] %s: %d rows had empty board_code; first samples: %s",
+            csv_path.name,
+            skipped_empty_code_count,
+            skipped_empty_code_samples,
+        )
+    if skipped_invalid_type_count:
+        logger.warning(
+            "[CSVSeed] %s: %d rows had invalid board_type (expected %s); first samples: %s",
+            csv_path.name,
+            skipped_invalid_type_count,
+            sorted(valid_types),
+            skipped_invalid_type_samples,
         )
     if not rows:
         logger.warning("[CSVSeed] %s: 0 rows after validation", csv_path.name)
@@ -168,15 +256,23 @@ def _seed_eastmoney_board_csv(csv_path: Path) -> int:
                VALUES (?,?,?,?,?,?,?)""",
             rows,
         )
-    logger.info("[CSVSeed] %s: wrote %d boards (eastmoney)", csv_path.name, len(rows))
+    logger.info(
+        "[CSVSeed] %s: wrote %d boards (eastmoney, empty_code=%d, invalid_type=%d)",
+        csv_path.name,
+        len(rows),
+        skipped_empty_code_count,
+        skipped_invalid_type_count,
+    )
     return len(rows)
 
 
 def seed_membership_from_csv(csv_path: Path) -> int:
     """Insert/REPLACE rows from a stock_board_membership-style CSV.
 
-    Rows with invalid stock_code (not 6 ASCII digits) are skipped with a
-    warning — same defense as `_read_board_stocks_from_db`.
+    Rows with invalid stock_code (not 6 ASCII digits) are aggregated and
+    reported as ONE summary warning at EOF (with first 3 samples) — same
+    defense pattern as ``_seed_full_schema_board_csv`` to avoid WARN spam
+    on the 100k+ row membership CSV.
 
     Returns:
         Number of rows inserted/updated.
@@ -192,16 +288,14 @@ def seed_membership_from_csv(csv_path: Path) -> int:
     conn = get_connection()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
-    skipped_invalid_code = 0
+    skipped_invalid_code_samples: list[str] = []
+    skipped_invalid_code_count = 0
     for r in _open_csv(csv_path):
         code = r["stock_code"]
         if not (isinstance(code, str) and _VALID_STOCK_CODE.match(code)):
-            logger.warning(
-                "[CSVSeed] %s: invalid stock_code=%r; skipped",
-                csv_path.name,
-                code,
-            )
-            skipped_invalid_code += 1
+            if len(skipped_invalid_code_samples) < _MAX_SAMPLE_RETAINED:
+                skipped_invalid_code_samples.append(repr(code))
+            skipped_invalid_code_count += 1
             continue
         rows.append(
             (
@@ -215,7 +309,15 @@ def seed_membership_from_csv(csv_path: Path) -> int:
                 now,
             )
         )
+    if skipped_invalid_code_count:
+        logger.warning(
+            "[CSVSeed] %s: %d rows had invalid stock_code (non-6-digit); first samples: %s",
+            csv_path.name,
+            skipped_invalid_code_count,
+            skipped_invalid_code_samples,
+        )
     if not rows:
+        logger.warning("[CSVSeed] %s: 0 rows after validation", csv_path.name)
         return 0
     with conn:
         conn.executemany(
@@ -229,7 +331,7 @@ def seed_membership_from_csv(csv_path: Path) -> int:
         "[CSVSeed] %s: wrote %d membership rows (skipped=%d)",
         csv_path.name,
         len(rows),
-        skipped_invalid_code,
+        skipped_invalid_code_count,
     )
     return len(rows)
 
@@ -238,43 +340,90 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
     """Seed both stock_board (THS+eastmoney) and stock_board_membership (THS).
 
     Missing files: log a warning, skip that source. Don't raise.
-    Schema errors (missing columns): log error, skip that source. Don't raise.
+    Schema errors (missing columns), encoding errors, malformed rows, and
+    SQLite integrity errors: log error, skip that source. Don't raise.
+    Anything outside ``_NON_FATAL_SEED_EXCEPTIONS`` propagates so the
+    caller (server.py lifespan) can decide whether to crash or continue
+    with a partial/empty board cache.
 
     Returns:
         {'stock_board_ths': N, 'stock_board_eastmoney': M,
          'stock_board_membership_ths': K}. Missing entries are absent.
+
+    Side effect: when files exist but ALL fail (schema/IO error), emits
+    one summary ERROR log so the caller can distinguish "no CSVs in the
+    backup dir" from "CSVs present but unparseable" — both produce {}.
     """
     results: dict[str, int] = {}
     if not backup_dir.exists():
         logger.warning("[CSVSeed] backup_dir %s does not exist; skipping all", backup_dir)
         return results
 
+    failed_files: list[str] = []
+    missing_files: list[str] = []
+
     ths_board = backup_dir / "stock_board_ths.csv"
     if ths_board.exists():
         try:
             results["stock_board_ths"] = seed_stock_board_from_csv("ths", ths_board)
-        except ValueError as e:
-            logger.error("[CSVSeed] %s: schema error: %s; skipping", ths_board.name, e)
+        except _NON_FATAL_SEED_EXCEPTIONS as e:
+            logger.error(
+                "[CSVSeed] %s: %s: %s; skipping",
+                ths_board.name,
+                type(e).__name__,
+                e,
+            )
+            failed_files.append(ths_board.name)
     else:
         logger.warning("[CSVSeed] %s not found; skipping ths stock_board seed", ths_board)
+        missing_files.append(ths_board.name)
 
     ths_member = backup_dir / "stock_board_membership_ths.csv"
     if ths_member.exists():
         try:
             results["stock_board_membership_ths"] = seed_membership_from_csv(ths_member)
-        except ValueError as e:
-            logger.error("[CSVSeed] %s: schema error: %s; skipping", ths_member.name, e)
+        except _NON_FATAL_SEED_EXCEPTIONS as e:
+            logger.error(
+                "[CSVSeed] %s: %s: %s; skipping",
+                ths_member.name,
+                type(e).__name__,
+                e,
+            )
+            failed_files.append(ths_member.name)
     else:
         logger.warning("[CSVSeed] %s not found; skipping ths membership seed", ths_member)
+        missing_files.append(ths_member.name)
 
     em_board = backup_dir / "stock_board_eastmoney.csv"
     if em_board.exists():
         try:
             results["stock_board_eastmoney"] = seed_stock_board_from_csv("eastmoney", em_board)
-        except ValueError as e:
-            logger.error("[CSVSeed] %s: schema error: %s; skipping", em_board.name, e)
+        except _NON_FATAL_SEED_EXCEPTIONS as e:
+            logger.error(
+                "[CSVSeed] %s: %s: %s; skipping",
+                em_board.name,
+                type(e).__name__,
+                e,
+            )
+            failed_files.append(em_board.name)
     else:
         logger.warning("[CSVSeed] %s not found; skipping eastmoney stock_board seed", em_board)
+        missing_files.append(em_board.name)
+
+    # Distinguish "no CSVs shipped" from "CSVs shipped but ALL failed".
+    # Both cases produce results={}; without this summary the operator
+    # cannot tell from the high-level log whether to fix CSV format or
+    # restore missing files. server.py uses results emptiness alone,
+    # so we need this side log. We only emit when NOTHING succeeded —
+    # a partial failure is already covered by the per-file ERROR logs above.
+    if failed_files and not results:
+        logger.error(
+            "[CSVSeed] All %d CSV file(s) failed to load: %s. "
+            "Board cache will be empty until files are fixed or upstream "
+            "backfill runs.",
+            len(failed_files),
+            failed_files,
+        )
 
     return results
 

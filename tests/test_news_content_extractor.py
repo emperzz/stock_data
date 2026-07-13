@@ -20,9 +20,13 @@ def bypass_ssrf(monkeypatch):
     in :func:`_validate_url` would otherwise fail on hosts that don't
     resolve on this particular dev box (``example.com`` DNS returns
     ``gaierror`` here), which is environment-specific noise that has
-    nothing to do with the extraction contract. SSRF protection is
-    covered separately by integration / smoke tests, not unit tests of
-    the HTML parser.
+    nothing to do with the extraction contract.
+
+    SSRF protection is covered by ``tests/test_news_content_ssrf.py``
+    (unit tests exercising ``_validate_url`` → ``_is_private_ip``
+    directly with mocked DNS), so bypassing it here does NOT delete
+    coverage. **Do not add SSRF-rejection assertions to this file** —
+    they would silently pass under this autouse fixture.
     """
     monkeypatch.setattr(news_extractor, "_is_private_ip", lambda host: False)
     yield
