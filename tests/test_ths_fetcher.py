@@ -1377,6 +1377,7 @@ class TestGetBoardStocks:
         class _EndOfPagination:
             """THS's 'we have no more data' signal — sometimes a clean
             200 empty body, sometimes a small 401/403 body."""
+
             status_code = 401
             encoding = "utf-8"
             text = "<html>Unauthorized</html>"
@@ -1575,6 +1576,7 @@ class TestGetBoardStocks:
 
         class _MidPaginationAuth:
             """THS returning 401 mid-pagination (NOT on the last page)."""
+
             status_code = 401
             encoding = "utf-8"
             text = "<html>Unauthorized</html>"
@@ -1595,7 +1597,6 @@ class TestGetBoardStocks:
         assert result[9]["stock_code"] == "300749"
         # Loop broke on page2; page3 was never issued.
         assert mock_get.call_count == 2
-
 
     def test_ths_boundary_signal_error_is_subclass_of_data_fetch_error(self):
         """ThsBoundarySignalError is a DataFetchError subclass; carries status_code.
@@ -1632,6 +1633,7 @@ class TestBoardStocksSortFieldMap:
         from stock_data.data_provider.fetchers.ths_fetcher import (
             _THS_BOARD_STOCKS_SORT_FIELD_MAP,
         )
+
         assert len(_THS_BOARD_STOCKS_SORT_FIELD_MAP) == 11
 
     def test_field_map_known_entries(self):
@@ -1639,17 +1641,18 @@ class TestBoardStocksSortFieldMap:
         from stock_data.data_provider.fetchers.ths_fetcher import (
             _THS_BOARD_STOCKS_SORT_FIELD_MAP,
         )
+
         expected = {
-            "change_pct":        "199112",
-            "price":             "10",
-            "turnover_rate":     "1968584",
-            "volume_ratio":      "1771976",
-            "amplitude":         "526792",
-            "change_amount":     "264648",
-            "change_speed":      "48",
-            "amount":            "19",
-            "pe_ratio":          "2034120",
-            "float_market_cap":  "3475914",
+            "change_pct": "199112",
+            "price": "10",
+            "turnover_rate": "1968584",
+            "volume_ratio": "1771976",
+            "amplitude": "526792",
+            "change_amount": "264648",
+            "change_speed": "48",
+            "amount": "19",
+            "pe_ratio": "2034120",
+            "float_market_cap": "3475914",
             "free_float_shares": "407",
         }
         assert _THS_BOARD_STOCKS_SORT_FIELD_MAP == expected
@@ -1660,12 +1663,12 @@ class TestBoardStocksUrlTemplate:
         from stock_data.data_provider.fetchers.ths_fetcher import (
             _BOARD_STOCKS_URL_TEMPLATE,
         )
+
         url = _BOARD_STOCKS_URL_TEMPLATE.format(
             concept_id="301085", field_code="10", order="desc", page=1
         )
         assert url == (
-            "https://q.10jqka.com.cn/gn/detail/code/301085"
-            "/field/10/order/desc/page/1/ajax/1/"
+            "https://q.10jqka.com.cn/gn/detail/code/301085/field/10/order/desc/page/1/ajax/1/"
         )
 
 
@@ -1674,6 +1677,7 @@ class TestGetBoardStocksTopNAndSort:
 
     def _board_stocks_test_target(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
         return ThsFetcher()
 
     def test_get_board_stocks_rejects_unknown_sort_by(self):
@@ -1681,7 +1685,10 @@ class TestGetBoardStocksTopNAndSort:
         fetcher = self._board_stocks_test_target()
         with pytest.raises(DataFetchError, match="sort_by='p_e'"):
             fetcher.get_board_stocks(
-                board_code="301085", top_n=10, sort_by="p_e", sort_order="desc",
+                board_code="301085",
+                top_n=10,
+                sort_by="p_e",
+                sort_order="desc",
             )
 
     def test_get_board_stocks_rejects_invalid_sort_order(self):
@@ -1689,7 +1696,10 @@ class TestGetBoardStocksTopNAndSort:
         fetcher = self._board_stocks_test_target()
         with pytest.raises(DataFetchError, match="sort_order='random'"):
             fetcher.get_board_stocks(
-                board_code="301085", top_n=10, sort_by="change_pct", sort_order="random",
+                board_code="301085",
+                top_n=10,
+                sort_by="change_pct",
+                sort_order="random",
             )
 
     def test_get_board_stocks_top_n_clamped_to_50(self):
@@ -1697,7 +1707,10 @@ class TestGetBoardStocksTopNAndSort:
         fetcher = self._board_stocks_test_target()
         with patch.object(fetcher, "_fetch_ths_board_stocks_page", return_value=[]) as mock_page:
             fetcher.get_board_stocks(
-                board_code="301085", top_n=200, sort_by="change_pct", sort_order="desc",
+                board_code="301085",
+                top_n=200,
+                sort_by="change_pct",
+                sort_order="desc",
             )
         # _MAX_BOARD_STOCKS_PAGES=50 是 hard cap; top_n=200 clamp 到 50 → ceil(50/10)+1=6 attempts
         # max_pages = ceil(top_n/10) + 1 = ceil(50/10)+1 = 6
@@ -1707,6 +1720,7 @@ class TestGetBoardStocksTopNAndSort:
     def test_fetch_ths_board_stocks_page_accepts_field_code_and_order(self):
         """`_fetch_ths_board_stocks_page` 接收 field_code + order kwarg."""
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
         fetcher = ThsFetcher()
         # Bypass v-token mint (avoids py_mini_racer import during tests).
         v_token_patcher = patch.object(ThsFetcher, "_v_token", return_value="x")
@@ -1716,10 +1730,77 @@ class TestGetBoardStocksTopNAndSort:
                 mock_get.return_value.text = "<table></table>"
                 mock_get.return_value.status_code = 200
                 fetcher._fetch_ths_board_stocks_page(
-                    "301085", 1, field_code="10", order="desc",
+                    "301085",
+                    1,
+                    field_code="10",
+                    order="desc",
                 )
                 called_url = mock_get.call_args[0][0]
                 assert "field/10/" in called_url
                 assert "order/desc/" in called_url
         finally:
             v_token_patcher.stop()
+
+
+class TestParseFreeFloat:
+    """_parse_free_float 单元: 解析 THS 上游 'N.NN亿' 格式."""
+
+    def test_parses_standard_yi_format(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import _parse_free_float
+
+        assert _parse_free_float("4.73亿") == 473_000_000
+        assert _parse_free_float("27.16亿") == 2_716_000_000
+
+    def test_none_on_dash(self):
+        """停牌 / 无数据股票上游是 '--' → None."""
+        from stock_data.data_provider.fetchers.ths_fetcher import _parse_free_float
+
+        assert _parse_free_float("--") is None
+        assert _parse_free_float("-") is None
+        assert _parse_free_float("") is None
+        assert _parse_free_float(None) is None
+
+    def test_none_on_unrecognized_format(self):
+        """上游格式变化 ('xx千万' 等) 时降级到 None, 不抛错."""
+        from stock_data.data_provider.fetchers.ths_fetcher import _parse_free_float
+
+        assert _parse_free_float("100万") is None
+        assert _parse_free_float("not-a-number") is None
+
+
+class TestParseBoardStocksRow14Cols:
+    """_parse_ths_board_stocks_row 现在解 14 列 (旧版 9 列)."""
+
+    def test_all_14_columns_parsed(self):
+        """idx 0..13 全部映射到已知字段."""
+        from bs4 import BeautifulSoup
+
+        from stock_data.data_provider.fetchers.ths_fetcher import (
+            _parse_ths_board_stocks_row,
+        )
+
+        # Build a synthetic <tr> with 14 <td>s.
+        html = """
+        <tr><td>1</td><td>000034</td><td>神州数码</td><td>12.34</td><td>5.50</td>
+        <td>0.65</td><td>0.10</td><td>8.70</td><td>1.85</td><td>2.31</td>
+        <td>591000000.0</td><td>4.73亿</td><td>6631000000.0</td><td>37.59</td></tr>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        tr = soup.select_one("tr")
+        tds = tr.find_all("td")
+        row = _parse_ths_board_stocks_row(tds)
+        assert row is not None
+        assert row["stock_code"] == "000034"
+        assert row["stock_name"] == "神州数码"
+        assert row["price"] == 12.34
+        assert row["change_pct"] == 5.50
+        assert row["change_amount"] == 0.65
+        assert row["change_speed"] == 0.10  # idx 6
+        assert row["turnover_rate"] == 8.70
+        assert row["volume_ratio"] == 1.85  # idx 8
+        assert row["amplitude"] == 2.31  # idx 9
+        assert row["amount"] == 591000000.0  # idx 10 (raw float, safe_float)
+        assert row["free_float_shares"] == 473_000_000  # idx 11 = 4.73亿 (free-float helper)
+        assert row["float_market_cap"] == 6631000000.0  # idx 12 (raw float, safe_float)
+        assert row["pe_ratio"] == 37.59
+        assert row["volume"] is None  # idx 14-col schema has no volume, only amount

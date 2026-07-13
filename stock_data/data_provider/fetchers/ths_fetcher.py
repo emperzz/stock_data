@@ -22,6 +22,7 @@ APIs:
 import logging
 import math
 import os
+import re
 import time
 from datetime import date as _date
 from datetime import datetime, timedelta
@@ -36,6 +37,7 @@ from tenacity import (
 )
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
+from ..core.types import safe_float
 from ..persistence.board import THS_CONCEPT_SUBTYPE, THS_INDUSTRY_SUBTYPE
 from ..utils.http import json_get, json_post
 from ..utils.normalize import normalize_stock_code
@@ -65,6 +67,37 @@ class ThsBoundarySignalError(DataFetchError):
 
 
 _BOUNDARY_TOLERATED_STATUSES: frozenset[int] = frozenset({401, 403})
+
+
+def _parse_free_float(s: str | None) -> int | None:
+    """Parse THS upstream large-value column → int (shares or 元).
+
+    THS 上游对 流通股 / 流通市值 / 成交额 等大数字用 'N.NN亿' 中文单位,
+    但也保留旧版 raw-integer 的 fallthrough (测试 fixture / 早期版本兼容).
+
+    Accepted formats:
+      - ``'4.73亿'``  →  ``473_000_000``  (× 1e8)
+      - ``'27.16亿'`` →  ``2_716_000_000`` (× 1e8)
+      - ``'100000000'`` →  ``100_000_000``  (raw integer fallthrough)
+
+    Returns:
+        int | None — None on ``'--'`` / ``'-'`` / 空字符串 / ``None`` /
+        未识别格式 (上游格式变化时安全降级而非抛错). 调用方靠 schema
+        Optional 接受 None.
+
+    2026-07-13 实测上游格式稳定; regex 严格匹配 + raw fallthrough,
+    未来微调时降级到 None 而不是抛 ValueError.
+    """
+    s = (s or "").strip().replace(",", "").replace("\xa0", "").replace("．", ".")
+    if not s or s in ("--", "-"):
+        return None
+    m = re.match(r"^([0-9]+(?:\.[0-9]+)?)亿$", s)
+    if m:
+        return int(round(float(m.group(1)) * 1e8))
+    # Strict integer-only fallthrough (compat with raw-integer fixture).
+    if re.match(r"^\d+$", s):
+        return int(s)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -204,17 +237,17 @@ _BOARD_STOCKS_URL_TEMPLATE = (
 # THS 上游列代码 (从 <th a field="..."> 实测) → python attr name.
 # 2026-07-13 playwright probe. 新加任何 key 需 route Literal 同步开放.
 _THS_BOARD_STOCKS_SORT_FIELD_MAP: dict[str, str] = {
-    "change_pct":        "199112",   # 涨跌幅(%)
-    "price":             "10",       # 现价
-    "turnover_rate":     "1968584",  # 换手(%)
-    "volume_ratio":      "1771976",  # 量比
-    "amplitude":         "526792",   # 振幅(%)
-    "change_amount":     "264648",   # 涨跌(元)
-    "change_speed":      "48",       # 涨速(%)
-    "amount":            "19",       # 成交额(元)
-    "pe_ratio":          "2034120",  # 市盈率
-    "float_market_cap":  "3475914",  # 流通市值(元)
-    "free_float_shares": "407",      # 流通股(股)
+    "change_pct": "199112",  # 涨跌幅(%)
+    "price": "10",  # 现价
+    "turnover_rate": "1968584",  # 换手(%)
+    "volume_ratio": "1771976",  # 量比
+    "amplitude": "526792",  # 振幅(%)
+    "change_amount": "264648",  # 涨跌(元)
+    "change_speed": "48",  # 涨速(%)
+    "amount": "19",  # 成交额(元)
+    "pe_ratio": "2034120",  # 市盈率
+    "float_market_cap": "3475914",  # 流通市值(元)
+    "free_float_shares": "407",  # 流通股(股)
 }
 
 _STOCK_CONCEPT_LIST_URL = (
@@ -700,61 +733,6 @@ class ThsFetcher(BaseFetcher):
     # 板块成分股 (Board Stocks) — q.10jqka.com.cn AJAX endpoint
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _parse_ths_board_stocks_row(tds: list) -> dict | None:
-        """Parse one <tr> from q.10jqka.com.cn board-stocks HTML into a dict.
-
-        14 columns (固定):
-        idx 0:  序号 (string, ignored)
-        idx 1:  代码 (string)
-        idx 2:  名称 (string)
-        idx 3:  现价 (float | None)
-        idx 4:  涨跌幅 (float | None, %)
-        idx 5:  涨跌 (float | None, 元)
-        idx 6:  涨速 (float | None, %)
-        idx 7:  换手 (float | None, %)
-        idx 8:  量比 (float | None)
-        idx 9:  振幅 (float | None, %)
-        idx 10: 成交额 (int | None, 元)
-        idx 11: 流通股 (int | None, 股)
-        idx 12: 流通市值 (float | None, 元)
-        idx 13: 市盈率 (float | None)
-
-        Returns None when ``td[1]`` (code) is missing — that row is
-        malformed and gets skipped silently.
-
-        ``--`` (em-dash) maps to None via ``safe_float`` in core.types.
-        """
-        from ..core.types import safe_float
-
-        if len(tds) < 3:
-            return None
-        stock_code = tds[1].get_text(strip=True)
-        if not stock_code:
-            return None
-        stock_name = tds[2].get_text(strip=True)
-        # Exchange inferred from the code prefix (matches zzshare/eastmoney
-        # convention: 'sh' for 沪, 'sz' for 深, '' for 北交所/未知).
-        code_prefix = stock_code[:1]
-        exchange = (
-            "sh" if code_prefix in ("6", "9") else ("sz" if code_prefix in ("0", "3") else "")
-        )
-        return {
-            "stock_code": stock_code,
-            "stock_name": stock_name,
-            "exchange": exchange,
-            "price": safe_float(tds[3].get_text(strip=True)) if len(tds) > 3 else None,
-            "change_pct": safe_float(tds[4].get_text(strip=True)) if len(tds) > 4 else None,
-            "change_amount": safe_float(tds[5].get_text(strip=True)) if len(tds) > 5 else None,
-            "turnover_rate": safe_float(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
-            # THS field/199112 上游只有 14 列,没有 成交量(手) 字段 — 现有
-            # 14 列中 idx 10 是 成交额(元),不是 成交量(股). 因为 BoardStockInfo
-            # schema 的 volume 字段语义是 成交量(股),我们必须把 volume 留 None
-            # 而不是塞成交额进去 (错把元当成股,会误导调用方).
-            "volume": None,
-            "amount": safe_float(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
-        }
-
     def _fetch_ths_board_stocks_page(
         self,
         concept_id: str,
@@ -781,7 +759,10 @@ class ThsFetcher(BaseFetcher):
         stock names decode to garbage.
         """
         url = _BOARD_STOCKS_URL_TEMPLATE.format(
-            concept_id=concept_id, field_code=field_code, order=order, page=page,
+            concept_id=concept_id,
+            field_code=field_code,
+            order=order,
+            page=page,
         )
         headers = {
             "User-Agent": THS_UA,
@@ -889,8 +870,7 @@ class ThsFetcher(BaseFetcher):
             )
         if sort_order not in ("asc", "desc"):
             raise DataFetchError(
-                f"[ThsFetcher] get_board_stocks: sort_order={sort_order!r} "
-                f"must be 'asc' or 'desc'"
+                f"[ThsFetcher] get_board_stocks: sort_order={sort_order!r} must be 'asc' or 'desc'"
             )
         # Defensive clamp: THS upstream hard cap is 50 (=5 pages * 10).
         top_n = max(1, min(top_n, 50))
@@ -901,7 +881,10 @@ class ThsFetcher(BaseFetcher):
         for page in range(1, max_pages + 1):
             try:
                 rows = self._fetch_ths_board_stocks_page(
-                    board_code, page, field_code=field_code, order=sort_order,
+                    board_code,
+                    page,
+                    field_code=field_code,
+                    order=sort_order,
                 )
             except ThsBoundarySignalError as e:
                 if not all_rows:
@@ -2153,3 +2136,81 @@ class ThsFetcher(BaseFetcher):
                 continue
             out.append(item)
         return out
+
+
+# ---------------------------------------------------------------------------
+# Module-level parse helper for ``ThsFetcher._parse_ths_board_stocks_row``.
+#
+# Defined at module scope (not as a class static method) so that unit tests
+# can import it directly without instantiating the fetcher. The function
+# only depends on module-level ``safe_float`` and ``_parse_free_float`` —
+# no instance state — so promoting it to module scope is safe and makes
+# the contract testable in isolation. Re-attached to the class below as
+# a static method so internal callers continue to use ``self._parse_ths_...``.
+# ---------------------------------------------------------------------------
+
+
+def _parse_ths_board_stocks_row(tds: list) -> dict | None:
+    """Parse one <tr> from q.10jqka.com.cn board-stocks HTML into a dict.
+
+    14 columns (固定):
+    idx 0:  序号 (string, ignored)
+    idx 1:  代码 (string)
+    idx 2:  名称 (string)
+    idx 3:  现价 (float | None)
+    idx 4:  涨跌幅 (float | None, %)
+    idx 5:  涨跌 (float | None, 元)
+    idx 6:  涨速 (float | None, %)
+    idx 7:  换手 (float | None, %)
+    idx 8:  量比 (float | None)
+    idx 9:  振幅 (float | None, %)
+    idx 10: 成交额 (int | None, 元)
+    idx 11: 流通股 (int | None, 股)
+    idx 12: 流通市值 (float | None, 元)
+    idx 13: 市盈率 (float | None)
+
+    Returns None when ``td[1]`` (code) is missing — that row is
+    malformed and gets skipped silently.
+
+    ``--`` (em-dash) maps to None via ``safe_float`` in core.types.
+    """
+    if len(tds) < 3:
+        return None
+    stock_code = tds[1].get_text(strip=True)
+    if not stock_code:
+        return None
+    stock_name = tds[2].get_text(strip=True)
+    # Exchange inferred from the code prefix (matches zzshare/eastmoney
+    # convention: 'sh' for 沪, 'sz' for 深, '' for 北交所/未知).
+    code_prefix = stock_code[:1]
+    exchange = (
+        "sh" if code_prefix in ("6", "9") else ("sz" if code_prefix in ("0", "3") else "")
+    )
+    return {
+        "stock_code": stock_code,
+        "stock_name": stock_name,
+        "exchange": exchange,
+        "price": safe_float(tds[3].get_text(strip=True)) if len(tds) > 3 else None,
+        "change_pct": safe_float(tds[4].get_text(strip=True)) if len(tds) > 4 else None,
+        "change_amount": safe_float(tds[5].get_text(strip=True)) if len(tds) > 5 else None,
+        "change_speed": safe_float(tds[6].get_text(strip=True)) if len(tds) > 6 else None,
+        "turnover_rate": safe_float(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
+        "volume_ratio": safe_float(tds[8].get_text(strip=True)) if len(tds) > 8 else None,
+        "amplitude": safe_float(tds[9].get_text(strip=True)) if len(tds) > 9 else None,
+        "amount": safe_float(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
+        "free_float_shares": _parse_free_float(tds[11].get_text(strip=True))
+        if len(tds) > 11
+        else None,
+        "float_market_cap": safe_float(tds[12].get_text(strip=True))
+        if len(tds) > 12
+        else None,
+        "pe_ratio": safe_float(tds[13].get_text(strip=True)) if len(tds) > 13 else None,
+        # THS field/199112 上游只有 14 列,没有 成交量(手) 字段 — 现有
+        # 14 列中 idx 10 是 成交额(元),不是 成交量(股). 因为 BoardStockInfo
+        # schema 的 volume 字段语义是 成交量(股),我们必须把 volume 留 None
+        # 而不是塞成交额进去 (错把元当成股,会误导调用方).
+        "volume": None,
+    }
+
+
+ThsFetcher._parse_ths_board_stocks_row = staticmethod(_parse_ths_board_stocks_row)
