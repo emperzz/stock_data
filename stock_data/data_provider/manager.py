@@ -813,8 +813,20 @@ class DataFetcherManager:
         source: str,
         include_quote: bool = False,
         board_type: str | None = None,
+        *,
+        sort_by: str | None = None,         # 2026-07-13: forward to fetcher
+        sort_order: str = "desc",           # 2026-07-13: forward to fetcher
+        top_n: int = 50,                    # 2026-07-13: forward to fetcher
     ) -> tuple[list[dict], str]:
         """Get stocks belonging to a board from the named source.
+
+        New keyword-only params (2026-07-13): sort_by / sort_order / top_n.
+        Forwarded to the fetcher when the chosen source implements them.
+        Fetchers whose get_board_stocks(**kwargs) absorbs them silently
+        (ZzshareFetcher, ZhituFetcher, MyquantFetcher) work without per-source
+        changes; ThsFetcher explicitly reads the 3 kwargs; EastMoneyFetcher
+        has no **kwargs, so route-layer 400 cross-validation guarantees
+        eastmoney never receives these.
 
         Args:
             board_code: 6-digit ``BK`` prefixed board code.
@@ -835,7 +847,13 @@ class DataFetcherManager:
         """
 
         def call(f):
-            kwargs = {"source": source, "include_quote": include_quote}
+            kwargs = {
+                "source": source,
+                "include_quote": include_quote,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+                "top_n": top_n,
+            }
             # Only pass board_type when explicitly set — keeps the call
             # shape identical for callers that haven't migrated yet
             # (assert_called_once_with tests in test_board_source_routing).

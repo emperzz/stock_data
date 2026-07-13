@@ -247,7 +247,14 @@ def test_manager_get_board_stocks_passes_board_code_to_fetcher():
     with patch.object(manager, "_with_source", side_effect=spy):
         manager.get_board_stocks("BK0001", source="EastMoneyFetcher")
 
-    em.get_board_stocks.assert_called_once_with("BK0001", source="EastMoneyFetcher", include_quote=False)
+    em.get_board_stocks.assert_called_once_with(
+        "BK0001",
+        source="EastMoneyFetcher",
+        include_quote=False,
+        sort_by=None,
+        sort_order="desc",
+        top_n=50,
+    )
 
 
 def test_manager_get_stock_boards_passes_stock_code_to_fetcher():
