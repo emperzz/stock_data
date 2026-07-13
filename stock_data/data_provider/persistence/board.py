@@ -1081,55 +1081,58 @@ def get_board_stocks(
     if not stocks:
         return [], origin, effective_source, reason, False, cached_count
 
-    needs_fill_in = len(stocks) >= THS_HARD_CAP
-
+    # 2026-07-13: per user Q&A — "include_quote=true 时, 总是调一次 ZZSHARE
+    # 拉全量成员清单, 补全剩余股票" (regardless of top_n / len(stocks)).
+    # 之前的 heuristic (len(stocks) >= 50) 让 top_n<50 的请求静默截断
+    # 200 只成分股的 board, THS 返回 10 行, ZZSHARE 不被调, client 误以为
+    # board 只有 10 只 — 契约撒谎. 新行为: 总是 1 次 ZZSHARE upstream call.
     suffix_no_quote: list[dict] = []
-    if needs_fill_in:
-        try:
-            zz_rows, _ = manager.get_board_stocks(
-                board_code=board_code,
-                source="zzshare",
-                include_quote=False,
-            )
-        except DataFetchError as e:
-            logger.warning(
-                f"[BoardCache] ZZSHARE fill-in for {board_code} failed: {e}; "
-                f"falling back to THS-only top-{len(stocks)}"
-            )
-            zz_rows = []
-
-        quote_codes = {s["stock_code"] for s in stocks if s.get("stock_code")}
-        suffix_no_quote = [
-            r
-            for r in (zz_rows or [])
-            if r.get("stock_code") and r["stock_code"] not in quote_codes
-        ]
-
-    # quote_truncated 3-branch decision:
-    #   needs_fill_in=False → 板上 <50 → not truncated
-    #   needs_fill_in=True, ZZSHARE 成功, suffix 非空 → 真截断
-    #   needs_fill_in=True, ZZSHARE 失败 OR 板真 50 只 → 保守 True
-    if not needs_fill_in:
-        quote_truncated = False
-    elif suffix_no_quote:
-        quote_truncated = True
-    else:
-        # needs_fill_in=True but ZZSHARE 路径空 (失败 OR board 真有 50 只)
-        quote_truncated = True  # 保守: 我们无法验证 = 截断
-        logger.info(
-            f"[BoardCache] {board_code}: heuristic fired but no suffix added; "
-            f"reporting quote_truncated=True conservatively"
+    try:
+        zz_rows, _ = manager.get_board_stocks(
+            board_code=board_code,
+            source="zzshare",
+            include_quote=False,
         )
+    except DataFetchError as e:
+        logger.warning(
+            f"[BoardCache] ZZSHARE fill-in for {board_code} failed: {e}; "
+            f"falling back to THS-only top-{len(stocks)}"
+        )
+        zz_rows = []
 
-    # quote_total_in_board per 3-case logic (cached_count is the
-    # initial DB row count, never reassigned):
-    #   1. short-circuit (no heuristic fired) → cached_count (cache is truth)
-    #   2. heuristic fired + suffix non-empty → max(cached_count, len(stocks)+len(suffix_no_quote))
-    #   3. heuristic fired but suffix empty → cached_count (conservative True; cache is what we know)
-    if not needs_fill_in:
-        quote_total_in_board = cached_count
-    elif suffix_no_quote:
+    quote_codes = {s["stock_code"] for s in stocks if s.get("stock_code")}
+    suffix_no_quote = [
+        r
+        for r in (zz_rows or [])
+        if r.get("stock_code") and r["stock_code"] not in quote_codes
+    ]
+
+    # quote_truncated: True iff suffix 非空 (真截断 observed) OR
+    # ZZSHARE 失败/空 (无法验证, 保守 True). False iff suffix 空且
+    # ZZSHARE 至少返回了行 — 表示 board 真有 top_n 只成员.
+    if suffix_no_quote:
+        quote_truncated = True
+    elif not zz_rows:
+        # ZZSHARE failed or returned empty; can't verify completeness.
+        # Conservative: report True so clients can re-check.
+        quote_truncated = True
+        logger.info(
+            f"[BoardCache] {board_code}: include_quote=true with no ZZSHARE "
+            f"verification; quote_truncated=True conservatively"
+        )
+    else:
+        # ZZSHARE returned, suffix empty → board genuinely has only what THS gave.
+        quote_truncated = False
+
+    # quote_total_in_board:
+    #   suffix 非空 → len(stocks) + len(suffix_no_quote)  (ZZSHARE 是真板)
+    #   suffix 空 + ZZSHARE 至少返回 → max(cached_count, len(stocks))
+    #     (cached_count >= len(stocks) when cache had more rows pre-refresh)
+    #   suffix 空 + ZZSHARE 失败 → cached_count (conservative, 不知道 board 真大小)
+    if suffix_no_quote:
         quote_total_in_board = max(cached_count, len(stocks) + len(suffix_no_quote))
+    elif zz_rows:
+        quote_total_in_board = max(cached_count, len(stocks))
     else:
         quote_total_in_board = cached_count
 

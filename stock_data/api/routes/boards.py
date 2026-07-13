@@ -453,11 +453,11 @@ def get_board_stocks(
         50, ge=1, le=50,
         description=(
             "Max number of stocks to fetch live quotes for "
-            "(mirrors THS upstream 50-stock hard cap). "
-            "ONLY effective when include_quote=true. "
-            "When the board's full member count exceeds top_n, "
-            "the response carries 'quote_truncated=true' with the "
-            "remaining stocks filled in from ZZSHARE (no quote fields)."
+            "(default 50, mirrors THS upstream hard cap). "
+            "When include_quote=true, the server always invokes a single "
+            "ZZSHARE membership call to fill in the remaining unquoted "
+            "members; the response contains quote_truncated=true iff that "
+            "fill-in added rows (or ZZSHARE itself failed)."
         ),
     ),
 ) -> BoardStocksResponse:

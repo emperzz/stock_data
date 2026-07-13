@@ -452,8 +452,10 @@ class BoardStocksResponse(BaseModel):
     quote_total_in_board: int | None = Field(
         default=None,
         description=(
-            "Total stock count in the board (before top_n truncation). "
-            "None when the caller did not request sorting."
+            "Total number of stocks in the board. Always populated on "
+            "include_quote=true (server does a ZZSHARE fill-in to discover "
+            "the true board size). May be None on include_quote=false cold "
+            "cache; populated with cached count when cache has rows."
         ),
     )
 

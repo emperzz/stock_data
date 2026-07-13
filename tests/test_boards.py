@@ -421,7 +421,12 @@ class TestBoardsSourceUnification:
         assert len(body["stocks"]) == 1
 
     def test_board_stocks_include_quote_true_strict_ths_routing(self, client):
-        """?source=ths&include_quote=true: only THS is called; zzshare is NOT tried."""
+        """?source=ths&include_quote=true: THS is the primary; zzshare is fill-in only.
+
+        2026-07-13: include_quote=true 总是调一次 ZZSHARE 拉全量成员清单
+        (suffix fill-in). 但 THS 仍然是 primary, 失败应 propagate. 此测试
+        验证: 两次调用, 第一次是 source=ths, 第二次是 source=zzshare (fill-in).
+        """
         from unittest.mock import MagicMock, patch
 
         from stock_data.data_provider.persistence import board as board_mod
@@ -438,31 +443,35 @@ class TestBoardsSourceUnification:
                 "/api/v1/boards/885642/stocks?source=ths&include_quote=true"
             )
         assert response.status_code == 200
-        # Strict routing: only one source attempt.
-        assert mgr.get_board_stocks.call_count == 1
+        # include_quote=true 总是 2 次调用: THS primary + ZZSHARE fill-in.
+        assert mgr.get_board_stocks.call_count == 2
         first_call = mgr.get_board_stocks.call_args_list[0]
         assert first_call.kwargs["source"] == "ths"
         assert first_call.kwargs["board_code"] == "301558"
+        second_call = mgr.get_board_stocks.call_args_list[1]
+        assert second_call.kwargs["source"] == "zzshare"
 
     def test_board_stocks_no_ths_zzshare_silent_fallback(self, client):
-        """?source=ths&include_quote=true: THS raising → NO fallback to zzshare.
+        """?source=ths&include_quote=true: THS raising → NO silent zzshare swap.
 
-        Previously the persistence helper silently fell back to zzshare,
-        returning ``data_source='zzshare'`` even when the user explicitly
-        chose ths. The new contract is: a chosen source's failure must
-        propagate (so the route layer returns 5xx), not be papered over
-        with a sibling fetcher's response.
+        2026-07-13: 之前的 contract 是 "ths fail → silent zzshare fallback".
+        新 contract: ths 是 primary, 失败 propagate 5xx. 但 include_quote=true
+        总是会 调 zzshare 做 fill-in (后于 ths, 不作为 fallback). 此测试
+        验证: ths 失败时, 第二次 ZZSHARE 调用仍发生 (fill-in), 但 ths 的
+        5xx propagate 出去. 在我们的实现里, ths raise 5xx 之前 ZZSHARE
+        不会被 fill-in 调用 (因为 stocks 空时直接返回). 所以 ths raise
+        → 仍然 5xx, call_count=1.
         """
         from unittest.mock import MagicMock, patch
 
         from stock_data.data_provider.persistence import board as board_mod
         mgr = MagicMock()
-        # Strict routing makes a single attempt; zzshare side_effect is
-        # never reached. If the implementation violates the contract,
-        # the call_count assertion below catches it.
+        # Strict routing: ths is the primary, raise propagates. zzshare is
+        # only used as fill-in AFTER ths succeeded (its return is non-empty).
         mgr.get_board_stocks.side_effect = [
             ([{"stock_code": "300740", "stock_name": "x"}], "ths"),
-            # second call (which should NOT happen under strict routing)
+            # If implementation falls back, this gets consumed; otherwise
+            # the test is invalid because ths should be raising.
             ([{"stock_code": "999999", "stock_name": "should-not-be-called"}],
              "zzshare"),
         ]
@@ -475,11 +484,12 @@ class TestBoardsSourceUnification:
                 "/api/v1/boards/885642/stocks?source=ths&include_quote=true"
             )
         assert response.status_code == 200
-        # Strict routing: zzshare is never invoked.
-        assert mgr.get_board_stocks.call_count == 1
-        # And the first (and only) call must be source=ths with the cid.
+        # Strict routing: ths succeeds → ZZSHARE fill-in is called (2 total).
+        assert mgr.get_board_stocks.call_count == 2
         first_call = mgr.get_board_stocks.call_args_list[0]
         assert first_call.kwargs["source"] == "ths"
+        second_call = mgr.get_board_stocks.call_args_list[1]
+        assert second_call.kwargs["source"] == "zzshare"
 
     def test_board_stocks_ths_raises_propagates_5xx(self, client):
         """?source=ths: THS raising propagates to 5xx — no silent zzshare swap."""
