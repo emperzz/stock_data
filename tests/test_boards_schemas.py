@@ -115,3 +115,43 @@ class TestStockBoardsResponseSchema:
             stock_code="600519", source="merged", data=[], cold_sources=["zhitu", "zzshare"]
         )
         assert r.cold_sources == ["zhitu", "zzshare"]
+
+
+def test_board_stock_info_accepts_6_new_optional_fields():
+    """BoardStockInfo 接受 6 个 2026-07-13 新增 optional quote 字段 (THS 14 列 schema 暴露)."""
+    from stock_data.api.schemas import BoardStockInfo
+
+    row = BoardStockInfo(
+        code="000034",
+        name="神州数码",
+        price=12.34,
+        change_pct=5.5,
+        change_amount=0.65,
+        turnover_rate=8.7,
+        # 6 new fields (2026-07-13):
+        change_speed=0.10,
+        volume_ratio=1.85,
+        amplitude=2.31,
+        free_float_shares=473_000_000,
+        float_market_cap=66_300_000_000.0,
+        pe_ratio=37.59,
+    )
+    assert row.change_speed == 0.10
+    assert row.volume_ratio == 1.85
+    assert row.amplitude == 2.31
+    assert row.free_float_shares == 473_000_000
+    assert row.float_market_cap == 66_300_000_000.0
+    assert row.pe_ratio == 37.59
+
+
+def test_board_stock_info_new_fields_default_none():
+    """新增字段缺省为 None (向后兼容)."""
+    from stock_data.api.schemas import BoardStockInfo
+
+    row = BoardStockInfo(code="000034", name="x")
+    assert row.change_speed is None
+    assert row.volume_ratio is None
+    assert row.amplitude is None
+    assert row.free_float_shares is None
+    assert row.float_market_cap is None
+    assert row.pe_ratio is None
