@@ -542,6 +542,7 @@ class BoardsMixin:
         source: str = "eastmoney",
         include_quote: bool = False,
         board_type: str | None = None,
+        **kwargs,
     ) -> list[dict]:
         """Get stocks in a board (unified entry — EastMoney doesn't distinguish
         concept/industry at the board level, both share the ``BK`` prefix).

@@ -821,7 +821,7 @@ class ThsFetcher(BaseFetcher):
         include_quote: bool = False,
         board_type: str | None = None,
         top_n: int = 50,
-        sort_by: str = "change_pct",
+        sort_by: str | None = None,
         sort_order: str = "desc",
         **kwargs,
     ) -> list[dict]:
@@ -863,6 +863,7 @@ class ThsFetcher(BaseFetcher):
             DataFetchError: v-token mint failed, HTTP non-2xx on any page,
                 or network failure on any page.
         """
+        sort_by = sort_by or "change_pct"
         if sort_by not in _THS_BOARD_STOCKS_SORT_FIELD_MAP:
             raise DataFetchError(
                 f"[ThsFetcher] get_board_stocks: sort_by={sort_by!r} not in "
@@ -2197,11 +2198,13 @@ def _parse_ths_board_stocks_row(tds: list) -> dict | None:
         "turnover_rate": safe_float(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
         "volume_ratio": safe_float(tds[8].get_text(strip=True)) if len(tds) > 8 else None,
         "amplitude": safe_float(tds[9].get_text(strip=True)) if len(tds) > 9 else None,
-        "amount": safe_float(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
+        "amount": _parse_free_float(tds[10].get_text(strip=True))
+        if len(tds) > 10
+        else None,
         "free_float_shares": _parse_free_float(tds[11].get_text(strip=True))
         if len(tds) > 11
         else None,
-        "float_market_cap": safe_float(tds[12].get_text(strip=True))
+        "float_market_cap": _parse_free_float(tds[12].get_text(strip=True))
         if len(tds) > 12
         else None,
         "pe_ratio": safe_float(tds[13].get_text(strip=True)) if len(tds) > 13 else None,

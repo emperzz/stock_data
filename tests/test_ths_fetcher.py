@@ -1783,7 +1783,7 @@ class TestParseBoardStocksRow14Cols:
         html = """
         <tr><td>1</td><td>000034</td><td>神州数码</td><td>12.34</td><td>5.50</td>
         <td>0.65</td><td>0.10</td><td>8.70</td><td>1.85</td><td>2.31</td>
-        <td>591000000.0</td><td>4.73亿</td><td>6631000000.0</td><td>37.59</td></tr>
+        <td>5.91亿</td><td>4.73亿</td><td>66.31亿</td><td>37.59</td></tr>
         """
         soup = BeautifulSoup(html, "lxml")
         tr = soup.select_one("tr")
@@ -1799,8 +1799,8 @@ class TestParseBoardStocksRow14Cols:
         assert row["turnover_rate"] == 8.70
         assert row["volume_ratio"] == 1.85  # idx 8
         assert row["amplitude"] == 2.31  # idx 9
-        assert row["amount"] == 591000000.0  # idx 10 (raw float, safe_float)
-        assert row["free_float_shares"] == 473_000_000  # idx 11 = 4.73亿 (free-float helper)
-        assert row["float_market_cap"] == 6631000000.0  # idx 12 (raw float, safe_float)
+        assert row["amount"] == 591_000_000
+        assert row["free_float_shares"] == 473_000_000
+        assert row["float_market_cap"] == 6_631_000_000
         assert row["pe_ratio"] == 37.59
         assert row["volume"] is None  # idx 14-col schema has no volume, only amount
