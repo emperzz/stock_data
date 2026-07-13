@@ -216,8 +216,6 @@ _THS_BOARD_STOCKS_SORT_FIELD_MAP: dict[str, str] = {
     "float_market_cap":  "3475914",  # 流通市值(元)
     "free_float_shares": "407",      # 流通股(股)
 }
-# 安全上限: 防止上游翻页返回异常 (e.g. 全是非空表), 强制终止.
-_MAX_BOARD_STOCKS_PAGES = 50
 
 _STOCK_CONCEPT_LIST_URL = (
     "https://basic.10jqka.com.cn/fuyao/f10_stock_index/concept/v1/stock_concept_list"
@@ -839,8 +837,11 @@ class ThsFetcher(BaseFetcher):
         board_code: str,
         *,
         source: str | None = None,
-        include_quote: bool = False,  # accepted for interface parity; ignored
-        board_type: str | None = None,  # accepted for interface parity; ignored
+        include_quote: bool = False,
+        board_type: str | None = None,
+        top_n: int = 50,
+        sort_by: str = "change_pct",
+        sort_order: str = "desc",
         **kwargs,
     ) -> list[dict]:
         """THS board constituent stocks via q.10jqka.com.cn AJAX endpoint.
@@ -859,6 +860,12 @@ class ThsFetcher(BaseFetcher):
                 already returns quote fields, so this flag is ignored.
             board_type: Accepted for interface parity. Currently unused.
 
+        New kwargs (2026-07-13):
+            sort_by: One of 11 keys in _THS_BOARD_STOCKS_SORT_FIELD_MAP.
+                Default "change_pct".
+            sort_order: "asc" or "desc". Default "desc".
+            top_n: Max number of stocks to fetch. Default 50 (THS hard cap).
+
         Returns:
             ``list[dict]`` — one row per constituent stock. Each row has:
             - ``stock_code`` (e.g. ``"300740"``)
@@ -869,58 +876,39 @@ class ThsFetcher(BaseFetcher):
 
             Empty list on no-data or upstream empty. Multiple pages are
             fanned out internally (10 rows per page, terminated by empty
-            page or ``_MAX_BOARD_STOCKS_PAGES`` cap).
+            page or ``max_pages = ceil(top_n/10) + 1`` cap).
 
         Raises:
             DataFetchError: v-token mint failed, HTTP non-2xx on any page,
                 or network failure on any page.
         """
-        # Page fan-out. Empty page or hard cap terminates the loop.
-        # Hard cap exists because a buggy upstream that returns 10 rows
-        # forever (instead of empty past page N) would otherwise loop
-        # indefinitely.
-        #
-        # On pages PAST the data boundary THS upstream routinely returns
-        # a small 401/403 body instead of a clean empty body — they
-        # obscure the boundary to discourage scraping. If we've already
-        # received data on prior pages, that's not a real failure: it's
-        # their signal that there's nothing left, and we treat it as
-        # graceful end-of-pagination so callers get the rows we DO have
-        # instead of a 5xx (reproduction: 885652 has 15 stocks across
-        # pages 1+2, then page 3 returns 401/417B body).
-        #
-        # Scope per P1 (2026-07-10): ONLY 401/403 are tolerated as
-        # boundary signals (raised as ``ThsBoundarySignalError``, a
-        # ``DataFetchError`` subclass). 5xx (real upstream failure) and
-        # network errors still propagate so the route returns 5xx and
-        # ops dashboards see the upstream breakage as 5xx rate — silent
-        # partial data on real failure is worse than a 5xx.
-        #
-        # Sticky boundary (2026-07-10 trade-off): the first 401/403
-        # after any data has been received ends the pagination loop
-        # immediately, even if subsequent pages would have contained
-        # more rows. This is the simplest way to interpret THS's
-        # "no more data" signal, but it can silently truncate boards
-        # whose upstream returns transient 401/403 mid-pagination.
-        # The _MAX_BOARD_STOCKS_PAGES=50 cap is the only guard
-        # against infinite loops on a buggy upstream; it does not
-        # protect against partial data on a healthy upstream with
-        # flaky 401s. If truncation becomes a recurring issue, the
-        # proper fix is a retry-with-backoff loop, not to relax the
-        # sticky-boundary rule. See
-        # ``tests/test_ths_fetcher.py::TestGetBoardStocks::test_mid_pagination_401_truncates_without_retry``.
+        if sort_by not in _THS_BOARD_STOCKS_SORT_FIELD_MAP:
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_stocks: sort_by={sort_by!r} not in "
+                f"supported set {sorted(_THS_BOARD_STOCKS_SORT_FIELD_MAP.keys())}"
+            )
+        if sort_order not in ("asc", "desc"):
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_stocks: sort_order={sort_order!r} "
+                f"must be 'asc' or 'desc'"
+            )
+        # Defensive clamp: THS upstream hard cap is 50 (=5 pages * 10).
+        top_n = max(1, min(top_n, 50))
+        field_code = _THS_BOARD_STOCKS_SORT_FIELD_MAP[sort_by]
+        max_pages = (top_n + 9) // 10 + 1  # ceil(top_n/10) + 1 buffer
+
         all_rows: list[dict] = []
-        for page in range(1, _MAX_BOARD_STOCKS_PAGES + 1):
+        for page in range(1, max_pages + 1):
             try:
-                rows = self._fetch_ths_board_stocks_page(board_code, page)
+                rows = self._fetch_ths_board_stocks_page(
+                    board_code, page, field_code=field_code, order=sort_order,
+                )
             except ThsBoundarySignalError as e:
-                # First-page failure: no rows yet → upstream is
-                # actually broken. Surface the error so the route can
-                # return 5xx instead of a silent empty list.
                 if not all_rows:
                     raise
                 logger.info(
-                    f"[ThsFetcher] board_stocks({board_code}, page={page}) "
+                    f"[ThsFetcher] board_stocks({board_code}, page={page}, "
+                    f"sort_by={sort_by}, sort_order={sort_order}) "
                     f"HTTP {e.status_code} on beyond-data page; treating as "
                     f"end of pagination ({len(all_rows)} rows collected so far)"
                 )
@@ -928,7 +916,9 @@ class ThsFetcher(BaseFetcher):
             if not rows:
                 break
             all_rows.extend(rows)
-        return all_rows
+            if len(all_rows) >= top_n:
+                break
+        return all_rows[:top_n]
 
     # ------------------------------------------------------------------
     # 板块实时行情 (Board Realtime Quote) — q.10jqka.com.cn 概念详情页 .heading

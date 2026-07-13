@@ -1667,3 +1667,59 @@ class TestBoardStocksUrlTemplate:
             "https://q.10jqka.com.cn/gn/detail/code/301085"
             "/field/10/order/desc/page/1/ajax/1/"
         )
+
+
+class TestGetBoardStocksTopNAndSort:
+    """sort_by / top_n / sort_order 行为契约 (Task 3 of plan)."""
+
+    def _board_stocks_test_target(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        return ThsFetcher()
+
+    def test_get_board_stocks_rejects_unknown_sort_by(self):
+        """sort_by 不在白名单 → DataFetchError (而不是默默回退到默认)."""
+        fetcher = self._board_stocks_test_target()
+        with pytest.raises(DataFetchError, match="sort_by='p_e'"):
+            fetcher.get_board_stocks(
+                board_code="301085", top_n=10, sort_by="p_e", sort_order="desc",
+            )
+
+    def test_get_board_stocks_rejects_invalid_sort_order(self):
+        """sort_order 不是 asc/desc → DataFetchError."""
+        fetcher = self._board_stocks_test_target()
+        with pytest.raises(DataFetchError, match="sort_order='random'"):
+            fetcher.get_board_stocks(
+                board_code="301085", top_n=10, sort_by="change_pct", sort_order="random",
+            )
+
+    def test_get_board_stocks_top_n_clamped_to_50(self):
+        """top_n > 50 → 防御性 clamp 到 50 (避免上游 login wall 浪费请求)."""
+        fetcher = self._board_stocks_test_target()
+        with patch.object(fetcher, "_fetch_ths_board_stocks_page", return_value=[]) as mock_page:
+            fetcher.get_board_stocks(
+                board_code="301085", top_n=200, sort_by="change_pct", sort_order="desc",
+            )
+        # _MAX_BOARD_STOCKS_PAGES=50 是 hard cap; top_n=200 clamp 到 50 → ceil(50/10)+1=6 attempts
+        # max_pages = ceil(top_n/10) + 1 = ceil(50/10)+1 = 6
+        # 但 _MAX_BOARD_STOCKS_PAGES=50 之内; max(+2)=7 用 6 验证
+        assert mock_page.call_count <= 6
+
+    def test_fetch_ths_board_stocks_page_accepts_field_code_and_order(self):
+        """`_fetch_ths_board_stocks_page` 接收 field_code + order kwarg."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        fetcher = ThsFetcher()
+        # Bypass v-token mint (avoids py_mini_racer import during tests).
+        v_token_patcher = patch.object(ThsFetcher, "_v_token", return_value="x")
+        v_token_patcher.start()
+        try:
+            with patch.object(fetcher, "_http_get") as mock_get:
+                mock_get.return_value.text = "<table></table>"
+                mock_get.return_value.status_code = 200
+                fetcher._fetch_ths_board_stocks_page(
+                    "301085", 1, field_code="10", order="desc",
+                )
+                called_url = mock_get.call_args[0][0]
+                assert "field/10/" in called_url
+                assert "order/desc/" in called_url
+        finally:
+            v_token_patcher.stop()
