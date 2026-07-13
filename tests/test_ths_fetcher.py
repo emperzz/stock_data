@@ -1625,3 +1625,45 @@ class TestGetBoardStocks:
         # 5xx / 200 / 302 must NOT be tolerated.
         assert 503 not in _BOUNDARY_TOLERATED_STATUSES
         assert 200 not in _BOUNDARY_TOLERATED_STATUSES
+
+
+class TestBoardStocksSortFieldMap:
+    def test_field_map_has_11_entries(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import (
+            _THS_BOARD_STOCKS_SORT_FIELD_MAP,
+        )
+        assert len(_THS_BOARD_STOCKS_SORT_FIELD_MAP) == 11
+
+    def test_field_map_known_entries(self):
+        """11 个排序键与实测 THS 上游列代码对应 (2026-07-13 playwright probe)."""
+        from stock_data.data_provider.fetchers.ths_fetcher import (
+            _THS_BOARD_STOCKS_SORT_FIELD_MAP,
+        )
+        expected = {
+            "change_pct":        "199112",
+            "price":             "10",
+            "turnover_rate":     "1968584",
+            "volume_ratio":      "1771976",
+            "amplitude":         "526792",
+            "change_amount":     "264648",
+            "change_speed":      "48",
+            "amount":            "19",
+            "pe_ratio":          "2034120",
+            "float_market_cap":  "3475914",
+            "free_float_shares": "407",
+        }
+        assert _THS_BOARD_STOCKS_SORT_FIELD_MAP == expected
+
+
+class TestBoardStocksUrlTemplate:
+    def test_url_template_renders_with_field_code_and_order(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import (
+            _BOARD_STOCKS_URL_TEMPLATE,
+        )
+        url = _BOARD_STOCKS_URL_TEMPLATE.format(
+            concept_id="301085", field_code="10", order="desc", page=1
+        )
+        assert url == (
+            "https://q.10jqka.com.cn/gn/detail/code/301085"
+            "/field/10/order/desc/page/1/ajax/1/"
+        )

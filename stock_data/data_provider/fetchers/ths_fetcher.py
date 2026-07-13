@@ -194,15 +194,28 @@ HSGT_HEADERS = {
 _CONCEPT_DETAIL_URL = "https://q.10jqka.com.cn/gn/detail/code/{slug}/"
 
 # q.10jqka.com.cn AJAX board-stocks endpoint (同花顺概念/行业成分股).
-# field/199112 → 14 列固定字段集 (序号/代码/名称/现价/涨跌幅/涨跌/涨速/换手/
-#                 量比/振幅/成交额/流通股/流通市值/市盈率). 不可改.
-# order/desc   → 涨跌降序 (默认排序).
-# ajax/1/      → 强制走 AJAX HTML 片段 (而非完整页面), 省去无关内容.
-# 翻页由 page/N 段控制, 每页 10 条.
-_BOARD_STOCKS_URL = (
+# THS upstream URL: /field/<code>/order/<dir>/page/N/ajax/1/
+# field/<code> 决定排序键 (199112=涨跌幅); order/<dir> 决定方向;
+# 每页 10 只; ajax/1/ 强制 AJAX HTML 片段 (避免完整页面).
+_BOARD_STOCKS_URL_TEMPLATE = (
     "https://q.10jqka.com.cn/gn/detail/code/{concept_id}"
-    "/field/199112/order/desc/page/{page}/ajax/1/"
+    "/field/{field_code}/order/{order}/page/{page}/ajax/1/"
 )
+# THS 上游列代码 (从 <th a field="..."> 实测) → python attr name.
+# 2026-07-13 playwright probe. 新加任何 key 需 route Literal 同步开放.
+_THS_BOARD_STOCKS_SORT_FIELD_MAP: dict[str, str] = {
+    "change_pct":        "199112",   # 涨跌幅(%)
+    "price":             "10",       # 现价
+    "turnover_rate":     "1968584",  # 换手(%)
+    "volume_ratio":      "1771976",  # 量比
+    "amplitude":         "526792",   # 振幅(%)
+    "change_amount":     "264648",   # 涨跌(元)
+    "change_speed":      "48",       # 涨速(%)
+    "amount":            "19",       # 成交额(元)
+    "pe_ratio":          "2034120",  # 市盈率
+    "float_market_cap":  "3475914",  # 流通市值(元)
+    "free_float_shares": "407",      # 流通股(股)
+}
 # 安全上限: 防止上游翻页返回异常 (e.g. 全是非空表), 强制终止.
 _MAX_BOARD_STOCKS_PAGES = 50
 
@@ -744,8 +757,20 @@ class ThsFetcher(BaseFetcher):
             "amount": safe_float(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
         }
 
-    def _fetch_ths_board_stocks_page(self, concept_id: str, page: int) -> list[dict]:
+    def _fetch_ths_board_stocks_page(
+        self,
+        concept_id: str,
+        page: int,
+        *,
+        field_code: str = "199112",
+        order: str = "desc",
+    ) -> list[dict]:
         """Fetch one page of THS board stocks (10 rows per page).
+
+        ``field_code`` selects the sort column (199112=change_pct, the
+        default preserved for callers that don't care about ordering)
+        and ``order`` picks direction ("desc"/"asc"); both map to the
+        URL template placeholders consumed by ``_BOARD_STOCKS_URL_TEMPLATE``.
 
         Returns ``[]`` when the page is empty (caller treats as the
         end-of-pagination signal). HTTP non-2xx raises ``DataFetchError``
@@ -757,7 +782,9 @@ class ThsFetcher(BaseFetcher):
         Without this, requests defaults to ISO-8859-1 and the Chinese
         stock names decode to garbage.
         """
-        url = _BOARD_STOCKS_URL.format(concept_id=concept_id, page=page)
+        url = _BOARD_STOCKS_URL_TEMPLATE.format(
+            concept_id=concept_id, field_code=field_code, order=order, page=page,
+        )
         headers = {
             "User-Agent": THS_UA,
             "Referer": _CONCEPT_DETAIL_URL.format(slug=concept_id),
