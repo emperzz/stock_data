@@ -920,24 +920,14 @@ def get_board_history(
     board_type: Literal["concept", "industry"] | None = Query(
         None,
         description=(
-            "Required when source='ths' (concept vs industry boards use "
-            "different code systems). Ignored by other sources."
+            "Board classification. Auto-detected from the stock_board cache "
+            "when omitted (source='ths' only). Pass explicitly to skip "
+            "the cache lookup. Ignored by other sources."
         ),
     ),
 ) -> BoardKlineResponse:
     """Get historical K-line for a board. Source-routed, no failover."""
     source = _resolve_board_history_source(source)
-    # THS uses two incompatible board-code systems (concept vs industry).
-    # Fail fast at the route layer (422) when board_type is missing, rather
-    # than letting ThsFetcher raise a generic upstream error (503).
-    if source == "ths" and board_type is None:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "missing_board_type",
-                "message": "board_type is required when source='ths' (concept or industry)",
-            },
-        )
     # Cap date range width at 800 days. Without this, a request like
     # `start=2015-01-01&end=2024-12-31` would silently return only the
     # 800 most-recent bars (post-fetch filter trims the older half).

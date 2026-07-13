@@ -36,10 +36,15 @@ class TestSourceExpansion:
         assert r.status_code != 422, r.text
         assert r.status_code != 400, r.text
 
-    def test_ths_concept_requires_board_type(self, client):
-        r = client.get("/api/v1/boards/301558/history", params={"source": "ths", "frequency": "d"})
-        # 422 because board_type is missing
-        assert r.status_code == 422, r.text
+    def test_ths_concept_works_without_board_type(self, client):
+        """board_type is now auto-detected from cache; no longer 422."""
+        with patch(
+            "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+            return_value=([], "ThsFetcher"),
+        ):
+            r = client.get("/api/v1/boards/885595/history", params={"source": "ths", "frequency": "d"})
+        # Should NOT be 422 — auto-detection replaces the hard gate.
+        assert r.status_code != 422, r.text
 
     def test_ths_industry_works(self, client):
         r = client.get(
@@ -97,13 +102,17 @@ class TestFrequencyExpansion:
 
 
 class TestBoardTypeParam:
-    def test_board_type_required_for_ths(self, client):
-        # Without board_type, route returns 422
-        r = client.get(
-            "/api/v1/boards/881270/history",
-            params={"source": "ths", "frequency": "d"},
-        )
-        assert r.status_code == 422
+    def test_board_type_optional_for_ths(self, client):
+        """board_type is now auto-detected; no longer 422."""
+        with patch(
+            "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+            return_value=([], "ThsFetcher"),
+        ):
+            r = client.get(
+                "/api/v1/boards/881270/history",
+                params={"source": "ths", "frequency": "d"},
+            )
+        assert r.status_code != 422, r.text
 
     def test_board_type_ignored_for_eastmoney(self, client):
         r = client.get(

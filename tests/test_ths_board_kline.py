@@ -197,16 +197,27 @@ class TestGetBoardHistory:
         else:
             raise AssertionError("expected DataFetchError for non-daily THS freq")
 
-    def test_missing_board_type_raises(self):
-        from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
+    def test_missing_board_type_auto_detects_industry(self):
+        """When board_type is None, auto-detect from stock_board cache."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        try:
-            f.get_board_history("881270", board_type=None)
-        except DataFetchError as e:
-            assert "board_type" in str(e).lower()
-        else:
-            raise AssertionError("expected DataFetchError when board_type missing")
+        year_js_body = 'var v_x={"data":"2025-12-30,1,2,3,4,5,6,7,8,9,10;"};'
+        with (
+            patch(
+                "stock_data.data_provider.persistence.board.get_board_metadata",
+                return_value={"name": "银行", "type": "industry", "subtype": ""},
+            ),
+            patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),
+        ):
+            rows = f.get_board_history(
+                board_code="881270",
+                board_type=None,
+                frequency="d",
+                days=180,
+                end_date="2025-12-31",
+            )
+        assert len(rows) == 1
 
     def test_invalid_board_type_raises(self):
         from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
@@ -230,6 +241,62 @@ class TestGetBoardHistory:
                 assert "301558" in str(e) or "clid" in str(e).lower()
             else:
                 raise AssertionError("expected DataFetchError when clid resolves to None")
+
+    def test_auto_detects_concept_from_platecode(self):
+        """board_code=platecode(885xxx) → cache resolves cid → HTML scrapes clid."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        year_js_body = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
+
+        with (
+            patch(
+                "stock_data.data_provider.persistence.board.get_board_metadata",
+                return_value={"name": "AI概念", "type": "concept", "subtype": ""},
+            ),
+            patch(
+                "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+                return_value="301558",
+            ),
+            patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"),
+            patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),
+        ):
+            rows = f.get_board_history(
+                board_code="885595",
+                board_type=None,
+                frequency="d",
+                days=30,
+                end_date="2025-06-30",
+                start_date="2025-06-01",
+            )
+        assert len(rows) == 1
+        assert rows[0]["date"] == "2025-06-30"
+
+    def test_auto_detects_industry_from_platecode(self):
+        """board_code=industry platecode(881xxx) → used directly, no clid resolution."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        year_js_body = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
+
+        with (
+            patch(
+                "stock_data.data_provider.persistence.board.get_board_metadata",
+                return_value={"name": "银行", "type": "industry", "subtype": ""},
+            ),
+            patch.object(ThsFetcher, "_resolve_ths_concept_clid") as clid_mock,
+            patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),
+        ):
+            rows = f.get_board_history(
+                board_code="881270",
+                board_type=None,
+                frequency="d",
+                days=30,
+                end_date="2025-06-30",
+                start_date="2025-06-01",
+            )
+        clid_mock.assert_not_called()
+        assert len(rows) == 1
 
     def test_date_range_filter(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher

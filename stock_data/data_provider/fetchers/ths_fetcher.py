@@ -622,12 +622,15 @@ class ThsFetcher(BaseFetcher):
         """THS concept/industry board K-line via d.10jqka.com.cn.
 
         Args:
-            board_code: THS board slug (concept: e.g. ``301558``; industry: e.g.
-                ``881270``). NOT the inner `clid` — that's resolved internally
-                for concept boards via the q.10jqka.com.cn HTML scrape.
+            board_code: THS board code — preferably the platecode
+                (concept: e.g. ``885595``; industry: e.g. ``881270``).
+                Concept platecodes are resolved to cid via the stock_board
+                cache, then to clid via HTML scrape. Concept cids
+                (e.g. ``301558``) are also accepted as a fallback.
             frequency: Only ``"d"`` is supported. THS upstream returns daily only.
-            board_type: ``"concept"`` or ``"industry"`` — required. Concept slugs
-                are remapped to inner clid; industry slugs map directly.
+            board_type: ``"concept"`` or ``"industry"`` — auto-detected from
+                the stock_board cache when omitted. Pass explicitly to skip
+                the cache lookup.
             days: Used when ``start_date`` not given; the year range is
                 ``[today - days, today]`` capped at the full available history.
             start_date / end_date: ``YYYY-MM-DD`` — wins over ``days``.
@@ -641,7 +644,7 @@ class ThsFetcher(BaseFetcher):
 
         Raises:
             DataFetchError: frequency not in ``_THS_BOARD_FREQ_MAP``;
-                board_type missing or invalid; concept clid resolution
+                invalid board_type; concept clid resolution
                 returns None; every requested year fetch failed
                 (likely upstream auth problem — investigate the v-token
                 / d.10jqka.com.cn).
@@ -653,11 +656,19 @@ class ThsFetcher(BaseFetcher):
                 so the same bad input gets the same status code
                 regardless of which source serves the request.
         """
+        # Auto-detect board_type from the stock_board cache when not provided.
+        # Follows the same pattern as get_board_realtime.
         if not board_type:
-            raise DataFetchError(
-                "[ThsFetcher] get_board_history: board_type is required "
-                "(must be 'concept' or 'industry')"
-            )
+            from ..persistence.board import get_board_metadata
+
+            meta = get_board_metadata(board_code, "ths")
+            if meta and meta.get("type"):
+                board_type = meta["type"]
+            else:
+                # Cache miss — assume concept (most common for THS boards).
+                # If wrong, the clid resolution below will fail with a clear
+                # error rather than silently returning empty data.
+                board_type = "concept"
         freq_key = (frequency or "d").lower()
         if freq_key not in _THS_BOARD_FREQ_MAP:
             raise DataFetchError(
@@ -680,12 +691,21 @@ class ThsFetcher(BaseFetcher):
                 f"narrow start_date/end_date or call repeatedly."
             )
 
-        # Resolve inner code
+        # Resolve inner code.
+        # Concept boards: board_code may be a platecode (885xxx) or a cid
+        # (301xxx). The stock_board cache maps platecode→cid; if the cache
+        # misses, assume board_code IS the cid (user passed it directly).
+        # Then resolve cid→clid via HTML scrape.
         if board_type == "concept":
-            clid = self._resolve_ths_concept_clid(board_code)
+            from ..persistence.board import _resolve_ths_cid_from_platecode
+
+            cid = _resolve_ths_cid_from_platecode(board_code)
+            slug = cid or board_code  # cache miss → user passed cid directly
+            clid = self._resolve_ths_concept_clid(slug)
             if not clid:
                 raise DataFetchError(
-                    f"[ThsFetcher] could not resolve concept clid for slug={board_code!r}"
+                    f"[ThsFetcher] could not resolve concept clid for "
+                    f"platecode={board_code!r} (resolved slug={slug!r})"
                 )
             inner = clid
         elif board_type == "industry":

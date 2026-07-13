@@ -282,7 +282,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | `get_all_boards` | `ths` `eastmoney` `zhitu` | `zzshare` unified under `ths` |
 | `get_board_stocks` | `ths` `eastmoney` `zhitu` | `zzshare` returns 422. `source=ths` + `include_quote=False` → ZZSHARE primary + THS fallback; `effective_source` exposes which served. |
 | `get_stock_boards` | `ths` `eastmoney` `zhitu` | `zzshare` aliased to `ths` |
-| `get_board_history` | `ths` (d-only) `eastmoney` (d/w/m+minutes) | `zzshare` aliased to `ths`; `board_type` required for `ths`; 800-day cap |
+| `get_board_history` | `ths` (d-only) `eastmoney` (d/w/m+minutes) | `zzshare` aliased to `ths`; `board_type` auto-detected from cache for `ths` (pass platecode); 800-day cap |
 | `get_board_realtime` | `ths` | Board realtime quote via q.10jqka |
 
 ### Index routing notes
