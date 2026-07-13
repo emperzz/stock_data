@@ -902,3 +902,74 @@ def test_get_board_stocks_signature_has_source_kwarg():
     assert "source" in sig.parameters, (
         f"get_board_stocks missing 'source' param: {list(sig.parameters)}"
     )
+
+
+class TestBoardStocksTopNAndSort:
+    """Route-level tests for sort_by / sort_order / top_n (Task 7 of plan)."""
+
+    @patch("stock_data.data_provider.persistence.board.get_board_stocks",
+           return_value=([{"stock_code": "000034", "stock_name": "x"}],
+                         "persistence", "ths", None, False, 1))
+    def test_default_request_no_new_fields(self, mock_pers, client):
+        """不传 sort/top_n 时 response 行为不变 (quote_* echo 全部 None)."""
+        r = client.get("/api/v1/boards/885756/stocks?source=ths")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["quote_truncated"] is False
+        assert body["quote_top_n"] is None
+        assert body["quote_sort_by"] is None
+        assert body["quote_sort_order"] is None
+        assert body["quote_total_in_board"] is None
+
+    @patch("stock_data.data_provider.persistence.board.get_board_stocks",
+           return_value=([{"stock_code": "000034", "stock_name": "x"}],
+                         "ths", "ths", None, False, 1))
+    def test_sort_by_echoed_back(self, mock_pers, client):
+        """?sort_by=price 返回时 echo 回 quote_sort_by."""
+        r = client.get(
+            "/api/v1/boards/885756/stocks?source=ths&include_quote=true"
+            "&sort_by=price&sort_order=asc&top_n=10"
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["quote_sort_by"] == "price"
+        assert body["quote_sort_order"] == "asc"
+        assert body["quote_top_n"] == 10
+        assert body["quote_total_in_board"] == 1
+
+    def test_sort_by_with_non_ths_source_returns_400(self, client):
+        """source='eastmoney' + sort_by=price → 400 invalid_combination (route cross-validation)."""
+        r = client.get(
+            "/api/v1/boards/885756/stocks?source=eastmoney&include_quote=true"
+            "&sort_by=price"
+        )
+        assert r.status_code == 400
+        body = r.json()
+        detail = body.get("detail", {})
+        assert detail.get("error") == "invalid_combination"
+        assert "source='ths'" in detail.get("message", "")
+
+    def test_sort_by_without_include_quote_returns_400(self, client):
+        """?sort_by=price 不带 include_quote=true → 400 (与 /boards sibling 一致)."""
+        r = client.get(
+            "/api/v1/boards/885756/stocks?source=ths"
+            "&sort_by=price"
+        )
+        assert r.status_code == 400
+        detail = r.json().get("detail", {})
+        assert detail.get("error") == "invalid_combination"
+
+    def test_top_n_above_50_returns_422(self, client):
+        """Query(le=50) → FastAPI 自带 422 validation."""
+        r = client.get(
+            "/api/v1/boards/885756/stocks?source=ths&include_quote=true&top_n=100"
+        )
+        assert r.status_code == 422
+
+    def test_sort_by_invalid_literal_returns_422(self, client):
+        """Literal[...] 校验 → 422."""
+        r = client.get(
+            "/api/v1/boards/885756/stocks?source=ths&include_quote=true"
+            "&sort_by=magic"
+        )
+        assert r.status_code == 422

@@ -431,6 +431,35 @@ def get_board_stocks(
     ),
     include_quote: bool = Query(False, description="Include realtime quote data"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
+    sort_by: Literal[
+        "change_pct", "price", "turnover_rate", "volume_ratio",
+        "amplitude", "change_amount", "change_speed", "amount",
+        "pe_ratio", "float_market_cap", "free_float_shares",
+    ] | None = Query(
+        None,
+        description=(
+            "Sort by field. ONLY effective when include_quote=true. "
+            "Defaults to 'change_pct desc' (THS upstream default). "
+            "Field code mapping: change_pct=199112, price=10, "
+            "turnover_rate=1968584, volume_ratio=1771976, amplitude=526792, "
+            "change_amount=264648, change_speed=48, amount=19, "
+            "pe_ratio=2034120, float_market_cap=3475914, free_float_shares=407."
+        ),
+    ),
+    sort_order: Literal["asc", "desc"] = Query(
+        "desc", description="Sort direction. ONLY effective when include_quote=true.",
+    ),
+    top_n: int = Query(
+        50, ge=1, le=50,
+        description=(
+            "Max number of stocks to fetch live quotes for "
+            "(mirrors THS upstream 50-stock hard cap). "
+            "ONLY effective when include_quote=true. "
+            "When the board's full member count exceeds top_n, "
+            "the response carries 'quote_truncated=true' with the "
+            "remaining stocks filled in from ZZSHARE (no quote fields)."
+        ),
+    ),
 ) -> BoardStocksResponse:
     """Get stocks belonging to a board.
 
@@ -448,6 +477,35 @@ def get_board_stocks(
             detail={"error": "invalid_source", "message": str(e)},
         ) from e
 
+    # Cross-validation: sort_by / sort_order / top_n require
+    # (a) source == 'ths' and (b) include_quote == True.
+    # Mirrors sibling /boards UX (api/routes/boards.py:327-335) and
+    # avoids eastmoney/zhitu TypeError→5xx due to fixed signatures.
+    if (sort_by is not None or top_n != 50 or sort_order != "desc"):
+        if source != "ths":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_combination",
+                    "message": (
+                        "sort_by / sort_order / top_n are only supported "
+                        f"with source='ths'. Got source={source!r}."
+                    ),
+                },
+            )
+        if not include_quote:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_combination",
+                    "message": (
+                        "sort_by / sort_order / top_n require include_quote=true. "
+                        "These parameters drive upstream quote fetching; "
+                        "without quotes the sort has no defined ordering."
+                    ),
+                },
+            )
+
     manager = get_manager()
     try:
         # Route through the persistence layer so cache hits return
@@ -460,13 +518,16 @@ def get_board_stocks(
         # persistence/board::fetch_board_stocks_with_zzshare_fallback);
         # ``effective_source`` tells the client which fetcher served the
         # response. Compare against ``query_source`` to detect fallback.
-        stocks, origin, effective_source, reason, _quote_truncated, _quote_total = (
+        stocks, origin, effective_source, reason, quote_truncated, total_in_board = (
             stock_board_cache.get_board_stocks(
                 board_code,
                 source=source,
                 refresh=refresh,
                 include_quote=include_quote,
                 manager=manager,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                top_n=top_n,
             )
         )
     except ValueError as e:
@@ -524,6 +585,13 @@ def get_board_stocks(
             volume=s.get("volume"),
             amount=s.get("amount"),
             turnover_rate=s.get("turnover_rate"),
+            # 2026-07-13 新增投影 (THS 14 列 6 字段)
+            change_speed=s.get("change_speed"),
+            volume_ratio=s.get("volume_ratio"),
+            amplitude=s.get("amplitude"),
+            free_float_shares=s.get("free_float_shares"),
+            float_market_cap=s.get("float_market_cap"),
+            pe_ratio=s.get("pe_ratio"),
         )
         for s in stocks
     ]
@@ -621,6 +689,17 @@ def get_board_stocks(
         effective_source=effective_source,
         quote_source=quote_source,
         quote_error=quote_error,
+        # 2026-07-13 新增 echo — only populate when sort/top_n was
+        # explicitly requested, so the response shape stays the same
+        # for default requests (mirrors /boards sibling UX contract).
+        quote_truncated=quote_truncated,
+        quote_top_n=top_n if (sort_by is not None or sort_order != "desc"
+                              or top_n != 50) else None,
+        quote_sort_by=sort_by,
+        quote_sort_order=sort_order if (sort_by is not None or sort_order != "desc"
+                                        or top_n != 50) else None,
+        quote_total_in_board=total_in_board if (sort_by is not None or sort_order != "desc"
+                                                or top_n != 50) and total_in_board > 0 else None,
     )
 
 

@@ -415,6 +415,47 @@ class BoardStocksResponse(BaseModel):
             "'upstream_failed: <reason>' (上游异常) / null (成功或未请求)."
         ),
     )
+    # === 2026-07-13 新增 (top_n / sort echo) ===
+    # These five fields echo the request's sort/top_n parameters and the
+    # helper's heuristic outcome back to the client, so callers can
+    # distinguish "no sort applied" / "sort applied without truncation" /
+    # "sort applied + truncated to top_n + remaining filled from zzshare".
+    quote_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "True when the board's full member count exceeded top_n and "
+            "the remaining stocks were filled in from ZZSHARE without "
+            "quote fields. None when the caller did not request sorting."
+        ),
+    )
+    quote_top_n: int | None = Field(
+        default=None,
+        description=(
+            "Echo of the request's top_n value (1-50). None when the "
+            "caller did not request sorting (defaults used)."
+        ),
+    )
+    quote_sort_by: str | None = Field(
+        default=None,
+        description=(
+            "Echo of the request's sort_by literal. None when the "
+            "caller did not request sorting."
+        ),
+    )
+    quote_sort_order: str | None = Field(
+        default=None,
+        description=(
+            "Echo of the request's sort_order literal ('asc' or 'desc'). "
+            "None when the caller did not request sorting."
+        ),
+    )
+    quote_total_in_board: int | None = Field(
+        default=None,
+        description=(
+            "Total stock count in the board (before top_n truncation). "
+            "None when the caller did not request sorting."
+        ),
+    )
 
 
 class BoardQuoteResponse(BaseModel):
