@@ -747,6 +747,10 @@ def fetch_board_stocks_with_zzshare_fallback(
     source: str,
     include_quote: bool,
     manager,
+    *,
+    sort_by: str | None = None,  # 2026-07-13: 透传到 ths
+    sort_order: str = "desc",
+    top_n: int = 50,
 ) -> tuple[list[dict], str, str, str | None]:
     """Get stocks for a board — STRICTLY source-routed with one cross-source fallback.
 
@@ -760,12 +764,18 @@ def fetch_board_stocks_with_zzshare_fallback(
           ``DataFetchError``, propagate so the route returns 5xx
           (zzshare fallback is forbidden here — its stocks carry no
           quote fields and the response shape would silently degrade).
+          The new 2026-07-13 kwargs (``sort_by`` / ``sort_order`` /
+          ``top_n``) are forwarded to THS so the response honours the
+          user's sort+top-N contract.
         * ``include_quote=False`` → prefer zzshare first (lighter
           request, no quote enrichment needed); on zzshare
           ``DataFetchError`` OR empty-rows, fall back to THS. The
           route layer surfaces the actual fetcher via the
           ``effective_source`` field so the client can tell whether
-          fallback fired.
+          fallback fired. The sort/top-N kwargs are NOT forwarded to
+          the include_quote=False branches (zzshare / THS-fallback) —
+          the route layer 400-asserts those kwargs are at defaults
+          whenever ``include_quote=False``.
 
     - ``source='zzshare'`` (internal label only; Literal at the route
       layer rejects it post-2026-07-08 unification): call ZzshareFetcher
@@ -782,6 +792,14 @@ def fetch_board_stocks_with_zzshare_fallback(
         include_quote: Forwarded to the fetcher. Affects routing
             inside the THS branch (above).
         manager: Required. ``DataFetcherManager`` instance.
+        sort_by: 2026-07-13 — forwarded to the THS leg
+            (``source='ths' + include_quote=True``). See
+            ``ThsFetcher._THS_BOARD_STOCKS_SORT_FIELD_MAP`` for the
+            accepted set. Other branches ignore this kwarg.
+        sort_order: 2026-07-13 — ``"asc"`` / ``"desc"``. Same
+            forwarding rules as ``sort_by``.
+        top_n: 2026-07-13 — max number of THS rows. Same forwarding
+            rules as ``sort_by``.
 
     Returns:
         ``(stocks, source_label, effective_source, reason)`` — 4-tuple:
@@ -802,6 +820,12 @@ def fetch_board_stocks_with_zzshare_fallback(
             other branches. The route layer maps ``reason="cid_unresolved"``
             to a 422 response (see ``api/routes/boards.py``).
 
+        Note: this helper returns the bare 4-tuple above. The trailing
+        ``quote_truncated`` / ``quote_total_in_board`` 6-tuple fields
+        are only appended by ``get_board_stocks`` (which owns the
+        50-stock heuristic + ZZSHARE fill-in logic). Callers that need
+        the heuristic fields must compose them on top of this helper.
+
     Raises:
         DataFetchError: the chosen fetcher raised and no fallback was
             applicable (or the fallback also raised). Propagates so
@@ -811,7 +835,9 @@ def fetch_board_stocks_with_zzshare_fallback(
     if source == "ths":
         # include_quote=True: THS is mandatory — zzshare has no quote
         # fields, falling back would silently degrade the response to
-        # null quotes. Propagate any failure unchanged.
+        # null quotes. Propagate any failure unchanged. 2026-07-13:
+        # forward sort_by/sort_order/top_n to THS so the user contract
+        # (board-stocks top-N + sort) is honored end-to-end.
         if include_quote:
             cid = _resolve_ths_cid_from_platecode(board_code)
             if not cid:
@@ -821,6 +847,9 @@ def fetch_board_stocks_with_zzshare_fallback(
                     board_code=cid,
                     source="ths",
                     include_quote=True,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
+                    top_n=top_n,
                 )
             except DataFetchError:
                 raise
@@ -893,13 +922,20 @@ def fetch_board_stocks_with_zzshare_fallback(
     )
 
 
+THS_HARD_CAP = 50  # THS upstream hard cap (5 pages * 10 rows)
+
+
 def get_board_stocks(
     board_code: str,
     source: str = "ths",
     refresh: bool = False,
     include_quote: bool = False,
     manager=None,
-) -> tuple[list, str, str, str | None]:
+    *,
+    sort_by: str | None = None,  # 2026-07-13
+    sort_order: str = "desc",  # 2026-07-13
+    top_n: int = 50,  # 2026-07-13
+) -> tuple[list, str, str, str | None, bool, int]:
     """Get stocks belonging to a board with automatic refresh.
 
     Cache is keyed on the public board_code (not on source — different
@@ -924,6 +960,30 @@ def get_board_stocks(
     force a fresh THS fetch *and* the data is currently a ZZSHARE-served
     cache row.
 
+    2026-07-13 (board-stocks top-N + sort): the return shape is now
+    6-tuple. The new tail entries are:
+
+      * ``quote_truncated`` (bool) — True if the response is a *partial*
+        snapshot: the THS leg returned exactly ``THS_HARD_CAP`` rows
+        (50) and we suspect the real membership may be larger. The
+        caller-facing 50-stock heuristic (the THS upstream hard cap) is
+        mitigated by an opportunistic ZZSHARE fill-in: we call
+        ``manager.get_board_stocks(source='zzshare', include_quote=False)``
+        and append any ZZSHARE members *not* already in the THS top-N
+        as a suffix with no quote fields. When the suffix is non-empty,
+        ``quote_truncated=True``. When ZZSHARE also returns empty /
+        errors, ``quote_truncated=True`` is reported conservatively —
+        the client should treat the result as potentially incomplete
+        (cannot be distinguished from "board really has 50 stocks").
+      * ``quote_total_in_board`` (int) — best-effort count of the
+        board's full membership (THS top-N + ZZSHARE suffix) when the
+        heuristic fired; otherwise the row count we actually returned.
+
+    The 50-stock heuristic is gated on ``include_quote=True`` (only
+    THS quote-fetched responses are size-capped; cache-hit
+    ``include_quote=False`` paths return all rows from the cache table,
+    which historically holds the full membership).
+
     Args:
         board_code: THS platecode (885xxx concept / 881xxx industry).
         source: User's chosen fetcher; defaults to ``'ths'`` for
@@ -932,11 +992,22 @@ def get_board_stocks(
         refresh: If True, force refresh from upstream.
         include_quote: If True, always fetch fresh realtime data from upstream.
         manager: DataFetcherManager instance. Required when fetching from upstream.
+        sort_by: 2026-07-13 — forwarded to THS (THS supported set;
+            ignored for other sources). Default None = THS default
+            (currently ``"change_pct"``).
+        sort_order: 2026-07-13 — ``"asc"`` / ``"desc"``. Default ``"desc"``.
+        top_n: 2026-07-13 — max THS rows. Default 50. THS upstream
+            hard cap is 50; the heuristic at 50+ triggers the
+            ZZSHARE suffix fill-in.
 
     Returns:
-        Tuple of (stocks, origin, effective_source, reason) where:
-          - ``origin`` is ``"persistence"`` (cache hit) or the requested
-            fetcher slug (cache miss path), as before.
+        6-tuple ``(stocks, origin, effective_source, reason,
+        quote_truncated, quote_total_in_board)``:
+          - ``stocks`` is the list of stock dicts (top-N + suffix
+            merged when the heuristic fired; otherwise just the
+            fetcher's response).
+          - ``origin`` is ``"persistence"`` (cache hit) or the
+            requested fetcher slug (cache miss path), as before.
           - ``effective_source`` is always populated to the fetcher
             slug that actually served the response — *post-fix* this is
             always a non-empty string. ``query_source vs effective_source``
@@ -947,7 +1018,8 @@ def get_board_stocks(
             all other cases. The route layer maps
             ``reason="cid_unresolved"`` to HTTP 422; ``None`` (or any
             other empty-result case) maps to HTTP 404.
-          - ``stocks`` is the list of stock dicts as before.
+          - ``quote_truncated`` (bool) — see heuristic notes above.
+          - ``quote_total_in_board`` (int) — see heuristic notes above.
     """
     init_schema()
 
@@ -958,33 +1030,128 @@ def get_board_stocks(
     # ths has populated the same row.
     needs_refresh = include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:ths")
 
-    if not needs_refresh:
-        cached = _read_board_stocks_from_db(board_code, "ths")
-        if cached:
-            # Cache hit: the upstream that originally wrote the row
-            # is not surfaced here. The route layer reports
-            # ``origin="persistence"``; clients that need the actual
-            # upstream should pass ?refresh=true.
-            return cached, "persistence", "ths", None
+    cached_full = _read_board_stocks_from_db(board_code, "ths")
+    cached_count = len(cached_full)
+
+    if not needs_refresh and cached_full:
+        # Cache hit: the upstream that originally wrote the row
+        # is not surfaced here. The route layer reports
+        # ``origin="persistence"``; clients that need the actual
+        # upstream should pass ?refresh=true.
+        return cached_full, "persistence", "ths", None, False, cached_count
 
     if manager is None:
         raise ValueError("manager is required when refresh=True or cache miss")
 
+    if not include_quote:
+        # include_quote=False path — the route layer 400-asserts the
+        # 2026-07-13 sort/top_n kwargs are at defaults. Pass nothing
+        # through to the helper so the include_quote=False branches
+        # retain their existing include_quote=False semantics.
+        stocks, origin, effective_source, reason = fetch_board_stocks_with_zzshare_fallback(
+            board_code=board_code,
+            source=source,
+            include_quote=False,
+            manager=manager,
+        )
+        if stocks:
+            update_cached_board_stocks(board_code, "ths", stocks)
+            logger.info(
+                f"[BoardCache] Refreshed {len(stocks)} stocks for board "
+                f"{board_code}/ths (origin={origin}, effective_source={effective_source})"
+            )
+        # Return the initial DB count as-is (cached_count) — we just
+        # refreshed the cache, but the variable intentionally stays
+        # pinned to ``len(cached_full)`` so callers can compare
+        # against the pre-refresh state without losing track of the
+        # "what was in the cache at the start of this call" semantic.
+        return stocks, origin, effective_source, reason, False, cached_count
+
+    # include_quote=True path: the THS branch honors sort_by / sort_order / top_n.
     stocks, origin, effective_source, reason = fetch_board_stocks_with_zzshare_fallback(
         board_code=board_code,
         source=source,
-        include_quote=include_quote,
+        include_quote=True,
         manager=manager,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        top_n=top_n,
     )
 
-    if stocks:
-        update_cached_board_stocks(board_code, "ths", stocks)
+    if not stocks:
+        return [], origin, effective_source, reason, False, cached_count
+
+    needs_fill_in = len(stocks) >= THS_HARD_CAP
+
+    suffix_no_quote: list[dict] = []
+    if needs_fill_in:
+        try:
+            zz_rows, _ = manager.get_board_stocks(
+                board_code=board_code,
+                source="zzshare",
+                include_quote=False,
+            )
+        except DataFetchError as e:
+            logger.warning(
+                f"[BoardCache] ZZSHARE fill-in for {board_code} failed: {e}; "
+                f"falling back to THS-only top-{len(stocks)}"
+            )
+            zz_rows = []
+
+        quote_codes = {s["stock_code"] for s in stocks if s.get("stock_code")}
+        suffix_no_quote = [
+            r
+            for r in (zz_rows or [])
+            if r.get("stock_code") and r["stock_code"] not in quote_codes
+        ]
+
+    # quote_truncated 3-branch decision:
+    #   needs_fill_in=False → 板上 <50 → not truncated
+    #   needs_fill_in=True, ZZSHARE 成功, suffix 非空 → 真截断
+    #   needs_fill_in=True, ZZSHARE 失败 OR 板真 50 只 → 保守 True
+    if not needs_fill_in:
+        quote_truncated = False
+    elif suffix_no_quote:
+        quote_truncated = True
+    else:
+        # needs_fill_in=True but ZZSHARE 路径空 (失败 OR board 真有 50 只)
+        quote_truncated = True  # 保守: 我们无法验证 = 截断
         logger.info(
-            f"[BoardCache] Refreshed {len(stocks)} stocks for board "
-            f"{board_code}/ths (origin={origin}, effective_source={effective_source})"
+            f"[BoardCache] {board_code}: heuristic fired but no suffix added; "
+            f"reporting quote_truncated=True conservatively"
         )
 
-    return stocks, origin, effective_source, reason
+    # quote_total_in_board per 3-case logic (cached_count is the
+    # initial DB row count, never reassigned):
+    #   1. short-circuit (no heuristic fired) → cached_count (cache is truth)
+    #   2. heuristic fired + suffix non-empty → max(cached_count, len(stocks)+len(suffix_no_quote))
+    #   3. heuristic fired but suffix empty → cached_count (conservative True; cache is what we know)
+    if not needs_fill_in:
+        quote_total_in_board = cached_count
+    elif suffix_no_quote:
+        quote_total_in_board = max(cached_count, len(stocks) + len(suffix_no_quote))
+    else:
+        quote_total_in_board = cached_count
+
+    # 拼接最终响应列表 (top-N 在前, suffix 在后)
+    if suffix_no_quote:
+        final_stocks = stocks + suffix_no_quote
+    else:
+        final_stocks = stocks
+
+    # 回写 cache: final_stocks 含 quote 字段, 但 update_cached_board_stocks
+    # 投影只写 (board_code, source, stock_code, stock_name, board_name,
+    # board_type, subtype, refreshed_at) — quote 字段自然被 SQLite 列投影丢弃
+    # (CLAUDE.md "Don't cache realtime quote data in SQLite").
+    update_cached_board_stocks(board_code, "ths", final_stocks)
+    logger.info(
+        f"[BoardCache] Refreshed {len(stocks)} ths + {len(suffix_no_quote)} zz suffix "
+        f"for board {board_code}/ths "
+        f"(origin={origin}, effective_source={effective_source}, "
+        f"quote_truncated={quote_truncated}, total={quote_total_in_board})"
+    )
+
+    return final_stocks, origin, effective_source, reason, quote_truncated, quote_total_in_board
 
 
 def resolve_board_types(

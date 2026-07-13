@@ -460,12 +460,14 @@ def get_board_stocks(
         # persistence/board::fetch_board_stocks_with_zzshare_fallback);
         # ``effective_source`` tells the client which fetcher served the
         # response. Compare against ``query_source`` to detect fallback.
-        stocks, origin, effective_source, reason = stock_board_cache.get_board_stocks(
-            board_code,
-            source=source,
-            refresh=refresh,
-            include_quote=include_quote,
-            manager=manager,
+        stocks, origin, effective_source, reason, _quote_truncated, _quote_total = (
+            stock_board_cache.get_board_stocks(
+                board_code,
+                source=source,
+                refresh=refresh,
+                include_quote=include_quote,
+                manager=manager,
+            )
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)}) from e

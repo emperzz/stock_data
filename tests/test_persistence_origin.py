@@ -90,8 +90,12 @@ def test_get_board_stocks_returns_tuple(monkeypatch):
     # Post-2026-07-10: returns (stocks, origin, effective_source, reason) — the
     # 3rd element tells the client which fetcher actually served (P4 contract),
     # the 4th is a "cid_unresolved" reason when the THS cid-index cache missed.
-    stocks, origin, effective_source, reason = board.get_board_stocks(
-        "BK0001", refresh=True, manager=_MockManager()
+    # Post-2026-07-13: 6-tuple — added (quote_truncated, quote_total_in_board)
+    # at the tail (4-tuple callers extended with placeholder _ destinations).
+    stocks, origin, effective_source, reason, _quote_truncated, _quote_total = (
+        board.get_board_stocks(
+            "BK0001", refresh=True, manager=_MockManager()
+        )
     )
     assert isinstance(stocks, list)
     # Default (include_quote=False) → zzshare first, so origin="zzshare"

@@ -395,7 +395,7 @@ def test_get_board_stocks_returns_404_on_empty(client):
     """Empty stocks → 404."""
     with patch(
         "stock_data.data_provider.persistence.board.get_board_stocks",
-        return_value=([], "eastmoney", "eastmoney", None),
+        return_value=([], "eastmoney", "eastmoney", None, False, 0),
     ):
         r = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney")
     assert r.status_code == 404
@@ -412,7 +412,7 @@ def test_cid_unresolved_returns_422(client):
     """
     with patch(
         "stock_data.data_provider.persistence.board.get_board_stocks",
-        return_value=([], "ths", "ths", "cid_unresolved"),
+        return_value=([], "ths", "ths", "cid_unresolved", False, 0),
     ):
         r = client.get("/api/v1/boards/885642/stocks?source=ths&include_quote=true")
     assert r.status_code == 422
@@ -439,14 +439,14 @@ def test_get_board_stocks_cache_hit_returns_persistence(client):
         ),
     ):
         # First call: fetcher-sourced
-        mock_get.return_value = (fake, "eastmoney", "eastmoney", None)
+        mock_get.return_value = (fake, "eastmoney", "eastmoney", None, False, 1)
         r1 = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney")
         assert r1.status_code == 200
         assert r1.json()["data_source"] == "eastmoney"
 
         # Second call: cache hit — origin is persistence; effective_source
         # is the historical fetcher label (we keep 'eastmoney' here).
-        mock_get.return_value = (fake, "persistence", "eastmoney", None)
+        mock_get.return_value = (fake, "persistence", "eastmoney", None, False, 1)
         r2 = client.get("/api/v1/boards/BK0001/stocks?source=eastmoney")
         assert r2.status_code == 200
         assert r2.json()["data_source"] == "persistence"
@@ -464,7 +464,7 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "eastmoney", "eastmoney", None),
+            return_value=(fake, "eastmoney", "eastmoney", None, False, 1),
         ) as mock_get,
         patch(
             "stock_data.data_provider.persistence.board.get_board_name",
@@ -553,7 +553,7 @@ def test_get_board_stocks_projects_amount_from_fetcher_output(client):
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "ths", "ths", None),
+            return_value=(fake, "ths", "ths", None, False, 1),
         ),
         patch(
             "stock_data.data_provider.persistence.board.get_board_name",
@@ -593,7 +593,7 @@ def test_get_board_stocks_projects_change_amount_and_turnover_rate(client):
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "ths", "ths", None),
+            return_value=(fake, "ths", "ths", None, False, 1),
         ),
         patch(
             "stock_data.data_provider.persistence.board.get_board_name",
@@ -628,7 +628,7 @@ def test_get_board_stocks_projects_change_amount_and_turnover_rate_null_when_abs
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "zzshare", "zzshare", None),
+            return_value=(fake, "zzshare", "zzshare", None, False, 1),
         ),
         patch(
             "stock_data.data_provider.persistence.board.get_board_name",
@@ -660,7 +660,7 @@ def test_get_board_stocks_ths_falls_back_when_get_all_boards_unavailable(client)
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_stocks",
-            return_value=(fake, "ths", "ths", None),
+            return_value=(fake, "ths", "ths", None, False, 1),
         ),
         # Cache miss for board name → triggers the upstream fallback path.
         patch(
