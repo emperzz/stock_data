@@ -44,6 +44,7 @@ _TTL_STOCK_INFO = int(os.getenv("CACHE_TTL_STOCK_INFO", "3600"))  # 公司画像
 _TTL_NEWS_SEARCH = int(os.getenv("CACHE_TTL_NEWS_SEARCH", "300"))
 _TTL_NEWS_CONTENT = int(os.getenv("CACHE_TTL_NEWS_CONTENT", "3600"))
 _TTL_NEWS_FLASH = int(os.getenv("CACHE_TTL_NEWS_FLASH", "60"))  # 7x24 快讯 (60s)
+_TTL_CLS_FEED = int(os.getenv("CACHE_TTL_CLS_FEED", "3600"))  # CLS 早报/复盘 (1h, immutable)
 
 # Cache instances
 _dragontiger_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_DRAGON_TIGER)
@@ -62,6 +63,7 @@ _stock_info_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INFO)
 _news_search_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_SEARCH)
 _news_content_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_CONTENT)
 _news_flash_cache: TTLCache = TTLCache(maxsize=64, ttl=_TTL_NEWS_FLASH)
+_cls_feed_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_CLS_FEED)
 
 
 def get_quote_cache() -> TTLCache:
@@ -149,6 +151,18 @@ def get_news_content_cache() -> TTLCache:
 
 def get_news_flash_cache() -> TTLCache:
     return _news_flash_cache
+
+
+def get_cls_feed_cache() -> TTLCache:
+    """Return the CLS feed (早报/复盘) cache instance (TTL 3600s by default)."""
+    return _cls_feed_cache
+
+
+def make_cls_feed_cache_key(subject: str, date: str) -> str:
+    """Build the cache key for a CLS feed entry. Subject is the namespace
+    ('morning_briefing' or 'market_review') so the two endpoints don't
+    collide on the same date."""
+    return f"cls:{subject}:{date}"
 
 
 def make_news_stock_cache_key(stock_code: str, limit: int) -> str:
