@@ -16,10 +16,7 @@ import os
 import re
 from typing import Any
 
-import requests  # noqa: F401  # used in Task 9 (_http_get_text)
-
 from ..base import BaseFetcher, DataCapability, DataFetchError
-from ..core.types import safe_int  # noqa: F401  # used in Task 7 (_parse_subject_articles)
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +24,6 @@ logger = logging.getLogger(__name__)
 CLS_SUBJECT_MORNING_BRIEFING = 1151
 # CLS list page 焦点复盘 subject id (verified 2026-07-14)
 CLS_SUBJECT_MARKET_RECAP = 1135
-
-CLS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
 
 # Subject id → human-readable name (used in error messages and as cache namespace)
 CLS_SUBJECT_NAMES: dict[int, str] = {
@@ -78,5 +73,7 @@ class ClsFetcher(BaseFetcher):
             )
         try:
             return json.loads(m.group(1))
-        except (ValueError, json.JSONDecodeError) as e:
+        except ValueError as e:
+            # JSONDecodeError is a subclass of ValueError; catching the
+            # parent class handles both. Use the parent for clarity.
             raise DataFetchError(f"[ClsFetcher] __NEXT_DATA__ JSON parse failed: {e}") from e
