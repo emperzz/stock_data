@@ -493,13 +493,33 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
 
     # Pool type -> zzshare endpoint name
     _POOL_TYPE_MAP: dict[str, str] = {
-        "zt": "uplimit_stocks",  # primary
+        "zt": "review_uplimit_reason",  # primary (richer than uplimit_stocks)
     }
 
-    def get_zt_pool(self, pool_type: str, date: str) -> list[dict] | None:
-        """Fetch ZT pool from zzshare uplimit_stocks (token-gated).
+    @staticmethod
+    def _normalize_seal_time(raw: str) -> str:
+        """Normalize upstream seal time to HH:MM:SS format.
 
-        Falls back gracefully: if uplimit_stocks returns empty (no token or
+        Upstream returns "HH:MM" (e.g. "09:31") — append ":00" to match
+        the schema's HH:MM:SS contract.
+        """
+        if not raw:
+            return ""
+        if len(raw) == 5 and raw[2] == ":":
+            return raw + ":00"
+        return raw
+
+    def get_zt_pool(self, pool_type: str, date: str) -> list[dict] | None:
+        """Fetch ZT pool from zzshare review_uplimit_reason.
+
+        Upstream returns a plate-grouped structure: ``list[dict]`` where each
+        dict has ``{plate_code, plate_name, plate_score, stocks: list[dict]}``.
+        Each stock dict carries per-stock fields (stock_code, stock_name,
+        stock_price, up_limit_keep_times, fengdan_money, actualcirculation_value,
+        etc.). We flatten and deduplicate by stock_code (a stock may appear in
+        multiple plates).
+
+        Falls back gracefully: if the endpoint returns empty (no token or
         no data), returns None so the manager failover chain can try the
         next fetcher.
         """
@@ -511,36 +531,52 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             return None
         date_yyyymmdd = _to_yyyymmdd(date)
         try:
-            rows = api.uplimit_stocks(date1=date_yyyymmdd)
+            rows = api.review_uplimit_reason(date1=date_yyyymmdd)
         except Exception as e:
-            logger.warning(f"[ZzshareFetcher] uplimit_stocks({date_yyyymmdd}) failed: {e}")
+            logger.warning(f"[ZzshareFetcher] review_uplimit_reason({date_yyyymmdd}) failed: {e}")
             return None
         if not rows:
             return None
+
+        # Flatten plate-grouped structure and deduplicate by stock_code.
+        # A stock can appear in multiple plates; keep first occurrence.
+        seen_codes: set[str] = set()
         out: list[dict] = []
-        for row in rows:
-            if not isinstance(row, dict):
+        for plate in rows:
+            if not isinstance(plate, dict):
                 continue
-            ts_code = str(row.get("ts_code", ""))
-            out.append(
-                {
-                    "code": ts_code.split(".")[0] if ts_code else "",
-                    "name": str(row.get("name", "")),
-                    "price": safe_float(row.get("price") or row.get("p")),
-                    "change_pct": safe_float(row.get("pct_chg")),
-                    "amount": safe_float(row.get("amount")),
-                    "circ_mv": safe_float(row.get("circ_mv") or row.get("lt")),
-                    "total_mv": safe_float(row.get("total_mv") or row.get("zsz")),
-                    "turnover_rate": safe_float(row.get("turnover_rate")),
-                    "lb_count": safe_int(row.get("lb_count")),
-                    "first_seal_time": str(row.get("first_seal_time", "")),
-                    "last_seal_time": str(row.get("last_seal_time", "")),
-                    "seal_amount": safe_float(row.get("seal_amount")),
-                    "seal_count": safe_int(row.get("seal_count")),
-                    "zt_count": safe_int(row.get("zt_count")),
-                }
-            )
-        return out
+            for row in plate.get("stocks", []):
+                if not isinstance(row, dict):
+                    continue
+                stock_code = str(row.get("stock_code", ""))
+                if not stock_code or stock_code in seen_codes:
+                    continue
+                seen_codes.add(stock_code)
+
+                # Normalize seal time: upstream "HH:MM" → "HH:MM:SS"
+                seal_time = self._normalize_seal_time(
+                    str(row.get("up_limit_time", ""))
+                )
+
+                out.append(
+                    {
+                        "code": stock_code,
+                        "name": str(row.get("stock_name", "")),
+                        "price": safe_float(row.get("stock_price")),
+                        "change_pct": safe_float(row.get("fd_close")),
+                        "amount": None,  # upstream amount is a ratio, not yuan
+                        "circ_mv": safe_float(row.get("actualcirculation_value")),
+                        "total_mv": None,  # not available in this endpoint
+                        "turnover_rate": safe_float(row.get("turnover_ration_real")),
+                        "lb_count": safe_int(row.get("up_limit_keep_times")),
+                        "first_seal_time": seal_time,
+                        "last_seal_time": seal_time,  # same field (single seal event)
+                        "seal_amount": safe_float(row.get("fengdan_money")),
+                        "seal_count": None,  # not available in this endpoint
+                        "zt_count": str(row.get("up_limit_desc", "")) or None,
+                    }
+                )
+        return out or None
 
     # Board type/subtype -> zzshare plate_type. zzshare's plate_type=17 (题材)
     # is unified with concept at the server boundary (subtype still carries
