@@ -16,10 +16,10 @@ import os
 import re
 from typing import Any
 
-import requests
+import requests  # noqa: F401  # used in Task 9 (_http_get_text)
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
-from ..core.types import safe_int
+from ..core.types import safe_int  # noqa: F401  # used in Task 7 (_parse_subject_articles)
 
 logger = logging.getLogger(__name__)
 
