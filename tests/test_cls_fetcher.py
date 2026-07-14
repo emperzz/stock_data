@@ -88,6 +88,55 @@ def test_parse_subject_articles_normal(fetcher, list_html):
     assert first["article_id"] > 0
 
 
+def test_parse_subject_articles_skips_zero_id(fetcher, list_html):
+    """Articles with article_id=0 or missing should be skipped (defensive guard)."""
+    # Inject a malformed article alongside a valid one
+    inner = json.loads(
+        (FIXTURE_DIR / "cls_subject_list.json").read_text(encoding="utf-8")
+    )
+    inner["articles"].insert(
+        0, {"article_id": 0, "article_title": "skipped", "article_time": 0}
+    )
+    envelope = {"props": {"pageProps": {"data": inner}}}
+    html = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps(envelope, ensure_ascii=False)}</script></html>'
+    arts = fetcher._parse_subject_articles(1151, html)
+    # None of the returned articles should be the zero-id one
+    assert all(a["article_id"] != 0 for a in arts)
+    assert len(arts) >= 1
+
+
+def test_parse_subject_articles_zero_values_not_treated_as_missing(fetcher):
+    """read_num=0 / comments_num=0 should be preserved as 0, not None.
+
+    Regression test for the `or default` anti-pattern: if someone replaces
+    `safe_int(x, default=0)` with `safe_int(x) or 0`, a 0 value would be
+    treated as missing and converted to None (or fail the int() cast).
+    """
+    inner = {
+        "id": 1151,
+        "articles": [
+            {
+                "article_id": 12345,
+                "article_title": "zero-test",
+                "article_brief": "test",
+                "article_author": "test",
+                "article_time": 1783983600,
+                "read_num": 0,
+                "comments_num": 0,
+                "share_num": 0,
+                "article_img": "",
+            }
+        ],
+    }
+    envelope = {"props": {"pageProps": {"data": inner}}}
+    html = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps(envelope, ensure_ascii=False)}</script></html>'
+    arts = fetcher._parse_subject_articles(1151, html)
+    assert len(arts) == 1
+    assert arts[0]["read_num"] == 0
+    assert arts[0]["comments_num"] == 0
+    assert arts[0]["share_num"] == 0
+
+
 def test_parse_subject_articles_limit(fetcher, list_html):
     """limit=2 → returns at most 2 articles."""
     arts = fetcher._parse_subject_articles(1151, list_html, limit=2)

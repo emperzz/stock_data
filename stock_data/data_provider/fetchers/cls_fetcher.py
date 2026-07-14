@@ -96,19 +96,15 @@ class ClsFetcher(BaseFetcher):
         observed article count per subject).
         """
         next_data = ClsFetcher._parse_next_data(html)
+        data = next_data.get("props", {}).get("pageProps", {}).get("data", {})
         # Validate the shape — if subject_id mismatch, this is a real upstream change
-        actual_subject_id = next_data.get("id")
+        actual_subject_id = data.get("id")
         if actual_subject_id is not None and int(actual_subject_id) != int(subject_id):
             logger.warning(
                 f"[ClsFetcher] subject_id mismatch: requested={subject_id} "
                 f"upstream={actual_subject_id}; parsing anyway"
             )
-        articles_raw = (
-            next_data.get("props", {})
-            .get("pageProps", {})
-            .get("data", {})
-            .get("articles", [])
-        )
+        articles_raw = data.get("articles", [])
         out: list[dict] = []
         for raw in articles_raw[:limit]:
             article_id = safe_int(raw.get("article_id"))
@@ -117,20 +113,20 @@ class ClsFetcher(BaseFetcher):
             ctime = safe_int(raw.get("article_time"))
             date = (
                 datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d")
-                if ctime
+                if ctime is not None
                 else ""
             )
             out.append(
                 {
-                    "article_id": int(article_id),
+                    "article_id": article_id,
                     "title": str(raw.get("article_title", "")),
                     "brief": str(raw.get("article_brief", "")),
                     "author": str(raw.get("article_author", "")),
-                    "ctime": int(ctime) if ctime else 0,
+                    "ctime": int(ctime) if ctime is not None else 0,
                     "date": date,
-                    "read_num": int(safe_int(raw.get("read_num")) or 0),
-                    "comments_num": int(safe_int(raw.get("comments_num")) or 0),
-                    "share_num": int(safe_int(raw.get("share_num")) or 0),
+                    "read_num": safe_int(raw.get("read_num"), default=0),
+                    "comments_num": safe_int(raw.get("comments_num"), default=0),
+                    "share_num": safe_int(raw.get("share_num"), default=0),
                     "images": [str(raw.get("article_img", ""))] if raw.get("article_img") else [],
                 }
             )
@@ -147,5 +143,5 @@ class ClsFetcher(BaseFetcher):
         """
         for art in articles:
             if art.get("date") == date:
-                return int(art["article_id"])
+                return art["article_id"]
         return None
