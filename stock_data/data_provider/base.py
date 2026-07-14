@@ -166,6 +166,8 @@ class DataCapability(Flag):
     NEWS_SEARCH = auto()  # 新闻搜索（关键词 → 列表）
     NEWS_FLASH = auto()  # 全球财经快讯（7×24 实时推送流）
     STOCK_NEWS = auto()  # 个股新闻（按股票代码 → 列表）
+    MORNING_BRIEFING = auto()  # 财联社早报（按日取全文本）
+    MARKET_RECAP = auto()  # 财联社焦点复盘（按日取全文本）
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -209,6 +211,8 @@ CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.NEWS_SEARCH: "search_news",
     DataCapability.NEWS_FLASH: "fetch_flash_news",
     DataCapability.STOCK_NEWS: "get_stock_news",
+    DataCapability.MORNING_BRIEFING: "get_morning_briefing",
+    DataCapability.MARKET_RECAP: "get_market_recap",
 }
 
 
