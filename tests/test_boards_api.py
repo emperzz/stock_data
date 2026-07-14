@@ -811,10 +811,18 @@ def test_get_board_history_ths_supports_weekly_frequency(client):
 
 
 def test_get_board_history_ths_returns_kline(client):
-    """Happy path: ths returns rows → 200 with BoardKlineResponse."""
+    """Happy path: ths returns rows → 200 with BoardKlineResponse.
+
+    Post-2026-07-14: each row carries a per-bar ``frequency`` tag
+    (matches the request's ``?frequency=``). This is the user-visible
+    contract for the consistency fix — the row self-identifies its
+    timeframe, so a wrong-upstream-segment bug surfaces as a row-level
+    mismatch, not just at the response top level.
+    """
     fake_rows = [
         {
             "date": "2026-05-20",
+            "frequency": "d",  # NEW: row-level tag from the fetcher
             "open": 1.0,
             "high": 1.1,
             "low": 0.9,
@@ -841,6 +849,68 @@ def test_get_board_history_ths_returns_kline(client):
     assert len(body["data"]) == 1
     assert body["data"][0]["date"] == "2026-05-20"
     assert body["data"][0]["close"] == 1.05
+    # Per-row frequency tag — the user can verify the bar's timeframe
+    # independently of the top-level period field.
+    assert body["data"][0]["frequency"] == "d"
+
+
+def test_get_board_history_per_row_frequency_falls_back_to_request(client):
+    """Defense-in-depth: if a fetcher doesn't tag its rows with
+    ``frequency`` (e.g. a new fetcher that hasn't been updated yet),
+    the route falls back to the request's ``?frequency=`` so every
+    bar still carries a meaningful tag — never None."""
+    fake_rows = [
+        # No "frequency" key in the row dict (legacy fetcher output).
+        {
+            "date": "2026-05-20",
+            "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05,
+            "volume": 100, "amount": 105.0, "pct_chg": 5.0,
+        },
+    ]
+    with patch(
+        "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+        return_value=(fake_rows, "LegacyFetcher"),
+    ):
+        r = client.get(
+            "/api/v1/boards/881270/history",
+            params={"source": "ths", "days": 7, "frequency": "w", "board_type": "industry"},
+        )
+    body = r.json()
+    assert body["period"] == "w"
+    # Per-row tag fell back to the request's frequency.
+    assert body["data"][0]["frequency"] == "w"
+
+
+def test_get_board_history_per_row_frequency_distinct_from_top_period(client):
+    """Top-level ``period`` and per-row ``frequency`` should match.
+    A mismatch would mean a fetcher bug hit the wrong upstream segment
+    — this test makes the contract explicit so future regressions
+    surface immediately."""
+    fake_rows = [
+        # Fetcher tagged this row as weekly, but the request was for daily.
+        # In production this would be a bug; the test asserts the API
+        # surfaces the mismatch by trusting the per-row tag (which is
+        # the fetcher's claim about what the bar actually is).
+        {
+            "date": "2026-05-20",
+            "frequency": "w",  # claims weekly
+            "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05,
+            "volume": 100, "amount": 105.0, "pct_chg": 5.0,
+        },
+    ]
+    with patch(
+        "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+        return_value=(fake_rows, "ThsFetcher"),
+    ):
+        r = client.get(
+            "/api/v1/boards/881270/history",
+            params={"source": "ths", "days": 7, "frequency": "d", "board_type": "industry"},
+        )
+    body = r.json()
+    # Top-level echoes the request (intentional — that's the user's
+    # intent). Per-row reflects what the data actually claims to be.
+    assert body["period"] == "d"
+    assert body["data"][0]["frequency"] == "w"  # mismatch is exposed
 
 
 def test_get_board_history_zzshare_aliases_to_ths(client):

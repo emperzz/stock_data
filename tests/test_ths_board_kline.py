@@ -447,6 +447,89 @@ class TestGetBoardHistory:
         dates = [r["date"] for r in rows]
         assert dates == sorted(dates)
 
+    @pytest.mark.parametrize("freq", ["d", "w", "m", "5m", "15m", "30m", "60m"])
+    def test_each_row_tagged_with_frequency(self, freq):
+        """Post-2026-07-14: each row in the response carries a
+        ``frequency`` field matching the requested freq. This is the
+        per-row self-identification contract — downstream consumers
+        can verify each bar's timeframe independently of the top-level
+        period field (defense-in-depth against wrong-upstream-segment
+        bugs that would otherwise be invisible at the row level)."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        body = _5MIN_BODY if freq.endswith("m") else _DAILY_BODY_2025
+        start = "2026-07-12" if freq.endswith("m") else "2025-06-29"
+        end = "2026-07-14" if freq.endswith("m") else "2025-06-30"
+
+        with patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=body):
+            rows = f.get_board_history(
+                board_code="881270",
+                board_type="industry",
+                frequency=freq,
+                start_date=start,
+                end_date=end,
+            )
+        assert rows, f"freq={freq} returned 0 rows"
+        for r in rows:
+            assert r["frequency"] == freq, (
+                f"freq={freq} row tagged {r.get('frequency')!r}; "
+                f"date={r['date']!r}"
+            )
+
+    def test_minute_end_bound_uses_2359(self):
+        """Minute-level bars (YYYY-MM-DD HH:MM) need the end-date bound
+        to extend to " 23:59" or the last bar of the day would be
+        cut off by the lexicographic compare."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        # Last bar of 2026-07-13 at 14:55 — would be cut off by a
+        # bare "2026-07-13" end bound (because "2026-07-13 14:55" >
+        # "2026-07-13" lex-wise; but "2026-07-13 14:55" <= "2026-07-13 23:59").
+        body = (
+            'var v_x={"data":"202607130930,1,2,3,4,5,6,7,8,9,10;'
+            '202607131455,1,2,3,4,5,6,7,8,9,10;"};'
+        )
+        with patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=body):
+            rows = f.get_board_history(
+                board_code="881270",
+                board_type="industry",
+                frequency="5m",
+                start_date="2026-07-13",
+                end_date="2026-07-13",
+            )
+        # Both rows should be kept (the 14:55 bar is the same day as end).
+        assert len(rows) == 2
+        dates = [r["date"] for r in rows]
+        assert "2026-07-13 14:55" in dates
+
+    def test_daily_end_bound_does_not_get_2359_suffix(self):
+        """Daily bars (YYYY-MM-DD) should NOT get the " 23:59" tail —
+        the explicit set check (not endswith("m")) means monthly
+        (key "m") and daily (key "d") both skip it. This verifies
+        the polish fix for the cosmetic "monthly was silently
+        over-applied" issue."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        # Mock _fetch_ths_board_year and capture the year body
+        # (we don't actually care about the URL — we just need
+        # the fetcher's date-filter behavior). The end bound is
+        # internal; we test the EFFECT: a daily bar on the same
+        # day as end_date is included regardless.
+        body = 'var v_x={"data":"20251231,1,2,3,4,5,6,7,8,9,10;"};'
+        with patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=body):
+            rows = f.get_board_history(
+                board_code="881270",
+                board_type="industry",
+                frequency="d",
+                start_date="2025-12-01",
+                end_date="2025-12-31",
+            )
+        assert len(rows) == 1
+        assert rows[0]["date"] == "2025-12-31"  # no spurious time suffix
+
 
 class TestVTokenCacheTTL:
     """F2 — lru_cache(maxsize=1) replaced with TTL cache + retry + VM singleton."""

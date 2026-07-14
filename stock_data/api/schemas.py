@@ -90,6 +90,23 @@ class KLineData(BaseModel):
     """
 
     date: str = Field(description="Date")
+    # Per-bar frequency tag. Mirrors the request's `?frequency=` so each
+    # row self-identifies its timeframe (the top-level `period` field
+    # on the response is also a tag, but per-row tagging gives a
+    # defense-in-depth check the bar's data matches the request's
+    # intent — a mismatch means the fetcher hit the wrong upstream
+    # segment, which would otherwise be invisible at the row level).
+    # Populated by the route layer from `row.get("frequency")` (set
+    # by the fetcher) or the request's `frequency` parameter (fallback
+    # for fetchers that don't tag their rows yet).
+    # Date format depends on frequency: YYYY-MM-DD for d/w/m,
+    # YYYY-MM-DD HH:MM for 5m/15m/30m/60m.
+    frequency: Literal["d", "w", "m", "5m", "15m", "30m", "60m"] | None = Field(
+        default=None,
+        description="Per-bar frequency tag. Same as the request's `?frequency=`. "
+        "Use this to verify each bar's timeframe matches the requested "
+        "frequency (defense against wrong-upstream-segment bugs).",
+    )
     open: float = Field(description="Opening price")
     high: float = Field(description="Highest price")
     low: float = Field(description="Lowest price")
@@ -127,6 +144,15 @@ class KLineData(BaseModel):
             "amount": self.amount,
             "change_percent": self.change_percent,
         }
+        # Per-bar frequency tag: only emit when populated. The route
+        # layer falls back to the request's `?frequency=` for fetchers
+        # that don't tag their rows, so by the time we reach the
+        # serializer this should always be set. We still guard with
+        # `is not None` to keep the serializer's "drop optional
+        # fields" contract consistent with `indicators` below —
+        # clients that don't care about the per-bar tag won't see it.
+        if self.frequency is not None:
+            data["frequency"] = self.frequency
         # indicators: only emit when populated. None / empty means the
         # caller didn't ask for them — drop the key from the response.
         if self.indicators:

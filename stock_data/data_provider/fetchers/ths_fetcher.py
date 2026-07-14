@@ -294,25 +294,74 @@ _THS_BASIC_HEADERS = {
 }
 
 _THS_BOARD_KLINE_URL = "https://d.10jqka.com.cn/v4/line/bk_{inner}/{freq}/{year}.js"
-# THS upstream K-line frequency segment mapping. Verified 2026-07-14 by
-# probing each seg against /v4/line/bk_886042/{seg}/2026.js:
-#   - seg=01 daily    : 125 rows/year  (dates YYYYMMDD)
-#   - seg=02 weekly   : 126 rows/year  (周五锚定)
-#   - seg=10 monthly  :  27 rows/year  (~一个月一行)
-#   - seg=30 5min     : ~6000 rows/year (timestamps YYYYMMDDHHMM, 5min 间隔实测)
-#   - seg=50 15min    :  501 rows/year
-#   - seg=60 30min    : ~10800 rows/year (从 2026-05-11 起,数据稀疏)
-#   - seg=70 60min    :  126 rows/year (15:00 收盘时点聚合)
-# akshare 硬编码 seg=01,从未公开过其他频率 — 但 upstream 真实支持全部 7 种。
+
+
+class _ThsFreqSegment:
+    """THS upstream URL segment for each K-line frequency.
+
+    **Internal** — these are URL implementation details (the
+    ``{freq:02d}`` placeholder in
+    ``/v4/line/bk_{platecode}/{freq:02d}/{year}.js``), NOT user-facing
+    concepts. The user-facing keys (``d`` / ``w`` / ``m`` / ``5m`` /
+    ``15m`` / ``30m`` / ``60m``) are exposed via the API route's
+    ``Literal`` type and through ``_THS_BOARD_FREQ_LABEL`` for
+    human-readable descriptions.
+
+    Verified 2026-07-14 by probing each segment against
+    ``/v4/line/bk_886042/{seg}/2026.js`` (the storage chip concept board).
+    """
+
+    DAILY = 1       # 125 rows/year, dates YYYYMMDD
+    WEEKLY = 2      # 126 rows/year, dates YYYYMMDD, 周五锚定
+    MONTHLY = 10    # 27 rows/year, dates YYYYMMDD, ~一个月一行
+    M5 = 30         # ~6000 rows/year, dates YYYYMMDDHHMM, 5min 间隔
+    M15 = 50        # 501 rows/year, dates YYYYMMDDHHMM
+    M30 = 60        # ~10800 rows/year, dates YYYYMMDDHHMM (从 2026-05-11 起)
+    M60 = 70        # 126 rows/year, dates YYYYMMDDHHMM, 15:00 收盘时点
+
+
+# Public: maps user-facing frequency string to internal upstream segment.
+# Values are read by ``_fetch_ths_board_year`` which interpolates them
+# into the URL template; callers should NOT use the integer values
+# directly. The string keys (``d`` / ``w`` / ``m`` / ``5m`` / ``15m`` /
+# ``30m`` / ``60m``) are the contract with the API layer.
+#
+# akshare 硬编码 seg=01,从未公开过其他频率 — 但 upstream 真实支持全部 7 种
+# (verified 2026-07-14, see _ThsFreqSegment docstring).
 _THS_BOARD_FREQ_MAP: dict[str, int] = {
-    "d": 1,    # 日线
-    "w": 2,    # 周线
-    "m": 10,   # 月线
-    "5m": 30,  # 5 分钟
-    "15m": 50, # 15 分钟
-    "30m": 60, # 30 分钟
-    "60m": 70, # 60 分钟
+    "d": _ThsFreqSegment.DAILY,
+    "w": _ThsFreqSegment.WEEKLY,
+    "m": _ThsFreqSegment.MONTHLY,
+    "5m": _ThsFreqSegment.M5,
+    "15m": _ThsFreqSegment.M15,
+    "30m": _ThsFreqSegment.M30,
+    "60m": _ThsFreqSegment.M60,
 }
+
+# Canonical human-readable label for each frequency. Used in error
+# messages and the explorer's manifest; NOT serialized into the API
+# response (the user-facing ``period`` field on the response is the
+# request's frequency string, e.g. ``"w"`` not ``"weekly"`` — keeps
+# the response terse and round-trippable).
+_THS_BOARD_FREQ_LABEL: dict[str, str] = {
+    "d": "daily",
+    "w": "weekly",
+    "m": "monthly",
+    "5m": "5-minute",
+    "15m": "15-minute",
+    "30m": "30-minute",
+    "60m": "60-minute",
+}
+
+# Frequencies whose bars carry a "HH:MM" time suffix in their
+# normalized date string. Daily/weekly/monthly emit "YYYY-MM-DD";
+# minute-level emit "YYYY-MM-DD HH:MM". Used in
+# :meth:`get_board_history` to construct the inclusive end-date bound
+# — minute-level needs the " 23:59" tail or the last bar of the day
+# would be cut off; daily/weekly/monthly don't need it. Explicit
+# set (NOT a substring check) so monthly (key "m", which also ends
+# in "m") is not silently over-applied.
+_MINUTE_FREQS: frozenset[str] = frozenset({"5m", "15m", "30m", "60m"})
 # Per-frequency max history span (days). Daily/weekly/monthly keep the
 # 10-year cap; minute-level frequencies are capped tight because each
 # year carries 6000+ rows and a 17-year minute query would be 100k+ rows
@@ -915,6 +964,15 @@ class ThsFetcher(BaseFetcher):
                 continue
             rows.extend(self._parse_ths_kline_body(body))
 
+        # Tag each row with the frequency that was requested. The
+        # per-row ``frequency`` field lets downstream consumers verify
+        # each bar's timeframe independently of the top-level
+        # ``period`` field (defense-in-depth against a hypothetical
+        # bug where the wrong upstream segment was hit and the data
+        # doesn't match the request).
+        for r in rows:
+            r["frequency"] = freq_key
+
         # Date range filter. _parse_ths_kline_body normalizes upstream's
         # YYYYMMDD / YYYYMMDDHHMM into canonical "YYYY-MM-DD" /
         # "YYYY-MM-DD HH:MM" so this lexicographic comparison works for
@@ -922,11 +980,16 @@ class ThsFetcher(BaseFetcher):
         # strings sorts with daily strings (both share YYYY-MM-DD), and
         # the trailing " HH:MM" sorts within-day correctly.
         start_str = start_d.strftime("%Y-%m-%d")
-        # Minute bars need an inclusive end bound that covers the full
-        # last day; we use " 23:59" to keep the comparison robust.
+        # Minute-level bars carry a "HH:MM" suffix on their date string;
+        # without the " 23:59" tail on the end bound, the last bar of
+        # the day (e.g. "2026-07-14 14:55") would compare < the bound
+        # and be cut off. Daily/weekly/monthly emit bare "YYYY-MM-DD"
+        # and don't need the suffix — comparing "2026-07-14" against
+        # "2026-07-14 23:59" produces the same result either way (the
+        # first 10 chars already differ for any later day).
         end_str = (
             f"{end_d.strftime('%Y-%m-%d')} 23:59"
-            if freq_key.endswith("m")
+            if freq_key in _MINUTE_FREQS
             else end_d.strftime("%Y-%m-%d")
         )
         filtered = [r for r in rows if start_str <= r["date"] <= end_str]

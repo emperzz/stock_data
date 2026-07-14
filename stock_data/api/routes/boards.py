@@ -954,12 +954,24 @@ def get_board_history(
     # Reshape manager rows (list[dict]) into KLineData list. Defensive —
     # if a fetcher returns a partial row missing required fields, drop it
     # rather than 500ing.
+    #
+    # Per-row ``frequency`` tag: the fetcher sets ``row["frequency"]`` on
+    # each parsed bar (verified 2026-07-14 for THS; EastMoney tags its
+    # own rows too). We fall back to the request's ``frequency`` param
+    # for fetchers that don't tag, so every bar carries the timeframe
+    # the caller asked for — defense-in-depth against wrong-upstream-
+    # segment bugs that would otherwise be invisible at the row level.
+    allowed_freqs = {"d", "w", "m", "5m", "15m", "30m", "60m"}
     kline_data: list[KLineData] = []
     for row in rows or []:
         try:
+            row_freq = row.get("frequency")
+            if row_freq not in allowed_freqs:
+                row_freq = frequency  # fallback to request's frequency
             kline_data.append(
                 KLineData(
                     date=str(row.get("date", "")),
+                    frequency=row_freq,  # NEW: per-bar frequency tag
                     open=safe_float(row.get("open"), 0.0),
                     high=safe_float(row.get("high"), 0.0),
                     low=safe_float(row.get("low"), 0.0),
