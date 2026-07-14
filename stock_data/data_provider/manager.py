@@ -1054,7 +1054,14 @@ class DataFetcherManager:
         )
 
     def get_stock_info(self, code: str) -> tuple[dict, str]:
-        """拉取公司画像 (A 股). Failover: Zhitu (P4) → Myquant (P9)."""
+        """拉取公司画像 (A 股). Failover: Zhitu (P5) → Myquant (P9).
+
+        Note: Zzshare (P2) was previously in this chain but removed 2026-07-14
+        because its ``/v3/open/stock/info?info_type=1`` endpoint returns
+        ``data: null`` for every A-share (verified against 10 主流 stocks;
+        see docs/zzshare/03-basic-data.md § 3). Keeping it as primary would
+        add ~3.8s of wasted network per request before falling through.
+        """
         return self._with_failover(
             DataCapability.STOCK_INFO,
             "csi",

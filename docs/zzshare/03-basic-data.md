@@ -106,9 +106,11 @@ days = api.trade_days(day_start='20260101', day_end='20260630')  # 区间
 
 ---
 
-## 3. `stock_info` — 个股公司画像
+## 3. `stock_info` — 个股公司画像 ⚠️ 已停用 (2026-07-14)
 
-### 接口
+> **本节描述的端点对所有 A 股返 `null`，已从项目 fetcher 的 `STOCK_INFO` capability 列表移除。** 详见 `stock_data/data_provider/fetchers/zzshare_fetcher.py` 模块 docstring 和 git 历史。
+
+### 接口（保留参考，不再用于 fetcher）
 
 - **HTTP**: `GET /v3/open/stock/info`
 - **SDK**: `DataApi.stock_info(...)`
@@ -120,12 +122,26 @@ days = api.trade_days(day_start='20260101', day_end='20260630')  # 区间
 | `stock_id` | `str` | ✅ | 6 位裸码（如 `600519`） |
 | `info_type` | `int` | ✅ | 子表类型（**SDK 未公开 enum**，需实测枚举） |
 
-### 频率限制
+### 探测结论
 
-**实测匿名调用返回 `null`**——需 Token。
+| 探测维度 | 结果 |
+|---|---|
+| `info_type=1` × 600519 | `{"code":20000,"message":"success","data":null}` |
+| `info_type=1` × 10 只主流股票（600519 / 000001 / 000002 / 000333 / 600036 / 601318 / 300750 / 688981 / 601012 / 002594） | **10/10 全部 null** |
+| `info_type=0..30` sweep × 600519 | `0..11` 全部 null；`info_type=12` 返回板块概念数据（`List`/`ListJX`，不是公司画像）；`13..30` 全部 null |
+| Token 有 / 无 | 都 null；token 不是因素 |
+| ts_code 形式 (`600519.SH`) vs 裸码 (`600519`) | 都 null |
 
-### 示例
+### 为什么移除
+
+1. **真实数据从未被验证** — fetcher 之前用的 `raddr/rcapital/rname/bsname/bsphone/bsemail` 字段名来自 README 示例代码（与项目当初给 Zhitu 设想的字段名一致），未经真实 upstream payload probe。
+2. **每次请求白费 ~3.8s** — `manager._with_failover` 把 Zzshare 排在 Zhitu 前面作为 primary，每次 `/stocks/{code}/info` 都先打 Zzshare → 3.8s 后 null → 才 fallback 到 Zhitu。
+3. **官方 README 自己记录 null**（§ 探针实测表 line 155）。
+
+### 示例（保留）
 
 ```python
+# 此调用现在永远返回 null — 不要在生产代码中依赖它
 info = api.stock_info(stock_id='600519', info_type=1)
+# info is None
 ```

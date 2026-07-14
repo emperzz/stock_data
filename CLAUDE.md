@@ -228,7 +228,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 |---|---|---|---|---|---|
 | `TushareFetcher` | 0 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` | `TUSHARE_TOKEN` | |
 | `BaostockFetcher` | 1 | csi | `STOCK_KLINE` `TRADE_CALENDAR` `INDEX_KLINE` `DIVIDEND` | none | |
-| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_POOL` `DRAGON_TIGER` `HOT_TOPICS` `STOCK_INFO` | `ZZSHARE_TOKEN` (optional) | Board endpoints: not a public source label (unified under `ths`) |
+| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_POOL` `DRAGON_TIGER` `HOT_TOPICS` | `ZZSHARE_TOKEN` (optional) | Board endpoints: not a public source label (unified under `ths`). `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. |
 | `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` `STOCK_ZT_POOL` | none | |
 | `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` `INDEX_REALTIME_QUOTE` | none | |
 | `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE` `STOCK_ZT_POOL` `STOCK_INFO` `STOCK_KLINE` (minute fallback) `STOCK_LIST` `STOCK_BOARD` `DIVIDEND` `FUND_FLOW` `HOLDER_NUM` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` | `ZHITU_TOKEN` | Index K-line via `/hz/` prefix |
@@ -270,7 +270,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | `fetch_flash_news` | `NEWS_FLASH` | EastMoney P6 → ThsFetcher P7 |
 | `search_news` | `NEWS_SEARCH` | EastMoney P6 → ThsFetcher / BaiduFetcher P7 |
 | `get_stock_news` | `STOCK_NEWS` | EastMoney P6 sole provider |
-| `get_stock_info` | `STOCK_INFO` | Zhitu P5 → Myquant P9 |
+| `get_stock_info` | `STOCK_INFO` | Zhitu P5 → Myquant P9 (Zzshare removed 2026-07-14 — upstream endpoint returns null) |
 | `get_news_content` | n/a | Pure utility in `utils/news_extractor.py` |
 | `get_indicator_catalog` | n/a | Pure compute |
 | `get_history` w/ `?indicators=` | n/a | `indicator_service.compute()` on top of `STOCK_KLINE` |

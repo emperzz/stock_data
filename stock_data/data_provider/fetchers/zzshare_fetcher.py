@@ -6,9 +6,18 @@ Client class: ``zzshare.client.DataApi``.
 Token configured via ZZSHARE_TOKEN environment variable (anonymous also works
 for most endpoints — see docs/zzshare/10-rate-limits.md).
 
-Most endpoints are anonymous-capable; only stock_info and uplimit_stocks
-require a token. The fetcher is_available() returns True as long as the
-SDK is importable, even without a token.
+Most endpoints are anonymous-capable; only uplimit_stocks requires a token.
+The fetcher is_available() returns True as long as the SDK is importable,
+even without a token.
+
+Note: ``STOCK_INFO`` (公司画像) was removed 2026-07-14 because zzshare's
+``/v3/open/stock/info?info_type=1`` returns ``data: null`` for every A-share
+— see docs/zzshare/03-basic-data.md § 3. The endpoint is reachable (HTTP 200)
+but the company-profile sub-table is empty upstream. If zzshare fills the
+data in a future release: probe the real payload shape first (do NOT trust
+the README's ``raddr/rcapital/rname/bsname/bsphone/bsemail`` field names —
+those are unverified guesses, mirroring the same trap Zhitu fell into),
+then re-add the capability flag and reimplement the method.
 
 Dragon-tiger endpoints (see ``get_dragon_tiger`` / ``get_daily_dragon_tiger``
 and docs/zzshare/05-dragon-tiger.md for upstream field tables):
@@ -125,7 +134,6 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         | DataCapability.STOCK_ZT_POOL
         | DataCapability.DRAGON_TIGER
         | DataCapability.HOT_TOPICS
-        | DataCapability.STOCK_INFO
     )
 
     # SDKFetcherMixin declarations. Token is optional (anonymous works
@@ -482,46 +490,6 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         if not dates:
             return None
         return list(dates)
-
-    def get_stock_info(self, stock_code: str) -> dict | None:
-        """公司画像 — zzshare stock_info(stock_id, info_type=1).
-
-        Returns 18-field dict matching ZhituFetcher.get_stock_info's shape.
-        info_type=1 is the company-profile enum (README 探测确认可用).
-        """
-        from ..utils.normalize import split_concepts as _split_concepts
-
-        self._ensure_api()
-        api = self.__class__._api
-        if api is None:
-            return None
-        code = normalize_stock_code(stock_code)
-        try:
-            data = api.stock_info(stock_id=code, info_type=1)
-        except Exception as e:
-            logger.warning(f"[ZzshareFetcher] stock_info({code}) failed: {e}")
-            return None
-        if not isinstance(data, dict):
-            return None
-        return {
-            "code": code,
-            "name": str(data.get("name", "") or ""),
-            "ename": str(data.get("ename", "") or ""),
-            "market": "csi",
-            "listed_date": str(data.get("ldate", "") or ""),
-            "delisted_date": "",
-            "total_shares": safe_float(data.get("totalstock")),
-            "float_shares": safe_float(data.get("flowstock")),
-            "concepts": _split_concepts(data.get("idea", "")),
-            "registered_address": str(data.get("raddr", "") or ""),
-            "registered_capital": str(data.get("rcapital", "") or ""),
-            "legal_representative": str(data.get("rname", "") or ""),
-            "business_scope": str(data.get("bscope", "") or ""),
-            "established_date": str(data.get("rdate", "") or ""),
-            "secretary": str(data.get("bsname", "") or ""),
-            "secretary_phone": str(data.get("bsphone", "") or ""),
-            "secretary_email": str(data.get("bsemail", "") or ""),
-        }
 
     # Pool type -> zzshare endpoint name
     _POOL_TYPE_MAP: dict[str, str] = {
