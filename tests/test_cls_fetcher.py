@@ -163,3 +163,57 @@ def test_find_article_id_by_date_no_match(fetcher, list_html):
     """Date that doesn't appear in the fixture → None."""
     arts = fetcher._parse_subject_articles(1151, list_html)
     assert fetcher._find_article_id_by_date(arts, "2020-01-01") is None
+
+
+def test_extract_body_text_strips_html(fetcher):
+    """body_text has no HTML tags, preserves paragraph separators."""
+    html = "<p>第一段</p><p>第二段有<strong>加粗</strong></p><p>第三段</p>"
+    out = fetcher._extract_body_text(html)
+    assert "<" not in out and ">" not in out
+    assert "第一段" in out
+    assert "加粗" in out  # text content preserved
+    # at least 2 newlines (paragraph separator)
+    assert "\n" in out
+
+
+def test_extract_body_text_empty(fetcher):
+    assert fetcher._extract_body_text("") == ""
+
+
+def test_extract_body_text_collapses_blank_lines(fetcher):
+    """3+ consecutive newlines collapse to 2."""
+    html = "<p>a</p><p></p><p></p><p></p><p>b</p>"
+    out = fetcher._extract_body_text(html)
+    assert "\n\n\n" not in out  # no 3+ consecutive newlines
+
+
+def test_dedup_images(fetcher):
+    detail = {
+        "images": ["https://a.com/1.jpg", "https://a.com/2.jpg"],
+        "content": '<p><img src="https://a.com/2.jpg"></p><p><img src="https://a.com/3.jpg"></p>',
+    }
+    out = fetcher._dedup_images(detail)
+    assert out == [
+        "https://a.com/1.jpg",  # from images field
+        "https://a.com/2.jpg",  # appears in both — first occurrence wins
+        "https://a.com/3.jpg",  # from content
+    ]
+
+
+def test_fetch_article_detail_normal(fetcher, detail_html):
+    """Standard detail HTML → full ClsArticle-shaped dict."""
+    art = fetcher._fetch_article_detail(2425210, detail_html)
+    assert art is not None
+    assert art["article_id"] == 2425210
+    assert art["title"].startswith("【")
+    assert len(art["body_text"]) > 100
+    # date is YYYY-MM-DD
+    assert len(art["date"]) == 10 and art["date"][4] == "-"
+    # images is a list (possibly empty)
+    assert isinstance(art["images"], list)
+
+
+def test_fetch_article_detail_empty_dict(fetcher):
+    """__NEXT_DATA__ with empty articleDetail → None."""
+    html = '<html><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"articleDetail":{}}}}</script></html>'
+    assert fetcher._fetch_article_detail(99999, html) is None

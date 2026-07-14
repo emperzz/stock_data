@@ -145,3 +145,89 @@ class ClsFetcher(BaseFetcher):
             if art.get("date") == date:
                 return art["article_id"]
         return None
+
+    # ------------------------------------------------------------------
+    # Internal: detail page parsing
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_body_text(html_content: str) -> str:
+        """BS4 抽出纯文本，保留段落分隔。
+
+        get_text(separator='\\n') 让 <p> 之间的换行保留；strip=True 去行内空白；
+        最后 re.sub 折叠连续 3+ 空行为 2 个（避免 <p>嵌套产生过多空行）。
+        """
+        if not html_content:
+            return ""
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html_content, "lxml")
+        text = soup.get_text("\n", strip=True)
+        # 折叠连续 3+ 空行为 2 个
+        return re.sub(r"\n{3,}", "\n\n", text)
+
+    @staticmethod
+    def _dedup_images(article_detail: dict) -> list[str]:
+        """合并 `images` 字段和 `content` 内 <img src>，去重保序。"""
+        seen: set[str] = set()
+        out: list[str] = []
+        # 1) articleDetail.images[] 优先
+        for url in article_detail.get("images", []) or []:
+            if url and url not in seen:
+                seen.add(url)
+                out.append(str(url))
+        # 2) 从 content HTML 里提取 <img src>
+        content = article_detail.get("content", "") or ""
+        if content:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(content, "lxml")
+            for img in soup.find_all("img"):
+                src = img.get("src")
+                if src and src not in seen:
+                    seen.add(src)
+                    out.append(str(src))
+        return out
+
+    @staticmethod
+    def _fetch_article_detail(article_id: int, html: str) -> dict | None:
+        """Parse a detail-page __NEXT_DATA__ → ClsArticle-shaped dict.
+
+        Path: __NEXT_DATA__.props.pageProps.articleDetail
+        Fields: id, title, brief, content (HTML), ctime, readingNum, author.name,
+                commentNum, images[], subject[].
+
+        Returns None if the articleDetail is missing (CLS returns an empty
+        object for invalid IDs).
+        """
+        next_data = ClsFetcher._parse_next_data(html)
+        detail = (
+            next_data.get("props", {})
+            .get("pageProps", {})
+            .get("articleDetail", {})
+        )
+        # CLS returns an empty dict (or just an error code) for invalid article IDs
+        if not detail or not detail.get("id"):
+            return None
+        ctime = safe_int(detail.get("ctime"), default=0)
+        date = (
+            datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d")
+            if ctime
+            else ""
+        )
+        body_text = ClsFetcher._extract_body_text(detail.get("content", "") or "")
+        images = ClsFetcher._dedup_images(detail)
+        author_obj = detail.get("author") or {}
+        return {
+            "article_id": int(detail["id"]),
+            "title": str(detail.get("title", "")),
+            "brief": str(detail.get("brief", "")),
+            "author": str(author_obj.get("name", "")) if isinstance(author_obj, dict) else "",
+            "ctime": int(ctime),
+            "date": date,
+            "read_num": safe_int(detail.get("readingNum"), default=0),
+            "comments_num": safe_int(detail.get("commentNum"), default=0),
+            "share_num": 0,  # detail page doesn't expose share_num; list does
+            "images": images,
+            "body_text": body_text,
+        }
