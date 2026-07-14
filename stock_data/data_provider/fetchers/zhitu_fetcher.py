@@ -382,6 +382,17 @@ class ZhituFetcher(BaseFetcher):
         """公司画像 — Zhitu gs/gsjj 端点 (https://api.zhituapi.com/hs/gs/gsjj/{code}).
 
         返回归一化的 18 user-data 字段 (source 由 manager 注入)。失败返 None 让 failover 工作。
+
+        Real upstream payload (probed 2026-07-14) does NOT include a ``code``
+        key; identity comes from the URL path. Field names differ from the
+        original commit's imagined schema: address lives in ``addr`` (not
+        ``raddr``), registered capital in ``rprice``, secretary in ``secre``
+        / ``sphone`` / ``semail``. Note: ``principal`` upstream is the **IPO
+        underwriter (主承销商)** — it is NOT the legal representative
+        (法人代表), so we deliberately leave ``legal_representative`` empty
+        rather than mis-map to ``principal``. Zhitu does NOT expose share
+        counts on this endpoint — ``total_shares`` / ``float_shares`` are
+        always ``None``.
         """
         if not self.is_available():
             return None
@@ -389,7 +400,11 @@ class ZhituFetcher(BaseFetcher):
             f"/hs/gs/gsjj/{stock_code}",
             op_label=f"stock_info {stock_code}",
         )
-        if not isinstance(data, dict) or "code" not in data:
+        # Validate shape: dict + must carry `name` (real gsjj payloads always
+        # do; absence means upstream returned a placeholder row or our URL is
+        # wrong). Note: we do NOT gate on a `code` key — upstream never sends
+        # one (the identity is in the URL path).
+        if not isinstance(data, dict) or not data.get("name"):
             logger.warning("[ZhituFetcher] get_stock_info %s: malformed payload", stock_code)
             return None
         return {
@@ -399,17 +414,18 @@ class ZhituFetcher(BaseFetcher):
             "market": "csi",
             "listed_date": str(data.get("ldate", "") or ""),
             "delisted_date": "",
-            "total_shares": safe_float(data.get("totalstock")),
-            "float_shares": safe_float(data.get("flowstock")),
+            "total_shares": None,  # Zhitu gsjj 不暴露总股本
+            "float_shares": None,  # Zhitu gsjj 不暴露流通股本
             "concepts": _split_concepts(data.get("idea", "")),
-            "registered_address": data.get("raddr", "") or "",
-            "registered_capital": data.get("rcapital", "") or "",
-            "legal_representative": data.get("rname", "") or "",
+            "registered_address": data.get("addr", "") or "",
+            "registered_capital": data.get("rprice", "") or "",
+            # Zhitu 不暴露法人代表 — `principal` 是 IPO 主承销商，不要错填。
+            "legal_representative": "",
             "business_scope": data.get("bscope", "") or "",
             "established_date": str(data.get("rdate", "") or ""),
-            "secretary": data.get("bsname", "") or "",
-            "secretary_phone": data.get("bsphone", "") or "",
-            "secretary_email": data.get("bsemail", "") or "",
+            "secretary": data.get("secre", "") or "",
+            "secretary_phone": data.get("sphone", "") or "",
+            "secretary_email": data.get("semail", "") or "",
         }
 
     # ---------- index methods ----------

@@ -28,12 +28,24 @@ class TestGetStockInfo:
         self.fetcher = ZhituFetcher()
 
     def test_returns_none_when_unavailable(self, monkeypatch):
-        monkeypatch.setattr("stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv", lambda *a, **k: "" if a and a[0] == "ZHITU_TOKEN" else "")
+        # NOTE: ``self.fetcher._token`` is cached at ``__init__`` from .env —
+        # monkeypatching ``os.getenv`` alone does NOT flip ``is_available()``,
+        # because ``is_available()`` reads the cached attribute. Clear both.
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
+            lambda *a, **k: "" if a and a[0] == "ZHITU_TOKEN" else "",
+        )
+        self.fetcher._token = ""
         result = self.fetcher.get_stock_info("600519")
         assert result is None
 
     @patch("stock_data.data_provider.utils.http.requests.get")
     def test_normalizes_full_payload(self, mock_get, monkeypatch):
+        """Verify mapping against the **real** Zhitu /hs/gs/gsjj/ payload shape
+        (probed live against api.zhituapi.com 2026-07-14). Real upstream uses
+        ``addr / rprice / principal / secre / sphone / semail`` and does NOT
+        expose share-count fields — those land as ``None``.
+        """
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
             lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else "",
@@ -41,21 +53,19 @@ class TestGetStockInfo:
         self.fetcher._token = "test_token"
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "code": "600519",
-            "name": "贵州茅台",
+            "name": "贵州茅台酒股份有限公司",
             "ename": "Kweichow Moutai Co.,Ltd.",
+            "market": "上海证券交易所",
             "ldate": "2001-08-27",
             "rdate": "1999-11-20",
-            "totalstock": "125619.78",
-            "flowstock": "125619.78",
-            "idea": "白酒,融资融券,证金持股,沪股通",
-            "raddr": "贵州省遵义市仁怀市茅台镇",
-            "rcapital": "9.82亿",
-            "rname": "丁雄军",
-            "bscope": "酒类生产、销售...",
-            "bsname": "蒋焰",
-            "bsphone": "0851-22386002",
-            "bsemail": "mtdm@maotai.com.cn",
+            "addr": "贵州省仁怀市茅台镇",
+            "rprice": "125008万元(CNY)",
+            "principal": "南方证券有限公司",
+            "bscope": "贵州茅台酒系列产品的生产与销售...",
+            "idea": "所属概念板块,白酒,MSCI中国,百元股",
+            "secre": "余思明",
+            "sphone": "0851-22386002",
+            "semail": "mtdm@moutaichina.com",
         }
         mock_get.return_value = mock_response
         mock_response.raise_for_status = lambda: None
@@ -63,22 +73,28 @@ class TestGetStockInfo:
         result = self.fetcher.get_stock_info("600519")
         assert result is not None
         assert result["code"] == "600519"
-        assert result["name"] == "贵州茅台"
+        assert result["name"] == "贵州茅台酒股份有限公司"
         assert result["ename"] == "Kweichow Moutai Co.,Ltd."
         assert result["market"] == "csi"
         assert result["listed_date"] == "2001-08-27"
         assert result["delisted_date"] == ""
-        assert result["total_shares"] == 125619.78
-        assert result["float_shares"] == 125619.78
-        assert result["concepts"] == ["白酒", "融资融券", "证金持股", "沪股通"]
-        assert result["registered_address"] == "贵州省遵义市仁怀市茅台镇"
-        assert result["registered_capital"] == "9.82亿"
-        assert result["legal_representative"] == "丁雄军"
-        assert result["business_scope"] == "酒类生产、销售..."
+        # Zhitu upstream does NOT expose share counts → None
+        assert result["total_shares"] is None
+        assert result["float_shares"] is None
+        # Concepts parsed from comma-separated `idea`
+        assert "白酒" in result["concepts"]
+        assert "MSCI中国" in result["concepts"]
+        # Real field-name mappings (addr/rprice/secre/sphone/semail)
+        assert result["registered_address"] == "贵州省仁怀市茅台镇"
+        assert result["registered_capital"] == "125008万元(CNY)"
+        # `principal` upstream = 主承销商 (underwriter), NOT 法人代表 — must NOT
+        # be mapped into `legal_representative` (Zhitu does not expose 法人代表).
+        assert result["legal_representative"] == ""
+        assert result["business_scope"] == "贵州茅台酒系列产品的生产与销售..."
         assert result["established_date"] == "1999-11-20"
-        assert result["secretary"] == "蒋焰"
+        assert result["secretary"] == "余思明"
         assert result["secretary_phone"] == "0851-22386002"
-        assert result["secretary_email"] == "mtdm@maotai.com.cn"
+        assert result["secretary_email"] == "mtdm@moutaichina.com"
         # No 'source' key — manager injects it
         assert "source" not in result
 
@@ -95,7 +111,12 @@ class TestGetStockInfo:
         assert self.fetcher.get_stock_info("600519") is None
 
     @patch("stock_data.data_provider.utils.http.requests.get")
-    def test_returns_none_on_malformed_payload(self, mock_get, monkeypatch):
+    def test_returns_none_on_detail_error_envelope(self, mock_get, monkeypatch):
+        """``_fetch_json`` already strips Zhitu's ``{"detail": ...}`` envelope
+        and returns None upstream of this method — but the upstream guard is
+        the contract; assert the *direct* contract for callers: a dict whose
+        only key is ``detail`` short-circuits to None (defence in depth).
+        """
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
             lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else "",
@@ -105,28 +126,67 @@ class TestGetStockInfo:
         mock_response.json.return_value = {"detail": "Licence证书无效"}
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
-        # No 'code' key in payload → returns None
         assert self.fetcher.get_stock_info("600519") is None
 
     @patch("stock_data.data_provider.utils.http.requests.get")
-    def test_empty_optional_fields_default_to_blank(self, mock_get, monkeypatch):
+    def test_returns_none_on_non_dict_payload(self, mock_get, monkeypatch):
+        """Defensive: a list or scalar at top-level must not crash — return None."""
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
             lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else "",
         )
         self.fetcher._token = "test_token"
         mock_response = MagicMock()
-        mock_response.json.return_value = {"code": "600519", "name": "贵州茅台"}
+        mock_response.json.return_value = ["unexpected", "list"]
+        mock_response.raise_for_status = lambda: None
+        mock_get.return_value = mock_response
+        assert self.fetcher.get_stock_info("600519") is None
+
+    @patch("stock_data.data_provider.utils.http.requests.get")
+    def test_returns_none_on_payload_without_name(self, mock_get, monkeypatch):
+        """Real gsjj payloads always carry ``name`` — if it's missing, treat as
+        malformed (some upstream rows are placeholders)."""
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
+            lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else "",
+        )
+        self.fetcher._token = "test_token"
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"market": "上海证券交易所", "ldate": ""}
+        mock_response.raise_for_status = lambda: None
+        mock_get.return_value = mock_response
+        assert self.fetcher.get_stock_info("600519") is None
+
+    @patch("stock_data.data_provider.utils.http.requests.get")
+    def test_empty_optional_fields_default_to_blank(self, mock_get, monkeypatch):
+        """Minimal real-shape payload (just ``name``) — all derived fields blank
+        and share counts None (upstream doesn't expose them)."""
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
+            lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else "",
+        )
+        self.fetcher._token = "test_token"
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"name": "贵州茅台"}
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
 
         result = self.fetcher.get_stock_info("600519")
+        assert result["code"] == "600519"
+        assert result["name"] == "贵州茅台"
         assert result["ename"] == ""
         assert result["listed_date"] == ""
         assert result["total_shares"] is None
+        assert result["float_shares"] is None
         assert result["concepts"] == []
         assert result["registered_address"] == ""
+        assert result["registered_capital"] == ""
+        assert result["legal_representative"] == ""
+        assert result["business_scope"] == ""
+        assert result["established_date"] == ""
         assert result["secretary"] == ""
+        assert result["secretary_phone"] == ""
+        assert result["secretary_email"] == ""
 
 
 class TestGetAllStocks:
