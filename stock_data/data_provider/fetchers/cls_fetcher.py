@@ -298,12 +298,13 @@ class ClsFetcher(BaseFetcher):
         return self._get_subject_article(CLS_SUBJECT_MARKET_RECAP, date)
 
     def _get_subject_article(self, subject_id: int, date: str) -> dict | None:
-        """Shared orchestration: list page → find article_id by date → detail page."""
+        """Shared orchestration: list page → find article_id by date → detail page.
+
+        DataFetchError from either HTTP call propagates to the caller (the
+        manager's `_with_failover` handles routing to the next fetcher).
+        """
         list_url = f"https://www.cls.cn/subject/{subject_id}"
-        try:
-            list_html = self._http_get_text(list_url)
-        except DataFetchError:
-            raise  # let the manager's _with_failover see it
+        list_html = self._http_get_text(list_url)
         articles = self._parse_subject_articles(subject_id, list_html, limit=20)
         article_id = self._find_article_id_by_date(articles, date)
         if article_id is None:
