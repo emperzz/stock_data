@@ -1177,6 +1177,7 @@ def create_default_manager() -> DataFetcherManager:
     from .fetchers.akshare import AkshareFetcher
     from .fetchers.baidu_fetcher import BaiduFetcher
     from .fetchers.baostock_fetcher import BaostockFetcher
+    from .fetchers.cls_fetcher import ClsFetcher
     from .fetchers.cninfo_fetcher import CninfoFetcher
     from .fetchers.eastmoney_fetcher import EastMoneyFetcher
     from .fetchers.myquant_fetcher import MyquantFetcher
@@ -1201,6 +1202,7 @@ def create_default_manager() -> DataFetcherManager:
         BaiduFetcher,
         ThsFetcher,
         CninfoFetcher,
+        ClsFetcher,
     ]
     for cls in fetcher_classes:
         instance = cls()
