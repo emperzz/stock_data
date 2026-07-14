@@ -24,6 +24,7 @@ from stock_data.data_provider import (
     YfinanceFetcher,
     ZhituFetcher,
     ZzshareFetcher,  # NEW
+    ClsFetcher,  # CLS 早报 + 复盘
 )
 from stock_data.data_provider.base import (
     CAPABILITY_TO_METHOD,
@@ -39,6 +40,7 @@ from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
 _CONCRETE_FETCHERS = (
     AkshareFetcher,
     BaostockFetcher,
+    ClsFetcher,
     CninfoFetcher,
     EastMoneyFetcher,
     MyquantFetcher,
