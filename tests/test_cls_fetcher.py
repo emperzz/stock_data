@@ -71,3 +71,46 @@ def test_parse_next_data_malformed_json(fetcher):
     bad = '<script id="__NEXT_DATA__" type="application/json">{"id": 1151,</script>'
     with pytest.raises(DataFetchError, match="JSON parse failed"):
         fetcher._parse_next_data(bad)
+
+
+def test_parse_subject_articles_normal(fetcher, list_html):
+    """Standard list HTML → returns normalized list."""
+    arts = fetcher._parse_subject_articles(1151, list_html)
+    assert isinstance(arts, list)
+    assert len(arts) >= 1
+    first = arts[0]
+    # All canonical fields present
+    for k in ("article_id", "title", "brief", "author", "ctime", "date", "read_num", "comments_num", "share_num", "images"):
+        assert k in first, f"missing field: {k}"
+    # date format check
+    assert len(first["date"]) == 10 and first["date"][4] == "-"
+    # article_id is a positive int
+    assert first["article_id"] > 0
+
+
+def test_parse_subject_articles_limit(fetcher, list_html):
+    """limit=2 → returns at most 2 articles."""
+    arts = fetcher._parse_subject_articles(1151, list_html, limit=2)
+    assert len(arts) <= 2
+
+
+def test_parse_subject_articles_empty(fetcher):
+    """HTML with empty articles list → returns []."""
+    empty_html = '<html><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"data":{"id":1151,"articles":[]}}}}</script></html>'
+    arts = fetcher._parse_subject_articles(1151, empty_html)
+    assert arts == []
+
+
+def test_find_article_id_by_date_match(fetcher, list_html):
+    """Find article_id for a date that exists in the fixture."""
+    arts = fetcher._parse_subject_articles(1151, list_html)
+    assert len(arts) >= 1
+    target_date = arts[0]["date"]
+    found = fetcher._find_article_id_by_date(arts, target_date)
+    assert found == arts[0]["article_id"]
+
+
+def test_find_article_id_by_date_no_match(fetcher, list_html):
+    """Date that doesn't appear in the fixture → None."""
+    arts = fetcher._parse_subject_articles(1151, list_html)
+    assert fetcher._find_article_id_by_date(arts, "2020-01-01") is None
