@@ -25,6 +25,7 @@ from .core.types import (
 from .fetchers.akshare import AkshareFetcher
 from .fetchers.baidu_fetcher import BaiduFetcher
 from .fetchers.baostock_fetcher import BaostockFetcher
+from .fetchers.cls_fetcher import ClsFetcher
 from .fetchers.cninfo_fetcher import CninfoFetcher
 from .fetchers.eastmoney_fetcher import EastMoneyFetcher
 from .fetchers.tencent_fetcher import TencentFetcher
@@ -83,6 +84,7 @@ __all__ = [
     "AkshareFetcher",
     "BaiduFetcher",
     "BaostockFetcher",
+    "ClsFetcher",
     "CninfoFetcher",
     "EastMoneyFetcher",
     "TencentFetcher",
