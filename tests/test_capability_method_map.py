@@ -16,6 +16,7 @@ import pytest
 from stock_data.data_provider import (
     AkshareFetcher,
     BaostockFetcher,
+    ClsFetcher,  # CLS 早报 + 复盘
     CninfoFetcher,
     EastMoneyFetcher,
     TencentFetcher,
@@ -39,6 +40,7 @@ from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
 _CONCRETE_FETCHERS = (
     AkshareFetcher,
     BaostockFetcher,
+    ClsFetcher,
     CninfoFetcher,
     EastMoneyFetcher,
     MyquantFetcher,

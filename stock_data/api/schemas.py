@@ -1099,3 +1099,29 @@ class StockNewsResponse(BaseModel):
     total: int = Field(default=0)
     limit: int = Field(default=20)
     source: str = Field(default="", description="数据来源 fetcher 名")
+
+
+class ClsArticle(BaseModel):
+    """Single CLS article (早报 / 复盘) — body_text is the BS4-extracted plain text."""
+
+    article_id: int
+    title: str
+    brief: str
+    author: str
+    date: str  # YYYY-MM-DD
+    ctime: int  # unix timestamp
+    read_num: int
+    comments_num: int
+    share_num: int
+    images: list[str] = []
+    body_text: str  # BS4 抽出的纯文本，保留段落分隔（get_text("\n", strip=True) + 折叠空行）
+
+
+class ClsFeedResponse(BaseModel):
+    """Response shape for /api/v1/cls/morning-briefing and /api/v1/cls/market-review."""
+
+    subject: str  # "morning_briefing" | "market_review"
+    subject_id: int
+    date: str  # 入参 date
+    article: ClsArticle | None  # None → 404
+    source: str = "cls"  # route 层用 manager_result[1] 覆盖；默认 "cls" 用于单测构造

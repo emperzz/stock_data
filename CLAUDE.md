@@ -16,7 +16,7 @@ Four layers, top-down:
 1. **API Layer (FastAPI)** — declarative routes; metadata-driven via `@endpoint_meta`.
 2. **Indicator compute layer (module functions)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC`. Sits on top of the manager; no fetcher involvement. See `data_provider/indicators/` for the full descriptor registry and add-an-indicator conventions.
 3. **DataFetcherManager** — capability-routed, priority-based failover + circuit breaker + TTLCache. See `data_provider/manager.py`.
-4. **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Zzshare · Tencent · EastMoney · Ths · Cninfo · Myquant · Baidu` (12 fetchers; details in each module's docstring).
+4. **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Zzshare · Tencent · EastMoney · Ths · Cninfo · Cls · Myquant · Baidu` (13 fetchers; details in each module's docstring).
 
 ## Directory Structure
 
@@ -237,6 +237,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | `ThsFetcher` | 7 | csi | `HOT_TOPICS` `NORTH_FLOW` `NEWS_FLASH` `NEWS_SEARCH` `STOCK_BOARD` `STOCK_NEWS` `ANNOUNCEMENT` | none | Board K-line d-only; `get_board_stocks` supports sort_by + top_n |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` | `BAIDU_API_KEY` | Backup for EastMoney news |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none | |
+| `ClsFetcher` | 8 | csi | `MORNING_BRIEFING` `MARKET_RECAP` | none | 财联社早报 + 焦点复盘 via Next.js `__NEXT_DATA__` JSON; 20-28 day window (no upstream pagination) |
 | `MyquantFetcher` | 9 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_KLINE` `STOCK_INFO` | `MYQUANT_TOKEN` | Last-resort backup |
 
 **Default priority is overridable** via `*_PRIORITY` env vars (see [Configuration](#configuration)). The lower the priority number, the earlier the fetcher is tried in the failover chain.
@@ -274,6 +275,8 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | `get_news_content` | n/a | Pure utility in `utils/news_extractor.py` |
 | `get_indicator_catalog` | n/a | Pure compute |
 | `get_history` w/ `?indicators=` | n/a | `indicator_service.compute()` on top of `STOCK_KLINE` |
+| `get_morning_briefing(date)` | `MORNING_BRIEFING` | ClsFetcher primary; ?date=YYYY-MM-DD; 20-28 day window; 404 on no article |
+| `get_market_recap(date)` | `MARKET_RECAP` | ClsFetcher primary; ?date=YYYY-MM-DD; 20-28 day window; 404 on no article |
 
 **Board endpoints** (source-routed, `_with_source()`, no failover):
 

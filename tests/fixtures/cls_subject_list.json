@@ -1,0 +1,115 @@
+{
+  "id": 1151,
+  "name": "有声早报",
+  "description": "每日7点，最热、最全面的财经资讯尽在财联社早报",
+  "attention_num": 189031,
+  "articles": [
+    {
+      "article_id": 2425210,
+      "article_type": 0,
+      "article_title": "【早报】美伊冲突升级；美股存储股再度重挫；国际油价暴涨9%，金价大跌",
+      "article_brief": "①李强：加大逆期调节力度，系统施策释放内需潜力②国务院批复《扩大消费\"十五五\"规划》③美股半导体指数大跌4.78%，油价大涨④META宣布将追加400亿美元投资路易斯安那州数据中心，将该数据中心扩展至5GW的计算容量⑤胜宏科技发布澄清公告。",
+      "article_guide_text": "",
+      "article_author": "财联社",
+      "article_img": "https://image.cls.cn/images/20260714/5P34sASW0e_1000x800.jpg",
+      "article_time": 1783983600,
+      "article_recommend": 0,
+      "is_collection": false,
+      "stock_list": [],
+      "plate_list": [],
+      "comments_num": 10,
+      "read_num": 100,
+      "share_num": 100,
+      "share_url": "https://api3.cls.cn/share/article/2425210?os=web&sv=8.7.9&app=CailianpressWeb",
+      "share_img": "https://img.cls.cn/share/morning.png",
+      "jump_url": "cailianshe://article_detail?article_id=2425210",
+      "externalLink": "",
+      "subjects": [
+        {
+          "article_id": 2425210,
+          "subject_id": 1151,
+          "subject_name": "有声早报",
+          "subject_img": "",
+          "subject_description": "",
+          "category_id": 0,
+          "attention_num": 189031,
+          "is_attention": false,
+          "is_reporter_subject": false,
+          "plate_id": 0,
+          "channel": "cls"
+        }
+      ],
+      "video_duration": 0,
+      "video_link": "",
+      "album_id": 0,
+      "album_name": "",
+      "album_img": "",
+      "share_content": "",
+      "gray_share": 0,
+      "article_tags": [
+        {
+          "id": 8,
+          "articleID": 2425210,
+          "name": "原创",
+          "color": "#DE0723",
+          "visible": 1,
+          "categoryId": 15
+        }
+      ],
+      "is_fad": 0,
+      "disclaimer": ""
+    },
+    {
+      "article_id": 2423960,
+      "article_type": 0,
+      "article_title": "【早报】美国对伊朗发动打击；油价大涨，黄金跌破4100美元；半导体设备龙头，今日复牌",
+      "article_brief": "①国常会：要系统推进数字中国建设，加快新一代通信网、算力网建设②中方对氦气实施临时禁止出口管理③机构：到2029年，中国国内算力卡采购额将达到1.44万亿元④SK海力士CEO：存储芯片短缺局面大概率会延续至2030年之后⑤拓荆科技今日复牌。",
+      "article_author": "财联社",
+      "article_img": "https://image.cls.cn/images/20260713/2tYHj8KMK2_1000x800.jpg",
+      "article_time": 1783897200,
+      "comments_num": 10,
+      "read_num": 100,
+      "share_num": 100,
+      "subjects": [
+        {
+          "article_id": 2423960,
+          "subject_id": 1151,
+          "subject_name": "有声早报"
+        }
+      ],
+      "article_tags": [
+        {
+          "id": 8,
+          "articleID": 2423960,
+          "name": "原创"
+        }
+      ]
+    },
+    {
+      "article_id": 2423679,
+      "article_type": 0,
+      "article_title": "【早报】中国石化完成对中国航油重组",
+      "article_brief": "①特朗普：1000枚导弹已瞄准伊朗②液化天然气制甲烷首次应用于长征系列火箭③伊朗最高领袖称将报复美以④行业人士：HBM价格明年或翻倍⑤中国石化完成对中国航油重组。",
+      "article_author": "财联社",
+      "article_img": "https://image.cls.cn/images/20260712/mBp9b3DmcZ_1000x800.jpg",
+      "article_time": 1783810800,
+      "comments_num": 10,
+      "read_num": 100,
+      "share_num": 100,
+      "subjects": [
+        {
+          "article_id": 2423679,
+          "subject_id": 1151,
+          "subject_name": "有声早报"
+        }
+      ],
+      "article_tags": [
+        {
+          "id": 8,
+          "articleID": 2423679,
+          "name": "原创"
+        }
+      ]
+    }
+  ]
+}

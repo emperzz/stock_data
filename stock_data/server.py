@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
 from .api.routes import health_router, news_router, router
+from .api.routes.cls import cls_router
 
 # Load environment variables
 load_dotenv()
@@ -194,6 +195,7 @@ app.add_middleware(
 
 # Data routes (versioned under /api/v1)
 app.include_router(router, prefix="/api/v1")
+app.include_router(cls_router, prefix="/api/v1")
 
 # News endpoints (also versioned under /api/v1 — the router's own paths start
 # with `/news/...`, so the final URL is `/api/v1/news/...`).

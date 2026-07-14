@@ -519,6 +519,40 @@ class DataFetcherManager:
             return_source=True,
         )
 
+    # ---------- CLS 财联社早报 / 焦点复盘 ----------
+
+    def get_morning_briefing(self, date: str) -> tuple[dict | None, str]:
+        """Fetch 财联社早报 for `date` (YYYY-MM-DD) via MORNING_BRIEFING-capable fetchers.
+
+        Returns:
+            Tuple of (article_dict_or_None, fetcher_name).
+            - article_dict_or_None: ClsArticle-shaped dict, or None if the date
+              has no published article (route layer maps None → 404).
+            - fetcher_name: "cls" (current only ClsFetcher implements this).
+        """
+        return self._with_failover(
+            capability=DataCapability.MORNING_BRIEFING,
+            market="csi",
+            op_label=f"get_morning_briefing {date}",
+            call=lambda f: f.get_morning_briefing(date),
+            allow_none=True,
+            return_source=True,
+        )
+
+    def get_market_recap(self, date: str) -> tuple[dict | None, str]:
+        """Fetch 财联社焦点复盘 for `date` (YYYY-MM-DD) via MARKET_RECAP-capable fetchers.
+
+        Same return semantics as get_morning_briefing.
+        """
+        return self._with_failover(
+            capability=DataCapability.MARKET_RECAP,
+            market="csi",
+            op_label=f"get_market_recap {date}",
+            call=lambda f: f.get_market_recap(date),
+            allow_none=True,
+            return_source=True,
+        )
+
     # ---------- stock news (per-stock feed) ----------
 
     def get_stock_news(self, code: str, limit: int = 20) -> tuple[list[dict], str]:
@@ -1177,6 +1211,7 @@ def create_default_manager() -> DataFetcherManager:
     from .fetchers.akshare import AkshareFetcher
     from .fetchers.baidu_fetcher import BaiduFetcher
     from .fetchers.baostock_fetcher import BaostockFetcher
+    from .fetchers.cls_fetcher import ClsFetcher
     from .fetchers.cninfo_fetcher import CninfoFetcher
     from .fetchers.eastmoney_fetcher import EastMoneyFetcher
     from .fetchers.myquant_fetcher import MyquantFetcher
@@ -1201,6 +1236,7 @@ def create_default_manager() -> DataFetcherManager:
         BaiduFetcher,
         ThsFetcher,
         CninfoFetcher,
+        ClsFetcher,
     ]
     for cls in fetcher_classes:
         instance = cls()
