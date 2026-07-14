@@ -180,8 +180,11 @@ def test_find_article_id_by_date_no_match(fetcher, list_html):
 
 def test_extract_body_text_strips_html(fetcher):
     """body_text has no HTML tags, preserves paragraph separators."""
+    from bs4 import BeautifulSoup
+
     html = "<p>第一段</p><p>第二段有<strong>加粗</strong></p><p>第三段</p>"
-    out = fetcher._extract_body_text(html)
+    soup = BeautifulSoup(html, "lxml")
+    out = fetcher._extract_body_text(soup)
     assert "<" not in out and ">" not in out
     assert "第一段" in out
     assert "加粗" in out  # text content preserved
@@ -190,13 +193,20 @@ def test_extract_body_text_strips_html(fetcher):
 
 
 def test_extract_body_text_empty(fetcher):
-    assert fetcher._extract_body_text("") == ""
+    """None / empty soup → empty body_text."""
+    assert fetcher._extract_body_text(None) == ""
+    from bs4 import BeautifulSoup
+
+    assert fetcher._extract_body_text(BeautifulSoup("", "lxml")) == ""
 
 
 def test_extract_body_text_collapses_blank_lines(fetcher):
     """3+ consecutive newlines collapse to 2."""
+    from bs4 import BeautifulSoup
+
     html = "<p>a</p><p></p><p></p><p></p><p>b</p>"
-    out = fetcher._extract_body_text(html)
+    soup = BeautifulSoup(html, "lxml")
+    out = fetcher._extract_body_text(soup)
     assert "\n\n\n" not in out  # no 3+ consecutive newlines
 
 
@@ -306,3 +316,150 @@ def test_get_morning_briefing_http_failure(fetcher):
         pytest.raises(DataFetchError, match="network down"),
     ):
         fetcher.get_morning_briefing("2026-07-14")
+
+
+def test_share_num_threads_from_list_to_detail(fetcher):
+    """Detail page doesn't expose share_num, but the list article entry does.
+
+    _get_subject_article must thread the list-page share_num through to the
+    detail-page dict; otherwise the response always reports share_num=0 even
+    when upstream has the real value.
+    """
+    list_data = {
+        "id": 1151,
+        "articles": [
+            {
+                "article_id": 2425210,
+                "article_title": "test",
+                "article_brief": "test brief",
+                "article_author": "财联社",
+                "article_time": 1783983600,
+                "read_num": 1,
+                "comments_num": 1,
+                "share_num": 1336,  # list page has the real value
+                "article_img": "",
+            }
+        ],
+    }
+    list_html = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps({"props": {"pageProps": {"data": list_data}}}, ensure_ascii=False)}</script></html>'
+    detail_html = _wrap_fixture("cls_article_detail.json", envelope_key="articleDetail")
+    with patch.object(fetcher, "_http_get_text", side_effect=[list_html, detail_html]):
+        art = fetcher.get_morning_briefing("2026-07-14")
+    assert art is not None
+    # Regression: must NOT be 0 anymore (detail page doesn't have shareNum,
+    # but the list-page share_num must flow through).
+    assert art["share_num"] == 1336
+
+
+def test_share_num_zero_when_list_missing(fetcher):
+    """If list article omits share_num, fall back to 0 in the detail dict."""
+    list_data = {
+        "id": 1151,
+        "articles": [
+            {
+                "article_id": 2425210,
+                "article_title": "test",
+                "article_brief": "test brief",
+                "article_author": "财联社",
+                "article_time": 1783983600,
+                "read_num": 1,
+                "comments_num": 1,
+                # share_num intentionally omitted
+                "article_img": "",
+            }
+        ],
+    }
+    list_html = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps({"props": {"pageProps": {"data": list_data}}}, ensure_ascii=False)}</script></html>'
+    detail_html = _wrap_fixture("cls_article_detail.json", envelope_key="articleDetail")
+    with patch.object(fetcher, "_http_get_text", side_effect=[list_html, detail_html]):
+        art = fetcher.get_morning_briefing("2026-07-14")
+    assert art is not None
+    assert art["share_num"] == 0
+
+
+def test_timezone_pin_to_shanghai(fetcher, monkeypatch):
+    """Regression: datetime.fromtimestamp without TZ silently shifts the date
+    on UTC servers. The fetcher must pin to Asia/Shanghai.
+
+    This test simulates a UTC server by faking the timestamp math directly:
+    build a list HTML with a ctime that resolves to a different date in
+    UTC vs Shanghai, then verify the fetcher produces the Shanghai date.
+    """
+    # ctime = 1783983600 → 2026-07-14 07:00 +0800, but 2026-07-13 23:00 UTC.
+    # On a UTC server, the bug used to produce date="2026-07-13".
+    list_html = _wrap_fixture("cls_subject_list.json", envelope_key="data")
+    arts = fetcher._parse_subject_articles(1151, list_html)
+    assert arts[0]["date"] == "2026-07-14", (
+        f"Expected Shanghai date 2026-07-14, got {arts[0]['date']!r}. "
+        "Check that _CLS_TZ is wired into datetime.fromtimestamp(...)."
+    )
+
+
+def test_is_available_requires_bs4(fetcher, monkeypatch):
+    """Regression: is_available() must probe the bs4 dep so a missing-bs4
+    server doesn't register a fetcher that 100% fails at runtime.
+    """
+    import builtins
+
+    # Patch importlib.util.find_spec to report bs4 missing.
+    from importlib import util as importlib_util
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name == "bs4":
+            return None
+        return importlib_util.find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "stock_data.data_provider.fetchers.cls_fetcher.importlib_util.find_spec",
+        fake_find_spec,
+    )
+    # Need to import fresh so the patched module-level importlib_util is used.
+    # Easier: call find_spec via the module's namespace.
+    from stock_data.data_provider.fetchers import cls_fetcher as cls_mod
+
+    monkeypatch.setattr(cls_mod.importlib_util, "find_spec", fake_find_spec)
+    assert fetcher.is_available() is False
+
+
+def test_is_available_when_bs4_present(fetcher):
+    """Default: bs4 is installed → is_available() returns True."""
+    assert fetcher.is_available() is True
+
+
+def test_detail_author_handles_flat_string(fetcher):
+    """Detail page's author field may be a flat string (newer payloads) or a
+    dict {name: ...} (older payloads). Both forms must surface in the dict.
+    Regression for: `detail.get('author') or {}` swallowed string authors.
+    """
+    detail_dict = {
+        "id": 2425210,
+        "title": "test",
+        "brief": "",
+        "content": "<p>body</p>",
+        "ctime": 1783983600,
+        "readingNum": 1,
+        "commentNum": 1,
+        "author": "财联社",  # flat string (newer payload shape)
+    }
+    html = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps({"props": {"pageProps": {"articleDetail": detail_dict}}})}</script></html>'
+    art = fetcher._fetch_article_detail(2425210, html)
+    assert art is not None
+    assert art["author"] == "财联社"
+
+
+def test_detail_author_handles_dict(fetcher):
+    """Detail page's author field as dict {name: ...} must still surface."""
+    detail_dict = {
+        "id": 2425210,
+        "title": "test",
+        "brief": "",
+        "content": "<p>body</p>",
+        "ctime": 1783983600,
+        "readingNum": 1,
+        "commentNum": 1,
+        "author": {"name": "财联社 dict"},
+    }
+    html = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps({"props": {"pageProps": {"articleDetail": detail_dict}}})}</script></html>'
+    art = fetcher._fetch_article_detail(2425210, html)
+    assert art is not None
+    assert art["author"] == "财联社 dict"

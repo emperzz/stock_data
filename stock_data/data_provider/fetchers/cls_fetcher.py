@@ -14,15 +14,22 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from importlib import util as importlib_util
 from typing import Any
 
 import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..core.types import safe_int
+from ..utils.http import random_ua
 
 logger = logging.getLogger(__name__)
+
+# CLS publishes in Asia/Shanghai (UTC+8). Server-local time would silently
+# mis-attribute 07:00 +0800 articles to the previous day on UTC machines,
+# breaking _find_article_id_by_date for every request.
+_CLS_TZ = timezone(timedelta(hours=8))
 
 # CLS list page 早报 subject id (verified 2026-07-14)
 CLS_SUBJECT_MORNING_BRIEFING = 1151
@@ -34,8 +41,6 @@ CLS_SUBJECT_NAMES: dict[int, str] = {
     CLS_SUBJECT_MORNING_BRIEFING: "morning_briefing",
     CLS_SUBJECT_MARKET_RECAP: "market_review",
 }
-
-CLS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
 
 _NEXT_DATA_RE = re.compile(
     r'<script\s+id="__NEXT_DATA__"[^>]*>(.*?)</script>',
@@ -54,7 +59,9 @@ class ClsFetcher(BaseFetcher):
     )
 
     def is_available(self) -> bool:
-        return True
+        # Lazy bs4 import in _extract_body_text / _dedup_images; probe before
+        # registering so a missing dep surfaces as unavailability, not a 500.
+        return importlib_util.find_spec("bs4") is not None
 
     def _normalize_data(self, df, stock_code):
         raise DataFetchError("ClsFetcher does not support historical K-line data")
@@ -102,8 +109,8 @@ class ClsFetcher(BaseFetcher):
         next_data = ClsFetcher._parse_next_data(html)
         data = next_data.get("props", {}).get("pageProps", {}).get("data", {})
         # Validate the shape — if subject_id mismatch, this is a real upstream change
-        actual_subject_id = data.get("id")
-        if actual_subject_id is not None and int(actual_subject_id) != int(subject_id):
+        actual_subject_id = safe_int(data.get("id"))
+        if actual_subject_id is not None and actual_subject_id != int(subject_id):
             logger.warning(
                 f"[ClsFetcher] subject_id mismatch: requested={subject_id} "
                 f"upstream={actual_subject_id}; parsing anyway"
@@ -115,9 +122,11 @@ class ClsFetcher(BaseFetcher):
             if article_id is None or article_id == 0:
                 continue
             ctime = safe_int(raw.get("article_time"))
+            # Pin to Asia/Shanghai so a UTC server doesn't mis-attribute the
+            # 07:00 +0800 publish time to the previous calendar day.
             date = (
-                datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d")
-                if ctime is not None
+                datetime.fromtimestamp(int(ctime), _CLS_TZ).strftime("%Y-%m-%d")
+                if ctime
                 else ""
             )
             out.append(
@@ -126,7 +135,7 @@ class ClsFetcher(BaseFetcher):
                     "title": str(raw.get("article_title", "")),
                     "brief": str(raw.get("article_brief", "")),
                     "author": str(raw.get("article_author", "")),
-                    "ctime": int(ctime) if ctime is not None else 0,
+                    "ctime": int(ctime) if ctime else 0,
                     "date": date,
                     "read_num": safe_int(raw.get("read_num"), default=0),
                     "comments_num": safe_int(raw.get("comments_num"), default=0),
@@ -155,24 +164,28 @@ class ClsFetcher(BaseFetcher):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_body_text(html_content: str) -> str:
+    def _extract_body_text(soup) -> str:
         """BS4 抽出纯文本，保留段落分隔。
 
         get_text(separator='\\n') 让 <p> 之间的换行保留；strip=True 去行内空白；
         最后 re.sub 折叠连续 3+ 空行为 2 个（避免 <p>嵌套产生过多空行）。
-        """
-        if not html_content:
-            return ""
-        from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(html_content, "lxml")
+        Accepts a pre-parsed ``BeautifulSoup`` so callers can share the parse
+        with ``_dedup_images`` (one BS4 parse per detail page, not two).
+        """
+        if soup is None:
+            return ""
         text = soup.get_text("\n", strip=True)
         # 折叠连续 3+ 空行为 2 个
         return re.sub(r"\n{3,}", "\n\n", text)
 
     @staticmethod
-    def _dedup_images(article_detail: dict) -> list[str]:
-        """合并 `images` 字段和 `content` 内 <img src>，去重保序。"""
+    def _dedup_images(article_detail: dict, soup=None) -> list[str]:
+        """合并 `images` 字段和 `content` 内 <img src>，去重保序。
+
+        If ``soup`` is provided, reuse it for the <img> scan; otherwise parse
+        ``article_detail["content"]`` ourselves.
+        """
         seen: set[str] = set()
         out: list[str] = []
         # 1) articleDetail.images[] 优先
@@ -183,9 +196,10 @@ class ClsFetcher(BaseFetcher):
         # 2) 从 content HTML 里提取 <img src>
         content = article_detail.get("content", "") or ""
         if content:
-            from bs4 import BeautifulSoup
+            if soup is None:
+                from bs4 import BeautifulSoup
 
-            soup = BeautifulSoup(content, "lxml")
+                soup = BeautifulSoup(content, "lxml")
             for img in soup.find_all("img"):
                 src = img.get("src")
                 if src and src not in seen:
@@ -194,15 +208,20 @@ class ClsFetcher(BaseFetcher):
         return out
 
     @staticmethod
-    def _fetch_article_detail(article_id: int, html: str) -> dict | None:
+    def _fetch_article_detail(
+        article_id: int, html: str, *, share_num: int = 0
+    ) -> dict | None:
         """Parse a detail-page __NEXT_DATA__ → ClsArticle-shaped dict.
 
         Path: __NEXT_DATA__.props.pageProps.articleDetail
         Returns dict with: article_id, title, brief, author, ctime, date,
         read_num, comments_num, share_num, images, body_text.
 
-        `article_id` is the ID the caller used to fetch the URL; we assert
-        it matches the detail page's `id` field to defend against upstream
+        ``share_num`` is passed in by the caller (the list-page fetch already
+        extracted it; the detail-page payload does not expose it).
+
+        ``article_id`` is the ID the caller used to fetch the URL; we assert
+        it matches the detail page's ``id`` field to defend against upstream
         drift (e.g. if /detail/{id}/ serves a different article than
         /subject/{subject_id}/'s articles[] claims).
 
@@ -217,36 +236,53 @@ class ClsFetcher(BaseFetcher):
             .get("articleDetail", {})
         )
         # CLS returns an empty dict (or just an error code) for invalid article IDs
-        if not detail or not detail.get("id"):
+        served_id = safe_int(detail.get("id"))
+        if not detail or served_id is None:
             return None
         # Defensive: assert the served article matches the requested id.
         # If the list page's article_id and the detail page's id diverge,
         # we'd silently serve the wrong article — fail loud instead.
-        served_id = int(detail["id"])
         if served_id != article_id:
             raise DataFetchError(
                 f"[ClsFetcher] article_id mismatch: requested={article_id} "
                 f"served={served_id} — list↔detail drift, investigate"
             )
-        ctime = safe_int(detail.get("ctime"), default=0)
+        ctime = safe_int(detail.get("ctime"))
+        # Pin to Asia/Shanghai so a UTC server doesn't mis-attribute the
+        # 07:00 +0800 publish time to the previous calendar day.
         date = (
-            datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d")
+            datetime.fromtimestamp(int(ctime), _CLS_TZ).strftime("%Y-%m-%d")
             if ctime
             else ""
         )
-        body_text = ClsFetcher._extract_body_text(detail.get("content", "") or "")
-        images = ClsFetcher._dedup_images(detail)
-        author_obj = detail.get("author") or {}
+        # One BS4 parse per detail page, shared between body_text + img scan.
+        content = detail.get("content", "") or ""
+        soup = None
+        if content:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(content, "lxml")
+        body_text = ClsFetcher._extract_body_text(soup)
+        images = ClsFetcher._dedup_images(detail, soup=soup)
+        # author may be a dict {name, ...} or a flat string in newer payloads —
+        # fall back to the string form so we don't silently drop the value.
+        author_obj = detail.get("author")
+        if isinstance(author_obj, dict):
+            author = str(author_obj.get("name", ""))
+        elif isinstance(author_obj, str):
+            author = author_obj
+        else:
+            author = ""
         return {
-            "article_id": int(detail["id"]),
+            "article_id": int(served_id),
             "title": str(detail.get("title", "")),
             "brief": str(detail.get("brief", "")),
-            "author": str(author_obj.get("name", "")) if isinstance(author_obj, dict) else "",
-            "ctime": int(ctime),
+            "author": author,
+            "ctime": int(ctime) if ctime else 0,
             "date": date,
             "read_num": safe_int(detail.get("readingNum"), default=0),
             "comments_num": safe_int(detail.get("commentNum"), default=0),
-            "share_num": 0,  # detail page doesn't expose share_num; list does
+            "share_num": int(share_num) if share_num else 0,
             "images": images,
             "body_text": body_text,
         }
@@ -258,15 +294,16 @@ class ClsFetcher(BaseFetcher):
     def _http_get_text(self, url: str, *, timeout: int = 15) -> str:
         """Plain requests.get returning the response body text.
 
-        CLS SSR pages don't fingerprint-block; no proxy / no UA rotation needed.
         On 4xx/5xx raises DataFetchError so the manager's _with_failover
         can route to the next fetcher (currently only ClsFetcher, but the
         contract is forward-compatible with EastMoney failover).
+        Uses the project's rotating UA pool to avoid fingerprint-based
+        throttling on Chinese financial endpoints.
         """
         try:
             r = requests.get(
                 url,
-                headers={"User-Agent": CLS_UA},
+                headers={"User-Agent": random_ua()},
                 timeout=timeout,
             )
         except requests.RequestException as e:
@@ -275,7 +312,7 @@ class ClsFetcher(BaseFetcher):
             raise DataFetchError(
                 f"[ClsFetcher] HTTP {r.status_code} for {url} ({len(r.content)}B body)"
             )
-        return r.text or ""
+        return r.text
 
     # ------------------------------------------------------------------
     # Public methods (called by DataFetcherManager)
@@ -301,14 +338,23 @@ class ClsFetcher(BaseFetcher):
         """Shared orchestration: list page → find article_id by date → detail page.
 
         DataFetchError from either HTTP call propagates to the caller (the
-        manager's `_with_failover` handles routing to the next fetcher).
+        manager's failover loop handles routing to the next fetcher).
+
+        Threads the list-page ``share_num`` through to the detail-page dict —
+        the detail payload doesn't expose it, but the list article entry does.
         """
         list_url = f"https://www.cls.cn/subject/{subject_id}"
         list_html = self._http_get_text(list_url)
         articles = self._parse_subject_articles(subject_id, list_html, limit=20)
+        # Map article_id → share_num so the detail parser can surface it.
+        share_by_id = {
+            art["article_id"]: art.get("share_num", 0) for art in articles
+        }
         article_id = self._find_article_id_by_date(articles, date)
         if article_id is None:
             return None
         detail_url = f"https://www.cls.cn/detail/{article_id}"
         detail_html = self._http_get_text(detail_url)
-        return self._fetch_article_detail(article_id, detail_html)
+        return self._fetch_article_detail(
+            article_id, detail_html, share_num=share_by_id.get(article_id, 0)
+        )

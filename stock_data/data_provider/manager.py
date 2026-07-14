@@ -521,6 +521,44 @@ class DataFetcherManager:
 
     # ---------- CLS 财联社早报 / 焦点复盘 ----------
 
+    def _fetch_cls_optional(
+        self,
+        capability: DataCapability,
+        op_label: str,
+        call: Callable[[BaseFetcher], T],
+    ) -> tuple[T, str]:
+        """CLS-specific failover: distinguishes "upstream failed" from "no article".
+
+        Unlike ``_with_failover(allow_none=True)`` — which collapses both
+        cases into ``(None, "")`` and makes the OpenAPI 503 unreachable —
+        this helper:
+          - raises DataFetchError when **all** candidate fetchers raised
+            (route layer → 503 via @map_errors),
+          - returns ``(None, "")`` when **all** candidates returned None
+            (route layer → 404 "no article for this date"),
+          - returns ``(article, fetcher.name)`` on the first success.
+        """
+        fetchers = self._filter_by_capability("csi", capability)
+        if not fetchers:
+            return None, ""  # type: ignore[return-value]
+        errors: list[str] = []
+        for fetcher in fetchers:
+            try:
+                result = call(fetcher)
+            except DataFetchError as e:
+                errors.append(f"[{fetcher.name}] {e}")
+                logger.warning(
+                    f"[Manager] {fetcher.name} {op_label} failed: {e}"
+                )
+                continue
+            if result is not None:
+                return result, fetcher.name
+        # Every candidate either raised or returned None.
+        if errors:
+            prefix = f"All fetchers failed for {op_label}:"
+            raise DataFetchError(prefix + "\n" + "\n".join(errors))
+        return None, ""  # type: ignore[return-value]
+
     def get_morning_briefing(self, date: str) -> tuple[dict | None, str]:
         """Fetch 财联社早报 for `date` (YYYY-MM-DD) via MORNING_BRIEFING-capable fetchers.
 
@@ -528,29 +566,27 @@ class DataFetcherManager:
             Tuple of (article_dict_or_None, fetcher_name).
             - article_dict_or_None: ClsArticle-shaped dict, or None if the date
               has no published article (route layer maps None → 404).
-            - fetcher_name: "cls" (current only ClsFetcher implements this).
+            - fetcher_name: fetcher class name (e.g. ``"ClsFetcher"``).
+
+        Raises:
+            DataFetchError: when all candidate fetchers raised (route layer
+                maps this to 503 via @map_errors).
         """
-        return self._with_failover(
+        return self._fetch_cls_optional(
             capability=DataCapability.MORNING_BRIEFING,
-            market="csi",
             op_label=f"get_morning_briefing {date}",
             call=lambda f: f.get_morning_briefing(date),
-            allow_none=True,
-            return_source=True,
         )
 
     def get_market_recap(self, date: str) -> tuple[dict | None, str]:
         """Fetch 财联社焦点复盘 for `date` (YYYY-MM-DD) via MARKET_RECAP-capable fetchers.
 
-        Same return semantics as get_morning_briefing.
+        Same return / raise semantics as get_morning_briefing.
         """
-        return self._with_failover(
+        return self._fetch_cls_optional(
             capability=DataCapability.MARKET_RECAP,
-            market="csi",
             op_label=f"get_market_recap {date}",
             call=lambda f: f.get_market_recap(date),
-            allow_none=True,
-            return_source=True,
         )
 
     # ---------- stock news (per-stock feed) ----------

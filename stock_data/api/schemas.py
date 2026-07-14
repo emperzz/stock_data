@@ -1124,4 +1124,4 @@ class ClsFeedResponse(BaseModel):
     subject_id: int
     date: str  # 入参 date
     article: ClsArticle | None  # None → 404
-    source: str = "cls"  # route 层用 manager_result[1] 覆盖；默认 "cls" 用于单测构造
+    source: str = Field(default="", description="数据来源 fetcher 名")
