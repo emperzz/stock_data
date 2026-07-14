@@ -16,6 +16,7 @@ import pytest
 from stock_data.data_provider import (
     AkshareFetcher,
     BaostockFetcher,
+    ClsFetcher,  # CLS 早报 + 复盘
     CninfoFetcher,
     EastMoneyFetcher,
     TencentFetcher,
@@ -24,7 +25,6 @@ from stock_data.data_provider import (
     YfinanceFetcher,
     ZhituFetcher,
     ZzshareFetcher,  # NEW
-    ClsFetcher,  # CLS 早报 + 复盘
 )
 from stock_data.data_provider.base import (
     CAPABILITY_TO_METHOD,
