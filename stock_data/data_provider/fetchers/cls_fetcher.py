@@ -181,30 +181,36 @@ class ClsFetcher(BaseFetcher):
 
     @staticmethod
     def _dedup_images(article_detail: dict, soup=None) -> list[str]:
-        """合并 `images` 字段和 `content` 内 <img src>，去重保序。
+        """从 `content` 内 <img src> 抽取正文图，去重保序。
 
-        If ``soup`` is provided, reuse it for the <img> scan; otherwise parse
-        ``article_detail["content"]`` ourselves.
+        跳过 content 里的**第一个** <img> — 那是文章头部封面图（紧跟 lead 段、
+        第一个 section header 之前），用户/agent 场景下没有信息量（可视为 logo）。
+
+        **不**合并 `article_detail["images"]` 列表页缩略图 — 那是文章在列表/分享时
+        用的封面，与正文无关。仅保留正文 (`content`) 内嵌图。
+
+        Accepts a pre-parsed ``BeautifulSoup`` so callers can share the parse
+        with ``_extract_body_text`` (one BS4 parse per detail page, not two).
         """
         seen: set[str] = set()
         out: list[str] = []
-        # 1) articleDetail.images[] 优先
-        for url in article_detail.get("images", []) or []:
-            if url and url not in seen:
-                seen.add(url)
-                out.append(str(url))
-        # 2) 从 content HTML 里提取 <img src>
         content = article_detail.get("content", "") or ""
-        if content:
-            if soup is None:
-                from bs4 import BeautifulSoup
+        if not content:
+            return out
+        if soup is None:
+            from bs4 import BeautifulSoup
 
-                soup = BeautifulSoup(content, "lxml")
-            for img in soup.find_all("img"):
-                src = img.get("src")
-                if src and src not in seen:
-                    seen.add(src)
-                    out.append(str(src))
+            soup = BeautifulSoup(content, "lxml")
+        for i, img in enumerate(soup.find_all("img")):
+            if i == 0:
+                # Skip the first <img> — it's the article header cover (logo-like,
+                # always positioned right after the lead paragraph and before
+                # the first <p><strong> section heading).
+                continue
+            src = img.get("src")
+            if src and src not in seen:
+                seen.add(src)
+                out.append(str(src))
         return out
 
     @staticmethod

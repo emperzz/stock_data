@@ -211,20 +211,63 @@ def test_extract_body_text_collapses_blank_lines(fetcher):
 
 
 def test_dedup_images(fetcher):
+    """Only `content` images are returned (the list-page `images[]` field is
+    intentionally NOT merged — those are list-page thumbnails, not body images).
+
+    Within `content`, the FIRST <img> is skipped (it's the article header
+    cover image, which the user identified as logo-like / no information value).
+    """
     detail = {
-        "images": ["https://a.com/1.jpg", "https://a.com/2.jpg"],
-        "content": '<p><img src="https://a.com/2.jpg"></p><p><img src="https://a.com/3.jpg"></p>',
+        # `images` field is the list-page thumbnail — must NOT appear in output.
+        "images": ["https://a.com/cover.jpg"],
+        "content": (
+            '<p>lead</p>'
+            '<p><img src="https://a.com/HEADER.png"></p>'  # skipped (first <img>)
+            '<p><strong>section</strong></p>'
+            '<p>text</p>'
+            '<p><img src="https://a.com/CHART1.png"></p>'  # kept
+            '<p><img src="https://a.com/CHART2.png"></p>'  # kept
+        ),
     }
     out = fetcher._dedup_images(detail)
     assert out == [
-        "https://a.com/1.jpg",  # from images field
-        "https://a.com/2.jpg",  # appears in both — first occurrence wins
-        "https://a.com/3.jpg",  # from content
+        "https://a.com/CHART1.png",
+        "https://a.com/CHART2.png",
     ]
 
 
+def test_dedup_images_no_content_images(fetcher):
+    """content 里 0 张图时, 返回空列表 (不抛错)."""
+    out = fetcher._dedup_images({
+        "images": ["https://a.com/cover.jpg"],  # list-page thumb — still dropped
+        "content": "<p>text only, no images</p>",
+    })
+    assert out == []
+
+
+def test_dedup_images_only_one_content_image_skipped(fetcher):
+    """content 只有 1 张图时, 跳过它后应剩空列表 (用户认为 header 是 logo)."""
+    out = fetcher._dedup_images({
+        "images": [],
+        "content": '<p><img src="https://a.com/ONLY.png"></p>',
+    })
+    assert out == []
+
+
+def test_dedup_images_empty_content(fetcher):
+    """content 缺失/空字符串 → 返回空列表."""
+    assert fetcher._dedup_images({"images": []}) == []
+    assert fetcher._dedup_images({"images": [], "content": ""}) == []
+
+
 def test_fetch_article_detail_normal(fetcher, detail_html):
-    """Standard detail HTML → full ClsArticle-shaped dict."""
+    """Standard detail HTML → full ClsArticle-shaped dict.
+
+    Fixture mirrors the real CLS structure: lead paragraph → header cover img →
+    section headers + items → trailing chart img. The new `_dedup_images` logic
+    MUST drop (a) the `images[]` list-page thumbnail and (b) the first content
+    `<img>` (the header cover), keeping only the trailing chart img.
+    """
     art = fetcher._fetch_article_detail(2425210, detail_html)
     assert art is not None
     assert art["article_id"] == 2425210
@@ -232,8 +275,11 @@ def test_fetch_article_detail_normal(fetcher, detail_html):
     assert len(art["body_text"]) > 100
     # date is YYYY-MM-DD
     assert len(art["date"]) == 10 and art["date"][4] == "-"
-    # images is a list (possibly empty)
-    assert isinstance(art["images"], list)
+    # images: only the trailing chart img survives (header cover + images[]
+    # list-page thumb both dropped). Pin content to catch silent regressions.
+    assert art["images"] == [
+        "https://image.cls.cn/images/20260714/market_chart_911x466.png"
+    ]
 
 
 def test_fetch_article_detail_empty_dict(fetcher):

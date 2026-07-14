@@ -1118,7 +1118,7 @@ class ClsArticle(BaseModel):
 
 
 class ClsFeedResponse(BaseModel):
-    """Response shape for /api/v1/cls/morning-briefing and /api/v1/cls/market-review."""
+    """Response shape for /api/v1/news/morning-briefing and /api/v1/news/market-recap."""
 
     subject: str  # "morning_briefing" | "market_review"
     subject_id: int

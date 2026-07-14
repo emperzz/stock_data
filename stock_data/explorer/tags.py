@@ -27,7 +27,6 @@ TAG_TO_TITLE: dict[str, str] = {
     "north-flow":    "北向资金",
     "indicators":    "技术指标",
     "news":          "新闻",
-    "cls":           "财联社",
 }
 
 
@@ -56,6 +55,6 @@ CAPABILITY_LABELS: dict[str, dict[str, str]] = {
     "NEWS_SEARCH":          {"label": "新闻搜索",         "icon": "🔍"},
     "NEWS_FLASH":           {"label": "全球财经快讯",     "icon": "📡"},
     "STOCK_NEWS":           {"label": "个股新闻",         "icon": "📰"},
-    "MORNING_BRIEFING":     {"label": "财联社早报",       "icon": "📰"},
-    "MARKET_RECAP":         {"label": "财联社复盘",       "icon": "📊"},
+    "MORNING_BRIEFING":     {"label": "早报",             "icon": "📰"},
+    "MARKET_RECAP":         {"label": "市场复盘",         "icon": "📊"},
 }

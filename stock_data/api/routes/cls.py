@@ -1,8 +1,10 @@
-"""财联社 早报 / 焦点复盘 endpoints.
+"""财联社 早报 / 焦点复盘 endpoints (mounted under /api/v1/news/*).
 
 Mounted by `stock_data.server` with prefix="/api/v1"; this router's own paths
-are /cls/morning-briefing and /cls/market-review. Both require ?date=YYYY-MM-DD
+are /news/morning-briefing and /news/market-recap. Both require ?date=YYYY-MM-DD
 and return the single article for that date (or 404 if not published).
+
+Tag: 'news' (merged with the existing /api/v1/news/* section in the explorer).
 """
 
 from datetime import date as _date
@@ -96,7 +98,7 @@ def _make_cls_route(
             404: {"description": "No article published for this date"},
             503: {"description": "All fetchers failed"},
         },
-        tags=["cls"],
+        tags=["news"],
     )
     @endpoint_meta(
         summary=summary,
@@ -132,7 +134,7 @@ def _make_cls_route(
 
 # Build the two endpoints from the shared factory.
 _make_cls_route(
-    path="/cls/morning-briefing",
+    path="/news/morning-briefing",
     subject=CLS_SUBJECT_NAMES[CLS_SUBJECT_MORNING_BRIEFING],
     subject_id=CLS_SUBJECT_MORNING_BRIEFING,
     manager_method_name="get_morning_briefing",
@@ -144,7 +146,7 @@ _make_cls_route(
 )
 
 _make_cls_route(
-    path="/cls/market-review",
+    path="/news/market-recap",
     subject=CLS_SUBJECT_NAMES[CLS_SUBJECT_MARKET_RECAP],
     subject_id=CLS_SUBJECT_MARKET_RECAP,
     manager_method_name="get_market_recap",
