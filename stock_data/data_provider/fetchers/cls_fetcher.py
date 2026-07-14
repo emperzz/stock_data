@@ -17,6 +17,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+import requests
+
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..core.types import safe_int
 
@@ -32,6 +34,8 @@ CLS_SUBJECT_NAMES: dict[int, str] = {
     CLS_SUBJECT_MORNING_BRIEFING: "morning_briefing",
     CLS_SUBJECT_MARKET_RECAP: "market_review",
 }
+
+CLS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
 
 _NEXT_DATA_RE = re.compile(
     r'<script\s+id="__NEXT_DATA__"[^>]*>(.*?)</script>',
@@ -246,3 +250,64 @@ class ClsFetcher(BaseFetcher):
             "images": images,
             "body_text": body_text,
         }
+
+    # ------------------------------------------------------------------
+    # HTTP helpers
+    # ------------------------------------------------------------------
+
+    def _http_get_text(self, url: str, *, timeout: int = 15) -> str:
+        """Plain requests.get returning the response body text.
+
+        CLS SSR pages don't fingerprint-block; no proxy / no UA rotation needed.
+        On 4xx/5xx raises DataFetchError so the manager's _with_failover
+        can route to the next fetcher (currently only ClsFetcher, but the
+        contract is forward-compatible with EastMoney failover).
+        """
+        try:
+            r = requests.get(
+                url,
+                headers={"User-Agent": CLS_UA},
+                timeout=timeout,
+            )
+        except requests.RequestException as e:
+            raise DataFetchError(f"[ClsFetcher] HTTP GET failed: {url} → {e}") from e
+        if not (200 <= r.status_code < 300):
+            raise DataFetchError(
+                f"[ClsFetcher] HTTP {r.status_code} for {url} ({len(r.content)}B body)"
+            )
+        return r.text or ""
+
+    # ------------------------------------------------------------------
+    # Public methods (called by DataFetcherManager)
+    # ------------------------------------------------------------------
+
+    def get_morning_briefing(self, date: str) -> dict | None:
+        """Return the 财联社早报 article for `date` (YYYY-MM-DD) or None if no article.
+
+        Internally fetches the list page (subject 1151) to find the article_id
+        for the given date, then fetches the detail page for the full body.
+        Returns None when either step yields nothing (route layer maps to 404).
+        """
+        return self._get_subject_article(CLS_SUBJECT_MORNING_BRIEFING, date)
+
+    def get_market_recap(self, date: str) -> dict | None:
+        """Return the 财联社焦点复盘 article for `date` (YYYY-MM-DD) or None.
+
+        Subject 1135; same orchestration as get_morning_briefing.
+        """
+        return self._get_subject_article(CLS_SUBJECT_MARKET_RECAP, date)
+
+    def _get_subject_article(self, subject_id: int, date: str) -> dict | None:
+        """Shared orchestration: list page → find article_id by date → detail page."""
+        list_url = f"https://www.cls.cn/subject/{subject_id}"
+        try:
+            list_html = self._http_get_text(list_url)
+        except DataFetchError:
+            raise  # let the manager's _with_failover see it
+        articles = self._parse_subject_articles(subject_id, list_html, limit=20)
+        article_id = self._find_article_id_by_date(articles, date)
+        if article_id is None:
+            return None
+        detail_url = f"https://www.cls.cn/detail/{article_id}"
+        detail_html = self._http_get_text(detail_url)
+        return self._fetch_article_detail(article_id, detail_html)

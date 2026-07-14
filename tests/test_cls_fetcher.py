@@ -4,6 +4,7 @@ upstream, not just field names/types)."""
 
 import json
 import pathlib
+from unittest.mock import patch
 
 import pytest
 
@@ -11,6 +12,18 @@ from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.cls_fetcher import ClsFetcher
 
 FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
+
+
+def _wrap_fixture(filename: str, *, envelope_key: str) -> str:
+    """Helper: wrap a fixture JSON in the full __NEXT_DATA__ envelope the way CLS SSR does.
+
+    The fixture file is the inner object (e.g. `data` for list, `articleDetail` for detail).
+    The wrapper adds the upstream `props.pageProps` envelope so the fetcher can
+    navigate `.props.pageProps.<envelope_key>.<...>` correctly.
+    """
+    inner = json.loads((FIXTURE_DIR / filename).read_text(encoding="utf-8"))
+    envelope = {"props": {"pageProps": {envelope_key: inner}}}
+    return f'<html><body><script id="__NEXT_DATA__" type="application/json">{json.dumps(envelope, ensure_ascii=False)}</script></body></html>'
 
 
 @pytest.fixture
@@ -229,3 +242,67 @@ def test_fetch_article_detail_id_mismatch_raises(fetcher, detail_html):
     with pytest.raises(DataFetchError, match="article_id mismatch"):
         # detail fixture is article 2425210; pass a different id
         fetcher._fetch_article_detail(99999, detail_html)
+
+
+def test_get_morning_briefing_full_path(fetcher):
+    """Mock list+detail HTTP → full article dict returned."""
+    list_html = _wrap_fixture("cls_subject_list.json", envelope_key="data")
+    detail_html = _wrap_fixture("cls_article_detail.json", envelope_key="articleDetail")
+    with patch.object(fetcher, "_http_get_text", side_effect=[list_html, detail_html]) as m:
+        # pick a date that exists in the list fixture
+        arts = fetcher._parse_subject_articles(1151, list_html)
+        target_date = arts[0]["date"]
+        art = fetcher.get_morning_briefing(target_date)
+    assert art is not None
+    assert art["article_id"] == 2425210
+    assert len(art["body_text"]) > 100
+    # 2 HTTP calls (list + detail)
+    assert m.call_count == 2
+
+
+def test_get_morning_briefing_not_found(fetcher):
+    """Date not in list → returns None (only 1 HTTP call — no detail fetch)."""
+    list_html = _wrap_fixture("cls_subject_list.json", envelope_key="data")
+    with patch.object(fetcher, "_http_get_text", return_value=list_html) as m:
+        art = fetcher.get_morning_briefing("2020-01-01")
+    assert art is None
+    # Only 1 HTTP call (list); no detail fetch on not-found
+    assert m.call_count == 1
+
+
+def test_get_market_recap_full_path(fetcher):
+    """Same as morning_briefing but for subject 1135."""
+    # Build a synthetic list HTML for subject 1135 with one article on a known date.
+    # The article_id MUST match the detail fixture's id (2425210), because
+    # _fetch_article_detail has a defensive mismatch check.
+    list_data = {
+        "id": 1135,
+        "articles": [
+            {
+                "article_id": 2425210,
+                "article_title": "【焦点复盘】test",
+                "article_brief": "test brief",
+                "article_author": "财联社",
+                "article_time": 1783983600,  # 2026-07-14
+                "read_num": 100,
+                "comments_num": 10,
+                "share_num": 100,
+                "article_img": "",
+            }
+        ],
+    }
+    list_html = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps({"props": {"pageProps": {"data": list_data}}}, ensure_ascii=False)}</script></html>'
+    detail_html = _wrap_fixture("cls_article_detail.json", envelope_key="articleDetail")
+    with patch.object(fetcher, "_http_get_text", side_effect=[list_html, detail_html]):
+        art = fetcher.get_market_recap("2026-07-14")
+    assert art is not None
+    assert art["article_id"] == 2425210  # from the detail fixture
+
+
+def test_get_morning_briefing_http_failure(fetcher):
+    """If list HTTP fails → DataFetchError propagates (no swallow)."""
+    with (
+        patch.object(fetcher, "_http_get_text", side_effect=DataFetchError("network down")),
+        pytest.raises(DataFetchError, match="network down"),
+    ):
+        fetcher.get_morning_briefing("2026-07-14")
