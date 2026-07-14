@@ -904,7 +904,41 @@ class DataFetcherManager:
         `board_type` is currently consumed only by ThsFetcher (must be
         ``"concept"`` or ``"industry"``); EastMoney and ZzshareFetcher
         ignore it. Pass it through regardless so the call shape is uniform.
+
+        Frequency × source validation lives here (post-2026-07-14). The
+        supported set per source is enumerated by
+        :data:`BOARD_KLINE_FREQ_BY_SOURCE`. Today both ``"ths"`` and
+        ``"eastmoney"`` accept the full 7-frequency set
+        (``d / w / m / 5m / 15m / 30m / 60m``) — verified 2026-07-14 by
+        probing each upstream segment against ``d.10jqka.com.cn`` (THS)
+        and the corresponding push2his endpoint (EastMoney). A future
+        fetcher that drops below the full set only needs to update the
+        map; the route layer stays unchanged.
         """
+        # Source × frequency validation. Validates before _with_source so
+        # the route layer's @map_errors turns a ValueError into a clean
+        # 400 (instead of letting the fetcher surface a confusing
+        # DataFetchError mid-fetch).
+        from .constants import BOARD_KLINE_FREQ_BY_SOURCE
+
+        # Normalize source to slug form so the freq map lookup works for
+        # both API-level "ths" / "eastmoney" and the manager's internal
+        # full-class-name form ("ThsFetcher" / "EastMoneyFetcher"). Mirrors
+        # the slug derivation in ``_derive_slug`` / ``_with_source``.
+        slug = self._derive_slug(source)
+        valid_freqs = BOARD_KLINE_FREQ_BY_SOURCE.get(slug)
+        if valid_freqs is None:
+            raise ValueError(
+                f"Unknown source {source!r} for board K-line. "
+                f"Valid sources: {sorted(BOARD_KLINE_FREQ_BY_SOURCE)}"
+            )
+        freq_key = (frequency or "d").lower()
+        if freq_key not in valid_freqs:
+            raise ValueError(
+                f"Source {source!r} does not support frequency {frequency!r}; "
+                f"supported: {sorted(valid_freqs)}"
+            )
+
         result, name = self._with_source(
             source=source,
             capability=DataCapability.STOCK_BOARD,

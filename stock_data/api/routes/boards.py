@@ -869,7 +869,7 @@ def get_stock_boards(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块 K 线 (ths 概念/行业日线 / eastmoney 多周期; zzshare alias → ths)",
+    summary="板块 K 线 (ths 概念/行业 全 7 频率 / eastmoney 全 7 频率; zzshare alias → ths; ths 输入统一 platecode)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_history",
@@ -881,8 +881,10 @@ def get_board_history(
         description=(
             "Board code (source-specific). Examples: "
             "eastmoney='BK0996'; "
-            "ths concept='301558'; ths industry='881270'. "
-            "`source=zzshare` is accepted as a backward-compat alias for `ths`."
+            "ths concept='885595' (platecode); ths industry='881270'. "
+            "`source=zzshare` is accepted as a backward-compat alias for `ths`. "
+            "For THS, prefer the platecode (885xxx / 881xxx) — concept CIDs "
+            "(30xxxx) are still accepted as backward-compat input."
         ),
     ),
     source: str = Query(
@@ -898,8 +900,10 @@ def get_board_history(
     frequency: Literal["d", "w", "m", "5m", "15m", "30m", "60m"] = Query(
         "d",
         description=(
-            "K-line frequency. eastmoney supports all; "
-            "zzshare/ths are daily-only (other frequencies raise 4xx)"
+            "K-line frequency. Both `ths` and `eastmoney` accept the full "
+            "7-frequency set (d / w / m / 5m / 15m / 30m / 60m). "
+            "Minute-level frequencies have tighter max-span caps (see "
+            "_THS_BOARD_MAX_SPAN_DAYS / EastMoney fetcher)."
         ),
     ),
     start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
@@ -914,7 +918,9 @@ def get_board_history(
             "push2his auto-escalates klt from daily→weekly→monthly. "
             "When `start_date` and `end_date` are both given, the date "
             "range width is also capped at 800 days (returns 400 with "
-            "`date_range_too_wide` on overflow)."
+            "`date_range_too_wide` on overflow). Note: minute-level "
+            "frequencies have a tighter per-frequency cap on the fetcher "
+            "side (e.g. 5m caps at 30 days)."
         ),
     ),
     board_type: Literal["concept", "industry"] | None = Query(

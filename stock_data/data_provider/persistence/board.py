@@ -1550,7 +1550,7 @@ def get_board_name(board_code: str, source: str) -> str | None:
 def get_board_metadata(
     board_code: str, source: str
 ) -> dict[str, Any] | None:
-    """Look up full board metadata (name + type + subtype) from the SQLite cache.
+    """Look up full board metadata (name + type + subtype + platecode) from the SQLite cache.
 
     Same fast-path semantics as :func:`get_board_name` — single-row read
     against ``stock_board``, matching on ``code OR platecode`` so THS
@@ -1562,16 +1562,27 @@ def get_board_metadata(
         source: Data source slug (``"ths"``, ``"eastmoney"``, etc.).
 
     Returns:
-        Dict ``{"name": str, "type": str, "subtype": str}`` if a row
-        exists; ``None`` on cache miss. ``type`` and ``subtype`` mirror
-        the cache column values verbatim (may be empty string for older
-        rows where the column was added in a forward-compat migration).
+        Dict ``{"name": str, "type": str, "subtype": str, "code": str, "platecode": str | None}``
+        if a row exists; ``None`` on cache miss. ``type`` and ``subtype``
+        mirror the cache column values verbatim (may be empty string for
+        older rows where the column was added in a forward-compat migration).
+        ``code`` is the cache's `code` column (THS concept CID, industry
+        platecode); ``platecode`` is the cache's `platecode` column
+        (None for eastmoney / zhitu rows and for THS concept sidebar-only
+        rows that were never backfilled with a platecode).
+
+        The ``code`` and ``platecode`` keys were added 2026-07-14 to
+        unblock ThsFetcher.get_board_history's platecode-resolution flow
+        (the fetcher needs the platecode to build the K-line URL, but the
+        cache lookup was previously only returning name/type/subtype).
+        Backward-compatible: existing callers that only read the original
+        3 keys are unaffected.
     """
     init_schema()
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT name, board_type, subtype FROM stock_board "
+        "SELECT name, board_type, subtype, code, platecode FROM stock_board "
         "WHERE (code = ? OR platecode = ?) AND source = ? LIMIT 1",
         (board_code, board_code, source),
     )
@@ -1594,6 +1605,8 @@ def get_board_metadata(
         "name": row["name"],
         "type": row["board_type"],
         "subtype": row["subtype"] or "",
+        "code": row["code"],
+        "platecode": row["platecode"],
     }
 
 

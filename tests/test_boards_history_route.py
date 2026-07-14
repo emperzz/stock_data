@@ -91,14 +91,44 @@ class TestFrequencyExpansion:
         # Validation passes; upstream may fail but route shouldn't 422.
         assert r.status_code != 422, f"freq={freq} rejected: {r.text}"
 
-    def test_ths_rejects_weekly(self, client):
+    def test_ths_rejects_unknown_frequency(self, client):
+        """Post-2026-07-14: THS supports the full 7-frequency set
+        (d / w / m / 5m / 15m / 30m / 60m), so weekly is now VALID.
+        This test now covers an actually-unsupported frequency like '2h'."""
         r = client.get(
             "/api/v1/boards/881270/history",
-            params={"source": "ths", "frequency": "w", "board_type": "industry"},
+            params={"source": "ths", "frequency": "2h", "board_type": "industry"},
         )
-        # ThsFetcher raises DataFetchError → mapped to 4xx/5xx (NOT 422)
-        assert r.status_code != 422, r.text
-        assert r.status_code >= 400, r.text
+        # Route Literal already rejects "2h" at FastAPI level → 422
+        # (the manager's source×freq check would also catch it as a
+        # defense-in-depth layer, but the route Literal fires first).
+        assert r.status_code == 422, r.text
+
+    def test_ths_supports_weekly(self, client):
+        """Post-2026-07-14: weekly is now real (upstream segment 02).
+        Patched manager call returns empty; route should 200, NOT 422/400."""
+        with patch(
+            "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+            return_value=([], "ThsFetcher"),
+        ):
+            r = client.get(
+                "/api/v1/boards/881270/history",
+                params={"source": "ths", "frequency": "w", "board_type": "industry"},
+            )
+        assert r.status_code == 200, r.text
+
+    @pytest.mark.parametrize("freq", ["d", "w", "m", "5m", "15m", "30m", "60m"])
+    def test_ths_accepts_all_7_frequencies(self, client, freq):
+        """THS upstream supports the full 7-frequency set (verified 2026-07-14)."""
+        with patch(
+            "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+            return_value=([], "ThsFetcher"),
+        ):
+            r = client.get(
+                "/api/v1/boards/881270/history",
+                params={"source": "ths", "frequency": freq, "board_type": "industry"},
+            )
+        assert r.status_code == 200, f"freq={freq} should be accepted: {r.text}"
 
 
 class TestBoardTypeParam:

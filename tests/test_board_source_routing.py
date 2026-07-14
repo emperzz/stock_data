@@ -275,12 +275,52 @@ def test_manager_get_stock_boards_passes_stock_code_to_fetcher():
 
 
 def test_manager_get_board_history_passes_args_to_fetcher():
-    em = _make_fetcher("ZhituFetcher", DataCapability.STOCK_BOARD)
+    # EastMoneyFetcher is in the source×frequency whitelist; the test
+    # verifies the manager dispatches to the right fetcher. Zhitu
+    # was the previous subject but ZhituFetcher does not implement
+    # get_board_history (it raises before reaching the dispatcher).
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
     manager = DataFetcherManager([em])
 
     with patch.object(manager, "_with_source", wraps=manager._with_source) as spy:
-        manager.get_board_history("sw_mt", source="ZhituFetcher", frequency="d", days=30)
+        manager.get_board_history("BK0996", source="EastMoneyFetcher", frequency="d", days=30)
         assert spy.call_count == 1
+
+
+def test_manager_get_board_history_rejects_unknown_source():
+    """source slug not in BOARD_KLINE_FREQ_BY_SOURCE → ValueError → 400.
+
+    Post-2026-07-14 the manager's get_board_history validates
+    source × frequency against the constants map before dispatch.
+    ZhituFetcher doesn't ship K-line support, so the test uses a
+    source that is registered with the manager but not on the
+    K-line whitelist."""
+    em = _make_fetcher("EastMoneyFetcher", DataCapability.STOCK_BOARD)
+    manager = DataFetcherManager([em])
+    # `2h` is NOT in the route Literal (which is
+    # `d / w / m / 5m / 15m / 30m / 60m`), so in production the route
+    # layer would 422 it before the manager ever sees it. This test
+    # exercises the manager-level guard directly (bypassing the route)
+    # so the freq-rejection path stays covered even if the route's
+    # Literal is later widened.
+    with pytest.raises(ValueError, match="does not support frequency '2h'"):
+        manager.get_board_history(
+            "BK0996", source="EastMoneyFetcher", frequency="2h", days=30,
+        )
+
+
+def test_manager_get_board_history_rejects_unsupported_source():
+    """A fetcher that doesn't declare K-line support (e.g. Zhitu) is
+    rejected at the source×freq check before reaching _with_source."""
+    from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
+
+    manager = DataFetcherManager([ZhituFetcher()])
+    # Zhitu is not in BOARD_KLINE_FREQ_BY_SOURCE — manager raises before
+    # the (non-existent) _with_source dispatch.
+    with pytest.raises(ValueError, match="Unknown source .* for board K-line"):
+        manager.get_board_history(
+            "sw_mt", source="zhitu", frequency="d", days=30,
+        )
 
 
 def test_manager_passes_date_range_to_fetcher():

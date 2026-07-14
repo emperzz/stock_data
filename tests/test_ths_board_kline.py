@@ -1,10 +1,42 @@
-"""Tests for ThsFetcher.get_board_history and runtime health checks."""
+"""Tests for ThsFetcher.get_board_history and runtime health checks.
+
+Post-2026-07-14: ThsFetcher supports all 7 THS K-line frequencies
+(d / w / m / 5m / 15m / 30m / 60m) and uniformly accepts platecode as
+input. The fetcher's clid→platecode helper is now named
+``_resolve_ths_platecode_from_cid`` (the upstream HTML element is named
+``<input id="clid">`` but its value is a 6-digit platecode — the old
+``_resolve_ths_concept_clid`` name suggested a T-prefixed value that the
+upstream never actually emitted).
+"""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Raw upstream date format (post-2026-07-14 normalization): the parser
+# accepts YYYYMMDD (daily/weekly/monthly) and YYYYMMDDHHMM (minute bars).
+# The first 7 columns are the canonical K-line subset
+# (date, open, high, low, close, volume, amount).
+_DAILY_BODY_2024 = (
+    'var v_x={"data":"20241215,1,2,3,4,5,6,7,8,9,10;"};'
+)
+_DAILY_BODY_2025 = (
+    'var v_x={"data":"20250630,1,2,3,4,5,6,7,8,9,10;'
+    '20250629,1.1,2.1,3.1,4.1,5.1,6.1,7.1,8.1,9.1,10.1;"};'
+)
+# 5-minute body with YYYYMMDDHHMM dates — the parser normalizes these
+# into "YYYY-MM-DD HH:MM" so the route-layer date filter works.
+_5MIN_BODY = (
+    'var v_x={"data":"202607130935,1,2,3,4,5,6,7,8,9,10;'
+    '202607130940,1.1,2.1,3.1,4.1,5.1,6.1,7.1,8.1,9.1,10.1;"};'
+)
 
 
 class TestVToken:
@@ -19,16 +51,21 @@ class TestVToken:
 
         v1 = _get_ths_v_token()
         v2 = _get_ths_v_token()
-        assert v1 == v2  # cached (lru_cache)
+        assert v1 == v2  # cached (within TTL)
 
 
-class TestResolveConceptClid:
-    def test_extracts_clid_from_html(self, monkeypatch):
-        from unittest.mock import patch
+class TestResolvePlatecodeFromCid:
+    """Post-2026-07-14: renamed from TestResolveConceptClid.
 
+    The upstream HTML element is ``<input id="clid">`` but its value
+    is a 6-digit platecode (e.g. ``"886042"``), not a T-prefixed clid.
+    The helper returns the platecode that the K-line URL accepts.
+    """
+
+    def test_extracts_platecode_from_html(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
-        fake_html = '<html><body><input id="clid" value="T000267467"/></body></html>'
+        fake_html = '<html><body><input id="clid" value="886042"/></body></html>'
 
         f = ThsFetcher.__new__(ThsFetcher)
 
@@ -40,12 +77,10 @@ class TestResolveConceptClid:
             return r
 
         with patch.object(ThsFetcher, "_http_get", side_effect=fake_get):
-            clid = f._resolve_ths_concept_clid("301558")
-        assert clid == "T000267467"
+            platecode = f._resolve_ths_platecode_from_cid("307940")
+        assert platecode == "886042"
 
-    def test_missing_clid_returns_none(self):
-        from unittest.mock import patch
-
+    def test_missing_clid_input_returns_none(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
@@ -57,11 +92,9 @@ class TestResolveConceptClid:
             return r
 
         with patch.object(ThsFetcher, "_http_get", side_effect=fake_get):
-            assert f._resolve_ths_concept_clid("xxx") is None
+            assert f._resolve_ths_platecode_from_cid("xxx") is None
 
     def test_http_failure_returns_none(self):
-        from unittest.mock import patch
-
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
@@ -70,25 +103,43 @@ class TestResolveConceptClid:
             raise RuntimeError("network down")
 
         with patch.object(ThsFetcher, "_http_get", side_effect=fake_get):
-            assert f._resolve_ths_concept_clid("301558") is None
+            assert f._resolve_ths_platecode_from_cid("307940") is None
 
 
 class TestParseThsKlineBody:
-    def test_parses_typical_response(self):
+    """Date-format normalization is the core of the post-2026-07-14 fix.
+
+    The parser accepts raw upstream YYYYMMDD (daily/weekly/monthly) and
+    YYYYMMDDHHMM (minute-level) and emits canonical "YYYY-MM-DD" /
+    "YYYY-MM-DD HH:MM" so the route-layer date filter compares correctly.
+    """
+
+    def test_parses_daily_yyyymmdd_response(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
         body = (
-            'var v_abc123={"data":"2025-06-30,1234.5,1260.0,1220.3,1255.7,12345678,1.234e10,2.5,1.7,21.2,1.5;'
-            '2025-06-29,1200.0,1240.0,1190.0,1230.0,10000000,1.0e10,2.0,1.0,12.0,1.0;"};'
+            'var v_abc123={"data":"20250630,1234.5,1260.0,1220.3,1255.7,12345678,1.234e10,2.5,1.7,21.2,1.5;'
+            '20250629,1200.0,1240.0,1190.0,1230.0,10000000,1.0e10,2.0,1.0,12.0,1.0;"};'
         )
         rows = f._parse_ths_kline_body(body)
         assert len(rows) == 2
+        # YYYYMMDD normalized to YYYY-MM-DD.
         assert rows[0]["date"] == "2025-06-30"
         assert rows[0]["open"] == 1234.5
         assert rows[1]["close"] == 1230.0
         for r in rows:
             assert set(r.keys()) >= {"date", "open", "high", "low", "close", "volume", "amount"}
+
+    def test_parses_minute_yyyymmddhhmm_response(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        rows = f._parse_ths_kline_body(_5MIN_BODY)
+        assert len(rows) == 2
+        # YYYYMMDDHHMM normalized to "YYYY-MM-DD HH:MM" (with space).
+        assert rows[0]["date"] == "2026-07-13 09:35"
+        assert rows[1]["date"] == "2026-07-13 09:40"
 
     def test_empty_data_returns_empty_list(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
@@ -100,7 +151,7 @@ class TestParseThsKlineBody:
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        body = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10,11;"};'
+        body = 'var v_x={"data":"20250630,1,2,3,4,5,6,7,8,9,10,11;"};'
         rows = f._parse_ths_kline_body(body)
         assert len(rows) == 1
         assert rows[0]["close"] == 4.0
@@ -109,15 +160,35 @@ class TestParseThsKlineBody:
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        body = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;garbage_row;2025-06-29,1,2,3,4,5,6,7,8,9,10;"};'
+        body = (
+            'var v_x={"data":"20250630,1,2,3,4,5,6,7,8,9,10;'
+            'garbage_row;'
+            '20250629,1,2,3,4,5,6,7,8,9,10;"};'
+        )
         rows = f._parse_ths_kline_body(body)
         assert len(rows) == 2
+
+    def test_skips_unknown_date_formats(self):
+        """Upstream variant with a 10-char or 9-char date — parser skips
+        the row rather than passing an unparseable string downstream
+        (which would silently break the route-layer date filter)."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        body = (
+            'var v_x={"data":"20250630,1,2,3,4,5,6,7,8,9,10;'  # 8-char (valid)
+            'X,1,2,3,4,5,6,7,8,9,10;'                            # 1-char (invalid)
+            '2025,1,2,3,4,5,6,7,8,9,10;"};'                       # 4-char (invalid)
+        )
+        rows = f._parse_ths_kline_body(body)
+        assert len(rows) == 1
+        assert rows[0]["date"] == "2025-06-30"
 
     def test_missing_var_wrapper_still_parses(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        body = '{"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"}'
+        body = '{"data":"20250630,1,2,3,4,5,6,7,8,9,10;"}'
         rows = f._parse_ths_kline_body(body)
         assert len(rows) == 1
 
@@ -135,45 +206,86 @@ class TestParseThsKlineBody:
 
 
 class TestGetBoardHistory:
-    def test_concept_calls_clid_then_year_js(self):
+    """get_board_history accepts platecode as the canonical input (per the
+    2026-07-14 unification). CIDs (e.g. ``"307940"``) are still accepted
+    as backward-compat input — the fetcher resolves them via the
+    ``stock_board`` cache (matched on code OR platecode) or, on cache
+    miss, via the upstream HTML page.
+    """
+
+    def test_concept_resolves_via_html_scrape(self):
+        """Cache miss → HTML scrape keyed on the input code (treated as CID) →
+        platecode used in K-line URL."""
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        body_2024 = 'var v_x={"data":"2024-12-15,1,2,3,4,5,6,7,8,9,10;"};'
-        body_2025 = (
-            'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;'
-            '2025-06-29,1.1,2.1,3.1,4.1,5.1,6.1,7.1,8.1,9.1,10.1;"};'
-        )
 
-        def fetch_year(inner, year):
-            return body_2025 if year == 2025 else body_2024
+        def fetch_year(inner, year, freq):
+            assert inner == "886042"  # the platecode the HTML returned
+            assert freq == 1  # d
+            return _DAILY_BODY_2025 if year == 2025 else _DAILY_BODY_2024
 
         with (
-            patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"),
+            patch(
+                "stock_data.data_provider.persistence.board.get_board_metadata",
+                return_value=None,  # cache miss → fall through to HTML scrape
+            ),
+            patch.object(ThsFetcher, "_resolve_ths_platecode_from_cid", return_value="886042"),
             patch.object(ThsFetcher, "_fetch_ths_board_year", side_effect=fetch_year),
         ):
             rows = f.get_board_history(
-                board_code="301558",
+                board_code="307940",  # CID input
                 board_type="concept",
                 frequency="d",
                 days=400,
                 end_date="2025-06-30",
                 start_date="2024-12-01",
             )
-        # 2024 body contributes 1 row, 2025 body contributes 2 rows
+        # 2024 body: 1 row; 2025 body: 2 rows.
         assert len(rows) == 3
-        # Sorted oldest → newest per get_board_history docstring
+        # Dates normalized to YYYY-MM-DD; sorted oldest → newest.
         assert [r["date"] for r in rows] == ["2024-12-15", "2025-06-29", "2025-06-30"]
 
-    def test_industry_skips_clid_step(self):
+    def test_concept_uses_cached_platecode(self):
+        """Cache hit with platecode populated → use it directly, no HTML scrape."""
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        # Scope to a single year so a single-year body satisfies len(rows) == 1.
-        # start_d = 2025-12-31 - 180 days → still 2025 → only 2025 fetched.
-        year_js_body = 'var v_x={"data":"2025-12-30,1,2,3,4,5,6,7,8,9,10;"};'
+
         with (
-            patch.object(ThsFetcher, "_resolve_ths_concept_clid") as clid_mock,
+            patch(
+                "stock_data.data_provider.persistence.board.get_board_metadata",
+                return_value={
+                    "name": "存储芯片",
+                    "type": "concept",
+                    "subtype": "",
+                    "code": "307940",
+                    "platecode": "886042",
+                },
+            ),
+            patch.object(ThsFetcher, "_resolve_ths_platecode_from_cid") as scrape_mock,
+            patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=_DAILY_BODY_2025),
+        ):
+            rows = f.get_board_history(
+                board_code="886042",  # platecode input
+                board_type="concept",
+                frequency="d",
+                start_date="2025-06-29",
+                end_date="2025-06-30",
+            )
+        scrape_mock.assert_not_called()  # cache hit short-circuits HTML scrape
+        assert len(rows) == 2
+        assert rows[0]["date"] == "2025-06-29"
+
+    def test_industry_skips_platecode_resolution(self):
+        """Industry: board_code IS the platecode (881xxx). No HTML scrape."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        year_js_body = 'var v_x={"data":"20251230,1,2,3,4,5,6,7,8,9,10;"};'
+
+        with (
+            patch.object(ThsFetcher, "_resolve_ths_platecode_from_cid") as scrape_mock,
             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),
         ):
             rows = f.get_board_history(
@@ -183,30 +295,77 @@ class TestGetBoardHistory:
                 days=180,
                 end_date="2025-12-31",
             )
-        clid_mock.assert_not_called()
+        scrape_mock.assert_not_called()
         assert len(rows) == 1
 
-    def test_unsupported_frequency_raises(self):
+    @pytest.mark.parametrize("freq,freq_segment", [
+        ("d", 1), ("w", 2), ("m", 10), ("5m", 30),
+        ("15m", 50), ("30m", 60), ("60m", 70),
+    ])
+    def test_all_7_frequencies_supported(self, freq, freq_segment):
+        """All 7 THS frequencies are accepted; freq_segment reaches
+        _fetch_ths_board_year correctly. (Pre-2026-07-14 only d worked.)"""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        # Daily/weekly/monthly bodies use 2025 dates that fall inside
+        # the test's explicit 2025-06-29..2025-06-30 window. Minute
+        # bodies use 2026-07-13 dates inside the 2026-07-12..2026-07-14
+        # window. Each frequency's _THS_BOARD_MAX_SPAN_DAYS cap is
+        # generous enough for these test windows.
+        body = _5MIN_BODY if freq.endswith("m") else _DAILY_BODY_2025
+        start = "2026-07-12" if freq.endswith("m") else "2025-06-29"
+        end = "2026-07-14" if freq.endswith("m") else "2025-06-30"
+
+        with patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=body) as fetch_mock:
+            rows = f.get_board_history(
+                board_code="881270",  # industry — no clid resolution needed
+                board_type="industry",
+                frequency=freq,
+                start_date=start,
+                end_date=end,
+            )
+        # Verify freq_segment was passed correctly.
+        for call in fetch_mock.call_args_list:
+            assert call.args[2] == freq_segment, (
+                f"freq={freq} expected seg={freq_segment}, got {call.args[2]}"
+            )
+        assert len(rows) >= 1, f"freq={freq} returned 0 rows"
+
+    def test_invalid_frequency_raises(self):
         from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        try:
-            f.get_board_history("881270", board_type="industry", frequency="w")
-        except DataFetchError as e:
-            assert "frequency" in str(e).lower() or "w" in str(e)
-        else:
-            raise AssertionError("expected DataFetchError for non-daily THS freq")
+        with pytest.raises(DataFetchError, match="unsupported frequency"):
+            f.get_board_history("881270", board_type="industry", frequency="2h")
+
+    def test_5min_span_cap_raises(self):
+        """5m bars are capped at 30 days (per _THS_BOARD_MAX_SPAN_DAYS);
+        longer spans raise ValueError → 400."""
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        with pytest.raises(ValueError, match="exceeds frequency='5m' max"):
+            f.get_board_history(
+                board_code="881270",
+                board_type="industry",
+                frequency="5m",
+                days=90,
+            )
 
     def test_missing_board_type_auto_detects_industry(self):
         """When board_type is None, auto-detect from stock_board cache."""
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        year_js_body = 'var v_x={"data":"2025-12-30,1,2,3,4,5,6,7,8,9,10;"};'
+        year_js_body = 'var v_x={"data":"20251230,1,2,3,4,5,6,7,8,9,10;"};'
         with (
             patch(
                 "stock_data.data_provider.persistence.board.get_board_metadata",
-                return_value={"name": "银行", "type": "industry", "subtype": ""},
+                return_value={
+                    "name": "银行", "type": "industry", "subtype": "",
+                    "code": "881270", "platecode": "881270",
+                },
             ),
             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),
         ):
@@ -223,97 +382,44 @@ class TestGetBoardHistory:
         from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        try:
+        with pytest.raises(DataFetchError, match="board_type must be"):
             f.get_board_history("881270", board_type="foobar")
-        except DataFetchError as e:
-            assert "board_type" in str(e).lower() or "foobar" in str(e)
-        else:
-            raise AssertionError("expected DataFetchError for unknown board_type")
 
-    def test_concept_clid_failure_raises(self):
+    def test_concept_platecode_failure_raises(self):
+        """Cache miss AND HTML scrape returns None → DataFetchError naming
+        the input so the operator can debug."""
         from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        with patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value=None):
-            try:
-                f.get_board_history("301558", board_type="concept")
-            except DataFetchError as e:
-                assert "301558" in str(e) or "clid" in str(e).lower()
-            else:
-                raise AssertionError("expected DataFetchError when clid resolves to None")
-
-    def test_auto_detects_concept_from_platecode(self):
-        """board_code=platecode(885xxx) → cache resolves cid → HTML scrapes clid."""
-        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
-
-        f = ThsFetcher.__new__(ThsFetcher)
-        year_js_body = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
-
         with (
             patch(
                 "stock_data.data_provider.persistence.board.get_board_metadata",
-                return_value={"name": "AI概念", "type": "concept", "subtype": ""},
+                return_value=None,  # force cache miss
             ),
-            patch(
-                "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
-                return_value="301558",
-            ),
-            patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"),
-            patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),
+            patch.object(ThsFetcher, "_resolve_ths_platecode_from_cid", return_value=None),
         ):
-            rows = f.get_board_history(
-                board_code="885595",
-                board_type=None,
-                frequency="d",
-                days=30,
-                end_date="2025-06-30",
-                start_date="2025-06-01",
-            )
-        assert len(rows) == 1
-        assert rows[0]["date"] == "2025-06-30"
+            with pytest.raises(DataFetchError, match="could not resolve concept platecode"):
+                f.get_board_history("307940", board_type="concept")
 
-    def test_auto_detects_industry_from_platecode(self):
-        """board_code=industry platecode(881xxx) → used directly, no clid resolution."""
+    def test_date_range_filter(self):
+        """Date filter now uses YYYY-MM-DD comparison (after the parser
+        normalizes upstream YYYYMMDD). The 2023 row is outside the
+        2024-01-01..2025-01-01 window and must be excluded."""
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        year_js_body = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
-
+        # Mix dates from 2023, 2024, 2025 — only 2024-12-31 should pass.
+        year_js_body = (
+            'var v_x={"data":"20250630,1,2,3,4,5,6,7,8,9,10;'
+            "20241231,1,2,3,4,5,6,7,8,9,10;"
+            '20230101,1,2,3,4,5,6,7,8,9,10;"};'
+        )
         with (
-            patch(
-                "stock_data.data_provider.persistence.board.get_board_metadata",
-                return_value={"name": "银行", "type": "industry", "subtype": ""},
-            ),
-            patch.object(ThsFetcher, "_resolve_ths_concept_clid") as clid_mock,
             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),
         ):
             rows = f.get_board_history(
                 board_code="881270",
-                board_type=None,
-                frequency="d",
-                days=30,
-                end_date="2025-06-30",
-                start_date="2025-06-01",
-            )
-        clid_mock.assert_not_called()
-        assert len(rows) == 1
-
-    def test_date_range_filter(self):
-        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
-
-        f = ThsFetcher.__new__(ThsFetcher)
-        year_js_body = (
-            'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;'
-            "2024-12-31,1,2,3,4,5,6,7,8,9,10;"
-            '2023-01-01,1,2,3,4,5,6,7,8,9,10;"};'
-        )
-        with (
-            patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"),
-            patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),
-        ):
-            rows = f.get_board_history(
-                board_code="301558",
-                board_type="concept",
+                board_type="industry",
                 start_date="2024-01-01",
                 end_date="2025-01-01",
             )
@@ -327,17 +433,14 @@ class TestGetBoardHistory:
 
         f = ThsFetcher.__new__(ThsFetcher)
         year_js_body = (
-            'var v_x={"data":"2025-06-29,1,2,3,4,5,6,7,8,9,10;'
-            "2025-06-30,1,2,3,4,5,6,7,8,9,10;"
-            '2025-06-28,1,2,3,4,5,6,7,8,9,10;"};'
+            'var v_x={"data":"20250629,1,2,3,4,5,6,7,8,9,10;'
+            "20250630,1,2,3,4,5,6,7,8,9,10;"
+            '20250628,1,2,3,4,5,6,7,8,9,10;"};'
         )
-        with (
-            patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"),
-            patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),
-        ):
+        with patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body):
             rows = f.get_board_history(
-                board_code="301558",
-                board_type="concept",
+                board_code="881270",
+                board_type="industry",
                 start_date="2025-06-01",
                 end_date="2025-06-30",
             )
@@ -387,9 +490,7 @@ class TestVTokenCacheTTL:
     def test_retry_on_transient_mint_failure(self, monkeypatch):
         """Bounded retry; after _THS_V_TOKEN_MAX_RETRIES, raise DataFetchError."""
         from stock_data.data_provider.fetchers import ths_fetcher as mod
-        from stock_data.data_provider.fetchers.ths_fetcher import (
-            DataFetchError,
-        )
+        from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError
 
         calls = {"n": 0}
 
@@ -428,8 +529,6 @@ class TestVTokenCacheTTL:
 
         mod._ths_v_token_cache["value"] = None
         mod._ths_v_token_cache["expires_at"] = 0.0
-        # Direct setattr with manual restore — pytest's monkeypatch.setattr has
-        # been flaky in our setup for module-level function references.
         original = mod._get_ths_js_vm
         mod._get_ths_js_vm = lambda: RetryVM()
         try:
@@ -442,7 +541,6 @@ class TestVTokenCacheTTL:
             mod._ths_v_token_cache["expires_at"] = 0.0
 
     def test_js_vm_is_singleton(self):
-        """MiniRacer VM instantiated once across calls — saves ~200ms per re-mint."""
         from stock_data.data_provider.fetchers import ths_fetcher as mod
 
         instantiations = {"n": 0}
@@ -459,13 +557,11 @@ class TestVTokenCacheTTL:
 
         original = mod._get_ths_js_vm
         mod._get_ths_js_vm = lambda: CountingVM()
-        mod._ths_js_vm = None  # force lazy init on next call
+        mod._ths_js_vm = None
         try:
             t1 = mod._get_ths_v_token()
             t2 = mod._get_ths_v_token()
             t3 = mod._get_ths_v_token()
-            # First call instantiates VM; subsequent calls return cached token,
-            # so `_get_ths_js_vm` is NOT re-invoked. instantiations == 1.
             assert instantiations["n"] == 1
             assert t1 == t2 == t3
         finally:
@@ -482,11 +578,8 @@ class TestThsKlineParserRobustness:
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        # d.10jqka.com.cn cache-bust combo variant emits two var= assignments.
-        # Old greedy regex joined them into invalid JSON; new positional
-        # extraction parses the FIRST object only.
         body = (
-            'var v_a={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
+            'var v_a={"data":"20250630,1,2,3,4,5,6,7,8,9,10;"};'
             'var v_b={"data":"ignored,row,data"};'
         )
         rows = f._parse_ths_kline_body(body)
@@ -494,20 +587,18 @@ class TestThsKlineParserRobustness:
         assert rows[0]["date"] == "2025-06-30"
 
     def test_no_trailing_semicolon_still_parses(self):
-        # Variant: `}` but no trailing `;`. Old code required ";" exactly.
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        body = '{"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"}'
+        body = '{"data":"20250630,1,2,3,4,5,6,7,8,9,10;"}'
         rows = f._parse_ths_kline_body(body)
         assert len(rows) == 1
 
     def test_js_unquoted_keys_accepted(self):
-        # demjson3 lenient on JS-style literals
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        body = 'var v_x={data:"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
+        body = 'var v_x={data:"20250630,1,2,3,4,5,6,7,8,9,10;"};'
         rows = f._parse_ths_kline_body(body)
         assert len(rows) == 1
 
@@ -520,18 +611,14 @@ class TestThsKlineParserRobustness:
         assert f._parse_ths_kline_body(";;;") == []
 
 
-class TestClidExtractionRobustness:
+class TestPlatecodeExtractionRobustness:
     """A4 — BS4 find() replaces attribute-order-sensitive regex."""
 
-    def test_extracts_clid_when_value_precedes_id(self):
-        # The OLD regex required id-then-value ordering; this body flipped
-        # the order. BS4 picks up the input regardless.
-        from unittest.mock import patch
-
+    def test_extracts_platecode_when_value_precedes_id(self):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        html = '<html><body><input value="T000888999" id="clid" /></body></html>'
+        html = '<html><body><input value="886042" id="clid" /></body></html>'
 
         def fake_get(url, headers=None, timeout=None, **kw):
             r = MagicMock()
@@ -539,13 +626,9 @@ class TestClidExtractionRobustness:
             return r
 
         with patch.object(ThsFetcher, "_http_get", side_effect=fake_get):
-            assert f._resolve_ths_concept_clid("301558") == "T000888999"
+            assert f._resolve_ths_platecode_from_cid("307940") == "886042"
 
     def test_missing_value_attribute_returns_none(self):
-        # input has id=clid but no value → BS4 returns None cleanly instead
-        # of KeyError.
-        from unittest.mock import patch
-
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
@@ -557,7 +640,7 @@ class TestClidExtractionRobustness:
             return r
 
         with patch.object(ThsFetcher, "_http_get", side_effect=fake_get):
-            assert f._resolve_ths_concept_clid("301558") is None
+            assert f._resolve_ths_platecode_from_cid("307940") is None
 
 
 class TestGetBoardHistoryEdgeCases:
@@ -566,22 +649,17 @@ class TestGetBoardHistoryEdgeCases:
     def test_all_years_failed_raises(self):
         from unittest.mock import patch
 
-        from stock_data.data_provider.fetchers.ths_fetcher import (
-            DataFetchError,
-            ThsFetcher,
-        )
+        from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError, ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        # All years return "" → upstream auth or 5xx for every year.
         with (
-            patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"),
             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=""),
             patch.object(ThsFetcher, "_v_token", return_value="x"),
-            pytest.raises(DataFetchError, match="all .* year-fetches returned empty"),
+            pytest.raises(DataFetchError, match="all .* year-fetches .* returned empty"),
         ):
             f.get_board_history(
-                board_code="301558",
-                board_type="concept",
+                board_code="881270",
+                board_type="industry",
                 frequency="d",
                 days=400,
                 end_date="2025-06-30",
@@ -589,35 +667,31 @@ class TestGetBoardHistoryEdgeCases:
             )
 
     def test_partial_years_success_passes_through(self):
-        # Some years empty, others valid → no raise, returns what came back.
         from unittest.mock import patch
 
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        body_2025 = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
 
-        def fetch_year(inner, year):
-            return body_2025 if year == 2025 else ""  # 2024 empty, 2025 ok
+        def fetch_year(inner, year, freq):
+            return _DAILY_BODY_2025 if year == 2025 else ""
 
-        with (
-            patch.object(ThsFetcher, "_resolve_ths_concept_clid", return_value="T000267467"),
-            patch.object(ThsFetcher, "_fetch_ths_board_year", side_effect=fetch_year),
-        ):
+        with patch.object(ThsFetcher, "_fetch_ths_board_year", side_effect=fetch_year):
             rows = f.get_board_history(
-                board_code="301558",
-                board_type="concept",
+                board_code="881270",
+                board_type="industry",
                 frequency="d",
                 days=400,
                 end_date="2025-06-30",
                 start_date="2024-12-01",
             )
-        # 2024 returned "" but skipped silently; 2025 contributed 1 row.
-        assert len(rows) == 1
-        assert rows[0]["date"] == "2025-06-30"
+        assert len(rows) == 2  # 2024 empty, 2025 contributes 2 rows
+        assert rows[0]["date"] == "2025-06-29"
 
     def test_year_span_cap_raises(self):
-        # 11+ year span → reject
+        """16-year span exceeds _THS_BOARD_MAX_SPAN_DAYS['d'] = 3650 days.
+        The cap was extended in 2026-07-14 from year-count (10y) to
+        day-count (3650d) — the message is now "exceeds frequency='d' max"."""
         from unittest.mock import patch
 
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
@@ -625,7 +699,7 @@ class TestGetBoardHistoryEdgeCases:
         f = ThsFetcher.__new__(ThsFetcher)
         with (
             patch.object(ThsFetcher, "_v_token", return_value="x"),
-            pytest.raises(ValueError, match="year span .* > 10"),
+            pytest.raises(ValueError, match="exceeds frequency='d' max"),
         ):
             f.get_board_history(
                 board_code="881270",
@@ -633,21 +707,19 @@ class TestGetBoardHistoryEdgeCases:
                 frequency="d",
                 days=10,
                 start_date="2010-01-01",
-                end_date="2025-12-31",  # 16-year span
+                end_date="2025-12-31",  # ~5800 days, well over 3650
             )
 
     def test_year_span_at_boundary_passes(self):
-        # Exactly 10 years (2016..2025) → passes span cap (cap is _MAX_YEAR_SPAN, exclusive).
-        # The mocked body returns one row per year → 10 rows total.
+        """9-year span (within _MAX_YEAR_SPAN=10 and 3650-day cap) passes."""
         from unittest.mock import patch
 
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
-        body = 'var v_x={"data":"2025-06-30,1,2,3,4,5,6,7,8,9,10;"};'
 
-        def fetch_year(inner, year):
-            return body
+        def fetch_year(inner, year, freq):
+            return 'var v_x={"data":"20250630,1,2,3,4,5,6,7,8,9,10;"};'
 
         with (
             patch.object(ThsFetcher, "_fetch_ths_board_year", side_effect=fetch_year),
@@ -658,11 +730,11 @@ class TestGetBoardHistoryEdgeCases:
                 board_type="industry",
                 frequency="d",
                 days=10,
-                start_date="2016-01-01",
-                end_date="2025-12-31",
+                start_date="2017-01-01",
+                end_date="2025-12-31",  # 9-year span
             )
-        # 2016..2025 inclusive = 10 years; each year contributes 1 row → 10 rows total.
-        assert len(rows) == 10
+        # 2017..2025 inclusive = 9 years; 1 row per year.
+        assert len(rows) == 9
 
     def test_reversed_dates_raises(self):
         from unittest.mock import patch
@@ -723,18 +795,13 @@ class TestGetBoardHistoryEdgeCases:
 
 
 class TestThsAssetsShipping:
-    """Packaging regression — vendored ths.js must ship + load."""
-
     def test_ths_assets_shipped(self):
         from importlib.resources import files
 
         import stock_data.data_provider.fetchers.ths_assets as assets
 
         js = files(assets).joinpath("ths.js")
-        assert js.is_file(), (
-            "ths.js missing from stock_data package — check "
-            "pyproject.toml [tool.hatch.build.targets.wheel.force-include]"
-        )
+        assert js.is_file()
 
     def test_ths_js_has_entry_signature(self):
         from importlib.resources import files
@@ -748,18 +815,11 @@ class TestThsAssetsShipping:
 
 
 class TestIsAvailable:
-    """F1 — ThsFetcher.is_available() reflects py_mini_racer + ths.js shipping."""
-
     def test_available_when_both_present(self):
-        # Real env in CI has both. On dev machines this can be True or
-        # False depending on whether py_mini_racer is installed; we
-        # exercise both paths via a sample, not as a hard pass/fail.
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         result = ThsFetcher().is_available()
         assert isinstance(result, bool)
-        # When True, reason MUST be None; when False, reason must be a
-        # non-empty string pointing the operator at the fix.
         if result:
             assert ThsFetcher().unavailable_reason() is None
         else:
@@ -770,9 +830,6 @@ class TestIsAvailable:
     def test_missing_py_mini_racer_returns_false(self, monkeypatch):
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
-        # Capture the REAL find_spec BEFORE monkeypatching so we can call
-        # it for non-py_mini_racer names without recursing back into the
-        # mocked function (which would infinite-loop).
         real_find_spec = ths_mod.util.find_spec
         monkeypatch.setattr(
             ths_mod.util,
@@ -785,41 +842,23 @@ class TestIsAvailable:
         assert "py_mini_racer" in reason
 
     def test_missing_ths_js_returns_false_with_vendor_reason(self, monkeypatch):
-        """When ths.js is genuinely missing or unresolvable,
-        ``is_available()`` returns False and ``unavailable_reason()``
-        points the operator at the vendor script / pip install.
-
-        We mock ``resources.files`` to raise; the fetcher's broad
-        try/except for the package data lookup falls through cleanly.
-        """
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
-        # Mock ths_assets module to look empty
         class _Spec:
             pass
 
         monkeypatch.setattr(ths_mod.util, "find_spec", lambda name: _Spec())
 
-        # is_available() fallback path: when resources.files() raises
-        # for any reason, return False.
         def _raise_files(_pkg):
             raise FileNotFoundError("simulated ths_assets missing")
 
         monkeypatch.setattr(ths_mod.resources, "files", _raise_files)
-        # is_available() catches Exception broadly in the fallback.
-        # Result MUST be False; reason MUST point at vendor_ths_js.
         assert ThsFetcher().is_available() is False
         reason = ThsFetcher().unavailable_reason()
         assert reason is not None
         assert "vendor_ths_js" in reason or "ths.js" in reason
 
     def test_missing_bs4_returns_false(self, monkeypatch):
-        """bs4 (BeautifulSoup) is required for concept clid resolution; if
-        missing, the lazy import at ths_fetcher.py:291 raises ImportError
-        that the broad except silently swallows — surfacing as the
-        misleading 'all year-fetches returned empty' 503. is_available()
-        must catch this dep gap at registration time.
-        """
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         real_find_spec = ths_mod.util.find_spec
@@ -836,11 +875,6 @@ class TestIsAvailable:
         assert "bs4" in reason
 
     def test_missing_demjson3_returns_false(self, monkeypatch):
-        """demjson3 is required for the lenient-JSON fallback in
-        _parse_ths_kline_body; missing it surfaces as silent parse failure
-        → 'all year-fetches returned empty' 503. is_available() catches
-        the dep gap.
-        """
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         real_find_spec = ths_mod.util.find_spec
@@ -861,12 +895,6 @@ class TestFetchThsBoardYearStatusCode:
     """Fix #9 — non-2xx upstream returns "" so the all-empty gate fires."""
 
     def test_non_2xx_returns_empty_string(self, monkeypatch):
-        """A 403/5xx response body (HTML error page) must NOT be passed to
-        the JSON parser — that would silently return [] with no error
-        signal. The fix returns "" so the all-empty gate in
-        get_board_history raises DataFetchError → 503 with a clear
-        'check v-token / upstream reachability' message.
-        """
         from unittest.mock import MagicMock, patch
 
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
@@ -884,7 +912,7 @@ class TestFetchThsBoardYearStatusCode:
             patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
             patch.object(ThsFetcher, "_v_token", return_value="x"),
         ):
-            assert f._fetch_ths_board_year("T000267467", 2024) == ""
+            assert f._fetch_ths_board_year("886042", 2024, 1) == ""
 
     def test_2xx_returns_body(self, monkeypatch):
         from unittest.mock import MagicMock, patch
@@ -896,11 +924,11 @@ class TestFetchThsBoardYearStatusCode:
         def fake_get(url, headers=None, timeout=None, **kw):
             r = MagicMock()
             r.status_code = 200
-            r.text = 'var v_x={"data":"2024-01-01,1,2,3,4,5,6,7,8,9,10;"};'
+            r.text = 'var v_x={"data":"20240101,1,2,3,4,5,6,7,8,9,10;"};'
             return r
 
         with (
             patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
             patch.object(ThsFetcher, "_v_token", return_value="x"),
         ):
-            assert f._fetch_ths_board_year("T000267467", 2024).startswith("var v_x=")
+            assert f._fetch_ths_board_year("886042", 2024, 1).startswith("var v_x=")

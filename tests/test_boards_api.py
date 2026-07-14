@@ -783,11 +783,10 @@ def test_get_board_history_rejects_unknown_source(client):
     assert r.status_code == 400
 
 
-def test_get_board_history_ths_rejects_weekly_frequency(client):
-    """THS board history is daily-only; weekly raises upstream DataFetchError."""
-    # Patch to avoid real network call. Return empty list (route still
-    # 200s on empty data, so we rely on the manager being called with
-    # frequency='w' and asserting the route didn't 422-validate).
+def test_get_board_history_ths_supports_weekly_frequency(client):
+    """Post-2026-07-14: THS supports weekly (upstream segment 02 verified).
+    The route accepts frequency='w' for source='ths' and dispatches to
+    ThsFetcher, which now serves weekly K-line via the same year-loop."""
     with patch(
         "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
         return_value=([], "ThsFetcher"),
@@ -798,6 +797,17 @@ def test_get_board_history_ths_rejects_weekly_frequency(client):
         )
     # 200 (route validation passed); upstream is patched so no 503.
     assert r.status_code == 200
+
+    with patch(
+        "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+        return_value=([], "ThsFetcher"),
+    ) as spy:
+        client.get(
+            "/api/v1/boards/881270/history",
+            params={"source": "ths", "frequency": "w", "board_type": "industry"},
+        )
+    # The manager must receive frequency='w' (no normalization to d).
+    assert spy.call_args.kwargs.get("frequency") == "w"
 
 
 def test_get_board_history_ths_returns_kline(client):
