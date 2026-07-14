@@ -194,11 +194,17 @@ class ClsFetcher(BaseFetcher):
         """Parse a detail-page __NEXT_DATA__ → ClsArticle-shaped dict.
 
         Path: __NEXT_DATA__.props.pageProps.articleDetail
-        Fields: id, title, brief, content (HTML), ctime, readingNum, author.name,
-                commentNum, images[], subject[].
+        Returns dict with: article_id, title, brief, author, ctime, date,
+        read_num, comments_num, share_num, images, body_text.
+
+        `article_id` is the ID the caller used to fetch the URL; we assert
+        it matches the detail page's `id` field to defend against upstream
+        drift (e.g. if /detail/{id}/ serves a different article than
+        /subject/{subject_id}/'s articles[] claims).
 
         Returns None if the articleDetail is missing (CLS returns an empty
-        object for invalid IDs).
+        object for invalid IDs). Raises DataFetchError on a mismatched
+        article_id (defensive — should never happen in practice).
         """
         next_data = ClsFetcher._parse_next_data(html)
         detail = (
@@ -209,6 +215,15 @@ class ClsFetcher(BaseFetcher):
         # CLS returns an empty dict (or just an error code) for invalid article IDs
         if not detail or not detail.get("id"):
             return None
+        # Defensive: assert the served article matches the requested id.
+        # If the list page's article_id and the detail page's id diverge,
+        # we'd silently serve the wrong article — fail loud instead.
+        served_id = int(detail["id"])
+        if served_id != article_id:
+            raise DataFetchError(
+                f"[ClsFetcher] article_id mismatch: requested={article_id} "
+                f"served={served_id} — list↔detail drift, investigate"
+            )
         ctime = safe_int(detail.get("ctime"), default=0)
         date = (
             datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d")

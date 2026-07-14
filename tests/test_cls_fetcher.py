@@ -217,3 +217,15 @@ def test_fetch_article_detail_empty_dict(fetcher):
     """__NEXT_DATA__ with empty articleDetail → None."""
     html = '<html><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"articleDetail":{}}}}</script></html>'
     assert fetcher._fetch_article_detail(99999, html) is None
+
+
+def test_fetch_article_detail_id_mismatch_raises(fetcher, detail_html):
+    """Caller passes a different article_id than the served detail → DataFetchError.
+
+    Defensive check against upstream drift: if /detail/{A}/ starts
+    serving article B, fail loud instead of silently serving the wrong
+    article.
+    """
+    with pytest.raises(DataFetchError, match="article_id mismatch"):
+        # detail fixture is article 2425210; pass a different id
+        fetcher._fetch_article_detail(99999, detail_html)
