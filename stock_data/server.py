@@ -21,12 +21,31 @@ import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from . import __version__
 from .api.routes import health_router, news_router, router
 from .api.routes.cls import cls_router
+
+
+class _UTF8JSONResponse(JSONResponse):
+    """JSON response that advertises ``charset=utf-8`` explicitly.
+
+    Starlette's default ``JSONResponse`` ships ``Content-Type: application/json``
+    with no charset. RFC 8259 says JSON *is* UTF-8, but HTTP/1.1 §3.7.1 still
+    tells well-behaved clients to default ``text/*`` (and many treat
+    ``application/json`` the same) to ISO-8859-1 when the charset is missing.
+    Browsers and curl running on Windows then mis-decode Chinese payloads
+    (财联社早报 title, news flash text, ...) as the classic
+    UTF-8→Latin-1 mojibake ("ãç¦ç¹..."). Announcing the charset fixes the
+    client side without touching the actual response bytes (they were already
+    correct UTF-8 — the fetcher never had a bug).
+    """
+
+    media_type = "application/json; charset=utf-8"
 
 # Load environment variables
 load_dotenv()
@@ -177,7 +196,25 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
+    # Announce charset=utf-8 on every JSON response (see _UTF8JSONResponse
+    # docstring for the mojibake rationale). Affects API + /control/* +
+    # /explorer/* JSON responses; legacy `application/json` (no charset)
+    # behavior is still produced for explicit `JSONResponse(...)` usages
+    # inside the app.
+    default_response_class=_UTF8JSONResponse,
 )
+
+
+# FastAPI's built-in RequestValidationError handler returns its own
+# ``application/json`` (no charset) and bypasses `default_response_class`,
+# which leaks the mojibake-prone Content-Type on every 422. Override it with
+# the same UTF-8 class so the charset contract is universal. The body shape
+# ({"detail": [...]}) matches FastAPI's default exactly — clients that
+# already parse 422 bodies continue to work.
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    return _UTF8JSONResponse(status_code=422, content={"detail": exc.errors()})
+
 
 # CORS — restrict to localhost only (unchanged)
 app.add_middleware(
