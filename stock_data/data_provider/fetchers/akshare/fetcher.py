@@ -6,6 +6,7 @@ Support for both A-shares and Hong Kong stocks.
 
 import logging
 import os
+from typing import Any
 
 import pandas as pd
 
@@ -726,7 +727,24 @@ class AkshareFetcher(BaseFetcher):
             return None
 
     def _normalize_zt_pool(self, df: pd.DataFrame, pool_type: str) -> list[dict]:
-        """Normalize Akshare ZT pool DataFrame to standard format."""
+        """Normalize Akshare ZT pool DataFrame to standard format.
+
+        Field mapping (per upstream column docs at docs/akshare/stock/):
+          ZT pool — code, name, 最新价, 涨跌幅, 成交额, 换手率, 连板数,
+                    首次封板时间, 最后封板时间, 炸板次数, 涨停统计, 封板资金,
+                    流通市值, 总市值
+          DT pool — code, name, 最新价, 涨跌幅, 成交额, 换手率, 连续跌停,
+                    最后封板时间, 开板次数, 封单资金, 流通市值, 总市值
+                    (DT pool has no 首次封板时间 / 涨停统计 / 封板资金)
+          ZBGC pool — code, name, 最新价, 涨跌幅, 成交额, 换手率, 涨速,
+                    首次封板时间, 炸板次数, 涨停统计, 振幅, 流通市值, 总市值
+                    (ZBGC pool has no 最后封板时间 / 封板资金 / 封单资金)
+
+        Note: 首次封板时间 / 最后封板时间 are 6-digit integers in upstream
+        (e.g. 141354, 150000), NOT the "HH:MM:SS" string format the akshare
+        docs claim. We normalize them to HH:MM:SS via
+        :meth:`_akshare_seal_time_to_hms`.
+        """
         result = []
         for _, row in df.iterrows():
             code = str(row.get("代码", "")).strip()
@@ -740,24 +758,95 @@ class AkshareFetcher(BaseFetcher):
                 "change_pct": row.get("涨跌幅") if "涨跌幅" in row.index else None,
                 "amount": row.get("成交额") if "成交额" in row.index else None,
                 "turnover_rate": row.get("换手率") if "换手率" in row.index else None,
-                "lb_count": row.get("连板数") if "连板数" in row.index else None,
-                "first_seal_time": row.get("首次封板时间") if "首次封板时间" in row.index else None,
-                "last_seal_time": row.get("最后封板时间") if "最后封板时间" in row.index else None,
-                "seal_count": row.get("炸板次数") if "炸板次数" in row.index else None,
+                "first_seal_time": self._akshare_seal_time_to_hms(
+                    row.get("首次封板时间") if "首次封板时间" in row.index else None
+                ),
+                "last_seal_time": self._akshare_seal_time_to_hms(
+                    row.get("最后封板时间") if "最后封板时间" in row.index else None
+                ),
                 "zt_count": row.get("涨停统计") if "涨停统计" in row.index else None,
+                "circ_mv": row.get("流通市值") if "流通市值" in row.index else None,
+                "total_mv": row.get("总市值") if "总市值" in row.index else None,
             }
 
-            # dt_pool has different fields (连续跌停次数, no 炸板次数, no 涨停统计)
             if pool_type == "dt":
-                stock["lb_count"] = row.get("连续跌停次数") if "连续跌停次数" in row.index else None
-                stock["seal_amount"] = None
+                # DT pool: 连续跌停 (not 连续跌停次数), 开板次数 (not 炸板次数),
+                # no 涨停统计, no 首次封板时间, 封单资金 (not 封板资金)
+                stock["lb_count"] = (
+                    row.get("连续跌停") if "连续跌停" in row.index else None
+                )
+                stock["seal_count"] = (
+                    row.get("开板次数") if "开板次数" in row.index else None
+                )
+                stock["seal_amount"] = (
+                    row.get("封单资金") if "封单资金" in row.index else None
+                )
             else:
-                stock["seal_amount"] = None
-
-            # circ_mv and total_mv are not in akshare ZT pool data
-            stock["circ_mv"] = None
-            stock["total_mv"] = None
+                # ZT and ZBGC pools use 炸板次数 + 连板数 (ZT only).
+                # ZBGC has 炸板次数 but no 连板数.
+                stock["seal_count"] = (
+                    row.get("炸板次数") if "炸板次数" in row.index else None
+                )
+                if pool_type == "zt":
+                    stock["lb_count"] = (
+                        row.get("连板数") if "连板数" in row.index else None
+                    )
+                    stock["seal_amount"] = (
+                        row.get("封板资金") if "封板资金" in row.index else None
+                    )
+                else:
+                    # zbgc: no 连板数 / 封板资金 columns upstream
+                    stock["lb_count"] = None
+                    stock["seal_amount"] = None
 
             result.append(stock)
 
         return result
+
+    @staticmethod
+    def _akshare_seal_time_to_hms(raw: Any) -> str | None:
+        """Normalize Akshare's seal time field to ``HH:MM:SS`` string format.
+
+        The akshare docs (docs/akshare/stock/stock_zt_pool_*.md) describe
+        ``首次封板时间`` / ``最后封板时间`` as ``object`` type with format
+        ``09:25:00``, but the actual data is a 6-digit integer (e.g.
+        ``141354`` for 14:13:54, ``150000`` for 15:00:00). The schema
+        contract (``ZTPoolStock.first_seal_time`` /
+        ``last_seal_time``) requires ``HH:MM:SS`` strings, so we coerce
+        here.
+
+        Accepts:
+          - int/float (e.g. ``141354``) → ``"14:13:54"``
+          - str of digits (e.g. ``"141354"``) → ``"14:13:54"``
+          - str already in ``HH:MM:SS`` (e.g. ``"09:25:00"``) → unchanged
+          - None / NaN / empty → ``None``
+        """
+        if raw is None:
+            return None
+        try:
+            # pandas NaN check (without importing numpy at module level)
+            if isinstance(raw, float) and raw != raw:  # NaN != NaN
+                return None
+        except Exception:
+            pass
+
+        # Numeric case (the common path: int 141354)
+        try:
+            n = int(raw)
+            s = str(n).zfill(6)
+            if len(s) == 6 and s.isdigit():
+                return f"{s[:2]}:{s[2:4]}:{s[4:6]}"
+        except (TypeError, ValueError):
+            pass
+
+        # String case
+        s = str(raw).strip()
+        if not s or s.lower() in ("nan", "none", "-", "--"):
+            return None
+        # Already HH:MM:SS or HH:MM — return as-is (defensive)
+        if len(s) >= 5 and s[2] == ":":
+            if len(s) == 8 and s[5] == ":":  # HH:MM:SS
+                return s
+            if len(s) == 5:  # HH:MM
+                return s + ":00"
+        return None
