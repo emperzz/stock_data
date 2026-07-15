@@ -62,6 +62,7 @@ class TestZTPoolAPIRoutes:
                      "seal_amount": 98243407, "seal_count": 0, "zt_count": "1/1", "pool_date": "2024-05-10"},
                 ],
                 "akshare",
+                None,
             )
             mock_manager.return_value = mock_mgr
 
@@ -88,6 +89,7 @@ class TestZTPoolAPIRoutes:
                      "lb_count": 1, "pool_date": "2024-05-10"},
                 ],
                 "persistence",
+                None,
             )
             mock_manager.return_value = mock_mgr
 
@@ -109,6 +111,7 @@ class TestZTPoolAPIRoutes:
                      "seal_count": 2, "lb_count": 1, "pool_date": "2024-05-10"},
                 ],
                 "akshare",
+                None,
             )
             mock_manager.return_value = mock_mgr
 
@@ -143,6 +146,7 @@ class TestZTPoolAPIRoutes:
             mock_mgr.get_zt_pool.return_value = (
                 [{"code": "000001", "name": "测试股票", "price": 10.0, "change_pct": 5.0}],
                 "akshare",
+                None,
             )
             mock_manager.return_value = mock_mgr
 
@@ -159,7 +163,7 @@ class TestZTPoolAPIRoutes:
         """Test GET /api/v1/zt-pools when no data returns 404."""
         with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
             mock_mgr = MagicMock()
-            mock_mgr.get_zt_pool.return_value = ([], "")
+            mock_mgr.get_zt_pool.return_value = ([], "", None)
             mock_manager.return_value = mock_mgr
 
             response = client.get("/api/v1/zt-pools?type=zt&date=2024-05-10")
@@ -169,7 +173,7 @@ class TestZTPoolAPIRoutes:
         """Test GET /api/v1/zt-pools passes date to manager correctly."""
         with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
             mock_mgr = MagicMock()
-            mock_mgr.get_zt_pool.return_value = ([], "")
+            mock_mgr.get_zt_pool.return_value = ([], "", None)
             mock_manager.return_value = mock_mgr
 
             client.get("/api/v1/zt-pools?type=zt&date=2024-06-15")
@@ -205,6 +209,7 @@ class TestZTPoolAPIRoutes:
             mock_mgr.get_zt_pool.return_value = (
                 [{"code": "000099", "name": "最近交易日股", "price": 1.0}],
                 "akshare",
+                None,
             )
             mock_manager.return_value = mock_mgr
 
@@ -388,18 +393,24 @@ class TestZTFetcherManager:
         stocks = mgr.get_zt_pool("zt", "2024-05-10", refresh=False)
         assert len(stocks) >= 1
 
-    def test_manager_get_zt_pool_skips_persistence_on_volatile_date(self):
-        """Persistence is bypassed on a volatile date (today AND is_trade_date(today)).
+    def test_manager_get_zt_pool_skips_write_on_volatile_date(self):
+        """Volatile date: reads from cache, fetches upstream on miss, skips the write.
 
-        Post-c40d108 contract: the persistence layer is the single source of truth
-        for the volatile/historical split (see pool_daily.is_volatile_date). When
-        ``is_volatile_date(date)`` is True, the manager performs a pure upstream
-        pass-through — no read, no write — to avoid freezing an in-progress
-        trading day. The pre-c40d108 ``is_current_day`` kwarg is now ignored.
+        Post-2026-07-15 contract: ``is_volatile_date(date)`` is the single source
+        of truth for the volatile/historical split. On a volatile date the
+        persistence layer:
+          1. Always tries the cache read first (a previous ``refresh=true`` may
+             have left volatile data, which is still meaningful with a warning).
+          2. Calls upstream on miss.
+          3. Skips the write-back UNLESS the caller passed ``refresh=true``.
 
-        To exercise the volatile branch, we seed today into the trade_calendar
-        via ``update_cached_calendar`` (a pure upsert, safe to call from tests
-        without clobbering unrelated state) and clean up our own row in finally.
+        This test exercises the "read miss + upstream fetch + skip write" path:
+        the cache is empty for today, the upstream returns data, and the cache
+        MUST remain empty. The 3-tuple return carries a non-None warning.
+
+        Setup: seed today into the trade calendar so ``is_volatile_date(today)``
+        is True regardless of whether the system clock is in trading hours.
+        Clean up the seeded row in finally.
         """
         from datetime import date as date_cls
 
@@ -445,10 +456,15 @@ class TestZTFetcherManager:
 
             # is_current_day kwarg is intentionally omitted: it's been ignored
             # since c40d108. Volatility is now derived from the date + calendar.
-            stocks, origin = real_mgr.get_zt_pool("zt", today_str, refresh=False)
+            stocks, origin, warning = real_mgr.get_zt_pool(
+                "zt", today_str, refresh=False,
+            )
             assert len(stocks) == 1
             assert stocks[0]["code"] == "FAKE001"
             assert origin == "FakeFetcher"
+            # Today is volatile → warning is emitted
+            assert warning is not None
+            assert "16:00" in warning
 
             # Persistence MUST NOT have been written for today's date
             persisted = get_pool_cached("zt", today_str)
@@ -474,3 +490,319 @@ class TestZTFetcherManager:
         # validate the pool type via the persistence layer helper.
         with pytest.raises(ValueError, match="Unknown pool_type"):
             mgr.get_zt_pool("invalid", "2099-01-01", refresh=False)
+
+
+class TestVolatileDatePolicy:
+    """Tests for the time-of-day cutoff in is_volatile_date and the
+    volatile-write-skip / refresh-bypass behavior in get_pool.
+    """
+
+    def _fake_clock(self, monkeypatch, fake_now):
+        """Patch pool_daily.date / pool_daily.datetime with thin wrappers.
+
+        We can't monkeypatch built-in ``datetime.date.today`` because the
+        C-implemented class is immutable. Instead, swap the module-level
+        ``date`` and ``datetime`` names for FakeClass wrappers that
+        delegate to real instances — that way the function under test
+        (which uses the module-level names) sees the fakes.
+        """
+        from datetime import date as real_date_cls, datetime as real_datetime_cls
+        from stock_data.data_provider.persistence import pool_daily
+
+        fake_today = real_date_cls(fake_now.year, fake_now.month, fake_now.day)
+
+        class _FakeDate:
+            @classmethod
+            def today(cls):
+                return fake_today
+
+        class _FakeDatetime:
+            @classmethod
+            def now(cls):
+                return fake_now
+
+        monkeypatch.setattr(pool_daily, "date", _FakeDate)
+        monkeypatch.setattr(pool_daily, "datetime", _FakeDatetime)
+
+    def test_is_volatile_date_before_16(self, monkeypatch):
+        """At 15:59 on a trade day, today is still volatile."""
+        from datetime import datetime
+
+        from stock_data.data_provider.persistence import pool_daily
+        from stock_data.data_provider.persistence import trade_calendar
+
+        fake_now = datetime(2026, 7, 15, 15, 59, 0)
+        self._fake_clock(monkeypatch, fake_now)
+        monkeypatch.setattr(trade_calendar, "is_trade_date", lambda d: True)
+
+        assert pool_daily.is_volatile_date("2026-07-15") is True
+
+    def test_is_volatile_date_after_16(self, monkeypatch):
+        """At 16:01 on a trade day, today is NO LONGER volatile."""
+        from datetime import datetime
+
+        from stock_data.data_provider.persistence import pool_daily
+        from stock_data.data_provider.persistence import trade_calendar
+
+        fake_now = datetime(2026, 7, 15, 16, 1, 0)
+        self._fake_clock(monkeypatch, fake_now)
+        monkeypatch.setattr(trade_calendar, "is_trade_date", lambda d: True)
+
+        # 16:01 → past the 16:00 cutoff → not volatile
+        assert pool_daily.is_volatile_date("2026-07-15") is False
+
+    def test_is_volatile_date_historical(self, monkeypatch):
+        """A non-today date is never volatile regardless of the clock."""
+        from datetime import datetime
+
+        from stock_data.data_provider.persistence import pool_daily
+
+        fake_now = datetime(2026, 7, 15, 14, 30, 0)
+        self._fake_clock(monkeypatch, fake_now)
+
+        # Historical date is never volatile
+        assert pool_daily.is_volatile_date("2024-05-10") is False
+
+    def test_is_volatile_date_today_not_trade_day(self, monkeypatch):
+        """Today is not a trade day → not volatile (calendar short-circuits)."""
+        from datetime import datetime
+
+        from stock_data.data_provider.persistence import pool_daily
+        from stock_data.data_provider.persistence import trade_calendar
+
+        fake_now = datetime(2026, 7, 15, 14, 30, 0)
+        self._fake_clock(monkeypatch, fake_now)
+        monkeypatch.setattr(trade_calendar, "is_trade_date", lambda d: False)
+
+        assert pool_daily.is_volatile_date("2026-07-15") is False
+
+
+class TestRefreshBypassOnVolatile:
+    """refresh=True forces the write-back even on a volatile date."""
+
+    def _fake_clock(self, monkeypatch, fake_now):
+        from datetime import date as real_date_cls, datetime as real_datetime_cls
+        from stock_data.data_provider.persistence import pool_daily
+
+        fake_today = real_date_cls(fake_now.year, fake_now.month, fake_now.day)
+
+        class _FakeDate:
+            @classmethod
+            def today(cls):
+                return fake_today
+
+        class _FakeDatetime:
+            @classmethod
+            def now(cls):
+                return fake_now
+
+        monkeypatch.setattr(pool_daily, "date", _FakeDate)
+        monkeypatch.setattr(pool_daily, "datetime", _FakeDatetime)
+
+    def test_refresh_true_writes_volatile_date(self, monkeypatch):
+        """Today (volatile) + refresh=True: persistence layer fetches AND writes."""
+        from datetime import datetime
+
+        from stock_data.data_provider import DataFetcherManager
+        from stock_data.data_provider.persistence import pool_daily
+        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence.db import get_connection
+        from stock_data.data_provider.persistence.pool_daily import (
+            get_pool_cached,
+            init_schema,
+        )
+        from stock_data.data_provider.persistence.trade_calendar import (
+            init_schema as init_calendar_schema,
+        )
+        from stock_data.data_provider.persistence.trade_calendar import (
+            update_cached_calendar,
+        )
+
+        # Force "now" to 14:30 on a trade day so is_volatile_date(today) is True.
+        fake_now = datetime(2026, 7, 15, 14, 30, 0)
+        self._fake_clock(monkeypatch, fake_now)
+        monkeypatch.setattr(trade_calendar, "is_trade_date", lambda d: True)
+
+        init_schema()
+        init_calendar_schema()
+        today_str = fake_now.strftime("%Y-%m-%d")
+
+        # Seed trade_calendar for completeness (some checks go through it).
+        update_cached_calendar([today_str])
+
+        conn = get_connection()
+        # Wipe any prior rows for today so we can assert exactly what gets written.
+        conn.execute(
+            "DELETE FROM pool_daily WHERE pool_type = 'zt' AND pool_date = ?",
+            (today_str,),
+        )
+        conn.commit()
+
+        try:
+            class FakeFetcher:
+                name = "FakeFetcher"
+                def get_zt_pool(self, pool_type, date):
+                    return [{"code": "REFR001", "name": "Refreshed", "price": 9.9}]
+
+            real_mgr = DataFetcherManager()
+            real_mgr._filter_by_capability = MagicMock(return_value=[FakeFetcher()])
+
+            stocks, origin, warning = real_mgr.get_zt_pool(
+                "zt", today_str, refresh=True,
+            )
+            assert stocks[0]["code"] == "REFR001"
+            assert origin == "FakeFetcher"
+            # Volatile → warning is non-None
+            assert warning is not None
+
+            # refresh=True forces the write even on a volatile date
+            persisted = get_pool_cached("zt", today_str)
+            assert len(persisted) == 1
+            assert persisted[0]["code"] == "REFR001"
+        finally:
+            conn = get_connection()
+            conn.execute(
+                "DELETE FROM pool_daily WHERE pool_type = 'zt' AND pool_date = ?",
+                (today_str,),
+            )
+            conn.execute(
+                "DELETE FROM trade_calendar WHERE trade_date = ?",
+                (today_str,),
+            )
+            conn.commit()
+
+
+class TestWarningEmission:
+    """The warning is emitted on every return path that yields data on a volatile date."""
+
+    def _fake_clock(self, monkeypatch, fake_now):
+        from datetime import date as real_date_cls, datetime as real_datetime_cls
+        from stock_data.data_provider.persistence import pool_daily
+
+        fake_today = real_date_cls(fake_now.year, fake_now.month, fake_now.day)
+
+        class _FakeDate:
+            @classmethod
+            def today(cls):
+                return fake_today
+
+        class _FakeDatetime:
+            @classmethod
+            def now(cls):
+                return fake_now
+
+        monkeypatch.setattr(pool_daily, "date", _FakeDate)
+        monkeypatch.setattr(pool_daily, "datetime", _FakeDatetime)
+
+    def test_warning_on_volatile_fresh_fetch(self, monkeypatch):
+        """Volatile date + cache miss + upstream fetch: warning present."""
+        from datetime import datetime
+
+        from stock_data.data_provider.persistence import pool_daily
+        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence.pool_daily import init_schema
+
+        fake_now = datetime(2026, 7, 15, 14, 30, 0)
+        self._fake_clock(monkeypatch, fake_now)
+        monkeypatch.setattr(trade_calendar, "is_trade_date", lambda d: True)
+
+        init_schema()
+
+        class FakeManager:
+            def get_zt_pool_raw(self, pool_type, date):
+                return ([{"code": "F001", "name": "x"}], "FakeFetcher")
+
+        stocks, origin, warning = pool_daily.get_pool(
+            "zt", "2026-07-15", manager=FakeManager(), refresh=False,
+        )
+        assert len(stocks) == 1
+        assert origin == "FakeFetcher"
+        assert warning is not None
+        assert "16:00" in warning
+
+    def test_warning_on_volatile_cache_hit(self, monkeypatch):
+        """Volatile date + cache HIT: warning still present.
+
+        The warning is purely a function of "this date is volatile";
+        it is NOT conditional on whether we just fetched. A previous
+        ``refresh=true`` may have left volatile data in the cache —
+        the user must still see the warning.
+        """
+        from datetime import datetime
+
+        from stock_data.data_provider.persistence import pool_daily
+        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence.pool_daily import (
+            init_schema,
+            save_pool,
+        )
+
+        fake_now = datetime(2026, 7, 15, 14, 30, 0)
+        today_str = fake_now.strftime("%Y-%m-%d")
+        self._fake_clock(monkeypatch, fake_now)
+        monkeypatch.setattr(trade_calendar, "is_trade_date", lambda d: True)
+
+        init_schema()
+
+        # Pre-seed the cache with volatile data (simulating a prior refresh=true)
+        save_pool("zt", today_str, [{"code": "VOL001", "name": "VolatileCache", "price": 1.0}])
+
+        # Manager whose get_zt_pool_raw MUST NOT be called (cache hit short-circuits)
+        class _ShouldNotBeCalledManager:
+            def get_zt_pool_raw(self, pool_type, date):
+                raise AssertionError("cache hit must not call upstream")
+
+        stocks, origin, warning = pool_daily.get_pool(
+            "zt", today_str, manager=_ShouldNotBeCalledManager(), refresh=False,
+        )
+        assert len(stocks) == 1
+        assert stocks[0]["code"] == "VOL001"
+        assert origin == "persistence"
+        # The data came from cache, but the date is volatile → warning is present
+        assert warning is not None
+
+    def test_no_warning_on_historical_date(self, monkeypatch):
+        """Historical date: no warning, even on fresh fetch."""
+        from datetime import datetime
+
+        from stock_data.data_provider.persistence import pool_daily
+        from stock_data.data_provider.persistence.pool_daily import init_schema
+
+        # Force the clock to a recent date so 2024-05-10 is clearly historical
+        fake_now = datetime(2026, 7, 15, 14, 30, 0)
+        self._fake_clock(monkeypatch, fake_now)
+
+        init_schema()
+
+        class FakeManager:
+            def get_zt_pool_raw(self, pool_type, date):
+                return ([{"code": "H001", "name": "Historical"}], "FakeFetcher")
+
+        stocks, origin, warning = pool_daily.get_pool(
+            "zt", "2024-05-10", manager=FakeManager(), refresh=False,
+        )
+        assert warning is None
+
+    def test_no_warning_on_today_after_16(self, monkeypatch):
+        """Today at 16:30 (post-cutoff): is_volatile_date is False, no warning."""
+        from datetime import datetime
+
+        from stock_data.data_provider.persistence import pool_daily
+        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence.pool_daily import init_schema
+
+        fake_now = datetime(2026, 7, 15, 16, 30, 0)
+        self._fake_clock(monkeypatch, fake_now)
+        monkeypatch.setattr(trade_calendar, "is_trade_date", lambda d: True)
+
+        init_schema()
+
+        class FakeManager:
+            def get_zt_pool_raw(self, pool_type, date):
+                return ([{"code": "P001", "name": "PostClose"}], "FakeFetcher")
+
+        stocks, origin, warning = pool_daily.get_pool(
+            "zt", "2026-07-15", manager=FakeManager(), refresh=False,
+        )
+        assert warning is None
+

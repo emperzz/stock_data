@@ -755,15 +755,19 @@ class DataFetcherManager:
         pool_type: str,
         date: str | None = None,
         refresh: bool = False,
-    ) -> tuple[list[dict], str]:
+    ) -> tuple[list[dict], str, str | None]:
         """Get ZT (涨跌停) pool data with date-keyed persistence.
 
         Returns:
-            Tuple of ``(stocks, origin)`` forwarded straight from
-            ``persistence.pool_daily.get_pool``. ``origin`` is the
-            fetcher name (e.g. ``"akshare"``) when the data was
-            served from the upstream, or ``"persistence"`` when the
-            data was read from the SQLite cache.
+            Tuple of ``(stocks, origin, warning)`` forwarded straight
+            from ``persistence.pool_daily.get_pool``.
+            ``origin`` is the fetcher name (e.g. ``"akshare"``) when
+            the data was served from the upstream, or ``"persistence"``
+            when the data was read from the SQLite cache.
+            ``warning`` is non-None iff the requested date is volatile
+            (today + 交易日 + < 16:00); the persistence layer emits a
+            single warning text that applies to all return paths
+            (cache hit / fresh fetch / upstream-failure fallback).
         """
         from .persistence.pool_daily import (
             get_latest_cached_date,
@@ -781,13 +785,13 @@ class DataFetcherManager:
 
                 query_date = date_cls.today().strftime("%Y-%m-%d")
 
-        stocks, origin = get_pool(
+        stocks, origin, warning = get_pool(
             pool_type=pool_type,
             date=query_date,
             manager=self,
             refresh=refresh,
         )
-        return stocks, origin
+        return stocks, origin, warning
 
     # ---------- index methods ----------
 

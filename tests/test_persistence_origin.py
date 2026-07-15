@@ -28,7 +28,11 @@ def test_get_cached_calendar_returns_tuple():
 
 
 def test_get_pool_returns_tuple(monkeypatch):
-    """pool_daily.get_pool 应该返回 (stocks, origin)."""
+    """pool_daily.get_pool 应该返回 (stocks, origin, warning).
+
+    3-tuple: 历史日期 + refresh=True 走 fetcher 路径, warning 应为 None
+    (历史日期不属于 volatile)。
+    """
     from stock_data.data_provider.persistence.pool_daily import get_pool
 
     # Mock manager: 不实际调上游
@@ -36,12 +40,14 @@ def test_get_pool_returns_tuple(monkeypatch):
         def get_zt_pool_raw(self, pool_type, date):
             return ([{"code": "000001", "name": "测试"}], "mock_fetcher")
 
-    stocks, origin = get_pool(
+    stocks, origin, warning = get_pool(
         pool_type="zt", date="2026-01-01", manager=_MockManager(), refresh=True
     )
     # refresh=True 强制走 fetcher, origin 应该是 fetcher 路径
     assert origin != ""
     assert isinstance(stocks, list)
+    # 历史日期 → 无 warning
+    assert warning is None
 
 
 def test_get_board_list_returns_tuple(monkeypatch):

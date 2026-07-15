@@ -11,7 +11,7 @@ to compute ``is_current_day`` and pass it down.
 
 import logging
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from . import db
 from .db import get_connection, get_db_path
@@ -222,11 +222,19 @@ def get_pool_count(pool_type: str, date: str) -> int:
 # HTTP layer.
 
 def is_volatile_date(date_str: str) -> bool:
-    """True iff ``date_str`` is today AND today is a trade date.
+    """True iff ``date_str`` is today AND today is a trade date AND
+    the current time is before 16:00 (A 股收盘 15:00 + 1 小时缓冲).
 
     A "volatile" date is one whose pool data is still mutating (market
-    open, partial seal counts, etc.). Persisting it to SQLite would
-    freeze an incomplete snapshot, so we skip both reads and writes.
+    open, 14:57-15:00 集合竞价, etc.). ``get_pool`` skips the cache
+    *write* on volatile dates to avoid freezing an incomplete snapshot
+    into the SQLite cache. Reads are NOT skipped — a previous
+    ``refresh=true`` may have left volatile data in the cache, and
+    that data is still meaningful to return (with a warning).
+
+    The 16:00 cutoff means 收盘集合竞价 + 数据稳定窗口之后，
+    ``is_volatile_date(today)`` becomes False and today's pool is
+    considered stable enough to persist.
 
     Uses the cached A-share trade calendar to decide whether today is a
     trading day. If the calendar is empty (e.g. very fresh install with
@@ -237,7 +245,27 @@ def is_volatile_date(date_str: str) -> bool:
     from .trade_calendar import is_trade_date
 
     today = date.today().strftime("%Y-%m-%d")
-    return date_str == today and is_trade_date(today)
+    if date_str != today:
+        return False
+    if not is_trade_date(today):
+        return False
+    # 16:00 = A 股收盘 15:00 + 1 小时缓冲（盘后集合竞价 + 数据稳定）
+    return datetime.now().time() < time(16, 0)
+
+
+def _volatile_warning(date_str: str) -> str:
+    """Build the warning text emitted on volatile dates.
+
+    Volatile = today + 交易日 + < 16:00. The data on such a date is
+    still mutating (盘中封板/炸板). Any path that returns data for
+    a volatile date — fresh fetch, cache hit, or upstream-failure
+    fallback — must surface this warning so the caller knows the
+    snapshot is not final.
+    """
+    return (
+        f"数据涉及 {date_str}，处于交易时段，涨跌停股池可能仍在变化。"
+        f"建议在收盘（16:00 后）重新查询以获取稳定快照。"
+    )
 
 
 def get_pool(
@@ -246,7 +274,7 @@ def get_pool(
     manager,
     *,
     refresh: bool = False,
-) -> tuple[list[dict], str]:
+) -> tuple[list[dict], str, str | None]:
     """Fetch a ZT/DT/ZBGC pool with the volatile-date policy baked in.
 
     Args:
@@ -254,34 +282,37 @@ def get_pool(
         date: Pool date in YYYY-MM-DD
         manager: DataFetcherManager — used for the upstream call.
         refresh: Force upstream fetch even when SQLite has the data
-            (only meaningful for historical dates; for volatile dates
-            we always go upstream anyway).
+            (also forces a write-back even on volatile dates).
 
     Returns:
-        Tuple of ``(stocks, origin)`` where ``origin`` is:
-          - the fetcher name (e.g. ``"akshare"``) when the data was
-            served from the upstream,
-          - ``"persistence"`` when the data was read from the SQLite
-            cache (either the primary historical hit, the write-back
-            of a fresh fetch, or the fallback after upstream failure).
+        Tuple of ``(stocks, origin, warning)`` where:
+          - ``stocks``: list of stock dicts (empty when no data)
+          - ``origin``: the fetcher name (e.g. ``"akshare"``) when the
+            data was served from the upstream; ``"persistence"`` when
+            the data was read from the SQLite cache (cache hit, write-
+            back of a fresh fetch, or upstream-failure fallback).
+          - ``warning``: non-None iff ``date`` is a volatile date. The
+            same warning text applies to all return paths that produce
+            data on a volatile date (cache hit / fresh fetch / fallback).
 
     Raises:
         DataFetchError: When the upstream fails AND there is no
-            persisted fallback (i.e. the volatile-date path always
-            raises on upstream failure by design).
+            persisted fallback (the route layer surfaces this as 5xx).
+
+    Notes:
+        Volatile-date policy — the read path always tries the cache
+        first (a previous ``refresh=true`` may have left volatile data
+        in the cache, and that data is still meaningful to return with
+        a warning). Only the *write* is skipped on volatile dates,
+        unless ``refresh=True`` forces the write-back.
     """
     from ..base import DataFetchError
 
     _validate_pool_type(pool_type)
+    volatile = is_volatile_date(date)
+    warning = _volatile_warning(date) if volatile else None
 
-    if is_volatile_date(date):
-        # Volatile: pure upstream pass-through. Never read or write SQLite.
-        # On failure, raise — the route layer is responsible for
-        # surfacing a clear 5xx to the caller.
-        return manager.get_zt_pool_raw(pool_type, date)
-
-    # Historical: SQLite-first, upstream on miss, write-back on success.
-    # On upstream failure, fall back to whatever SQLite has.
+    # Cache-first read (applies to all dates, volatile or not).
     if not refresh:
         cached = get_pool_cached(pool_type, date)
         if cached:
@@ -289,8 +320,9 @@ def get_pool(
                 f"[PoolDaily] {pool_type} {date} hit in persistence "
                 f"({len(cached)} stocks)"
             )
-            return cached, "persistence"
+            return cached, "persistence", warning
 
+    # Upstream fetch — wraps the ZT_POOL-capability failover.
     try:
         stocks, fetcher_source = manager.get_zt_pool_raw(pool_type, date)
     except DataFetchError:
@@ -300,12 +332,13 @@ def get_pool(
                 f"[PoolDaily] Upstream failed for {pool_type} {date}, "
                 f"falling back to {len(cached)} persisted stocks"
             )
-            return cached, "persistence"
+            return cached, "persistence", warning
         raise
 
-    if stocks:
+    # Write-back: skip on volatile dates unless the caller forced refresh.
+    if stocks and (not volatile or refresh):
         save_pool(pool_type, date, stocks)
-    return stocks, fetcher_source
+    return stocks, fetcher_source, warning
 
 
 __all__ = [

@@ -664,6 +664,14 @@ class ZTPoolResponse(BaseModel):
         default="",
         description="数据来源 fetcher 名 或 'persistence' (历史日期的池数据从 SQLite 读取)",
     )
+    warning: str | None = Field(
+        default=None,
+        description=(
+            "非空表示数据涉及交易时段（今天 + 是交易日 + 当前时间早于 16:00），"
+            "涨跌停股池可能仍在变化，建议收盘（16:00 后）重新查询以获取稳定快照。"
+            "历史日期或收盘后的当日数据该字段为 null。"
+        ),
+    )
 
 
 class DragonTigerSeat(BaseModel):

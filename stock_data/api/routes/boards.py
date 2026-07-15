@@ -1073,7 +1073,7 @@ def get_pools(
             return hit
 
     manager = get_manager()
-    stocks, origin = manager.get_zt_pool(
+    stocks, origin, warning = manager.get_zt_pool(
         pool_type=type,
         date=query_date,
         refresh=refresh,
@@ -1113,6 +1113,7 @@ def get_pools(
         total=len(pool_stocks),
         stocks=pool_stocks,
         source=origin,
+        warning=warning,
     )
 
     if is_current_day:
