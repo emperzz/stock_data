@@ -1,19 +1,19 @@
 # Stock Data Server
 
-A local stock data aggregation server that integrates 12 upstream stock data APIs into a unified REST API for AI agents.
+A local stock data aggregation server that integrates 13 upstream stock data APIs into a unified REST API for AI agents.
 
 **Four layers in one server:**
 
 - **API Layer (FastAPI)** — declarative routes; metadata-driven via `@endpoint_meta`.
 - **Indicator compute layer (module functions)** — `MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC` (14 built-in). Sits on top of the manager; no fetcher involvement.
 - **DataFetcherManager** — capability-routed, priority-based failover + circuit breaker + TTLCache.
-- **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Zzshare · Tencent · EastMoney · THS · Cninfo · Myquant · Baidu` (12 fetchers).
+- **Source Adapters** — `Tushare · Baostock · Akshare · Yfinance · Zhitu · Zzshare · Tencent · EastMoney · THS · Cninfo · Cls · Myquant · Baidu` (13 fetchers).
 
 Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / ZT pools) is owned by `data_provider/persistence/` and seeded transparently by the manager. Board persistence supports all types (concept/industry/index/special), keyed by (board_type, source). An interactive API Explorer is served at `/explorer/`.
 
 ## Features
 
-- **Multi-source aggregation** (12 fetchers): Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Myquant, Baidu
+- **Multi-source aggregation** (13 fetchers): Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Cls, Myquant, Baidu
 - **Board data** (concept / industry / index / special): source-routed across `ths` (concept + industry, d-only K-line), `eastmoney` (concept + industry, d/w/m + minutes K-line), `zhitu` (all 4 types, no K-line); `zzshare` unified under `ths` since 2026-07-08.
 - **Automatic failover**: priority-based source selection with capability-routed fallback
 - **Circuit breaker**: prevents cascading failures from unavailable sources
@@ -22,7 +22,7 @@ Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / 
 - **Market support**: A-shares, Hong Kong stocks, US stocks and indices (CSI / HK / US)
 - **Enhanced quotes**: PE/PB/市值/换手率/振幅 via Tencent财经
 - **Signal layer**: 龙虎榜/融资融券/大宗交易/股东户数/分红/资金流/热点题材/北向资金
-- **News**: 关键词搜索 (EastMoney → Baidu 备份) / 7×24 快讯 (EastMoney → THS 备份) / 正文提取
+- **News**: 关键词搜索 (EastMoney → Baidu 备份) / 7×24 快讯 (EastMoney → THS 备份) / 个股新闻 (EastMoney) / **财联社早报 + 焦点复盘** (按日取全文本, CLS subject 1151/1135, 20-28 天窗口) / 正文提取
 - **Fundamentals**: 公司画像 (Zhitu → Myquant) / 研报检索+PDF下载 / 公告检索
 - **Technical indicators** (pure compute, 14 built-in): MA · MACD · BOLL · KDJ · RSI · WR · BIAS · CCI · ATR · OBV · ROC · DMI · SAR · KC — attach to K-line via `?indicators=ma,macd,kdj`
 - **API Explorer** (`/explorer/`): interactive docs, search, market/fetcher filters, Stage 2 fetcher drill-down
@@ -65,6 +65,12 @@ curl 'http://localhost:8888/api/v1/indicators/catalog'
 
 # Health check (root-mounted, k8s/lb convention)
 curl 'http://localhost:8888/healthz?details=true'
+
+# 财联社 早报 (today, Asia/Shanghai)
+curl 'http://localhost:8888/api/v1/news/morning-briefing?date=2026-07-14'
+
+# 财联社 焦点复盘
+curl 'http://localhost:8888/api/v1/news/market-recap?date=2026-07-14'
 ```
 
 ## API Endpoints
@@ -1093,6 +1099,72 @@ points at internal networks (`127.0.0.1`, `10.0.0.0/8`, etc.).
 
 ---
 
+### 财联社早报 / 焦点复盘 (CLS Morning Briefing / Market Recap)
+
+Two date-keyed full-text feeds scraped from 财联社 (CLS) via
+`__NEXT_DATA__` JSON extraction (subject 1151 = 早报, subject 1135 = 焦点复盘).
+Backed by `ClsFetcher` (P8) — not configurable with a `?source=` parameter
+(no other fetcher exposes this content).
+
+**Important — date window:** both endpoints accept dates within the past
+**28 days only**. CLS list page returns ~20-28 most recent articles; older
+dates return `404 No article published for this date`. The `date` param is
+required and validated against Asia/Shanghai server time (so a UTC server
+between 16:00–23:59 still accepts "today" for a BJT-located caller).
+
+```bash
+GET /api/v1/news/morning-briefing?date=2026-07-14
+GET /api/v1/news/market-recap?date=2026-07-14
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `date` | string | required | Article date `YYYY-MM-DD` (within last 28 days; not in the future). |
+
+**Response (200):**
+```json
+{
+  "subject": "morning_briefing",
+  "subject_id": 1151,
+  "date": "2026-07-14",
+  "article": {
+    "article_id": 1842356,
+    "title": "财联社7月14日早报",
+    "brief": "今日市场重点关注：...",
+    "author": "财联社编辑部",
+    "date": "2026-07-14",
+    "ctime": 1752441600,
+    "read_num": 25431,
+    "comments_num": 0,
+    "share_num": 87,
+    "images": ["https://..."],
+    "body_text": "【今日头条】\n...\n【行业动态】\n..."
+  },
+  "source": "cls"
+}
+```
+
+- `body_text` is BS4-extracted plain text with paragraph breaks preserved
+  (`get_text("\n", strip=True)` + 折叠连续 3+ 空行 → 2 个).
+- `source` is the fetcher slug (`"cls"`); capability-routed failover means a
+  future second provider (e.g. EastMoney) joining the chain will surface
+  its slug here.
+- Cached in-process for 3600s (`get_cls_feed_cache()`).
+
+**Errors:**
+- `400 Invalid date` — bad format / future date / older than 28 days.
+- `404 No article published for this date` — date within window but CLS
+  didn't publish that day.
+- `503 All fetchers failed` — upstream 4xx/5xx or network failure.
+
+Subject ids are imported from `stock_data.data_provider.fetchers.cls_fetcher`
+(`CLS_SUBJECT_MORNING_BRIEFING = 1151`, `CLS_SUBJECT_MARKET_RECAP = 1135`,
+probed 2026-07-14); if CLS rotates these the manifest will surface drift
+via the `subject_id mismatch` warning before the article body.
+
+---
+
 ## API Response Caching
 
 The `/quote` and `/kline` endpoints are cached using an in-memory TTLCache to avoid repeated upstream API calls when multiple users request the same data within a short window.
@@ -1309,6 +1381,7 @@ The server automatically routes requests to the appropriate data source based on
 | 7 | THS | 热点题材/北向资金/快讯 (backup) / 板块 K 线 (d-only, concept+industry) / 个股新闻 + 个股公告 P7 备份 |
 | 7 | Baidu | 新闻搜索 (backup for EastMoney), requires `BAIDU_API_KEY` |
 | 8 | Cninfo | 公告检索 |
+| 8 | **CLS** | **财联社 早报 (subject 1151) + 焦点复盘 (subject 1135)**；按日取全文本, 20-28 天窗口 (无上游分页) |
 | 9 | Myquant | Last-resort backup (d/w/m/minute/quote/index-d), requires `MYQUANT_TOKEN` |
 
 ### A-share Indices (CSI)
@@ -1410,6 +1483,7 @@ The server automatically routes requests to the appropriate data source based on
 | `BAIDU_API_KEY` | Baidu Qianfan API key (NEWS_SEARCH backup for EastMoney) | - |
 | `BAIDU_PRIORITY` | Override Baidu priority | 7 |
 | `CNINFO_PRIORITY` | Override Cninfo priority | 8 |
+| `CLS_PRIORITY` | Override CLS (财联社) priority | 8 |
 | `MYQUANT_TOKEN` | Myquant (掘金) API token | - |
 | `MYQUANT_PRIORITY` | Override Myquant priority (default is 9, last-resort) | 9 |
 | `BAIDU_NEWS_DOMAINS` | Comma-separated host whitelist for Baidu news search | canonical news subdomains |
