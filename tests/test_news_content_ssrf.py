@@ -65,6 +65,10 @@ class TestSSRFRejection:
             # Now call extract with html= so we don't actually fetch example.com
             result = NewsContentExtractor.extract(
                 "https://example.com/news/1",
-                html="<html><body><article><p>body content for testing.</p></article></body></html>",
+                html=(
+                    "<html><body><article><p>body content for testing with enough "
+                    "additional text to satisfy the generic extraction threshold.</p>"
+                    "</article></body></html>"
+                ),
             )
-            assert result.body == "body content for testing."
+            assert "body content for testing with enough" in result.body

@@ -3,6 +3,8 @@ Integration tests for /api/v1/news/search and /api/v1/news/content endpoints.
 """
 from unittest.mock import patch
 
+import pytest
+
 # ---------------------- /api/v1/news/search ----------------------
 
 class TestNewsSearchEndpoint:
@@ -69,6 +71,9 @@ class TestNewsContentEndpoint:
             source_domain="finance.eastmoney.com",
             extractor="eastmoney_v1",
             byte_size=28,
+            content_status="ok",
+            canonical_url="https://finance.eastmoney.com/a/1.html",
+            http_status=200,
         )
         with patch(
             "stock_data.data_provider.utils.news_extractor.NewsContentExtractor.extract",
@@ -78,6 +83,9 @@ class TestNewsContentEndpoint:
 
         assert resp.status_code == 200
         assert resp.json()["title"] == "Test Title"
+        assert resp.json()["content_status"] == "ok"
+        assert resp.json()["canonical_url"] == fake.canonical_url
+        assert resp.json()["http_status"] == 200
 
     def test_content_missing_url_returns_422(self, client):
         resp = client.get("/api/v1/news/content")
@@ -93,10 +101,69 @@ class TestNewsContentEndpoint:
         resp = client.get("/api/v1/news/content", params={"url": "file:///etc/passwd"})
         assert resp.status_code == 400
 
-    def test_content_extraction_failure_returns_400(self, client):
+    def test_content_403_returns_200_with_blocked_status(self, client):
+        from stock_data.data_provider.utils.news_extractor import NewsContent
+
+        fake = NewsContent._build(
+            url="https://example.com/blocked",
+            extractor="generic",
+            content_status="blocked",
+            reason="upstream HTTP 403",
+            http_status=403,
+        )
         with patch(
             "stock_data.data_provider.utils.news_extractor.NewsContentExtractor.extract",
-            side_effect=ValueError("could not extract main content"),
+            return_value=fake,
+        ):
+            resp = client.get("/api/v1/news/content", params={"url": fake.url})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["content_status"] == "blocked"
+        assert body["reason"] == "upstream HTTP 403"
+        assert body["http_status"] == 403
+        assert body["body"] == ""
+
+    def test_content_cache_preserves_structured_fields(self, client):
+        from stock_data.data_provider.utils.news_extractor import NewsContent
+
+        url = "https://example.com/content-cache-structured-20260715"
+        fake = NewsContent._build(
+            url=url,
+            title="Cached title",
+            body="Cached body",
+            extractor="generic",
+            content_status="unsupported",
+            reason="cached diagnostic",
+            canonical_url="https://example.com/canonical",
+            http_status=200,
+        )
+        with patch(
+            "stock_data.data_provider.utils.news_extractor.NewsContentExtractor.extract",
+            return_value=fake,
+        ) as extract:
+            first = client.get("/api/v1/news/content", params={"url": url})
+            second = client.get("/api/v1/news/content", params={"url": url})
+
+        assert first.status_code == second.status_code == 200
+        assert second.json()["content_status"] == "unsupported"
+        assert second.json()["reason"] == "cached diagnostic"
+        assert second.json()["canonical_url"] == "https://example.com/canonical"
+        assert second.json()["http_status"] == 200
+        assert extract.call_count == 1
+
+    def test_content_status_schema_rejects_unknown_value(self):
+        from pydantic import ValidationError
+
+        from stock_data.api.schemas import NewsContentResponse
+
+        with pytest.raises(ValidationError):
+            NewsContentResponse(url="https://example.com/x", content_status="unknown")
+
+    def test_content_security_failure_still_returns_400(self, client):
+        with patch(
+            "stock_data.data_provider.utils.news_extractor.NewsContentExtractor.extract",
+            side_effect=ValueError("redirected to internal network"),
         ):
             resp = client.get(
                 "/api/v1/news/content", params={"url": "https://example.com/x"}

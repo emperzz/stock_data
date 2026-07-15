@@ -1047,6 +1047,16 @@ class NewsSearchResponse(BaseModel):
     )
 
 
+NewsContentStatus = Literal[
+    "ok",
+    "empty",
+    "unsupported",
+    "javascript_required",
+    "blocked",
+    "fetch_error",
+]
+
+
 class NewsContentResponse(BaseModel):
     """News content extraction response."""
 
@@ -1058,6 +1068,10 @@ class NewsContentResponse(BaseModel):
     source_domain: str = Field(default="")
     extractor: str = Field(default="default", description="使用的 handler 名")
     byte_size: int = Field(default=0)
+    content_status: NewsContentStatus = Field(default="ok", description="正文提取状态")
+    reason: str | None = Field(default=None, description="失败原因（仅供诊断）")
+    canonical_url: str | None = Field(default=None, description="页面规范 URL")
+    http_status: int | None = Field(default=None, description="最终上游 HTTP 状态码")
 
 
 class FlashNewsItem(BaseModel):

@@ -122,7 +122,6 @@ def get_flash_news(
     response_model=NewsContentResponse,
     responses={
         400: {"model": ErrorResponse, "description": "Invalid URL or SSRF rejection"},
-        502: {"model": ErrorResponse, "description": "Extraction failed"},
     },
     tags=["news"],
 )
@@ -156,6 +155,10 @@ def get_news_content(
         source_domain=result.source_domain,
         extractor=result.extractor,
         byte_size=result.byte_size,
+        content_status=result.content_status,
+        reason=result.reason,
+        canonical_url=result.canonical_url,
+        http_status=result.http_status,
     )
 
 
