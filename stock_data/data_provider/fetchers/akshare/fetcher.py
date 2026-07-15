@@ -751,49 +751,42 @@ class AkshareFetcher(BaseFetcher):
             # Normalize to 6-digit format
             code = normalize_stock_code(code)
 
+            def _col(name: str):
+                """Read a column from the row, returning None if absent."""
+                return row[name] if name in row.index else None
+
             stock = {
                 "code": code,
                 "name": str(row.get("名称", "")).strip(),
-                "price": row.get("最新价") if "最新价" in row.index else None,
-                "change_pct": row.get("涨跌幅") if "涨跌幅" in row.index else None,
-                "amount": row.get("成交额") if "成交额" in row.index else None,
-                "turnover_rate": row.get("换手率") if "换手率" in row.index else None,
-                "first_seal_time": self._akshare_seal_time_to_hms(
-                    row.get("首次封板时间") if "首次封板时间" in row.index else None
-                ),
-                "last_seal_time": self._akshare_seal_time_to_hms(
-                    row.get("最后封板时间") if "最后封板时间" in row.index else None
-                ),
-                "zt_count": row.get("涨停统计") if "涨停统计" in row.index else None,
-                "circ_mv": row.get("流通市值") if "流通市值" in row.index else None,
-                "total_mv": row.get("总市值") if "总市值" in row.index else None,
+                # All numeric fields go through safe_float / safe_int so the
+                # returned types match ZhituFetcher / ZzshareFetcher
+                # (cross-fetcher uniformity — see CLAUDE.md "Standardized Data
+                # Schema"). Pre-fix these were raw numpy scalars (int64 /
+                # float64) which serialize unreliably across json libs.
+                "price": safe_float(_col("最新价")),
+                "change_pct": safe_float(_col("涨跌幅")),
+                "amount": safe_float(_col("成交额")),
+                "turnover_rate": safe_float(_col("换手率")),
+                "first_seal_time": self._akshare_seal_time_to_hms(_col("首次封板时间")),
+                "last_seal_time": self._akshare_seal_time_to_hms(_col("最后封板时间")),
+                "zt_count": str(_col("涨停统计")) if _col("涨停统计") is not None else None,
+                "circ_mv": safe_float(_col("流通市值")),
+                "total_mv": safe_float(_col("总市值")),
             }
 
             if pool_type == "dt":
                 # DT pool: 连续跌停 (not 连续跌停次数), 开板次数 (not 炸板次数),
                 # no 涨停统计, no 首次封板时间, 封单资金 (not 封板资金)
-                stock["lb_count"] = (
-                    row.get("连续跌停") if "连续跌停" in row.index else None
-                )
-                stock["seal_count"] = (
-                    row.get("开板次数") if "开板次数" in row.index else None
-                )
-                stock["seal_amount"] = (
-                    row.get("封单资金") if "封单资金" in row.index else None
-                )
+                stock["lb_count"] = safe_int(_col("连续跌停"))
+                stock["seal_count"] = safe_int(_col("开板次数"))
+                stock["seal_amount"] = safe_float(_col("封单资金"))
             else:
-                # ZT and ZBGC pools use 炸板次数 + 连板数 (ZT only).
-                # ZBGC has 炸板次数 but no 连板数.
-                stock["seal_count"] = (
-                    row.get("炸板次数") if "炸板次数" in row.index else None
-                )
+                # ZT and ZBGC pools use 炸板次数. ZBGC has 炸板次数 but no
+                # 连板数 / 封板资金 columns upstream.
+                stock["seal_count"] = safe_int(_col("炸板次数"))
                 if pool_type == "zt":
-                    stock["lb_count"] = (
-                        row.get("连板数") if "连板数" in row.index else None
-                    )
-                    stock["seal_amount"] = (
-                        row.get("封板资金") if "封板资金" in row.index else None
-                    )
+                    stock["lb_count"] = safe_int(_col("连板数"))
+                    stock["seal_amount"] = safe_float(_col("封板资金"))
                 else:
                     # zbgc: no 连板数 / 封板资金 columns upstream
                     stock["lb_count"] = None

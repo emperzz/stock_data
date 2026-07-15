@@ -308,3 +308,97 @@ def test_empty_dataframe_returns_empty_list():
         "涨停统计", "连板数", "所属行业",
     ])
     assert fetcher._normalize_zt_pool(empty, "zt") == []
+
+
+# ---------------------------------------------------------------------------
+# Numeric-type consistency with ZhituFetcher / ZzshareFetcher
+# ---------------------------------------------------------------------------
+
+class TestNumericTypeConsistency:
+    """All numeric fields must be Python ``float`` / ``int`` (not numpy scalars).
+
+    Cross-fetcher contract: every fetcher's get_zt_pool returns the same
+    Python types so the manager / persistence layer doesn't need to
+    special-case numpy. See CLAUDE.md "Standardized Data Schema".
+    """
+
+    def test_zt_pool_numeric_types_are_python_native(self):
+        from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+        fetcher = AkshareFetcher()
+        stock = fetcher._normalize_zt_pool(_make_zt_df(), "zt")[0]
+
+        # Floats
+        for key in ("price", "change_pct", "amount", "turnover_rate",
+                    "circ_mv", "total_mv", "seal_amount"):
+            assert type(stock[key]) is float, (
+                f"{key} is {type(stock[key]).__name__}, expected float"
+            )
+        # Ints
+        for key in ("lb_count", "seal_count"):
+            assert type(stock[key]) is int, (
+                f"{key} is {type(stock[key]).__name__}, expected int"
+            )
+
+    def test_dt_pool_numeric_types_are_python_native(self):
+        from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+        fetcher = AkshareFetcher()
+        stock = fetcher._normalize_zt_pool(_make_dt_df(), "dt")[0]
+
+        for key in ("price", "change_pct", "amount", "turnover_rate",
+                    "circ_mv", "total_mv", "seal_amount"):
+            assert type(stock[key]) is float, (
+                f"{key} is {type(stock[key]).__name__}, expected float"
+            )
+        for key in ("lb_count", "seal_count"):
+            assert type(stock[key]) is int, (
+                f"{key} is {type(stock[key]).__name__}, expected int"
+            )
+
+    def test_zbgc_pool_numeric_types_are_python_native(self):
+        from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+        fetcher = AkshareFetcher()
+        stock = fetcher._normalize_zt_pool(_make_zbgc_df(), "zbgc")[0]
+
+        for key in ("price", "change_pct", "amount", "turnover_rate",
+                    "circ_mv", "total_mv"):
+            assert type(stock[key]) is float, (
+                f"{key} is {type(stock[key]).__name__}, expected float"
+            )
+        assert type(stock["seal_count"]) is int
+
+    def test_zt_count_is_string(self):
+        """涨停统计 is an object column (e.g. "10/6") — must be a Python str."""
+        from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+        fetcher = AkshareFetcher()
+        stock = fetcher._normalize_zt_pool(_make_zt_df(), "zt")[0]
+        assert type(stock["zt_count"]) is str
+        assert stock["zt_count"] == "10/6"
+
+    def test_missing_column_returns_none_not_default(self):
+        """safe_float / safe_int return None for missing/NaN, not 0.0/0.
+
+        Pre-fix, ``row.get(col)`` on a missing col returned None (correct),
+        but on a NaN cell returned numpy.nan which then serialized as
+        'NaN' in JSON. After the fix, NaN → None consistently.
+        """
+        from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+        fetcher = AkshareFetcher()
+        df = _make_zt_df().drop(columns=["成交额"])  # remove 成交额
+        stock = fetcher._normalize_zt_pool(df, "zt")[0]
+        assert stock["amount"] is None
+
+    def test_nan_cell_returns_none(self):
+        """A NaN cell in a numeric column must be normalized to None.
+
+        Without safe_float, pandas.read returns numpy.nan for empty
+        cells, which serializes as 'NaN' in some JSON encoders and as
+        a parse error in others — breaking the schema contract.
+        """
+        from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+        fetcher = AkshareFetcher()
+        df = _make_zt_df().copy()
+        df.loc[0, "最新价"] = float("nan")
+        df.loc[0, "连板数"] = float("nan")
+        stock = fetcher._normalize_zt_pool(df, "zt")[0]
+        assert stock["price"] is None
+        assert stock["lb_count"] is None
