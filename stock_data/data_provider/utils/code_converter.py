@@ -291,6 +291,9 @@ def to_tushare_format(code: str) -> str:
             bs_symbol = entry[0]
             parts = bs_symbol.split(".")
             return f"{parts[1]}.{parts[0].upper()}"
+        # 未在 map 的 CSI 指数按交易所分流：399 → 深交所 SZ, 其他（上交所系）→ SH
+        if code.startswith("399"):
+            return f"{code}.SZ"
         return f"{code}.SH"
 
     # A-share stocks

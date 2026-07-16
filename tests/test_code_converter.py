@@ -339,6 +339,38 @@ class TestToTushareFormat:
     def test_normalizes_prefix(self):
         assert cc.to_tushare_format("SH600519") == "600519.SH"
 
+    def test_399_a_share_fallback_also_sz(self):
+        """399xxx 不在 CSI_INDEX_MAP 时(经 A 股股票分支)也返 .SZ。
+
+        当前实现: ``is_index_code`` 对未在 map 的 399 返 False, 走 A 股
+        股票分支 ``startswith("3")`` 也给 .SZ — 因此该测试在修复前后都通过,
+        属于契约记录而非 TDD 回归。真正的 TDD 回归见
+        ``test_tushare_unmapped_000_fallback_branch``。
+        """
+        assert cc.to_tushare_format("399370") == "399370.SZ"
+
+    def test_tushare_unmapped_000_fallback_branch(self):
+        """直接探测修复后的 fallback 路径: 对假设 ``is_index_code=True`` 但
+        ``CSI_INDEX_MAP.get=None`` 的场景, 必须按 399→SZ / 其他→SH 分流.
+
+        通过 mock 让 ``is_index_code`` 强制返回 True, 走修复后的代码路径.
+        """
+        from unittest.mock import patch
+
+        # ``is_index_code`` 从 ..utils.normalize 重导出到 code_converter 模块级
+        # 引用, mock 必须在 code_converter 里拦截。``get_index_type`` 是函数
+        # 内 from-import, mock 必须在源模块 (index_symbols) 拦截。
+        with patch(
+            "stock_data.data_provider.utils.code_converter.is_index_code",
+            return_value=True,
+        ), patch(
+            "stock_data.data_provider.fetchers.index_symbols.get_index_type",
+            return_value="csi",
+        ):
+            assert cc.to_tushare_format("399370") == "399370.SZ"
+            assert cc.to_tushare_format("000370") == "000370.SH"
+            assert cc.to_tushare_format("512500") == "512500.SH"
+
 
 # ============================================================================
 # Cross-function consistency

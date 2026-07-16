@@ -41,6 +41,28 @@ class TestCninfoFetcherBasics:
         result = f._org_id("300476")
         assert result.startswith("gssz0")
 
+    def test_org_id_bj_920(self):
+        """北交所 920xxx 必须路由到 gsbj 前缀, 不能落到 SZ 的 else 分支。
+
+        920 系列是 normalize.py 声明的 A_SHARE_STOCK_PREFIXES 之一
+        (`startswith("9")`)。若 _org_id 漏 9, 会给 ``gssz0920xxx``, 深交所
+        orgId 查北交所股票 → 公告静默空。
+        """
+        f = CninfoFetcher()
+        result = f._org_id("920001")
+        assert result == "gsbj0920001"
+        assert result.startswith("gsbj")
+
+    def test_org_id_bj_830_legacy(self):
+        """北交所老格式 8xxxxx 仍走 gsbj。"""
+        f = CninfoFetcher()
+        assert f._org_id("832000") == "gsbj0832000"
+
+    def test_org_id_bj_430_legacy(self):
+        """北交所老格式 4xxxxx 仍走 gsbj。"""
+        f = CninfoFetcher()
+        assert f._org_id("430017") == "gsbj0430017"
+
 
 class TestAnnouncements:
     def setup_method(self):

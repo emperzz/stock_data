@@ -37,7 +37,7 @@ class CninfoFetcher(BaseFetcher):
         """Build orgId for cninfo API."""
         if code.startswith("6"):
             return f"gssh0{code}"
-        elif code.startswith(("8", "4")):
+        elif code.startswith(("8", "4", "9")):
             return f"gsbj0{code}"
         else:
             return f"gssz0{code}"
