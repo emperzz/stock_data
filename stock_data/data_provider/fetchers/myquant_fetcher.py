@@ -476,9 +476,23 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
         Only ``frequency="d"`` is supported. Weekly/monthly would need
         separate ``history`` calls aggregated client-side, which we don't
         implement here — the manager will fall through to other fetchers.
+
+        Failure semantics (P2-3 of ``docs/optimization-plan-2026-07-16.md``):
+        we raise ``DataFetchError`` on every "I couldn't get data" path
+        (SDK unavailable, empty result, exception) so the manager failover
+        chain can move on to the next source. Bare ``None`` would bypass
+        ``BaseFetcher.get_kline_data``'s normal ``raw_df is None →
+        DataFetchError`` conversion (the index path uses
+        ``_kline_with_index_dispatch`` which calls this method directly)
+        and silently stop failover, leaking ``None`` to the caller where
+        downstream ``.columns`` access would 500. Matches Tushare's
+        ``_fetch_index_kline`` (``tushare_fetcher.py:196-264``) which has
+        raised consistently since the index-fetch introduction.
         """
         if not self.is_available():
-            return None
+            raise DataFetchError(
+                "Myquant API not available (no token) — manager should skip"
+            )
         if frequency != "d":
             raise DataFetchError(
                 f"MyquantFetcher index does not support frequency={frequency!r} "
@@ -499,16 +513,20 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
                 df=True,
             )
             if df is None or df.empty:
-                return None
+                raise DataFetchError(
+                    f"Myquant returned no data for index {index_code}"
+                )
             return self._normalize_index_df(df)
         except DataFetchError:
             raise
-        except Exception:
+        except Exception as e:
             logger.warning(
                 f"[MyquantFetcher] get_index_historical failed for {index_code}",
                 exc_info=True,
             )
-            return None
+            raise DataFetchError(
+                f"MyquantFetcher index fetch failed for {index_code}: {e}"
+            ) from e
 
     def get_index_intraday(self, index_code: str, period: str = "5") -> pd.DataFrame | None:
         """Get intraday minute-level data for a CSI index via myquant.

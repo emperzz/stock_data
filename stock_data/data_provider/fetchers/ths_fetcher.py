@@ -44,6 +44,7 @@ upstream 真实支持所有 7 种频率,本 fetcher 现已覆盖。
 import logging
 import math
 import os
+import random
 import re
 import time
 from datetime import date as _date
@@ -61,7 +62,7 @@ from tenacity import (
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..core.types import safe_float
 from ..persistence.board import THS_CONCEPT_SUBTYPE, THS_INDUSTRY_SUBTYPE
-from ..utils.http import json_get, json_post
+from ..utils.http import json_get, json_post, random_ua
 from ..utils.normalize import normalize_stock_code
 from ..utils.text import strip_em_tags
 from ..utils.url_helpers import source_domain as source_domain_from_url
@@ -555,10 +556,34 @@ class ThsFetcher(BaseFetcher):
 
         Uses requests (not curl_cffi) — d.10jqka.com.cn / q.10jqka.com.cn don't
         fingerprint-block. Reuses the project's requests default (no proxy).
+
+        UA rotation (P2-4 of ``docs/optimization-plan-2026-07-16.md``):
+        when the caller doesn't supply its own ``User-Agent``, we pick one
+        at random from the project's shared UA pool (``utils.http._UA_POOL``)
+        instead of the single static ``THS_UA``. Personal single-IP use is
+        especially vulnerable to per-UA throttling on q.10jqka.com.cn, so
+        the rotation is the cheapest defense. Callers that pass a custom
+        UA (Cninfo POST, Baidu Bearer) keep theirs unchanged.
+
+        **Scope caveat (M11 partial fix):** the rotation only applies to
+        request sites that go through ``_http_get``. The other ~9 THS
+        request sites (industry summary, hot topics, north flow, news
+        flash, news search, board history, etc.) still use the static
+        ``THS_UA`` constant directly. Extending the swap to those
+        callsites is left as a follow-up — see audit §M11 for the full
+        list. The audit's intent is met for the two paged cold-path
+        fetches (``get_board_stocks`` and the industry summary loop in
+        ``get_all_boards``), which are the highest-frequency request
+        patterns.
         """
         import requests
 
-        return requests.get(url, headers=headers or {"User-Agent": THS_UA}, timeout=timeout)
+        if headers is None or "User-Agent" not in headers:
+            base = {"User-Agent": random_ua()}
+            if headers:
+                base.update(headers)
+            headers = base
+        return requests.get(url, headers=headers, timeout=timeout)
 
     def _resolve_ths_platecode_from_cid(self, cid: str) -> str | None:
         """Fetch the concept-board HTML page and extract the platecode (e.g. ``"886042"``).
@@ -1155,6 +1180,12 @@ class ThsFetcher(BaseFetcher):
 
         all_rows: list[dict] = []
         for page in range(1, max_pages + 1):
+            # P2-4: jitter between paged fetches. THS personal single-IP
+            # use is easy to fingerprint at 10-row/page cadence; a uniform
+            # 1.5-3.0s sleep evens out the request pattern. Skip the sleep
+            # before the first page so the cold-path latency is unaffected.
+            if page > 1:
+                time.sleep(random.uniform(*self._THS_PAGING_JITTER_S))
             try:
                 rows = self._fetch_ths_board_stocks_page(
                     board_code,
@@ -1597,6 +1628,14 @@ class ThsFetcher(BaseFetcher):
     _THS_INDUSTRY_INDEX_URL = "https://q.10jqka.com.cn/thshy/"
     _THS_BOARD_LIST_TIMEOUT = 15
 
+    # P2-4 board-paging jitter (docs/optimization-plan-2026-07-16.md).
+    # THS personal single-IP users are easy to flag — q.10jqka.com.cn sees
+    # the IP and UA but not enough cookie churn. A randomized sleep between
+    # paged board fetches matches the 1.5-3.0s range the project's CLAUDE.md
+    # aspirationally promises (today: only EastMoney uses it; THS was the
+    # weakest link per audit §M11).
+    _THS_PAGING_JITTER_S = (1.5, 3.0)
+
     # Realtime fields the /boards response shape promises for every row.
     # The list is intentionally verbose so the backfill loop in
     # ``get_all_boards`` can guarantee uniform shape across concept +
@@ -1970,6 +2009,13 @@ class ThsFetcher(BaseFetcher):
 
         out: dict[str, dict] = {}
         for page in range(1, self._THS_INDUSTRY_SUMMARY_MAX_PAGES + 1):
+            # P2-4: jitter between paged fetches — same rationale as
+            # ``get_board_stocks``. Industry-summary backfill can fan out
+            # up to _THS_INDUSTRY_SUMMARY_MAX_PAGES (5) requests in tight
+            # succession, which is the request pattern most likely to
+            # trigger THS anti-bot heuristics.
+            if page > 1:
+                time.sleep(random.uniform(*self._THS_PAGING_JITTER_S))
             url = self._THS_INDUSTRY_SUMMARY_URL.format(page=page)
             headers = {
                 "User-Agent": THS_UA,

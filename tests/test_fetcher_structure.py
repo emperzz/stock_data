@@ -696,10 +696,21 @@ class TestMyquantFetcher:
         monkeypatch.setattr("gm.api.history", boom, raising=False)
         assert fetcher.get_intraday_data("600519", period="5") is None
 
-    def test_index_historical_without_token_returns_none(self, fetcher_no_token):
-        assert fetcher_no_token.get_index_historical(
-            "000300", "2024-01-01", "2024-01-31", "d"
-        ) is None
+    def test_index_historical_without_token_raises(self, fetcher_no_token):
+        """P2-3: SDK unavailable must raise ``DataFetchError``, not return None.
+
+        The bare-None behavior silently stopped the manager failover
+        chain (see ``myquant_fetcher.py:482-486`` docstring + the
+        ``test_myquant_fetcher.py::test_index_branch_sdk_unavailable_raises``
+        regression test for the full rationale). This test now
+        asserts the new contract.
+        """
+        from stock_data.data_provider.base import DataFetchError
+
+        with pytest.raises(DataFetchError, match="not available"):
+            fetcher_no_token.get_index_historical(
+                "000300", "2024-01-01", "2024-01-31", "d"
+            )
 
     def test_index_historical_uses_myquant(self, fetcher, monkeypatch):
         pytest.importorskip("gm")

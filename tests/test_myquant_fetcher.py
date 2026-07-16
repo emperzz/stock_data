@@ -247,14 +247,103 @@ class TestGetKlineDataIndexDispatch:
         ``index_market_tag`` and must also raise non-CSI.
 
         Distinct from the HSI test (which is HK) because ``index_market_tag``
-        has two non-CSI paths: HK (``HSI`` in ``HK_INDEX_MAP``) and US
-        (``SPX`` in ``US_INDEX_MAP``).
-        """
+        classifies them differently. Both must surface as ``DataFetchError``."""
         from stock_data.data_provider.base import DataFetchError
 
         fetcher = self._setup_fetcher()
         with pytest.raises(DataFetchError, match="non-CSI"):
             fetcher.get_kline_data("SPX", days=4, frequency="d")
+
+    def test_index_branch_sdk_unavailable_raises(self, monkeypatch):
+        """P2-3: SDK unavailable must raise ``DataFetchError``, not return None.
+
+        Before the fix, ``MyquantFetcher.get_index_historical`` returned
+        ``None`` when ``is_available()`` was False, bypassing
+        ``BaseFetcher.get_kline_data``'s ``raw_df is None → DataFetchError``
+        conversion (the index branch uses ``_kline_with_index_dispatch``
+        which calls this method directly). Manager failover expects
+        ``DataFetchError`` to know to try the next source — a bare ``None``
+        silently stopped failover and the caller 500'd on ``.columns``.
+        """
+        from stock_data.data_provider.base import DataFetchError
+
+        # Save/restore class-level state manually because this test does
+        # not call _setup_fetcher (which would set is_available True).
+        self._saved_attempted = MyquantFetcher._init_attempted
+        self._saved_ok = MyquantFetcher._init_ok
+        self._saved_token = MyquantFetcher._cls_token
+        MyquantFetcher._init_attempted = True
+        MyquantFetcher._init_ok = False
+        MyquantFetcher._cls_token = ""
+        fetcher = MyquantFetcher()
+        with pytest.raises(DataFetchError, match="not available"):
+            fetcher.get_index_historical("000300", None, None, "d")
+
+    def test_index_branch_empty_df_raises(self, monkeypatch):
+        """P2-3: Empty gm.api.history result must raise, not return None.
+
+        Matches Tushare's ``_fetch_index_kline`` precedent: an empty
+        result means "this source has no data for this index", which
+        the manager should treat as a soft failure (try the next
+        source), not as "we successfully have no data".
+        """
+        from stock_data.data_provider.base import DataFetchError
+
+        def fake_history_empty(**kwargs):
+            return pd.DataFrame()  # empty
+
+        monkeypatch.setattr("gm.api.history", fake_history_empty, raising=False)
+        fetcher = self._setup_fetcher()
+        with pytest.raises(DataFetchError, match="no data"):
+            fetcher.get_index_historical("000300", None, None, "d")
+
+    def test_index_branch_sdk_exception_raises(self, monkeypatch):
+        """P2-3: SDK call exception must raise DataFetchError, not swallow.
+
+        The previous ``except Exception: return None`` path masked
+        transient network failures. The manager failover chain needs
+        the raised error to know to skip this fetcher.
+        """
+        from stock_data.data_provider.base import DataFetchError
+
+        def fake_history_blowup(**kwargs):
+            raise ConnectionError("simulated upstream timeout")
+
+        monkeypatch.setattr("gm.api.history", fake_history_blowup, raising=False)
+        fetcher = self._setup_fetcher()
+        with pytest.raises(DataFetchError, match="simulated upstream timeout"):
+            fetcher.get_index_historical("000300", None, None, "d")
+
+    def test_index_branch_none_return_raises(self, monkeypatch):
+        """P2-3: gm.api.history returning ``None`` must raise DataFetchError.
+
+        Defensive — some SDK call paths can return ``None`` instead of an
+        empty DataFrame. We must not silently return ``None`` to the
+        caller.
+        """
+        from stock_data.data_provider.base import DataFetchError
+
+        def fake_history_none(**kwargs):
+            return None
+
+        monkeypatch.setattr("gm.api.history", fake_history_none, raising=False)
+        fetcher = self._setup_fetcher()
+        with pytest.raises(DataFetchError, match="no data"):
+            fetcher.get_index_historical("000300", None, None, "d")
+
+    def test_index_branch_success_still_returns_df(self, monkeypatch):
+        """P2-3 must not regress the happy path: real data still returns DataFrame."""
+        def fake_history(**kwargs):
+            return self._fake_index_history()
+
+        monkeypatch.setattr("gm.api.history", fake_history, raising=False)
+        fetcher = self._setup_fetcher()
+
+        df = fetcher.get_index_historical("000300", None, None, "d")
+        assert df is not None
+        assert not df.empty
+        for col in ("date", "open", "high", "low", "close", "volume", "amount"):
+            assert col in df.columns, f"missing column {col}"
 
     def test_supports_kline_index_daily_only(self):
         """Manager two-stage filter gate: index is daily-only.

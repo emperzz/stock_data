@@ -57,6 +57,19 @@ def normalize_index_df(
     standard columns — and differed only in their ``column_mapping`` and
     ``numeric_cols`` lists.
 
+    Volume unit conversion (P2-2 of ``docs/optimization-plan-2026-07-16.md``):
+    the canonical contract is **股 (shares)** per ``KLineData.volume_unit``
+    schema invariant. Sina and EM index endpoints upstream report volume
+    in **手 (lots = 100 shares)**, so when the ``column_mapping`` brings
+    in the raw ``volume`` field we ``*100`` to match the stock-K-line
+    normalization in ``AkshareFetcher._normalize_data`` (so akshare(P3)
+    index daily agrees with zhitu(P5) on the same canonical unit).
+    Tencent's ``_INDEX_TX_MAP`` maps upstream ``amount`` (not ``volume``)
+    into the standard ``volume`` column — the M8 audit flag — and that
+    path is skipped here. The detection rule is: "the column literally
+    named ``volume`` in the source DataFrame was renamed to ``volume``"
+    (identity rename), so the raw value is genuine share-count-in-手.
+
     Args:
         df: Raw DataFrame from an akshare index-history API.
         code: Canonical index code to set on every row.
@@ -76,6 +89,21 @@ def normalize_index_df(
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+    # 手 -> 股 (lots -> shares) per spec §3.4 — only when the raw
+    # upstream field was named ``volume``. Tencent's mapping renames
+    # ``amount`` -> ``volume``; multiplying that by 100 would compound
+    # an unrelated unit confusion (M8 still under audit). We detect
+    # the distinction by looking at which *raw* key in the mapping
+    # produces the ``volume`` column: Sina/EM use ``"volume"`` as the
+    # raw key, Tencent uses ``"amount"``.
+    volume_source_is_lots = (
+        "volume" in df.columns
+        and any(v == "volume" and k == "volume" for k, v in column_mapping.items())
+    )
+    if volume_source_is_lots:
+        df["volume"] = df["volume"].apply(
+            lambda v: int(v) * 100 if pd.notna(v) else 0
+        )
     if "code" not in df.columns:
         df["code"] = code
     keep_cols = ["code", "date"] + [c for c in numeric_cols if c in df.columns]
