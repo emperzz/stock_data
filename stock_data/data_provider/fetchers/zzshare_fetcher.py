@@ -548,7 +548,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             for row in plate.get("stocks", []):
                 if not isinstance(row, dict):
                     continue
-                stock_code = str(row.get("stock_code", ""))
+                stock_code = normalize_stock_code(str(row.get("stock_code", "")).strip())
                 if not stock_code or stock_code in seen_codes:
                     continue
                 seen_codes.add(stock_code)
@@ -695,7 +695,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            stock_code = str(row.get("stock_code", "")).strip()
+            stock_code = normalize_stock_code(str(row.get("stock_code", "")).strip())
             if not stock_code:
                 continue
             out.append(
@@ -768,7 +768,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             net_buy_wan = round(buy_in / 10000, 1) if buy_in else 0.0
             if min_net_buy is not None and net_buy_wan < min_net_buy:
                 continue
-            stock_code = str(row.get("stock_code", "")).strip()
+            stock_code = normalize_stock_code(str(row.get("stock_code", "")).strip())
             out_stocks.append(
                 {
                     "code": stock_code,
@@ -952,7 +952,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         for row in rows or []:
             if not isinstance(row, dict):
                 continue
-            symbol = str(row.get("symbol_code", "")).strip()
+            symbol = normalize_stock_code(str(row.get("symbol_code", "")).strip())
             out.append(
                 {
                     "code": symbol,

@@ -1048,12 +1048,34 @@ def get_board_stocks(
         # 2026-07-13 sort/top_n kwargs are at defaults. Pass nothing
         # through to the helper so the include_quote=False branches
         # retain their existing include_quote=False semantics.
-        stocks, origin, effective_source, reason = fetch_board_stocks_with_zzshare_fallback(
-            board_code=board_code,
-            source=source,
-            include_quote=False,
-            manager=manager,
-        )
+        try:
+            stocks, origin, effective_source, reason = fetch_board_stocks_with_zzshare_fallback(
+                board_code=board_code,
+                source=source,
+                include_quote=False,
+                manager=manager,
+            )
+        except DataFetchError as e:
+            # P3-a1 (H4): when both ZZSHARE and THS fail upstream, fall back
+            # to whatever we have in SQLite. The user's request still
+            # succeeds with yesterday's data instead of a hard 5xx. The
+            # caller distinguishes via origin="persistence" + reason set.
+            # Mirror of pool_daily.get_pool:325-336.
+            if cached_full:
+                logger.warning(
+                    f"[BoardCache] Upstream failed for {board_code} "
+                    f"(include_quote=False), serving {len(cached_full)} stale "
+                    f"stocks: {e}"
+                )
+                return (
+                    cached_full,
+                    "persistence",
+                    "ths",
+                    "stale_after_upstream_failure",
+                    False,
+                    cached_count,
+                )
+            raise
         if stocks:
             update_cached_board_stocks(board_code, "ths", stocks)
             logger.info(
@@ -1167,9 +1189,7 @@ def resolve_board_types(
     push2.slist/get reverse endpoint (used by ``get_stock_boards``) cannot
     distinguish concept / industry / region / index — every row has
     ``f152=2`` — so the fetcher hardcodes ``"industry"`` and relies on this
-    helper to recover the true classification. The persistence layer's
-    cold-fill path (``upsert_membership_for_stock_boards``) calls the same
-    helper so the SQL and column projection live in exactly one place.
+    helper to recover the true classification.
 
     Args:
         codes: Board codes (e.g. ``["BK0438", "BK0615"]``). Empty list is a no-op.
@@ -1318,74 +1338,6 @@ def upsert_membership_bulk(
                 subtype,
             )
             for s in stocks
-        ]
-        cursor.executemany(
-            """INSERT OR REPLACE INTO stock_board_membership
-               (board_code, source, stock_code, stock_name,
-                board_name, board_type, subtype, refreshed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-            rows,
-        )
-    return len(rows)
-
-
-def upsert_membership_for_stock_boards(
-    stock_code: str,
-    stock_name: str,
-    boards: list[dict],
-    source: str,
-    conn: sqlite3.Connection | None = None,
-) -> int:
-    """Batch upsert all boards a stock belongs to (single transaction).
-
-    Used by the ths / zhitu / eastmoney cold paths in `/stocks/{code}/boards` to
-    write the reverse-index rows for every board returned by the fetcher
-    in one executemany call. Each input board dict must have keys:
-    code, name, type, subtype.
-
-    **board_type override**: For EastMoneyFetcher specifically, the
-    upstream push2.slist/get endpoint returns ``f152=2`` for every board
-    (concept, industry, region, index — all the same), so the fetcher
-    hardcodes ``"industry"``. To recover the true type (e.g. BK0615
-    中药概念 is ``concept``, not ``industry``), we look up the
-    authoritative ``board_type`` from the local ``stock_board`` table
-    (which is populated by the board-list refresh path) and override
-    the fetcher's value when the board_code is known there. Boards
-    absent from ``stock_board`` keep the fetcher's value.
-
-    Args:
-        conn: optional SQLite connection. When None, opens a fresh
-            connection via get_connection(). Pass an existing
-            connection when calling from a multi-threaded caller
-            (each thread should own its own connection).
-    """
-    if not boards:
-        return 0
-
-    init_schema()
-    if conn is None:
-        conn = get_connection()
-    with conn:
-        cursor = conn.cursor()
-
-        # board_type/subtype override: look up authoritative values from
-        # stock_board for the codes in this batch. The single-code variant
-        # (zhitu fetcher returns type/subtype directly from upstream) hits
-        # an empty dict here, so we skip the row-wise override below.
-        board_codes = [b["code"] for b in boards if b.get("code")]
-        type_overrides = resolve_board_types(board_codes, source)
-
-        rows = [
-            (
-                b["code"],
-                source,
-                stock_code,
-                stock_name,
-                b.get("name", ""),
-                (type_overrides.get(b["code"], {})).get("type") or b.get("type", ""),
-                (type_overrides.get(b["code"], {})).get("subtype") or b.get("subtype"),
-            )
-            for b in boards
         ]
         cursor.executemany(
             """INSERT OR REPLACE INTO stock_board_membership

@@ -55,3 +55,25 @@ def test_kline_serves_utf8_charset():
     assert "charset=utf-8" in ct.lower(), (
         f"missing charset=utf-8 in Content-Type: {ct!r}"
     )
+
+
+def test_http_exception_serves_utf8_charset():
+    """HTTPException (e.g. 404 for unknown route) must also serve charset=utf-8.
+
+    FastAPI's default HTTPException handler bypasses default_response_class,
+    so without an explicit override 4xx/5xx error bodies would lose the
+    charset hint and surface as Latin-1 mojibake for Chinese ``detail``
+    messages (e.g. "No 财联社早报 article ..."). Regression test for the
+    ``_http_exception_handler`` registered in server.py.
+    """
+    from stock_data.server import app
+
+    client = TestClient(app)
+    # Hit a path that FastAPI will turn into a 404 HTTPException (not a
+    # 422 validation error) — the two handlers are wired separately.
+    r = client.get("/api/v1/this-path-does-not-exist")
+    assert r.status_code == 404, r.text
+    ct = r.headers.get("content-type", "")
+    assert "charset=utf-8" in ct.lower(), (
+        f"missing charset=utf-8 on HTTPException 404: {ct!r}"
+    )

@@ -99,6 +99,34 @@ class TestGetStockInfo:
         assert "source" not in result
 
     @patch("stock_data.data_provider.utils.http.requests.get")
+    def test_normalizes_code_before_url_interpolation(self, mock_get, monkeypatch):
+        """P3-a3 (M10): URL path must use the bare 6-digit code, not raw input.
+
+        Regression guard: callers from ``/control/fetcher-test`` may pass
+        the upstream-formatted code (``600519.SH``). Without pre-URL
+        ``normalize_stock_code()``, Zhitu returns 404 and the
+        _fetch_json side reports a misleading "malformed payload" error.
+        """
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
+            lambda *a, **k: "test_token" if a and a[0] == "ZHITU_TOKEN" else "",
+        )
+        self.fetcher._token = "test_token"
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"name": "贵州茅台"}
+        mock_response.raise_for_status = lambda: None
+        mock_get.return_value = mock_response
+
+        # Call with the upstream-form variant (SH suffix); the URL hit
+        # by requests.get must use the bare 6-digit form.
+        self.fetcher.get_stock_info("600519.SH")
+        called_url = mock_get.call_args[0][0]
+        assert "/hs/gs/gsjj/600519" in called_url, (
+            f"URL was not normalized before interpolation: {called_url!r}"
+        )
+        assert "600519.SH" not in called_url
+
+    @patch("stock_data.data_provider.utils.http.requests.get")
     def test_returns_none_on_http_error(self, mock_get, monkeypatch):
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",

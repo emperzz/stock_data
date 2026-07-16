@@ -87,10 +87,6 @@ class DataFetcherManager:
             self._fetchers.sort(key=lambda f: f.priority)
             self._refresh_index()
 
-    def get_fetcher(self, name: str) -> BaseFetcher | None:
-        """Get fetcher by name."""
-        return self._fetchers_by_name.get(name)
-
     def _filter_by_capability(self, market: str, capability: DataCapability) -> list[BaseFetcher]:
         """Filter fetchers by market support and data capability.
 

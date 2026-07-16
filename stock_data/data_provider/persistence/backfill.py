@@ -17,8 +17,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-
-from fastapi import FastAPI
+from typing import TYPE_CHECKING
 
 from .board import (
     fetch_board_stocks_with_zzshare_fallback,
@@ -30,6 +29,10 @@ from .board import (
 from .db import get_db_path
 
 logger = logging.getLogger(__name__)
+
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 
 # After this many consecutive phase-2 fetch failures, short-circuit the rest

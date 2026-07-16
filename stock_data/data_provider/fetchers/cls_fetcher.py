@@ -26,6 +26,14 @@ from ..utils.http import random_ua
 
 logger = logging.getLogger(__name__)
 
+# P3-b2 (M16): mirror news_extractor._MAX_RESPONSE_BYTES (5 MiB) but tighten
+# to 2 MiB for CLS — pages are predictable (article list / detail HTML, not
+# user-controlled) so 2 MiB is generous. URL is internally constructed, so the
+# attack surface is narrower than news_extractor; the limit still caps
+# accidental memory blow-up from upstream bloat / MITM.
+_CLS_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+_CLS_CHUNK_SIZE = 64 * 1024
+
 # CLS publishes in Asia/Shanghai (UTC+8). Server-local time would silently
 # mis-attribute 07:00 +0800 articles to the previous day on UTC machines,
 # breaking _find_article_id_by_date for every request.
@@ -305,20 +313,56 @@ class ClsFetcher(BaseFetcher):
         contract is forward-compatible with EastMoney failover).
         Uses the project's rotating UA pool to avoid fingerprint-based
         throttling on Chinese financial endpoints.
+
+        P3-b2 (M16): streams the response with a 2 MiB cap (mirror of
+        ``news_extractor._MAX_RESPONSE_BYTES``). The previous code path
+        consumed ``r.text`` directly, which loads the entire body into
+        memory in one shot — a CLS or MITM bloat response would have
+        caused unbounded growth.
         """
         try:
             r = requests.get(
                 url,
                 headers={"User-Agent": random_ua()},
                 timeout=timeout,
+                stream=True,
             )
         except requests.RequestException as e:
             raise DataFetchError(f"[ClsFetcher] HTTP GET failed: {url} → {e}") from e
         if not (200 <= r.status_code < 300):
+            close = getattr(r, "close", None)
+            if callable(close):
+                close()
             raise DataFetchError(
                 f"[ClsFetcher] HTTP {r.status_code} for {url} ({len(r.content)}B body)"
             )
-        return r.text
+        try:
+            chunks = bytearray()
+            iterator = getattr(r, "iter_content", None)
+            if callable(iterator):
+                for chunk in iterator(chunk_size=_CLS_CHUNK_SIZE):
+                    if not chunk:
+                        continue
+                    chunks.extend(chunk)
+                    if len(chunks) > _CLS_MAX_RESPONSE_BYTES:
+                        raise DataFetchError(
+                            f"[ClsFetcher] response exceeded "
+                            f"{_CLS_MAX_RESPONSE_BYTES}B cap for {url}"
+                        )
+                raw = bytes(chunks)
+            else:
+                # Test double without iter_content: read once, then check.
+                raw = getattr(r, "content", b"") or b""
+                if len(raw) > _CLS_MAX_RESPONSE_BYTES:
+                    raise DataFetchError(
+                        f"[ClsFetcher] response exceeded "
+                        f"{_CLS_MAX_RESPONSE_BYTES}B cap for {url}"
+                    )
+        finally:
+            close = getattr(r, "close", None)
+            if callable(close):
+                close()
+        return raw.decode("utf-8", errors="replace")
 
     # ------------------------------------------------------------------
     # Public methods (called by DataFetcherManager)

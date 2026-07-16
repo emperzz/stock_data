@@ -25,6 +25,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__
 from .api.routes import health_router, news_router, router
@@ -214,6 +215,19 @@ app = FastAPI(
 @app.exception_handler(RequestValidationError)
 async def _validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     return _UTF8JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+
+# FastAPI's default ``HTTPException`` handler also bypasses the
+# default-response-class charset hint, so 4xx/5xx responses raised via
+# ``raise HTTPException(...)`` (404 from ``map_errors``, 503 from upstream
+# ``DataFetchError`` mappings, 400 from validation in route handlers) leak
+# the same mojibake-prone ``application/json`` without ``charset=utf-8``.
+# Map it to ``_UTF8JSONResponse`` so error bodies — which frequently contain
+# Chinese strings (e.g. "No 财联社早报 article for ...") — round-trip cleanly.
+# Body shape ``{"detail": <exc.detail>}`` matches Starlette's default.
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    return _UTF8JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 # CORS — restrict to localhost only (unchanged)

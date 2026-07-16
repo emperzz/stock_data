@@ -396,6 +396,7 @@ class ZhituFetcher(BaseFetcher):
         """
         if not self.is_available():
             return None
+        stock_code = normalize_stock_code(stock_code)
         data = self._fetch_json(
             f"/hs/gs/gsjj/{stock_code}",
             op_label=f"stock_info {stock_code}",
@@ -862,6 +863,7 @@ class ZhituFetcher(BaseFetcher):
         ``page_size`` is applied as a post-sort cap (Zhitu returns all
         records in one call).
         """
+        code = normalize_stock_code(code)
         data = self._fetch_json(
             f"/hs/gs/jnff/{code}",
             op_label=f"dividend {code}",
@@ -940,6 +942,7 @@ class ZhituFetcher(BaseFetcher):
         ``st`` / ``et`` use Zhitu's ``YYYYMMDD`` format. ``limit`` caps the
         number of returned rows (Zhitu's ``lt=`` query param).
         """
+        code = normalize_stock_code(code)
         data = self._fetch_json(
             f"/hs/history/transaction/{code}",
             params={"st": st, "et": et, "lt": str(limit)},
@@ -1022,6 +1025,7 @@ class ZhituFetcher(BaseFetcher):
         skipping ``新增``/``减少`` prefixes (best-effort; falls back to 0
         on unrecognised text).
         """
+        code = normalize_stock_code(code)
         data = self._fetch_json(
             f"/hs/gs/gdbh/{code}",
             op_label=f"holder_num {code}",

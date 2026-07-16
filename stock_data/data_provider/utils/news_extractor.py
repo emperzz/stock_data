@@ -20,16 +20,13 @@ import requests
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
+from .http import random_ua
 from .url_helpers import source_domain as source_domain_from_url
 
 logger = logging.getLogger(__name__)
 
 _EM_BODY_STOP_KEYWORDS = ("文章来源", "责任编辑", "郑重声明", "网友评论")
 _EM_AD_KEYWORDS = ("看资讯行情", "选东方财富证券")
-_EM_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
 _BLOCK_MARKERS = (
     "请输入验证码",
     "访问频繁",
@@ -511,7 +508,7 @@ class NewsContentExtractor:
             try:
                 resp = requests.get(
                     url,
-                    headers={"User-Agent": _EM_USER_AGENT},
+                    headers={"User-Agent": random_ua()},
                     timeout=15,
                     allow_redirects=True,
                     stream=True,

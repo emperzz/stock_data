@@ -1578,7 +1578,7 @@ class ThsFetcher(BaseFetcher):
         rows = payload.get("data") or []
         return [
             {
-                "code": str(r.get("quote_code", "")).strip(),
+                "code": normalize_stock_code(str(r.get("quote_code", "")).strip()),
                 "name": str(r.get("name", "")).strip(),
                 "type": "concept",
                 "subtype": THS_CONCEPT_SUBTYPE,

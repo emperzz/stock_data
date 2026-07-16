@@ -509,3 +509,65 @@ def test_detail_author_handles_dict(fetcher):
     art = fetcher._fetch_article_detail(2425210, html)
     assert art is not None
     assert art["author"] == "财联社 dict"
+
+
+# ---------- P3-b2 (M16): bounded response body read ----------
+
+
+class _FakeStreamResponse:
+    """Minimal mock mirroring the requests.Response API that _http_get_text
+    exercises: status_code, headers, stream(), iter_content(), close()."""
+
+    def __init__(self, body: bytes, status_code: int = 200):
+        self.status_code = status_code
+        self.content = body
+        self.closed = False
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+    def iter_content(self, chunk_size: int = 64 * 1024):
+        for i in range(0, len(self._body), chunk_size):
+            yield self._body[i : i + chunk_size]
+
+    def close(self):
+        self.closed = True
+
+
+def test_http_get_text_rejects_oversize_response(fetcher):
+    """P3-b2 (M16): response above _CLS_MAX_RESPONSE_BYTES must raise
+    DataFetchError instead of loading the entire body into memory."""
+    from stock_data.data_provider.fetchers.cls_fetcher import _CLS_MAX_RESPONSE_BYTES
+
+    oversize = b"x" * (_CLS_MAX_RESPONSE_BYTES + 1)
+    fake = _FakeStreamResponse(oversize)
+
+    with patch("stock_data.data_provider.fetchers.cls_fetcher.requests.get", return_value=fake):
+        with pytest.raises(DataFetchError, match="exceeded"):
+            fetcher._http_get_text("https://www.cls.cn/subject/1151")
+    assert fake.closed, "response must be closed after size cap fires"
+
+
+def test_http_get_text_accepts_normal_response(fetcher):
+    """Within-cap response returns decoded text and closes the connection."""
+    body = b'{"hello": "world"}'
+    fake = _FakeStreamResponse(body)
+
+    with patch("stock_data.data_provider.fetchers.cls_fetcher.requests.get", return_value=fake):
+        text = fetcher._http_get_text("https://www.cls.cn/subject/1151")
+    assert text == '{"hello": "world"}'
+    assert fake.closed, "response must be closed on the happy path too"
+
+
+def test_http_get_text_returns_datafetch_error_on_5xx(fetcher):
+    """5xx response must raise DataFetchError (unchanged from pre-P3-b2)."""
+    fake = _FakeStreamResponse(b"server boom", status_code=503)
+
+    with patch("stock_data.data_provider.fetchers.cls_fetcher.requests.get", return_value=fake):
+        with pytest.raises(DataFetchError, match="503"):
+            fetcher._http_get_text("https://www.cls.cn/subject/1151")
+    assert fake.closed, "response must be closed when status check fails"
