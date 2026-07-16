@@ -258,3 +258,96 @@ def test_static_ths_ua_still_exists_for_backward_compat():
     that explicitly opt out of rotation (rare).
     """
     assert THS_UA.startswith("Mozilla/5.0")
+
+
+# ============================================================================
+# Caller convention: do NOT pre-set User-Agent
+# ----------------------------------------------------------------------------
+# Audit gap: P2-4 added a UA-rotation guard in ``_http_get`` but every
+# ``_http_get`` call site pre-set ``"User-Agent": THS_UA`` in its headers
+# dict, so the guard's ``if "User-Agent" not in headers`` branch never
+# fires in production. UA rotation is dead code.
+#
+# Fix contract: callers must let ``_http_get`` inject the UA. These two
+# tests pin the contract for the two highest-frequency paged cold-path
+# fetches (the ones called out in the ``_http_get`` docstring). The
+# other 4 ``_http_get`` call sites (L607 / L781 / L1396 / L2119) are
+# covered by the same one-line mechanical deletion in the fix commit
+# and inspected at review time.
+# ============================================================================
+
+
+class TestCallerDoesNotPresetUserAgent:
+    """P2-4 audit-fix: ``_http_get`` callers must not pre-set User-Agent."""
+
+    def test_fetch_ths_board_stocks_page_no_user_agent(self, monkeypatch):
+        """``_fetch_ths_board_stocks_page`` (L1068) must not pre-set User-Agent.
+
+        If callers pre-set ``"User-Agent": THS_UA`` the rotation guard
+        inside ``_http_get`` is bypassed and the same single static UA
+        goes out on every request — the audit M11 weakness.
+        """
+        captured: dict | None = None
+
+        def fake_http_get(self, url, *, headers=None, timeout=10):
+            nonlocal captured
+            captured = headers
+            r = MagicMock()
+            r.status_code = 200
+            r.content = b""
+            r.text = ""
+            return r
+
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.ths_fetcher.ThsFetcher._http_get",
+            fake_http_get,
+        )
+        fetcher = ThsFetcher.__new__(ThsFetcher)
+        monkeypatch.setattr(fetcher, "_v_token", lambda: "test_v")
+
+        fetcher._fetch_ths_board_stocks_page("123456", 1)
+
+        assert captured is not None, "_http_get was not called"
+        assert "User-Agent" not in captured, (
+            f"_fetch_ths_board_stocks_page pre-sets User-Agent; "
+            f"_http_get's UA rotation cannot fire. Headers: {captured!r}"
+        )
+
+    def test_fetch_ths_industry_summary_no_user_agent(self, monkeypatch):
+        """``_fetch_ths_industry_summary`` (L2021) must not pre-set User-Agent.
+
+        Industry summary walks up to 5 pages — the highest-frequency
+        paged cold path on the THS side. Same audit gap as
+        ``_fetch_ths_board_stocks_page``: pre-setting ``THS_UA`` makes
+        the wrapper's rotation guard inert across all 5 pages.
+        """
+        captured: list[dict] = []
+
+        def fake_http_get(self, url, *, headers=None, timeout=10):
+            captured.append(headers)
+            r = MagicMock()
+            r.status_code = 200
+            r.content = b""
+            r.text = ""
+            return r
+
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.ths_fetcher.ThsFetcher._http_get",
+            fake_http_get,
+        )
+        # Empty rows so the loop walks all _THS_INDUSTRY_SUMMARY_MAX_PAGES pages.
+        monkeypatch.setattr(
+            "stock_data.data_provider.fetchers.ths_fetcher.ThsFetcher._parse_ths_industry_summary_page",
+            lambda self, html: [],
+        )
+        fetcher = ThsFetcher.__new__(ThsFetcher)
+        monkeypatch.setattr(fetcher, "_v_token", lambda: "test_v")
+
+        fetcher._fetch_ths_industry_summary()
+
+        assert len(captured) > 0, "_http_get was not called"
+        for i, headers in enumerate(captured, start=1):
+            assert "User-Agent" not in headers, (
+                f"_fetch_ths_industry_summary page {i} pre-sets User-Agent; "
+                f"_http_get's UA rotation cannot fire. Headers: {headers!r}"
+            )

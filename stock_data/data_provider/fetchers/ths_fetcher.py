@@ -512,23 +512,22 @@ class ThsFetcher(BaseFetcher):
     def is_available(self) -> bool:
         """True only when board-K-line deps are present.
 
-        Six pure-HTTP THS endpoints (hot-topics / north-flow / flash-news
-        / news-search / stock-news / announcements) don't need
-        ``py_mini_racer`` / ``bs4`` / ``demjson3`` or the vendored
-        ``ths.js``. But by project convention (see ``ZhituFetcher`` and
-        the ``data_provider/manager.py:1002`` registration loop), an
+        Returns ``self._check_ths_deps()[0]``. Six pure-HTTP THS
+        endpoints (hot-topics / north-flow / flash-news / news-search
+        / stock-news / announcements) don't need ``py_mini_racer`` /
+        ``bs4`` / ``demjson3`` or the vendored ``ths.js``, but by
+        project convention (``data_provider/manager.py:1002``) an
         unavailable fetcher is dropped from the manager's table —
-        meaning when is_available() returns False, the six pure-HTTP
-        THS endpoints lose their backend too. Trade-off: one
-        board-K-line dep outage costs six endpoints; in our threat
-        model (single akshare+py_mini_racer env per server) that's
-        acceptable. If you need fine-grained gating per capability,
-        the manager would need a per-capability is_available variant —
-        larger refactor, deferred.
+        a missing dep costs all six pure-HTTP endpoints too.
 
-        The reverse is also worth catching: a process where someone
-        deleted ``ths_assets/ths.js`` shouldn't silently drop a
-        fetcher capability that does work.
+        **Accepted trade-off:** one ``ths.js`` / V8 / bs4 outage
+        takes down the entire fetcher (not just the K-line endpoint).
+        In our threat model — a single deps env per server, not a
+        multi-tenant fleet — this is acceptable. Per-capability
+        availability gating would require a ``(capability -> deps)``
+        map in :meth:`_check_ths_deps` plus a manager-side
+        ``is_available_for(capability)`` lookup; tracked as tech
+        debt, deferred.
         """
         return self._check_ths_deps()[0]
 
@@ -604,7 +603,7 @@ class ThsFetcher(BaseFetcher):
         Logs at WARNING on network failure or HTML parse error.
         """
         url = _CONCEPT_DETAIL_URL.format(slug=cid)
-        headers = {"User-Agent": THS_UA, "Cookie": f"v={self._v_token()}"}
+        headers = {"Cookie": f"v={self._v_token()}"}
         try:
             r = self._http_get(url, headers=headers, timeout=10)
         except Exception as e:
@@ -778,7 +777,6 @@ class ThsFetcher(BaseFetcher):
             inner=inner_code, freq=f"{freq_segment:02d}", year=year
         )
         headers = {
-            "User-Agent": THS_UA,
             "Referer": "http://q.10jqka.com.cn",
             "Host": "d.10jqka.com.cn",
             "Cookie": f"v={self._v_token()}",
@@ -1065,7 +1063,6 @@ class ThsFetcher(BaseFetcher):
             page=page,
         )
         headers = {
-            "User-Agent": THS_UA,
             "Referer": _CONCEPT_DETAIL_URL.format(slug=concept_id),
             "X-Requested-With": "XMLHttpRequest",
             "Cookie": f"v={self._v_token()}",
@@ -1393,7 +1390,6 @@ class ThsFetcher(BaseFetcher):
                 )
         url = _CONCEPT_DETAIL_URL.format(slug=cid)
         headers = {
-            "User-Agent": THS_UA,
             "Referer": _CONCEPT_DETAIL_URL.format(slug=cid),
             "Cookie": f"v={self._v_token()}",
         }
@@ -2018,7 +2014,6 @@ class ThsFetcher(BaseFetcher):
                 time.sleep(random.uniform(*self._THS_PAGING_JITTER_S))
             url = self._THS_INDUSTRY_SUMMARY_URL.format(page=page)
             headers = {
-                "User-Agent": THS_UA,
                 "Referer": self._THS_INDUSTRY_INDEX_URL,
                 "X-Requested-With": "XMLHttpRequest",
                 "Cookie": f"v={self._v_token()}",
@@ -2116,7 +2111,7 @@ class ThsFetcher(BaseFetcher):
         Returns body on 2xx. Raises DataFetchError on non-2xx so the
         upstream failure surfaces in the response / 503 path.
         """
-        headers = {"User-Agent": THS_UA, "Cookie": f"v={self._v_token()}"}
+        headers = {"Cookie": f"v={self._v_token()}"}
         try:
             r = self._http_get(url, headers=headers, timeout=self._THS_BOARD_LIST_TIMEOUT)
         except Exception as e:

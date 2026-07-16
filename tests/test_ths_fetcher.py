@@ -1102,11 +1102,17 @@ class TestGetBoardStocks:
         assert "/field/199112/" in url
         assert "/page/1/" in url
         assert "/ajax/1/" in url
-        # Cookie + UA + Referer + XHR header (THS AJAX requires XHR)
+        # Cookie + Referer + XHR header (THS AJAX requires XHR).
+        # User-Agent is NOT pre-set by the caller — _http_get's guard
+        # injects a random UA from utils.http._UA_POOL so the q.10jqka
+        # anti-bot layer sees UA diversity across requests (audit M11).
         headers = first_call.kwargs["headers"]
         assert headers["Cookie"] == "v=x"
         assert "Referer" in headers
-        assert "User-Agent" in headers
+        assert "User-Agent" not in headers, (
+            f"caller pre-sets User-Agent; _http_get's UA rotation cannot fire. "
+            f"Headers: {headers!r}"
+        )
         assert headers["X-Requested-With"] == "XMLHttpRequest"
 
         # Output schema — baseline fields populated
