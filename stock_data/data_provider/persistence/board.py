@@ -1282,6 +1282,13 @@ def upsert_membership_bulk(
             (each thread should own its own connection).
 
     Implementation notes:
+        - DELETE-then-INSERT inside the same ``with conn:`` transaction:
+          stocks that left the board upstream are purged so the cache
+          reflects the current snapshot rather than a monotonic union of
+          all historical members. Both backfill tools
+          (``tools/build_membership_index.py``, ``persistence/backfill.py``)
+          pass the full board membership per call — partial-update
+          callers would silently lose rows.
         - Uses INSERT OR REPLACE so refreshed_at = CURRENT_TIMESTAMP.
         - One executemany call (one transaction) for the whole batch.
         - Returns the number of stock rows passed in (rows upserted).
@@ -1294,6 +1301,12 @@ def upsert_membership_bulk(
         conn = get_connection()
     with conn:
         cursor = conn.cursor()
+        # Purge stale members that left the board upstream, scoped to
+        # (board_code, source) so other boards / source labels are untouched.
+        cursor.execute(
+            "DELETE FROM stock_board_membership WHERE board_code = ? AND source = ?",
+            (board_code, source),
+        )
         rows = [
             (
                 board_code,
@@ -1857,6 +1870,15 @@ def update_cached_board_stocks(board_code: str, source: str, stocks: list) -> in
     try:
         with conn:
             cursor = conn.cursor()
+            # Purge stale members that left the board upstream, scoped to
+            # (board_code, source). The fetch path always re-reads the full
+            # board on cache miss, so DELETE-then-INSERT inside one
+            # transaction is the correct "snapshot replace" semantics —
+            # partial-update callers would lose rows.
+            cursor.execute(
+                "DELETE FROM stock_board_membership WHERE board_code = ? AND source = ?",
+                (board_code, source),
+            )
             cursor.executemany(
                 """INSERT OR REPLACE INTO stock_board_membership
                    (board_code, source, stock_code, stock_name,

@@ -34,6 +34,86 @@ from stock_data.api.cache import (
 )
 
 
+class TestCacheEndpointRespectsDisable:
+    """cache_endpoint wrapper must honor the global ENABLE_API_CACHE switch.
+
+    Pre-2026-07-16 the wrapper unconditionally read/wrote the cache — the
+    ``_ENABLE_CACHE`` flag only gated ``cached_lookup`` / ``cached_store``
+    helpers (used by a small subset of routes). Operators toggling
+    ``ENABLE_API_CACHE=false`` to debug stale data saw ~20 cache_endpoint
+    routes still hit memory. This pins the contract that the wrapper
+    short-circuits when caching is disabled.
+    """
+
+    def test_cache_endpoint_bypasses_when_disabled(self, monkeypatch):
+        from cachetools import TTLCache
+
+        from stock_data.api import cache as cache_mod
+
+        # Use a fresh throwaway cache so prior tests can't pollute the key.
+        isolated = TTLCache(maxsize=4, ttl=60)
+        monkeypatch.setattr(cache_mod, "_ENABLE_CACHE", False)
+
+        calls = {"n": 0}
+
+        def underlying(*args, **kwargs):
+            calls["n"] += 1
+            return {"args": args, "kwargs": kwargs, "n": calls["n"]}
+
+        @cache_mod.cache_endpoint(
+            cache_fn=lambda *a, **kw: isolated,
+            key_builder=lambda *a, **kw: "k",
+            hit_label="unit-test",
+        )
+        def handler(x):
+            return underlying(x)
+
+        # First call: with disable, must invoke underlying directly (no write).
+        out1 = handler(1)
+        assert out1 == {"args": (1,), "kwargs": {}, "n": 1}
+        assert calls["n"] == 1
+        # The cache MUST be untouched when disabled.
+        assert "k" not in isolated
+
+        # Second call: still no cache hit, underlying fires again.
+        out2 = handler(2)
+        assert out2 == {"args": (2,), "kwargs": {}, "n": 2}
+        assert calls["n"] == 2
+        assert "k" not in isolated
+
+    def test_cache_endpoint_caches_when_enabled(self, monkeypatch):
+        """Companion test: when _ENABLE_CACHE is True, wrapper caches as before.
+
+        Guards against the new guard accidentally short-circuiting the
+        normal path.
+        """
+        from cachetools import TTLCache
+
+        from stock_data.api import cache as cache_mod
+
+        isolated = TTLCache(maxsize=4, ttl=60)
+        monkeypatch.setattr(cache_mod, "_ENABLE_CACHE", True)
+
+        calls = {"n": 0}
+
+        def underlying():
+            calls["n"] += 1
+            return calls["n"]
+
+        @cache_mod.cache_endpoint(
+            cache_fn=lambda *a, **kw: isolated,
+            key_builder=lambda *a, **kw: "k",
+            hit_label="unit-test",
+        )
+        def handler():
+            return underlying()
+
+        assert handler() == 1
+        assert handler() == 1  # cache hit, no second underlying call
+        assert calls["n"] == 1
+        assert isolated["k"] == 1
+
+
 class TestCacheKeyBuilders:
     """Test cache key generation for each API endpoint."""
 

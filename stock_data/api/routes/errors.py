@@ -17,14 +17,17 @@ such construction behind FastAPI's request-validation layer where possible.
 
 Usage:
     @router.get('/path', ...)
+    @endpoint_meta(...)         # OUTER (above @map_errors / @cache_endpoint)
     @map_errors
-    @cache_endpoint(...)        # optional
-    @endpoint_meta(...)
+    @cache_endpoint(...)        # optional; INNERMOST
     def handler(...): ...
 
-The order matters: ``@map_errors`` must be **outside** ``@cache_endpoint``
-(both are outside ``@endpoint_meta``) so the exception handler catches
-anything either layer raises.
+The order matters: ``@endpoint_meta`` must be the **outermost** non-router
+decorator so FastAPI captures the same function object that ``REGISTRY[f]``
+was keyed on. ``@map_errors`` sits **outside** ``@cache_endpoint`` so the
+exception handler catches anything either layer raises. (Documented 2026-07-16;
+the previous "INNER" wording was inverted relative to the actual order used
+in every route file under ``api/routes/``.)
 """
 
 import logging

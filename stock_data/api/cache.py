@@ -320,6 +320,13 @@ def cache_endpoint(
     error contract. Without that decorator, exceptions raised by the wrapped
     function propagate unchanged.
 
+    Honours the global ``ENABLE_API_CACHE`` toggle (default ``true``). When
+    ``ENABLE_API_CACHE=false`` the wrapper short-circuits straight through
+    to the wrapped function — neither reads from nor writes to the cache.
+    This matches the contract of :func:`cached_lookup` / :func:`cached_store`
+    so operators can disable the entire in-memory cache layer with one env
+    var (added 2026-07-16 per architecture-review §H2).
+
     Args:
         cache_fn: ``(*args, **kwargs) -> TTLCache``. Both fixed-cache
             endpoints (``cache_fn=lambda *a, **kw: get_quote_cache()``) and
@@ -335,16 +342,23 @@ def cache_endpoint(
 
     Usage:
         @router.get('/path')
+        @endpoint_meta(...)        # OUTER (above @map_errors / @cache_endpoint)
         @map_errors
         @cache_endpoint(get_x_cache, make_x_key, 'label')
-        @endpoint_meta(...)
         def handler(...): ...
+
+    Note: ``@endpoint_meta`` is the outermost non-router decorator — the
+    actual order used by every route file. (Documented 2026-07-16; the
+    previous "INNER" wording in this Usage block was inverted relative to
+    reality.)
     """
     from functools import wraps
 
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            if not _ENABLE_CACHE:
+                return func(*args, **kwargs)
             cache = cache_fn(*args, **kwargs)
             cache_key = key_builder(*args, **kwargs)
             if cache_key in cache:
