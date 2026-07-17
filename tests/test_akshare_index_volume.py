@@ -1,18 +1,21 @@
-"""P2-2: akshare index daily K-line volume must be converted 手→股.
+"""P2-2 + P3-a5: akshare index daily K-line volume must be converted 手→股.
 
-Background (``docs/optimization-plan-2026-07-16.md`` §P2-2):
+Background (``docs/optimization-plan-2026-07-16.md`` §P2-2 / §P3-a5):
 * Stock K-line already multiplies volume by 100 (lots → shares) per
   spec §3.4 — verified by ``tests/test_volume_unit_unification.py``.
 * Index daily K-line silently stayed in 手 until this change, so an
   akshare(P3)→zhitu(P5) failover would jump the volume by 100× with
   no signal to the client (no volume_unit field on index responses).
-* Tencent's ``_INDEX_TX_MAP`` maps upstream ``amount`` (not ``volume``)
-  into the standard ``volume`` column; that mapping is the M8 audit
-  flag and must NOT be multiplied by 100 here.
-
-These tests pin both branches of the new logic so a future refactor
-that reverts Sina/EM (real volume) or accidentally multiplies Tencent
-(amount-as-volume) gets caught immediately.
+* Tencent's ``_INDEX_TX_MAP`` renames upstream ``amount`` → ``volume``.
+  Per akshare docs (``docs/akshare/index/stock_zh_index_daily_tx.md``:
+  "amount ... 注意单位: 手"), Tencent's ``amount`` column is in 手 — same
+  unit as Sina/EM's ``volume``. The 2026-07-17 live probe
+  (``scripts/probe_tencent_index_amount.py``) confirmed via magnitude
+  reasoning (5.97e10 股 for 上证指数 daily volume, vs ~5.97e8 元 which
+  would be ~1000× too small for actual turnover).
+  ⇒ Tencent path ALSO needs *100. The previous "skip *100 for amount"
+  assumption was the M8 audit's "wrong-direction hypothesis" — resolved
+  by the live probe.
 """
 from __future__ import annotations
 
@@ -66,18 +69,25 @@ class TestEastMoneyIndexVolumeMultiplied:
         assert out["volume"].iloc[0] == 2_500_000
 
 
-class TestTencentIndexVolumeSkipped:
-    """Tencent's ``_INDEX_TX_MAP`` maps upstream ``amount`` to ``volume`` (M8).
+class TestTencentIndexVolumeMultiplied:
+    """P3-a5 (M8) fix: Tencent's ``amount`` column is in 手 too.
 
-    Multiplying by 100 would compound the unit confusion flagged in the
-    M8 audit. The normalize path must leave the value as-is until M8 is
-    resolved (live probe + decide whether to drop the column or rename
-    it to ``amount``).
+    Resolved by live-network probe 2026-07-17:
+    ``scripts/probe_tencent_index_amount.py`` confirmed magnitude (HS300
+    daily ~2.8e8, matches Sina/EM volume-in-手), and akshare docs
+    ``stock_zh_index_daily_tx.md`` explicitly annotate the ``amount``
+    column with "注意单位: 手". The previous "skip *100" assumption was
+    the M8 audit's hypothesis — wrong direction. Tencent path now
+    behaves identically to Sina/EM: *100 conversion runs.
+
+    This test replaces the prior ``TestTencentIndexVolumeSkipped`` (which
+    codified the inverted assumption that every probed live row violated —
+    the magnitude heuristic in ``scripts/probe_tencent_index_amount.py``
+    matches EM volume-in-手 for HS300 daily, plus akshare docs explicitly
+    annotate ``amount`` as 手).
     """
 
-    def test_tx_volume_is_not_multiplied(self):
-        # Build a fixture that mimics Tencent's actual column layout:
-        # there is no upstream ``volume`` column, only ``amount``.
+    def test_tx_amount_volume_is_multiplied_by_100(self):
         raw = pd.DataFrame(
             {
                 "date": ["2026-06-29"],
@@ -85,16 +95,16 @@ class TestTencentIndexVolumeSkipped:
                 "close": [3510.0],
                 "high": [3520.0],
                 "low": [3490.0],
-                "amount": [9_999_999.0],  # value that should NOT be touched
+                "amount": [9_999_999.0],
             }
         )
         out = normalize_index_df(raw, "000300", _INDEX_TX_MAP)
         assert "volume" in out.columns
-        # Tencent maps amount→volume; the *100 logic must detect the
-        # mapping brought volume from ``amount`` (not ``volume``) and
-        # skip multiplication. If a future change accidentally applies
-        # *100 here, the volume becomes 999_999_900 and this fails.
-        assert int(out["volume"].iloc[0]) == 9_999_999
+        # 9_999_999 手 × 100 = 999_999_900 股 — same canonical unit as Sina/EM.
+        assert int(out["volume"].iloc[0]) == 999_999_900, (
+            f"Tencent amount→volume must apply *100 (per akshare doc "
+            f"'注意单位: 手' + live probe); got {out['volume'].iloc[0]!r}"
+        )
 
 
 class TestVolumeEdgeCases:

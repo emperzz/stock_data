@@ -1046,10 +1046,18 @@ class ZhituFetcher(BaseFetcher):
             m = re.search(r"-?\d+", bh_raw.replace(",", ""))
             change_num = int(m.group(0)) if m else 0
             # 新增 / 减少 flips the sign of the magnitude.
-            if "新增" in bh_raw and change_num > 0:
+            #
+            # Live-network probe (scripts/probe_zhitu_holder_num.py, 2026-07-17)
+            # verified across 105 records that the intuitive semantic is the
+            # CORRECT one — "新增N" means holder_num went UP by N, "减少N" means
+            # DOWN by N. The previous sign convention (新增→-, 减少→+) was
+            # inverted across every single row. The docs example referenced in
+            # the prior comment appears to have been misread; this fix aligns
+            # the output with the actual upstream meaning.
+            if "减少" in bh_raw and change_num > 0:
                 change_num = -change_num
-            elif "减少" in bh_raw and change_num > 0:
-                pass  # already positive — matches the docs example
+            elif "新增" in bh_raw and change_num > 0:
+                pass  # already positive — 新增 means actual increase
             rows.append(
                 {
                     "date": date_str,

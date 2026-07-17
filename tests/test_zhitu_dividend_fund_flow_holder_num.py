@@ -398,7 +398,11 @@ class TestGetHolderNumChange:
         assert len(result) == 2
         assert result[0]["date"] == "2025-03-31"
         assert result[0]["holder_num"] == 517695
-        assert result[0]["change_num"] == 28718  # 减少 → positive magnitude
+        # P3-a4 (M17) fix: "减少N" means holder_num dropped by N → negative sign.
+        # Live-network probe (scripts/probe_zhitu_holder_num.py, 2026-07-17)
+        # verified across 105 rows that the intuitive semantic matches Zhitu's
+        # actual gdhs delta; the previous "减少→positive" convention was inverted.
+        assert result[0]["change_num"] == -28718
         # Zhitu doesn't expose change_ratio / avg_shares.
         assert result[0]["change_ratio"] == 0.0
         assert result[0]["avg_shares"] == 0.0
@@ -418,8 +422,13 @@ class TestGetHolderNumChange:
         assert [r["date"] for r in result] == ["2025-03-31", "2024-06-30", "2023-12-31"]
 
     @patch("stock_data.data_provider.utils.http.requests.get")
-    def test_xinzeng_flips_sign_to_negative(self, mock_get, monkeypatch):
-        """``新增1702`` → change_num == -1702 (negative means share count grew)."""
+    def test_xinzeng_keeps_positive(self, mock_get, monkeypatch):
+        """P3-a4 (M17): ``新增1702`` → change_num == +1702.
+
+        Live probe confirmed: gdhs delta = +1702 when bh reads ``新增1702``.
+        Renamed from the prior ``test_xinzeng_flips_sign_to_negative`` (which
+        codified the inverted semantic that 105/105 live rows violated).
+        """
         _enable_token(self.fetcher, monkeypatch)
         mock_get.return_value = _make_json_response(
             [
@@ -427,7 +436,7 @@ class TestGetHolderNumChange:
             ]
         )
         result = self.fetcher.get_holder_num_change("600519")
-        assert result[0]["change_num"] == -1702
+        assert result[0]["change_num"] == 1702
 
     @patch("stock_data.data_provider.utils.http.requests.get")
     def test_unknown_change_text_defaults_to_zero(self, mock_get, monkeypatch):

@@ -57,18 +57,21 @@ def normalize_index_df(
     standard columns — and differed only in their ``column_mapping`` and
     ``numeric_cols`` lists.
 
-    Volume unit conversion (P2-2 of ``docs/optimization-plan-2026-07-16.md``):
+    Volume unit conversion (P2-2 + P3-a5 of ``docs/optimization-plan-2026-07-16.md``):
     the canonical contract is **股 (shares)** per ``KLineData.volume_unit``
-    schema invariant. Sina and EM index endpoints upstream report volume
-    in **手 (lots = 100 shares)**, so when the ``column_mapping`` brings
-    in the raw ``volume`` field we ``*100`` to match the stock-K-line
-    normalization in ``AkshareFetcher._normalize_data`` (so akshare(P3)
-    index daily agrees with zhitu(P5) on the same canonical unit).
-    Tencent's ``_INDEX_TX_MAP`` maps upstream ``amount`` (not ``volume``)
-    into the standard ``volume`` column — the M8 audit flag — and that
-    path is skipped here. The detection rule is: "the column literally
-    named ``volume`` in the source DataFrame was renamed to ``volume``"
-    (identity rename), so the raw value is genuine share-count-in-手.
+    schema invariant. All three index daily endpoints upstream report
+    volume in **手 (lots = 100 shares)**:
+    - Sina / EM: raw column literally named ``volume`` → maps to ``volume``
+    - Tencent: raw column literally named ``amount`` (per akshare docs
+      "注意单位: 手") → mapped to ``volume`` via ``_INDEX_TX_MAP``
+
+    The ``*100`` conversion therefore runs for ANY mapping that produces a
+    ``volume`` column. Pre-P3-a5 the detection rule wrongly excluded the
+    ``amount → volume`` rename, leaving Tencent volume 100× smaller than
+    Sina/EM and breaking the failover invariant. The fix was verified by
+    live probe (``scripts/probe_tencent_index_amount.py``, 2026-07-17):
+    HS300 daily Tencent value ~2.8e8 matches Sina/EM magnitude, and the
+    akshare docstring explicitly annotates ``amount`` as 手.
 
     Args:
         df: Raw DataFrame from an akshare index-history API.
@@ -89,16 +92,19 @@ def normalize_index_df(
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    # 手 -> 股 (lots -> shares) per spec §3.4 — only when the raw
-    # upstream field was named ``volume``. Tencent's mapping renames
-    # ``amount`` -> ``volume``; multiplying that by 100 would compound
-    # an unrelated unit confusion (M8 still under audit). We detect
-    # the distinction by looking at which *raw* key in the mapping
-    # produces the ``volume`` column: Sina/EM use ``"volume"`` as the
-    # raw key, Tencent uses ``"amount"``.
+    # 手 -> 股 (lots -> shares) per spec §3.4. All three index daily
+    # endpoints (Sina / Tencent / EM) report volume in 手. Tencent's
+    # column is literally named ``amount`` upstream (per akshare docs:
+    # "注意单位: 手"), so the mapping renames ``amount`` → ``volume``
+    # — but the underlying unit is still 手. The original code skipped
+    # the *100 conversion for the amount→volume mapping under the
+    # (wrong) assumption that Tencent might be reporting yuan; live
+    # probe (scripts/probe_tencent_index_amount.py, 2026-07-17) plus
+    # the akshare docstring "注意单位: 手" confirm the unit IS 手 and
+    # the conversion must run for all three sources.
     volume_source_is_lots = (
         "volume" in df.columns
-        and any(v == "volume" and k == "volume" for k, v in column_mapping.items())
+        and any(v == "volume" for k, v in column_mapping.items())
     )
     if volume_source_is_lots:
         df["volume"] = df["volume"].apply(
