@@ -35,6 +35,15 @@ class SDKFetcherMixin:
         _TOKEN_ENV_VAR : str | None  — env var name for the credential.
                                        Set to None for tokenless SDKs
                                        (e.g. Baostock).
+        _TOKEN_REQUIRED: bool        — when True (default), the env-var
+                                       gate at ``_ensure_api`` short-
+                                       circuits init if the token is
+                                       unset. Subclasses whose
+                                       ``_init_sdk`` accepts an empty
+                                       token (anonymous mode, e.g.
+                                       ZzshareFetcher) override to
+                                       False so the empty-token path
+                                       is reachable.
         _SDK_NAME      : str        — human-readable name for log/error
                                        messages. Defaults to the class name.
 
@@ -69,6 +78,14 @@ class SDKFetcherMixin:
     _init_error: str | None = None
     _api: Any = None
 
+    #: Class-level flag: when True (default), the env-var gate at
+    #: ``_ensure_api`` short-circuits init if ``_TOKEN_ENV_VAR`` is unset.
+    #: Subclasses whose ``_init_sdk`` accepts an empty token (anonymous mode)
+    #: override to ``False`` so the empty-token path is reachable. The
+    #: per-method ``_init_sdk`` is the source of truth for "what does
+    #: empty token mean"; this flag only controls whether the gate fires.
+    _TOKEN_REQUIRED: bool = True
+
     def _ensure_api(self) -> None:
         """Lazily initialise the SDK (once per process).
 
@@ -87,7 +104,14 @@ class SDKFetcherMixin:
             cls._init_attempted = True
             env_var = getattr(self, "_TOKEN_ENV_VAR", None)
             cls._cls_token = os.getenv(env_var, "").strip() if env_var else ""
-            if env_var and not cls._cls_token:
+            # Gate fires only when: env_var declared AND token absent AND
+            # the subclass declared token as required. Subclasses with
+            # ``_TOKEN_REQUIRED=False`` and an anonymous-capable
+            # ``_init_sdk`` (e.g. ZzshareFetcher) fall through to init
+            # with an empty token; ``_init_sdk`` then constructs the
+            # anonymous client.
+            token_required = getattr(self, "_TOKEN_REQUIRED", True)
+            if env_var and not cls._cls_token and token_required:
                 cls._init_error = f"{env_var} not set"
                 logger.warning(
                     f"[{cls.__name__}] {cls._init_error}"
@@ -96,7 +120,10 @@ class SDKFetcherMixin:
             try:
                 cls._api = self._init_sdk(cls._cls_token)
                 cls._init_ok = True
-                logger.info(f"[{cls.__name__}] Initialized successfully")
+                logger.info(
+                    f"[{cls.__name__}] Initialized successfully"
+                    + ("" if cls._cls_token else " (anonymous)")
+                )
             except Exception as e:
                 cls._init_error = str(e)
                 logger.warning(f"[{cls.__name__}] SDK init failed: {e}")
@@ -115,12 +142,17 @@ class SDKFetcherMixin:
         """Return a human-readable reason this fetcher is unavailable.
 
         Distinguishes "token env var missing" (user fixable) from "SDK
-        init failed" (likely transient or package not installed).
+        init failed" (likely transient or package not installed). When
+        the subclass declared token as OPTIONAL (``_TOKEN_REQUIRED=False``),
+        an empty env var is not by itself an unavailability reason —
+        the anonymous init may have succeeded or failed on its own
+        merits; we surface that init error instead.
         """
         if self.is_available():
             return None
         env_var = getattr(self, "_TOKEN_ENV_VAR", None)
-        if env_var and not self.__class__._cls_token:
+        token_required = getattr(self, "_TOKEN_REQUIRED", True)
+        if env_var and not self.__class__._cls_token and token_required:
             return (
                 f"{env_var} environment variable not set "
                 f"(required by {self.name})"

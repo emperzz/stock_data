@@ -167,6 +167,62 @@ class TestZzshareFetcherAvailability:
             assert "zzshare" in reason, f"unavailable_reason should mention 'zzshare', got: {reason!r}"
 
 
+class TestZzshareFetcherTokenOptional:
+    """Token is OPTIONAL for ZzshareFetcher: ``_init_sdk`` supports an empty
+    token (``DataApi()`` anonymous). The mixin's ``_ensure_api`` must NOT
+    short-circuit on missing token — it must fall through to ``_init_sdk`` so
+    the anonymous branch can run. Regression: previously the mixin
+    unconditionally bailed out with ``_init_error='ZZSHARE_TOKEN not set'``,
+    leaving ``_api=None`` and ``get_all_boards`` silently returning ``[]``.
+    """
+
+    @staticmethod
+    def _sdk_present(name, *args, **kwargs):
+        return MagicMock() if name == "zzshare" else None
+
+    def test_ensure_api_succeeds_without_token(self, monkeypatch):
+        """Without ZZSHARE_TOKEN but with the ``zzshare`` package importable,
+        ``_ensure_api()`` must succeed: ``_init_ok=True``, ``_api`` set to the
+        anonymous DataApi instance. Pre-fix: ``_init_error='ZZSHARE_TOKEN not set'``
+        and ``_api=None``.
+        """
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+
+        fake_instance = MagicMock(name="anonymous_dataapi_instance")
+        fake_dataapi = MagicMock(return_value=fake_instance, name="DataApi")
+
+        with patch("importlib.util.find_spec", side_effect=self._sdk_present), \
+             patch("zzshare.client.DataApi", fake_dataapi, create=True):
+            fetcher = ZzshareFetcher()
+            fetcher._ensure_api()
+
+        assert ZzshareFetcher._init_ok is True, (
+            f"_init_ok should be True after anonymous init; "
+            f"got init_error={ZzshareFetcher._init_error!r}"
+        )
+        assert ZzshareFetcher._api is fake_instance
+        # DataApi() called with NO token (anonymous).
+        fake_dataapi.assert_called_once_with()
+
+    def test_ensure_api_passes_token_when_set(self, monkeypatch):
+        """When ZZSHARE_TOKEN is set, ``_ensure_api`` must thread it through
+        to ``DataApi(token=...)`` (regression guard for the optional path:
+        making the token gate skippable must not break the token path)."""
+        monkeypatch.setenv("ZZSHARE_TOKEN", "test-token-xyz")
+
+        fake_instance = MagicMock(name="token_dataapi_instance")
+        fake_dataapi = MagicMock(return_value=fake_instance)
+
+        with patch("importlib.util.find_spec", side_effect=self._sdk_present), \
+             patch("zzshare.client.DataApi", fake_dataapi, create=True):
+            fetcher = ZzshareFetcher()
+            fetcher._ensure_api()
+
+        assert ZzshareFetcher._init_ok is True
+        assert ZzshareFetcher._api is fake_instance
+        fake_dataapi.assert_called_once_with(token="test-token-xyz")
+
+
 class TestKLineMethodsRaise:
     def test_fetch_raw_data_raises_for_unsupported_freq(self):
         fetcher = ZzshareFetcher()

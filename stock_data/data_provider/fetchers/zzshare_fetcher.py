@@ -136,16 +136,22 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         | DataCapability.HOT_TOPICS
     )
 
-    # SDKFetcherMixin declarations. Token is optional (anonymous works
-    # for most endpoints); _init_sdk handles the empty-token case.
+    # SDKFetcherMixin declarations. Token is optional — the zzshare SDK
+    # accepts anonymous init (``DataApi()``) for most endpoints, so the
+    # mixin's "env var unset → bail" gate is disabled via
+    # ``_TOKEN_REQUIRED=False``. With a token the SDK upgrades to the
+    # authenticated client transparently inside ``_init_sdk``.
     _TOKEN_ENV_VAR = "ZZSHARE_TOKEN"
+    _TOKEN_REQUIRED = False
     _SDK_NAME = "zzshare"
 
     def __init__(self):
         pass
 
     def _init_sdk(self, token: str) -> Any:
-        """Initialise the zzshare SDK. Token is optional."""
+        """Initialise the zzshare SDK. Token is optional — empty/missing
+        token falls through to anonymous ``DataApi()``.
+        """
         if importlib.util.find_spec("zzshare") is None:
             raise ImportError("zzshare SDK not importable (pip install zzshare)")
         from zzshare.client import DataApi  # type: ignore
@@ -155,11 +161,13 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         return DataApi()
 
     def is_available(self) -> bool:
-        """True iff the zzshare PyPI package is importable. Token is optional.
+        """True iff the zzshare PyPI package is importable.
 
-        Overrides the mixin's is_available() (which triggers _ensure_api)
-        because Zzshare only requires the SDK to be installed — token is
-        checked lazily inside per-method calls via _ensure_api().
+        Overrides the mixin's ``is_available()`` (which triggers
+        ``_ensure_api``) to avoid probing the SDK at availability-check
+        time — token is checked lazily on the first per-method call. The
+        actual ``_api`` is populated lazily inside the first method that
+        calls ``_ensure_api()`` (see ``_TOKEN_REQUIRED=False`` above).
         """
         return importlib.util.find_spec("zzshare") is not None
 
