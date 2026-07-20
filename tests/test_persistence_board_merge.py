@@ -65,7 +65,22 @@ class TestResolveThsCidFromPlatecode:
         assert board_mod._resolve_ths_cid_from_platecode("885642") == "301558"
 
     def test_industry_returns_same_as_platecode(self, fresh_db):
-        """Industry: code=881270, cid=NULL (industry has no separate cid)."""
+        """Industry: code=881270, cid=881270 (industry has no separate cid —
+        the platecode IS the cid). Post-2026-07-20 contract: both columns
+        store the same value."""
+        _seed_board(
+            code="881270",
+            cid="881270",
+            name="半导体",
+            board_type="industry",
+            source="ths",
+        )
+        assert board_mod._resolve_ths_cid_from_platecode("881270") == "881270"
+
+    def test_industry_legacy_cid_null_falls_back_to_code(self, fresh_db):
+        """Defensive: a partially-migrated industry row where cid=NULL
+        (legacy) still resolves via the code-column fallback. Guards
+        against future migrations that might leave cid NULL for industry."""
         _seed_board(
             code="881270",
             cid=None,
@@ -73,9 +88,7 @@ class TestResolveThsCidFromPlatecode:
             board_type="industry",
             source="ths",
         )
-        # Industry board's cid column stores the same value as code (or NULL);
-        # the function returns whichever the row holds.
-        assert board_mod._resolve_ths_cid_from_platecode("881270") in ("881270", None)
+        assert board_mod._resolve_ths_cid_from_platecode("881270") == "881270"
 
     def test_unknown_returns_none(self, fresh_db):
         """Unknown platecode → None (caller falls back to zzshare-only)."""

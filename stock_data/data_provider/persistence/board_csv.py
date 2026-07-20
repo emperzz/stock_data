@@ -50,18 +50,15 @@ _MEMBERSHIP_COLS = {
     "board_type",
     "subtype",
 }
-# Eastmoney kept its legacy 3-col format (``board_type, board_code,
-# board_name``) as a separate import path because the source CSV
-# predates the 7-col schema unification. The 7-col loader handles THS
-# (full-schema) and any future source that adopts the unified layout.
-_EASTMONEY_LEGACY_COLS = {"board_type", "board_code", "board_name"}
-
-_VALID_STOCK_CODE = re.compile(r"^\d{6}$")
-
-# Sources supported by seed_stock_board_from_csv. The two CSV shapes
-# (full-schema 7-col THS, legacy 3-col eastmoney) correspond to the two
-# loaders; any other source value would silently filter every row.
+# Sources supported by seed_stock_board_from_csv. All currently
+# supported sources share the same 7-col schema; post-2026-07-20
+# the legacy 3-col eastmoney loader was deleted (its dispatch branch
+# in seed_stock_board_from_csv was removed when the schema unified).
+# Any other source value would silently filter every row.
 _SUPPORTED_STOCK_BOARD_SOURCES: frozenset[str] = frozenset({"ths", "eastmoney"})
+
+# 6-digit ASCII stock code pattern, used to filter membership CSV rows.
+_VALID_STOCK_CODE = re.compile(r"^\d{6}$")
 
 # Cap on how many sample rows are retained for the EOF summary warning.
 # Without this, a 100k+ row CSV with all-bad rows would accumulate 100k
@@ -92,10 +89,9 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
     """Insert/REPLACE rows from a stock_board-style CSV into the DB.
 
     Args:
-        source: 'ths' or 'eastmoney' — both now use the unified 7-col
-            schema (post-2026-07-20; pre-2026-07-20 eastmoney had a
-            3-col legacy shape ``board_type, board_code, board_name``
-            that has since been aligned).
+        source: One of ``{'ths', 'eastmoney'}``. Both now use the
+            unified 7-col schema; legacy 3-col eastmoney was removed
+            2026-07-20 when the schema unified across sources.
         csv_path: Path to the CSV file.
 
     Returns:
@@ -119,7 +115,7 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
 
 
 def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
-    """Full-schema 7-col CSV path (THS uses this).
+    """Full-schema 7-col CSV loader (THS + eastmoney use this).
 
     Wrong-source rows are collected and reported as ONE summary warning at
     EOF (with first 3 samples) — avoids WARN spam with 5000+ rows.
@@ -193,86 +189,6 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
         source,
         skipped_wrong_source_count,
         skipped_empty_code_count,
-    )
-    return len(rows)
-
-
-def _seed_eastmoney_board_csv(csv_path: Path) -> int:
-    """3-col CSV path. Fills source='eastmoney', subtype=board_type,
-    cid=NULL, updated_at=NOW.
-
-    Invalid rows (empty board_code or board_type not in
-    ``VALID_SUBTYPES_BY_SOURCE['eastmoney']``) are skipped with a
-    sample+count summary, mirroring the THS loader's pattern.
-    """
-    _validate_csv_columns(csv_path, _EASTMONEY_LEGACY_COLS)
-    valid_types = set(board_mod.VALID_SUBTYPES_BY_SOURCE.get("eastmoney", {}).keys())
-    conn = get_connection()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    rows = []
-    skipped_empty_code_samples: list[str] = []
-    skipped_empty_code_count = 0
-    skipped_invalid_type_samples: list[str] = []
-    skipped_invalid_type_count = 0
-    for r in _open_csv(csv_path):
-        code = r.get("board_code")
-        btype = r.get("board_type")
-        if not code:
-            if len(skipped_empty_code_samples) < _MAX_SAMPLE_RETAINED:
-                skipped_empty_code_samples.append(
-                    f"board_name={r.get('board_name')!r}"
-                )
-            skipped_empty_code_count += 1
-            continue
-        if btype not in valid_types:
-            if len(skipped_invalid_type_samples) < _MAX_SAMPLE_RETAINED:
-                skipped_invalid_type_samples.append(
-                    f"code={code!r} board_type={btype!r}"
-                )
-            skipped_invalid_type_count += 1
-            continue
-        rows.append(
-            (
-                code,
-                r["board_name"],
-                btype,
-                btype,  # subtype = board_type (eastmoney 唯一合法 subtype)
-                "eastmoney",  # source hardcoded
-                None,  # cid = NULL (eastmoney boards have no THS cid)
-                now,
-            )
-        )
-    if skipped_empty_code_count:
-        logger.warning(
-            "[CSVSeed] %s: %d rows had empty board_code; first samples: %s",
-            csv_path.name,
-            skipped_empty_code_count,
-            skipped_empty_code_samples,
-        )
-    if skipped_invalid_type_count:
-        logger.warning(
-            "[CSVSeed] %s: %d rows had invalid board_type (expected %s); first samples: %s",
-            csv_path.name,
-            skipped_invalid_type_count,
-            sorted(valid_types),
-            skipped_invalid_type_samples,
-        )
-    if not rows:
-        logger.warning("[CSVSeed] %s: 0 rows after validation", csv_path.name)
-        return 0
-    with conn:
-        conn.executemany(
-            """INSERT OR REPLACE INTO stock_board
-               (code, name, board_type, subtype, source, cid, updated_at)
-               VALUES (?,?,?,?,?,?,?)""",
-            rows,
-        )
-    logger.info(
-        "[CSVSeed] %s: wrote %d boards (eastmoney, empty_code=%d, invalid_type=%d)",
-        csv_path.name,
-        len(rows),
-        skipped_empty_code_count,
-        skipped_invalid_type_count,
     )
     return len(rows)
 

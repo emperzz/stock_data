@@ -113,9 +113,41 @@ def test_get_board_stocks_returns_tuple(monkeypatch):
     # Default (include_quote=False) → zzshare first, so origin="zzshare"
     # (the mock-manager always returns the rows, regardless of source label).
     assert origin in ("zzshare", "ths", "")
-    # effective_source is always populated (P4 contract).
-    assert effective_source in ("zzshare", "ths", "")
+    # effective_source is always populated (P4 contract). Includes the
+    # post-2026-07-20 'ths-f10' label introduced when THS F10 is the
+    # serving source (see fetch_board_stocks_with_zzshare_fallback).
+    assert effective_source in ("zzshare", "ths", "ths-f10", "")
     # reason is None on the success path (mock manager always returns rows).
+    assert reason is None
+
+
+def test_get_board_stocks_f10_leg_sets_ths_f10_effective_source(monkeypatch):
+    """When the THS F10 full-listing leg fires, effective_source reports
+    'ths-f10' so clients can distinguish cache-hit, real ZZSHARE serving,
+    real THS AJAX serving, and THS F10 serving (post-2026-07-20 contract)."""
+    from stock_data.data_provider.persistence import board
+
+    class _F10OnlyMockManager:
+        # F10 returns non-empty → the helper short-circuits before ZZSHARE.
+        def get_board_stocks_full(self, board_code, source="ths", **_):
+            return (
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "ths",
+            )
+        # The other legs should never run for this test:
+        def get_board_stocks(self, *a, **kw):
+            raise AssertionError("zzshare/THS AJAX legs should not fire when F10 succeeds")
+
+    monkeypatch.setattr(
+        board,
+        "_refresh_tracker",
+        type("T", (), {"is_first_call": lambda *a: True})(),
+    )
+    stocks, _origin, effective_source, reason, _qt, _qtot = board.get_board_stocks(
+        "885914", refresh=True, manager=_F10OnlyMockManager()
+    )
+    assert len(stocks) == 1
+    assert effective_source == "ths-f10"
     assert reason is None
 
 

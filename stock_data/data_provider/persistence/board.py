@@ -406,10 +406,12 @@ def _migrate_stock_board_to_code_cid(cursor) -> None:
                 board_type,
                 subtype,
                 source,
+                -- cid: THS-internal id. For THS source, the post-migration
+                -- contract stores a non-NULL cid even for industry rows
+                -- (where platecode==code), so the resolver can rely on a
+                -- always-present THS cid. EastMoney / Zhitu still get NULL.
                 CASE
-                    WHEN source = 'ths'
-                     AND platecode IS NOT NULL
-                     AND platecode != code
+                    WHEN source = 'ths' AND code IS NOT NULL
                     THEN code
                     ELSE NULL
                 END                                    AS cid,
@@ -675,9 +677,15 @@ def _resolve_ths_cid_from_code(code: str) -> str | None:
     Single SELECT against stock_board. The same query handles both
     concept boards (cid ≠ code: 300xxx vs 885xxx) and industry
     boards (cid == code: 881xxx) — for industry the row's
-    ``code`` column stores 881xxx and the ``cid`` column also stores
-    881xxx (redundant). No special-casing by length or prefix; the
-    data layer is the single source of truth.
+    ``code`` and ``cid`` columns both store 881xxx (redundant but
+    consistent). No special-casing by length or prefix; the data
+    layer is the single source of truth.
+
+    Defensive NULL fallback: if a legacy / partially-migrated row
+    has ``cid IS NULL`` (which only happens for eastmoney / zhitu,
+    or for THS rows that pre-date the post-2026-07-20 schema fix),
+    fall back to ``code`` so callers always see a usable cid for
+    THS-routed boards.
 
     Args:
         code: THS public board code (e.g. '885642' for concept,
@@ -694,11 +702,15 @@ def _resolve_ths_cid_from_code(code: str) -> str | None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT cid FROM stock_board WHERE code = ? AND source = 'ths' LIMIT 1",
+        "SELECT code, cid FROM stock_board WHERE code = ? AND source = 'ths' LIMIT 1",
         (code,),
     )
     row = cursor.fetchone()
-    return row["cid"] if row else None
+    if row is None:
+        return None
+    # cid is the source of truth post-migration; fall back to code
+    # only when a legacy / partial-migration row left cid NULL.
+    return row["cid"] if row["cid"] is not None else row["code"] if row["code"] else None
 
 
 # Backward-compat alias — pre-2026-07-20 callers (ThsFetcher, several tests)
@@ -1022,8 +1034,6 @@ def fetch_board_stocks_with_zzshare_fallback(
                     f"({type(f10_err).__name__}: {f10_err})"
                 )
                 _f10_ret = None
-            else:
-                pass
             # Verify it's a 2-tuple; otherwise skip (mock quirk).
             if _f10_ret is not None and (
                 isinstance(_f10_ret, tuple)
@@ -1720,10 +1730,9 @@ def get_board_metadata(
 
         The ``code`` and ``cid`` keys replaced the pre-2026-07-20
         ``(code, platecode)`` pair (see spec
-        ``2026-07-20-ths-board-f10-extension-design.md`` §1.1). Backward-
-        compat: pre-existing callers that read ``platecode`` from the old
-        return shape continue to work via the :func:`get_board_metadata_compat`
-        alias — but new code should read ``code`` directly.
+        ``2026-07-20-ths-board-f10-extension-design.md`` §1.1). New code
+        reads ``code`` directly (post-migration, ``code`` IS the public
+        platecode; ``platecode`` is no longer a separate key).
     """
     init_schema()
     conn = get_connection()
@@ -1754,28 +1763,6 @@ def get_board_metadata(
         "subtype": row["subtype"] or "",
         "code": row["code"],
         "cid": row["cid"],
-    }
-
-
-def get_board_metadata_compat(
-    board_code: str, source: str
-) -> dict[str, Any] | None:
-    """Backward-compat wrapper that returns ``platecode`` instead of ``cid``.
-
-    Post-2026-07-20, callers that previously read ``meta["platecode"]``
-    can still do so via this wrapper — the wrapper maps the new
-    ``code`` value into the ``platecode`` key (and drops ``cid``).
-    New code should prefer :func:`get_board_metadata` directly.
-    """
-    meta = get_board_metadata(board_code, source)
-    if meta is None:
-        return None
-    return {
-        "name": meta["name"],
-        "type": meta["type"],
-        "subtype": meta["subtype"],
-        "code": meta["code"],
-        "platecode": meta["code"],  # post-migration: code == old platecode
     }
 
 
@@ -1993,18 +1980,22 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
                         board_type,
                         b.get("subtype") or "",
                         source,
-                        # `cid` is the THS concept internal id (3xxxxx); for
-                        # THS concept rows it lives under `code` in the
-                        # fetcher dict, distinct from `platecode`. Only write
-                        # a non-NULL cid when the two values actually differ
-                        # (otherwise we'd store BK1048/eastmoney as a false cid).
+                        # `cid` is the THS internal id. For THS source, the
+                        # fetcher dict's ``code`` key is the canonical cid
+                        # regardless of board_type:
+                        #   - THS concept: code=308791, platecode=886042
+                        #     (different — cid is the 3xxxxx)
+                        #   - THS industry: code=881270, platecode=881270
+                        #     (same — THS uses platecode as cid for
+                        #     industry; per spec the resolver returns
+                        #     the platecode as cid in this case, so we
+                        #     store the same value in `cid` rather than
+                        #     NULL to keep the resolver contract simple)
+                        # For eastmoney we keep cid=NULL — `b["code"]` is
+                        # BKxxxx there, not a THS cid.
                         (
                             b["code"]
-                            if (
-                                source == "ths"
-                                and b.get("platecode")
-                                and b["code"] != b.get("platecode")
-                            )
+                            if (source == "ths" and b.get("platecode"))
                             else None
                         ),
                         now,

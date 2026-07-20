@@ -259,8 +259,8 @@ class TestGetBoardHistory:
                     "name": "存储芯片",
                     "type": "concept",
                     "subtype": "",
-                    "code": "307940",
-                    "platecode": "886042",
+                    "code": "886042",   # post-2026-07-20: code IS the public platecode
+                    "cid": "307940",    # post-2026-07-20: cid is separate column
                 },
             ),
             patch.object(ThsFetcher, "_resolve_ths_platecode_from_cid") as scrape_mock,
@@ -364,7 +364,7 @@ class TestGetBoardHistory:
                 "stock_data.data_provider.persistence.board.get_board_metadata",
                 return_value={
                     "name": "银行", "type": "industry", "subtype": "",
-                    "code": "881270", "platecode": "881270",
+                    "code": "881270", "cid": "881270",  # post-2026-07-20: both columns identical for industry
                 },
             ),
             patch.object(ThsFetcher, "_fetch_ths_board_year", return_value=year_js_body),

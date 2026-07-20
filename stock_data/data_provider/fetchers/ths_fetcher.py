@@ -950,10 +950,13 @@ class ThsFetcher(BaseFetcher):
                 meta = get_board_metadata(board_code, "ths")
 
             if meta:
-                # Cache hit — prefer platecode if populated, else fall
-                # through to HTML scrape keyed on the cache's code (cid).
-                inner = meta.get("platecode") or None
-                cached_cid = meta.get("code")
+                # Cache hit — read public platecode from `code` (post
+                # 2026-07-20 schema rename) and the THS concept CID from
+                # the separate `cid` column. `inner` is the platecode we
+                # need for K-line URL construction; `cached_cid` is the
+                # internal concept ID that gates an HTML-scrape fallback.
+                inner = meta.get("code") or None
+                cached_cid = meta.get("cid")
             else:
                 cached_cid = None
 
@@ -2507,7 +2510,12 @@ class ThsFetcher(BaseFetcher):
             limit_up_count = None
             if len(pct_cells) >= 3:
                 def _pct(cell) -> float | None:
-                    el = cell.select_one(".upcolor, .fallcolor")
+                    # THS F10 markup uses `.upcolor` for positive pct
+                    # and `.downcolor` for negative pct (`tests/fixtures/
+                    # ths_basic_board_885914_surges.html:68` shows
+                    # `<span class="downcolor">-0.27%</span>` — note
+                    # `.fallcolor` does NOT exist on this surface).
+                    el = cell.select_one(".upcolor, .downcolor")
                     return safe_float(el.get_text(strip=True).rstrip("%")) if el else None
 
                 board_pct = _pct(pct_cells[0])

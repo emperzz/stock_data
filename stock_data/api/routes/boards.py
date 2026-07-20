@@ -746,7 +746,8 @@ def get_board_quote(
     manager = get_manager()
     # Look up board_type from the cache; the fetcher trusts the caller's
     # classification (post-2026-07-10: no more "881" magic string). The
-    # cache is keyed on (code OR platecode, source='ths') — see
+    # cache is keyed on (code, source='ths') post-2026-07-20 schema
+    # rename (was platecode OR code in the pre-rename schema) — see
     # stock_board_cache.get_board_metadata.
     metadata = stock_board_cache.get_board_metadata(board_code, "ths")
     board_type = metadata.get("type") if metadata else None
