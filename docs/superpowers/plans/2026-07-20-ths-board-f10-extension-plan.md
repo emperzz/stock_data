@@ -16,7 +16,7 @@
 
 3. **板块新闻和炒作周期未暴露** — THS F10 同一页面同时含 17 条新闻 + 5 个月份的炒作周期数据，server-render，但项目无 API 暴露。
 
-预期成果：dev box 数据库 schema 升级、`/boards/{code}/stocks` 在不需要实时行情时返回 90+ 全量、新增 2 个 REST 端点。所有现有 client 与 OpenAPI 文档保持向后兼容（新字段全部 optional）。
+预期成果：dev box 数据库 schema 升级、`/boards/{code}/stocks` 在不需要实时行情时返回 90+ 全量、新增 2 个 REST 端点。所有现有 client 与 OpenAPI 文档保持向后兼容（`include_quote=true` 行为完全不变；`include_quote=false` 走 F10 全量，`BoardStockInfo` 零字段扩展，仅 quote 字段为 None）。
 
 ---
 
@@ -100,141 +100,122 @@ print('THS sample:', conn.execute('SELECT code, cid, name FROM stock_board WHERE
 
 ---
 
-### Phase 2: 新增 3 个 fetcher 方法（无新路由）
+### Phase 2: 新增 3 个 fetcher 方法 + F10 HTML 复用（无新路由）
 
-**目标**：在 `ThsFetcher` 上加 `get_board_stocks_full` / `get_board_news` / `get_board_surges`，加 manager wrapper，加新 capability flag，写测试和 fixture。**此 phase 不动 API 路由层，新方法暂时只能从 fetcher 内部调。**
+**目标**：在 `ThsFetcher` 上加 `get_board_f10_page`（薄方法 + 短 TTL HTML 缓存）/ `get_board_stocks_full` / `get_board_news` / `get_board_surges`，加 3 个 manager wrapper，加新 capability flag，写测试和 fixture。**此 phase 不动 API 路由层，新方法暂时只能从 fetcher/manager 内部调。**
 
 1. **`stock_data/data_provider/fetchers/ths_fetcher.py`** 顶部常量：
-   - 新增 `_THS_F10_BOARD_URL = "https://basic.10jqka.com.cn/{marketid}/{platecode}/"`
-   - `_THS_F10_MARKETID = {"concept": "48", "industry": "47"}`（marketid 是 THS F10 内部市场 ID，需实测验证；fallback 到 `48`）
-   - `_THS_F10_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0 Safari/537.36"`（与现有 `THS_UA` 一致即可）
+   - 新增 `_THS_F10_BOARD_URL = "https://basic.10jqka.com.cn/48/{platecode}/"`（**v1 concept only**，URL 直接写死 `/48/`，不引入 `_THS_F10_MARKETID` 字典——industry 的 `/47/` 未实测，违反 `upstream-probe-success-case`，留到 probe 后再加）
+   - `_THS_F10_UA`：与现有 `THS_UA` 一致即可
 
-2. **新方法 `get_board_stocks_full(self, board_code, *, board_type=None, **kwargs) -> list[dict]`**：
-   - 根据 `board_type` 选 marketid；未指定则试 concept first, fallback industry
-   - `requests.get(_THS_F10_BOARD_URL.format(...), headers=..., timeout=10)`
-   - `r.encoding = "gbk"`（F10 页面也用 gbk）
+2. **新方法 `get_board_f10_page(self, board_code, *, board_type=None) -> str`**（§3.2.1，三个方法共用）：
+   - module-level `_f10_html_cache: dict[str, tuple[str, float]]`，TTL 45s
+   - 命中未过期 → 直接返回缓存的 HTML
+   - 未命中 → `requests.get(_THS_F10_BOARD_URL.format(platecode=board_code), headers=..., timeout=10)`，`r.encoding = "gbk"`
+   - HTTP 401/403 → 返回 `""`（空串，调用方各自当"无数据"处理；不缓存）
+   - HTTP 5xx / 网络失败 → 抛 `DataFetchError`（不缓存）
+   - FastAPI 同步路径无需加锁；若将来上线程池补 `threading.Lock`
+
+3. **新方法 `get_board_stocks_full(self, board_code, *, board_type=None, **kwargs) -> list[dict]`**：
+   - `html = self.get_board_f10_page(board_code, board_type=board_type)`
+   - `board_type == "industry"` → 返回 `[]` + 日志（v1 不支持，见 spec §3.2）
+   - `html == ""` → 返回 `[]`
    - BeautifulSoup 解析 `<div id="c_table">` 下 `<table class="m_table m_hl">`
-   - 每行 `<tr class="c_highlight">` 抽 7 字段（rank/code/name/exchange/limit_up_count_year/eps/float_share_yi/float_mv_yi）
-   - 从 `popInfoArr` 拿 analysis 文本（regex 提取 `var popInfoArr = [...];`，按 index 索引）
-   - HTTP 401/403 → 返回 `[]`（与现有 boundary signal 一致）
-   - HTTP 5xx / 网络失败 → 抛 `DataFetchError`
-   - HTML 解析失败（找不到 c_table）→ 抛 `DataFetchError`
+   - 每行 `<tr class="c_highlight">` 抽 3 字段：`stock_code` / `stock_name` / `exchange`，**外加 quote 字段全 None**（与 `get_board_stocks` 同 shape）
+   - **不解析** `popInfoArr` / `analysis` / `rank` / `eps` / `float_share_yi` / `float_mv_yi`（过度设计，已砍，见 spec §3.2.2）
+   - HTML 解析失败（找不到 `c_table` 且 html 非空）→ 抛 `DataFetchError`
 
-3. **新方法 `get_board_news(self, board_code, *, limit=20, board_type=None, **kwargs) -> list[dict]`**：
-   - URL 同 stocks_full
+4. **新方法 `get_board_news(self, board_code, *, limit=20, board_type=None, **kwargs) -> list[dict]`**：
+   - `html = self.get_board_f10_page(board_code, board_type=board_type)`
    - BeautifulSoup 解析 `<div class="m_box post" id="news">` 下 `<div class="newslist clearfix">`
    - 每个 `<dl>` 抽 6 字段（title/url/publish_date/publish_time/summary/source_domain）
    - `source_domain = "news.10jqka.com.cn"`（常量）
    - `publish_date` 从 URL path `/field/YYYYMMDD/` 提取
    - `rows[:limit]` 截断
 
-4. **新方法 `get_board_surges(self, board_code, *, limit=5, board_type=None, **kwargs) -> list[dict]`**：
-   - URL 同 stocks_full
+5. **新方法 `get_board_surges(self, board_code, *, limit=5, board_type=None, **kwargs) -> list[dict]`**：
+   - `html = self.get_board_f10_page(board_code, board_type=board_type)`
    - BeautifulSoup 解析 `<div class="m_box" id="period">` 下 `<div class="history clearfix">`
    - 每个 `<div class="timeline">` 抽：date / board_change_pct / sh_change_pct / limit_up_count / limit_up_stocks[]
    - 抓第 2 个 `<p class="flexcont" style="display:none;">` 拿完整涨停股列表
    - `rows[:limit]` 截断
 
-5. **`ThsFetcher.supported_data_types` (line 451)**：
+6. **`ThsFetcher.supported_data_types` (line 451)**：
    - 现有：`HOT_TOPICS | NORTH_FLOW | NEWS_FLASH | NEWS_SEARCH | STOCK_BOARD | STOCK_NEWS | ANNOUNCEMENT`
    - 改：加 `BOARD_NEWS | BOARD_SURGES`（共 8 个 flag）
 
-6. **`stock_data/data_provider/base.py`**：
+7. **`stock_data/data_provider/base.py`**：
    - `DataCapability` enum (line 167) 新增 `BOARD_NEWS = auto()` / `BOARD_SURGES = auto()`
    - `CAPABILITY_TO_METHOD` (line 223) 新增 2 条：`BOARD_NEWS → "get_board_news"`, `BOARD_SURGES → "get_board_surges"`
 
-7. **`stock_data/data_provider/manager.py`**：
+8. **`stock_data/data_provider/manager.py`**：
    - 新增 `get_board_news(self, board_code, source, limit=20, *, board_type=None)` wrapper
    - 新增 `get_board_surges(self, board_code, source, limit=5, *, board_type=None)` wrapper
+   - **新增 `get_board_stocks_full(self, board_code, source, *, board_type=None)` wrapper**（走 `_with_source`，供 Phase 3 的 persistence helper 调用；**不修改**既有 `get_board_stocks`）
    - 模式与现有 `get_board_realtime` (line 1032) 完全相同：`_with_source(source, capability=..., method_name="get_board_news", market="csi", call=lambda f: f.get_board_news(...))`
 
-8. **Tests + Fixtures**：
+9. **Tests + Fixtures**：
    - `tests/fixtures/ths_basic_board_885914_full.html` — 用今天保存的 `/tmp/ths_board_html.html` (21299 字节) + playwright 抓到的 90 行 `<tr>` HTML 拼接（dev box 操作）
    - `tests/fixtures/ths_basic_board_885914_news.html` — 单 section HTML（从今天 playwright dump 截取 `.m_box.post#news`）
    - `tests/fixtures/ths_basic_board_885914_surges.html` — 单 section HTML（截取 `.m_box#period`）
-   - `tests/test_ths_fetcher_get_board_stocks_full.py` — 单元测试 90+ 解析
+   - `tests/test_ths_fetcher_get_board_f10_page.py` — HTML 缓存命中/过期/401 返回空串
+   - `tests/test_ths_fetcher_get_board_stocks_full.py` — 单元测试 90+ 解析 + quote 字段全 None + industry 返回空
    - `tests/test_ths_fetcher_get_board_news.py` — 单元测试 17 条新闻解析
    - `tests/test_ths_fetcher_get_board_surges.py` — 单元测试 5 个月份解析
-   - `tests/test_manager_get_board_news_surges.py` — wrapper 转发验证
+   - `tests/test_manager_get_board_news_surges.py` — wrapper 转发验证（含 `get_board_stocks_full`）
    - `tests/test_capability_method_map.py` — 加 2 个 flag 的测试
 
 **Phase 2 验证**：
 ```bash
-.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher_get_board_stocks_full.py tests/test_ths_fetcher_get_board_news.py tests/test_ths_fetcher_get_board_surges.py tests/test_manager_get_board_news_surges.py tests/test_capability_method_map.py -v
+.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher_get_board_f10_page.py tests/test_ths_fetcher_get_board_stocks_full.py tests/test_ths_fetcher_get_board_news.py tests/test_ths_fetcher_get_board_surges.py tests/test_manager_get_board_news_surges.py tests/test_capability_method_map.py -v
 ```
 
 ---
 
-### Phase 3: 改 `/boards/{code}/stocks` 走 F10 全量
+### Phase 3: 改 `/boards/{code}/stocks` 走 F10 全量（分流在 persistence helper）
 
-**目标**：`include_quote=false`（默认）时，`get_board_stocks` 自动改调 `get_board_stocks_full`，90+ 全量回填 stock_board_membership 缓存；`include_quote=true` 行为不变。
+**目标**：`include_quote=false`（默认）时，`persistence/board.py::fetch_board_stocks_with_zzshare_fallback` 优先走 THS F10 全量腿（90+），失败退回既有 ZZSHARE+THS 链；`include_quote=true` **完全不变**。`BoardStockInfo` 不加字段、路由层零映射。
 
-1. **`stock_data/data_provider/manager.py::get_board_stocks`** (line 880)：
-   - 现有方法签名不变
-   - **内部判断新增**：
+1. **`stock_data/data_provider/persistence/board.py::fetch_board_stocks_with_zzshare_fallback`** (line 745) — **分流放这里，不放 manager**：
+   - 项目架构（CLAUDE.md「Persistence-Only Routing」）：路由层 → `persistence/board.py::get_board_stocks`（board.py:928）→ cold-path 委托本 helper → 本 helper 调 `manager.get_board_stocks`（board.py:846/864/889/900/911）
+   - 本 helper 在 `source='ths'` + `include_quote=False` 时**已有**「ZZSHARE primary + THS fallback」链（board.py:944-961）。新增第三条腿（THS F10 full，首选）：
      ```python
-     if not include_quote and source == "ths":
-         rows = _with_source(
-             source, capability=STOCK_BOARD, market="csi",
-             method_name="get_board_stocks_full",
-             call=lambda f: f.get_board_stocks_full(board_code, board_type=board_type),
-         )
-         # rows 形状与 get_board_stocks 不同（无实时行情字段）
-         # 路由层负责字段映射
-         return rows
+     if source == "ths" and not include_quote:
+         # leg 3 (新增): THS F10 full — 首选，90+ 全量
+         try:
+             f10_rows, _ = manager.get_board_stocks_full(board_code, source="ths", board_type=board_type)
+             if f10_rows:                           # F10 成功 → 用它
+                 effective_source = "ths-f10"
+                 return f10_rows, origin, effective_source, reason, quote_truncated=False, len(f10_rows)
+         except DataFetchError:
+             pass                                   # F10 失败 → 退回下方既有 ZZSHARE+THS 链
+     # leg 1 + leg 2 (既有): ZZSHARE primary + THS fallback ... 不动
      ```
-   - **关键问题**：现有 `get_board_stocks` 返回 `list[dict]`，字段是 `BoardStockInfo` 的全集（带 quote 字段）；`get_board_stocks_full` 返回的 dict 缺这些字段，但**多**了 5 个新字段（rank/limit_up_count_year/eps/float_share_yi/float_mv_yi/analysis）
-   - **方案 A（推荐）**：返回不同的 dict 集合，路由层在 `include_quote=false` 路径用 `_convert_full_to_stocks_info(rows)` helper 把 `limit_up_count_year → rank` 等映射成统一格式；缺失 quote 字段填 None
-   - **方案 B**：让 fetcher 返回统一 shape，full 方法自己填 quote=None。**不推荐** — 引入不必要的 None 字段污染
+   - `effective_source` 取 `ths-f10`/`zzshare`/`ths`（既有契约，CLAUDE.md「effective_source」段）
+   - **cache key 不变**（仍按 `(board_code, source='ths')` 索引），原 `lazy fill` 行为自动复用；F10 成功后回填 stock_board_membership（snapshot replace）
+   - **三条腿只取一条结果**（非拼接）：F10 成功就用 F10 的 90+；F10 失败才退回旧链。避免"50 + 40+ 拼接"破坏 sort 契约
 
-   选方案 A。
+2. **`stock_data/data_provider/manager.py::get_board_stocks`** — **不修改**：
+   - 既有方法签名/行为完全不变。Phase 2 新增的 `manager.get_board_stocks_full` 是并列 wrapper，仅供 persistence helper leg 3 调用，不侵入 `get_board_stocks`
 
-2. **`stock_data/data_provider/persistence/board.py::get_board_stocks`** (line 927) — 缓存回填逻辑：
-   - 现有逻辑：`include_quote=true` → 调 fetcher → 写入 stock_board_membership
-   - **修改**：`include_quote=false` 路径也调 `get_board_stocks_full` → 写入 stock_board_membership
-   - **cache key 不变**（仍按 `(board_code, source)` 索引），因此原 `lazy fill` 行为自动复用
+3. **`stock_data/api/schemas.py::BoardStockInfo`** (line 364) — **不加字段**：
+   - 原 spec 拟加的 `rank / limit_up_count_year / eps / float_share_yi / float_mv_yi / analysis` 6 字段全部砍掉（过度设计，见 spec §3.2.2 / §3.8）
+   - `get_board_stocks_full` 返回的 dict 与 `get_board_stocks` 同 shape（quote 字段全 None），`BoardStockInfo` 零扩展
 
-3. **`stock_data/api/schemas.py::BoardStockInfo`** (line 364)：
-   - 新增 5 个 optional 字段：
-     ```python
-     rank: int | None = None
-     limit_up_count_year: int | None = None
-     eps: float | None = None
-     float_share_yi: float | None = None
-     float_mv_yi: float | None = None
-     analysis: str | None = None
-     ```
-   - 老客户端读不到这些字段 → 无影响（schema 默认值 None）
-   - 新客户端读 `include_quote=false` 时拿到 90+ 只 + 5 个新字段
-
-4. **`stock_data/api/routes/boards.py::get_board_stocks`** (line 415) — 字段映射：
-   - `include_quote=false` 时，rows 来自 `get_board_stocks_full`，需要做字段映射：
-     ```python
-     mapped = [
-         BoardStockInfo(
-             code=r["stock_code"],
-             name=r.get("stock_name", ""),
-             exchange=...,
-             price=None, change_pct=None, change_amount=None, ...  # 全部 None
-             rank=r.get("rank"),
-             limit_up_count_year=r.get("limit_up_count_year"),
-             eps=r.get("eps"),
-             float_share_yi=r.get("float_share_yi"),
-             float_mv_yi=r.get("float_mv_yi"),
-             analysis=r.get("analysis"),
-         )
-         for r in rows
-     ]
-     ```
+4. **`stock_data/api/routes/boards.py::get_board_stocks`** (line 415) — **零映射**：
+   - `include_quote=false` 路径直接把 `get_board_stocks_full` 返回的 dict 喂给 `BoardStockInfo`（quote 字段 None，schema 自然接受）
+   - **删掉**原 spec 的 `_convert_full_to_stocks_info` helper 映射逻辑
+   - docstring 更新：`include_quote=false` 走 F10 全量、`include_quote=true` 行为不变
 
 5. **Tests**：
-   - `tests/test_boards.py::test_get_board_stocks*` — 新增 `include_quote=false` 走 F10 的 mock
+   - `tests/test_boards.py::test_get_board_stocks*` — 新增 `include_quote=false` 走 F10 的 mock（验证 90+ + quote 字段 None + `effective_source='ths-f10'`）
    - `tests/test_board_stocks_forward_route.py` — 改测试 fixture 路径
-   - `tests/test_manager_get_board_stocks_kwargs.py` — 加 `include_quote=false` 路径测试
+   - `tests/test_persistence_board_fallback.py`（新增或扩展现有）— F10 成功用 F10 / F10 失败退回 ZZSHARE+THS 链
+   - `tests/test_manager_get_board_stocks_kwargs.py` — 加 `get_board_stocks_full` wrapper 转发测试（不动 `get_board_stocks`）
 
 **Phase 3 验证**：
 ```bash
-.venv/Scripts/python.exe -m pytest tests/test_boards.py tests/test_board_stocks_forward_route.py tests/test_manager_get_board_stocks_kwargs.py -v
+.venv/Scripts/python.exe -m pytest tests/test_boards.py tests/test_board_stocks_forward_route.py tests/test_persistence_board_fallback.py tests/test_manager_get_board_stocks_kwargs.py -v
 ```
 
 ---
@@ -283,13 +264,13 @@ print('THS sample:', conn.execute('SELECT code, cid, name FROM stock_board WHERE
 2. **`stock_data/api/routes/boards.py`**：
    - 新增 `/boards/{board_code}/news` 路由：
      - `@router.get` + `@endpoint_meta(capabilities=["BOARD_NEWS"], fetcher_method="get_board_news")` + `@map_errors` + `@cache_endpoint(ttl=1800)`
-     - Query: `limit=20` (1-50), `source="ths"` (Literal)
+     - Query: `limit=20` (1-50), `source: Literal["ths"] = Query("ths")`
      - 实现：调 `manager.get_board_news(board_code, source, limit)` → 映射成 `BoardNewsResponse`
-     - 错误处理：`source != "ths"` → `HTTPException(400, detail={"error": "unsupported_source"})`
+     - **不写** `if source != "ths": raise HTTPException(400)`——`Literal["ths"]` 已在类型层保证，非 ths 值由 FastAPI 自动返回 422。避免 422/400 不一致
    - 新增 `/boards/{board_code}/surges` 路由：
-     - `@router_meta(capabilities=["BOARD_SURGES"], fetcher_method="get_board_surges")` + `@cache_endpoint(ttl=3600)`
-     - Query: `limit=5` (1-12), `source="ths"`
-     - 同样 400 处理
+     - `@endpoint_meta(capabilities=["BOARD_SURGES"], fetcher_method="get_board_surges")` + `@cache_endpoint(ttl=3600)`
+     - Query: `limit=5` (1-12), `source: Literal["ths"] = Query("ths")`
+     - 同样不写手动 400 校验
 
 3. **Tests**：
    - `tests/test_boards_news_route.py` — 路由 + schema + source validation
@@ -327,10 +308,11 @@ print('sample:', d['stocks'][0] if d.get('stocks') else None)
 
 - `stock_data/data_provider/persistence/board.py` — 25+ 处 `platecode` 重命名，DDL 变更，6 个 reader 函数签名/返回值变化
 - `stock_data/data_provider/persistence/board_csv.py` — 列名集合重写，1 个统一 loader
-- `stock_data/data_provider/fetchers/ths_fetcher.py` — 3 个新方法，5+ 处字段引用重命名
-- `stock_data/data_provider/manager.py` — 1 个新判断分支 + 2 个新 wrapper
-- `stock_data/api/routes/boards.py` — 1 个现有路由行为变化 + 2 个新路由
-- `stock_data/api/schemas.py` — 5 个新 optional 字段 + 4 个新 model
+- `stock_data/data_provider/fetchers/ths_fetcher.py` — 1 个薄方法（`get_board_f10_page` + 短 TTL HTML 缓存）+ 3 个解析方法，5+ 处字段引用重命名
+- `stock_data/data_provider/manager.py` — 3 个新 wrapper（`get_board_news` / `get_board_surges` / `get_board_stocks_full`），**不修改** `get_board_stocks`
+- `stock_data/data_provider/persistence/board.py`（Phase 3）— `fetch_board_stocks_with_zzshare_fallback` 新增 THS F10 leg（分流点在此，不在 manager）
+- `stock_data/api/routes/boards.py` — 2 个新路由（`include_quote=true` 路径不变）
+- `stock_data/api/schemas.py` — **`BoardStockInfo` 不加字段**，仅 4 个新 model（`BoardNewsItem`/`BoardNewsResponse`/`BoardSurgeItem`/`BoardSurgesResponse`）
 
 **复用的现有工具**：
 
@@ -371,16 +353,15 @@ import json, sys
 d = json.load(sys.stdin)
 assert len(d['stocks']) >= 80, f'expected 80+, got {len(d[\"stocks\"])}'
 print('stocks count:', len(d['stocks']))
-print('has rank field:', 'rank' in d['stocks'][0])
-print('has eps field:', 'eps' in d['stocks'][0])
+print('quote fields None:', d['stocks'][0].get('price') is None)
 "
 
 curl -s "http://localhost:8888/api/v1/boards/885914/news?limit=3" | python -m json.tool
 curl -s "http://localhost:8888/api/v1/boards/885914/surges?limit=3" | python -m json.tool
 
-# 验证 source validation
+# 验证 source validation（Literal["ths"] → 非 ths 由 FastAPI 返回 422，非手动 400）
 curl -s "http://localhost:8888/api/v1/boards/885914/news?source=zhitu" -o /dev/null -w "%{http_code}\n"
-# 期望: 400
+# 期望: 422
 
 # 验证 explorer manifest
 curl -s "http://localhost:8888/control/api-manifest" | python -c "
