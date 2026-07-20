@@ -200,6 +200,8 @@ class DataCapability(Flag):
     STOCK_NEWS = auto()  # 个股新闻（按股票代码 → 列表）
     MORNING_BRIEFING = auto()  # 财联社早报（按日取全文本）
     MARKET_RECAP = auto()  # 财联社焦点复盘（按日取全文本）
+    BOARD_NEWS = auto()  # 板块热点新闻（THS F10 .m_box#news 抓取）
+    BOARD_SURGES = auto()  # 板块炒作周期（THS F10 .history.timeline 抓取）
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -245,6 +247,8 @@ CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.STOCK_NEWS: "get_stock_news",
     DataCapability.MORNING_BRIEFING: "get_morning_briefing",
     DataCapability.MARKET_RECAP: "get_market_recap",
+    DataCapability.BOARD_NEWS: "get_board_news",
+    DataCapability.BOARD_SURGES: "get_board_surges",
 }
 
 

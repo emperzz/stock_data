@@ -23,10 +23,15 @@ from ...data_provider.core.types import safe_float, safe_int
 from ...data_provider.persistence import board as stock_board_cache
 from ...data_provider.persistence import trade_calendar
 from ..cache import (
+    cache_endpoint,
     cached_lookup,
     cached_store,
+    get_board_news_cache,
+    get_board_surges_cache,
     get_pools_cache,
     is_cache_enabled,
+    make_board_news_cache_key,
+    make_board_surges_cache_key,
     make_pools_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
@@ -34,9 +39,13 @@ from ..schemas import (
     BoardInfo,
     BoardKlineResponse,
     BoardListResponse,
+    BoardNewsItem,
+    BoardNewsResponse,
     BoardQuoteResponse,
     BoardStockInfo,
     BoardStocksResponse,
+    BoardSurgeItem,
+    BoardSurgesResponse,
     ErrorResponse,
     KLineData,
     StockBoardInfo,
@@ -737,7 +746,8 @@ def get_board_quote(
     manager = get_manager()
     # Look up board_type from the cache; the fetcher trusts the caller's
     # classification (post-2026-07-10: no more "881" magic string). The
-    # cache is keyed on (code OR platecode, source='ths') — see
+    # cache is keyed on (code, source='ths') post-2026-07-20 schema
+    # rename (was platecode OR code in the pre-rename schema) — see
     # stock_board_cache.get_board_metadata.
     metadata = stock_board_cache.get_board_metadata(board_code, "ths")
     board_type = metadata.get("type") if metadata else None
@@ -994,6 +1004,94 @@ def get_board_history(
         period=frequency,
         data=kline_data,
         source=origin,
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Board F10 板块新闻 + 板块炒作周期 (added 2026-07-20 per spec §3.5.2 / §3.5.3)
+# ────────────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/boards/{board_code}/news",
+    response_model=BoardNewsResponse,
+    responses={
+        422: {"model": ErrorResponse, "description": "Invalid source"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["boards"],
+)
+@endpoint_meta(
+    summary="板块热点新闻 (THS basic.10jqka.com.cn/48/{code}/ F10 news section). "
+            "v1 仅 THS 实现,?source=ths 是默认值(其他 source → 422 由 Literal 保证)。",
+    markets=["csi"],
+    capabilities=["BOARD_NEWS"],
+    fetcher_method="get_board_news",
+)
+@map_errors
+@cache_endpoint(
+    lambda *a, **kw: get_board_news_cache(),
+    make_board_news_cache_key,
+    "board_news",
+)
+def get_board_news_route(
+    board_code: str = Path(max_length=30, description="Board code (e.g. 885914 for 煤炭概念)"),
+    limit: int = Query(20, ge=1, le=50, description="Max news items to return (1-50)"),
+    source: Literal["ths"] = Query("ths"),
+) -> BoardNewsResponse:
+    """Get board-level news feed from THS F10 page (source=ths only).
+
+    The ``source`` query param is a Literal['ths'] so FastAPI returns 422
+    on any non-ths value; we don't add a manual 400 check on top of that.
+    """
+    manager = get_manager()
+    rows, origin = manager.get_board_news(board_code, source, limit=limit)
+    return BoardNewsResponse(
+        board_code=board_code,
+        source=origin,
+        total=len(rows),
+        data=[BoardNewsItem(**r) for r in rows],
+    )
+
+
+@router.get(
+    "/boards/{board_code}/surges",
+    response_model=BoardSurgesResponse,
+    responses={
+        422: {"model": ErrorResponse, "description": "Invalid source"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["boards"],
+)
+@endpoint_meta(
+    summary="板块炒作周期 (THS F10 #period section). "
+            "v1 仅 THS 实现,?source=ths 是默认值(其他 source → 422 由 Literal 保证)。",
+    markets=["csi"],
+    capabilities=["BOARD_SURGES"],
+    fetcher_method="get_board_surges",
+)
+@map_errors
+@cache_endpoint(
+    lambda *a, **kw: get_board_surges_cache(),
+    make_board_surges_cache_key,
+    "board_surges",
+)
+def get_board_surges_route(
+    board_code: str = Path(max_length=30, description="Board code (e.g. 885914)"),
+    limit: int = Query(5, ge=1, le=12, description="Max surge-cycle entries to return (1-12)"),
+    source: Literal["ths"] = Query("ths"),
+) -> BoardSurgesResponse:
+    """Get board-level 炒作周期 (peak speculation cycles) from THS F10 page.
+
+    ``source`` query param is a Literal['ths'] — non-ths values yield 422.
+    """
+    manager = get_manager()
+    rows, origin = manager.get_board_surges(board_code, source, limit=limit)
+    return BoardSurgesResponse(
+        board_code=board_code,
+        source=origin,
+        total=len(rows),
+        data=[BoardSurgeItem(**r) for r in rows],
     )
 
 

@@ -410,13 +410,15 @@ class BoardStocksResponse(BaseModel):
     # 总是填充 (P4): 主要 fetcher 链 = 'ths' / 'zzshare' / 'eastmoney' / 'zhitu'.
     # 当 query_source == effective_source 时未触发 fallback; 不同时表示
     # source='ths' + include_quote=False 路径内部 fallback 到 ZZSHARE.
+    # 'ths-f10' (post-2026-07-20) 表示 THS F10 全量页直拉 (90+ 成员) 胜出。
     effective_source: str | None = Field(
         default=None,
         description=(
-            "实际服务本响应的 fetcher 名称 (ths / zzshare / eastmoney / zhitu). "
+            "实际服务本响应的 fetcher 名称 (ths / zzshare / eastmoney / zhitu / ths-f10). "
             "路由层总是填充——None 只在直构造 Pydantic 模型 (如 schema 测试) 不传参时出现. "
             "区别于 query_source 即可判 fallback: "
-            "query_source='ths' 且 effective_source='zzshare' 表示走 ZZSHARE fallback. "
+            "query_source='ths' 且 effective_source='zzshare' 表示走 ZZSHARE fallback; "
+            "query_source='ths' 且 effective_source='ths-f10' 表示 THS F10 全量胜出. "
             "缓存命中时该字段固定为 'ths' (因为 stock_board_membership 表不存 per-row origin 列); "
             "需要暴露真实 upstream 时传 ?refresh=true."
         ),
@@ -542,6 +544,83 @@ class BoardKlineResponse(BaseModel):
             "Data source fetcher name — one of 'EastMoneyFetcher', 'ZzshareFetcher', 'ThsFetcher'"
         ),
     )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Board F10 page sections (added 2026-07-20 per spec §3.5.2 / §3.5.3).
+# Both endpoints source-routed to ``source='ths'`` (THS-only v1).
+# ────────────────────────────────────────────────────────────────────────
+
+
+class BoardNewsItem(BaseModel):
+    """A single news item from a board's THS F10 news section."""
+
+    title: str = Field(description="News title (Chinese)")
+    url: str = Field(description="Absolute URL to the article on news.10jqka.com.cn")
+    publish_date: str = Field(
+        default="",
+        description="Publish date in 'YYYY-MM-DD' format (extracted from URL path; may be '' for malformed URLs)",
+    )
+    publish_time: str = Field(
+        default="",
+        description="Publish time label as shown on the page (e.g. '20:13'); sometimes relative or empty",
+    )
+    summary: str = Field(
+        default="",
+        description="Optional one-line preview text from the upstream card; '' when upstream has no preview",
+    )
+    source_domain: str = Field(
+        default="news.10jqka.com.cn",
+        description="Source domain of the news URL",
+    )
+
+
+class BoardNewsResponse(BaseModel):
+    """Response for /boards/{board_code}/news (THS F10 板块热点新闻)."""
+
+    board_code: str = Field(description="Board code echoed back")
+    source: str = Field(default="ths", description="Source label (THS-only v1)")
+    total: int = Field(description="Number of items in `data`")
+    data: list[BoardNewsItem] = Field(default_factory=list, description="News items")
+
+
+class BoardSurgeItem(BaseModel):
+    """A single 炒作周期 entry from a board's THS F10 surges section."""
+
+    date: str = Field(description="Date label (typically YYYY-MM-DD)")
+    board_change_pct: float | None = Field(
+        default=None,
+        description="Board index change percent for the cycle (positive=up, negative=down)",
+    )
+    sh_change_pct: float | None = Field(
+        default=None,
+        description="Shanghai composite change percent for the same cycle",
+    )
+    limit_up_count: int = Field(
+        default=0,
+        description="Count of stocks that hit the 涨停 limit during this cycle",
+    )
+    limit_up_stocks: list[str] = Field(
+        default_factory=list,
+        description="Six-digit stock codes that hit the 涨停 limit during this cycle",
+    )
+    up_count: int | None = Field(
+        default=None,
+        description="Count of up-movers on the cycle day (F10 doesn't expose; reserved for future)",
+    )
+    down_count: int | None = Field(
+        default=None,
+        description="Count of down-movers on the cycle day (F10 doesn't expose; reserved for future)",
+    )
+
+
+class BoardSurgesResponse(BaseModel):
+    """Response for /boards/{board_code}/surges (THS F10 板块炒作周期)."""
+
+    board_code: str = Field(description="Board code echoed back")
+    source: str = Field(default="ths", description="Source label (THS-only v1)")
+    total: int = Field(description="Number of items in `data`")
+    data: list[BoardSurgeItem] = Field(default_factory=list, description="Surge/cycle entries")
 
 
 class StockBoardInfo(BaseModel):

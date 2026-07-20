@@ -473,12 +473,13 @@ class TestGetStockMembershipsBoardNameOverride:
         board_code=885652 (THS concept), name/board_type/subtype all buggy.
         """
         conn = db_mod.get_connection()
-        # stock_board row mimicking ThsFetcher.get_all_boards output:
-        # code = cid, platecode = the 885xxx the public API uses
+        # stock_board row mimicking ThsFetcher.get_all_boards output,
+        # post-2026-07-20 schema: `code` IS the public code (885xxx) and
+        # the THS concept cid is stored in the dedicated `cid` column.
         conn.execute(
-            "INSERT INTO stock_board (code, name, board_type, subtype, source, platecode) "
+            "INSERT INTO stock_board (code, name, board_type, subtype, source, cid) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            ("300351", "东百集团", "concept", "同花顺概念", "ths", "885652"),
+            ("885652", "东百集团", "concept", "同花顺概念", "ths", "300351"),
         )
         # membership row with the buggy legacy values (board_code = platecode,
         # NOT cid; board_name = board_code; board_type = ''; subtype = NULL)

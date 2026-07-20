@@ -1065,6 +1065,76 @@ class DataFetcherManager:
             method_name="get_board_realtime",
         )
 
+    def get_board_stocks_full(
+        self,
+        board_code: str,
+        source: str,
+        *,
+        board_type: str | None = None,
+    ) -> tuple[list[dict], str]:
+        """Get THS F10 concept-page full membership (90+ members).
+
+        Source-routed (``_with_source``) — only ``source='ths'`` is valid.
+        No failover: only ThsFetcher implements
+        :meth:`ThsFetcher.get_board_stocks_full` (the F10 page is THS-only).
+
+        Invoked by ``persistence/board.py::fetch_board_stocks_with_zzshare_fallback``
+        (leg 3 of the include_quote=False path, added 2026-07-20 per
+        spec §3.5.1). Distinct from ``get_board_stocks`` (q.10jqka AJAX
+        path with hard cap 50).
+        """
+        return self._with_source(
+            source=source,
+            capability=DataCapability.STOCK_BOARD,
+            market="csi",
+            op_label=f"board stocks full {board_code} ({source})",
+            call=lambda f: (f.get_board_stocks_full(board_code, board_type=board_type), f.name),
+            method_name="get_board_stocks_full",
+        )
+
+    def get_board_news(
+        self,
+        board_code: str,
+        source: str,
+        limit: int = 20,
+        *,
+        board_type: str | None = None,
+    ) -> tuple[list[dict], str]:
+        """Get THS F10 news section ``<div class="m_box post" id="news">``.
+
+        Source-routed — only ``source='ths'`` is valid; the route layer
+        pins this via ``Literal["ths"]``.
+        """
+        return self._with_source(
+            source=source,
+            capability=DataCapability.BOARD_NEWS,
+            market="csi",
+            op_label=f"board news {board_code} ({source})",
+            call=lambda f: (f.get_board_news(board_code, limit=limit, board_type=board_type), f.name),
+            method_name="get_board_news",
+        )
+
+    def get_board_surges(
+        self,
+        board_code: str,
+        source: str,
+        limit: int = 5,
+        *,
+        board_type: str | None = None,
+    ) -> tuple[list[dict], str]:
+        """Get THS F10 surges section ``<div class="m_box" id="period">``.
+
+        Source-routed — only ``source='ths'`` is valid.
+        """
+        return self._with_source(
+            source=source,
+            capability=DataCapability.BOARD_SURGES,
+            market="csi",
+            op_label=f"board surges {board_code} ({source})",
+            call=lambda f: (f.get_board_surges(board_code, limit=limit, board_type=board_type), f.name),
+            method_name="get_board_surges",
+        )
+
     # ---------- eastmoney datacenter endpoints ----------
 
     def get_dragon_tiger(self, code: str, trade_date: str = "") -> tuple[dict, str]:

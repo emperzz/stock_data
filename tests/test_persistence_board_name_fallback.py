@@ -109,29 +109,34 @@ def test_get_board_name_with_fallback_returns_none_when_no_match_in_boards():
     assert name is None
 
 
-def test_get_board_name_matches_ths_concept_by_platecode():
-    """THS concept board: input is platecode (885xxx) but stock_board stores code=cid.
+def test_get_board_name_matches_ths_concept_by_code():
+    """THS concept board: input is the public code (885xxx).
 
-    Regression for the board.name==code bug: get_board_name must match on
-    platecode too (mirrors _read_membership_entries' OR-join fix, 2026-07-09).
+    Pre-2026-07-20 the test wrote ``code=cid`` + ``platecode=public`` and
+    relied on the OR-join (``WHERE code = ? OR platecode = ?``) to match
+    callers passing either form. Post-migration ``code`` IS the public
+    identifier (``code=885595`` for the 央企国企改革 概念), so a single
+    ``WHERE code = ?`` covers every input form uniformly.
     """
     board_mod.update_cached_boards(
         "concept",
         "ths",
         [{"code": "301546", "name": "央企国企改革", "platecode": "885595"}],
     )
-    # Client addresses the board by platecode (885595), not cid.
+    # Client addresses the board by public code (885595). The update helper
+    # promotes ``platecode`` → ``code`` (the new cross-source public key).
     assert board_mod.get_board_name("885595", "ths") == "央企国企改革"
-    # cid still works (industry boards pass code==platecode).
-    assert board_mod.get_board_name("301546", "ths") == "央企国企改革"
+    # Direct cid lookup is no longer supported via get_board_name — the
+    # column-name mapping moved cid out of the searchable key. Callers that
+    # only know the cid must use _resolve_ths_cid_from_code (not this helper).
 
 
-def test_get_board_name_platecode_or_no_false_match_for_eastmoney():
-    """eastmoney rows have platecode=NULL → OR's second arm is UNKNOWN, no false hit."""
+def test_get_board_name_no_false_match_for_eastmoney():
+    """eastmoney rows have cid=NULL → no false hit on a THS concept code."""
     board_mod.update_cached_boards(
         "concept",
         "eastmoney",
-        [{"code": "BK0996", "name": "人形机器人"}],  # platecode defaults to NULL
+        [{"code": "BK0996", "name": "人形机器人"}],
     )
     assert board_mod.get_board_name("BK0996", "eastmoney") == "人形机器人"
     assert board_mod.get_board_name("885595", "eastmoney") is None

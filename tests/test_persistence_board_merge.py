@@ -20,12 +20,17 @@ def fresh_db(tmp_path, monkeypatch):
 
 def _seed_board(
     code: str,
-    platecode: str | None,
-    name: str,
+    cid: str | None = None,
+    name: str = "",
     board_type: str = "concept",
     source: str = "ths",
 ) -> None:
-    """Insert a row into stock_board directly via the public upsert helper."""
+    """Insert a row into stock_board directly via the public upsert helper.
+
+    Post-2026-07-20: ``code`` is the cross-source public board identifier
+    (THS platecode 885xxx/881xxx, eastmoney BKxxxx, zhitu sw_xxx); ``cid``
+    is the THS-internal concept id (3xxxxx), NULL for industry/eastmoney.
+    """
     from datetime import datetime
 
     conn = board_mod.get_connection()
@@ -33,7 +38,7 @@ def _seed_board(
     with conn:
         conn.execute(
             """INSERT OR REPLACE INTO stock_board
-               (code, name, board_type, subtype, source, platecode, updated_at)
+               (code, name, board_type, subtype, source, cid, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 code,
@@ -41,7 +46,7 @@ def _seed_board(
                 board_type,
                 "同花顺概念" if board_type == "concept" else "同花顺行业",
                 source,
-                platecode,
+                cid,
                 now,
             ),
         )
@@ -49,10 +54,10 @@ def _seed_board(
 
 class TestResolveThsCidFromPlatecode:
     def test_concept_returns_different_cid(self, fresh_db):
-        """Concept: platecode=885642 → cid=301558 (different value)."""
+        """Concept: code=885642 (public) → cid=301558 (THS internal)."""
         _seed_board(
-            code="301558",
-            platecode="885642",
+            code="885642",        # public platecode (was old platecode column)
+            cid="301558",          # THS concept cid (was old code column)
             name="跨境电商",
             board_type="concept",
             source="ths",
@@ -60,10 +65,25 @@ class TestResolveThsCidFromPlatecode:
         assert board_mod._resolve_ths_cid_from_platecode("885642") == "301558"
 
     def test_industry_returns_same_as_platecode(self, fresh_db):
-        """Industry: platecode=881270 → code=881270 (industry has no separate cid)."""
+        """Industry: code=881270, cid=881270 (industry has no separate cid —
+        the platecode IS the cid). Post-2026-07-20 contract: both columns
+        store the same value."""
         _seed_board(
             code="881270",
-            platecode="881270",
+            cid="881270",
+            name="半导体",
+            board_type="industry",
+            source="ths",
+        )
+        assert board_mod._resolve_ths_cid_from_platecode("881270") == "881270"
+
+    def test_industry_legacy_cid_null_falls_back_to_code(self, fresh_db):
+        """Defensive: a partially-migrated industry row where cid=NULL
+        (legacy) still resolves via the code-column fallback. Guards
+        against future migrations that might leave cid NULL for industry."""
+        _seed_board(
+            code="881270",
+            cid=None,
             name="半导体",
             board_type="industry",
             source="ths",
@@ -77,8 +97,8 @@ class TestResolveThsCidFromPlatecode:
     def test_only_matches_ths_source(self, fresh_db):
         """Platecode row under source='zzshare' must NOT match (we want ths only)."""
         _seed_board(
-            code="300000",
-            platecode="885000",
+            code="885000",
+            cid=None,
             name="x",
             board_type="concept",
             source="zzshare",
@@ -263,6 +283,10 @@ class TestFetchBoardStocksWithZzshareFallback:
         def side_effect(*a, **kw):
             return by_source_return.get(kw.get('source'), ([], 'unknown'))
         mgr.get_board_stocks.side_effect = side_effect
+        # Phase 3 (2026-07-20) added the F10 leg (manager.get_board_stocks_full).
+        # Default the F10 leg to empty so the test exercises the legacy
+        # ZZSHARE→THS chain (this test class predates that change).
+        mgr.get_board_stocks_full.return_value = ([], "noop")
         return mgr
 
     def test_source_ths_routes_to_ths_only(self, mock_cid_resolver):
@@ -411,6 +435,7 @@ class TestFetchBoardStocksWithZzshareFallback:
         from unittest.mock import MagicMock
         mgr = MagicMock()
         mgr.get_board_stocks.return_value = ([], 'zzshare')
+        mgr.get_board_stocks_full.return_value = ([], 'noop')  # F10 leg (Phase 3) → empty → continue
         with mock_cid_resolver({('885642',): None}):
             stocks, origin, effective_source, reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
                 board_code='885642', source='ths',

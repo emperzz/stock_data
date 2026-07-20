@@ -45,6 +45,8 @@ _TTL_NEWS_SEARCH = int(os.getenv("CACHE_TTL_NEWS_SEARCH", "300"))
 _TTL_NEWS_CONTENT = int(os.getenv("CACHE_TTL_NEWS_CONTENT", "3600"))
 _TTL_NEWS_FLASH = int(os.getenv("CACHE_TTL_NEWS_FLASH", "60"))  # 7x24 快讯 (60s)
 _TTL_CLS_FEED = int(os.getenv("CACHE_TTL_CLS_FEED", "3600"))  # CLS 早报/复盘 (1h, immutable)
+_TTL_BOARD_NEWS = int(os.getenv("CACHE_TTL_BOARD_NEWS", "1800"))    # 板块新闻 (30min, 半实时)
+_TTL_BOARD_SURGES = int(os.getenv("CACHE_TTL_BOARD_SURGES", "3600"))  # 板块炒作周期 (1h, 月度粒度变动慢)
 
 # Cache instances
 _dragontiger_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_DRAGON_TIGER)
@@ -64,6 +66,8 @@ _news_search_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_SEARCH)
 _news_content_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_CONTENT)
 _news_flash_cache: TTLCache = TTLCache(maxsize=64, ttl=_TTL_NEWS_FLASH)
 _cls_feed_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_CLS_FEED)
+_board_news_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_BOARD_NEWS)
+_board_surges_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_BOARD_SURGES)
 
 
 def get_quote_cache() -> TTLCache:
@@ -156,6 +160,32 @@ def get_news_flash_cache() -> TTLCache:
 def get_cls_feed_cache() -> TTLCache:
     """Return the CLS feed (早报/复盘) cache instance (TTL 3600s by default)."""
     return _cls_feed_cache
+
+
+def get_board_news_cache() -> TTLCache:
+    """Return the board news (THS F10 ``#news``) cache instance.
+
+    TTL default 1800s (30min) — boards news feed is fire-and-forget
+    (no historical archive), so a longer TTL than K-line is fine.
+    """
+    return _board_news_cache
+
+
+def get_board_surges_cache() -> TTLCache:
+    """Return the board surges (THS F10 ``#period``) cache instance.
+
+    TTL default 3600s (1h) — surges aggregate per-month, so a longer
+    TTL is safe (re-reading every day is plenty fresh).
+    """
+    return _board_surges_cache
+
+
+def make_board_news_cache_key(board_code: str, limit: int, **_) -> str:
+    return f"board_news:{board_code}:{limit}"
+
+
+def make_board_surges_cache_key(board_code: str, limit: int, **_) -> str:
+    return f"board_surges:{board_code}:{limit}"
 
 
 def make_cls_feed_cache_key(subject: str, date: str) -> str:
