@@ -29,9 +29,9 @@ def test_seed_stock_board_ths_full_schema(fresh_db, tmp_path):
     """7-col THS CSV → all rows written to stock_board with source='ths'."""
     csv_path = tmp_path / "stock_board_ths.csv"
     csv_path.write_text(
-        "code,name,board_type,subtype,source,platecode,updated_at\n"
-        "885001,煤炭,industry,同花顺行业,ths,881001,2026-07-12 17:30:00\n"
-        "885002,白酒,concept,同花顺概念,ths,885002,2026-07-12 17:30:00\n",
+        "code,name,board_type,subtype,source,cid,updated_at\n"
+        "885001,煤炭,industry,同花顺行业,ths,,2026-07-12 17:30:00\n"
+        "885002,白酒,concept,同花顺概念,ths,300002,2026-07-12 17:30:00\n",
         encoding="utf-8-sig",
     )
 
@@ -41,22 +41,25 @@ def test_seed_stock_board_ths_full_schema(fresh_db, tmp_path):
     industry_rows = board_mod._read_boards_from_db("industry", "ths")
     assert len(industry_rows) == 1
     assert industry_rows[0]["code"] == "885001"
-    assert industry_rows[0]["platecode"] == "881001"
+    assert industry_rows[0]["cid"] is None  # industry has no separate cid
 
     concept_rows = board_mod._read_boards_from_db("concept", "ths")
     assert len(concept_rows) == 1
     assert concept_rows[0]["code"] == "885002"
+    assert concept_rows[0]["cid"] == "300002"
 
 
-def test_seed_eastmoney_3col_fills_defaults(fresh_db, tmp_path):
-    """3-col eastmoney CSV: source/subtype/platecode 由 loader 填充.
+def test_seed_eastmoney_full_schema_fills_defaults(fresh_db, tmp_path):
+    """7-col eastmoney CSV (post-unification): source/cid 由 loader 填充.
 
     Verifies both industry AND concept rows are written correctly
     (not just industry — avoids half-coverage regression).
     """
     csv_path = tmp_path / "stock_board_eastmoney.csv"
     csv_path.write_text(
-        "board_type,board_code,board_name\nindustry,BK1627,综合Ⅲ\nconcept,BK1701,融资融券\n",
+        "code,name,board_type,subtype,source,cid,updated_at\n"
+        "BK1627,综合Ⅲ,industry,industry,eastmoney,,2026-07-12 17:30:00\n"
+        "BK1701,融资融券,concept,concept,eastmoney,,2026-07-12 17:30:00\n",
         encoding="utf-8-sig",
     )
 
@@ -67,7 +70,7 @@ def test_seed_eastmoney_3col_fills_defaults(fresh_db, tmp_path):
     assert len(industry_rows) == 1
     assert industry_rows[0]["code"] == "BK1627"
     assert industry_rows[0]["subtype"] == "industry"
-    assert industry_rows[0]["platecode"] is None
+    assert industry_rows[0]["cid"] is None
     assert industry_rows[0]["source"] == "eastmoney"
 
     # concept 行也必须正确写入(否则只验了 industry 一半覆盖)
@@ -129,10 +132,10 @@ def test_seed_full_schema_skips_wrong_source_row(fresh_db, tmp_path, caplog):
     """
     csv_path = tmp_path / "stock_board_ths.csv"
     csv_path.write_text(
-        "code,name,board_type,subtype,source,platecode,updated_at\n"
-        "885001,煤炭,industry,同花顺行业,ths,881001,2026-07-12 17:30:00\n"
-        "885002,白酒,concept,同花顺概念,eastmoney,885002,2026-07-12 17:30:00\n"
-        "885003,医药,concept,同花顺概念,ths,885003,2026-07-12 17:30:00\n",
+        "code,name,board_type,subtype,source,cid,updated_at\n"
+        "885001,煤炭,industry,同花顺行业,ths,,2026-07-12 17:30:00\n"
+        "885002,白酒,concept,同花顺概念,eastmoney,300002,2026-07-12 17:30:00\n"
+        "885003,医药,concept,同花顺概念,ths,300003,2026-07-12 17:30:00\n",
         encoding="utf-8-sig",
     )
 
@@ -160,7 +163,7 @@ def test_seed_missing_columns_raises_value_error(fresh_db, tmp_path):
     """缺必需列 → ValueError(被 seed_all_from_backup_dir 包成 log error, 不致命)."""
     csv_path = tmp_path / "stock_board_ths.csv"
     csv_path.write_text(
-        "code,name,board_type,subtype,source,updated_at\n"  # missing platecode
+        "code,name,board_type,subtype,source,updated_at\n"  # missing cid
         "885001,煤炭,industry,同花顺行业,ths,2026-07-12 17:30:00\n",
         encoding="utf-8-sig",
     )
@@ -214,8 +217,8 @@ def test_seed_all_from_backup_dir_partial_files(fresh_db, tmp_path):
     backup_dir = tmp_path / "partial_backup"
     backup_dir.mkdir()
     (backup_dir / "stock_board_ths.csv").write_text(
-        "code,name,board_type,subtype,source,platecode,updated_at\n"
-        "885001,煤炭,industry,同花顺行业,ths,881001,2026-07-12 17:30:00\n",
+        "code,name,board_type,subtype,source,cid,updated_at\n"
+        "885001,煤炭,industry,同花顺行业,ths,,2026-07-12 17:30:00\n",
         encoding="utf-8-sig",
     )
     # membership + eastmoney files intentionally absent
@@ -231,9 +234,9 @@ def test_seed_idempotent_re_run(fresh_db, tmp_path):
     """同 CSV 跑两次 → 行数不变 (INSERT OR REPLACE)."""
     csv_path = tmp_path / "stock_board_ths.csv"
     csv_path.write_text(
-        "code,name,board_type,subtype,source,platecode,updated_at\n"
-        "885001,煤炭,industry,同花顺行业,ths,881001,2026-07-12 17:30:00\n"
-        "885002,白酒,concept,同花顺概念,ths,885002,2026-07-12 17:30:00\n",
+        "code,name,board_type,subtype,source,cid,updated_at\n"
+        "885001,煤炭,industry,同花顺行业,ths,,2026-07-12 17:30:00\n"
+        "885002,白酒,concept,同花顺概念,ths,300002,2026-07-12 17:30:00\n",
         encoding="utf-8-sig",
     )
 

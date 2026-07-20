@@ -297,6 +297,21 @@ _THS_BASIC_HEADERS = {
 _THS_BOARD_KLINE_URL = "https://d.10jqka.com.cn/v4/line/bk_{inner}/{freq}/{year}.js"
 
 
+# THS F10 板块基本资料页 — server-render 一次性给"成分股全表 + 板块新闻 + 炒作周期"
+# 三段(详见 spec 2026-07-20 §3.2.1)。Marketid 直写 /48/ 对应 concept 板;
+# industry F10 (/47/) 未实测,违背 upstream-probe-success-case,留到 probe 后再加。
+# Keyed by `board_code` (the public THS platecode) — same identifier that
+# /boards/{board_code}/stocks accepts.
+_THS_F10_BOARD_URL = "https://basic.10jqka.com.cn/48/{board_code}/"
+
+# Module-level short TTL HTML cache for the F10 page. Three sections
+# (stocks / news / surges) all read the same URL; caching the HTML
+# prevents the route layer from triggering 3 separate upstream GETs
+# when a client hits all three endpoints in one window. The route-layer
+# @cache_endpoint (30min TTL) and the persistence layer's staleness
+# logic are unchanged — this cache is purely a same-process de-duper.
+_F10_HTML_TTL_SECONDS: float = 45.0
+_f10_html_cache: dict[str, tuple[str, float]] = {}
 class _ThsFreqSegment:
     """THS upstream URL segment for each K-line frequency.
 
@@ -456,6 +471,9 @@ class ThsFetcher(BaseFetcher):
         | DataCapability.STOCK_BOARD  # for board K-line (concept/industry)
         | DataCapability.STOCK_NEWS  # 新: 个股新闻 basic.10jqka.com.cn
         | DataCapability.ANNOUNCEMENT  # 新: 个股公告 basic.10jqka.com.cn
+        # 新 (2026-07-20 spec): F10 page sections
+        | DataCapability.BOARD_NEWS     # 板块热点新闻
+        | DataCapability.BOARD_SURGES   # 板块炒作周期
     )
 
     @staticmethod
@@ -2125,6 +2143,419 @@ class ThsFetcher(BaseFetcher):
 
     # ------------------------------------------------------------------
     # 热点题材 (Hot Topics)
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # 板块 F10 页面（basic.10jqka.com.cn/48/{code}/）：成分股全表 + 板块新闻 + 炒作周期
+    # (added 2026-07-20 per spec §3.2; HTML cache via _THS_F10_BOARD_URL)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _throttle_f10_cache_key(board_code: str) -> str:
+        """Stable cache key for the F10 HTML cache. Stored as-is in
+        :data:`_f10_html_cache`. The route layer wraps each public method
+        call in its own `@cache_endpoint` (30min TTL), so this cache only
+        covers intra-window multiple-section reads (stocks + news + surges
+        on the same process hit)."""
+        return f"ths-f10-html::{board_code}"
+
+    def get_board_f10_page(self, board_code: str, *, board_type: str | None = None) -> str:
+        """Fetch the THS F10 HTML page for a board, with a short TTL HTML cache.
+
+        Three downstream methods (``get_board_stocks_full``,
+        ``get_board_news``, ``get_board_surges``) all read this same page
+        and parse their respective sections. The 45-second module-level
+        cache lets a single request window issue one upstream GET even
+        when all three are called in succession.
+
+        Args:
+            board_code: THS public platecode (e.g. ``"885914"``).
+            board_type: Optional hint. ``"industry"`` short-circuits with
+                empty string (industry F10 path not probed yet — see
+                spec §3.2 stub note); ``"concept"`` / ``None`` fetches.
+
+        Returns:
+            The HTML body as GBK-decoded text, or ``""`` on:
+              - HTTP 401/403 (boundary signal — same handling as
+                ``get_board_stocks``)
+              - ``board_type="industry"`` (v1 stub — see spec §3.2)
+
+        Raises:
+            DataFetchError: 5xx / network failure (not 401/403 — those
+                are surfaced as empty string so callers can transparently
+                fall back to the existing ZZSHARE+THS chain).
+        """
+        if board_type == "industry":
+            # v1 doesn't support industry F10 — return empty so the
+            # caller's `if html == "": return []` logic kicks in.
+            logger.info(
+                f"[ThsFetcher] get_board_f10_page: industry F10 page "
+                f"not implemented in v1 (board_code={board_code!r}); "
+                f"caller should fall back to the canonical path."
+            )
+            return ""
+
+        cache_key = self._throttle_f10_cache_key(board_code)
+        now = time.monotonic()
+        cached = _f10_html_cache.get(cache_key)
+        if cached is not None:
+            html, ts = cached
+            if (now - ts) < _F10_HTML_TTL_SECONDS:
+                return html
+            # TTL expired — drop and refetch.
+            _f10_html_cache.pop(cache_key, None)
+
+        url = _THS_F10_BOARD_URL.format(board_code=board_code)
+        headers = {"Cookie": f"v={self._v_token()}"}
+        try:
+            r = self._http_get(url, headers=headers, timeout=10)
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_f10_page({board_code!r}): GET {url} failed: {e}"
+            ) from e
+
+        status = getattr(r, "status_code", 0)
+        if status in _BOUNDARY_TOLERATED_STATUSES:
+            # 401 / 403 — THS upstream's no-auth signal. Don't cache;
+            # caller's downstream parser returns []. Mirrors
+            # get_board_stocks' boundary-signal handling.
+            logger.warning(
+                f"[ThsFetcher] get_board_f10_page({board_code!r}): "
+                f"HTTP {status}; returning empty."
+            )
+            return ""
+        if not (200 <= status < 300):
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_f10_page({board_code!r}): "
+                f"HTTP {status} ({len(r.content)}B body)"
+            )
+
+        # The page declares its encoding as GBK in the meta charset; match
+        # what the existing fetcher does for THS HTML so BeautifulSoup
+        # gets unicode strings.
+        r.encoding = "gbk"
+        html = r.text or ""
+        if html:
+            _f10_html_cache[cache_key] = (html, now)
+        return html
+
+    def get_board_stocks_full(
+        self,
+        board_code: str,
+        *,
+        board_type: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """THS F10 concept page's "概念股排名" table — full 90+ members.
+
+        Distinct from ``get_board_stocks`` (q.10jqka AJAX, hard cap 50
+        with realtime sort keys): this method reads the F10 page's
+        ``<div id="c_table"> <table class="m_table m_hl">`` table for
+        server-rendered full membership. No realtime quote — all
+        quote-shaped fields are ``None``.
+
+        Args:
+            board_code: THS public platecode (e.g. ``"885914"``).
+            board_type: Optional hint. ``"industry"`` returns ``[]``
+                (v1 stub — see :meth:`get_board_f10_page`).
+            **kwargs: Absorbed silently so callers can pass arbitrary
+                kwargs through ``_with_source`` without crashing.
+
+        Returns:
+            list of dicts with shape matching ``get_board_stocks``'s
+            BoardStockInfo fields, with all quote-shaped values ``None``
+            (F10 doesn't provide them). Empty list on industry,
+            401/403, no rows in HTML.
+
+        Raises:
+            DataFetchError: HTML returned but ``c_table`` not found
+                (page structure changed) — surfaces a real bug rather
+                than silently returning empty.
+        """
+        from bs4 import BeautifulSoup
+
+        html = self.get_board_f10_page(board_code, board_type=board_type)
+        if not html:
+            return []
+
+        soup = BeautifulSoup(html, features="lxml")
+        c_table = soup.find(id="c_table")
+        if c_table is None:
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_stocks_full({board_code!r}): "
+                f"F10 HTML returned but #c_table not found — upstream "
+                f"structure may have changed."
+            )
+
+        # Spec §3.2.2: extract stock_code / stock_name / exchange per row.
+        # Use the `a.jumpto[code]` selector instead of relying on
+        # `tr.c_highlight` because F10 mixes class patterns (some rows
+        # omit the class but still carry a jumpto anchor); the anchor
+        # presence is the ground truth for "this row is a stock row".
+        # Quote-shaped fields stay None — BoardStockInfo has zero expansion.
+        rows: list[dict] = []
+        for tr in c_table.select("tr"):
+            a = tr.select_one("a.jumpto[code]")
+            if a is None:
+                continue
+            stock_code = a["code"].strip() if a.get("code") else ""
+            raw_name = a.get_text(strip=True)
+            # THS wraps high-frequency tokens in <em>; strip them so the
+            # returned name is plain Chinese.
+            stock_name = strip_em_tags(raw_name)
+
+            exchange = ""
+            td = tr.find_all("td")
+            if len(td) >= 3:
+                exch_map = {"上交所": "sh", "深交所": "sz", "北交所": "bj"}
+                exchange = exch_map.get(td[2].get_text(strip=True), "")
+
+            if not stock_code:
+                continue
+
+            rows.append(
+                {
+                    "stock_code": stock_code,
+                    "stock_name": stock_name,
+                    "exchange": exchange,
+                    "price": None,
+                    "change_pct": None,
+                    "change_amount": None,
+                    "volume": None,
+                    "amount": None,
+                    "turnover_rate": None,
+                    "amplitude": None,
+                    "high": None,
+                    "low": None,
+                    "open": None,
+                    "prev_close": None,
+                    "speed_open": None,
+                    "speed_current": None,
+                    "speed_change_pct": None,
+                    "speed_change_amount": None,
+                    "speed_volume": None,
+                    "speed_turnover_rate": None,
+                    "rise_speed": None,
+                    "ls_based_ratio": None,
+                    "rise_count": None,
+                    "fall_count": None,
+                    "leading_stock": None,
+                    "leading_stock_pct": None,
+                    "board_pct": None,
+                    "rank": None,
+                    "eps": None,
+                    "float_share_yi": None,
+                    "float_mv_yi": None,
+                    "limit_up_count_year": None,
+                    "analysis": None,
+                    "pop_info": None,
+                }
+            )
+
+        return rows
+
+    def get_board_news(
+        self,
+        board_code: str,
+        *,
+        limit: int = 20,
+        board_type: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """THS F10 板块热点新闻 — section ``<div class="m_box post" id="news">``.
+
+        Parses ``<dl>`` rows under ``.newslist clearfix``: each ``<dl>``
+        carries a title-link and a span.fr.date. The publish_date is
+        extracted from the URL path (``/field/YYYYMMDD/{id}.shtml``)
+        rather than the page's date label (which is sometimes relative
+        like "20:13").
+
+        Args:
+            board_code: THS public platecode.
+            limit: Max items to return (1-50).
+            board_type: Optional hint. ``"industry"`` returns ``[]``.
+            **kwargs: Absorbed silently.
+
+        Returns:
+            list of dicts: {title, url, publish_date, publish_time, summary, source_domain}.
+        """
+        from bs4 import BeautifulSoup, Comment
+        import re as _re
+
+        html = self.get_board_f10_page(board_code, board_type=board_type)
+        if not html:
+            return []
+
+        soup = BeautifulSoup(html, features="lxml")
+        news_box = soup.select_one("div.m_box.post#news .newslist")
+        if news_box is None:
+            return []
+
+        # THS wraps its news DLs inside an HTML comment (a single
+        # ``<!-- ... -->` block whose body is raw server-rendered DLs).
+        # BeautifulSoup's ``select()`` does NOT traverse into comments
+        # by default — we must re-parse each comment's text as HTML
+        # and collect the dl children that way. Some news boxes also
+        # have non-commented DLs (defensive: try both).
+        dls: list = list(news_box.select("dl"))
+        for comment in news_box.find_all(string=lambda t: isinstance(t, Comment)):
+            try:
+                inner = BeautifulSoup(str(comment), features="lxml")
+            except Exception:
+                continue
+            dls.extend(inner.select("dl"))
+
+        # Dedupe by (title, url) — a feed can repeat rows near the boundary.
+        seen_keys: set[tuple[str, str]] = set()
+
+        n = max(1, min(int(limit), 50))
+        out: list[dict] = []
+        for dl in dls:
+            if len(out) >= n:
+                break
+
+            link = dl.select_one("dt a[href*='news.10jqka.com.cn']")
+            title_link = dl.select_one("dt a strong") if link else None
+            time_span = dl.select_one("dt span.fr.date")
+            summary_p = dl.select_one("dd.hot_preview p")
+
+            url = link["href"].strip() if link and link.get("href") else ""
+            title = title_link.get_text(strip=True) if title_link else ""
+            publish_time = time_span.get_text(strip=True) if time_span else ""
+            summary = summary_p.get_text(strip=True) if summary_p else ""
+
+            publish_date = ""
+            m = _re.search(r"/field/(\d{8})/", url)
+            if m:
+                d = m.group(1)
+                publish_date = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+
+            if not title or not url:
+                continue
+
+            key = (title, url)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            out.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "publish_date": publish_date,
+                    "publish_time": publish_time,
+                    "summary": summary,
+                    "source_domain": "news.10jqka.com.cn",
+                }
+            )
+
+        return out
+
+    def get_board_surges(
+        self,
+        board_code: str,
+        *,
+        limit: int = 5,
+        board_type: str | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """THS F10 板块炒作周期 — section ``<div class="m_box" id="period">``.
+
+        Each ``<div class="timeline">`` represents one peak 炒作 cycle.
+        The涨停 stock list for the cycle is in the SECOND
+        ``<p class="flexcont" style="display:none;">`` block (full list —
+        the 1st block truncates to 5 visible). We parse the 2nd block for
+        the full list.
+
+        Args:
+            board_code: THS public platecode.
+            limit: Max items (1-12).
+            board_type: Optional hint. ``"industry"`` returns ``[]``.
+            **kwargs: Absorbed silently.
+
+        Returns:
+            list of dicts: {date, board_change_pct, sh_change_pct,
+                             limit_up_count, limit_up_stocks, up_count, down_count}.
+        """
+        from bs4 import BeautifulSoup
+        import re as _re
+
+        html = self.get_board_f10_page(board_code, board_type=board_type)
+        if not html:
+            return []
+
+        soup = BeautifulSoup(html, features="lxml")
+        period_box = soup.select_one("#period div.history.clearfix")
+        if period_box is None:
+            return []
+
+        n = max(1, min(int(limit), 12))
+        out: list[dict] = []
+        for tl in period_box.select("div.timeline"):
+            if len(out) >= n:
+                break
+
+            date_span = tl.select_one("span.time")
+            date_str = date_span.get_text(strip=True) if date_span else ""
+
+            thead_tr = tl.select_one("thead tr.f14")
+            if thead_tr is None:
+                continue
+            pct_cells = thead_tr.find_all("th")
+            board_pct = None
+            sh_pct = None
+            limit_up_count = None
+            if len(pct_cells) >= 3:
+                def _pct(cell) -> float | None:
+                    el = cell.select_one(".upcolor, .fallcolor")
+                    return safe_float(el.get_text(strip=True).rstrip("%")) if el else None
+
+                board_pct = _pct(pct_cells[0])
+                sh_pct = _pct(pct_cells[1])
+
+                tip_el = pct_cells[2].select_one(".tip")
+                if tip_el:
+                    txt = tip_el.get_text(strip=True)
+                    num_m = _re.search(r"(\d+)", txt)
+                    if num_m:
+                        try:
+                            limit_up_count = int(num_m.group(1))
+                        except (TypeError, ValueError):
+                            limit_up_count = None
+
+            # 2nd .flexcont is the full list; fall back to 1st only on
+            # structural change.
+            flexcont_paras = tl.select("p.flexcont")
+            full_para = (
+                flexcont_paras[1]
+                if len(flexcont_paras) >= 2
+                else (flexcont_paras[0] if flexcont_paras else None)
+            )
+            limit_up_stocks: list[str] = []
+            if full_para is not None:
+                seen: set[str] = set()
+                for a in full_para.select("a.jumpto[code]"):
+                    c = (a.get("code") or "").strip()
+                    if c and c not in seen:
+                        seen.add(c)
+                        limit_up_stocks.append(c)
+
+            out.append(
+                {
+                    "date": date_str,
+                    "board_change_pct": board_pct,
+                    "sh_change_pct": sh_pct,
+                    "limit_up_count": limit_up_count if limit_up_count is not None else 0,
+                    "limit_up_stocks": limit_up_stocks,
+                    "up_count": None,
+                    "down_count": None,
+                }
+            )
+
+        return out
+
+    # ------------------------------------------------------------------
+    # 热点题材 / 北向资金
     # ------------------------------------------------------------------
 
     def get_hot_topics(self, date_str: str = "") -> list[dict]:

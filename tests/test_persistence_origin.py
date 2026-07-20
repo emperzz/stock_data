@@ -80,9 +80,15 @@ def test_get_board_stocks_returns_tuple(monkeypatch):
     # Phase 4 (2026-07-02): real manager now also accepts ``board_type=`` to
     # steer the fetcher; ``**_`` keeps the mock interface-compatible for any
     # future kwargs (e.g. include_quote stays positional too).
+    # Phase 3 (2026-07-20): real manager now also exposes
+    # ``get_board_stocks_full`` (THS F10 leg). The mock returns empty so the
+    # test exercises the legacy ZZSHARE→THS chain.
     class _MockManager:
         def get_board_stocks(self, board_code, source="eastmoney", include_quote=False, **_):
             return ([{"stock_code": "600519", "stock_name": "贵州茅台"}], "mock_fetcher")
+
+        def get_board_stocks_full(self, board_code, source="ths", **_):
+            return ([], "noop")
 
     # 跳过 SQLite, 强制走 fetcher 路径
     monkeypatch.setattr(

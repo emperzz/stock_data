@@ -40,7 +40,7 @@ _NON_FATAL_SEED_EXCEPTIONS: tuple[type[BaseException], ...] = (
 
 logger = logging.getLogger(__name__)
 
-_STOCK_BOARD_COLS = {"code", "name", "board_type", "subtype", "source", "platecode"}
+_STOCK_BOARD_COLS = {"code", "name", "board_type", "subtype", "source", "cid"}
 _MEMBERSHIP_COLS = {
     "board_code",
     "stock_code",
@@ -50,7 +50,11 @@ _MEMBERSHIP_COLS = {
     "board_type",
     "subtype",
 }
-_EASTMONEY_COLS = {"board_type", "board_code", "board_name"}
+# Eastmoney kept its legacy 3-col format (``board_type, board_code,
+# board_name``) as a separate import path because the source CSV
+# predates the 7-col schema unification. The 7-col loader handles THS
+# (full-schema) and any future source that adopts the unified layout.
+_EASTMONEY_LEGACY_COLS = {"board_type", "board_code", "board_name"}
 
 _VALID_STOCK_CODE = re.compile(r"^\d{6}$")
 
@@ -88,7 +92,10 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
     """Insert/REPLACE rows from a stock_board-style CSV into the DB.
 
     Args:
-        source: 'ths' (full-schema 7-col CSV) or 'eastmoney' (legacy 3-col).
+        source: 'ths' or 'eastmoney' — both now use the unified 7-col
+            schema (post-2026-07-20; pre-2026-07-20 eastmoney had a
+            3-col legacy shape ``board_type, board_code, board_name``
+            that has since been aligned).
         csv_path: Path to the CSV file.
 
     Returns:
@@ -107,8 +114,6 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
         raise FileNotFoundError(csv_path)
     board_mod.init_schema()  # idempotent; safe to call before INSERT
 
-    if source == "eastmoney":
-        return _seed_eastmoney_board_csv(csv_path)
     _validate_csv_columns(csv_path, _STOCK_BOARD_COLS)
     return _seed_full_schema_board_csv(source, csv_path)
 
@@ -147,7 +152,13 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
                 r["board_type"],
                 r["subtype"] or "",
                 r["source"],
-                r["platecode"] or None,
+                # Post-2026-07-20: THS concept rows carry `cid` here
+                # (was the `platecode` column). The CSV's `cid` column
+                # holds the THS internal concept id (3xxxxx) for concept
+                # rows; empty / NULL for industry / eastmoney / zhitu rows.
+                # The matching CSV migration swaps old `platecode` data
+                # into the `cid` column header.
+                r.get("cid") or None,
                 now,
             )
         )
@@ -171,7 +182,7 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
     with conn:
         conn.executemany(
             """INSERT OR REPLACE INTO stock_board
-               (code, name, board_type, subtype, source, platecode, updated_at)
+               (code, name, board_type, subtype, source, cid, updated_at)
                VALUES (?,?,?,?,?,?,?)""",
             rows,
         )
@@ -188,13 +199,13 @@ def _seed_full_schema_board_csv(source: str, csv_path: Path) -> int:
 
 def _seed_eastmoney_board_csv(csv_path: Path) -> int:
     """3-col CSV path. Fills source='eastmoney', subtype=board_type,
-    platecode=NULL, updated_at=NOW.
+    cid=NULL, updated_at=NOW.
 
     Invalid rows (empty board_code or board_type not in
     ``VALID_SUBTYPES_BY_SOURCE['eastmoney']``) are skipped with a
     sample+count summary, mirroring the THS loader's pattern.
     """
-    _validate_csv_columns(csv_path, _EASTMONEY_COLS)
+    _validate_csv_columns(csv_path, _EASTMONEY_LEGACY_COLS)
     valid_types = set(board_mod.VALID_SUBTYPES_BY_SOURCE.get("eastmoney", {}).keys())
     conn = get_connection()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -227,7 +238,7 @@ def _seed_eastmoney_board_csv(csv_path: Path) -> int:
                 btype,
                 btype,  # subtype = board_type (eastmoney 唯一合法 subtype)
                 "eastmoney",  # source hardcoded
-                None,  # platecode = NULL
+                None,  # cid = NULL (eastmoney boards have no THS cid)
                 now,
             )
         )
@@ -252,7 +263,7 @@ def _seed_eastmoney_board_csv(csv_path: Path) -> int:
     with conn:
         conn.executemany(
             """INSERT OR REPLACE INTO stock_board
-               (code, name, board_type, subtype, source, platecode, updated_at)
+               (code, name, board_type, subtype, source, cid, updated_at)
                VALUES (?,?,?,?,?,?,?)""",
             rows,
         )

@@ -57,4 +57,6 @@ CAPABILITY_LABELS: dict[str, dict[str, str]] = {
     "STOCK_NEWS":           {"label": "个股新闻",         "icon": "📰"},
     "MORNING_BRIEFING":     {"label": "早报",             "icon": "📰"},
     "MARKET_RECAP":         {"label": "市场复盘",         "icon": "📊"},
+    "BOARD_NEWS":           {"label": "板块新闻",         "icon": "📰"},
+    "BOARD_SURGES":         {"label": "板块炒作周期",     "icon": "📈"},
 }
