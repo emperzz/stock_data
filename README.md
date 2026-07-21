@@ -415,7 +415,9 @@ The server automatically routes requests to the appropriate data source based on
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MYQUANT_CALENDAR_START_YEAR` | Start year for `get_trade_calendar` | 2010 |
+| `TRADE_CALENDAR_START_YEAR` | Start year for `get_trade_calendar` (zzshare + myquant; akshare is upstream-driven) | 1990 |
+| `TRADE_CALENDAR_END_YEAR` | End year for `get_trade_calendar` (zzshare + myquant; akshare is upstream-driven) | current year |
+| `MYQUANT_CALENDAR_START_YEAR` | Legacy alias for `TRADE_CALENDAR_START_YEAR` (still honored for backward compat) | — |
 
 ### Circuit Breaker Configuration (Advanced)
 

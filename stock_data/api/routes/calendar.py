@@ -78,7 +78,10 @@ def get_trade_calendar(
     - Cache is empty
     - Cached latest date is before today (data may be stale)
 
-    Uses akshare tool_trade_date_hist_sina API.
+    Failover chain for refresh: Zzshare (P2) → Akshare (P3) → Myquant (P9).
+    Baostock used to serve this (P1) but its ``query_trade_dates`` only returns
+    dates through today, so it was removed from the chain on 2026-07-21 —
+    without this change the cache would never extend past today.
     """
     from ...data_provider.persistence.trade_calendar import (
         get_cached_calendar,

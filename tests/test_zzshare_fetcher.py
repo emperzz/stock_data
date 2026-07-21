@@ -1003,6 +1003,67 @@ class TestTradeCalendar:
             fetcher = ZzshareFetcher()
             assert fetcher.get_trade_calendar() is None
 
+    def test_trade_calendar_default_range(self, monkeypatch):
+        """Default start_year=1990, end_year=current year (no env vars set)."""
+        monkeypatch.delenv("TRADE_CALENDAR_START_YEAR", raising=False)
+        monkeypatch.delenv("TRADE_CALENDAR_END_YEAR", raising=False)
+        monkeypatch.delenv("MYQUANT_CALENDAR_START_YEAR", raising=False)
+        fake_api = MagicMock()
+        fake_api.trade_days = MagicMock(return_value=["2026-01-02"])
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        fetcher = ZzshareFetcher()
+        fetcher.get_trade_calendar()
+        kwargs = fake_api.trade_days.call_args.kwargs
+        assert kwargs["day_start"] == "1990-01-01"
+        current_year = date.today().year
+        assert kwargs["day_end"] == f"{current_year}-12-31"
+
+    def test_trade_calendar_canonical_start_year_override(self, monkeypatch):
+        monkeypatch.setenv("TRADE_CALENDAR_START_YEAR", "2005")
+        monkeypatch.delenv("TRADE_CALENDAR_END_YEAR", raising=False)
+        monkeypatch.delenv("MYQUANT_CALENDAR_START_YEAR", raising=False)
+        fake_api = MagicMock()
+        fake_api.trade_days = MagicMock(return_value=["2005-01-03"])
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher().get_trade_calendar()
+        assert fake_api.trade_days.call_args.kwargs["day_start"] == "2005-01-01"
+
+    def test_trade_calendar_end_year_override(self, monkeypatch):
+        monkeypatch.delenv("TRADE_CALENDAR_START_YEAR", raising=False)
+        monkeypatch.setenv("TRADE_CALENDAR_END_YEAR", "2030")
+        monkeypatch.delenv("MYQUANT_CALENDAR_START_YEAR", raising=False)
+        fake_api = MagicMock()
+        fake_api.trade_days = MagicMock(return_value=["2026-01-02"])
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher().get_trade_calendar()
+        assert fake_api.trade_days.call_args.kwargs["day_end"] == "2030-12-31"
+
+    def test_trade_calendar_legacy_fallback(self, monkeypatch):
+        """MYQUANT_CALENDAR_START_YEAR is honored when canonical unset."""
+        monkeypatch.delenv("TRADE_CALENDAR_START_YEAR", raising=False)
+        monkeypatch.setenv("MYQUANT_CALENDAR_START_YEAR", "2015")
+        monkeypatch.delenv("TRADE_CALENDAR_END_YEAR", raising=False)
+        fake_api = MagicMock()
+        fake_api.trade_days = MagicMock(return_value=["2015-01-05"])
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher().get_trade_calendar()
+        assert fake_api.trade_days.call_args.kwargs["day_start"] == "2015-01-01"
+
+    def test_trade_calendar_canonical_wins_over_legacy(self, monkeypatch):
+        monkeypatch.setenv("TRADE_CALENDAR_START_YEAR", "2008")
+        monkeypatch.setenv("MYQUANT_CALENDAR_START_YEAR", "2015")
+        monkeypatch.delenv("TRADE_CALENDAR_END_YEAR", raising=False)
+        fake_api = MagicMock()
+        fake_api.trade_days = MagicMock(return_value=["2008-01-02"])
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        ZzshareFetcher().get_trade_calendar()
+        assert fake_api.trade_days.call_args.kwargs["day_start"] == "2008-01-01"
+
 
 # ====================================================================
 # STOCK_INFO — REMOVED 2026-07-14 (zzshare upstream returns null for all

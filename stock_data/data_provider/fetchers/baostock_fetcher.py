@@ -32,7 +32,6 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
         DataCapability.STOCK_KLINE
-        | DataCapability.TRADE_CALENDAR
         | DataCapability.INDEX_KLINE
         | DataCapability.DIVIDEND
     )
@@ -259,23 +258,6 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
         except Exception as e:
             logger.warning(f"[BaostockFetcher] get_all_stocks failed: {e}")
             return []
-
-    def get_trade_calendar(self) -> list[str] | None:
-        """Get A-share trade calendar from Baostock."""
-        import baostock as bs
-
-        try:
-            rs = bs.query_trade_dates()
-            dates = []
-            while rs.error_code == "0" and rs.next():
-                row = rs.get_row_data()
-                if row[1] == "1":  # is_trading_day == "1"
-                    dates.append(row[0])
-            if dates:
-                return sorted(dates)
-        except Exception as e:
-            logger.warning(f"[BaostockFetcher] get_trade_calendar failed: {e}")
-        return None
 
     def get_index_historical(
         self, index_code: str, start_date: str | None, end_date: str | None, frequency: str

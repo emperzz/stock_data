@@ -124,16 +124,6 @@ _INTRADAY_FREQ_MAP: dict[str, str] = {
     "60": "3600s",
 }
 
-# Trade calendar start year — env-var overridable for deep backfill needs.
-# Canonical name: TRADE_CALENDAR_START_YEAR (used by all trade-calendar
-# fetchers). Legacy name MYQUANT_CALENDAR_START_YEAR kept as a fallback
-# for backward compatibility with existing .env files.
-_CALENDAR_START_YEAR = int(
-    os.getenv("TRADE_CALENDAR_START_YEAR")
-    or os.getenv("MYQUANT_CALENDAR_START_YEAR")
-    or "2010"
-)
-
 
 class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
     """Myquant (掘金量化) SDK fetcher for A-share data."""
@@ -338,10 +328,20 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
             from gm.api import get_trading_dates_by_year  # type: ignore
 
             now = datetime.now()
+            # start/end year resolved at call time (not module load) so test
+            # env-var overrides take effect without import-order tricks. Default
+            # start_year=1990 matches the empirical min returned by akshare's
+            # upstream; default end_year=current year; both env-overridable.
+            start_year = int(
+                os.getenv("TRADE_CALENDAR_START_YEAR")
+                or os.getenv("MYQUANT_CALENDAR_START_YEAR")
+                or "1990"
+            )
+            end_year = int(os.getenv("TRADE_CALENDAR_END_YEAR") or str(now.year))
             df = get_trading_dates_by_year(
                 exchange="SHSE",
-                start_year=_CALENDAR_START_YEAR,
-                end_year=now.year,
+                start_year=start_year,
+                end_year=end_year,
             )
             if df is None or df.empty or "trade_date" not in df.columns:
                 return None

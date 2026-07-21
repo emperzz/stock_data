@@ -741,9 +741,12 @@ class DataFetcherManager:
         """Get A-share trade calendar with automatic failover.
 
         Tries each fetcher's get_trade_calendar() in priority order.
-        Akshare is primary; Baostock is fallback. On success, the result
-        is persisted; on total upstream failure, the cached value is
-        returned (or DataFetchError if no cache either).
+        Zzshare (P2) → Akshare (P3) → Myquant (P9) is the failover chain
+        (Baostock used to be P1 but its ``query_trade_dates`` only returns
+        dates through today; removed 2026-07-21 so the cache can extend to
+        the year-end via Zzshare / Akshare / Myquant). On success, the
+        result is persisted; on total upstream failure, the cached value
+        is returned (or DataFetchError if no cache either).
 
         Returns:
             Tuple of ``(dates, origin)`` where ``origin`` is the

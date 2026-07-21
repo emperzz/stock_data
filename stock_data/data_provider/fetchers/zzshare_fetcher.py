@@ -454,9 +454,11 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         """Fetch full A-share trade calendar from zzshare trade_days.
 
         Returns the ascending YYYY-MM-DD list of all trade dates in
-        [day_start, day_end]. Aligned with MyquantFetcher's
-        ``MYQUANT_CALENDAR_START_YEAR`` default (2010) so the cache has
-        a consistent lookback window across fetchers — downstream helpers
+        [day_start, day_end]. Aligned with MyquantFetcher via
+        ``TRADE_CALENDAR_START_YEAR`` (default 1990, matching akshare's
+        empirical upstream min) and ``TRADE_CALENDAR_END_YEAR`` (default
+        current year). Legacy ``MYQUANT_CALENDAR_START_YEAR`` is still
+        honored as a fallback for existing .env files. Downstream helpers
         (``is_trade_date`` / ``get_latest_trade_date_on_or_before``) work
         correctly with both partial and full ranges, but a full range
         lets us answer "was date X a trade day" queries reliably for any
@@ -476,18 +478,21 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         if api is None:
             return None
         try:
-            # Reuse the project-wide start-year env var (default 2010) so
-            # the cache window matches MyquantFetcher. End year = current
-            # year; the SDK returns the full calendar within bounds.
-            # Canonical name is TRADE_CALENDAR_START_YEAR; legacy
-            # MYQUANT_CALENDAR_START_YEAR kept as a fallback for
-            # existing .env files.
+            # Start/end year resolved at call time so test env-var overrides
+            # take effect without import-order tricks. Default start_year=1990
+            # matches the empirical min returned by akshare's upstream; both
+            # env-overridable via TRADE_CALENDAR_START_YEAR / _END_YEAR.
+            # Legacy MYQUANT_CALENDAR_START_YEAR still honored for backward
+            # compat with existing .env files.
             start_year = int(
                 os.getenv("TRADE_CALENDAR_START_YEAR")
                 or os.getenv("MYQUANT_CALENDAR_START_YEAR")
-                or "2010"
+                or "1990"
             )
-            end_year = datetime.now().year
+            end_year = int(
+                os.getenv("TRADE_CALENDAR_END_YEAR")
+                or str(datetime.now().year)
+            )
             dates = api.trade_days(
                 day_start=f"{start_year}-01-01",
                 day_end=f"{end_year}-12-31",

@@ -227,7 +227,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | Fetcher | P | Markets | Capabilities | Auth | Notes |
 |---|---|---|---|---|---|
 | `TushareFetcher` | 0 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` | `TUSHARE_TOKEN` | |
-| `BaostockFetcher` | 1 | csi | `STOCK_KLINE` `TRADE_CALENDAR` `INDEX_KLINE` `DIVIDEND` | none | |
+| `BaostockFetcher` | 1 | csi | `STOCK_KLINE` `INDEX_KLINE` `DIVIDEND` | none | |
 | `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_POOL` `DRAGON_TIGER` `HOT_TOPICS` | `ZZSHARE_TOKEN` (optional) | Board endpoints: not a public source label (unified under `ths`). `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. |
 | `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` `STOCK_ZT_POOL` | none | |
 | `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` `INDEX_REALTIME_QUOTE` | none | |
@@ -493,7 +493,8 @@ The non-obvious knobs worth memorizing here:
 - `STOCK_CACHE_DB_PATH` — SQLite persistence file. Default: `<repo>/stock_data/stock_cache.db`.
 - `ENABLE_API_CACHE` — toggle the in-memory `TTLCache` layer (default: `true`).
 - `*_PRIORITY` env vars — override any fetcher's default priority at startup. The lower the number, the earlier the fetcher is tried.
-- `MYQUANT_CALENDAR_START_YEAR` — start year for `get_trade_calendar` (default: `2010`).
+- `TRADE_CALENDAR_START_YEAR` — start year for `get_trade_calendar` (zzshare + myquant); legacy `MYQUANT_CALENDAR_START_YEAR` still honored. Default: `1990` (matches akshare upstream's empirical min).
+- `TRADE_CALENDAR_END_YEAR` — end year for `get_trade_calendar` (zzshare + myquant); defaults to current year.
 - `CACHE_TTL_STOCK_INTRADAY` — minute-line cache TTL in seconds (default: `30`).
 - `CACHE_TTL_STOCK_INFO` — 公司画像 (`StockInfoResponse`) cache TTL in seconds (default: `3600`).
 

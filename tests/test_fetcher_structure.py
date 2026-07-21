@@ -8,6 +8,8 @@ cases without hitting upstream APIs.
 
 from unittest.mock import patch
 
+from datetime import date
+
 import pytest
 
 from stock_data.data_provider.base import DataCapability
@@ -114,10 +116,13 @@ class TestBaostockFetcher:
     def test_capabilities(self, fetcher):
         caps = [
             DataCapability.STOCK_KLINE,
-            DataCapability.TRADE_CALENDAR, DataCapability.INDEX_KLINE,
+            DataCapability.INDEX_KLINE,
         ]
         for c in caps:
             assert c in fetcher.supported_data_types
+        # Baostock no longer serves TRADE_CALENDAR (removed 2026-07-21 — its
+        # upstream returns dates through today only, blocking year-end cache).
+        assert DataCapability.TRADE_CALENDAR not in fetcher.supported_data_types
 
     def test_convert_code_delegates_to_converter(self, fetcher):
         """_convert_code delegates to to_baostock_format."""
@@ -545,6 +550,100 @@ class TestMyquantFetcher:
         )
         dates = fetcher.get_trade_calendar()
         assert dates == ["2024-01-02", "2024-01-03"]  # Empty trade_date filtered, sorted asc
+
+    def test_trade_calendar_default_range(self, fetcher, monkeypatch):
+        """Default start_year=1990, end_year=current year (no env vars set)."""
+        pytest.importorskip("gm")
+        monkeypatch.delenv("TRADE_CALENDAR_START_YEAR", raising=False)
+        monkeypatch.delenv("TRADE_CALENDAR_END_YEAR", raising=False)
+        monkeypatch.delenv("MYQUANT_CALENDAR_START_YEAR", raising=False)
+        captured = {}
+
+        def fake_calendar(*args, **_kwargs):
+            captured["args"] = args
+            captured["kwargs"] = _kwargs
+            import pandas as pd
+            return pd.DataFrame({"trade_date": ["2026-01-02"]})
+
+        monkeypatch.setattr(
+            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
+        )
+        fetcher.get_trade_calendar()
+        assert captured["kwargs"].get("start_year") == 1990
+        assert captured["kwargs"].get("end_year") == date.today().year
+
+    def test_trade_calendar_canonical_start_year_override(self, fetcher, monkeypatch):
+        pytest.importorskip("gm")
+        monkeypatch.setenv("TRADE_CALENDAR_START_YEAR", "2005")
+        monkeypatch.delenv("TRADE_CALENDAR_END_YEAR", raising=False)
+        monkeypatch.delenv("MYQUANT_CALENDAR_START_YEAR", raising=False)
+        captured = {}
+
+        def fake_calendar(*args, **_kwargs):
+            captured["kwargs"] = _kwargs
+            import pandas as pd
+            return pd.DataFrame({"trade_date": ["2005-01-03"]})
+
+        monkeypatch.setattr(
+            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
+        )
+        fetcher.get_trade_calendar()
+        assert captured["kwargs"].get("start_year") == 2005
+
+    def test_trade_calendar_end_year_override(self, fetcher, monkeypatch):
+        pytest.importorskip("gm")
+        monkeypatch.delenv("TRADE_CALENDAR_START_YEAR", raising=False)
+        monkeypatch.setenv("TRADE_CALENDAR_END_YEAR", "2030")
+        monkeypatch.delenv("MYQUANT_CALENDAR_START_YEAR", raising=False)
+        captured = {}
+
+        def fake_calendar(*args, **_kwargs):
+            captured["kwargs"] = _kwargs
+            import pandas as pd
+            return pd.DataFrame({"trade_date": ["2026-01-02"]})
+
+        monkeypatch.setattr(
+            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
+        )
+        fetcher.get_trade_calendar()
+        assert captured["kwargs"].get("end_year") == 2030
+
+    def test_trade_calendar_legacy_fallback(self, fetcher, monkeypatch):
+        """MYQUANT_CALENDAR_START_YEAR honored when canonical unset."""
+        pytest.importorskip("gm")
+        monkeypatch.delenv("TRADE_CALENDAR_START_YEAR", raising=False)
+        monkeypatch.setenv("MYQUANT_CALENDAR_START_YEAR", "2015")
+        monkeypatch.delenv("TRADE_CALENDAR_END_YEAR", raising=False)
+        captured = {}
+
+        def fake_calendar(*args, **_kwargs):
+            captured["kwargs"] = _kwargs
+            import pandas as pd
+            return pd.DataFrame({"trade_date": ["2015-01-05"]})
+
+        monkeypatch.setattr(
+            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
+        )
+        fetcher.get_trade_calendar()
+        assert captured["kwargs"].get("start_year") == 2015
+
+    def test_trade_calendar_canonical_wins_over_legacy(self, fetcher, monkeypatch):
+        pytest.importorskip("gm")
+        monkeypatch.setenv("TRADE_CALENDAR_START_YEAR", "2008")
+        monkeypatch.setenv("MYQUANT_CALENDAR_START_YEAR", "2015")
+        monkeypatch.delenv("TRADE_CALENDAR_END_YEAR", raising=False)
+        captured = {}
+
+        def fake_calendar(*args, **_kwargs):
+            captured["kwargs"] = _kwargs
+            import pandas as pd
+            return pd.DataFrame({"trade_date": ["2008-01-02"]})
+
+        monkeypatch.setattr(
+            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
+        )
+        fetcher.get_trade_calendar()
+        assert captured["kwargs"].get("start_year") == 2008
 
     def test_get_all_stocks_without_token_returns_empty(self, fetcher_no_token):
         assert fetcher_no_token.get_all_stocks("csi") == []
