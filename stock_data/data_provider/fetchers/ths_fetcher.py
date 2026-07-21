@@ -2249,13 +2249,18 @@ class ThsFetcher(BaseFetcher):
         board_type: str | None = None,
         **kwargs,
     ) -> list[dict]:
-        """THS F10 concept page's "概念股排名" table — full 90+ members.
+        """THS F10 concept page's full membership — 90+ / 800+ concept stocks.
 
         Distinct from ``get_board_stocks`` (q.10jqka AJAX, hard cap 50
-        with realtime sort keys): this method reads the F10 page's
-        ``<div id="c_table"> <table class="m_table m_hl">`` table for
-        server-rendered full membership. No realtime quote — all
+        with realtime sort keys). F10 has no realtime quote — all
         quote-shaped fields are ``None``.
+
+        Data source on the page: ``<div id="concept_data" style="display:none;">
+        {JSON}</div>``. THS's client JS at ``s.thsi.cn/js/basic/exponent/index.js``
+        ``eval()``s it and renders into ``#c_table``. We parse the inline JSON
+        directly because our fetcher doesn't run JS — the raw HTML has the
+        c_table shell but no rows. Probed 2026-07-21: 885914 → 90 rows,
+        885756 → 905 rows (vs q.10jqka's 50-cap).
 
         Args:
             board_code: THS public platecode (e.g. ``"885914"``).
@@ -2269,91 +2274,127 @@ class ThsFetcher(BaseFetcher):
             BoardStockInfo fields, with all quote-shaped values ``None``
             (F10 doesn't provide them). Empty list on industry,
             401/403, no rows in HTML.
-
-        Raises:
-            DataFetchError: HTML returned but ``c_table`` not found
-                (page structure changed) — surfaces a real bug rather
-                than silently returning empty.
         """
         from bs4 import BeautifulSoup
+        from ..core.types import safe_float, safe_int
+        import json as _json
+        import re as _re
 
         html = self.get_board_f10_page(board_code, board_type=board_type)
         if not html:
             return []
 
         soup = BeautifulSoup(html, features="lxml")
-        c_table = soup.find(id="c_table")
-        if c_table is None:
-            raise DataFetchError(
-                f"[ThsFetcher] get_board_stocks_full({board_code!r}): "
-                f"F10 HTML returned but #c_table not found — upstream "
-                f"structure may have changed."
-            )
 
-        # Spec §3.2.2: extract stock_code / stock_name / exchange per row.
-        # Use the `a.jumpto[code]` selector instead of relying on
-        # `tr.c_highlight` because F10 mixes class patterns (some rows
-        # omit the class but still carry a jumpto anchor); the anchor
-        # presence is the ground truth for "this row is a stock row".
-        # Quote-shaped fields stay None — BoardStockInfo has zero expansion.
+        # Primary path: parse the inline #concept_data JSON. Each entry:
+        #   [stock_code, stock_name, exchange, rank, ?, ?, 涨停次数, summary, ...]
+        # Index 0=code, 1=name, 2=exchange ("深交所"/"上交所"/"北交所"),
+        # 3=涨停次数 (rank in some boards). Probed 2026-07-21 on
+        # 885914 / 885756.
         rows: list[dict] = []
-        for tr in c_table.select("tr"):
-            a = tr.select_one("a.jumpto[code]")
-            if a is None:
-                continue
-            stock_code = a["code"].strip() if a.get("code") else ""
-            raw_name = a.get_text(strip=True)
-            # THS wraps high-frequency tokens in <em>; strip them so the
-            # returned name is plain Chinese.
-            stock_name = strip_em_tags(raw_name)
+        concept_data = soup.find(id="concept_data")
+        if concept_data is not None:
+            txt = concept_data.get_text() or ""
+            try:
+                payload = _json.loads(txt)
+                ld = (payload.get("result") or {}).get("listdata") or {}
+                # listdata keyed by date; take the only (or latest) entry.
+                for _date, entries in ld.items():
+                    for entry in entries or []:
+                        if not (isinstance(entry, (list, tuple)) and len(entry) >= 3):
+                            continue
+                        stock_code = str(entry[0] or "").strip()
+                        if not stock_code:
+                            continue
+                        exch_map = {"上交所": "sh", "深交所": "sz", "北交所": "bj"}
+                        exchange = exch_map.get(str(entry[2] or "").strip(), "")
+                        rows.append(
+                            {
+                                "stock_code": stock_code,
+                                "stock_name": str(entry[1] or "").strip(),
+                                "exchange": exchange,
+                                "price": None,
+                                "change_pct": None,
+                                "change_amount": None,
+                                "volume": None,
+                                "amount": None,
+                                "turnover_rate": None,
+                                "amplitude": None,
+                                "high": None,
+                                "low": None,
+                                "open": None,
+                                "prev_close": None,
+                                "speed_open": None,
+                                "speed_current": None,
+                                "speed_change_pct": None,
+                                "speed_change_amount": None,
+                                "speed_volume": None,
+                                "speed_turnover_rate": None,
+                                "rise_speed": None,
+                                "ls_based_ratio": None,
+                                "rise_count": None,
+                                "fall_count": None,
+                                "leading_stock": None,
+                                "leading_stock_pct": None,
+                                "board_pct": None,
+                                "rank": safe_int(entry[3]) if len(entry) > 3 else None,
+                                "eps": None,
+                                "float_share_yi": None,
+                                "float_mv_yi": None,
+                                "limit_up_count_year": None,
+                                "analysis": None,
+                                "pop_info": None,
+                            }
+                        )
+                    break  # only consume the first/latest date entry
+            except (ValueError, KeyError, TypeError) as e:
+                logger.warning(
+                    f"[ThsFetcher] get_board_stocks_full({board_code!r}): "
+                    f"#concept_data JSON parse failed ({type(e).__name__}: {e}); "
+                    f"falling back to #c_table rows."
+                )
 
-            exchange = ""
-            td = tr.find_all("td")
-            if len(td) >= 3:
-                exch_map = {"上交所": "sh", "深交所": "sz", "北交所": "bj"}
-                exchange = exch_map.get(td[2].get_text(strip=True), "")
-
-            if not stock_code:
-                continue
-
-            rows.append(
-                {
-                    "stock_code": stock_code,
-                    "stock_name": stock_name,
-                    "exchange": exchange,
-                    "price": None,
-                    "change_pct": None,
-                    "change_amount": None,
-                    "volume": None,
-                    "amount": None,
-                    "turnover_rate": None,
-                    "amplitude": None,
-                    "high": None,
-                    "low": None,
-                    "open": None,
-                    "prev_close": None,
-                    "speed_open": None,
-                    "speed_current": None,
-                    "speed_change_pct": None,
-                    "speed_change_amount": None,
-                    "speed_volume": None,
-                    "speed_turnover_rate": None,
-                    "rise_speed": None,
-                    "ls_based_ratio": None,
-                    "rise_count": None,
-                    "fall_count": None,
-                    "leading_stock": None,
-                    "leading_stock_pct": None,
-                    "board_pct": None,
-                    "rank": None,
-                    "eps": None,
-                    "float_share_yi": None,
-                    "float_mv_yi": None,
-                    "limit_up_count_year": None,
-                    "analysis": None,
-                    "pop_info": None,
-                }
-            )
+        # Fallback: render-side rows (legacy spec path; works only if upstream
+        # ships server-rendered rows, which it doesn't today).
+        if not rows:
+            c_table = soup.find(id="c_table")
+            if c_table is None:
+                return []  # concept_data missing AND c_table missing — empty board
+            for tr in c_table.select("tr"):
+                a = tr.select_one("a.jumpto[code]")
+                if a is None:
+                    continue
+                stock_code = a["code"].strip() if a.get("code") else ""
+                raw_name = a.get_text(strip=True)
+                stock_name = strip_em_tags(raw_name)
+                exchange = ""
+                td = tr.find_all("td")
+                if len(td) >= 3:
+                    exch_map = {"上交所": "sh", "深交所": "sz", "北交所": "bj"}
+                    exchange = exch_map.get(td[2].get_text(strip=True), "")
+                if not stock_code:
+                    continue
+                rows.append(
+                    {
+                        "stock_code": stock_code,
+                        "stock_name": stock_name,
+                        "exchange": exchange,
+                        "price": None, "change_pct": None, "change_amount": None,
+                        "volume": None, "amount": None, "turnover_rate": None,
+                        "amplitude": None, "high": None, "low": None,
+                        "open": None, "prev_close": None,
+                        "speed_open": None, "speed_current": None,
+                        "speed_change_pct": None, "speed_change_amount": None,
+                        "speed_volume": None, "speed_turnover_rate": None,
+                        "rise_speed": None, "ls_based_ratio": None,
+                        "rise_count": None, "fall_count": None,
+                        "leading_stock": None, "leading_stock_pct": None,
+                        "board_pct": None, "rank": None,
+                        "eps": None, "float_share_yi": None,
+                        "float_mv_yi": None, "limit_up_count_year": None,
+                        "analysis": None, "pop_info": None,
+                    }
+                )
 
         return rows
 
