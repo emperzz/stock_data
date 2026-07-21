@@ -32,6 +32,55 @@ def _is_meaningful(result: Any) -> bool:
     return not (isinstance(result, list) and len(result) == 0)
 
 
+def _is_empty_dict(result: Any) -> bool:
+    """Treat a dict as 'structurally empty' when it has no non-empty list/dict values
+    (recursively).
+
+    Used by ``_with_failover`` when ``empty_is_failure=True``. A dict like
+    ``{"date": "2026-07-21", "total": 0, "stocks": []}`` carries metadata
+    around an empty data list — the metadata is correct, but the *content*
+    is empty and the call site has explicitly opted into "empty counts as
+    failure, fall through to the next fetcher". Scalars (date strings,
+    totals) are ignored for this check; only collections matter.
+
+    Recursive: a dict value like ``{"buy": [], "sell": []}`` (non-empty as
+    a dict, but all inner values empty) is treated as empty. The check
+    fires only when at least one list/dict value exists, to avoid
+    misclassifying a dict of scalars (e.g. ``{"date": "X", "url": "Y"}``)
+    as empty.
+
+    Edge cases:
+    - ``{}`` — empty (no values).
+    - ``{"date": "X", "url": "http://..."}`` — NOT empty (no list/dict).
+    - ``{"a": 1, "b": 2}`` — NOT empty (scalars only).
+    - ``{"records": [], "seats": {"buy": [], "sell": []}, "institution": {}}`` — empty
+      (all collections recursively empty).
+    """
+    if not isinstance(result, dict):
+        return False
+    if not result:
+        return True  # {} is empty
+    has_collection = False
+    for v in result.values():
+        if isinstance(v, (list, dict)):
+            has_collection = True
+            if not _is_empty_collection(v):
+                return False  # has a non-empty collection
+    return has_collection
+
+
+def _is_empty_collection(v: Any) -> bool:
+    """A collection value is empty if it's None, empty list, empty dict,
+    or a dict whose values are all recursively empty."""
+    if v is None:
+        return True
+    if isinstance(v, list):
+        return not v
+    if isinstance(v, dict):
+        return _is_empty_dict(v)
+    return False  # scalar: not "empty" by this definition
+
+
 class DataFetcherManager:
     """
     Manager for multiple data fetchers with priority-based failover.
@@ -268,6 +317,7 @@ class DataFetcherManager:
         return_source: bool = False,
         circuit_breaker: CircuitBreaker | None = None,
         candidates: list[BaseFetcher] | None = None,
+        empty_is_failure: bool = False,
     ) -> T:
         """Run `call(fetcher)` over every fetcher with the given capability, in priority order.
 
@@ -288,6 +338,17 @@ class DataFetcherManager:
                 or ``_quote_candidates``). When provided, skips internal
                 ``_filter_by_capability`` — the caller already did the
                 two-stage filter (capability bit → supports_fn).
+            empty_is_failure: when True, an "empty" result (per
+                ``_is_meaningful``) — including a structurally-empty dict
+                per ``_is_empty_dict`` — is treated as a soft failure and
+                the chain falls through to the next fetcher. Use this for
+                endpoints where the primary fetcher's empty answer is not
+                authoritative: e.g. ``DRAGON_TIGER``, where Zzshare's
+                ``{"date", "total", "stocks": []}`` shape would otherwise
+                short-circuit the chain and starve EastMoney's
+                (different-coverage) fallback. Default False preserves
+                the existing "any non-None dict is a success" behavior
+                for K-line / quote / dividend / etc.
 
         Returns:
             The first non-None/non-empty result (or ``(result, source_name)``
@@ -318,16 +379,27 @@ class DataFetcherManager:
                 errors.append(f"[{fetcher.name}] {e}")
                 logger.warning(f"[Manager] {fetcher.name} {op_label} failed: {e}")
                 continue
-            if _is_meaningful(result):
+            if _is_meaningful(result) and not (empty_is_failure and _is_empty_dict(result)):
                 logger.info(f"[Manager] {fetcher.name} succeeded for {op_label}")
                 if circuit_breaker is not None:
                     circuit_breaker.record_success(fetcher.name)
                 return (result, fetcher.name) if return_source else result  # type: ignore[return-value]
-            # Result is None/empty — remember the last empty result (prefer
-            # [] over None for downstream compatibility) and treat as soft
-            # failure for circuit breaker.
+            # Result is None/empty (and, when empty_is_failure=True, also a
+            # structurally-empty dict) — remember the last empty result
+            # (prefer [] / {} over None for downstream compatibility) and
+            # treat as soft failure for circuit breaker. When
+            # empty_is_failure is on, also record an entry in ``errors`` so
+            # the "all failed" error path names the per-fetcher emptiness
+            # cause rather than swallowing it.
             if result is not None:
                 last_empty_result = result
+            if empty_is_failure:
+                if result is None:
+                    errors.append(f"[{fetcher.name}] returned None")
+                elif isinstance(result, (list, pd.DataFrame)) and len(result) == 0:
+                    errors.append(f"[{fetcher.name}] returned empty {type(result).__name__}")
+                elif _is_empty_dict(result):
+                    errors.append(f"[{fetcher.name}] returned empty dict")
             if circuit_breaker is not None:
                 circuit_breaker.record_failure(fetcher.name)
 
@@ -1147,6 +1219,7 @@ class DataFetcherManager:
         method_name: str,
         *args: Any,
         op_label: str | None = None,
+        empty_is_failure: bool = False,
     ) -> Any:
         """CSI-market capability routing boilerplate.
 
@@ -1156,6 +1229,11 @@ class DataFetcherManager:
         args is non-empty, else the bare short method name. Override for
         static labels (``"hot_topics"``, ``"north_flow"``,
         ``"daily dragon_tiger"``).
+
+        ``empty_is_failure`` opts this call site into treating an empty
+        result (None / empty list / empty DataFrame / structurally-empty
+        dict) as a soft failure and falling through to the next fetcher.
+        See ``_with_failover`` for the contract.
         """
         if op_label is None:
             short = method_name[4:] if method_name.startswith("get_") else method_name
@@ -1166,10 +1244,17 @@ class DataFetcherManager:
             op_label,
             lambda f: getattr(f, method_name)(*args),
             return_source=True,
+            empty_is_failure=empty_is_failure,
         )
 
     def get_dragon_tiger(self, code: str, trade_date: str = "") -> tuple[dict, str]:
-        return self._route_cap(DataCapability.DRAGON_TIGER, "get_dragon_tiger", code, trade_date)
+        return self._route_cap(
+            DataCapability.DRAGON_TIGER,
+            "get_dragon_tiger",
+            code,
+            trade_date,
+            empty_is_failure=True,
+        )
 
     def get_daily_dragon_tiger(
         self, trade_date: str = "", min_net_buy: float | None = None
@@ -1180,6 +1265,7 @@ class DataFetcherManager:
             trade_date,
             min_net_buy,
             op_label="daily dragon_tiger",
+            empty_is_failure=True,
         )
 
     def get_margin_trading(self, code: str, page_size: int = 30) -> tuple[list[dict], str]:

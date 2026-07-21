@@ -258,7 +258,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | `get_stock_name` | n/a | `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
 | `get_trade_calendar` | `TRADE_CALENDAR` | ZzshareFetcher P2 primary |
 | `get_zt_pool` | `STOCK_ZT_POOL` | ZzshareFetcher P2 primary |
-| `get_dragon_tiger` | `DRAGON_TIGER` | ZzshareFetcher P2 primary |
+| `get_dragon_tiger` (per-stock + daily) | `DRAGON_TIGER` | ZzshareFetcher P2 primary; **empty result is a soft failure, fall through to EastMoney** (`empty_is_failure=True`, see [Dragon-Tiger empty-fall-through](#dragon-tiger-empty-fall-through)) |
 | `get_margin_trading` | `MARGIN_TRADING` | |
 | `get_block_trade` | `BLOCK_TRADE` | |
 | `get_holder_num_change` | `HOLDER_NUM` | |
@@ -291,6 +291,22 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 ### Index routing notes
 
 Each fetcher that declares an INDEX_* capability must implement the corresponding public method (`get_index_realtime_quote`, `get_index_historical`). The Manager calls these methods directly — no `hasattr` checks, no fallback to stock methods. MyquantFetcher and TushareFetcher override `get_kline_data` to dispatch to their index API when `index_market_tag()` matches.
+
+## Dragon-Tiger empty-fall-through
+
+Both `/api/v1/dragon-tiger` (全市场) and `/stocks/{code}/dragon-tiger` (个股) opt into `empty_is_failure=True` on their `DataFetcherManager._with_failover` call. The contract:
+
+- A non-empty result from Zzshare (P2 primary) → short-circuit with `source="zzshare"`.
+- A *structurally empty* result from Zzshare (i.e. ``{"stocks": []}`` for daily, ``{"records": [], "seats": {"buy": [], "sell": []}, "institution": {}}`` for per-stock) → treat as soft failure, fall through to EastMoney (P6).
+- If EastMoney also returns structurally empty, raise `DataFetchError` (caller sees an explicit failure rather than a misleading "all candidates returned empty" 200).
+
+**Why**: Zzshare's `lhb_list` / `lhb_detail` return the official CSRC 龙虎榜 list. An empty result is "this day had no events for the requested scope" — but EastMoney has different coverage and field shape (it ships `close` / `buy_wan` / `sell_wan` that Zzshare omits), so when Zzshare says "empty", EastMoney often has the real data the caller wants. Falling through preserves coverage.
+
+**Opt-in mechanism**: `DataFetcherManager._with_failover(empty_is_failure=True)`. Internally this routes through `_is_empty_dict()` (with recursive `_is_empty_collection()`), which classifies a dict as empty when:
+- it has at least one list/dict value, AND
+- all list/dict values are recursively empty (no inner non-empty list/dict survives)
+
+A dict of only scalars (e.g. `{"date": "X", "url": "Y"}`) is **not** classified as empty (no collection to evaluate). The flag is currently enabled only for `get_dragon_tiger` + `get_daily_dragon_tiger`; other endpoints use the default "non-None dict is meaningful" behavior. See `tests/test_dragon_tiger_zzshare_short_circuit.py` for the contract tests (6 cases: empty fall-through, populated short-circuit, both-empty raises, exception cascade, per-stock variant).
 
 ## Symbol Conventions
 

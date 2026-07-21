@@ -45,16 +45,18 @@ class _MockFetcher:
 
     def get_dragon_tiger(self, code, trade_date):
         return {
-            "records": [],
+            "records": [{"date": "2026-07-21", "reason": "test", "net_buy_wan": 1.0,
+                         "turnover_pct": 0.0}],
             "seats": {"buy": [], "sell": []},
             "institution": {},
         }
 
     def get_daily_dragon_tiger(self, trade_date, min_net_buy):
         return {
-            "records": [],
-            "seats": {"buy": [], "sell": []},
-            "institution": {},
+            "date": "2026-07-21", "total": 1,
+            "stocks": [{"code": "600519", "name": "test", "reason": "r",
+                        "change_pct": 0.0, "net_buy_wan": 1.0,
+                        "turnover_pct": 0.0}],
         }
 
     def get_margin_trading(self, code, page_size):
