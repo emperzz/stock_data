@@ -57,7 +57,7 @@ def test_f10_leg_serves_request_when_nonempty(monkeypatch):
     )
 
     assert rows == F10_FULL_ROWS
-    assert effective == "ths-f10"
+    assert effective == "ths"
     assert reason is None
     assert src_label == "ths"  # user-facing source label unchanged
     mgr.get_board_stocks_full.assert_called_once_with(

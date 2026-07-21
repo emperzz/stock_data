@@ -1042,7 +1042,7 @@ def fetch_board_stocks_with_zzshare_fallback(
             ):
                 f10_rows, _ = _f10_ret
                 if f10_rows:
-                    return f10_rows, "ths", "ths-f10", None
+                    return f10_rows, "ths", "ths", None
                 logger.info(
                     f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
                     f"ths F10 returned 0 rows for board={board_code}; "

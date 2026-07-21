@@ -113,18 +113,17 @@ def test_get_board_stocks_returns_tuple(monkeypatch):
     # Default (include_quote=False) → zzshare first, so origin="zzshare"
     # (the mock-manager always returns the rows, regardless of source label).
     assert origin in ("zzshare", "ths", "")
-    # effective_source is always populated (P4 contract). Includes the
-    # post-2026-07-20 'ths-f10' label introduced when THS F10 is the
-    # serving source (see fetch_board_stocks_with_zzshare_fallback).
-    assert effective_source in ("zzshare", "ths", "ths-f10", "")
+    # effective_source is always populated (P4 contract). THS F10 success
+    # is unified under 'ths' (post-2026-07-21; previously 'ths-f10').
+    assert effective_source in ("zzshare", "ths", "")
     # reason is None on the success path (mock manager always returns rows).
     assert reason is None
 
 
-def test_get_board_stocks_f10_leg_sets_ths_f10_effective_source(monkeypatch):
+def test_get_board_stocks_f10_leg_sets_ths_effective_source(monkeypatch):
     """When the THS F10 full-listing leg fires, effective_source reports
-    'ths-f10' so clients can distinguish cache-hit, real ZZSHARE serving,
-    real THS AJAX serving, and THS F10 serving (post-2026-07-20 contract)."""
+    'ths' (unified under the ths label post-2026-07-21; the F10 internal
+    detail is not exposed to clients)."""
     from stock_data.data_provider.persistence import board
 
     class _F10OnlyMockManager:
@@ -147,7 +146,7 @@ def test_get_board_stocks_f10_leg_sets_ths_f10_effective_source(monkeypatch):
         "885914", refresh=True, manager=_F10OnlyMockManager()
     )
     assert len(stocks) == 1
-    assert effective_source == "ths-f10"
+    assert effective_source == "ths"
     assert reason is None
 
 
