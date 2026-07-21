@@ -1022,8 +1022,9 @@ def get_board_history(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块热点新闻 (THS basic.10jqka.com.cn/48/{code}/ F10 news section). "
-            "v1 仅 THS 实现,?source=ths 是默认值(其他 source → 422 由 Literal 保证)。",
+    summary="板块新闻 (THS news.10jqka.com.cn timeline API, marketId=48). "
+            "游标分页无 14 条上限,带 summary。v1 仅 THS 实现,?source=ths 是默认值"
+            "(其他 source → 422 由 Literal 保证)。",
     markets=["csi"],
     capabilities=["BOARD_NEWS"],
     fetcher_method="get_board_news",

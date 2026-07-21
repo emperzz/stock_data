@@ -553,17 +553,17 @@ class BoardKlineResponse(BaseModel):
 
 
 class BoardNewsItem(BaseModel):
-    """A single news item from a board's THS F10 news section."""
+    """A single news item from a board's THS timeline news feed."""
 
     title: str = Field(description="News title (Chinese)")
     url: str = Field(description="Absolute URL to the article on news.10jqka.com.cn")
     publish_date: str = Field(
         default="",
-        description="Publish date in 'YYYY-MM-DD' format (extracted from URL path; may be '' for malformed URLs)",
+        description="Publish date in 'YYYY-MM-DD' format (from upstream publishTime epoch; '' when missing)",
     )
     publish_time: str = Field(
         default="",
-        description="Publish time label as shown on the page (e.g. '20:13'); sometimes relative or empty",
+        description="Publish time in 'HH:MM' format (from upstream publishTime epoch; '' when missing)",
     )
     summary: str = Field(
         default="",
@@ -576,7 +576,7 @@ class BoardNewsItem(BaseModel):
 
 
 class BoardNewsResponse(BaseModel):
-    """Response for /boards/{board_code}/news (THS F10 板块热点新闻)."""
+    """Response for /boards/{board_code}/news (THS 板块新闻 timeline feed)."""
 
     board_code: str = Field(description="Board code echoed back")
     source: str = Field(default="ths", description="Source label (THS-only v1)")

@@ -48,7 +48,7 @@ import random
 import re
 import time
 from datetime import date as _date
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from importlib import resources, util
 
 from tenacity import (
@@ -285,6 +285,17 @@ _THS_MARKET_ID_MAP: dict[str, str] = {
     "0": "33",  # 深市主板 + 中小板
     "3": "33",  # 深市创业板
 }
+
+# 板块新闻 timeline — news.10jqka.com.cn/timeline_web/... (probed 2026-07-21).
+# Unauthenticated JSON, cursor-paginated (offset=last publishTime), marketId=48
+# for THS blocks (concept + industry both verified). Replaces the old F10-page
+# scrape that hard-capped at 14 items with no summary.
+_THS_TIMELINE_NEWS_URL = "https://news.10jqka.com.cn/timeline_web/web/v1/news/list"
+_THS_BOARD_MARKET_ID = "48"
+# THS publishTime is a UTC-epoch ms; articles are published in Beijing time.
+# Parse in CST so publish_date/time don't shift a day on non-Asia/Shanghai
+# servers (same fix as ClsFetcher._CLS_TZ).
+_THS_TZ = timezone(timedelta(hours=8))
 
 # 个股新闻 / 个股公告 — basic.10jqka.com.cn/fuyao/info/company/v1/...
 _THS_NEWS_URL = "https://basic.10jqka.com.cn/fuyao/info/company/v1/news"
@@ -2406,142 +2417,67 @@ class ThsFetcher(BaseFetcher):
         board_type: str | None = None,
         **kwargs,
     ) -> list[dict]:
-        """THS F10 板块热点新闻 — section ``<div class="m_box post" id="news">``.
+        """THS 板块新闻 via news.10jqka.com.cn timeline API.
 
-        Parses ``<dl>`` rows under ``.newslist clearfix``: each ``<dl>``
-        carries a title-link and a span.fr.date. The publish_date is
-        extracted from the URL path (``/field/YYYYMMDD/{id}.shtml``)
-        rather than the page's date label (which is sometimes relative
-        like "20:13").
+        Replaces the old F10-page (`basic.10jqka.com.cn/48/{code}/`) scrape,
+        which hard-capped at 14 items (two 7-item ``<ul>`` blocks) and never
+        carried a summary. The timeline endpoint is unauthenticated JSON,
+        cursor-paginated, and returns publisher + summary per item (probed
+        2026-07-21 on 885756 / 881165 / 884001, marketId=48 covers concept
+        and industry boards alike).
 
         Args:
-            board_code: THS public platecode.
-            limit: Max items to return (1-50).
-            board_type: Optional hint. ``"industry"`` returns ``[]``.
+            board_code: THS public platecode (e.g. ``"885756"``).
+            limit: Max items to return (1-50). Single upstream page; the API
+                honors ``size`` directly so no offset loop is needed here.
+            board_type: Ignored (kept for manager call-site compatibility).
             **kwargs: Absorbed silently.
 
         Returns:
-            list of dicts: {title, url, publish_date, publish_time, summary, source_domain}.
+            list of dicts: {title, url, publish_date, publish_time,
+                            summary, source_domain}.
         """
-        from bs4 import BeautifulSoup, Comment
-        import re as _re
-
-        html = self.get_board_f10_page(board_code, board_type=board_type)
-        if not html:
-            return []
-
-        # Use html.parser (not lxml): lxml chokes on garbled bytes inside
-        # THS F10 page HTML comments (probed 2026-07-21 on 885756, which has
-        # mojibake in `<!-- ��ʷ���� -->` comments before #period). lxml
-        # silently stops matching elements beyond the first bad comment,
-        # so news/surges return [] even though the raw HTML has the markup.
-        soup = BeautifulSoup(html, features="html.parser")
-        news_box = soup.select_one("div.m_box.post#news .newslist")
-        if news_box is None:
-            return []
-
-        # Primary path (2026-07-21 probe on 885914 / 885756): THS renders
-        # news as two ``<ul class="news_lists">`` blocks (7 + 7 = 14 items)
-        # under .newslist. Each ``<li>`` carries a single anchor with a
-        # ``<span>YYYY-MM-DD</span>`` date prefix and the title as text.
-        # The legacy spec assumed a ``<dl>`` structure (some industry /
-        # special boards do still emit DLs); we keep that as a fallback.
-        # THS also wraps some DLs inside HTML comments — re-parse those.
-        seen_keys: set[tuple[str, str]] = set()
         n = max(1, min(int(limit), 50))
+        payload = json_get(
+            _THS_TIMELINE_NEWS_URL,
+            params={"marketId": _THS_BOARD_MARKET_ID, "code": board_code, "size": n},
+            headers={"User-Agent": THS_UA, "Referer": "https://stockpage.10jqka.com.cn/"},
+            timeout=10,
+        )
+        if not isinstance(payload, dict) or payload.get("status_code") != 0:
+            logger.warning(
+                f"[ThsFetcher] get_board_news({board_code}) upstream "
+                f"status_code={payload.get('status_code') if isinstance(payload, dict) else 'N/A'}"
+            )
+            return []
 
+        rows = (payload.get("data") or {}).get("newsList") or []
         out: list[dict] = []
-
-        # Primary: <ul class="news_lists"> > <li>
-        for ul in news_box.select("ul.news_lists"):
-            for li in ul.select("li"):
-                if len(out) >= n:
-                    break
-                a = li.select_one("a[href*='news.10jqka.com.cn']")
-                if not a or not a.get("href"):
-                    continue
-                url = a["href"].strip()
-                date_span = a.select_one("span")
-                publish_date = date_span.get_text(strip=True) if date_span else ""
-                # The anchor's text includes the date span; strip the span
-                # text so the title is plain Chinese.
-                if date_span:
-                    date_span.extract()
-                title = a.get_text(strip=True)
-                if not title or not url:
-                    continue
-                # Confirm publish_date shape (YYYY-MM-DD); fall back to URL.
-                if not _re.match(r"^\d{4}-\d{2}-\d{2}$", publish_date):
-                    m = _re.search(r"/field/(\d{8})/", url)
-                    if m:
-                        d = m.group(1)
-                        publish_date = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
-                key = (title, url)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                out.append(
-                    {
-                        "title": title,
-                        "url": url,
-                        "publish_date": publish_date,
-                        "publish_time": "",
-                        "summary": "",
-                        "source_domain": "news.10jqka.com.cn",
-                    }
-                )
+        for r in rows:
+            url = str(r.get("jumpUrl") or "").strip()
+            title = str(r.get("title") or "").strip()
+            if not title or not url:
+                continue
+            publish_date = publish_time = ""
+            pt = r.get("publishTime")
+            if isinstance(pt, (int, float)) and pt > 0:
+                dt = datetime.fromtimestamp(pt / 1000, _THS_TZ)
+                publish_date = dt.strftime("%Y-%m-%d")
+                publish_time = dt.strftime("%H:%M")
+            out.append(
+                {
+                    "title": title,
+                    "url": url,
+                    "publish_date": publish_date,
+                    "publish_time": publish_time,
+                    "summary": str(r.get("summary") or "").strip(),
+                    "source_domain": source_domain_from_url(url),
+                }
+            )
             if len(out) >= n:
                 break
-
-        # Fallback: <dl> rows (legacy / industry / special boards). Include
-        # DLs wrapped in HTML comments — THS renders those in<!-- -->.
-        if not out:
-            dls: list = list(news_box.select("dl"))
-            for comment in news_box.find_all(string=lambda t: isinstance(t, Comment)):
-                try:
-                    inner = BeautifulSoup(str(comment), features="html.parser")
-                except Exception:
-                    continue
-                dls.extend(inner.select("dl"))
-            for dl in dls:
-                if len(out) >= n:
-                    break
-                link = dl.select_one("dt a[href*='news.10jqka.com.cn']")
-                title_link = dl.select_one("dt a strong") if link else None
-                time_span = dl.select_one("dt span.fr.date")
-                summary_p = dl.select_one("dd.hot_preview p")
-
-                url = link["href"].strip() if link and link.get("href") else ""
-                title = title_link.get_text(strip=True) if title_link else ""
-                publish_time = time_span.get_text(strip=True) if time_span else ""
-                summary = summary_p.get_text(strip=True) if summary_p else ""
-
-                publish_date = ""
-                m = _re.search(r"/field/(\d{8})/", url)
-                if m:
-                    d = m.group(1)
-                    publish_date = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
-
-                if not title or not url:
-                    continue
-
-                key = (title, url)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-
-                out.append(
-                    {
-                        "title": title,
-                        "url": url,
-                        "publish_date": publish_date,
-                        "publish_time": publish_time,
-                        "summary": summary,
-                        "source_domain": "news.10jqka.com.cn",
-                    }
-                )
-
         return out
+
 
     def get_board_surges(
         self,
