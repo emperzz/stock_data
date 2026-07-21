@@ -349,6 +349,117 @@ def _get_ths_hxkline_jwt() -> str:
     return token
 
 
+def _compute_begin_time(
+    *, days: int, freq_key: str, start_date: str | None,
+) -> int:
+    """Translate (days, start_date) to the negative-day offset upstream expects.
+
+    When ``start_date`` is given, we compute the offset from today's date
+    in Beijing time. Otherwise we use the ``days`` argument directly.
+
+    Per-frequency max-span caps still apply — ``get_board_history`` enforces
+    those upstream of this helper.
+    """
+    if start_date:
+        try:
+            start_d = datetime.strptime(start_date, "%Y-%m-%d").date()
+        except ValueError as e:
+            raise DataFetchError(
+                f"[ThsFetcher] single_kline: bad start_date {start_date!r}: {e}"
+            ) from e
+        today = _date.today()
+        offset = (today - start_d).days
+        return -max(offset, 1)
+    return -max(days, 1)
+
+
+def _fetch_ths_single_kline(
+    board_code: str,
+    *,
+    freq_key: str,
+    days: int,
+    start_date: str | None = None,
+) -> list[dict]:
+    """POST to ``single_kline`` and return parsed K-line rows.
+
+    Single request — no year loop, no JS-body parsing. Returns [] on empty
+    upstream payload (legit no-data); raises ``DataFetchError`` on HTTP
+    errors, non-zero status_code, or 401/403 after one JWT refresh + retry.
+
+    The 401/403 retry is the only failure-recovery this helper does:
+    upstream JWT rotations coincide with JS-bundle chunk-hash changes, and
+    we already cache the new JWT for 24h on a successful re-fetch (see
+    ``_get_ths_hxkline_jwt``). After one retry we let the error propagate.
+    """
+    if freq_key not in _THS_HXKLINE_PERIOD_MAP:
+        raise DataFetchError(
+            f"[ThsFetcher] _fetch_ths_single_kline: unsupported freq_key "
+            f"{freq_key!r}; supported: {sorted(_THS_HXKLINE_PERIOD_MAP)}"
+        )
+    time_period = _THS_HXKLINE_PERIOD_MAP[freq_key]
+    headers = {**_THS_HXKLINE_HEADERS_BASE, "x-fuyao-auth": _get_ths_hxkline_jwt()}
+    body = {
+        "code_list": [{"codes": [board_code], "market": "48"}],
+        "trade_class": "intraday",
+        "time_period": time_period,
+        "trade_date": -1,
+        # The single_kline endpoint uses negative offsets for "N days back"
+        # (verified against the stockpage network panel). When start_date /
+        # end_date are explicit, convert to a days-back approximation
+        # (upstream doesn't accept date strings; it accepts ms epoch or
+        # negative-day offsets).
+        "begin_time": _compute_begin_time(
+            days=days, freq_key=freq_key, start_date=start_date,
+        ),
+        "end_time": 0,  # 0 = "now"
+        "adjust_type": "forward",
+        "gpid": 1,
+    }
+    for attempt in (1, 2):
+        try:
+            resp = requests.post(
+                _THS_HXKLINE_KLINE_URL, headers=headers, json=body, timeout=20,
+            )
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] single_kline({board_code}, freq={freq_key}) "
+                f"network failed: {e}"
+            ) from e
+        if resp.status_code in (401, 403):
+            if attempt == 1:
+                # JWT may have rotated; invalidate cache and retry once with
+                # a fresh token. The next _get_ths_hxkline_jwt() call will
+                # re-mint from the JS bundle.
+                _ths_hxkline_jwt_cache["value"] = None
+                _ths_hxkline_jwt_cache["expires_at"] = 0.0
+                headers["x-fuyao-auth"] = _get_ths_hxkline_jwt()
+                logger.warning(
+                    f"[ThsFetcher] single_kline {board_code} freq={freq_key} "
+                    f"got HTTP {resp.status_code}; refreshing JWT and retrying once"
+                )
+                continue
+            raise DataFetchError(
+                f"[ThsFetcher] single_kline({board_code}, freq={freq_key}) "
+                f"HTTP {resp.status_code} after JWT refresh — likely chunk-hash "
+                f"rotation. Set THS_HXKLINE_JWT to a known-good token."
+            )
+        if not (200 <= resp.status_code < 300):
+            raise DataFetchError(
+                f"[ThsFetcher] single_kline({board_code}, freq={freq_key}) "
+                f"HTTP {resp.status_code} ({len(resp.content)}B body)"
+            )
+        try:
+            resp_body = resp.json()
+        except Exception as e:
+            raise DataFetchError(
+                f"[ThsFetcher] single_kline({board_code}, freq={freq_key}) "
+                f"response not JSON: {e}"
+            ) from e
+        return _parse_ths_single_kline_response(resp_body, freq_key=freq_key)
+    # unreachable
+    raise DataFetchError(f"[ThsFetcher] single_kline({board_code}) retry loop exited unexpectedly")
+
+
 THS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0 Safari/537.36"
 
 HSGT_HEADERS = {

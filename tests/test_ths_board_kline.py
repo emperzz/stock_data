@@ -1142,3 +1142,100 @@ class TestParseSingleKlineResponse:
 
         body = {"status_code": 0, "data": {"quote_data": [], "fail_params": None}, "status_msg": "ok"}
         assert _parse_ths_single_kline_response(body, freq_key="d") == []
+
+
+class TestFetchSingleKline:
+    """POST to single_kline, handle 401/403 by refreshing the JWT."""
+
+    def test_happy_path(self, monkeypatch):
+        from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+        from stock_data.data_provider.fetchers.ths_fetcher import _fetch_ths_single_kline
+
+        monkeypatch.setattr(ths_mod, "_get_ths_hxkline_jwt", lambda: "eyJ.test.sig")
+
+        fake_body = {
+            "status_code": 0,
+            "data": {"quote_data": [{
+                "market": "48", "code": "881270", "delay": False,
+                "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                "value": [[1732550400000, 9000.0, 9100.0, 8900.0, 9050.0, 100, 1000]],
+            }], "fail_params": None},
+            "status_msg": "ok",
+        }
+
+        captured_kwargs: dict = {}
+        class FakeResp:
+            status_code = 200
+            headers = {"x-ratelimit-remaining": "2740", "x-ratelimit-limit": "2750"}
+            def json(self): return fake_body
+        def fake_post(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return FakeResp()
+        monkeypatch.setattr(ths_mod.requests, "post", fake_post)
+
+        rows = _fetch_ths_single_kline("881270", freq_key="d", days=400)
+        assert len(rows) == 1
+        assert rows[0]["close"] == 9050.0
+        # Verify the request shape
+        headers = captured_kwargs["headers"]
+        assert headers["x-fuyao-auth"] == "eyJ.test.sig"
+        body = captured_kwargs["json"]
+        assert body["code_list"] == [{"codes": ["881270"], "market": "48"}]
+        assert body["time_period"] == "day_1"
+        assert body["begin_time"] == -400
+        assert body["end_time"] == 0
+
+    def test_401_refreshes_jwt_and_retries_once(self, monkeypatch):
+        from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+        from stock_data.data_provider.fetchers.ths_fetcher import _fetch_ths_single_kline
+
+        post_calls = {"n": 0}
+        class FakeResp:
+            def __init__(self, code, body):
+                self.status_code = code
+                self._body = body
+                self.headers = {}
+            def json(self): return self._body
+        def fake_post(url, **kwargs):
+            post_calls["n"] += 1
+            if post_calls["n"] == 1:
+                return FakeResp(401, {})
+            return FakeResp(200, {
+                "status_code": 0,
+                "data": {"quote_data": [{
+                    "market": "48", "code": "881270", "delay": False,
+                    "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                    "value": [],
+                }], "fail_params": None},
+                "status_msg": "ok",
+            })
+        monkeypatch.setattr(ths_mod.requests, "post", fake_post)
+
+        # Each _get_ths_hxkline_jwt call invalidates the cache to simulate
+        # the natural cache-flush behavior on JWT rotation.
+        jwt_iter = iter(["eyJ.iter1", "eyJ.iter2"])
+        def fake_jwt():
+            tok = next(jwt_iter)
+            ths_mod._ths_hxkline_jwt_cache["value"] = None
+            return tok
+        monkeypatch.setattr(ths_mod, "_get_ths_hxkline_jwt", fake_jwt)
+
+        rows = _fetch_ths_single_kline("881270", freq_key="d", days=30)
+        assert rows == []
+        assert post_calls["n"] == 2  # one 401 + one retry
+
+    def test_http_error_raises(self, monkeypatch):
+        from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+        from stock_data.data_provider.fetchers.ths_fetcher import (
+            DataFetchError, _fetch_ths_single_kline,
+        )
+
+        monkeypatch.setattr(ths_mod, "_get_ths_hxkline_jwt", lambda: "eyJ.test.sig")
+        class FakeResp:
+            status_code = 500
+            text = "upstream down"
+            content = b"upstream down"
+            headers = {}
+        monkeypatch.setattr(ths_mod.requests, "post", lambda *a, **kw: FakeResp())
+        with pytest.raises(DataFetchError, match="HTTP 500"):
+            _fetch_ths_single_kline("881270", freq_key="d", days=30)
