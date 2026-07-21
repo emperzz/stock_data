@@ -17,10 +17,11 @@ the ths_fetcher module docstring for the upstream segment mapping).
 # listed frequencies (the manager's get_board_history raises ValueError
 # on a frequency not in this map → route layer maps to 400).
 BOARD_KLINE_FREQ_BY_SOURCE: dict[str, frozenset[str]] = {
-    # THS: d / w / m / 5m / 15m / 30m / 60m — all confirmed by probing
-    # d.10jqka.com.cn/v4/line/bk_{platecode}/{seg}/2026.js for inner=886042.
-    # akshare 硬编码 seg=01,从未公开过其他频率 — 但 upstream 真实支持全部 7 种.
-    "ths": frozenset({"d", "w", "m", "5m", "15m", "30m", "60m"}),
-    # EastMoney: 全部 7 频率 (klt=101/102/103/... + min-level).
-    "eastmoney": frozenset({"d", "w", "m", "5m", "15m", "30m", "60m"}),
+    # THS: d / w / m / 1m / 5m / 15m / 30m / 60m — all confirmed by probing
+    # quota-h.10jqka.com.cn/fuyao/.../single_kline for inner=885756 / 881153 /
+    # 881270 (verified 2026-07-21). akshare 硬编码 seg=01,从未公开过其他频率
+    # — 但 upstream 真实支持全部 8 种. 1m caps at ~30 bars upstream.
+    "ths": frozenset({"d", "w", "m", "1m", "5m", "15m", "30m", "60m"}),
+    # EastMoney: 全部 8 频率 (klt=101/102/103/... + min-level).
+    "eastmoney": frozenset({"d", "w", "m", "1m", "5m", "15m", "30m", "60m"}),
 }
