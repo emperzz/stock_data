@@ -50,6 +50,7 @@ import time
 from datetime import date as _date
 from datetime import datetime, timedelta, timezone
 from importlib import resources, util
+from typing import Any
 
 from tenacity import (
     before_sleep_log,
@@ -58,6 +59,8 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+
+import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..core.types import safe_float
@@ -155,6 +158,62 @@ _ths_v_token_cache: dict[str, float | str | None] = {
 }
 _ths_js_vm = None  # lazily-initialized py_mini_racer.MiniRacer with ths.js loaded
 
+# HXKline (quota-h.10jqka.com.cn) JWT cache. Discovered 2026-07-21: the JWT
+# is hardcoded in the HXKline Next.js webpack chunk (currently 82-*.js). It
+# rotates only when the JS bundle is rebuilt (rare). We cache for 1 day by
+# default; the env override THS_HXLINE_JWT skips the cache + fetch entirely
+# so operators can pin a known-good token after a chunk-hash rotation.
+_ths_hxkline_jwt_cache: dict[str, Any] = {
+    "value": None,
+    "expires_at": 0.0,
+}
+_THS_HXKLINE_JWT_TTL_SECONDS = 24 * 3600
+_THS_HXKLINE_JS_CHUNK_URL = (
+    "https://s.thsi.cn/cd/news-p-fe-app-news-flow-home/market/"
+    "_next/static/chunks/82-2aa7e9259b5193a4.js"
+)
+_THS_HXKLINE_HEADERS_BASE: dict[str, str] = {
+    "x-auth-progid": "7047",
+    "x-auth-type": "ths",
+    "x-auth-version": "1.0",
+    "x-auth-appname": "AINVEST",
+    "source-id": "hxkline-NEWS_appNewsFlowHome_Page",
+    "platform": "hxkline",
+    "Referer": "https://stockpage.10jqka.com.cn/",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/151.0.0.0 Safari/537.36"
+    ),
+    "content-type": "application/json",
+}
+_THS_HXKLINE_KLINE_URL = (
+    "https://quota-h.10jqka.com.cn/fuyao/common_hq_aggr/quote/v1/single_kline"
+)
+# time_period enum. Verified 2026-07-21 against the stockpage network panel
+# for d / w / m / min_1 / min_5 / min_15 / min_30 / min_60.
+_THS_HXKLINE_PERIOD_MAP: dict[str, str] = {
+    "d": "day_1",
+    "w": "week_1",
+    "m": "month_1",
+    "1m": "min_1",   # upstream caps at ~30 bars regardless of begin_time
+    "5m": "min_5",
+    "15m": "min_15",
+    "30m": "min_30",
+    "60m": "min_60",
+}
+# Position-to-key map for `data_fields` in the response. Stable across
+# upstream variants (verified 2026-07-21 across 18 probes).
+_THS_HXKLINE_FIELD_TO_KEY = {
+    "1": "ts_ms",
+    "7": "open",
+    "8": "high",
+    "9": "low",
+    "11": "close",
+    "13": "volume",
+    "19": "amount",
+}
+
 
 def _load_ths_js() -> str:
     """Return the contents of the vendored ``ths.js`` blob.
@@ -235,6 +294,58 @@ def _get_ths_v_token() -> str:
         ) from e
     _ths_v_token_cache["value"] = token
     _ths_v_token_cache["expires_at"] = now + _THS_V_TOKEN_TTL_SECONDS
+    return token
+
+
+# ---------------------------------------------------------------------------
+# HXKline (quota-h.10jqka.com.cn) JWT bootstrap (post-2026-07-21)
+# ---------------------------------------------------------------------------
+
+
+def _mint_ths_hxkline_jwt_uncached() -> str:
+    """Fetch the HXKline JS bundle and extract the embedded x-fuyao-auth JWT.
+
+    The token is shipped as a static string in the Next.js webpack chunk so
+    there's no auth handshake — but the chunk hash changes when JS is
+    rebuilt, in which case this function raises ``DataFetchError`` and the
+    operator must either wait for the new hash to land or pin
+    ``THS_HXKLINE_JWT`` to a known-good value (see ``_get_ths_hxkline_jwt``).
+    """
+    resp = requests.get(_THS_HXKLINE_JS_CHUNK_URL, timeout=15)
+    resp.raise_for_status()
+    m = re.search(
+        r'token:\s*"(eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+)"',
+        resp.text,
+    )
+    if not m:
+        raise DataFetchError(
+            f"x-fuyao-auth JWT not found in HXKline JS chunk "
+            f"{_THS_HXKLINE_JS_CHUNK_URL}; the chunk hash may have rotated. "
+            f"Pin THS_HXKLINE_JWT env var to a known-good value."
+        )
+    return m.group(1)
+
+
+def _get_ths_hxkline_jwt() -> str:
+    """Return a cached x-fuyao-auth JWT, refreshing on TTL expiry.
+
+    TTL: ``_THS_HXKLINE_JWT_TTL_SECONDS`` (1 day). The token rarely rotates
+    (only when the JS bundle is rebuilt); 1 day is a defensive upper bound
+    that also lets a chunk-hash rotation recover within a day of occurrence.
+
+    Override: setting ``THS_HXKLINE_JWT`` in the environment bypasses both
+    the cache and the JS-bundle fetch. Use this to pin a token after the
+    chunk hash rotates before the cache TTL elapses.
+    """
+    env_jwt = os.environ.get("THS_HXKLINE_JWT")
+    if env_jwt:
+        return env_jwt
+    cached = _ths_hxkline_jwt_cache["value"]
+    if cached is not None and _ths_hxkline_jwt_cache["expires_at"] > time.time():
+        return cached
+    token = _mint_ths_hxkline_jwt_uncached()
+    _ths_hxkline_jwt_cache["value"] = token
+    _ths_hxkline_jwt_cache["expires_at"] = time.time() + _THS_HXKLINE_JWT_TTL_SECONDS
     return token
 
 

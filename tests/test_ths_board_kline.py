@@ -1015,3 +1015,64 @@ class TestFetchThsBoardYearStatusCode:
             patch.object(ThsFetcher, "_v_token", return_value="x"),
         ):
             assert f._fetch_ths_board_year("886042", 2024, 1).startswith("var v_x=")
+
+
+class TestHuxkLineJwt:
+    """Lazily-fetched JWT for the quota-h.10jqka.com.cn/single_kline endpoint."""
+
+    def test_lazy_fetch_from_js_bundle(self, monkeypatch):
+        from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+        from stock_data.data_provider.fetchers.ths_fetcher import _get_ths_hxkline_jwt
+
+        # Real JWT shape: header.payload.signature — each chunk is base64url
+        fake_jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature123"
+        fake_js = f'let c={{id:"hxkline-x",token:"{fake_jwt}"}}'
+
+        class FakeResp:
+            text = fake_js
+            status_code = 200
+            def raise_for_status(self): pass
+
+        ths_mod._ths_hxkline_jwt_cache["value"] = None
+        ths_mod._ths_hxkline_jwt_cache["expires_at"] = 0.0
+
+        calls = {"n": 0}
+        def fake_get(url, timeout=15):
+            calls["n"] += 1
+            assert "82-" in url  # chunk hash is part of the URL
+            return FakeResp()
+
+        monkeypatch.setattr(ths_mod.requests, "get", fake_get)
+        jwt1 = _get_ths_hxkline_jwt()
+        jwt2 = _get_ths_hxkline_jwt()
+        assert jwt1 == fake_jwt
+        assert jwt2 == fake_jwt
+        assert calls["n"] == 1  # second call used cache
+
+    def test_env_override_bypasses_fetch(self, monkeypatch):
+        from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+
+        monkeypatch.setenv("THS_HXKLINE_JWT", "eyJ.env.override")
+        ths_mod._ths_hxkline_jwt_cache["value"] = None
+        ths_mod._ths_hxkline_jwt_cache["expires_at"] = 0.0
+
+        def must_not_call(*a, **kw):
+            raise AssertionError("requests.get must not be called when env override is set")
+        monkeypatch.setattr(ths_mod.requests, "get", must_not_call)
+        assert ths_mod._get_ths_hxkline_jwt() == "eyJ.env.override"
+
+    def test_missing_token_raises(self, monkeypatch):
+        from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+        from stock_data.data_provider.fetchers.ths_fetcher import DataFetchError
+
+        ths_mod._ths_hxkline_jwt_cache["value"] = None
+        ths_mod._ths_hxkline_jwt_cache["expires_at"] = 0.0
+
+        class FakeResp:
+            text = "no token here"
+            status_code = 200
+            def raise_for_status(self): pass
+        monkeypatch.setattr(ths_mod.requests, "get", lambda *a, **kw: FakeResp())
+
+        with pytest.raises(DataFetchError, match="JWT not found"):
+            ths_mod._get_ths_hxkline_jwt()
