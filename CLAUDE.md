@@ -397,13 +397,16 @@ are the same as stocks (see [Standardized Data Schema](#standardized-data-schema
 
 ## Common Commands
 
-> **Always use the project venv.** The `akshare` / `yfinance` / `gm`
-> packages are installed in `.venv/`, not the system Python. Running
-> `python` (system) will hit `ModuleNotFoundError` for those modules,
-> and `AkshareFetcher.is_available()` will return `False`, breaking
-> every endpoint that routes through akshare (STOCK_BOARD, STOCK_LIST,
-> INDEX_*, ZT_POOL, STOCK_REALTIME_QUOTE, …). Use `.venv/Scripts/python.exe`
-> directly, or `source .venv/Scripts/activate` first.
+> **Use `.venv` when present; fall back to system Python otherwise.** The
+> `akshare` / `yfinance` / `gm` packages are installed in `.venv/`, not the
+> system Python. If `.venv/Scripts/python.exe` exists, use it directly (or
+> `source .venv/Scripts/activate` first) — running `python` (system) will
+> hit `ModuleNotFoundError` for those modules and `AkshareFetcher.is_available()`
+> will return `False`, breaking every endpoint that routes through akshare
+> (STOCK_BOARD, STOCK_LIST, INDEX_*, ZT_POOL, STOCK_REALTIME_QUOTE, …). If
+> `.venv/` is absent (fresh clone / new machine), fall back to the system
+> `python` — the project still boots, but upstream-specific fetchers are
+> unavailable until you `python -m venv .venv && .venv/Scripts/python.exe -m pip install -e ".[dev]"`.
 
 ```bash
 # Install dependencies (into the venv)
@@ -491,7 +494,7 @@ The non-obvious knobs worth memorizing here:
 - **Don't** write `options.get(key) or default` for numeric/float option keys — when `key=0` is a valid value, the `or` treats it as missing. Use `options.get(key, default)` so `0` flows through.
 - **Don't** re-introduce inline MA/EMA/WMA calculations in the fetcher path. If you need a moving average on K-line data, ask the indicator service via `?indicators=ma` (or compute it downstream of the API).
 - **Don't** reorder decorators on a route so `@endpoint_meta` sits OUTSIDE `@router.get` (i.e. `@endpoint_meta(...) @router.get(...) def f`). The contract requires `@endpoint_meta` to be the OUTER decorator (above `@map_errors` / `@cache_endpoint`) — the actual order used by every route file is `@router.get → @endpoint_meta → @map_errors → @cache_endpoint → def` (see `api/routes/news.py:135` for a representative example). The previous "INNER" wording in this section (and the matching Usage examples in `api/routes/errors.py` / `api/cache.py`) was the inverse of reality; both have been corrected 2026-07-16. The contract holds because `endpoint_meta.deco` is required to return the original `func` (not a wrapper) — see the *Decorator contract* note above — so `route.endpoint` resolves directly to the `REGISTRY` key and the sanity check at `explorer/__init__.py:100` matches without any `__wrapped__` walk. The manifest builder (`explorer/manifest.py::_lookup_registry`) does walk `__wrapped__` defensively, in case a future decorator between `@endpoint_meta` and `@router.get` is added — but today that walk is unused on the OUTER-order route files.
-- **Don't** add a `DataCapability` flag without declaring intent — every flag must be in `CAPABILITY_TO_METHOD` (maps to a fetcher method). `tests/test_capability_method_map.py` enforces this; the explorer startup sanity check also warns about violations.
+- **Don't** add a `DataCapability` flag without declaring intent — every flag must be in `CAPABILITY_TO_METHOD` (maps to a fetcher method). `tests/test_capability_method_map.py` enforces this (test-only — startup sanity walk removed in b85ed88; `_validate_manifest_invariants` still warns about fetcher_method overrides, missing `@endpoint_meta`, and missing tag titles).
 - **Don't** override `@endpoint_meta(fetcher_method=...)` with a method name that doesn't exist on any fetcher class — startup sanity check warns but the manifest will silently produce a misleading Stage 2 entry.
 - **Don't** leak the outbound `ts_code` / `_to_xxx_ts_code` suffix into an inbound API response. The server's canonical stock_code format is **bare 6-digit** (e.g. `000034`, `600519`), enforced by `normalize_stock_code()`. Per-upstream protocol formats (Tushare `000034.SZ`, Baostock `sh.600519`, Yfinance `600519.SS`, Zhitu `600519.SH`) are an **outbound-only** concern — they live in helpers like `_to_zzshare_ts_code` / `to_tushare_format` / `to_baostock_code` that are called RIGHT BEFORE the SDK call. On the response side, always return the bare 6-digit (e.g. `ts_code.split(".")[0]`). Forgetting the inbound/outbound boundary is exactly how `ZzshareFetcher.get_board_stocks` / `get_daily_dragon_tiger` / `get_hot_topics` ended up returning `000034.SZ` instead of `000034` (fixed 2026-06-25). Same rule applies to HK (`HK00700`) and US (`AAPL`) codes — they keep their canonical form, never get re-suffixed.
 - **Don't** let a fetcher reach into a peer fetcher's package internals — even clean imports like `from akshare.datasets import get_ths_js` or `from akshare.utils import demjson` invert the dependency direction between fetchers (they're peers, not a utility layer). If fetcher X needs to vendor an upstream asset (e.g. THS's `ths.js` JS blob), copy it into `stock_data/data_provider/fetchers/<x>_assets/` (a sub-package under X's directory, must have `__init__.py`) and bundle via `[tool.hatch.build.targets.wheel.force-include]` in `pyproject.toml`. Build-time helpers (e.g. `tools/vendor_ths_js.py`) are the only place allowed to touch a peer fetcher's vendored assets to refresh them; server runtime MUST stay peer-decoupled. See [[extend-not-spawn-fetcher]] + [[vendor-not-peer-import]].
