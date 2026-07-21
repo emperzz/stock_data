@@ -1076,3 +1076,69 @@ class TestHuxkLineJwt:
 
         with pytest.raises(DataFetchError, match="JWT not found"):
             ths_mod._get_ths_hxkline_jwt()
+
+
+class TestParseSingleKlineResponse:
+    """Parse the `data.quote_data[0].value` 2-D array from single_kline responses."""
+
+    def test_daily_response_yields_canonical_dates(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import _parse_ths_single_kline_response
+
+        body = {
+            "status_code": 0,
+            "data": {
+                "quote_data": [{
+                    "market": "48",
+                    "code": "885756",
+                    "delay": False,
+                    "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                    "value": [
+                        [1732550400000, 2813.92, 2845.87, 2770.84, 2771.96, 14851306000, 23828683000],
+                        [1732636800000, 2754.02, 2840.82, 2696.71, 2840.82, 16226268000, 28300843000],
+                    ],
+                }],
+                "fail_params": None,
+            },
+            "status_msg": "ok",
+        }
+        rows = _parse_ths_single_kline_response(body, freq_key="d")
+        assert len(rows) == 2
+        # YYYY-MM-DD canonical (Beijing time = UTC+8, so 1732550400000ms UTC
+        # midnight-of-2024-11-26 maps to 2024-11-26 00:00 Beijing → bare date)
+        assert rows[0]["date"] == "2024-11-26"
+        assert rows[0]["open"] == 2813.92
+        assert rows[0]["volume"] == 14851306000
+        assert rows[0]["frequency"] == "d"
+
+    def test_minute_response_yields_canonical_datetime(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import _parse_ths_single_kline_response
+
+        body = {
+            "status_code": 0,
+            "data": {"quote_data": [{
+                "market": "48", "code": "881153", "delay": False,
+                "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                "value": [[1781574300000, 1707.92, 1707.92, 1677.89, 1679.61, 640538570, 3271067400]],
+            }], "fail_params": None},
+            "status_msg": "ok",
+        }
+        rows = _parse_ths_single_kline_response(body, freq_key="15m")
+        assert len(rows) == 1
+        # YYYY-MM-DD HH:MM (note the space, NOT 'T'); Beijing time (UTC+8)
+        assert rows[0]["date"] == "2026-06-16 09:45"
+
+    def test_status_nonzero_raises(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import (
+            DataFetchError, _parse_ths_single_kline_response,
+        )
+        with pytest.raises(DataFetchError, match="status_code"):
+            _parse_ths_single_kline_response(
+                {"status_code": 40001, "status_msg": "auth failed", "data": None},
+                freq_key="d",
+            )
+
+    def test_empty_quote_data_returns_empty_list(self):
+        from stock_data.data_provider.fetchers.ths_fetcher import _parse_ths_single_kline_response
+
+        body = {"status_code": 0, "data": {"quote_data": [], "fail_params": None}, "status_msg": "ok"}
+        assert _parse_ths_single_kline_response(body, freq_key="d") == []

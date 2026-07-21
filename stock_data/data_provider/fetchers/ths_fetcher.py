@@ -579,6 +579,79 @@ def _resolve_ths_date_range(
     return start_d, end_d
 
 
+# Frequencies whose bars carry a "HH:MM" suffix in their normalized date string.
+# Mirrors the same set in the legacy implementation; kept as a module-level
+# constant so the parser and the date-range filter agree.
+_MINUTE_FREQS: frozenset[str] = frozenset({"1m", "5m", "15m", "30m", "60m"})
+
+
+def _parse_ths_single_kline_response(body: dict, freq_key: str) -> list[dict]:
+    """Parse a `quota-h.10jqka.com.cn/.../single_kline` JSON response.
+
+    Response shape (verified 2026-07-21, 21 probes):
+        {"status_code": 0,
+         "data": {"quote_data": [{
+             "market": "48", "code": "<board_code>",
+             "data_fields": ["1","7","8","9","11","13","19"],
+             "value": [[ts_ms, open, high, low, close, volume, amount], ...]
+         }], "fail_params": None},
+         "status_msg": "ok"}
+
+    Returns canonical row dicts: date, open, high, low, close, volume, amount, frequency.
+    Date normalization matches the legacy implementation so the route-layer
+    date filter is identical:
+        daily / weekly / monthly  → "YYYY-MM-DD"
+        minute-level (1m/5m/15m/30m/60m) → "YYYY-MM-DD HH:MM"
+
+    Raises ``DataFetchError`` when ``status_code != 0`` (upstream auth
+    failure or unknown time_period enum — see Task 3 for 401/403 retry).
+    Returns ``[]`` when ``quote_data`` is empty (legit no-data, distinct
+    from the legacy "all years empty" gate which surfaced 503).
+    """
+    status = body.get("status_code")
+    if status != 0:
+        raise DataFetchError(
+            f"[ThsFetcher] single_kline returned status_code={status} "
+            f"msg={body.get('status_msg')!r}; the JWT may have rotated or "
+            f"the time_period enum may be wrong"
+        )
+    quote_data = (body.get("data") or {}).get("quote_data") or []
+    if not quote_data:
+        return []
+    row0 = quote_data[0]
+    values = row0.get("value") or []
+    # Verify data_fields shape (defensive — if upstream adds/reorders fields,
+    # we'd silently misalign. Probe 21 cases all returned the same 7 fields).
+    fields = row0.get("data_fields") or []
+    expected = list(_THS_HXKLINE_FIELD_TO_KEY.keys())
+    if fields != expected:
+        raise DataFetchError(
+            f"[ThsFetcher] single_kline data_fields={fields!r} != expected {expected!r}; "
+            f"upstream schema may have changed"
+        )
+    use_hhmm = freq_key in _MINUTE_FREQS
+    out: list[dict] = []
+    for row in values:
+        try:
+            ts_ms = int(row[0])
+            # Beijing time (matches legacy implementation's `_THS_TZ`).
+            dt = datetime.fromtimestamp(ts_ms / 1000, _THS_TZ)
+            date_str = dt.strftime("%Y-%m-%d %H:%M") if use_hhmm else dt.strftime("%Y-%m-%d")
+            out.append({
+                "date": date_str,
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": int(float(row[5])),
+                "amount": float(row[6]),
+                "frequency": freq_key,
+            })
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
 class ThsFetcher(BaseFetcher):
     """同花顺 HTTP API fetcher for signal data."""
 
