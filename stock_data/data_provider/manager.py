@@ -543,9 +543,7 @@ class DataFetcherManager:
                 result = call(fetcher)
             except DataFetchError as e:
                 errors.append(f"[{fetcher.name}] {e}")
-                logger.warning(
-                    f"[Manager] {fetcher.name} {op_label} failed: {e}"
-                )
+                logger.warning(f"[Manager] {fetcher.name} {op_label} failed: {e}")
                 continue
             if result is not None:
                 return result, fetcher.name
@@ -884,9 +882,9 @@ class DataFetcherManager:
         include_quote: bool = False,
         board_type: str | None = None,
         *,
-        sort_by: str | None = None,         # 2026-07-13: forward to fetcher
-        sort_order: str = "desc",           # 2026-07-13: forward to fetcher
-        top_n: int = 50,                    # 2026-07-13: forward to fetcher
+        sort_by: str | None = None,  # 2026-07-13: forward to fetcher
+        sort_order: str = "desc",  # 2026-07-13: forward to fetcher
+        top_n: int = 50,  # 2026-07-13: forward to fetcher
     ) -> tuple[list[dict], str]:
         """Get stocks belonging to a board from the named source.
 
@@ -1110,7 +1108,10 @@ class DataFetcherManager:
             capability=DataCapability.BOARD_NEWS,
             market="csi",
             op_label=f"board news {board_code} ({source})",
-            call=lambda f: (f.get_board_news(board_code, limit=limit, board_type=board_type), f.name),
+            call=lambda f: (
+                f.get_board_news(board_code, limit=limit, board_type=board_type),
+                f.name,
+            ),
             method_name="get_board_news",
         )
 
@@ -1131,50 +1132,66 @@ class DataFetcherManager:
             capability=DataCapability.BOARD_SURGES,
             market="csi",
             op_label=f"board surges {board_code} ({source})",
-            call=lambda f: (f.get_board_surges(board_code, limit=limit, board_type=board_type), f.name),
+            call=lambda f: (
+                f.get_board_surges(board_code, limit=limit, board_type=board_type),
+                f.name,
+            ),
             method_name="get_board_surges",
         )
 
     # ---------- eastmoney datacenter endpoints ----------
 
-    def get_dragon_tiger(self, code: str, trade_date: str = "") -> tuple[dict, str]:
+    def _route_cap(
+        self,
+        capability: DataCapability,
+        method_name: str,
+        *args: Any,
+        op_label: str | None = None,
+    ) -> Any:
+        """CSI-market capability routing boilerplate.
+
+        Every get_* below used to be a 7-line ``_with_failover(<cap>, "csi",
+        <label>, lambda f: f.<method>(<args>), return_source=True)`` block.
+        Default ``op_label`` is ``"<method minus 'get_'> {args[0]}"`` when
+        args is non-empty, else the bare short method name. Override for
+        static labels (``"hot_topics"``, ``"north_flow"``,
+        ``"daily dragon_tiger"``).
+        """
+        if op_label is None:
+            short = method_name[4:] if method_name.startswith("get_") else method_name
+            op_label = f"{short} {args[0]}" if args else short
         return self._with_failover(
-            DataCapability.DRAGON_TIGER,
+            capability,
             "csi",
-            f"dragon_tiger {code}",
-            lambda f: f.get_dragon_tiger(code, trade_date),
+            op_label,
+            lambda f: getattr(f, method_name)(*args),
             return_source=True,
         )
+
+    def get_dragon_tiger(self, code: str, trade_date: str = "") -> tuple[dict, str]:
+        return self._route_cap(DataCapability.DRAGON_TIGER, "get_dragon_tiger", code, trade_date)
 
     def get_daily_dragon_tiger(
         self, trade_date: str = "", min_net_buy: float | None = None
     ) -> tuple[dict, str]:
-        return self._with_failover(
+        return self._route_cap(
             DataCapability.DRAGON_TIGER,
-            "csi",
-            "daily dragon_tiger",
-            lambda f: f.get_daily_dragon_tiger(trade_date, min_net_buy),
-            return_source=True,
+            "get_daily_dragon_tiger",
+            trade_date,
+            min_net_buy,
+            op_label="daily dragon_tiger",
         )
 
     def get_margin_trading(self, code: str, page_size: int = 30) -> tuple[list[dict], str]:
-        return self._with_failover(
-            DataCapability.MARGIN_TRADING,
-            "csi",
-            f"margin_trading {code}",
-            lambda f: f.get_margin_trading(code, page_size),
-            return_source=True,
-        )
+        return self._route_cap(DataCapability.MARGIN_TRADING, "get_margin_trading", code, page_size)
 
     def get_block_trade(self, code: str, page_size: int = 20) -> tuple[list[dict], str]:
-        return self._with_failover(
-            DataCapability.BLOCK_TRADE,
-            "csi",
-            f"block_trade {code}",
-            lambda f: f.get_block_trade(code, page_size),
-            return_source=True,
-        )
+        return self._route_cap(DataCapability.BLOCK_TRADE, "get_block_trade", code, page_size)
 
+    # Log label is "holder_num {code}" (not "holder_num_change") to match the
+    # upstream zhitu op_label + the cache hit_label in routes/stocks.py. The
+    # short-name derivation in _route_cap uses method_name verbatim, so this
+    # wrapper inlines the call to preserve the legacy label exactly.
     def get_holder_num_change(self, code: str, page_size: int = 10) -> tuple[list[dict], str]:
         return self._with_failover(
             DataCapability.HOLDER_NUM,
@@ -1185,13 +1202,7 @@ class DataFetcherManager:
         )
 
     def get_dividend(self, code: str, page_size: int = 20) -> tuple[list[dict], str]:
-        return self._with_failover(
-            DataCapability.DIVIDEND,
-            "csi",
-            f"dividend {code}",
-            lambda f: f.get_dividend(code, page_size),
-            return_source=True,
-        )
+        return self._route_cap(DataCapability.DIVIDEND, "get_dividend", code, page_size)
 
     def get_stock_info(self, code: str) -> tuple[dict, str]:
         """拉取公司画像 (A 股). Failover: Zhitu (P5) → Myquant (P9).
@@ -1202,69 +1213,29 @@ class DataFetcherManager:
         see docs/zzshare/03-basic-data.md § 3). Keeping it as primary would
         add ~3.8s of wasted network per request before falling through.
         """
-        return self._with_failover(
-            DataCapability.STOCK_INFO,
-            "csi",
-            f"stock_info {code}",
-            lambda f: f.get_stock_info(code),
-            return_source=True,
-        )
+        return self._route_cap(DataCapability.STOCK_INFO, "get_stock_info", code)
 
     def get_fund_flow_minute(self, code: str) -> tuple[list[dict], str]:
-        return self._with_failover(
-            DataCapability.FUND_FLOW,
-            "csi",
-            f"fund_flow_minute {code}",
-            lambda f: f.get_fund_flow_minute(code),
-            return_source=True,
-        )
+        return self._route_cap(DataCapability.FUND_FLOW, "get_fund_flow_minute", code)
 
     def get_fund_flow_120d(self, code: str) -> tuple[list[dict], str]:
-        return self._with_failover(
-            DataCapability.FUND_FLOW,
-            "csi",
-            f"fund_flow_120d {code}",
-            lambda f: f.get_fund_flow_120d(code),
-            return_source=True,
-        )
+        return self._route_cap(DataCapability.FUND_FLOW, "get_fund_flow_120d", code)
 
     # ---------- ths / research / announcement ----------
 
     def get_hot_topics(self, date_str: str = "") -> tuple[list[dict], str]:
-        return self._with_failover(
-            DataCapability.HOT_TOPICS,
-            "csi",
-            "hot_topics",
-            lambda f: f.get_hot_topics(date_str),
-            return_source=True,
+        return self._route_cap(
+            DataCapability.HOT_TOPICS, "get_hot_topics", date_str, op_label="hot_topics"
         )
 
     def get_north_flow(self) -> tuple[list[dict], str]:
-        return self._with_failover(
-            DataCapability.NORTH_FLOW,
-            "csi",
-            "north_flow",
-            lambda f: f.get_north_flow(),
-            return_source=True,
-        )
+        return self._route_cap(DataCapability.NORTH_FLOW, "get_north_flow")
 
     def get_reports(self, code: str, max_pages: int = 5) -> tuple[list[dict], str]:
-        return self._with_failover(
-            DataCapability.RESEARCH_REPORT,
-            "csi",
-            f"reports {code}",
-            lambda f: f.get_reports(code, max_pages),
-            return_source=True,
-        )
+        return self._route_cap(DataCapability.RESEARCH_REPORT, "get_reports", code, max_pages)
 
     def get_announcements(self, code: str, page_size: int = 30) -> tuple[list[dict], str]:
-        return self._with_failover(
-            DataCapability.ANNOUNCEMENT,
-            "csi",
-            f"announcements {code}",
-            lambda f: f.get_announcements(code, page_size),
-            return_source=True,
-        )
+        return self._route_cap(DataCapability.ANNOUNCEMENT, "get_announcements", code, page_size)
 
     def get_report_pdf(self, report_id: str) -> tuple[str, str]:
         """Resolve a research report PDF.
