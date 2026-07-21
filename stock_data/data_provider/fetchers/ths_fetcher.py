@@ -527,7 +527,6 @@ _THS_BASIC_HEADERS = {
     "Referer": "https://basic.10jqka.com.cn/astockpc/astockmain/index.html",
 }
 
-_THS_BOARD_KLINE_URL = "https://d.10jqka.com.cn/v4/line/bk_{inner}/{freq}/{year}.js"
 
 
 # THS F10 板块基本资料页 — server-render 一次性给"成分股全表 + 板块新闻 + 炒作周期"
@@ -545,29 +544,6 @@ _THS_F10_BOARD_URL = "https://basic.10jqka.com.cn/48/{board_code}/"
 # logic are unchanged — this cache is purely a same-process de-duper.
 _F10_HTML_TTL_SECONDS: float = 45.0
 _f10_html_cache: dict[str, tuple[str, float]] = {}
-class _ThsFreqSegment:
-    """THS upstream URL segment for each K-line frequency.
-
-    **Internal** — these are URL implementation details (the
-    ``{freq:02d}`` placeholder in
-    ``/v4/line/bk_{platecode}/{freq:02d}/{year}.js``), NOT user-facing
-    concepts. The user-facing keys (``d`` / ``w`` / ``m`` / ``5m`` /
-    ``15m`` / ``30m`` / ``60m``) are exposed via the API route's
-    ``Literal`` type and through ``_THS_BOARD_FREQ_LABEL`` for
-    human-readable descriptions.
-
-    Verified 2026-07-14 by probing each segment against
-    ``/v4/line/bk_886042/{seg}/2026.js`` (the storage chip concept board).
-    """
-
-    DAILY = 1       # 125 rows/year, dates YYYYMMDD
-    WEEKLY = 2      # 126 rows/year, dates YYYYMMDD, 周五锚定
-    MONTHLY = 10    # 27 rows/year, dates YYYYMMDD, ~一个月一行
-    M5 = 30         # ~6000 rows/year, dates YYYYMMDDHHMM, 5min 间隔
-    M15 = 50        # 501 rows/year, dates YYYYMMDDHHMM
-    M30 = 60        # ~10800 rows/year, dates YYYYMMDDHHMM (从 2026-05-11 起)
-    M60 = 70        # 126 rows/year, dates YYYYMMDDHHMM, 15:00 收盘时点
-
 
 # Public: maps user-facing frequency string to internal upstream segment.
 # Values are read by ``_fetch_ths_board_year`` which interpolates them
@@ -577,30 +553,12 @@ class _ThsFreqSegment:
 #
 # akshare 硬编码 seg=01,从未公开过其他频率 — 但 upstream 真实支持全部 7 种
 # (verified 2026-07-14, see _ThsFreqSegment docstring).
-_THS_BOARD_FREQ_MAP: dict[str, int] = {
-    "d": _ThsFreqSegment.DAILY,
-    "w": _ThsFreqSegment.WEEKLY,
-    "m": _ThsFreqSegment.MONTHLY,
-    "5m": _ThsFreqSegment.M5,
-    "15m": _ThsFreqSegment.M15,
-    "30m": _ThsFreqSegment.M30,
-    "60m": _ThsFreqSegment.M60,
-}
 
 # Canonical human-readable label for each frequency. Used in error
 # messages and the explorer's manifest; NOT serialized into the API
 # response (the user-facing ``period`` field on the response is the
 # request's frequency string, e.g. ``"w"`` not ``"weekly"`` — keeps
 # the response terse and round-trippable).
-_THS_BOARD_FREQ_LABEL: dict[str, str] = {
-    "d": "daily",
-    "w": "weekly",
-    "m": "monthly",
-    "5m": "5-minute",
-    "15m": "15-minute",
-    "30m": "30-minute",
-    "60m": "60-minute",
-}
 
 # Frequencies whose bars carry a "HH:MM" time suffix in their
 # normalized date string. Daily/weekly/monthly emit "YYYY-MM-DD";
@@ -610,37 +568,23 @@ _THS_BOARD_FREQ_LABEL: dict[str, str] = {
 # would be cut off; daily/weekly/monthly don't need it. Explicit
 # set (NOT a substring check) so monthly (key "m", which also ends
 # in "m") is not silently over-applied.
-_MINUTE_FREQS: frozenset[str] = frozenset({"5m", "15m", "30m", "60m"})
-# Per-frequency max history span (days). Daily/weekly/monthly keep the
-# 10-year cap; minute-level frequencies are capped tight because each
-# year carries 6000+ rows and a 17-year minute query would be 100k+ rows
-# (DoS surface for callers; the route layer has no start/end span limit
-# on minute bars beyond this).
-_THS_BOARD_MAX_SPAN_DAYS: dict[str, int] = {
+# Per-frequency max history span (days) for the single_kline endpoint.
+# Daily/weekly/monthly keep the 10-year ceiling (single request returns
+# up to ~10 years of bars). Minute-level frequencies are bounded tighter
+# because the upstream returns ~96 bars per day × N days. 1m has a hard
+# upstream cap at ~30 bars regardless of how far back you ask (verified
+# 2026-07-21) — cap at 2 days so the route layer's "max-span" gate fires
+# before upstream's silent truncation.
+_THS_HXKLINE_MAX_SPAN_DAYS: dict[str, int] = {
     "d": 365 * 10,
     "w": 365 * 10,
     "m": 365 * 10,
-    "5m": 30,    # ~30 个交易日 → ~1440 5min bars
-    "15m": 60,   # ~480 bars
-    "30m": 90,   # ~360 bars
-    "60m": 180,  # ~360 bars (60m bars 数据稀疏)
+    "1m": 2,
+    "5m": 30,
+    "15m": 60,
+    "30m": 90,
+    "60m": 180,
 }
-# Module-load invariant: the two maps must stay in sync. A typo that adds
-# a freq to one map but not the other would surface as a confusing
-# KeyError on the hot path; this assert fails fast at import.
-assert set(_THS_BOARD_FREQ_MAP) == set(_THS_BOARD_MAX_SPAN_DAYS), (
-    f"_THS_BOARD_FREQ_MAP and _THS_BOARD_MAX_SPAN_DAYS keys must match; "
-    f"got freq={set(_THS_BOARD_FREQ_MAP)} span={set(_THS_BOARD_MAX_SPAN_DAYS)}"
-)
-# Year-loop cap (A6 from PR2 review). Daily/weekly/monthly: each year
-# carries a 15s timeout worst case; 17-year queries at 250s+ are a
-# stability risk and a DoS surface for callers (the route layer has no
-# start/end span limit). Minute-level frequencies also go through the
-# same year loop, but their tighter _THS_BOARD_MAX_SPAN_DAYS cap means
-# the practical span is bounded by that.
-_MAX_YEAR_SPAN = 10
-# The fetcher is sequential on purpose — concurrent year-fetch triggers
-# push2-style rate limits on this endpoint.
 
 
 def _resolve_ths_date_range(
@@ -907,220 +851,6 @@ class ThsFetcher(BaseFetcher):
                 base.update(headers)
             headers = base
         return requests.get(url, headers=headers, timeout=timeout)
-
-    def _resolve_ths_platecode_from_cid(self, cid: str) -> str | None:
-        """Fetch the concept-board HTML page and extract the platecode (e.g. ``"886042"``).
-
-        The upstream HTML element is ``<input id="clid">`` — the HTML
-        attribute name is a historical artifact that we preserve verbatim,
-        but its ``value`` attribute carries the 6-digit **platecode** (the
-        same code that ``d.10jqka.com.cn/v4/line/bk_{platecode}/...`` accepts).
-        Concept boards store this in the ``platecode`` column of the
-        ``stock_board`` cache; industry boards have platecode == cid ==
-        URL slug (881xxx) and don't need this lookup.
-
-        Uses BeautifulSoup's attribute dict lookup rather than a regex so a
-        different attribute order on the upstream HTML (e.g. ``value="..."``
-        before ``id="clid"``) doesn't silently break platecode extraction.
-
-        Returns the platecode string, or None if not found / on any error.
-        Logs at WARNING on network failure or HTML parse error.
-        """
-        url = _CONCEPT_DETAIL_URL.format(slug=cid)
-        headers = {"Cookie": f"v={self._v_token()}"}
-        try:
-            r = self._http_get(url, headers=headers, timeout=10)
-        except Exception as e:
-            logger.warning(f"[ThsFetcher] concept platecode fetch failed for {cid}: {e}")
-            return None
-        try:
-            from bs4 import BeautifulSoup
-
-            soup = BeautifulSoup(r.text or "", features="lxml")
-            node = soup.find("input", attrs={"id": "clid"})
-        except Exception as e:
-            logger.warning(f"[ThsFetcher] soup parse failed for {cid}: {e}")
-            return None
-        if node is None:
-            return None
-        # node.get() returns None when the attribute is absent — different
-        # from `node["value"]` which would KeyError. Defensive — the upstream
-        # form does carry the value, but an HTML reshuffle that drops it
-        # shouldn't 500 the fetcher.
-        return node.get("value")
-
-    @staticmethod
-    def _parse_ths_kline_body(body: str) -> list[dict]:
-        """Parse a `d.10jqka.com.cn/v4/line/bk_*/{seg}/{year}.js` response.
-
-        The upstream response is `var v_XXXX={"data": "<csv>"};`. The `data`
-        field is `;`-separated rows; each row is 11 comma-separated fields:
-        `date, open, high, low, close, volume, amount, amp, pct_chg, change_amt, turnover_rate`.
-        Some upstream variants return 12 columns (trailing null); we accept
-        both and consume only the first 7 (canonical K-line subset).
-
-        Date formats observed (verified 2026-07-14):
-          - YYYYMMDD       (seg=01 daily / 02 weekly / 10 monthly)
-          - YYYYMMDDHHMM   (seg=30/50/60/70 minute-level bars)
-
-        We normalize both to canonical strings so the route-layer date
-        filter compares apples-to-apples (a YYYYMMDD string and a
-        YYYY-MM-DD string sort differently under lexicographic comparison —
-        the dash at position 4 ASCII 45 < digit '0' ASCII 48 — so a
-        raw upstream YYYYMMDD row would always sort AFTER a YYYY-MM-DD
-        filter bound, silently excluding every row. Fix lives here:
-        parsed rows carry canonical ``"YYYY-MM-DD"`` (daily) or
-        ``"YYYY-MM-DD HH:MM"`` (minute) so the filter in
-        :meth:`get_board_history` works correctly.
-
-        JSON extraction is positional (find first ``{`` + strip trailing
-        ``;``) instead of a greedy regex, so multi-var upstream variants
-        parse correctly. ``demjson3`` (Python 3 port — the original ``demjson``
-        doesn't install on 3.10+) is more lenient than ``json`` on JS-style
-        literals (e.g. unquoted keys are still rare but possible upstream).
-
-        Returns canonical row dicts with keys: date, open, high, low, close,
-        volume, amount. Other fields (amp, pct_chg, change_amt, turnover_rate)
-        are dropped — THS upstream's last 4 fields aren't standardized. Empty
-        list on parse failure / empty data.
-        """
-        if not body:
-            return []
-        # Locate the FIRST complete JSON object anywhere in ``body``.
-        # ``json.JSONDecoder().raw_decode(s, idx)`` is the only
-        # strictly-positional extractor that respects nested braces — it
-        # walks the string from ``idx`` and returns ``(obj, end_pos)`` of
-        # the first well-formed JSON object. Replaces both the old greedy
-        # ``re.search(r"\{[\s\S]*\}", body)`` AND the
-        # slightly-buggy ``body.find("}", start+1)`` we tried first.
-        idx = body.find("{")
-        if idx == -1:
-            return []
-        try:
-            import json as _json
-
-            decoder = _json.JSONDecoder()
-            payload, _ = decoder.raw_decode(body, idx)
-        except (_json.JSONDecodeError, ValueError):
-            # demjson3 is more lenient than stdlib on JS-style literals
-            # (unquoted keys, trailing commas). Fall back to a manual
-            # brace-balance scan + demjson3 decode for those variants.
-            try:
-                import demjson3 as demjson_lib
-
-                start = idx
-                depth = 0
-                end = -1
-                for i, ch in enumerate(body[start:], start=start):
-                    if ch == "{":
-                        depth += 1
-                    elif ch == "}":
-                        depth -= 1
-                        if depth == 0:
-                            end = i
-                            break
-                if end == -1:
-                    return []
-                payload = demjson_lib.decode(body[start : end + 1])
-            except Exception:
-                return []
-        data = payload.get("data") or ""
-        if not data:
-            return []
-        out: list[dict] = []
-        for row in data.split(";"):
-            row = row.strip()
-            if not row:
-                continue
-            parts = row.split(",")
-            if len(parts) < 7:
-                continue
-            raw_date = parts[0]
-            # Normalize date format. Upstream emits either YYYYMMDD (daily)
-            # or YYYYMMDDHHMM (minute-level). Both become canonical strings
-            # so the route-layer date filter (YYYY-MM-DD) compares correctly.
-            if len(raw_date) == 8:
-                canonical_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
-            elif len(raw_date) == 12:
-                canonical_date = (
-                    f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]} "
-                    f"{raw_date[8:10]}:{raw_date[10:12]}"
-                )
-            else:
-                # Unknown date shape (upstream variant) — skip rather than
-                # pass an unparseable string downstream.
-                continue
-            try:
-                out.append(
-                    {
-                        "date": canonical_date,
-                        "open": float(parts[1]),
-                        "high": float(parts[2]),
-                        "low": float(parts[3]),
-                        "close": float(parts[4]),
-                        "volume": int(float(parts[5])),
-                        "amount": float(parts[6]),
-                    }
-                )
-            except (TypeError, ValueError):
-                continue
-        return out
-
-    # ------------------------------------------------------------------
-    # 板块 K 线 (Board K-Line) — concept + industry
-    # ------------------------------------------------------------------
-
-    def _fetch_ths_board_year(self, inner_code: str, year: int, freq_segment: int) -> str:
-        """Fetch one year of THS board K-line JS body. Returns "" on failure.
-
-        A non-2xx response (typically 403 when the v-token has been rotated
-        upstream, or 5xx during upstream incidents) is treated as failure:
-        we log and return ``""`` so the all-empty gate in
-        :meth:`get_board_history` can surface the upstream issue as 503.
-        Without this check, a 403 HTML body would be passed to the JSON
-        parser and silently return zero rows (no error, no signal) — the
-        exact bug the all-empty gate was supposed to catch.
-
-        ``freq_segment`` is the upstream URL segment for the requested
-        frequency (1=daily, 2=weekly, 10=monthly, 30=5min, 50=15min,
-        60=30min, 70=60min — see ``_THS_BOARD_FREQ_MAP``). We validate
-        against the known set so a typo produces a clear ``DataFetchError``
-        here (during development) rather than a misleading "check v-token"
-        message from the all-empty gate (during operation).
-
-        Per-year 4xx/5xx does not abort the full request — other years may
-        still succeed. Only the all-empty case is fatal. This matches
-        cninfo_fetcher's "be forgiving on partial failure" pattern.
-        """
-        if freq_segment not in set(_THS_BOARD_FREQ_MAP.values()):
-            raise DataFetchError(
-                f"[ThsFetcher] _fetch_ths_board_year: unknown freq_segment "
-                f"{freq_segment!r}; known: {sorted(set(_THS_BOARD_FREQ_MAP.values()))}"
-            )
-        url = _THS_BOARD_KLINE_URL.format(
-            inner=inner_code, freq=f"{freq_segment:02d}", year=year
-        )
-        headers = {
-            "Referer": "http://q.10jqka.com.cn",
-            "Host": "d.10jqka.com.cn",
-            "Cookie": f"v={self._v_token()}",
-        }
-        try:
-            r = self._http_get(url, headers=headers, timeout=15)
-            if not (200 <= r.status_code < 300):
-                logger.warning(
-                    f"[ThsFetcher] board kline year={year} freq={freq_segment} "
-                    f"({inner_code}) HTTP {r.status_code} ({len(r.content)}B body)"
-                )
-                return ""
-            return r.text or ""
-        except Exception as e:
-            logger.warning(
-                f"[ThsFetcher] board kline year={year} freq={freq_segment} "
-                f"({inner_code}) failed: {e}"
-            )
-            return ""
-
     def get_board_history(
         self,
         board_code: str,
@@ -1133,65 +863,40 @@ class ThsFetcher(BaseFetcher):
         board_type: str | None = None,
         **kwargs,
     ) -> list[dict]:
-        """THS concept/industry board K-line via d.10jqka.com.cn.
+        """THS concept/industry board K-line via quota-h.10jqka.com.cn (single_kline).
+
+        Post-2026-07-21: replaced the legacy d.10jqka.com.cn year-loop with a
+        single POST to ``single_kline``. The new endpoint returns clean JSON,
+        takes all 8 frequencies via a single ``time_period`` enum, and uses a
+        static JWT token (no rotation). It accepts THS platecode directly
+        (885xxx for concept, 881xxx for industry) — CID resolution was dropped
+        since the route defaults to platecode anyway.
 
         Args:
-            board_code: THS platecode (concept: e.g. ``"886042"``;
-                industry: e.g. ``"881270"``). This is the canonical,
-                cross-source-stable identifier — the K-line URL
-                ``bk_{platecode}/{freq}/{year}.js`` accepts platecode
-                only (NOT the concept CID slug).
-
-                Backward compat: a concept CID (e.g. ``"307940"``) is
-                still accepted as input. The fetcher detects this by
-                looking up the ``stock_board`` cache (matched on either
-                ``code`` or ``platecode``) and resolving the CID to its
-                platecode via the upstream HTML page when the cache
-                misses. This preserves the pre-2026-07-14 contract where
-                docs / examples showed CID as input.
-            frequency: One of ``"d" | "w" | "m" | "5m" | "15m" | "30m" | "60m"``.
-                All 7 frequencies are real upstream (verified 2026-07-14 —
-                akshare never exposed anything but daily, but the upstream
-                serves all 7 segments). Minute-level frequencies are
-                capped tight by ``_THS_BOARD_MAX_SPAN_DAYS`` to prevent
-                runaway year loops.
-            board_type: ``"concept"`` or ``"industry"`` — auto-detected
-                from the stock_board cache when omitted. Pass explicitly
-                to skip the cache lookup.
-            days: Used when ``start_date`` not given; the date range is
-                ``[today - days, today]`` capped at the per-frequency max
-                span (see ``_THS_BOARD_MAX_SPAN_DAYS``).
-            start_date / end_date: ``YYYY-MM-DD`` — wins over ``days``.
+            board_code: THS platecode (concept: 885xxx; industry: 881xxx).
+            frequency: One of ``d | w | m | 1m | 5m | 15m | 30m | 60m``.
+            days: Used when ``start_date`` not given. Per-frequency max span:
+                d/w/m=3650 (10y), 1m=2, 5m=30, 15m=60, 30m=90, 60m=180.
+            start_date / end_date: YYYY-MM-DD; wins over ``days``.
+            board_type: ``"concept"`` or ``"industry"``; auto-detected from
+                the ``stock_board`` cache when omitted.
 
         Returns:
             list[dict] — sorted oldest → newest. Keys: date, open, high, low,
-            close, volume, amount. The ``date`` field is normalized to
+            close, volume, amount, frequency. ``date`` is normalized to
             ``"YYYY-MM-DD"`` (daily/weekly/monthly) or ``"YYYY-MM-DD HH:MM"``
-            (minute bars), so the route-layer date filter compares
-            apples-to-apples with the route's YYYY-MM-DD bounds. Empty list
-            on no-data or upstream empty; a hard error is raised when every
-            requested year fetch fails (likely auth/v-token problem) — see
-            Raises.
+            (minute bars).
 
         Raises:
-            DataFetchError: frequency not in ``_THS_BOARD_FREQ_MAP``;
-                invalid board_type; concept platecode resolution returns
-                None (board_code is neither a valid platecode nor a valid
-                CID); every requested year fetch failed (likely upstream
-                auth problem — investigate the v-token / d.10jqka.com.cn).
-            ValueError: date span exceeds the per-frequency
-                ``_THS_BOARD_MAX_SPAN_DAYS`` cap; date bound malformed;
-                ``end_date < start_date``. These are caller-input errors —
-                the route layer's ``@map_errors`` maps
-                ``ValueError → 400``. Aligns with EastMoney's contract so
-                the same bad input gets the same status code regardless of
-                which source serves the request.
+            DataFetchError: JWT missing / chunk-hash rotation; non-zero
+                upstream status_code after retry; unsupported frequency.
+            ValueError: date span exceeds per-frequency max span; date bound
+                malformed; ``end_date < start_date``.
         """
         # Auto-detect board_type from the stock_board cache when not provided.
-        # Mirrors the pattern in get_board_realtime. The cache row is reused
-        # below in the concept-branch resolution (avoids a 2nd SQLite round
-        # trip on the hot path).
-        meta: dict | None = None
+        # Industry and concept both go through single_kline with the same
+        # market="48"; the board_type only affects cache lookup and downstream
+        # callers (which use it for member-list formatting etc.).
         if not board_type:
             from ..persistence.board import get_board_metadata
 
@@ -1199,27 +904,23 @@ class ThsFetcher(BaseFetcher):
             if meta and meta.get("type"):
                 board_type = meta["type"]
             else:
-                # Cache miss — assume concept (most common for THS boards).
-                # If wrong, the platecode resolution below will fail with a
-                # clear error rather than silently returning empty data.
-                board_type = "concept"
+                board_type = "concept"  # default; matches legacy behavior
+        elif board_type not in ("concept", "industry"):
+            raise DataFetchError(
+                f"[ThsFetcher] get_board_history: board_type must be "
+                f"'concept' or 'industry' (got {board_type!r})"
+            )
+
         freq_key = (frequency or "d").lower()
-        if freq_key not in _THS_BOARD_FREQ_MAP:
+        if freq_key not in _THS_HXKLINE_PERIOD_MAP:
             raise DataFetchError(
                 f"[ThsFetcher] get_board_history: unsupported frequency "
-                f"{frequency!r}; supported: {sorted(_THS_BOARD_FREQ_MAP)}"
+                f"{frequency!r}; supported: {sorted(_THS_HXKLINE_PERIOD_MAP)}"
             )
-        freq_segment = _THS_BOARD_FREQ_MAP[freq_key]
 
-        # Date range — fail fast on bad bounds (reversed dates, malformed,
-        # past-the-end dates) so the year loop doesn't silently loop weird
-        # windows. Tuple returned from _resolve_ths_date_range is (start_d, end_d).
+        # Date range resolution + per-frequency max-span cap (reused from legacy).
         start_d, end_d = _resolve_ths_date_range(start_date, end_date, days)
-
-        # Per-frequency max-span cap. Daily/weekly/monthly keep the 10-year
-        # year-loop ceiling; minute-level frequencies are bounded tighter
-        # because each year carries ~6000 rows.
-        max_span_days = _THS_BOARD_MAX_SPAN_DAYS[freq_key]
+        max_span_days = _THS_HXKLINE_MAX_SPAN_DAYS[freq_key]
         span_days = (end_d - start_d).days + 1
         if span_days > max_span_days:
             raise ValueError(
@@ -1227,131 +928,28 @@ class ThsFetcher(BaseFetcher):
                 f"exceeds frequency={freq_key!r} max ({max_span_days}d). "
                 f"Narrow start_date/end_date."
             )
-        start_year = start_d.year
-        end_year = end_d.year
-        n_years = end_year - start_year + 1
-        if n_years > _MAX_YEAR_SPAN:
-            raise ValueError(
-                f"[ThsFetcher] get_board_history year span "
-                f"({n_years}y) > {_MAX_YEAR_SPAN}; "
-                f"narrow start_date/end_date or call repeatedly."
-            )
 
-        # Resolve inner code (platecode) — the K-line URL accepts only
-        # platecode, not the CID slug. Resolution strategy:
-        #   - Industry: board_code IS the platecode (881xxx).
-        #   - Concept: prefer cache lookup (matched on platecode OR code)
-        #     to short-circuit the HTML scrape; fall back to HTML scrape
-        #     when the cache is cold.
-        inner: str | None = None
-        if board_type == "industry":
-            inner = board_code
-        elif board_type == "concept":
-            # Reuse the cache row from the auto-detect step above (no
-            # 2nd round-trip) — fall through to a single fresh query only
-            # when the caller passed board_type explicitly.
-            if meta is None:
-                from ..persistence.board import get_board_metadata
+        rows = _fetch_ths_single_kline(
+            board_code,
+            freq_key=freq_key,
+            days=days,
+            start_date=start_date,
+        )
 
-                meta = get_board_metadata(board_code, "ths")
-
-            if meta:
-                # Cache hit — read public platecode from `code` (post
-                # 2026-07-20 schema rename) and the THS concept CID from
-                # the separate `cid` column. `inner` is the platecode we
-                # need for K-line URL construction; `cached_cid` is the
-                # internal concept ID that gates an HTML-scrape fallback.
-                inner = meta.get("code") or None
-                cached_cid = meta.get("cid")
-            else:
-                cached_cid = None
-
-            if not inner:
-                # Cache miss on platecode — assume board_code is the CID
-                # (older API contract) and resolve via HTML scrape.
-                cid_for_scrape = cached_cid or board_code
-                inner = self._resolve_ths_platecode_from_cid(cid_for_scrape)
-                if not inner:
-                    raise DataFetchError(
-                        f"[ThsFetcher] could not resolve concept platecode "
-                        f"for board_code={board_code!r} "
-                        f"(tried CID={cid_for_scrape!r} via HTML scrape). "
-                        f"Verify board_code is a valid THS concept platecode "
-                        f"(885xxx) or CID (30xxxx)."
-                    )
-        else:
-            raise DataFetchError(
-                f"[ThsFetcher] get_board_history: board_type must be "
-                f"'concept' or 'industry' (got {board_type!r})"
-            )
-
-        # Fetch each year sequentially (concurrent year-fetch triggers
-        # push2-style rate limits on this endpoint — keep it serial).
-        rows: list[dict] = []
-        bodies: dict[int, str] = {}
-        for year in range(start_year, end_year + 1):
-            body = self._fetch_ths_board_year(inner, year, freq_segment)
-            bodies[year] = body
-        # All-empty is a real failure surface: callers can't tell from an
-        # empty list whether the board has no history (legit) or every
-        # request 4xx'd (ops bug). Surface it.
-        if all(b == "" for b in bodies.values()):
-            logger.warning(
-                f"[ThsFetcher] get_board_history: all {n_years} year-fetches "
-                f"freq={freq_key} (seg={freq_segment}) returned empty for "
-                f"platecode={inner!r}; check v-token, d.10jqka.com.cn "
-                f"reachability, and that the board slug "
-                f"({board_code!r}) is correct."
-            )
-            raise DataFetchError(
-                f"[ThsFetcher] get_board_history: all {n_years} year-fetches "
-                f"freq={freq_key} returned empty for platecode={inner!r}; "
-                f"check v-token, d.10jqka.com.cn reachability, and that "
-                f"the board slug ({board_code!r}) is correct. See WARNING logs above."
-            )
-        for body in bodies.values():
-            if not body:
-                continue
-            rows.extend(self._parse_ths_kline_body(body))
-
-        # Tag each row with the frequency that was requested. The
-        # per-row ``frequency`` field lets downstream consumers verify
-        # each bar's timeframe independently of the top-level
-        # ``period`` field (defense-in-depth against a hypothetical
-        # bug where the wrong upstream segment was hit and the data
-        # doesn't match the request).
-        for r in rows:
-            r["frequency"] = freq_key
-
-        # Date range filter. _parse_ths_kline_body normalizes upstream's
-        # YYYYMMDD / YYYYMMDDHHMM into canonical "YYYY-MM-DD" /
-        # "YYYY-MM-DD HH:MM" so this lexicographic comparison works for
-        # both daily and minute bars. The YYYY-MM-DD prefix of minute
-        # strings sorts with daily strings (both share YYYY-MM-DD), and
-        # the trailing " HH:MM" sorts within-day correctly.
+        # Date range filter (canonical format comparison, same logic as legacy).
         start_str = start_d.strftime("%Y-%m-%d")
-        # Minute-level bars carry a "HH:MM" suffix on their date string;
-        # without the " 23:59" tail on the end bound, the last bar of
-        # the day (e.g. "2026-07-14 14:55") would compare < the bound
-        # and be cut off. Daily/weekly/monthly emit bare "YYYY-MM-DD"
-        # and don't need the suffix — comparing "2026-07-14" against
-        # "2026-07-14 23:59" produces the same result either way (the
-        # first 10 chars already differ for any later day).
         end_str = (
             f"{end_d.strftime('%Y-%m-%d')} 23:59"
             if freq_key in _MINUTE_FREQS
             else end_d.strftime("%Y-%m-%d")
         )
         filtered = [r for r in rows if start_str <= r["date"] <= end_str]
+        filtered.sort(key=lambda r: r["date"])
         logger.debug(
             f"[ThsFetcher] get_board_history board_code={board_code!r} "
-            f"platecode={inner!r} freq={freq_key} years={start_year}-{end_year} "
-            f"parsed_rows={len(rows)} filtered_rows={len(filtered)} "
-            f"date_range=[{start_str},{end_str}]"
+            f"freq={freq_key} date_range=[{start_str},{end_str}] "
+            f"upstream_rows={len(rows)} filtered_rows={len(filtered)}"
         )
-
-        # Sort ascending
-        filtered.sort(key=lambda r: r["date"])
         return filtered
 
     # ------------------------------------------------------------------
