@@ -2430,68 +2430,116 @@ class ThsFetcher(BaseFetcher):
         if not html:
             return []
 
-        soup = BeautifulSoup(html, features="lxml")
+        # Use html.parser (not lxml): lxml chokes on garbled bytes inside
+        # THS F10 page HTML comments (probed 2026-07-21 on 885756, which has
+        # mojibake in `<!-- ��ʷ���� -->` comments before #period). lxml
+        # silently stops matching elements beyond the first bad comment,
+        # so news/surges return [] even though the raw HTML has the markup.
+        soup = BeautifulSoup(html, features="html.parser")
         news_box = soup.select_one("div.m_box.post#news .newslist")
         if news_box is None:
             return []
 
-        # THS wraps its news DLs inside an HTML comment (a single
-        # ``<!-- ... -->` block whose body is raw server-rendered DLs).
-        # BeautifulSoup's ``select()`` does NOT traverse into comments
-        # by default — we must re-parse each comment's text as HTML
-        # and collect the dl children that way. Some news boxes also
-        # have non-commented DLs (defensive: try both).
-        dls: list = list(news_box.select("dl"))
-        for comment in news_box.find_all(string=lambda t: isinstance(t, Comment)):
-            try:
-                inner = BeautifulSoup(str(comment), features="lxml")
-            except Exception:
-                continue
-            dls.extend(inner.select("dl"))
-
-        # Dedupe by (title, url) — a feed can repeat rows near the boundary.
+        # Primary path (2026-07-21 probe on 885914 / 885756): THS renders
+        # news as two ``<ul class="news_lists">`` blocks (7 + 7 = 14 items)
+        # under .newslist. Each ``<li>`` carries a single anchor with a
+        # ``<span>YYYY-MM-DD</span>`` date prefix and the title as text.
+        # The legacy spec assumed a ``<dl>`` structure (some industry /
+        # special boards do still emit DLs); we keep that as a fallback.
+        # THS also wraps some DLs inside HTML comments — re-parse those.
         seen_keys: set[tuple[str, str]] = set()
-
         n = max(1, min(int(limit), 50))
+
         out: list[dict] = []
-        for dl in dls:
+
+        # Primary: <ul class="news_lists"> > <li>
+        for ul in news_box.select("ul.news_lists"):
+            for li in ul.select("li"):
+                if len(out) >= n:
+                    break
+                a = li.select_one("a[href*='news.10jqka.com.cn']")
+                if not a or not a.get("href"):
+                    continue
+                url = a["href"].strip()
+                date_span = a.select_one("span")
+                publish_date = date_span.get_text(strip=True) if date_span else ""
+                # The anchor's text includes the date span; strip the span
+                # text so the title is plain Chinese.
+                if date_span:
+                    date_span.extract()
+                title = a.get_text(strip=True)
+                if not title or not url:
+                    continue
+                # Confirm publish_date shape (YYYY-MM-DD); fall back to URL.
+                if not _re.match(r"^\d{4}-\d{2}-\d{2}$", publish_date):
+                    m = _re.search(r"/field/(\d{8})/", url)
+                    if m:
+                        d = m.group(1)
+                        publish_date = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+                key = (title, url)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                out.append(
+                    {
+                        "title": title,
+                        "url": url,
+                        "publish_date": publish_date,
+                        "publish_time": "",
+                        "summary": "",
+                        "source_domain": "news.10jqka.com.cn",
+                    }
+                )
             if len(out) >= n:
                 break
 
-            link = dl.select_one("dt a[href*='news.10jqka.com.cn']")
-            title_link = dl.select_one("dt a strong") if link else None
-            time_span = dl.select_one("dt span.fr.date")
-            summary_p = dl.select_one("dd.hot_preview p")
+        # Fallback: <dl> rows (legacy / industry / special boards). Include
+        # DLs wrapped in HTML comments — THS renders those in<!-- -->.
+        if not out:
+            dls: list = list(news_box.select("dl"))
+            for comment in news_box.find_all(string=lambda t: isinstance(t, Comment)):
+                try:
+                    inner = BeautifulSoup(str(comment), features="html.parser")
+                except Exception:
+                    continue
+                dls.extend(inner.select("dl"))
+            for dl in dls:
+                if len(out) >= n:
+                    break
+                link = dl.select_one("dt a[href*='news.10jqka.com.cn']")
+                title_link = dl.select_one("dt a strong") if link else None
+                time_span = dl.select_one("dt span.fr.date")
+                summary_p = dl.select_one("dd.hot_preview p")
 
-            url = link["href"].strip() if link and link.get("href") else ""
-            title = title_link.get_text(strip=True) if title_link else ""
-            publish_time = time_span.get_text(strip=True) if time_span else ""
-            summary = summary_p.get_text(strip=True) if summary_p else ""
+                url = link["href"].strip() if link and link.get("href") else ""
+                title = title_link.get_text(strip=True) if title_link else ""
+                publish_time = time_span.get_text(strip=True) if time_span else ""
+                summary = summary_p.get_text(strip=True) if summary_p else ""
 
-            publish_date = ""
-            m = _re.search(r"/field/(\d{8})/", url)
-            if m:
-                d = m.group(1)
-                publish_date = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+                publish_date = ""
+                m = _re.search(r"/field/(\d{8})/", url)
+                if m:
+                    d = m.group(1)
+                    publish_date = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
 
-            if not title or not url:
-                continue
+                if not title or not url:
+                    continue
 
-            key = (title, url)
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
+                key = (title, url)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
 
-            out.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "publish_date": publish_date,
-                    "publish_time": publish_time,
-                    "summary": summary,
-                    "source_domain": "news.10jqka.com.cn",
-                }
-            )
+                out.append(
+                    {
+                        "title": title,
+                        "url": url,
+                        "publish_date": publish_date,
+                        "publish_time": publish_time,
+                        "summary": summary,
+                        "source_domain": "news.10jqka.com.cn",
+                    }
+                )
 
         return out
 
@@ -2528,7 +2576,9 @@ class ThsFetcher(BaseFetcher):
         if not html:
             return []
 
-        soup = BeautifulSoup(html, features="lxml")
+        # html.parser (not lxml): see get_board_news comment — same mojibake
+        # in HTML comments breaks lxml element matching for some boards.
+        soup = BeautifulSoup(html, features="html.parser")
         period_box = soup.select_one("#period div.history.clearfix")
         if period_box is None:
             return []
