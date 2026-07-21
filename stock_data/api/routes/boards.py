@@ -879,7 +879,7 @@ def get_stock_boards(
     tags=["boards"],
 )
 @endpoint_meta(
-    summary="板块 K 线 (ths 概念/行业 全 7 频率 / eastmoney 全 7 频率; zzshare alias → ths; ths 输入统一 platecode)",
+    summary="板块 K 线 (ths 概念/行业 全 8 频率 / eastmoney 全 8 频率; zzshare alias → ths)",
     markets=["csi"],
     capabilities=["STOCK_BOARD"],
     fetcher_method="get_board_history",
@@ -893,8 +893,7 @@ def get_board_history(
             "eastmoney='BK0996'; "
             "ths concept='885595' (platecode); ths industry='881270'. "
             "`source=zzshare` is accepted as a backward-compat alias for `ths`. "
-            "For THS, prefer the platecode (885xxx / 881xxx) — concept CIDs "
-            "(30xxxx) are still accepted as backward-compat input."
+            "For THS, pass the platecode (885xxx / 881xxx)."
         ),
     ),
     source: str = Query(
@@ -907,13 +906,13 @@ def get_board_history(
             "Validated by _resolve_board_history_source (400 on unknown)."
         ),
     ),
-    frequency: Literal["d", "w", "m", "5m", "15m", "30m", "60m"] = Query(
+    frequency: Literal["d", "w", "m", "1m", "5m", "15m", "30m", "60m"] = Query(
         "d",
         description=(
             "K-line frequency. Both `ths` and `eastmoney` accept the full "
-            "7-frequency set (d / w / m / 5m / 15m / 30m / 60m). "
+            "8-frequency set (d / w / m / 1m / 5m / 15m / 30m / 60m). "
             "Minute-level frequencies have tighter max-span caps (see "
-            "_THS_BOARD_MAX_SPAN_DAYS / EastMoney fetcher)."
+            "_THS_HXKLINE_MAX_SPAN_DAYS / EastMoney fetcher)."
         ),
     ),
     start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
