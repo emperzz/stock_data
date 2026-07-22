@@ -61,7 +61,7 @@ def test_f10_leg_serves_request_when_nonempty(monkeypatch):
     assert reason is None
     assert src_label == "ths"  # user-facing source label unchanged
     mgr.get_board_stocks_full.assert_called_once_with(
-        board_code="885914", source="ths"
+        board_code="885914", source="ths", board_type="concept",
     )
     # F10 served — neither ZZSHARE nor THS AJAX fired.
     mgr.get_board_stocks.assert_not_called()

@@ -122,7 +122,17 @@ def test_get_board_f10_page_raises_on_5xx(fake_html_bytes):
         stack.close()
 
 
-def test_get_board_f10_page_industry_short_circuits(fake_html_bytes):
+def test_get_board_f10_page_industry_hits_upstream(fake_html_bytes):
+    """Industry F10 page is reachable (post-2026-07-22).
+
+    Pre-2026-07-22 industry was a v1 stub (returned ``""`` without
+    hitting upstream). Now we fetch ``basic.10jqka.com.cn/{code}/``
+    (no ``/48/`` prefix for industry) and parse the inline
+    ``onclick="changecode(...)"`` rows. The concept fixture used
+    here also exercises the no-prefix URL; the change is verified by
+    asserting the upstream was hit AND the returned HTML matches what
+    the mock served.
+    """
     log = [0]
 
     def fake_get(url, *, headers=None, timeout=10):
@@ -131,11 +141,33 @@ def test_get_board_f10_page_industry_short_circuits(fake_html_bytes):
 
     fetcher, stack = _patched_fetcher(fake_get)
     try:
-        html = fetcher.get_board_f10_page("881101", board_type="industry")
-        assert html == ""
-        assert log[0] == 0, "industry v1 stub must not hit upstream"
+        html = fetcher.get_board_f10_page("881121", board_type="industry")
+        assert html != "", "industry F10 page must be fetched, not stubbed"
+        assert log[0] == 1, "industry must hit upstream exactly once"
     finally:
         stack.close()
+
+
+def test_get_board_f10_page_industry_url_no_marketid_prefix():
+    """Industry URL is ``basic.10jqka.com.cn/{code}/`` (no ``/48/``).
+
+    Concept uses ``/48/{code}/`` (THS upstream marketId convention);
+    industry omits the prefix. Verified 2026-07-22 against
+    ``basic.10jqka.com.cn/881121/``.
+    """
+    captured_url = []
+
+    def fake_get(url, *, headers=None, timeout=10):
+        captured_url.append(url)
+        return _mock_response(200, b"<html></html>")
+
+    fetcher, stack = _patched_fetcher(fake_get)
+    try:
+        fetcher.get_board_f10_page("881121", board_type="industry")
+    finally:
+        stack.close()
+
+    assert captured_url[0] == "https://basic.10jqka.com.cn/881121/"
 
 
 def test_get_board_f10_page_cache_ttl_respected(fake_html_bytes):
@@ -152,7 +184,7 @@ def test_get_board_f10_page_cache_ttl_respected(fake_html_bytes):
         assert log[0] == 1
 
         # Force-expire cache entry.
-        cache_key = ThsFetcher._throttle_f10_cache_key("885914")
+        cache_key = ThsFetcher._throttle_f10_cache_key("885914", "concept")
         cached_html, _ = tff._f10_html_cache[cache_key]
         tff._f10_html_cache[cache_key] = (cached_html, 0.0)
 

@@ -160,7 +160,8 @@ def test_get_board_realtime_industry_board_type_uses_platecode_as_cid():
         patch.object(ThsFetcher, "_v_token", return_value="tok"),
     ):
         d = f.get_board_realtime("881270", board_type="industry")
-    assert "/gn/detail/code/881270/" in captured["url"]
+    # Industry uses the /thshy/ section prefix (probed 2026-07-22).
+    assert "/thshy/detail/code/881270/" in captured["url"]
     assert d["board_name"] == "银行"
     # Industry boards must NOT call the cid resolver.
     cid_resolver.assert_not_called()
