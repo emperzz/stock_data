@@ -103,6 +103,9 @@ worktrees/
 # against the full path — a bare directory negation wouldn't override the
 # project-wide *.csv exclusion above.
 !stock_data/stock_data_backup/*.csv
+# Local rollback snapshots of those CSVs (timestamped .bak.NNN); ignore.
+# ponytail: remove if you want a snapshot in the repo
+/stock_data/stock_data_backup/*.bak.*
 
 # Playwright MCP browser session caches
 .playwright-mcp/
