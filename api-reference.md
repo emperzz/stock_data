@@ -481,10 +481,8 @@ Zhitu: type × subtype), so failover between sources is intentionally
 not supported.
 
 **Available source labels (post 2026-07-08 unification):**
-- `ths` — ThsFetcher (concept + industry, d-only K-line; internally
-  merges ZzshareFetcher for platecode backfill)
-- `eastmoney` — EastMoneyFetcher (concept + industry only; no
-  index/special classification upstream; d/w/m + 5/15/30/60m K-line)
+- `ths` — ThsFetcher (concept + industry; d/w/m/1m/5m/15m/30m/60m K-line; internally merges ZzshareFetcher for platecode backfill)
+- `eastmoney` — EastMoneyFetcher (concept + industry only; no index/special classification upstream; d/w/m/5m/15m/30m/60m K-line, no 1m)
 - `zhitu` — ZhituFetcher (concept / industry / index / special; no K-line)
 
 **`zzshare` aliases:**
@@ -515,9 +513,9 @@ GET /api/v1/stocks/000001/boards?source=ths
 GET /api/v1/stocks/000001/boards?source=zhitu&type=concept&subtype=热门概念
 GET /api/v1/stocks/000001/boards?source=ths,eastmoney,zhitu   # multi-source aggregation
 
-# Board K-line (THS: d-only, board_type required; EastMoney: multi-frequency)
+# Board K-line (THS: 8 frequencies, board_type required; EastMoney: 7 frequencies, no 1m)
 GET /api/v1/boards/BK1048/history?source=eastmoney&frequency=d
-GET /api/v1/boards/881270/history?source=ths&frequency=d&board_type=industry
+GET /api/v1/boards/881270/history?source=ths&frequency=1m&board_type=industry
 ```
 
 **Parameters for `GET /boards`:**
@@ -581,10 +579,11 @@ as `source="ths"`.
 | `include_quote` | bool | `false` | Include realtime quote fields (THS populates by default; EastMoney requires `true`; Zzshare/Zhitu emit no quote fields — affected fields are `null`, not omitted) |
 | `refresh` | bool | `false` | Force fetch latest from upstream |
 
-This endpoint returns two source fields:
+This endpoint returns three source fields:
 - `query_source` — the user-supplied `?source=` value (canonicalized)
-- `data_source` — the actual origin (`fetcher name` on cache miss;
-  `"persistence"` on cache hit)
+- `data_source` — the fetcher label on cache miss or `"persistence"` on cache hit
+- `effective_source` — the fetcher that actually served the upstream call;
+  on a persistence hit this is the unified cache-key label (currently `"ths"`)
 
 **Parameters for `GET /stocks/{stock_code}/boards`:**
 | Parameter | Type | Default | Description |
@@ -602,8 +601,8 @@ startup backfill or returns `cold_sources` on miss).
 **Parameters for `GET /boards/{board_code}/history`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `source` | string | Required | Data source: `ths` (d-only) or `eastmoney` (d/w/m + 5/15/30/60m). `zzshare` is accepted and aliased to `ths`. |
-| `frequency` | string | `d` | K-line frequency. `eastmoney` supports `d / w / m / 5m / 15m / 30m / 60m`; `ths` is `d`-only (other frequencies raise 4xx). |
+| `source` | string | Required | Data source: `ths` (d/w/m/1m/5m/15m/30m/60m) or `eastmoney` (d/w/m/5m/15m/30m/60m; no 1m). `zzshare` is accepted and aliased to `ths`. |
+| `frequency` | string | `d` | K-line frequency. Validated against the selected source: THS supports all 8 listed frequencies; EastMoney supports the same set except `1m`. |
 | `start_date` | string | null | Start date (YYYY-MM-DD). Range width is capped at 800 days; exceeds → 400 `date_range_too_wide`. |
 | `end_date` | string | null | End date (YYYY-MM-DD). Defaults to today. |
 | `days` | int | 30 | Days (used when `start_date` is not given). 1-800. |

@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A Python-based local stock data aggregation server that:
-- Integrates 12 upstream stock data APIs (Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Myquant, Baidu)
+- Integrates 13 upstream stock data APIs (Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Cls, Myquant, Baidu)
 - Normalizes data into a unified format across all capability groups (行情/资金面/基础数据/公告/研报/特殊池/etc.)
 - Provides a stable REST API for consumption by AI agents like OpenClaw
 
@@ -234,7 +234,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE` `STOCK_ZT_POOL` `STOCK_INFO` `STOCK_KLINE` (minute fallback) `STOCK_LIST` `STOCK_BOARD` `DIVIDEND` `FUND_FLOW` `HOLDER_NUM` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` | `ZHITU_TOKEN` | Index K-line via `/hz/` prefix |
 | `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none | |
 | `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER` `MARGIN_TRADING` `BLOCK_TRADE` `HOLDER_NUM` `DIVIDEND` `FUND_FLOW` `RESEARCH_REPORT` `NEWS_FLASH` `NEWS_SEARCH` `STOCK_BOARD` `STOCK_NEWS` `ANNOUNCEMENT` | none | |
-| `ThsFetcher` | 7 | csi | `HOT_TOPICS` `NORTH_FLOW` `NEWS_FLASH` `NEWS_SEARCH` `STOCK_BOARD` `STOCK_NEWS` `ANNOUNCEMENT` | none | Board K-line d-only; `get_board_stocks` supports sort_by + top_n |
+| `ThsFetcher` | 7 | csi | `HOT_TOPICS` `NORTH_FLOW` `NEWS_FLASH` `NEWS_SEARCH` `STOCK_BOARD` `STOCK_NEWS` `ANNOUNCEMENT` | none | Board K-line d/w/m/1m/5m/15m/30m/60m; `get_board_stocks` supports sort_by + top_n |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` | `BAIDU_API_KEY` | Backup for EastMoney news |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none | |
 | `ClsFetcher` | 8 | csi | `MORNING_BRIEFING` `MARKET_RECAP` | none | 财联社早报 + 焦点复盘 via Next.js `__NEXT_DATA__` JSON; 20-28 day window (no upstream pagination) |
@@ -285,7 +285,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | `get_all_boards` | `ths` `eastmoney` `zhitu` | `zzshare` unified under `ths` |
 | `get_board_stocks` | `ths` `eastmoney` `zhitu` | `zzshare` returns 422. `source=ths` + `include_quote=False` → ZZSHARE primary + THS fallback; `effective_source` exposes which served. |
 | `get_stock_boards` | `ths` `eastmoney` `zhitu` | `zzshare` aliased to `ths` |
-| `get_board_history` | `ths` (d-only) `eastmoney` (d/w/m+minutes) | `zzshare` aliased to `ths`; `board_type` auto-detected from cache for `ths` (pass platecode); 800-day cap |
+| `get_board_history` | `ths` (d/w/m/1m/5m/15m/30m/60m) `eastmoney` (d/w/m/5m/15m/30m/60m) | `zzshare` aliased to `ths`; `board_type` auto-detected from cache for `ths` (pass platecode); 800-day cap |
 | `get_board_realtime` | `ths` | Board realtime quote via q.10jqka |
 
 ### Index routing notes

@@ -14,7 +14,7 @@ Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / 
 ## Features
 
 - **Multi-source aggregation** (13 fetchers): Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Cls, Myquant, Baidu
-- **Board data** (concept / industry / index / special): source-routed across `ths` (concept + industry, d-only K-line), `eastmoney` (concept + industry, d/w/m + minutes K-line), `zhitu` (all 4 types, no K-line); `zzshare` unified under `ths` since 2026-07-08. THS also serves board realtime quote / news (news.10jqka) / 炒作周期 (F10).
+- **Board data** (concept / industry / index / special): source-routed across `ths` (concept + industry, d/w/m/1m/5m/15m/30m/60m K-line), `eastmoney` (concept + industry, d/w/m/5m/15m/30m/60m K-line), `zhitu` (all 4 types, no K-line); `zzshare` unified under `ths` since 2026-07-08. THS also serves `GET /boards/{code}/quote`, `/news`, and `/surges` (F10 炒作周期).
 - **Automatic failover**: priority-based source selection with capability-routed fallback
 - **Circuit breaker**: prevents cascading failures from unavailable sources
 - **Persistent metadata cache**: SQLite for stock lists, board metadata, trade calendar, ZT/DT/ZBGC pools (separate from in-process TTLCache)
@@ -81,7 +81,7 @@ or browse it interactively at `/explorer/` once the server is running.
 
 Quick index: health · technical indicators · K-line · realtime quote ·
 company profile · per-stock news · trade calendar · indices · stock list ·
-boards (list / stocks / quote / news / surges / history) · 涨跌停股池 ·
+boards (list / stocks / stock→boards / quote / news / surges / history) · 涨跌停股池 ·
 margin · block trade · holder count · dividend · dragon-tiger · fund flow ·
 hot topics · north-bound flow · research reports · announcements ·
 news search / flash / content · 财联社早报 / 焦点复盘.
@@ -115,6 +115,7 @@ The `/quote` and `/kline` endpoints are cached using an in-memory TTLCache to av
 | `CACHE_TTL_INDEX_QUOTE` | TTL for index realtime quotes (seconds) | `60` |
 | `CACHE_TTL_STOCK_INTRADAY` | TTL for stock intraday (seconds) | `30` |
 | `CACHE_TTL_STOCK_INFO` | TTL for 公司画像 (`StockInfoResponse`, seconds) | `3600` |
+| `CACHE_TTL_CLS_FEED` | TTL for 财联社早报/复盘 (seconds) | `3600` |
 
 ### Persistence (on-disk SQLite store)
 
@@ -131,6 +132,7 @@ realtime quote data is always fetched live and never persisted.
 |----------|-------------|---------|
 | `STOCK_CACHE_DB_PATH` | Path to the SQLite file used by the persistence layer | `<repo>/stock_data/stock_cache.db` |
 | `STOCK_DB_INIT` | `true` → DROP + recreate all persistence tables on boot; `false` → idempotent CREATE IF NOT EXISTS only. **WARNING: `true` wipes all cached stock lists, board metadata, trade calendar, and ZT/DT/ZBGC pool history.** | `false` |
+| `BOARD_BACKFILL_ON_STARTUP` | Refresh THS board metadata and membership in the background at startup; may add substantial upstream load/time | `false` |
 
 ### Source Tracking (new)
 
@@ -149,9 +151,11 @@ the `source` query parameter, with two exceptions:
 - `source=ths` on `/boards` internally merges `ThsFetcher` +
   `ZzshareFetcher` (platecode backfill); the public surface tags both
   as `source="ths"`.
-- `/boards/{code}/stocks` returns **two** source fields:
-  `query_source` (user-supplied `?source=`, canonicalized) and
-  `data_source` (actual origin: fetcher name or `"persistence"`).
+- `/boards/{code}/stocks` returns **three** source fields:
+  `query_source` (user-supplied `?source=`, canonicalized),
+  `data_source` (fetcher label on cache miss or `"persistence"` on cache hit), and
+  `effective_source` (the fetcher that actually served the upstream call; on a
+  persistence hit this is the unified cache-key label, currently `"ths"`).
 
 `/stocks` and `/calendar` currently do NOT expose `source` (their response models have no such field) — the persistence origin is still computed and discarded. This is a YAGNI choice; if needed later, add `source: str` to those response models and the route layer is already wired to pass it through.
 
@@ -299,7 +303,7 @@ The server automatically routes requests to the appropriate data source based on
 | 5 | Zhitu | Realtime quotes + 公司画像 + 板块 (含 stock→boards), minute fallback (5/15/30/60), requires `ZHITU_TOKEN` |
 | 5 | Tencent | Enhanced quotes (PE/PB/市值/涨跌停价), HTTP only |
 | 6 | EastMoney | 龙虎榜/融资融券/大宗/股东户数/分红/资金流/研报/快讯/新闻/板块 (concept+industry only) /个股资讯/公告 |
-| 7 | THS | 热点题材/北向资金/快讯 (backup) / 板块 K 线 (d-only, concept+industry) / 板块实时行情 / 板块新闻 (news.10jqka) / 板块炒作周期 (F10) / 个股新闻 + 个股公告 P7 备份 |
+| 7 | THS | 热点题材/北向资金/快讯 (backup) / 板块 K 线 (d/w/m/1m/5m/15m/30m/60m, concept+industry) / 板块实时行情 / 板块新闻 (news.10jqka) / 板块炒作周期 (F10) / 个股新闻 + 个股公告 P7 备份 |
 | 7 | Baidu | 新闻搜索 (backup for EastMoney), requires `BAIDU_API_KEY` |
 | 8 | Cninfo | 公告检索 |
 | 8 | **CLS** | **财联社 早报 (subject 1151) + 焦点复盘 (subject 1135)**；按日取全文本, 20-28 天窗口 (无上游分页) |
@@ -400,6 +404,9 @@ The server automatically routes requests to the appropriate data source based on
 | `ZHITU_PRIORITY` | Override Zhitu priority | 5 |
 | `TENCENT_PRIORITY` | Override Tencent priority | 5 |
 | `EASTMONEY_PRIORITY` | Override EastMoney priority | 6 |
+| `EASTMONEY_PUSH2_CONCEPT_PREFIXES` | Comma-separated push2 numeric subdomain prefixes for concept boards; empty item enables bare-host fallback | built-in `79` + bare fallback |
+| `EASTMONEY_PUSH2_INDUSTRY_PREFIXES` | Comma-separated push2 numeric subdomain prefixes for industry boards; empty item enables bare-host fallback | built-in `17` + bare fallback |
+| `EASTMONEY_PUSH2_COMPONENTS_PREFIXES` | Comma-separated push2 numeric subdomain prefixes for board constituents; empty item enables bare-host fallback | built-in `29` + bare fallback |
 | `THS_PRIORITY` | Override THS priority | 7 |
 | `BAIDU_API_KEY` | Baidu Qianfan API key (NEWS_SEARCH backup for EastMoney) | - |
 | `BAIDU_PRIORITY` | Override Baidu priority | 7 |
