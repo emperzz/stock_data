@@ -509,14 +509,20 @@ HSGT_HEADERS = {
 }
 
 
-_CONCEPT_DETAIL_URL = "https://q.10jqka.com.cn/gn/detail/code/{slug}/"
+# q.10jqka.com.cn board detail pages — section prefix is the only thing
+# that differs between concept (``gn``) and industry (``thshy``); the
+# AJAX constituents endpoint below shares the exact same shape.
+# Industry AJAX support probed 2026-07-22 against /thshy/detail/code/881121/:
+# identical column set + field codes (see _THS_BOARD_STOCKS_SORT_FIELD_MAP).
+_BOARD_DETAIL_URL_TEMPLATE = "https://q.10jqka.com.cn/{section}/detail/code/{slug}/"
 
 # q.10jqka.com.cn AJAX board-stocks endpoint (同花顺概念/行业成分股).
 # THS upstream URL: /field/<code>/order/<dir>/page/N/ajax/1/
 # field/<code> 决定排序键 (199112=涨跌幅); order/<dir> 决定方向;
 # 每页 10 只; ajax/1/ 强制 AJAX HTML 片段 (避免完整页面).
+# ``section`` ∈ {"gn", "thshy"} — chosen by the fetcher from ``board_type``.
 _BOARD_STOCKS_URL_TEMPLATE = (
-    "https://q.10jqka.com.cn/gn/detail/code/{concept_id}"
+    "https://q.10jqka.com.cn/{section}/detail/code/{board_code}"
     "/field/{field_code}/order/{order}/page/{page}/ajax/1/"
 )
 # THS 上游列代码 (从 <th a field="..."> 实测) → python attr name.
@@ -1058,6 +1064,7 @@ class ThsFetcher(BaseFetcher):
         *,
         field_code: str = "199112",
         order: str = "desc",
+        board_type: str | None = None,
     ) -> list[dict]:
         """Fetch one page of THS board stocks (10 rows per page).
 
@@ -1065,6 +1072,11 @@ class ThsFetcher(BaseFetcher):
         default preserved for callers that don't care about ordering)
         and ``order`` picks direction ("desc"/"asc"); both map to the
         URL template placeholders consumed by ``_BOARD_STOCKS_URL_TEMPLATE``.
+
+        ``board_type`` picks the URL section prefix: ``"industry"`` →
+        ``/thshy/`` (industry detail page), anything else (including
+        ``None`` / ``"concept"``) → ``/gn/`` (concept detail page).
+        Default ``None`` preserves the legacy concept-only behaviour.
 
         Returns ``[]`` when the page is empty (caller treats as the
         end-of-pagination signal). HTTP non-2xx raises ``DataFetchError``
@@ -1076,14 +1088,16 @@ class ThsFetcher(BaseFetcher):
         Without this, requests defaults to ISO-8859-1 and the Chinese
         stock names decode to garbage.
         """
+        section = "thshy" if board_type == "industry" else "gn"
         url = _BOARD_STOCKS_URL_TEMPLATE.format(
-            concept_id=concept_id,
+            section=section,
+            board_code=concept_id,
             field_code=field_code,
             order=order,
             page=page,
         )
         headers = {
-            "Referer": _CONCEPT_DETAIL_URL.format(slug=concept_id),
+            "Referer": _BOARD_DETAIL_URL_TEMPLATE.format(section=section, slug=concept_id),
             "X-Requested-With": "XMLHttpRequest",
             "Cookie": f"v={self._v_token()}",
         }
@@ -1145,18 +1159,24 @@ class ThsFetcher(BaseFetcher):
         """THS board constituent stocks via q.10jqka.com.cn AJAX endpoint.
 
         Args:
-            board_code: THS concept slug (e.g. ``"308709"``) — the path
-                segment used by ``q.10jqka.com.cn/gn/detail/code/{slug}/``.
+            board_code: THS concept slug (e.g. ``"308709"`` for concept
+                885xxx→cid) or industry platecode (e.g. ``"881121"``) —
+                the path segment used by
+                ``q.10jqka.com.cn/{section}/detail/code/{slug}/``.
                 THS concept/industry boards use 6-digit decimal slugs.
-                This fetcher always treats the code as a ``concept_id``
-                (THS does not expose a parallel industry endpoint that
-                we have observed). If industry support is added later,
-                branch on ``board_type``.
+                For industry ``board_code`` is the platecode itself
+                (industry has no separate cid resolution).
             source: Accepted for interface parity (manager passes it).
                 Always effectively ``"ths"`` for this fetcher.
             include_quote: Accepted for interface parity. THS upstream
                 already returns quote fields, so this flag is ignored.
-            board_type: Accepted for interface parity. Currently unused.
+            board_type: Picks the upstream section prefix. ``"industry"``
+                → ``/thshy/detail/code/{board_code}/`` (industry AJAX
+                endpoint, same shape as concept, probed 2026-07-22
+                against 881121). Anything else (including ``None``) →
+                ``/gn/detail/code/{board_code}/`` (concept, legacy
+                default). Industry AJAX inherits the same 50-stock cap
+                as concept (10 rows/page × 5 pages).
 
         New kwargs (2026-07-13):
             sort_by: One of 11 keys in _THS_BOARD_STOCKS_SORT_FIELD_MAP.
@@ -1209,6 +1229,7 @@ class ThsFetcher(BaseFetcher):
                     page,
                     field_code=field_code,
                     order=sort_order,
+                    board_type=board_type,
                 )
             except ThsBoundarySignalError as e:
                 if not all_rows:
@@ -1408,9 +1429,11 @@ class ThsFetcher(BaseFetcher):
                     f"platecode={board_code!r} (board_type={board_type!r}). "
                     f"Concept boards require platecode→cid via stock_board cache."
                 )
-        url = _CONCEPT_DETAIL_URL.format(slug=cid)
+        section = "thshy" if board_type == "industry" else "gn"
+        detail_url = _BOARD_DETAIL_URL_TEMPLATE.format(section=section, slug=cid)
+        url = detail_url
         headers = {
-            "Referer": _CONCEPT_DETAIL_URL.format(slug=cid),
+            "Referer": detail_url,
             "Cookie": f"v={self._v_token()}",
         }
         try:

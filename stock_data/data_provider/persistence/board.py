@@ -972,6 +972,13 @@ def fetch_board_stocks_with_zzshare_fallback(
         ValueError: ``source`` is not one of the four supported slugs.
     """
     if source == "ths":
+        # Resolve board_type once (single SELECT against stock_board).
+        # ThsFetcher.get_board_stocks picks /thshy/ vs /gn/ on this;
+        # without it industry AJAX silently hits the concept endpoint
+        # and returns 404. None is tolerated (defaults to "gn").
+        _meta = get_board_metadata(board_code, "ths")
+        ths_board_type = _meta.get("type") if _meta else None
+
         # include_quote=True: THS is mandatory — zzshare has no quote
         # fields, falling back would silently degrade the response to
         # null quotes. Propagate any failure unchanged. 2026-07-13:
@@ -986,6 +993,7 @@ def fetch_board_stocks_with_zzshare_fallback(
                     board_code=cid,
                     source="ths",
                     include_quote=True,
+                    board_type=ths_board_type,
                     sort_by=sort_by,
                     sort_order=sort_order,
                     top_n=top_n,
@@ -1085,6 +1093,7 @@ def fetch_board_stocks_with_zzshare_fallback(
                 board_code=cid,
                 source="ths",
                 include_quote=False,
+                board_type=ths_board_type,
             )
         except DataFetchError:
             raise
