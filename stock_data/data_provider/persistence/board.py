@@ -1017,9 +1017,17 @@ def fetch_board_stocks_with_zzshare_fallback(
         f10_full = getattr(manager, "get_board_stocks_full", None)
         if callable(f10_full):
             try:
+                # Forward ths_board_type so the fetcher picks the right
+                # extraction strategy — concept uses ``#concept_data``
+                # JSON, industry uses inline ``onclick="changecode(...)"``.
+                # Without this kwarg, an industry request silently falls
+                # through to the concept JSON parser (which returns [])
+                # and then to ZZSHARE, misreporting
+                # ``effective_source="zzshare"``.
                 _f10_ret = f10_full(
                     board_code=board_code,
                     source="ths",
+                    board_type=ths_board_type,
                 )
             except TypeError as ty_err:
                 # TypeError: legacy mock managers don't accept kwargs.
