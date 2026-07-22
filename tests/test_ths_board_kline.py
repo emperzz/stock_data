@@ -108,16 +108,20 @@ class TestGetBoardHistory:
         f = ThsFetcher.__new__(ThsFetcher)
         # 1m has a 2-day max-span cap (upstream returns ~30 bars total);
         # minute-level frequencies have tighter caps. Daily/weekly/monthly
-        # have 10-year caps.
+        # have 10-year caps. Post-Fix-A: `days` is the default window width,
+        # `start_date` only extends back; pick `days` to fit each freq's cap.
         if freq == "1m":
             rows = [_fake_row("2026-07-14 09:35", freq)]
-            start, end = "2026-07-13", "2026-07-14"  # 1-day span
+            start, end = "2026-07-13", "2026-07-14"
+            days = 1  # 1m cap = 2d
         elif freq in ("5m", "15m", "30m", "60m"):
             rows = [_fake_row("2026-07-14 09:35", freq)]
             start, end = "2026-07-12", "2026-07-14"
+            days = 2  # fits 5m(30d)/15m(60d)/30m(90d)/60m(180d) caps
         else:
             rows = [_fake_row("2025-06-30", freq)]
             start, end = "2025-06-29", "2025-06-30"
+            days = 30
 
         with patch(
             "stock_data.data_provider.fetchers.ths_fetcher._fetch_ths_single_kline",
@@ -129,6 +133,7 @@ class TestGetBoardHistory:
                 frequency=freq,
                 start_date=start,
                 end_date=end,
+                days=days,
             )
         # Verify the helper was called with the correct freq_key.
         assert fetch_mock.call_args.kwargs["freq_key"] == freq
@@ -252,12 +257,15 @@ class TestGetBoardHistory:
         if freq == "1m":
             row = _fake_row("2026-07-14 09:35", freq)
             start, end = "2026-07-13", "2026-07-14"
+            days = 1
         elif freq in ("5m", "15m", "30m", "60m"):
             row = _fake_row("2026-07-14 09:35", freq)
             start, end = "2026-07-12", "2026-07-14"
+            days = 2
         else:
             row = _fake_row("2025-06-30", freq)
             start, end = "2025-06-29", "2025-06-30"
+            days = 30
 
         with patch(
             "stock_data.data_provider.fetchers.ths_fetcher._fetch_ths_single_kline",
@@ -269,6 +277,7 @@ class TestGetBoardHistory:
                 frequency=freq,
                 start_date=start,
                 end_date=end,
+                days=days,
             )
         assert rows, f"freq={freq} returned 0 rows"
         for r in rows:
@@ -298,6 +307,7 @@ class TestGetBoardHistory:
                 frequency="5m",
                 start_date="2026-07-13",
                 end_date="2026-07-13",
+                days=1,
             )
         # Both rows should be kept (the 14:55 bar is the same day as end).
         assert len(out) == 2
@@ -482,8 +492,10 @@ class TestGetBoardHistoryEdgeCases:
         assert rows == []
 
     def test_year_span_cap_raises(self):
-        """16-year span exceeds _THS_HXKLINE_MAX_SPAN_DAYS['d'] = 3650 days.
-        The message is "exceeds frequency='d' max"."""
+        """`days > _THS_HXKLINE_MAX_SPAN_DAYS['d']` (3650) raises.
+        Post-fix: `days` is always the window width; start_date is just a
+        lower bound, so a 16-year range with explicit bounds no longer
+        triggers the cap — you have to ask for it via `days`."""
         from unittest.mock import patch
 
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
@@ -494,10 +506,94 @@ class TestGetBoardHistoryEdgeCases:
                 board_code="881270",
                 board_type="industry",
                 frequency="d",
-                days=10,
-                start_date="2010-01-01",
-                end_date="2025-12-31",  # ~5800 days, well over 3650
+                days=4000,  # > 3650 ceiling
             )
+
+    def test_span_boundary_for_5m_does_not_falsely_raise(self):
+        """Regression guard for the off-by-one fix.
+
+        `days=30` with `freq=5m` should NOT raise the 30d cap. With the
+        legacy `span_days = (end - start).days + 1`, this case would
+        compute span=31 and falsely fire the cap, blocking the very
+        window the route advertises as the max for 5m."""
+        from unittest.mock import patch
+
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        with patch(
+            "stock_data.data_provider.fetchers.ths_fetcher._fetch_ths_single_kline",
+            return_value=[],
+        ):
+            # Should NOT raise — exactly at the 5m 30d boundary.
+            rows = f.get_board_history(
+                board_code="881270",
+                board_type="industry",
+                frequency="5m",
+                days=30,
+            )
+        assert rows == []
+
+    def test_start_date_more_recent_than_days_default_uses_days(self):
+        """Pin the contract: passing ``start_date=today`` with ``days=30``
+        is effectively a no-op — you still get the default 30-day window,
+        NOT a 1-day window. Catches future regressions where someone
+        re-introduces ``start_date wins over days`` semantics."""
+        from unittest.mock import patch
+        from datetime import date
+
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        captured: dict = {}
+        def fake_fetch(board_code, *, freq_key, start_d, end_d, days):
+            captured["start_d"] = start_d
+            captured["end_d"] = end_d
+            return []
+        with patch(
+            "stock_data.data_provider.fetchers.ths_fetcher._fetch_ths_single_kline",
+            side_effect=fake_fetch,
+        ):
+            f.get_board_history(
+                board_code="881270",
+                board_type="industry",
+                frequency="5m",
+                start_date=date.today().strftime("%Y-%m-%d"),  # today's hint — should NOT shrink window
+                days=30,
+            )
+        # The fetcher received resolved dates spanning 30 days, NOT 1 day.
+        assert (captured["end_d"] - captured["start_d"]).days == 30
+
+    def test_start_date_older_than_days_default_extends_window(self):
+        """Pin the contract: passing ``start_date=2020-01-01`` with
+        ``days=30`` honors the hint — the window extends back to 2020-01-01.
+        The per-frequency cap will fire (returning 400), but the
+        resolution should still pick the EARLIER of the two candidates."""
+        from unittest.mock import patch
+
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
+        f = ThsFetcher.__new__(ThsFetcher)
+        captured: dict = {}
+        def fake_fetch(board_code, *, freq_key, start_d, end_d, days):
+            captured["start_d"] = start_d
+            captured["end_d"] = end_d
+            return []
+        # Use freq=d (10y cap, won't fire here)
+        with patch(
+            "stock_data.data_provider.fetchers.ths_fetcher._fetch_ths_single_kline",
+            side_effect=fake_fetch,
+        ):
+            f.get_board_history(
+                board_code="881270",
+                board_type="industry",
+                frequency="d",
+                start_date="2020-01-01",
+                days=30,
+            )
+        # start_d should be 2020-01-01, NOT (end_d - 30 days).
+        from datetime import date
+        assert captured["start_d"] == date(2020, 1, 1)
 
     def test_reversed_dates_raises(self):
         from unittest.mock import patch
@@ -636,22 +732,6 @@ class TestIsAvailable:
         reason = ThsFetcher().unavailable_reason()
         assert reason is not None
         assert "bs4" in reason
-
-    def test_missing_demjson3_returns_false(self, monkeypatch):
-        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
-
-        real_find_spec = ths_mod.util.find_spec
-
-        def fake_find_spec(name):
-            if name == "demjson3":
-                return None
-            return real_find_spec(name)
-
-        monkeypatch.setattr(ths_mod.util, "find_spec", fake_find_spec)
-        assert ThsFetcher().is_available() is False
-        reason = ThsFetcher().unavailable_reason()
-        assert reason is not None
-        assert "demjson3" in reason
 
 
 
@@ -878,3 +958,105 @@ class TestFetchSingleKline:
         monkeypatch.setattr(ths_mod.requests, "post", lambda *a, **kw: FakeResp())
         with pytest.raises(DataFetchError, match="HTTP 500"):
             _fetch_ths_single_kline("881270", freq_key="d", days=30)
+
+    def test_env_pinned_jwt_skips_retry_on_401(self, monkeypatch):
+        """When THS_HXKLINE_JWT env var pins the token, the 401/403 retry
+        loop is a no-op (same stale token) — must raise with a 'stale env'
+        message instead of silently retrying once with the same token."""
+        from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+        from stock_data.data_provider.fetchers.ths_fetcher import (
+            DataFetchError, _fetch_ths_single_kline,
+        )
+
+        monkeypatch.setenv("THS_HXKLINE_JWT", "eyJ.pinned.stale")
+        monkeypatch.setattr(ths_mod, "_get_ths_hxkline_jwt", lambda: "eyJ.pinned.stale")
+
+        post_calls = {"n": 0}
+        class FakeResp:
+            status_code = 401
+            content = b""
+            headers = {}
+        def fake_post(*a, **kw):
+            post_calls["n"] += 1
+            return FakeResp()
+        monkeypatch.setattr(ths_mod.requests, "post", fake_post)
+
+        with pytest.raises(DataFetchError, match="THS_HXKLINE_JWT env var is stale"):
+            _fetch_ths_single_kline("881270", freq_key="d", days=30)
+        assert post_calls["n"] == 1  # NO retry when env-pinned
+
+    def test_end_date_only_propagates_to_upstream(self, monkeypatch):
+        """Regression for Fix #7: only end_date given (no start_date)
+        used to silently drop all rows (upstream returned today-relative
+        data, post-filter killed it). Must now compute a proper
+        begin/end window anchored on end_date."""
+        from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+        from stock_data.data_provider.fetchers.ths_fetcher import _fetch_ths_single_kline
+
+        monkeypatch.setattr(ths_mod, "_get_ths_hxkline_jwt", lambda: "eyJ.test.sig")
+
+        captured_kwargs: dict = {}
+        class FakeResp:
+            status_code = 200
+            headers = {}
+            def json(self):
+                return {
+                    "status_code": 0,
+                    "data": {"quote_data": [{
+                        "market": "48", "code": "881270", "delay": False,
+                        "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                        "value": [],
+                    }], "fail_params": None},
+                    "status_msg": "ok",
+                }
+        def fake_post(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return FakeResp()
+        monkeypatch.setattr(ths_mod.requests, "post", fake_post)
+
+        # days=180, end_d 100 days back → begin=-280, end=-100
+        from datetime import date, timedelta
+        end_d = date.today() - timedelta(days=100)
+        _fetch_ths_single_kline("881270", freq_key="d", days=180, end_d=end_d)
+        body = captured_kwargs["json"]
+        assert body["end_time"] == -100
+        assert body["begin_time"] == -280
+
+    def test_compute_time_window_end_date_only(self):
+        """end_d-only: window is `days` ending on end_d (mirror
+        _resolve_ths_date_range behavior where start_d=end_d-days)."""
+        from datetime import date, timedelta
+        from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
+
+        end_d = date.today() - timedelta(days=100)
+        begin, end = _compute_time_window(days=180, start_d=None, end_d=end_d)
+        assert end == -100
+        assert begin == -280  # 180 days ending 100 days back
+
+    def test_compute_time_window_end_date_today_clamped(self):
+        """end_d today/future → end_time=0 (upstream '0=now', positive undefined)."""
+        from datetime import date
+        from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
+
+        begin, end = _compute_time_window(days=30, start_d=None, end_d=None)
+        assert end == 0
+        begin, end = _compute_time_window(
+            days=30, start_d=None,
+            end_d=date(2099, 1, 1),  # far future
+        )
+        assert end == 0
+
+    def test_compute_time_window_translates_resolved_dates(self):
+        """`_compute_time_window` is a pure translation: caller passes
+        already-resolved ``start_d/end_d`` (after _resolve_ths_date_range
+        applied the days-is-width + start_date-is-lower-bound contract).
+        This test mirrors what get_board_history actually passes in:
+        start_d = end_d - days, end_d = today."""
+        from datetime import date, timedelta
+        from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
+
+        end_d = date.today()
+        start_d = end_d - timedelta(days=30)
+        begin, end = _compute_time_window(days=30, start_d=start_d, end_d=end_d)
+        assert end == 0
+        assert begin == -30  # NOT -1, because start_d is already expanded

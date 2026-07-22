@@ -349,42 +349,55 @@ def _get_ths_hxkline_jwt() -> str:
     return token
 
 
-def _compute_begin_time(
-    *, days: int, freq_key: str, start_date: str | None,
-) -> int:
-    """Translate (days, start_date) to the negative-day offset upstream expects.
+def _compute_time_window(
+    *, start_d: _date | None, end_d: _date | None, days: int,
+) -> tuple[int, int]:
+    """Translate **resolved** ``(start_d, end_d)`` to upstream offsets.
 
-    When ``start_date`` is given, we compute the offset from today's date
-    in Beijing time. Otherwise we use the ``days`` argument directly.
+    The single_kline endpoint uses negative-day offsets relative to today
+    (verified against the stockpage network panel): ``-N`` means "N days
+    before today"; ``0`` means "now". Upstream does NOT accept date
+    strings, only these offsets.
 
-    Per-frequency max-span caps still apply — ``get_board_history`` enforces
-    those upstream of this helper.
+    Caller MUST have already run ``_resolve_ths_date_range`` (which applies
+    the days-is-width + start_date-is-lower-bound contract). This helper is
+    a pure translation step — feeding raw ``start_date`` here was the
+    bug behind "5m with ``start_date=today`` returns 1 bar" (the resolver
+    expanded the window to 30 days but this helper still pinned
+    ``begin_time`` to ``-1``).
+
+    Anchor is Beijing today — UTC servers risk off-by-one in the
+    16:00–24:00 UTC window.
     """
-    if start_date:
-        try:
-            start_d = datetime.strptime(start_date, "%Y-%m-%d").date()
-        except ValueError as e:
-            raise DataFetchError(
-                f"[ThsFetcher] single_kline: bad start_date {start_date!r}: {e}"
-            ) from e
-        today = _date.today()
-        offset = (today - start_d).days
-        return -max(offset, 1)
-    return -max(days, 1)
+    today = datetime.now(_THS_TZ).date()
+    if end_d is None:
+        end_d = today
+    if start_d is None:
+        start_d = end_d - timedelta(days=days)
+    end_offset = (today - end_d).days
+    end_time = -end_offset if end_offset > 0 else 0
+    begin_time = -max((today - start_d).days, 1)
+    return begin_time, end_time
 
 
 def _fetch_ths_single_kline(
     board_code: str,
     *,
     freq_key: str,
-    days: int,
-    start_date: str | None = None,
+    start_d: _date | None = None,
+    end_d: _date | None = None,
+    days: int = 30,
 ) -> list[dict]:
     """POST to ``single_kline`` and return parsed K-line rows.
 
+    ``start_d`` / ``end_d`` are the **already-resolved** date objects from
+    ``_resolve_ths_date_range`` — do not pass raw ``start_date`` / ``end_date``
+    strings (the lower-bound semantics live in the resolver, not here).
+
     Single request — no year loop, no JS-body parsing. Returns [] on empty
     upstream payload (legit no-data); raises ``DataFetchError`` on HTTP
-    errors, non-zero status_code, or 401/403 after one JWT refresh + retry.
+    errors, non-zero status_code, or 401/403 after one JWT refresh + retry
+    (skipped when ``THS_HXKLINE_JWT`` env var is pinned).
 
     The 401/403 retry is the only failure-recovery this helper does:
     upstream JWT rotations coincide with JS-bundle chunk-hash changes, and
@@ -398,20 +411,19 @@ def _fetch_ths_single_kline(
         )
     time_period = _THS_HXKLINE_PERIOD_MAP[freq_key]
     headers = {**_THS_HXKLINE_HEADERS_BASE, "x-fuyao-auth": _get_ths_hxkline_jwt()}
+    begin_time, end_time = _compute_time_window(
+        start_d=start_d, end_d=end_d, days=days,
+    )
     body = {
         "code_list": [{"codes": [board_code], "market": "48"}],
         "trade_class": "intraday",
         "time_period": time_period,
         "trade_date": -1,
-        # The single_kline endpoint uses negative offsets for "N days back"
-        # (verified against the stockpage network panel). When start_date /
-        # end_date are explicit, convert to a days-back approximation
-        # (upstream doesn't accept date strings; it accepts ms epoch or
-        # negative-day offsets).
-        "begin_time": _compute_begin_time(
-            days=days, freq_key=freq_key, start_date=start_date,
-        ),
-        "end_time": 0,  # 0 = "now"
+        # Negative offsets mean "N days back" (verified against stockpage
+        # network panel). Upstream doesn't accept date strings; it accepts
+        # ms epoch or these negative-day offsets.
+        "begin_time": begin_time,
+        "end_time": end_time,  # 0 = "now"
         "adjust_type": "forward",
         "gpid": 1,
     }
@@ -426,6 +438,16 @@ def _fetch_ths_single_kline(
                 f"network failed: {e}"
             ) from e
         if resp.status_code in (401, 403):
+            # When THS_HXKLINE_JWT is env-pinned, _get_ths_hxkline_jwt() returns
+            # the env value without touching the cache — retrying with the
+            # same stale token is a no-op. Surface a clear "your pin is
+            # stale" error instead of silently looping.
+            if os.environ.get("THS_HXKLINE_JWT"):
+                raise DataFetchError(
+                    f"[ThsFetcher] single_kline({board_code}, freq={freq_key}) "
+                    f"HTTP {resp.status_code}; THS_HXKLINE_JWT env var is "
+                    f"stale — refresh it to a known-good token."
+                )
             if attempt == 1:
                 # JWT may have rotated; invalidate cache and retry once with
                 # a fresh token. The next _get_ths_hxkline_jwt() call will
@@ -592,42 +614,61 @@ def _resolve_ths_date_range(
     end_date: str | None,
     days: int,
 ) -> tuple[_date, _date]:
-    """Resolve and validate ``(start_date, end_date)`` for the year loop.
+    """Resolve and validate ``(start_date, end_date, days)`` to a date range.
 
-    Mirrors ``EastMoneyFetcher._board_history_range_days`` semantics so
-    f-string path messages look the same; returns ``(start_d, end_d)``
-    both as ``date`` objects. Both bounds are stripped before parsing
-    so user-supplied whitespace (e.g. ``" 2026-01-01 "``) is accepted,
-    matching EastMoney's behavior.
+    ``days`` is the **default** window width. ``start_date`` only extends
+    the window further back — when given, the window becomes
+    ``[min(start_date, end_d - days), end_d]``. This way ``start_date=today``
+    is effectively a no-op (caller probably meant "give me the default
+    days-back window") rather than collapsing the window to 1 day, while
+    ``start_date=2020-01-01`` still honors the longer history request.
+
+    If the resolved window exceeds the per-frequency max span, the
+    fetcher's own ``_THS_HXKLINE_MAX_SPAN_DAYS`` check raises a
+    ``ValueError`` → 400 with a clear message.
+
+    ``end_date`` is the upper bound; defaults to Beijing today. Both bounds
+    are stripped before parsing so user-supplied whitespace
+    (e.g. ``" 2026-01-01 "``) is accepted, matching EastMoney's behavior.
 
     Raises:
         ValueError: a non-empty bound fails YYYY-MM-DD parsing, or
-            ``end_date`` is strictly before ``start_date``. The route
-            layer's ``@map_errors`` maps ``ValueError → 400`` (bad
-            request), matching EastMoney's contract. ``DataFetchError``
-            is reserved for upstream failures (year-span cap, all-empty
-            gate, clid resolution, etc.).
+            ``start_d > end_d`` (caller passed ``start_date > end_date``).
+            The route layer's ``@map_errors`` maps ``ValueError → 400``.
     """
     try:
         end_d = (
             datetime.strptime((end_date or "").strip(), "%Y-%m-%d").date()
             if end_date
-            else _date.today()
+            else datetime.now(_THS_TZ).date()
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(
             f"[ThsFetcher] get_board_history: end_date={end_date!r} not YYYY-MM-DD"
         ) from exc
+    start_d_default = end_d - timedelta(days=days)
+    start_hint: _date | None = None
     if start_date:
         try:
-            start_d = datetime.strptime(start_date.strip(), "%Y-%m-%d").date()
+            start_hint = datetime.strptime(start_date.strip(), "%Y-%m-%d").date()
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 f"[ThsFetcher] get_board_history: start_date={start_date!r} not YYYY-MM-DD"
             ) from exc
+        # Earliest of (hint, days-based default): if hint is older than the
+        # default, honor it; if hint is more recent (e.g. user passed
+        # ``start_date=today``), use the default so `days` doesn't get
+        # silently overridden.
+        start_d = min(start_hint, start_d_default)
     else:
-        start_d = end_d - timedelta(days=days)
-    if start_d > end_d:
+        start_d = start_d_default
+    # Reversed-bounds guard: when the user gave an explicit `start_date`,
+    # compare the hint (not the clamped start_d) so a contradictory
+    # `start_date > end_date` is still surfaced as a 400 instead of being
+    # silently widened by the min() above. Without `start_date`, the
+    # default `start_d = end_d - days` is always ≤ end_d (route enforces
+    # `days >= 1`), so no second guard is needed.
+    if start_hint is not None and start_hint > end_d:
         raise ValueError(
             f"[ThsFetcher] get_board_history: start_date {start_date!r} > end_date {end_date!r}"
         )
@@ -738,8 +779,8 @@ class ThsFetcher(BaseFetcher):
 
         Probes:
         - ``py_mini_racer`` (V8 isolate for ``ths.js`` evaluation)
-        - ``bs4`` (BeautifulSoup for concept-board clid resolution)
-        - ``demjson3`` (lenient JSON parser for upstream JS-style bodies)
+        - ``bs4`` (BeautifulSoup for HTML page parsing — board index /
+          F10 / news pages)
         - ``ths_assets/ths.js`` (vendored JS blob)
 
         Hot-topics / north-flow / flash-news / news-search don't need
@@ -750,14 +791,14 @@ class ThsFetcher(BaseFetcher):
         trade-off; see :meth:`is_available` docstring.
         """
         missing: list[str] = []
-        for mod in ("py_mini_racer", "bs4", "demjson3"):
+        for mod in ("py_mini_racer", "bs4"):
             if util.find_spec(mod) is None:
                 missing.append(mod)
         if missing:
             return False, (
                 f"{ThsFetcher.name}.board_history unavailable: "
                 f"missing deps {sorted(missing)} "
-                f"(pip install py-mini-racer beautifulsoup4 demjson3)"
+                f"(pip install py-mini-racer beautifulsoup4)"
             )
         try:
             js_path = resources.files("stock_data.data_provider.fetchers.ths_assets").joinpath(
@@ -783,7 +824,7 @@ class ThsFetcher(BaseFetcher):
         Returns ``self._check_ths_deps()[0]``. Six pure-HTTP THS
         endpoints (hot-topics / north-flow / flash-news / news-search
         / stock-news / announcements) don't need ``py_mini_racer`` /
-        ``bs4`` / ``demjson3`` or the vendored ``ths.js``, but by
+        ``bs4`` or the vendored ``ths.js``, but by
         project convention (``data_provider/manager.py:1002``) an
         unavailable fetcher is dropped from the manager's table —
         a missing dep costs all six pure-HTTP endpoints too.
@@ -875,9 +916,15 @@ class ThsFetcher(BaseFetcher):
         Args:
             board_code: THS platecode (concept: 885xxx; industry: 881xxx).
             frequency: One of ``d | w | m | 1m | 5m | 15m | 30m | 60m``.
-            days: Used when ``start_date`` not given. Per-frequency max span:
-                d/w/m=3650 (10y), 1m=2, 5m=30, 15m=60, 30m=90, 60m=180.
-            start_date / end_date: YYYY-MM-DD; wins over ``days``.
+            days: Default window width (always honored as the lower bound).
+                Per-frequency max span: d/w/m=3650 (10y), 1m=2, 5m=30,
+                15m=60, 30m=90, 60m=180.
+            start_date: YYYY-MM-DD; only extends the window further back
+                (``start_d = min(start_hint, end_d - days)``). Passing
+                ``start_date=today`` is effectively a no-op — you still
+                get the default ``days``-wide window. ``start_date`` set
+                AFTER ``end_date`` raises ``ValueError`` → 400.
+            end_date: YYYY-MM-DD upper bound; defaults to Beijing today.
             board_type: ``"concept"`` or ``"industry"``; auto-detected from
                 the ``stock_board`` cache when omitted.
 
@@ -921,7 +968,12 @@ class ThsFetcher(BaseFetcher):
         # Date range resolution + per-frequency max-span cap (reused from legacy).
         start_d, end_d = _resolve_ths_date_range(start_date, end_date, days)
         max_span_days = _THS_HXKLINE_MAX_SPAN_DAYS[freq_key]
-        span_days = (end_d - start_d).days + 1
+        # `days` is the window width, not inclusive calendar days. E.g.
+        # `days=30` means "30 bars" not "30+1 calendar days" — without
+        # this fix, a `days=30` request with default end_d=today fails
+        # the 5m (30d) cap by 1 (the +1 was a legacy off-by-one that
+        # only mattered when `start_date` widened the window).
+        span_days = (end_d - start_d).days
         if span_days > max_span_days:
             raise ValueError(
                 f"[ThsFetcher] get_board_history: date span ({span_days}d) "
@@ -932,8 +984,9 @@ class ThsFetcher(BaseFetcher):
         rows = _fetch_ths_single_kline(
             board_code,
             freq_key=freq_key,
+            start_d=start_d,
+            end_d=end_d,
             days=days,
-            start_date=start_date,
         )
 
         # Date range filter (canonical format comparison, same logic as legacy).

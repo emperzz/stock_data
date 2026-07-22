@@ -100,8 +100,8 @@ class KLineData(BaseModel):
     # by the fetcher) or the request's `frequency` parameter (fallback
     # for fetchers that don't tag their rows yet).
     # Date format depends on frequency: YYYY-MM-DD for d/w/m,
-    # YYYY-MM-DD HH:MM for 5m/15m/30m/60m.
-    frequency: Literal["d", "w", "m", "5m", "15m", "30m", "60m"] | None = Field(
+    # YYYY-MM-DD HH:MM for 1m/5m/15m/30m/60m.
+    frequency: Literal["d", "w", "m", "1m", "5m", "15m", "30m", "60m"] | None = Field(
         default=None,
         description="Per-bar frequency tag. Same as the request's `?frequency=`. "
         "Use this to verify each bar's timeframe matches the requested "

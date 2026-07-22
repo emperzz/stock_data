@@ -1040,7 +1040,9 @@ class DataFetcherManager:
     ) -> tuple[list[dict], str]:
         """Get K-line for a board from the named source.
 
-        `start_date` / `end_date` (YYYY-MM-DD) take precedence over `days`.
+        `days` is the default window width. `start_date` only extends the
+        window further back (does NOT win over `days` — passing
+        `start_date=today` still gets the default `days`-wide window).
         Source-routed (no failover) per CLAUDE.md — board classification
         systems differ across sources.
 

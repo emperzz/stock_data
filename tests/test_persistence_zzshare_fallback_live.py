@@ -58,7 +58,7 @@ def test_zzshare_plates_stocks_serves_named_platecode(platecode):
     degrades to THS or to a 404.
     """
     if not ZzshareFetcher().is_available():
-        pytest.skip("ZzshareFetcher dependencies unavailable (py_mini_racer / demjson3 missing)")
+        pytest.skip("ZzshareFetcher dependencies unavailable (py_mini_racer missing)")
 
     rows = ZzshareFetcher().get_board_stocks(platecode, include_quote=False)
     assert isinstance(rows, list), (

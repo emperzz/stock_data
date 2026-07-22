@@ -922,14 +922,14 @@ def get_board_history(
         ge=1,
         le=800,
         description=(
-            "Days (used when start_date not given). The 800 ceiling "
-            "mirrors EastMoneyFetcher's hard `lmt` cap — past that "
-            "push2his auto-escalates klt from daily→weekly→monthly. "
-            "When `start_date` and `end_date` are both given, the date "
-            "range width is also capped at 800 days (returns 400 with "
-            "`date_range_too_wide` on overflow). Note: minute-level "
-            "frequencies have a tighter per-frequency cap on the fetcher "
-            "side (e.g. 5m caps at 30 days)."
+            "Window width in days (default behavior). When `start_date` "
+            "is also given, it ONLY extends the window further back — "
+            "passing `start_date=today` is a no-op (you still get the "
+            "default `days`-wide window ending today). Pass "
+            "`start_date=2020-01-01` if you want a longer history. The "
+            "800 ceiling mirrors EastMoneyFetcher's hard `lmt` cap. "
+            "Minute-level frequencies have a tighter per-frequency cap on "
+            "the fetcher side (e.g. 5m caps at 30 days; 1m at 2)."
         ),
     ),
     board_type: Literal["concept", "industry"] | None = Query(
@@ -970,7 +970,7 @@ def get_board_history(
     # for fetchers that don't tag, so every bar carries the timeframe
     # the caller asked for — defense-in-depth against wrong-upstream-
     # segment bugs that would otherwise be invisible at the row level.
-    allowed_freqs = {"d", "w", "m", "5m", "15m", "30m", "60m"}
+    allowed_freqs = {"d", "w", "m", "1m", "5m", "15m", "30m", "60m"}
     kline_data: list[KLineData] = []
     for row in rows or []:
         try:
