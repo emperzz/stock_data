@@ -91,6 +91,21 @@ class TestFrequencyExpansion:
         # Validation passes; upstream may fail but route shouldn't 422.
         assert r.status_code != 422, f"freq={freq} rejected: {r.text}"
 
+    def test_eastmoney_rejects_1m(self, client):
+        """EastMoney boards don't support 1m (push2his freq_map is 7-freq,
+        no klt=1). BOARD_KLINE_FREQ_BY_SOURCE reflects this — manager's
+        source×freq check returns 400 with a clear message instead of
+        the fetcher's DataFetchError (which would surface as 500)."""
+        r = client.get(
+            "/api/v1/boards/BK0996/history",
+            params={"source": "eastmoney", "frequency": "1m"},
+        )
+        assert r.status_code == 400, r.text
+        body = r.json()
+        # Detail shape from manager: ValueError message
+        assert "frequency" in body.get("detail", {}).get("message", "").lower() or \
+               "1m" in body.get("detail", {}).get("message", "")
+
     def test_ths_rejects_unknown_frequency(self, client):
         """Post-2026-07-14: THS supports the full 7-frequency set
         (d / w / m / 5m / 15m / 30m / 60m), so weekly is now VALID.
@@ -271,3 +286,112 @@ class TestBoardCodeValidation:
             params={"source": "eastmoney", "frequency": "d", "days": 30},
         )
         assert r.status_code == 400, r.text
+
+
+class TestFrequencyAwareDaysDefault:
+    """Regression: ``days`` default must be frequency-aware so minute-level
+    frequencies don't trip the per-frequency span cap when caller doesn't
+    pass ``days`` explicitly.
+
+    Pre-fix: route hardcoded ``days=30``. Resolver clamps
+    ``start_d = min(start_hint, end_d - days)``, so
+    ``frequency=1m&start_date=today`` still computes span=30d > 1m
+    cap (2d) → 400 ``date span (30d) exceeds frequency='1m' max (2d)``.
+
+    Post-fix: ``days`` defaults are freq-aware
+    (``d/w/m=30, 1m=1, 5m/15m/30m/60m=2``); user-supplied ``days`` wins.
+    """
+
+    @pytest.mark.parametrize(
+        "freq,expected_default",
+        [
+            ("d", 30),
+            ("w", 30),
+            ("m", 30),
+            ("1m", 800),
+            ("5m", 30),
+            ("15m", 30),
+            ("30m", 30),
+            ("60m", 30),
+        ],
+    )
+    def test_default_days_forwards_to_manager(
+        self, client, freq, expected_default
+    ):
+        """When caller doesn't pass ``days``, manager receives the
+        freq-aware default (not the hardcoded 30)."""
+        with patch(
+            "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+            return_value=([], "ThsFetcher"),
+        ) as spy:
+            r = client.get(
+                "/api/v1/boards/881270/history",
+                params={
+                    "source": "ths",
+                    "frequency": freq,
+                    "board_type": "industry",
+                },
+            )
+        assert r.status_code == 200, r.text
+        assert spy.call_args.kwargs["days"] == expected_default, (
+            f"freq={freq} should default days={expected_default}, "
+            f"got {spy.call_args.kwargs['days']}"
+        )
+
+    def test_1m_with_start_date_today_does_not_400(self, client):
+        """End-to-end: ``frequency=1m&start_date=today`` (no days) must NOT
+        hit a span-cap 400. With the freq-aware default (1m=800), the
+        resolved window is ~800 days back, which now fits the 1m span
+        cap (raised from 2 to 800). The default 800 maps to upstream's
+        bar-count cap, so the fetcher returns ~800 1m bars.
+
+        Patch at the ths_fetcher._fetch_ths_single_kline level so the real
+        resolver + span check actually runs (only the network call is
+        short-circuited)."""
+        from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
+
+        # 800 fake 1m rows to simulate upstream's full bar-count cap
+        fake_rows = [
+            {
+                "date": f"2026-07-{20 + i // 240:02d} {(i % 240) // 10:02d}:{(i % 10) * 6:02d}",
+                "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
+                "volume": 100, "amount": 150.0, "frequency": "1m",
+            }
+            for i in range(800)
+        ]
+        with patch.object(
+            ths_mod, "_fetch_ths_single_kline", return_value=fake_rows
+        ):
+            r = client.get(
+                "/api/v1/boards/881270/history",
+                params={
+                    "source": "ths",
+                    "frequency": "1m",
+                    "start_date": "2026-07-22",
+                    "board_type": "industry",
+                },
+            )
+        assert r.status_code == 200, (
+            f"frequency=1m&start_date=today should be 200; got "
+            f"{r.status_code}: {r.text[:300]}"
+        )
+
+    def test_explicit_days_overrides_freq_default(self, client):
+        """User-supplied ``days`` flows through unchanged (freq default is
+        only the fallback)."""
+        with patch(
+            "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
+            return_value=([], "ThsFetcher"),
+        ) as spy:
+            r = client.get(
+                "/api/v1/boards/881270/history",
+                params={
+                    "source": "ths",
+                    "frequency": "1m",
+                    "days": 7,  # would fail 1m cap (2d) at fetcher span check,
+                    #   but route shouldn't reject on its own
+                    "board_type": "industry",
+                },
+            )
+        assert r.status_code == 200, r.text
+        assert spy.call_args.kwargs["days"] == 7

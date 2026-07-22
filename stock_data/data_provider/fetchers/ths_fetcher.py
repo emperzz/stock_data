@@ -196,7 +196,7 @@ _THS_HXKLINE_PERIOD_MAP: dict[str, str] = {
     "d": "day_1",
     "w": "week_1",
     "m": "month_1",
-    "1m": "min_1",   # upstream caps at ~30 bars regardless of begin_time
+    "1m": "min_1",   # upstream: begin_time=-N returns N bars (capped at 800)
     "5m": "min_5",
     "15m": "min_15",
     "30m": "min_30",
@@ -351,6 +351,7 @@ def _get_ths_hxkline_jwt() -> str:
 
 def _compute_time_window(
     *, start_d: _date | None, end_d: _date | None, days: int,
+    freq_key: str,
 ) -> tuple[int, int]:
     """Translate **resolved** ``(start_d, end_d)`` to upstream offsets.
 
@@ -358,6 +359,15 @@ def _compute_time_window(
     (verified against the stockpage network panel): ``-N`` means "N days
     before today"; ``0`` means "now". Upstream does NOT accept date
     strings, only these offsets.
+
+    For minute-level frequencies, ``begin_time`` is bar count, not
+    calendar days (upstream: begin_time=-N returns N bars, hard-capped
+    at 800 per request). The span check
+    (``(end_d - start_d).days ≤ max_span``) catches most over-cap cases,
+    but misses requests where ``end_d < today`` (e.g. ``days=800,
+    end_date=yesterday`` → span_days=800 OK, but begin_time = -801,
+    which upstream silently returns empty for). We detect that here and
+    raise so the route layer's @map_errors can turn it into a 400.
 
     Caller MUST have already run ``_resolve_ths_date_range`` (which applies
     the days-is-width + start_date-is-lower-bound contract). This helper is
@@ -376,7 +386,15 @@ def _compute_time_window(
         start_d = end_d - timedelta(days=days)
     end_offset = (today - end_d).days
     end_time = -end_offset if end_offset > 0 else 0
-    begin_time = -max((today - start_d).days, 1)
+    computed_begin_offset = max((today - start_d).days, 1)
+    if freq_key in _MINUTE_FREQS and computed_begin_offset > 800:
+        raise ValueError(
+            f"[ThsFetcher] get_board_history: minute-level window "
+            f"(begin_time=-{computed_begin_offset}) exceeds upstream's "
+            f"800-bar cap for frequency={freq_key!r}. Narrow "
+            f"start_date/end_date or reduce days."
+        )
+    begin_time = -computed_begin_offset
     return begin_time, end_time
 
 
@@ -412,7 +430,7 @@ def _fetch_ths_single_kline(
     time_period = _THS_HXKLINE_PERIOD_MAP[freq_key]
     headers = {**_THS_HXKLINE_HEADERS_BASE, "x-fuyao-auth": _get_ths_hxkline_jwt()}
     begin_time, end_time = _compute_time_window(
-        start_d=start_d, end_d=end_d, days=days,
+        start_d=start_d, end_d=end_d, days=days, freq_key=freq_key,
     )
     body = {
         "code_list": [{"codes": [board_code], "market": "48"}],
@@ -592,20 +610,28 @@ _f10_html_cache: dict[str, tuple[str, float]] = {}
 # in "m") is not silently over-applied.
 # Per-frequency max history span (days) for the single_kline endpoint.
 # Daily/weekly/monthly keep the 10-year ceiling (single request returns
-# up to ~10 years of bars). Minute-level frequencies are bounded tighter
-# because the upstream returns ~96 bars per day × N days. 1m has a hard
-# upstream cap at ~30 bars regardless of how far back you ask (verified
-# 2026-07-21) — cap at 2 days so the route layer's "max-span" gate fires
-# before upstream's silent truncation.
+# up to ~10 years of bars). Minute-level frequencies are bounded by
+# upstream's per-request bar-count cap.
+#
+# Upstream semantics for ALL minute-level: ``begin_time=-N`` returns
+# exactly N bars (capped at 800 total per request — verified 2026-07-22
+# against the stockpage network panel for min_1/min_5/min_15/min_30/
+# min_60; requests with begin_time < -800 return ``quote_data: []``).
+# So ``days`` for any minute frequency is effectively "bar count up to
+# 800", not calendar days. All minute-level caps below are 800 to match
+# upstream; the legacy per-frequency day caps (5m=30, 15m=60, 30m=90,
+# 60m=180) were under-tight (rejected valid requests, e.g. 5m days=50
+# was 400 even though upstream would happily return 50 bars) and are
+# unified here.
 _THS_HXKLINE_MAX_SPAN_DAYS: dict[str, int] = {
     "d": 365 * 10,
     "w": 365 * 10,
     "m": 365 * 10,
-    "1m": 2,
-    "5m": 30,
-    "15m": 60,
-    "30m": 90,
-    "60m": 180,
+    "1m": 800,
+    "5m": 800,
+    "15m": 800,
+    "30m": 800,
+    "60m": 800,
 }
 
 
@@ -991,6 +1017,22 @@ class ThsFetcher(BaseFetcher):
 
         # Date range filter (canonical format comparison, same logic as legacy).
         start_str = start_d.strftime("%Y-%m-%d")
+        # For minute-level, upstream maps begin_time=-N to N bars (not
+        # N days of history). The resolver's ``min(start_hint, end_d -
+        # days)`` therefore silently widens the fetch window past the
+        # user's start_date when days is large (1m default = 800).
+        # Override start_str with the user's start_date so the post-filter
+        # actually honors it. Daily/weekly/monthly are unaffected because
+        # their days == calendar days == bar count, so the resolver's
+        # min() clamp is semantically correct.
+        if freq_key in _MINUTE_FREQS and start_date:
+            try:
+                user_start_d = datetime.strptime(
+                    start_date.strip(), "%Y-%m-%d"
+                ).date()
+                start_str = user_start_d.strftime("%Y-%m-%d")
+            except ValueError:
+                pass  # invalid start_date already raised in resolver
         end_str = (
             f"{end_d.strftime('%Y-%m-%d')} 23:59"
             if freq_key in _MINUTE_FREQS

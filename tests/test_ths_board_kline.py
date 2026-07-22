@@ -147,8 +147,10 @@ class TestGetBoardHistory:
             f.get_board_history("881270", board_type="industry", frequency="2h")
 
     def test_5min_span_cap_raises(self):
-        """5m bars are capped at 30 days (per _THS_BOARD_MAX_SPAN_DAYS);
-        longer spans raise ValueError → 400."""
+        """All minute-level frequencies (1m/5m/15m/30m/60m) cap at 800
+        days, matching upstream's per-request bar-count cap (verified
+        2026-07-22 against the stockpage network panel: begin_time=-N
+        returns N bars for N≤800). days > 800 raises ValueError → 400."""
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
@@ -157,7 +159,7 @@ class TestGetBoardHistory:
                 board_code="881270",
                 board_type="industry",
                 frequency="5m",
-                days=90,
+                days=900,  # > 800 ceiling
             )
 
     def test_missing_board_type_auto_detects_industry(self):
@@ -512,10 +514,12 @@ class TestGetBoardHistoryEdgeCases:
     def test_span_boundary_for_5m_does_not_falsely_raise(self):
         """Regression guard for the off-by-one fix.
 
-        `days=30` with `freq=5m` should NOT raise the 30d cap. With the
+        `days=800` with `freq=5m` should NOT raise the 800d cap. With the
         legacy `span_days = (end - start).days + 1`, this case would
-        compute span=31 and falsely fire the cap, blocking the very
-        window the route advertises as the max for 5m."""
+        compute span=801 and falsely fire the cap, blocking the very
+        window the route advertises as the max for 5m (since 2026-07-22
+        raised all minute-level caps to 800 to match upstream's per-
+        request bar-count cap)."""
         from unittest.mock import patch
 
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
@@ -525,12 +529,12 @@ class TestGetBoardHistoryEdgeCases:
             "stock_data.data_provider.fetchers.ths_fetcher._fetch_ths_single_kline",
             return_value=[],
         ):
-            # Should NOT raise — exactly at the 5m 30d boundary.
+            # Should NOT raise — exactly at the 5m 800d boundary.
             rows = f.get_board_history(
                 board_code="881270",
                 board_type="industry",
                 frequency="5m",
-                days=30,
+                days=800,
             )
         assert rows == []
 
@@ -1024,12 +1028,15 @@ class TestFetchSingleKline:
 
     def test_compute_time_window_end_date_only(self):
         """end_d-only: window is `days` ending on end_d (mirror
-        _resolve_ths_date_range behavior where start_d=end_d-days)."""
+        _resolve_ths_date_range behavior where start_d=end_d-days).
+        freq_key='d' so the 800-bar cap check doesn't fire."""
         from datetime import date, timedelta
         from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
 
         end_d = date.today() - timedelta(days=100)
-        begin, end = _compute_time_window(days=180, start_d=None, end_d=end_d)
+        begin, end = _compute_time_window(
+            days=180, start_d=None, end_d=end_d, freq_key="d",
+        )
         assert end == -100
         assert begin == -280  # 180 days ending 100 days back
 
@@ -1038,11 +1045,14 @@ class TestFetchSingleKline:
         from datetime import date
         from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
 
-        begin, end = _compute_time_window(days=30, start_d=None, end_d=None)
+        begin, end = _compute_time_window(
+            days=30, start_d=None, end_d=None, freq_key="d",
+        )
         assert end == 0
         begin, end = _compute_time_window(
             days=30, start_d=None,
             end_d=date(2099, 1, 1),  # far future
+            freq_key="d",
         )
         assert end == 0
 
@@ -1057,6 +1067,44 @@ class TestFetchSingleKline:
 
         end_d = date.today()
         start_d = end_d - timedelta(days=30)
-        begin, end = _compute_time_window(days=30, start_d=start_d, end_d=end_d)
+        begin, end = _compute_time_window(
+            days=30, start_d=start_d, end_d=end_d, freq_key="d",
+        )
         assert end == 0
         assert begin == -30  # NOT -1, because start_d is already expanded
+
+    def test_compute_time_window_minute_800_bar_cap_raises(self):
+        """Regression: minute-level ``begin_time`` must not exceed -800
+        (upstream returns empty ``quote_data: []`` otherwise). Without
+        this guard, ``end_date=yesterday + days=800`` computes
+        begin_time=-801 and silently returns 200 + empty list.
+
+        Span check (800 days) passes because it uses
+        ``(end_d - start_d).days`` which is 800 here, but the actual
+        upstream offset uses ``(today - start_d).days`` which is 801.
+        """
+        from datetime import date, timedelta
+        from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
+
+        end_d = date.today() - timedelta(days=1)  # yesterday
+        start_d = end_d - timedelta(days=800)  # 800d window ending yesterday
+        with pytest.raises(ValueError, match="800-bar cap"):
+            _compute_time_window(
+                days=800, start_d=start_d, end_d=end_d, freq_key="1m",
+            )
+
+    def test_compute_time_window_daily_800_bar_cap_not_fired(self):
+        """Daily/weekly/monthly have a 3650-day cap, not 800. The
+        800-bar cap guard must NOT fire for them even when (today -
+        start_d).days > 800."""
+        from datetime import date, timedelta
+        from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
+
+        end_d = date.today()
+        start_d = end_d - timedelta(days=2000)  # well over 800 days back
+        # Should NOT raise — daily uses the 3650 cap, not 800.
+        begin, end = _compute_time_window(
+            days=2000, start_d=start_d, end_d=end_d, freq_key="d",
+        )
+        assert end == 0
+        assert begin == -2000

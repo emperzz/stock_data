@@ -19,6 +19,7 @@ from typing import Literal
 from fastapi import HTTPException, Path, Query
 
 from ...data_provider.base import DataFetchError
+from ...data_provider.constants import BOARD_KLINE_DEFAULT_DAYS_BY_FREQ
 from ...data_provider.core.types import safe_float, safe_int
 from ...data_provider.persistence import board as stock_board_cache
 from ...data_provider.persistence import trade_calendar
@@ -917,19 +918,21 @@ def get_board_history(
     ),
     start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
-    days: int = Query(
-        30,
+    days: int | None = Query(
+        None,
         ge=1,
         le=800,
         description=(
-            "Window width in days (default behavior). When `start_date` "
-            "is also given, it ONLY extends the window further back — "
-            "passing `start_date=today` is a no-op (you still get the "
-            "default `days`-wide window ending today). Pass "
-            "`start_date=2020-01-01` if you want a longer history. The "
-            "800 ceiling mirrors EastMoneyFetcher's hard `lmt` cap. "
-            "Minute-level frequencies have a tighter per-frequency cap on "
-            "the fetcher side (e.g. 5m caps at 30 days; 1m at 2)."
+            "Window width in days. Defaults to a frequency-aware value "
+            "(d/w/m/30, 1m=800, 5m/15m/30m/60m=30) sized to fit THS's "
+            "per-frequency span caps; pass an explicit value to override. "
+            "When `start_date` is also given, it ONLY extends the window "
+            "further back — passing `start_date=today` is a no-op (you "
+            "still get the default `days`-wide window ending today). "
+            "Pass `start_date=2020-01-01` if you want a longer history. "
+            "The 800 ceiling mirrors EastMoneyFetcher's hard `lmt` cap. "
+            "All minute-level frequencies cap at 800 days to match "
+            "upstream's 800-bar per-request ceiling."
         ),
     ),
     board_type: Literal["concept", "industry"] | None = Query(
@@ -949,6 +952,12 @@ def get_board_history(
     # Fail fast at the route layer with a clear 400 + pagination
     # guidance — see _validate_board_history_date_range.
     _validate_board_history_date_range(start_date, end_date)
+    # Frequency-aware default for `days`: minute-level frequencies have
+    # a uniform 800-day cap (matching upstream's 800-bar per-request
+    # ceiling); daily/weekly/monthly keep 10y. See
+    # BOARD_KLINE_DEFAULT_DAYS_BY_FREQ for the per-frequency table.
+    if days is None:
+        days = BOARD_KLINE_DEFAULT_DAYS_BY_FREQ.get(frequency, 30)
     manager = get_manager()
     rows, origin = manager.get_board_history(
         board_code,
