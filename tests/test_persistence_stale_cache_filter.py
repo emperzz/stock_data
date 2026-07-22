@@ -33,16 +33,23 @@ def _clean_db(tmp_path, monkeypatch):
     yield
 
 
-def _insert_membership_row(
-    board_code: str, source: str, stock_code: str, stock_name: str
-) -> None:
+def _insert_membership_row(board_code: str, source: str, stock_code: str, stock_name: str) -> None:
     """Direct insert bypassing validators — simulates a stale cached row."""
     conn = board_mod.get_connection()
     conn.execute(
         "INSERT INTO stock_board_membership "
         "(board_code, source, stock_code, stock_name, board_name, board_type, subtype, refreshed_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (board_code, source, stock_code, stock_name, board_code, "concept", "concept", "2026-07-04 12:00:00"),
+        (
+            board_code,
+            source,
+            stock_code,
+            stock_name,
+            board_code,
+            "concept",
+            "concept",
+            "2026-07-04 12:00:00",
+        ),
     )
     conn.commit()
 
@@ -58,9 +65,7 @@ def test_read_filters_out_chinese_name_stale_rows():
 
     rows = board_mod._read_board_stocks_from_db("BK0001", "eastmoney")
     codes = [r["stock_code"] for r in rows]
-    assert codes == ["600519"], (
-        f"stale rows should be filtered; got {codes}"
-    )
+    assert codes == ["600519"], f"stale rows should be filtered; got {codes}"
 
 
 def test_read_keeps_valid_six_digit_codes():
@@ -84,12 +89,12 @@ def test_read_filters_out_various_corrupt_shapes():
       - Whitespace / punctuation
     """
     corrupt = [
-        ("贵州茅台", "x"),       # Chinese name from f14
-        ("12345678901.0", "y"), # numeric leak from f16 (pre-fix)
-        ("12345678", "z"),      # 8 digits (too long)
-        ("12345", "a"),         # 5 digits (too short)
-        ("", "b"),              # empty
-        ("600-519", "c"),       # punctuation
+        ("贵州茅台", "x"),  # Chinese name from f14
+        ("12345678901.0", "y"),  # numeric leak from f16 (pre-fix)
+        ("12345678", "z"),  # 8 digits (too long)
+        ("12345", "a"),  # 5 digits (too short)
+        ("", "b"),  # empty
+        ("600-519", "c"),  # punctuation
     ]
     for code, name in corrupt:
         _insert_membership_row("BK0001", "eastmoney", code, name)

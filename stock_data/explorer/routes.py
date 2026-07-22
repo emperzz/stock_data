@@ -35,6 +35,7 @@ def _read_server_host() -> str:
 def _json_safe(value):
     """Best-effort JSON-safe coercion for fetcher return values."""
     import pandas as pd
+
     if isinstance(value, pd.DataFrame):
         return value.to_dict(orient="records")
     if hasattr(value, "to_dict"):
@@ -153,6 +154,7 @@ class FetcherTestRequest(BaseModel):
     Pydantic v2 + FastAPI 0.136 can't resolve ForwardRefs for closure-
     scoped models. See test_fetcher_test_endpoint.py for the contract.
     """
+
     fetcher: str = Field(..., description="Fetcher name (e.g. 'baostock')")
     method: str = Field(..., description="Method name on the fetcher")
     kwargs: dict = Field(default_factory=dict, description="kwargs unpacked into the method call")

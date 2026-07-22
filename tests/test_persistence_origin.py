@@ -14,10 +14,12 @@ This file covers:
 
 Reference: ``docs/superpowers/plans/2026-06-12-source-tracking.md``
 """
-from stock_data.data_provider.persistence import board, trade_calendar
+
 from unittest.mock import patch
 
 import pytest
+
+from stock_data.data_provider.persistence import board, trade_calendar
 
 
 def test_get_cached_calendar_returns_tuple():
@@ -52,9 +54,12 @@ def test_get_pool_returns_tuple(monkeypatch):
 
 def test_get_board_list_returns_tuple(monkeypatch):
     """board.get_board_list 应该返回 (boards, origin)."""
+
     # Mock manager
     class _MockManager:
-        def get_all_boards(self, source="eastmoney", board_type="concept", include_quote=False, **_):
+        def get_all_boards(
+            self, source="eastmoney", board_type="concept", include_quote=False, **_
+        ):
             if board_type == "concept":
                 return ([{"code": "BK0001", "name": "测试板块"}], "mock_fetcher")
             return ([], "")
@@ -67,15 +72,14 @@ def test_get_board_list_returns_tuple(monkeypatch):
     )
     # After unification: get_board_list no longer takes 'source' (always 'ths'
     # internally). Origin is hardcoded to "ths" by the new code path.
-    boards, origin = board.get_board_list(
-        "concept", refresh=True, manager=_MockManager()
-    )
+    boards, origin = board.get_board_list("concept", refresh=True, manager=_MockManager())
     assert isinstance(boards, list)
     assert origin == "ths"
 
 
 def test_get_board_stocks_returns_tuple(monkeypatch):
     """board.get_board_stocks 应该返回 (stocks, origin)."""
+
     # Mock manager — unified entry point only.
     # Phase 4 (2026-07-02): real manager now also accepts ``board_type=`` to
     # steer the fetcher; ``**_`` keeps the mock interface-compatible for any
@@ -105,9 +109,7 @@ def test_get_board_stocks_returns_tuple(monkeypatch):
     # Post-2026-07-13: 6-tuple — added (quote_truncated, quote_total_in_board)
     # at the tail (4-tuple callers extended with placeholder _ destinations).
     stocks, origin, effective_source, reason, _quote_truncated, _quote_total = (
-        board.get_board_stocks(
-            "BK0001", refresh=True, manager=_MockManager()
-        )
+        board.get_board_stocks("BK0001", refresh=True, manager=_MockManager())
     )
     assert isinstance(stocks, list)
     # Default (include_quote=False) → zzshare first, so origin="zzshare"
@@ -133,6 +135,7 @@ def test_get_board_stocks_f10_leg_sets_ths_effective_source(monkeypatch):
                 [{"stock_code": "600519", "stock_name": "贵州茅台"}],
                 "ths",
             )
+
         # The other legs should never run for this test:
         def get_board_stocks(self, *a, **kw):
             raise AssertionError("zzshare/THS AJAX legs should not fire when F10 succeeds")
@@ -164,9 +167,7 @@ def test_get_stock_list_returns_tuple(monkeypatch):
         "_refresh_tracker",
         type("T", (), {"is_first_call": lambda *a: True})(),
     )
-    stocks, origin = stock_list.get_stock_list(
-        "csi", refresh=True, manager=_MockManager()
-    )
+    stocks, origin = stock_list.get_stock_list("csi", refresh=True, manager=_MockManager())
     assert isinstance(stocks, list)
     assert origin == "mock_fetcher"
 
@@ -191,6 +192,7 @@ def test_board_list_subtype_round_trip(tmp_path, monkeypatch):
 
     # Force re-init against the new path
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Write boards with mixed subtypes
@@ -229,6 +231,7 @@ def test_get_board_list_always_fetches_full_then_filters(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Mock manager — returns full set with subtype tags
@@ -252,9 +255,7 @@ def test_get_board_list_always_fetches_full_then_filters(tmp_path, monkeypatch):
 
     # With subtype filter: fetcher called full, result narrowed before return
     # After unification: no 'source' arg; origin is "ths" (post-merge).
-    boards, origin = board_mod.get_board_list(
-        "concept", subtype="热门概念", manager=_MockManager()
-    )
+    boards, origin = board_mod.get_board_list("concept", subtype="热门概念", manager=_MockManager())
     assert origin == "ths"
     assert len(boards) == 1
     assert boards[0]["code"] == "BK0001"
@@ -275,6 +276,7 @@ def test_get_board_list_cache_hit_with_subtype_filter(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Pre-populate the cache directly (simulating a previous fresh fetch).
@@ -304,9 +306,7 @@ def test_get_board_list_cache_hit_with_subtype_filter(tmp_path, monkeypatch):
     )
 
     # After unification: no 'source' kwarg; cache is keyed on 'ths'.
-    boards, origin = board_mod.get_board_list(
-        "concept", subtype="热门概念", manager=_SpyManager()
-    )
+    boards, origin = board_mod.get_board_list("concept", subtype="热门概念", manager=_SpyManager())
     assert origin == "persistence", "second call on same day must hit cache"
     assert fetcher_called["count"] == 0, "fetcher must NOT be called on cache hit"
     assert len(boards) == 1
@@ -323,11 +323,13 @@ def test_get_board_list_refresh_bypasses_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Pre-populate cache (post-unification, source='ths' is the cache key).
     board_mod.update_cached_boards(
-        "concept", "ths",
+        "concept",
+        "ths",
         [{"code": "OLD01", "name": "old", "subtype": "同花顺概念"}],
     )
 
@@ -339,9 +341,7 @@ def test_get_board_list_refresh_bypasses_cache(tmp_path, monkeypatch):
             )
 
     # After unification: no 'source' kwarg; origin is "ths" (post-merge).
-    boards, origin = board_mod.get_board_list(
-        "concept", refresh=True, manager=_MockManager()
-    )
+    boards, origin = board_mod.get_board_list("concept", refresh=True, manager=_MockManager())
     assert origin == "ths"
     assert boards[0]["code"] == "NEW01"
 
@@ -350,7 +350,6 @@ def test_eastmoney_boards_have_subtype_tagged():
     """Regression: EastMoneyFetcher tags boards with subtype=board_type so the
     persistence layer has a uniform shape across sources.
     """
-    from unittest.mock import patch
 
     from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 
@@ -394,6 +393,7 @@ def test_get_board_list_all_types_persists_each_type_separately(tmp_path, monkey
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Fetcher returns per-type boards (board_type=None branch).
@@ -422,9 +422,7 @@ def test_get_board_list_all_types_persists_each_type_separately(tmp_path, monkey
 
     # All-types query (board_type=None). After unification, no 'source' arg;
     # origin is "ths" (post-merge in the all-types helper).
-    boards, origin = board_mod.get_board_list(
-        None, refresh=True, manager=_MockManager()
-    )
+    boards, origin = board_mod.get_board_list(None, refresh=True, manager=_MockManager())
     assert origin == "ths"
     assert len(boards) == 3
     by_code = {b["code"]: b for b in boards}
@@ -457,15 +455,14 @@ def test_get_board_list_all_types_summary_origin_persistence(tmp_path, monkeypat
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Pre-populate every supported type. Post-unification, the cache key is
     # always source='ths' (concept + industry only; the old "special" type
     # was unified into concept on 2026-07-07).
     for bt, code in [("concept", "BK_C"), ("industry", "BK_I")]:
-        board_mod.update_cached_boards(
-            bt, "ths", [{"code": code, "name": bt, "subtype": bt}]
-        )
+        board_mod.update_cached_boards(bt, "ths", [{"code": code, "name": bt, "subtype": bt}])
 
     # Fetcher that must NOT be called (cache hit on every type)
     fetcher_called = {"count": 0}
@@ -483,9 +480,7 @@ def test_get_board_list_all_types_summary_origin_persistence(tmp_path, monkeypat
     )
 
     # After unification: no 'source' kwarg; cache is keyed on 'ths'.
-    boards, origin = board_mod.get_board_list(
-        None, manager=_SpyManager()
-    )
+    boards, origin = board_mod.get_board_list(None, manager=_SpyManager())
     assert origin == "persistence"
     assert fetcher_called["count"] == 0
     # 2 boards: one concept + one industry (ths dropped special on 2026-07-07)
@@ -502,6 +497,7 @@ def test_get_board_list_all_types_mixed_origin(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Pre-populate only concept. Post-unification, cache key is 'ths'.
@@ -530,9 +526,7 @@ def test_get_board_list_all_types_mixed_origin(tmp_path, monkeypatch):
     )
 
     # After unification: no 'source' kwarg.
-    boards, origin = board_mod.get_board_list(
-        None, manager=_MockManager()
-    )
+    boards, origin = board_mod.get_board_list(None, manager=_MockManager())
     # concept hits cache (persistence), industry hits fetcher (MockFetcher).
     # Summary must honestly reflect the mix. The label is "mixed" — aligned
     # with get_stock_memberships.
@@ -559,6 +553,7 @@ def test_get_board_list_all_types_rejects_subtype(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     class _MockManager:
@@ -566,9 +561,7 @@ def test_get_board_list_all_types_rejects_subtype(tmp_path, monkeypatch):
             return ([], "ShouldNotBeCalled")
 
     with pytest.raises(ValueError, match="subtype"):
-        board_mod.get_board_list(
-            None, subtype="同花顺概念", manager=_MockManager()
-        )
+        board_mod.get_board_list(None, subtype="同花顺概念", manager=_MockManager())
 
 
 def test_get_board_list_all_types_skips_unsupported_types():
@@ -591,9 +584,7 @@ def test_get_board_list_all_types_skips_unsupported_types():
     board_mod._refresh_tracker = type("T", (), {"is_first_call": lambda self, *a: True})()
 
     # After unification: no 'source' kwarg.
-    boards, origin = board_mod.get_board_list(
-        None, refresh=True, manager=_MockManager()
-    )
+    boards, origin = board_mod.get_board_list(None, refresh=True, manager=_MockManager())
     # ths' subtype table: concept / industry only (no index, no special
     # — plate=17 unified under concept on 2026-07-07)
     assert set(called_types) == {"concept", "industry"}
@@ -619,6 +610,7 @@ def test_get_board_list_all_types_include_quote_bypasses_cache(tmp_path, monkeyp
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Pre-populate every supported type (so a cache-hit path would otherwise be
@@ -641,9 +633,14 @@ def test_get_board_list_all_types_include_quote_bypasses_cache(tmp_path, monkeyp
                         "code": f"NEW_{board_type}",
                         "name": "fresh",
                         "type": board_type,
-                        "subtype": "同花顺" + ("概念" if bt_short(board_type) == "concept"
-                                              else "行业" if bt_short(board_type) == "industry"
-                                              else "题材"),
+                        "subtype": "同花顺"
+                        + (
+                            "概念"
+                            if bt_short(board_type) == "concept"
+                            else "行业"
+                            if bt_short(board_type) == "industry"
+                            else "题材"
+                        ),
                         "price": 100.0,
                         "change_pct": 1.5,
                     }
@@ -656,9 +653,7 @@ def test_get_board_list_all_types_include_quote_bypasses_cache(tmp_path, monkeyp
     board_mod._refresh_tracker = type("T", (), {"is_first_call": lambda self, *a: False})()
 
     # After unification: no 'source' kwarg; origin is "ths" (post-merge).
-    boards, origin = board_mod.get_board_list(
-        None, include_quote=True, manager=_SpyManager()
-    )
+    boards, origin = board_mod.get_board_list(None, include_quote=True, manager=_SpyManager())
     # Fetcher was called for every supported type, not bypassed. "special" no
     # longer in the supported set after the 2026-07-07 unification.
     assert set(fetcher_calls) == {"concept", "industry"}
@@ -692,11 +687,13 @@ def test_get_board_list_cache_hit_rows_carry_type_field(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Write boards to the cache. Post-unification, cache key is always 'ths'.
     board_mod.update_cached_boards(
-        "concept", "ths",
+        "concept",
+        "ths",
         [{"code": "BK_C", "name": "c", "subtype": "同花顺概念"}],
     )
 
@@ -714,9 +711,7 @@ def test_get_board_list_cache_hit_rows_carry_type_field(tmp_path, monkeypatch):
 
     board_mod._refresh_tracker = type("T", (), {"is_first_call": lambda self, *a: False})()
     # After unification: no 'source' kwarg; cache is keyed on 'ths'.
-    boards, origin = board_mod.get_board_list(
-        "concept", manager=_SpyManager()
-    )
+    boards, origin = board_mod.get_board_list("concept", manager=_SpyManager())
     assert origin == "persistence"
     assert boards[0]["type"] == "concept"
 
@@ -737,6 +732,7 @@ def test_init_schema_migrates_zzshare_special_rows_to_concept(tmp_path, monkeypa
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
+
     board_mod._schema_initialized_paths.clear()
 
     # Seed the DB with rows that match the OLD shape (board_type='special',

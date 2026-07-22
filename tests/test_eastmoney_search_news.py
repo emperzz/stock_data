@@ -14,8 +14,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from stock_data.data_provider.base import DataFetchError
-from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 from stock_data.data_provider.fetchers.eastmoney._endpoints import URLS
+from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 
 FIXTURE_PATH = "tests/fixtures/news_search_jsonp.txt"
 
@@ -137,8 +137,7 @@ class TestSearchNewsHappyPath(_SearchNewsTestBase):
         referer = mock_get.call_args.kwargs["headers"]["Referer"]
         # "白酒概念" in UTF-8 is E7 99 BD E9 85 92 E6 A6 82 E5 BF B5
         assert referer == (
-            "https://so.eastmoney.com/news/s?"
-            "keyword=%E7%99%BD%E9%85%92%E6%A6%82%E5%BF%B5"
+            "https://so.eastmoney.com/news/s?keyword=%E7%99%BD%E9%85%92%E6%A6%82%E5%BF%B5"
         )
         # And the raw non-ASCII bytes must NOT appear in the header.
         assert "白酒" not in referer

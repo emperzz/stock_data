@@ -1,4 +1,5 @@
 """Unit tests for CninfoFetcher."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -74,8 +75,12 @@ class TestAnnouncements:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "announcements": [
-                {"announcementTitle": "年度报告", "announcementTypeName": "年报",
-                 "announcementTime": 1716768000000, "announcementId": "123456"}
+                {
+                    "announcementTitle": "年度报告",
+                    "announcementTypeName": "年报",
+                    "announcementTime": 1716768000000,
+                    "announcementId": "123456",
+                }
             ]
         }
         mock_post.return_value = mock_response
@@ -89,6 +94,7 @@ class TestAnnouncements:
 class TestHistoricalNotSupported:
     def test_fetch_raw_data_raises(self):
         from stock_data.data_provider.base import DataFetchError
+
         f = CninfoFetcher()
         with pytest.raises(DataFetchError):
             f._fetch_raw_data("600519", "", "")
@@ -97,6 +103,7 @@ class TestHistoricalNotSupported:
         import pandas as pd
 
         from stock_data.data_provider.base import DataFetchError
+
         f = CninfoFetcher()
         with pytest.raises(DataFetchError):
             f._normalize_data(pd.DataFrame(), "600519")

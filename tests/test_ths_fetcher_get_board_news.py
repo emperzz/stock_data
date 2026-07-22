@@ -72,8 +72,9 @@ def test_get_board_news_missing_publishtime_yields_blank_dates():
 
 
 def test_get_board_news_limit_truncates():
-    items = [dict(_ITEM, id=str(i), jumpUrl=f"https://news.10jqka.com.cn/x{i}.shtml")
-             for i in range(10)]
+    items = [
+        dict(_ITEM, id=str(i), jumpUrl=f"https://news.10jqka.com.cn/x{i}.shtml") for i in range(10)
+    ]
     with patch.object(tff, "json_get", return_value=_payload(items)):
         news = ThsFetcher().get_board_news("885756", limit=3)
     assert len(news) == 3

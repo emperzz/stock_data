@@ -204,9 +204,7 @@ def _parse_indicators_param(indicators: str | None) -> list[str]:
     return out
 
 
-def _expand_indicator_lookback(
-    requested_indicators: list[str], days: int
-) -> int:
+def _expand_indicator_lookback(requested_indicators: list[str], days: int) -> int:
     """Return the bar count needed to warm the requested indicators.
 
     If no indicators are requested, returns ``days`` unchanged. Otherwise

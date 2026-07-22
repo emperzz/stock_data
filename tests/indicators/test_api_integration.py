@@ -6,7 +6,6 @@ system is irrelevant for these tests — we only care that the API layer
 plumbs `?indicators=` through to the indicator orchestrator correctly.
 """
 
-
 import pandas as pd
 import pytest
 
@@ -68,8 +67,20 @@ def test_catalog_endpoint_lists_all_indicators(client):
     assert len(body["indicators"]) == 14
     keys = {entry["key"] for entry in body["indicators"]}
     assert keys == {
-        "ma", "macd", "boll", "kdj", "rsi", "wr", "bias",
-        "cci", "atr", "obv", "roc", "dmi", "sar", "kc",
+        "ma",
+        "macd",
+        "boll",
+        "kdj",
+        "rsi",
+        "wr",
+        "bias",
+        "cci",
+        "atr",
+        "obv",
+        "roc",
+        "dmi",
+        "sar",
+        "kc",
     }
     # Each entry has the expected fields
     for entry in body["indicators"]:

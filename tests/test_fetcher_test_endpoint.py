@@ -1,4 +1,5 @@
 """Tests for POST /control/fetcher-test endpoint."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,8 +24,14 @@ def test_happy_path_returns_ok_true(client):
     fake.is_available.return_value = True
     fake.get_realtime_quote.return_value = {"price": 100.0}
     with patch.object(app.state.manager, "get_fetcher", return_value=fake):
-        r = _post(client, {"fetcher": "baostock", "method": "get_realtime_quote",
-                           "kwargs": {"stock_code": "600519"}})
+        r = _post(
+            client,
+            {
+                "fetcher": "baostock",
+                "method": "get_realtime_quote",
+                "kwargs": {"stock_code": "600519"},
+            },
+        )
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
@@ -38,8 +45,14 @@ def test_happy_path_returns_ok_true(client):
 
 def test_unknown_fetcher_returns_ok_false_http_200(client):
     with patch.object(app.state.manager, "get_fetcher", return_value=None):
-        r = _post(client, {"fetcher": "ghost", "method": "get_realtime_quote",
-                           "kwargs": {"stock_code": "600519"}})
+        r = _post(
+            client,
+            {
+                "fetcher": "ghost",
+                "method": "get_realtime_quote",
+                "kwargs": {"stock_code": "600519"},
+            },
+        )
     assert r.status_code == 200  # always 200
     body = r.json()
     assert body["ok"] is False
@@ -50,8 +63,7 @@ def test_unknown_fetcher_returns_ok_false_http_200(client):
 def test_unknown_method_returns_ok_false_http_200(client):
     fake = MagicMock()
     with patch.object(app.state.manager, "get_fetcher", return_value=fake):
-        r = _post(client, {"fetcher": "baostock", "method": "__init__",
-                           "kwargs": {}})
+        r = _post(client, {"fetcher": "baostock", "method": "__init__", "kwargs": {}})
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is False
@@ -62,8 +74,14 @@ def test_fetcher_unavailable_returns_ok_false(client):
     fake = MagicMock()
     fake.is_available.return_value = False
     with patch.object(app.state.manager, "get_fetcher", return_value=fake):
-        r = _post(client, {"fetcher": "baostock", "method": "get_realtime_quote",
-                           "kwargs": {"stock_code": "600519"}})
+        r = _post(
+            client,
+            {
+                "fetcher": "baostock",
+                "method": "get_realtime_quote",
+                "kwargs": {"stock_code": "600519"},
+            },
+        )
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is False
@@ -88,10 +106,17 @@ def test_fetcher_exception_returns_class_name_with_traceback(client):
     fake = MagicMock()
     fake.is_available.return_value = True
     from stock_data.data_provider.base import DataFetchError
+
     fake.get_realtime_quote.side_effect = DataFetchError("BaoStock login failed")
     with patch.object(app.state.manager, "get_fetcher", return_value=fake):
-        r = _post(client, {"fetcher": "baostock", "method": "get_realtime_quote",
-                           "kwargs": {"stock_code": "600519"}})
+        r = _post(
+            client,
+            {
+                "fetcher": "baostock",
+                "method": "get_realtime_quote",
+                "kwargs": {"stock_code": "600519"},
+            },
+        )
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is False
@@ -146,12 +171,8 @@ class TestCoerceKwargsToSignature:
         def fn(include_quote: bool = False) -> bool:
             return include_quote
 
-        assert _coerce_kwargs_to_signature(fn, {"include_quote": "true"}) == {
-            "include_quote": True
-        }
-        assert _coerce_kwargs_to_signature(fn, {"include_quote": "1"}) == {
-            "include_quote": True
-        }
+        assert _coerce_kwargs_to_signature(fn, {"include_quote": "true"}) == {"include_quote": True}
+        assert _coerce_kwargs_to_signature(fn, {"include_quote": "1"}) == {"include_quote": True}
         assert _coerce_kwargs_to_signature(fn, {"include_quote": "false"}) == {
             "include_quote": False
         }
@@ -225,9 +246,7 @@ class TestCoerceKwargsToSignature:
         def fn(days: int = 30) -> int:
             return days
 
-        assert _coerce_kwargs_to_signature(fn, {"days": "not-a-number"}) == {
-            "days": "not-a-number"
-        }
+        assert _coerce_kwargs_to_signature(fn, {"days": "not-a-number"}) == {"days": "not-a-number"}
 
     def test_pep563_string_annotations_are_resolved(self):
         """Modules using ``from __future__ import annotations`` make param
@@ -342,9 +361,7 @@ class TestFetcherTestCoercesKwargs:
                 stock_code: str,
                 include_quote: bool = False,
             ) -> dict:
-                self._calls.append(
-                    {"stock_code": stock_code, "include_quote": include_quote}
-                )
+                self._calls.append({"stock_code": stock_code, "include_quote": include_quote})
                 return {"price": 100.0}
 
         fake = _FakeRealtimeFetcher()

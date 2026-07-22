@@ -113,9 +113,7 @@ class SDKFetcherMixin:
             token_required = getattr(self, "_TOKEN_REQUIRED", True)
             if env_var and not cls._cls_token and token_required:
                 cls._init_error = f"{env_var} not set"
-                logger.warning(
-                    f"[{cls.__name__}] {cls._init_error}"
-                )
+                logger.warning(f"[{cls.__name__}] {cls._init_error}")
                 return
             try:
                 cls._api = self._init_sdk(cls._cls_token)
@@ -153,10 +151,7 @@ class SDKFetcherMixin:
         env_var = getattr(self, "_TOKEN_ENV_VAR", None)
         token_required = getattr(self, "_TOKEN_REQUIRED", True)
         if env_var and not self.__class__._cls_token and token_required:
-            return (
-                f"{env_var} environment variable not set "
-                f"(required by {self.name})"
-            )
+            return f"{env_var} environment variable not set (required by {self.name})"
         sdk_name = getattr(self, "_SDK_NAME", self.name)
         return (
             f"{sdk_name} SDK could not initialize for {self.name} "
@@ -175,10 +170,10 @@ class DataCapability(Flag):
     """
 
     # --- rev 3 unified flags ---
-    STOCK_KLINE = auto()              # 股票 d/w/m + 1m/5m/15m/30m/60m
-    INDEX_KLINE = auto()              # 指数 d/w/m + 1m/5m/15m/30m/60m
-    STOCK_REALTIME_QUOTE = auto()     # 股票实时快照
-    INDEX_REALTIME_QUOTE = auto()     # 指数实时快照
+    STOCK_KLINE = auto()  # 股票 d/w/m + 1m/5m/15m/30m/60m
+    INDEX_KLINE = auto()  # 指数 d/w/m + 1m/5m/15m/30m/60m
+    STOCK_REALTIME_QUOTE = auto()  # 股票实时快照
+    INDEX_REALTIME_QUOTE = auto()  # 指数实时快照
     # --- unchanged ---
     STOCK_LIST = auto()  # 股票列表 (get_all_stocks)
     TRADE_CALENDAR = auto()  # 交易日历
@@ -229,14 +224,14 @@ CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.INDEX_REALTIME_QUOTE: "get_index_realtime_quote",
     DataCapability.STOCK_LIST: "get_all_stocks",
     DataCapability.TRADE_CALENDAR: "get_trade_calendar",
-    DataCapability.STOCK_BOARD: "get_all_boards",            # default; .stocks variant overrides
+    DataCapability.STOCK_BOARD: "get_all_boards",  # default; .stocks variant overrides
     DataCapability.STOCK_ZT_POOL: "get_zt_pool",
-    DataCapability.DRAGON_TIGER: "get_dragon_tiger",         # default; /daily variant overrides
+    DataCapability.DRAGON_TIGER: "get_dragon_tiger",  # default; /daily variant overrides
     DataCapability.MARGIN_TRADING: "get_margin_trading",
     DataCapability.BLOCK_TRADE: "get_block_trade",
     DataCapability.HOLDER_NUM: "get_holder_num_change",
     DataCapability.DIVIDEND: "get_dividend",
-    DataCapability.FUND_FLOW: "get_fund_flow_minute",        # default; /daily variant overrides
+    DataCapability.FUND_FLOW: "get_fund_flow_minute",  # default; /daily variant overrides
     DataCapability.HOT_TOPICS: "get_hot_topics",
     DataCapability.NORTH_FLOW: "get_north_flow",
     DataCapability.RESEARCH_REPORT: "get_reports",
@@ -348,9 +343,7 @@ class BaseFetcher(ABC):
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
             adjust: Provider-specific adjustment value (already mapped by _map_adjust)
         """
-        raise DataFetchError(
-            f"{self.name} does not support historical K-line data"
-        )
+        raise DataFetchError(f"{self.name} does not support historical K-line data")
 
     @abstractmethod
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
@@ -448,9 +441,7 @@ class BaseFetcher(ABC):
           explicitly is behavior-preserving and avoids re-dispatch recursion.
         """
         if index_market_tag(stock_code) is not None:
-            start_date, end_date = self._resolve_kline_window(
-                start_date, end_date, days
-            )
+            start_date, end_date = self._resolve_kline_window(start_date, end_date, days)
             return index_fn(stock_code, start_date, end_date, frequency)
         return BaseFetcher.get_kline_data(
             self, stock_code, start_date, end_date, days, frequency, adjust

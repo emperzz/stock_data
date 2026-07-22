@@ -4,6 +4,7 @@ Tests for DataFetcherManager.search_news() routing.
 Confirms the manager delegates to NEWS_SEARCH-capable fetchers in priority
 order and returns (result, source) on the first success.
 """
+
 from unittest.mock import patch
 
 from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
@@ -21,9 +22,7 @@ class TestManagerSearchNews:
     def test_routes_to_eastmoney_when_available(self):
         mgr = _make_manager_with_only_eastmoney()
         expected = [{"title": "fake", "url": "http://x", "publish_date": "2026-06-09"}]
-        with patch.object(
-            EastMoneyFetcher, "search_news", return_value=expected
-        ) as mock_search:
+        with patch.object(EastMoneyFetcher, "search_news", return_value=expected) as mock_search:
             data, source = mgr.search_news(q="603777", limit=5)
 
         assert data == expected
@@ -33,16 +32,10 @@ class TestManagerSearchNews:
     def test_propagates_from_to_date(self):
         mgr = _make_manager_with_only_eastmoney()
         fake_result = [{"title": "fake", "url": "http://x", "publish_date": "2026-06-09"}]
-        with patch.object(
-            EastMoneyFetcher, "search_news", return_value=fake_result
-        ) as mock_search:
-            mgr.search_news(
-                q="603777", from_date="2026-01-01", to_date="2026-06-30", limit=10
-            )
+        with patch.object(EastMoneyFetcher, "search_news", return_value=fake_result) as mock_search:
+            mgr.search_news(q="603777", from_date="2026-01-01", to_date="2026-06-30", limit=10)
 
-        mock_search.assert_called_once_with(
-            "603777", "2026-01-01", "2026-06-30", 10
-        )
+        mock_search.assert_called_once_with("603777", "2026-01-01", "2026-06-30", 10)
 
     def test_only_news_search_capable_fetchers_are_consulted(self):
         """A fetcher that does not declare NEWS_SEARCH should not be called."""
@@ -52,9 +45,7 @@ class TestManagerSearchNews:
         mgr.add_fetcher(CninfoFetcher())  # CNINFO does not declare NEWS_SEARCH
 
         fake_result = [{"title": "fake", "url": "http://x", "publish_date": "2026-06-09"}]
-        with patch.object(
-            EastMoneyFetcher, "search_news", return_value=fake_result
-        ) as mock_search:
+        with patch.object(EastMoneyFetcher, "search_news", return_value=fake_result) as mock_search:
             mgr.search_news(q="603777")
 
         # CninfoFetcher was filtered out by _filter_by_capability

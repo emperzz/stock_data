@@ -42,6 +42,7 @@ def _isolate_zzshare_cls_state():
         ZzshareFetcher._api,
     ) = saved
 
+
 # ====================================================================
 # Metadata + availability
 # ====================================================================
@@ -164,7 +165,9 @@ class TestZzshareFetcherAvailability:
             fetcher = ZzshareFetcher()
             reason = fetcher.unavailable_reason()
             assert reason is not None
-            assert "zzshare" in reason, f"unavailable_reason should mention 'zzshare', got: {reason!r}"
+            assert "zzshare" in reason, (
+                f"unavailable_reason should mention 'zzshare', got: {reason!r}"
+            )
 
 
 class TestZzshareFetcherTokenOptional:
@@ -191,8 +194,10 @@ class TestZzshareFetcherTokenOptional:
         fake_instance = MagicMock(name="anonymous_dataapi_instance")
         fake_dataapi = MagicMock(return_value=fake_instance, name="DataApi")
 
-        with patch("importlib.util.find_spec", side_effect=self._sdk_present), \
-             patch("zzshare.client.DataApi", fake_dataapi, create=True):
+        with (
+            patch("importlib.util.find_spec", side_effect=self._sdk_present),
+            patch("zzshare.client.DataApi", fake_dataapi, create=True),
+        ):
             fetcher = ZzshareFetcher()
             fetcher._ensure_api()
 
@@ -213,8 +218,10 @@ class TestZzshareFetcherTokenOptional:
         fake_instance = MagicMock(name="token_dataapi_instance")
         fake_dataapi = MagicMock(return_value=fake_instance)
 
-        with patch("importlib.util.find_spec", side_effect=self._sdk_present), \
-             patch("zzshare.client.DataApi", fake_dataapi, create=True):
+        with (
+            patch("importlib.util.find_spec", side_effect=self._sdk_present),
+            patch("zzshare.client.DataApi", fake_dataapi, create=True),
+        ):
             fetcher = ZzshareFetcher()
             fetcher._ensure_api()
 
@@ -325,7 +332,6 @@ class TestDailyKline:
         return fetcher
 
     def test_daily_normalizes_columns(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -358,7 +364,6 @@ class TestDailyKline:
         assert abs(df.iloc[0]["pct_chg"] - 0.59) < 0.01
 
     def test_daily_passes_yyyymmdd_to_sdk(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -383,7 +388,6 @@ class TestDailyKline:
         assert call.kwargs["ts_code"] == "600519.SH"
 
     def test_daily_qfq_adjust_passes_through(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -404,7 +408,6 @@ class TestDailyKline:
         assert call.kwargs.get("adj") == "qfq"
 
     def test_daily_no_adjust_does_not_pass_adj(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -425,7 +428,6 @@ class TestDailyKline:
         assert "adj" not in call.kwargs
 
     def test_daily_empty_df_raises(self):
-        import pandas as pd
 
         fetcher = self._fetcher_with_api(pd.DataFrame())
         with pytest.raises(DataFetchError, match="No data"):
@@ -433,26 +435,27 @@ class TestDailyKline:
 
     def test_fetch_raw_data_minute_single_day(self):
         """_fetch_raw_data(frequency="5") routes through api.stk_mins for a single day."""
-        import pandas as pd
 
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
-        fake_api.stk_mins = MagicMock(return_value=pd.DataFrame({
-            "ts_code": ["600519.SH"] * 3,
-            "trade_time": ["202605200935", "202605200940", "202605200945"],
-            "open": [1700.0, 1705.0, 1710.0],
-            "high": [1708.0, 1712.0, 1717.0],
-            "low": [1698.0, 1702.0, 1708.0],
-            "close": [1705.0, 1710.0, 1715.0],
-            "vol": [1e5, 1.1e5, 1.2e5],
-            "amount": [1e8, 1.1e8, 1.2e8],
-        }))
+        fake_api.stk_mins = MagicMock(
+            return_value=pd.DataFrame(
+                {
+                    "ts_code": ["600519.SH"] * 3,
+                    "trade_time": ["202605200935", "202605200940", "202605200945"],
+                    "open": [1700.0, 1705.0, 1710.0],
+                    "high": [1708.0, 1712.0, 1717.0],
+                    "low": [1698.0, 1702.0, 1708.0],
+                    "close": [1705.0, 1710.0, 1715.0],
+                    "vol": [1e5, 1.1e5, 1.2e5],
+                    "amount": [1e8, 1.1e8, 1.2e8],
+                }
+            )
+        )
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
 
-        fetcher._fetch_raw_data(
-            "600519", "2026-05-20", "2026-05-20", frequency="5"
-        )
+        fetcher._fetch_raw_data("600519", "2026-05-20", "2026-05-20", frequency="5")
 
         # 验证走的是 stk_mins 而不是 daily
         assert fake_api.stk_mins.called
@@ -465,21 +468,26 @@ class TestDailyKline:
 
     def test_fetch_raw_data_minute_adjust_ignored(self):
         """adjust='qfq' on minute frequency: must NOT be forwarded to stk_mins."""
-        import pandas as pd
 
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
-        fake_api.stk_mins = MagicMock(return_value=pd.DataFrame({
-            "trade_time": ["202605200935"],
-            "open": [1700.0], "high": [1708.0], "low": [1698.0], "close": [1705.0],
-            "vol": [1e5], "amount": [1e8],
-        }))
+        fake_api.stk_mins = MagicMock(
+            return_value=pd.DataFrame(
+                {
+                    "trade_time": ["202605200935"],
+                    "open": [1700.0],
+                    "high": [1708.0],
+                    "low": [1698.0],
+                    "close": [1705.0],
+                    "vol": [1e5],
+                    "amount": [1e8],
+                }
+            )
+        )
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
 
-        fetcher._fetch_raw_data(
-            "600519", "2026-05-20", "2026-05-20", frequency="5", adjust="qfq"
-        )
+        fetcher._fetch_raw_data("600519", "2026-05-20", "2026-05-20", frequency="5", adjust="qfq")
         call = fake_api.stk_mins.call_args
         assert "adj" not in call.kwargs
         assert "adjust" not in call.kwargs
@@ -497,13 +505,10 @@ class TestDailyKline:
         with patch("importlib.util.find_spec", return_value=None):
             fetcher = ZzshareFetcher()
             with pytest.raises(DataFetchError, match="SDK 不可用"):
-                fetcher.get_kline_data(
-                    "600519", "2026-05-20", "2026-05-20", frequency="5"
-                )
+                fetcher.get_kline_data("600519", "2026-05-20", "2026-05-20", frequency="5")
 
     def test_fetch_raw_data_minute_all_days_empty_raises(self):
         """When stk_mins returns empty for the only day, raise DataFetchError."""
-        import pandas as pd
 
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
@@ -512,42 +517,54 @@ class TestDailyKline:
         ZzshareFetcher._init_attempted = True
 
         with pytest.raises(DataFetchError, match="无分钟数据"):
-            fetcher.get_kline_data(
-                "600519", "2026-05-20", "2026-05-20", frequency="5"
-            )
+            fetcher.get_kline_data("600519", "2026-05-20", "2026-05-20", frequency="5")
 
     def test_fetch_raw_data_minute_three_day_loop(self):
         """3-day minute range → 3 stk_mins calls + concat."""
-        import pandas as pd
 
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
-        fake_api.stk_mins = MagicMock(side_effect=[
-            pd.DataFrame({
-                "trade_time": ["202605180935", "202605180940"],
-                "open": [1700.0, 1705.0], "high": [1708.0, 1712.0],
-                "low": [1698.0, 1702.0], "close": [1705.0, 1710.0],
-                "vol": [1e5, 1.1e5], "amount": [1e8, 1.1e8],
-            }),
-            pd.DataFrame({
-                "trade_time": ["202605190935", "202605190940"],
-                "open": [1710.0, 1715.0], "high": [1718.0, 1723.0],
-                "low": [1708.0, 1713.0], "close": [1715.0, 1720.0],
-                "vol": [1.2e5, 1.3e5], "amount": [1.2e8, 1.3e8],
-            }),
-            pd.DataFrame({
-                "trade_time": ["202605200935", "202605200940"],
-                "open": [1720.0, 1725.0], "high": [1728.0, 1733.0],
-                "low": [1718.0, 1723.0], "close": [1725.0, 1730.0],
-                "vol": [1.4e5, 1.5e5], "amount": [1.4e8, 1.5e8],
-            }),
-        ])
+        fake_api.stk_mins = MagicMock(
+            side_effect=[
+                pd.DataFrame(
+                    {
+                        "trade_time": ["202605180935", "202605180940"],
+                        "open": [1700.0, 1705.0],
+                        "high": [1708.0, 1712.0],
+                        "low": [1698.0, 1702.0],
+                        "close": [1705.0, 1710.0],
+                        "vol": [1e5, 1.1e5],
+                        "amount": [1e8, 1.1e8],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "trade_time": ["202605190935", "202605190940"],
+                        "open": [1710.0, 1715.0],
+                        "high": [1718.0, 1723.0],
+                        "low": [1708.0, 1713.0],
+                        "close": [1715.0, 1720.0],
+                        "vol": [1.2e5, 1.3e5],
+                        "amount": [1.2e8, 1.3e8],
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "trade_time": ["202605200935", "202605200940"],
+                        "open": [1720.0, 1725.0],
+                        "high": [1728.0, 1733.0],
+                        "low": [1718.0, 1723.0],
+                        "close": [1725.0, 1730.0],
+                        "vol": [1.4e5, 1.5e5],
+                        "amount": [1.4e8, 1.5e8],
+                    }
+                ),
+            ]
+        )
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
 
-        df = fetcher._fetch_raw_data(
-            "600519", "2026-05-18", "2026-05-20", frequency="5"
-        )
+        df = fetcher._fetch_raw_data("600519", "2026-05-18", "2026-05-20", frequency="5")
 
         assert fake_api.stk_mins.call_count == 3
         # Verify trade_time argument across calls
@@ -558,29 +575,40 @@ class TestDailyKline:
 
     def test_fetch_raw_data_minute_skips_empty_days(self):
         """Non-trade days returning None/empty are skipped, not raised."""
-        import pandas as pd
 
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
-        fake_api.stk_mins = MagicMock(side_effect=[
-            pd.DataFrame({
-                "trade_time": ["202605180935"],
-                "open": [1700.0], "high": [1708.0], "low": [1698.0], "close": [1705.0],
-                "vol": [1e5], "amount": [1e8],
-            }),
-            pd.DataFrame(),  # 19th: empty (non-trade day)
-            pd.DataFrame({
-                "trade_time": ["202605200935"],
-                "open": [1720.0], "high": [1728.0], "low": [1718.0], "close": [1725.0],
-                "vol": [1.4e5], "amount": [1.4e8],
-            }),
-        ])
+        fake_api.stk_mins = MagicMock(
+            side_effect=[
+                pd.DataFrame(
+                    {
+                        "trade_time": ["202605180935"],
+                        "open": [1700.0],
+                        "high": [1708.0],
+                        "low": [1698.0],
+                        "close": [1705.0],
+                        "vol": [1e5],
+                        "amount": [1e8],
+                    }
+                ),
+                pd.DataFrame(),  # 19th: empty (non-trade day)
+                pd.DataFrame(
+                    {
+                        "trade_time": ["202605200935"],
+                        "open": [1720.0],
+                        "high": [1728.0],
+                        "low": [1718.0],
+                        "close": [1725.0],
+                        "vol": [1.4e5],
+                        "amount": [1.4e8],
+                    }
+                ),
+            ]
+        )
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
 
-        df = fetcher._fetch_raw_data(
-            "600519", "2026-05-18", "2026-05-20", frequency="5"
-        )
+        df = fetcher._fetch_raw_data("600519", "2026-05-18", "2026-05-20", frequency="5")
         assert fake_api.stk_mins.call_count == 3
         assert len(df) == 2  # only 18 and 20 contributed
 
@@ -588,22 +616,28 @@ class TestDailyKline:
         """Range > 14 days triggers a logger.warning."""
         import logging
 
-        import pandas as pd
-
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
-        fake_api.stk_mins = MagicMock(return_value=pd.DataFrame({
-            "trade_time": ["202605180935"],
-            "open": [1700.0], "high": [1708.0], "low": [1698.0], "close": [1705.0],
-            "vol": [1e5], "amount": [1e8],
-        }))
+        fake_api.stk_mins = MagicMock(
+            return_value=pd.DataFrame(
+                {
+                    "trade_time": ["202605180935"],
+                    "open": [1700.0],
+                    "high": [1708.0],
+                    "low": [1698.0],
+                    "close": [1705.0],
+                    "vol": [1e5],
+                    "amount": [1e8],
+                }
+            )
+        )
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
 
-        with caplog.at_level(logging.WARNING, logger="stock_data.data_provider.fetchers.zzshare_fetcher"):
-            fetcher._fetch_raw_data(
-                "600519", "2026-05-01", "2026-05-20", frequency="5"
-            )
+        with caplog.at_level(
+            logging.WARNING, logger="stock_data.data_provider.fetchers.zzshare_fetcher"
+        ):
+            fetcher._fetch_raw_data("600519", "2026-05-01", "2026-05-20", frequency="5")
 
         assert any("over 20 days" in r.message for r in caplog.records)
 
@@ -623,7 +657,6 @@ class TestIntradayKline:
         return fetcher
 
     def test_intraday_normalizes_time(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -645,7 +678,6 @@ class TestIntradayKline:
         assert "volume" in df.columns
 
     def test_intraday_period_to_freq(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -666,7 +698,6 @@ class TestIntradayKline:
 
     def test_intraday_adjust_ignored(self):
         """Minute K has no adjust — adjust param should not be passed."""
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -688,7 +719,6 @@ class TestIntradayKline:
 
     def test_intraday_date_is_yyyymmdd_format(self):
         """trade_time passed to SDK should be YYYYMMDD (no dashes)."""
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -724,13 +754,10 @@ class TestFetchMinuteKline:
 
     def test_helper_dispatches_to_stk_mins(self):
         """Helper calls api.stk_mins with correct ts_code / freq / trade_time."""
-        import pandas as pd
 
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
-        fake_api.stk_mins = MagicMock(
-            return_value=pd.DataFrame({"trade_time": ["202605200935"]})
-        )
+        fake_api.stk_mins = MagicMock(return_value=pd.DataFrame({"trade_time": ["202605200935"]}))
         ZzshareFetcher._api = fake_api
         ZzshareFetcher._init_attempted = True
         df = fetcher._fetch_minute_kline("600519", "20260520", "5min")
@@ -755,7 +782,6 @@ class TestFetchMinuteKline:
         assert fetcher._fetch_minute_kline("600519", "20260520", "5min") is None
 
     def test_helper_empty_df_returns_none(self):
-        import pandas as pd
 
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
@@ -780,7 +806,6 @@ class TestRealtimeQuote:
         return fetcher
 
     def test_realtime_basic_fields(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             [
@@ -820,7 +845,6 @@ class TestRealtimeQuote:
         assert quote.turnover_rate == 0.5
 
     def test_realtime_uses_fields_all(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             [
@@ -849,7 +873,6 @@ class TestRealtimeQuote:
         assert call.kwargs.get("fields") == "all"
 
     def test_realtime_empty_df_returns_none(self):
-        import pandas as pd
 
         fetcher = self._fetcher_with_api(pd.DataFrame())
         assert fetcher.get_realtime_quote("600519") is None
@@ -876,7 +899,6 @@ class TestStockList:
         return fetcher
 
     def test_get_all_stocks_normalizes_exchange(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -915,7 +937,6 @@ class TestStockList:
         ``/api/v1/stocks?market=csi`` failover because Zzshare (P2)
         returned ``[]`` whenever the manager called it with ``"cn"``.
         """
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -931,8 +952,7 @@ class TestStockList:
         fetcher = self._fetcher_with_api(raw)
         result = fetcher.get_all_stocks("cn")
         assert len(result) == 2, (
-            f"ZzshareFetcher must accept 'cn' as an alias for csi A-shares; "
-            f"got {len(result)} rows"
+            f"ZzshareFetcher must accept 'cn' as an alias for csi A-shares; got {len(result)} rows"
         )
         assert result[0] == {"code": "600519", "name": "贵州茅台", "exchange": "SSE"}
         assert result[1] == {"code": "000001", "name": "平安银行", "exchange": "SZSE"}
@@ -947,7 +967,6 @@ class TestStockList:
             assert fetcher.get_all_stocks("garbage") == []
 
     def test_get_all_stocks_calls_stock_basic_all(self):
-        import pandas as pd
 
         raw = pd.DataFrame(
             {
@@ -1296,9 +1315,7 @@ class TestBoards:
         fetcher = self._fetcher_with_api(plates_rank=plates_rank_by_pt)
         # Unified path: querying concept returns plate=17 rows tagged as
         # type=concept with subtype="同花顺题材" preserved.
-        boards = fetcher.get_all_boards(
-            board_type="concept", subtype=None, source="zzshare"
-        )
+        boards = fetcher.get_all_boards(board_type="concept", subtype=None, source="zzshare")
         assert len(boards) == 1
         assert boards[0]["type"] == "concept"
         assert boards[0]["subtype"] == "同花顺题材"
@@ -1346,9 +1363,7 @@ class TestBoards:
         # include_quote=False must not leak raw plates_rank columns.
         rows = [dict(self._RANK_ROW)]
         fetcher = self._fetcher_with_api(plates_rank=rows)
-        boards = fetcher.get_all_boards(
-            board_type="concept", source="zzshare", include_quote=False
-        )
+        boards = fetcher.get_all_boards(board_type="concept", source="zzshare", include_quote=False)
         assert boards[0].keys() == {"code", "name", "type", "subtype"}
         assert "change_pct" not in boards[0]
         assert "score" not in boards[0]
@@ -1385,8 +1400,7 @@ class TestBoards:
 
         fetcher = self._fetcher_with_api(plates_rank=plates_rank_by_pt)
         with patch(
-            "stock_data.data_provider.fetchers.zzshare_fetcher."
-            "get_latest_trade_date_on_or_before",
+            "stock_data.data_provider.fetchers.zzshare_fetcher.get_latest_trade_date_on_or_before",
             return_value="2026-07-06",
         ):
             boards = fetcher.get_all_boards(
@@ -1413,8 +1427,7 @@ class TestBoards:
 
         fetcher = self._fetcher_with_api(plates_rank=plates_rank_by_pt)
         with patch(
-            "stock_data.data_provider.fetchers.zzshare_fetcher."
-            "get_latest_trade_date_on_or_before",
+            "stock_data.data_provider.fetchers.zzshare_fetcher.get_latest_trade_date_on_or_before",
             return_value="2026-07-06",
         ):
             boards = fetcher.get_all_boards(
@@ -1437,13 +1450,10 @@ class TestBoards:
 
         fetcher = self._fetcher_with_api(plates_rank=plates_rank_by_pt)
         with patch(
-            "stock_data.data_provider.fetchers.zzshare_fetcher."
-            "get_latest_trade_date_on_or_before",
+            "stock_data.data_provider.fetchers.zzshare_fetcher.get_latest_trade_date_on_or_before",
             return_value="2026-07-06",
         ):
-            fetcher.get_all_boards(
-                board_type="concept", source="zzshare", include_quote=True
-            )
+            fetcher.get_all_boards(board_type="concept", source="zzshare", include_quote=True)
         # Both plate_type=15 and plate_type=17 must have been requested.
         plate_types_called = {
             c.kwargs["plate_type"] for c in ZzshareFetcher._api.plates_rank.call_args_list
@@ -1459,13 +1469,10 @@ class TestBoards:
         fetcher = self._fetcher_with_api(plates_rank=[dict(self._RANK_ROW)])
         # empty trade-calendar cache -> None -> today's date used
         with patch(
-            "stock_data.data_provider.fetchers.zzshare_fetcher."
-            "get_latest_trade_date_on_or_before",
+            "stock_data.data_provider.fetchers.zzshare_fetcher.get_latest_trade_date_on_or_before",
             return_value=None,
         ):
-            fetcher.get_all_boards(
-                board_type="concept", source="zzshare", include_quote=True
-            )
+            fetcher.get_all_boards(board_type="concept", source="zzshare", include_quote=True)
         call = ZzshareFetcher._api.plates_rank.call_args
         # a non-empty YYYY-MM-DD date was still passed
         assert call.kwargs["date1"]
@@ -1550,6 +1557,7 @@ class TestDragonTiger:
         # We verify via the schema (Pydantic) rather than the dict directly,
         # because route layer does DailyDragonTigerStock(**s).
         from stock_data.api.schemas import DailyDragonTigerStock
+
         validated = DailyDragonTigerStock(**data["stocks"][0])
         assert validated.close is None
         assert validated.buy_wan is None
@@ -1564,8 +1572,12 @@ class TestDragonTiger:
         # No extraneous fields — output is a strict subset of DailyDragonTigerStock schema
         stock_keys = set(data["stocks"][0].keys())
         expected_keys = {
-            "code", "name", "reason", "change_pct",
-            "net_buy_wan", "turnover_pct",
+            "code",
+            "name",
+            "reason",
+            "change_pct",
+            "net_buy_wan",
+            "turnover_pct",
         }
         assert stock_keys == expected_keys, (
             f"unexpected fields: {stock_keys - expected_keys}; "
@@ -1691,12 +1703,19 @@ class TestDragonTiger:
         # matches the documented not-on-list shape; the outer dict is
         # truthy (has `traders`), so a buggy fetcher that checks
         # `if detail:` (truthy outer) would append a phantom record.
-        fetcher = self._fetcher_with_api(lhb_detail={
-            "traders": [
-                {"trader_name": "东方证券", "buy_amount": 1e7,
-                 "sell_amount": 5e6, "rank": 1, "type": 1},
-            ],
-        })
+        fetcher = self._fetcher_with_api(
+            lhb_detail={
+                "traders": [
+                    {
+                        "trader_name": "东方证券",
+                        "buy_amount": 1e7,
+                        "sell_amount": 5e6,
+                        "rank": 1,
+                        "type": 1,
+                    },
+                ],
+            }
+        )
         data = fetcher.get_dragon_tiger("000078", "2026-05-20")
         # records MUST be empty (no inner detail → stock not on list)
         assert data["records"] == []
@@ -1704,10 +1723,12 @@ class TestDragonTiger:
         # without the per-day aggregate)
         assert len(data["seats"]["buy"]) == 1
         assert data["seats"]["buy"][0]["name"] == "东方证券"
-        assert data["seats"] == {"buy": [
-            {"name": "东方证券", "buy_wan": 1000.0,
-             "sell_wan": 500.0, "net_wan": 500.0},
-        ], "sell": []}
+        assert data["seats"] == {
+            "buy": [
+                {"name": "东方证券", "buy_wan": 1000.0, "sell_wan": 500.0, "net_wan": 500.0},
+            ],
+            "sell": [],
+        }
         assert data["institution"] == {"buy_amt": 0, "sell_amt": 0, "net_amt": 0}
 
     def test_dragon_tiger_lhb_detail_exception_returns_empty(self):
@@ -1716,7 +1737,6 @@ class TestDragonTiger:
         the try/except contract in the production code; a regression
         that removed the try/except would surface here immediately.
         """
-        import stock_data.data_provider.fetchers.zzshare_fetcher as zf
         # Replace the class-level api mock with one whose lhb_detail raises.
         fetcher = ZzshareFetcher()
         fake_api = MagicMock()
@@ -1739,8 +1759,10 @@ class TestDragonTiger:
         without raising.
         """
         import stock_data.data_provider.fetchers.zzshare_fetcher as zf
+
         monkeypatch.setattr(
-            zf, "get_latest_trade_date_on_or_before",
+            zf,
+            "get_latest_trade_date_on_or_before",
             lambda d: "",
         )
         fetcher = self._fetcher_with_api(lhb_detail=None)
@@ -1757,14 +1779,18 @@ class TestDragonTiger:
         to lhb_detail in YYYYMMDD form.
         """
         import stock_data.data_provider.fetchers.zzshare_fetcher as zf
+
         monkeypatch.setattr(
-            zf, "get_latest_trade_date_on_or_before",
+            zf,
+            "get_latest_trade_date_on_or_before",
             lambda d: "2026-05-22",
         )
-        fetcher = self._fetcher_with_api(lhb_detail={
-            "detail": {"buy_in": 1e7, "up_reason": "日跌幅偏离值达7%"},
-            "traders": [],
-        })
+        fetcher = self._fetcher_with_api(
+            lhb_detail={
+                "detail": {"buy_in": 1e7, "up_reason": "日跌幅偏离值达7%"},
+                "traders": [],
+            }
+        )
         data = fetcher.get_dragon_tiger("000078", "")
         # lhb_detail was called with date1=20260522 (YYYYMMDD format)
         call = ZzshareFetcher._api.lhb_detail.call_args
@@ -1779,8 +1805,10 @@ class TestDragonTiger:
         """When trade_date is empty, fall back to the latest trade date <= today."""
         # Mock the trade calendar helper
         import stock_data.data_provider.fetchers.zzshare_fetcher as zf
+
         monkeypatch.setattr(
-            zf, "get_latest_trade_date_on_or_before",
+            zf,
+            "get_latest_trade_date_on_or_before",
             lambda d: "2026-05-22",
         )
         fetcher = self._fetcher_with_api(lhb_list=[])
@@ -1918,10 +1946,7 @@ class TestBoardSubtypeValidation:
         )
 
         assert THS_CONCEPT_SUBTYPE in VALID_SUBTYPES_BY_SOURCE["ths"]["concept"]
-        assert (
-            THS_CONCEPT_SUBTYPE
-            in VALID_SUBTYPES_BY_SOURCE["zzshare"]["concept"]
-        )
+        assert THS_CONCEPT_SUBTYPE in VALID_SUBTYPES_BY_SOURCE["zzshare"]["concept"]
 
 
 # ====================================================================
@@ -1934,19 +1959,20 @@ class TestNormalizeMinute:
 
     def test_normalize_minute_extracts_date_from_trade_time(self):
         """trade_time (YYYYMMDDHHMM, 12 digits) → date column (YYYY-MM-DD)."""
-        import pandas as pd
 
         fetcher = ZzshareFetcher()
-        raw = pd.DataFrame({
-            "ts_code": ["600519.SH"] * 4,
-            "trade_time": ["202605200935", "202605200940", "202605210935", "202605210940"],
-            "open": [1700.0, 1705.0, 1710.0, 1715.0],
-            "high": [1708.0, 1712.0, 1718.0, 1723.0],
-            "low": [1698.0, 1702.0, 1708.0, 1713.0],
-            "close": [1705.0, 1710.0, 1715.0, 1720.0],
-            "vol": [1e5, 1.1e5, 1.2e5, 1.3e5],
-            "amount": [1e8, 1.1e8, 1.2e8, 1.3e8],
-        })
+        raw = pd.DataFrame(
+            {
+                "ts_code": ["600519.SH"] * 4,
+                "trade_time": ["202605200935", "202605200940", "202605210935", "202605210940"],
+                "open": [1700.0, 1705.0, 1710.0, 1715.0],
+                "high": [1708.0, 1712.0, 1718.0, 1723.0],
+                "low": [1698.0, 1702.0, 1708.0, 1713.0],
+                "close": [1705.0, 1710.0, 1715.0, 1720.0],
+                "vol": [1e5, 1.1e5, 1.2e5, 1.3e5],
+                "amount": [1e8, 1.1e8, 1.2e8, 1.3e8],
+            }
+        )
         out = fetcher._normalize_data(raw, "600519")
         assert "date" in out.columns
         # trade_time[0:8] = "20260520" → "2026-05-20"

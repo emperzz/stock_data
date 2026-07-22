@@ -1,4 +1,5 @@
 """Unit tests for stock_data/api/endpoint_meta.py."""
+
 import pytest
 
 from stock_data.api.endpoint_meta import REGISTRY, EndpointMeta, endpoint_meta
@@ -29,6 +30,7 @@ class TestEndpointMetaDecorator:
         @endpoint_meta(summary="实时行情", markets=["csi"], capabilities=["STOCK_REALTIME_QUOTE"])
         def my_route():
             return None
+
         assert REGISTRY[my_route].summary == "实时行情"
         assert REGISTRY[my_route].markets == ["csi"]
         assert REGISTRY[my_route].capabilities == ["STOCK_REALTIME_QUOTE"]
@@ -36,6 +38,7 @@ class TestEndpointMetaDecorator:
     def test_duplicate_registration_raises(self):
         def my_route():
             return None
+
         endpoint_meta(summary="first")(my_route)
         with pytest.raises(ValueError, match="@endpoint_meta already registered"):
             endpoint_meta(summary="second")(my_route)
@@ -44,6 +47,7 @@ class TestEndpointMetaDecorator:
         @endpoint_meta(summary="x")
         def my_route():
             return None
+
         meta = REGISTRY[my_route]
         assert meta.markets == []
         assert meta.capabilities == []
@@ -69,6 +73,7 @@ class TestFetcherMethodOverride:
         )
         def my_route():
             return None
+
         meta = REGISTRY[my_route]
         assert meta.fetcher_method == "get_daily_dragon_tiger"
         assert meta.capabilities == ["DRAGON_TIGER"]
@@ -77,4 +82,5 @@ class TestFetcherMethodOverride:
         @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
         def my_route():
             return None
+
         assert REGISTRY[my_route].fetcher_method is None

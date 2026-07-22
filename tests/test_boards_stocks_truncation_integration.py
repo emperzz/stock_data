@@ -1,4 +1,5 @@
 """Integration tests using fixture HTML for top_n + truncation path."""
+
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +28,7 @@ def test_fixture_loads_10_rows():
 def test_integration_top_n_10_with_real_fixture():
     """完整路径: fixture HTML → fetcher parse → 响应 6-tuple → route 返回."""
     from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
     fetcher = ThsFetcher()
 
     fake_html = _read_fixture()
@@ -39,8 +41,10 @@ def test_integration_top_n_10_with_real_fixture():
         mock_get.return_value.content = fake_html.encode("gbk")
 
         rows = fetcher.get_board_stocks(
-            board_code="301085", top_n=10,
-            sort_by="change_pct", sort_order="desc",
+            board_code="301085",
+            top_n=10,
+            sort_by="change_pct",
+            sort_order="desc",
         )
 
     assert len(rows) == 10
@@ -61,6 +65,7 @@ def test_integration_top_n_10_with_real_fixture():
 def test_integration_top_n_3_truncates_after_first_page():
     """top_n=3 → 翻 1 页 (10 行) → 接到 3 行就 break."""
     from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+
     fetcher = ThsFetcher()
 
     fake_html = _read_fixture()
@@ -71,8 +76,10 @@ def test_integration_top_n_3_truncates_after_first_page():
         mock_get.return_value.content = fake_html.encode("gbk")
 
         rows = fetcher.get_board_stocks(
-            board_code="301085", top_n=3,
-            sort_by="change_pct", sort_order="desc",
+            board_code="301085",
+            top_n=3,
+            sort_by="change_pct",
+            sort_order="desc",
         )
 
     # 拿到的前 3 行的 stock_code 必须 == fixture 的前 3 行 stock_code.

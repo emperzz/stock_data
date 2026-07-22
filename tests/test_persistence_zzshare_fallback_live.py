@@ -66,12 +66,12 @@ def test_zzshare_plates_stocks_serves_named_platecode(platecode):
     )
     # Core contract: at least one 6-digit A-share code in the rows.
     recognised = [
-        r for r in rows
+        r
+        for r in rows
         if isinstance(r.get("stock_code"), str)
         and r["stock_code"].isdigit()
         and len(r["stock_code"]) == 6
     ]
     assert recognised, (
-        f"ZZSHARE returned no recognisable 6-digit rows for plate {platecode}: "
-        f"raw={rows[:3]}"
+        f"ZZSHARE returned no recognisable 6-digit rows for plate {platecode}: raw={rows[:3]}"
     )

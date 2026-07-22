@@ -9,6 +9,7 @@ tests/test_stocks_announcements_endpoint.py``.
 The failover mechanism itself is tested in
 ``test_announcements_eastmoney_failover.py`` (mock-based).
 """
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -35,5 +36,6 @@ def test_stocks_announcements_endpoint_live(client):
     assert "announcements" in body
     assert len(body["announcements"]) > 0
     # source should be either EastMoneyFetcher or CninfoFetcher (failover)
-    assert body["source"] in ("EastMoneyFetcher", "CninfoFetcher"), \
+    assert body["source"] in ("EastMoneyFetcher", "CninfoFetcher"), (
         f"Unexpected source: {body['source']}"
+    )

@@ -39,12 +39,13 @@ def _mock_response(status_code: int, body_bytes: bytes) -> MagicMock:
 def _patched_fetcher(response_factory):
     stack = ExitStack()
     stack.enter_context(
-        patch.object(ThsFetcher, "_http_get",
-                     side_effect=lambda url, *, headers=None, timeout=10: response_factory())
+        patch.object(
+            ThsFetcher,
+            "_http_get",
+            side_effect=lambda url, *, headers=None, timeout=10: response_factory(),
+        )
     )
-    stack.enter_context(
-        patch.object(ThsFetcher, "_v_token", return_value="fake")
-    )
+    stack.enter_context(patch.object(ThsFetcher, "_v_token", return_value="fake"))
     return ThsFetcher(), stack
 
 

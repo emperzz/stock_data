@@ -16,6 +16,7 @@ from ``ENDPOINTS.BOARD_LIST_CONCEPT["fields"].split(",")``.
 Direct imports from the new sub-package are also supported:
 ``from stock_data.data_provider.fetchers.eastmoney import EastMoneyFetcher``.
 """
+
 from .eastmoney import EastMoneyFetcher, _DCEndpoint
 from .eastmoney._endpoints import ENDPOINTS
 

@@ -46,12 +46,8 @@ def _patched_fetcher(get_side_effect):
     patch scope; using an explicit ExitStack avoids that.
     """
     stack = ExitStack()
-    stack.enter_context(
-        patch.object(ThsFetcher, "_http_get", side_effect=get_side_effect)
-    )
-    stack.enter_context(
-        patch.object(ThsFetcher, "_v_token", return_value="fake")
-    )
+    stack.enter_context(patch.object(ThsFetcher, "_http_get", side_effect=get_side_effect))
+    stack.enter_context(patch.object(ThsFetcher, "_v_token", return_value="fake"))
     fetcher = ThsFetcher()
     return fetcher, stack
 

@@ -3,6 +3,7 @@
 Complements tests/test_zzshare_fetcher.py (unit) by exercising the full
 manager.get_kline_data → ZzshareFetcher._fetch_raw_data → stk_mins path.
 """
+
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -31,12 +32,19 @@ def _make_manager_with_zzshare_only():
 def test_manager_routes_minute_kline_to_zzshare():
     """manager.get_kline_data(frequency="5") → ZzshareFetcher → stk_mins."""
     mgr, fake_api = _make_manager_with_zzshare_only()
-    fake_api.stk_mins = MagicMock(return_value=pd.DataFrame({
-        "trade_time": ["202605200935", "202605200940"],
-        "open": [1700.0, 1705.0], "high": [1708.0, 1712.0],
-        "low": [1698.0, 1702.0], "close": [1705.0, 1710.0],
-        "vol": [1e5, 1.1e5], "amount": [1e8, 1.1e8],
-    }))
+    fake_api.stk_mins = MagicMock(
+        return_value=pd.DataFrame(
+            {
+                "trade_time": ["202605200935", "202605200940"],
+                "open": [1700.0, 1705.0],
+                "high": [1708.0, 1712.0],
+                "low": [1698.0, 1702.0],
+                "close": [1705.0, 1710.0],
+                "vol": [1e5, 1.1e5],
+                "amount": [1e8, 1.1e8],
+            }
+        )
+    )
 
     df, source = mgr.get_kline_data(
         "600519", start_date="2026-05-20", end_date="2026-05-20", frequency="5"

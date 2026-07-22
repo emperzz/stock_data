@@ -1,4 +1,5 @@
 """Two-stage manager filter per spec §4.4: capability bit → supports_kline."""
+
 import pandas as pd
 import pytest
 
@@ -11,9 +12,15 @@ class _FakeFetcher(BaseFetcher):
     def is_available(self) -> bool:
         return True
 
-    def __init__(self, name, priority, supported_markets,
-                 supported_data_types, supports_kline_result=True,
-                 supports_quote_result=True):
+    def __init__(
+        self,
+        name,
+        priority,
+        supported_markets,
+        supported_data_types,
+        supports_kline_result=True,
+        supports_quote_result=True,
+    ):
         self.name = name
         self.priority = priority
         self.supported_markets = supported_markets
@@ -28,8 +35,7 @@ class _FakeFetcher(BaseFetcher):
         return self._supports_quote_result
 
     # ABC stubs — not exercised in this test file
-    def _fetch_raw_data(self, stock_code, start_date, end_date,
-                        frequency="d", adjust=None):
+    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
         return pd.DataFrame()
 
     def _normalize_data(self, df, stock_code):
@@ -44,18 +50,18 @@ def test_manager_filters_by_supports_kline_when_empty_raises():
     from stock_data.data_provider.manager import DataFetcherManager
 
     mg = DataFetcherManager()
-    f1 = _FakeFetcher("A", 1, {"csi"},
-                       DataCapability.STOCK_KLINE,
-                       supports_kline_result=False)
-    f2 = _FakeFetcher("B", 2, {"csi"},
-                       DataCapability.STOCK_KLINE,
-                       supports_kline_result=False)
+    f1 = _FakeFetcher("A", 1, {"csi"}, DataCapability.STOCK_KLINE, supports_kline_result=False)
+    f2 = _FakeFetcher("B", 2, {"csi"}, DataCapability.STOCK_KLINE, supports_kline_result=False)
     mg.add_fetcher(f1)
     mg.add_fetcher(f2)
     with pytest.raises(DataFetchError) as exc:
         mg.get_kline_data(
-            "600519", start_date=None, end_date="2026-06-29",
-            days=1, frequency="1", adjust="qfq",
+            "600519",
+            start_date=None,
+            end_date="2026-06-29",
+            days=1,
+            frequency="1",
+            adjust="qfq",
         )
     # Error message must include asset, period, adjust, market.
     msg = str(exc.value)
@@ -86,8 +92,7 @@ def test_manager_picks_only_supporting_fetcher():
         def supports_kline(self, period, adjust, market, asset):
             return self._supports_kline
 
-        def _fetch_raw_data(self, stock_code, start_date, end_date,
-                            frequency="d", adjust=None):
+        def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
             return pd.DataFrame()
 
         def _normalize_data(self, df, stock_code):
@@ -101,8 +106,12 @@ def test_manager_picks_only_supporting_fetcher():
     mg.add_fetcher(_PickerFetcher("No", 0, supports_kline=False))  # higher priority but rejects
 
     df, source = mg.get_kline_data(
-        "600519", start_date=None, end_date="2026-06-29",
-        days=1, frequency="5", adjust="qfq",
+        "600519",
+        start_date=None,
+        end_date="2026-06-29",
+        days=1,
+        frequency="5",
+        adjust="qfq",
     )
     # Higher-priority "No" was filtered out; "Yes" (priority 1, supports) was chosen.
     assert source == "Yes"
@@ -114,16 +123,17 @@ def test_manager_three_stage_drops_unsupported_markets():
     from stock_data.data_provider.manager import DataFetcherManager
 
     mg = DataFetcherManager()
-    f1 = _FakeFetcher("HKOnly", 1, {"hk"},
-                       DataCapability.STOCK_KLINE,
-                       supports_kline_result=True)
+    f1 = _FakeFetcher("HKOnly", 1, {"hk"}, DataCapability.STOCK_KLINE, supports_kline_result=True)
     mg.add_fetcher(f1)
 
     with pytest.raises(DataFetchError):
         # 600519 is csi market; HKOnly is filtered out by _filter_by_capability.
         mg.get_kline_data(
-            "600519", start_date=None, end_date="2026-06-29",
-            days=1, frequency="d",
+            "600519",
+            start_date=None,
+            end_date="2026-06-29",
+            days=1,
+            frequency="d",
         )
 
 
@@ -158,8 +168,7 @@ def test_manager_quote_two_stage_filter_picks_supporting_fetcher():
             return self._supports_quote
 
         # ABC stubs
-        def _fetch_raw_data(self, stock_code, start_date, end_date,
-                            frequency="d", adjust=None):
+        def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
             return pd.DataFrame()
 
         def _normalize_data(self, df, stock_code):
@@ -187,14 +196,22 @@ def test_manager_quote_raises_when_no_supporting_fetcher():
     from stock_data.data_provider.manager import DataFetcherManager
 
     mg = DataFetcherManager()
-    f1 = _FakeFetcher("NQ1", 1, {"csi"},
-                       DataCapability.STOCK_REALTIME_QUOTE,
-                       supports_kline_result=True,
-                       supports_quote_result=False)
-    f2 = _FakeFetcher("NQ2", 2, {"csi"},
-                       DataCapability.STOCK_REALTIME_QUOTE,
-                       supports_kline_result=True,
-                       supports_quote_result=False)
+    f1 = _FakeFetcher(
+        "NQ1",
+        1,
+        {"csi"},
+        DataCapability.STOCK_REALTIME_QUOTE,
+        supports_kline_result=True,
+        supports_quote_result=False,
+    )
+    f2 = _FakeFetcher(
+        "NQ2",
+        2,
+        {"csi"},
+        DataCapability.STOCK_REALTIME_QUOTE,
+        supports_kline_result=True,
+        supports_quote_result=False,
+    )
     mg.add_fetcher(f1)
     mg.add_fetcher(f2)
 

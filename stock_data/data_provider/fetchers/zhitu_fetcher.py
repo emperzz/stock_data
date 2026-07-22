@@ -165,7 +165,9 @@ class ZhituFetcher(BaseFetcher):
             price=safe_float(row.get("p")),
             change_pct=safe_float(row.get("pc")),
             change_amount=safe_float(row.get("ud")),
-            volume=safe_int(row.get("v"), 0) * 100 * 10000,  # 万手→股 per spec §3.4 (Zhitu public /hs/real/ssjy/ v is in 万手; broker /hs/real/time/ is in 手 — see [[zhitu-upstream-volume-unit-inconsistency]])
+            volume=safe_int(row.get("v"), 0)
+            * 100
+            * 10000,  # 万手→股 per spec §3.4 (Zhitu public /hs/real/ssjy/ v is in 万手; broker /hs/real/time/ is in 手 — see [[zhitu-upstream-volume-unit-inconsistency]])
             amount=safe_float(row.get("cje")),
             open_price=safe_float(row.get("o")),
             high=safe_float(row.get("h")),
@@ -497,7 +499,8 @@ class ZhituFetcher(BaseFetcher):
             change_amount=safe_float(data.get("ud")),
             change_pct=safe_float(data.get("pc")),
             amplitude=safe_float(data.get("zf")),
-            volume=safe_int(data.get("v"), 0) * 100,  # 手→股 per spec §3.4 (指数 /hz/real/ssjy/ v is 手 — 2026-07-06 实测)
+            volume=safe_int(data.get("v"), 0)
+            * 100,  # 手→股 per spec §3.4 (指数 /hz/real/ssjy/ v is 手 — 2026-07-06 实测)
             amount=safe_float(data.get("cje")),  # 单位: 元
             # 以下指数无对应字段, 保持 None
             volume_ratio=None,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,8 +40,10 @@ def test_single_source_returns_per_entry_source_field(fresh_db):
     board_mod.upsert_membership_bulk(
         source="zhitu",
         stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
-        board_code="sw_yx_baijiu", board_name="白酒",
-        board_type="industry", subtype="申万行业",
+        board_code="sw_yx_baijiu",
+        board_name="白酒",
+        board_type="industry",
+        subtype="申万行业",
     )
     with TestClient(_app_for_test) as client:
         r = client.get("/api/v1/stocks/600519/boards?source=zhitu")
@@ -59,12 +61,18 @@ def test_csv_source_aggregates_multiple_sources(fresh_db):
     board_mod.upsert_membership_bulk(
         source="zhitu",
         stocks=[{"stock_code": "600519", "stock_name": "x"}],
-        board_code="sw_yx", board_name="SW", board_type="industry", subtype="申万行业",
+        board_code="sw_yx",
+        board_name="SW",
+        board_type="industry",
+        subtype="申万行业",
     )
     board_mod.upsert_membership_bulk(
         source="eastmoney",
         stocks=[{"stock_code": "600519", "stock_name": "x"}],
-        board_code="BK1048", board_name="EM", board_type="concept", subtype="concept",
+        board_code="BK1048",
+        board_name="EM",
+        board_type="concept",
+        subtype="concept",
     )
     with TestClient(_app_for_test) as client:
         r = client.get("/api/v1/stocks/600519/boards?source=zhitu,eastmoney")
@@ -131,10 +139,6 @@ def test_ths_industry_filter_returns_400(fresh_db):
     assert r.json()["detail"]["error"] == "bad_request"
 
 
-
-
-
-
 def test_invalid_source_in_csv_returns_400(fresh_db):
     """Unknown source in CSV → 400 with error detail."""
     with TestClient(_app_for_test) as client:
@@ -145,9 +149,11 @@ def test_invalid_source_in_csv_returns_400(fresh_db):
 
 # --- normalize_stock_board_source -----------------------------------
 
+
 def test_normalize_stock_board_source_canonical():
     """ths / eastmoney / zhitu pass through unchanged."""
     from stock_data.data_provider.persistence.board import normalize_stock_board_source
+
     assert normalize_stock_board_source("ths") == "ths"
     assert normalize_stock_board_source("eastmoney") == "eastmoney"
     assert normalize_stock_board_source("zhitu") == "zhitu"
@@ -156,12 +162,14 @@ def test_normalize_stock_board_source_canonical():
 def test_normalize_stock_board_source_zzshare_alias():
     """zzshare aliases to ths (data is THS upstream)."""
     from stock_data.data_provider.persistence.board import normalize_stock_board_source
+
     assert normalize_stock_board_source("zzshare") == "ths"
 
 
 def test_normalize_stock_board_source_invalid_raises():
     """Unknown source raises ValueError."""
     from stock_data.data_provider.persistence.board import normalize_stock_board_source
+
     with pytest.raises(ValueError, match="Unknown stock-boards source"):
         normalize_stock_board_source("bogus")
     with pytest.raises(ValueError, match="Unknown stock-boards source"):
@@ -171,6 +179,7 @@ def test_normalize_stock_board_source_invalid_raises():
 def test_normalize_stock_board_source_does_not_alias_other_directions():
     """ths is canonical (does NOT alias to zzshare)."""
     from stock_data.data_provider.persistence.board import normalize_stock_board_source
+
     assert normalize_stock_board_source("ths") != "zzshare"
 
 

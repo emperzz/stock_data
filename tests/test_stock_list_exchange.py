@@ -1,4 +1,5 @@
 """Tests for stock_list exchange normalization."""
+
 from stock_data.data_provider.persistence.stock_list import (
     _normalize_exchange,
     get_cached_stocks,
@@ -50,52 +51,68 @@ class TestExchangeRoundTrip:
 
     def test_round_trip_zhitu_jys_sh(self, tmp_path, monkeypatch):
         from stock_data.data_provider.persistence import db, stock_list
+
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
         monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
-        update_cached_stocks("csi", [
-            {"code": "688411", "name": "N海博", "exchange": "sh"},
-        ])
+        update_cached_stocks(
+            "csi",
+            [
+                {"code": "688411", "name": "N海博", "exchange": "sh"},
+            ],
+        )
         rows = get_cached_stocks("csi")
         assert len(rows) == 1
         assert rows[0]["exchange"] == "SH"
 
     def test_round_trip_myquant_shse(self, tmp_path, monkeypatch):
         from stock_data.data_provider.persistence import db, stock_list
+
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
         monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
-        update_cached_stocks("csi", [
-            {"code": "600519", "name": "贵州茅台", "exchange": "SHSE"},
-        ])
+        update_cached_stocks(
+            "csi",
+            [
+                {"code": "600519", "name": "贵州茅台", "exchange": "SHSE"},
+            ],
+        )
         rows = get_cached_stocks("csi")
         assert len(rows) == 1
         assert rows[0]["exchange"] == "SH"
 
     def test_round_trip_missing_exchange_is_none(self, tmp_path, monkeypatch):
         from stock_data.data_provider.persistence import db, stock_list
+
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
         monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
-        update_cached_stocks("csi", [
-            {"code": "000001", "name": "平安银行"},
-        ])
+        update_cached_stocks(
+            "csi",
+            [
+                {"code": "000001", "name": "平安银行"},
+            ],
+        )
         rows = get_cached_stocks("csi")
         assert len(rows) == 1
         assert rows[0]["exchange"] is None
 
     def test_round_trip_explicit_none_is_none(self, tmp_path, monkeypatch):
         from stock_data.data_provider.persistence import db, stock_list
+
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
         monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
-        update_cached_stocks("csi", [
-            {"code": "000002", "name": "万 科Ａ", "exchange": None},
-        ])
+        update_cached_stocks(
+            "csi",
+            [
+                {"code": "000002", "name": "万 科Ａ", "exchange": None},
+            ],
+        )
         rows = get_cached_stocks("csi")
         assert rows[0]["exchange"] is None
 
@@ -103,12 +120,16 @@ class TestExchangeRoundTrip:
         """Even when normalized to None, the read dict must include the key
         (so /stocks response can expose it as null)."""
         from stock_data.data_provider.persistence import db, stock_list
+
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
         monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
-        update_cached_stocks("csi", [
-            {"code": "000001", "name": "平安银行"},
-        ])
+        update_cached_stocks(
+            "csi",
+            [
+                {"code": "000001", "name": "平安银行"},
+            ],
+        )
         rows = get_cached_stocks("csi")
         assert "exchange" in rows[0]

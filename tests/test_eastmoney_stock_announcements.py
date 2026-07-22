@@ -12,6 +12,7 @@ upstream and are tagged ``@pytest.mark.live_network`` so the default
 live_network"]``. To run them: ``pytest -m live_network
 tests/test_eastmoney_stock_announcements.py``.
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -28,12 +29,14 @@ SAMPLE_RESPONSE = {
                 "notice_date": "2026-06-22 00:00:00",
                 "display_time": "2026-06-21 15:31:10:656",
                 "eiTime": "2026-06-21 15:32:01:000",
-                "codes": [{
-                    "stock_code": "600519",
-                    "short_name": "贵州茅台",
-                    "market_code": "1",
-                    "ann_type": "A,SHA",
-                }],
+                "codes": [
+                    {
+                        "stock_code": "600519",
+                        "short_name": "贵州茅台",
+                        "market_code": "1",
+                        "ann_type": "A,SHA",
+                    }
+                ],
                 "columns": [{"column_code": "001002002001005", "column_name": "分红送配"}],
             },
             {
@@ -41,12 +44,14 @@ SAMPLE_RESPONSE = {
                 "title": "贵州茅台:贵州茅台关于聘任董事会秘书的公告",
                 "notice_date": "2026-06-12 00:00:00",
                 "display_time": "2026-06-11 20:55:07:400",
-                "codes": [{
-                    "stock_code": "600519",
-                    "short_name": "贵州茅台",
-                    "market_code": "1",
-                    "ann_type": "A,SHA",
-                }],
+                "codes": [
+                    {
+                        "stock_code": "600519",
+                        "short_name": "贵州茅台",
+                        "market_code": "1",
+                        "ann_type": "A,SHA",
+                    }
+                ],
                 "columns": [],
             },
         ],
@@ -117,12 +122,14 @@ def test_handles_missing_codes_array():
     bad = {
         "data": {
             "total_hits": 1,
-            "list": [{
-                "art_code": "AN123",
-                "title": "t",
-                "notice_date": "2026-01-01 00:00:00",
-                "codes": [],  # empty
-            }],
+            "list": [
+                {
+                    "art_code": "AN123",
+                    "title": "t",
+                    "notice_date": "2026-01-01 00:00:00",
+                    "codes": [],  # empty
+                }
+            ],
         },
     }
     with patch.object(fetcher._session, "get", return_value=_mock_resp(bad)):
@@ -148,8 +155,9 @@ class TestGetAnnouncementsLive:
         assert len(result) > 0, "Should return at least 1 announcement"
         first = result[0]
         assert "title" in first and first["title"]
-        assert "url" in first and "AN" in first["url"], \
+        assert "url" in first and "AN" in first["url"], (
             f"URL should contain announcement code: {first}"
+        )
         assert "date" in first and len(first["date"]) == 10
 
     def test_pagination_works(self, fetcher):
@@ -160,5 +168,6 @@ class TestGetAnnouncementsLive:
         assert len(page2) > 0
         # Dates should be different (page2 is older)
         if page1 and page2:
-            assert page1[0]["date"] >= page2[0]["date"], \
+            assert page1[0]["date"] >= page2[0]["date"], (
                 f"page1 should be newer than page2: {page1[0]['date']} vs {page2[0]['date']}"
+            )

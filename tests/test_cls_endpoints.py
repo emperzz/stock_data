@@ -45,8 +45,10 @@ def test_morning_briefing_success(client, sample_article, monkeypatch):
     mock_mgr = MagicMock()
     mock_mgr.get_morning_briefing.return_value = (sample_article, "ClsFetcher")
     from stock_data.api.routes import cls as cls_routes
+
     monkeypatch.setattr(cls_routes, "get_manager", lambda: mock_mgr)
     from stock_data.api.cache import get_cls_feed_cache
+
     get_cls_feed_cache().clear()
     r = client.get("/api/v1/news/morning-briefing?date=2026-07-14")
     assert r.status_code == 200
@@ -87,8 +89,10 @@ def test_morning_briefing_not_found(client, monkeypatch):
     mock_mgr = MagicMock()
     mock_mgr.get_morning_briefing.return_value = (None, "")
     from stock_data.api.routes import cls as cls_routes
+
     monkeypatch.setattr(cls_routes, "get_manager", lambda: mock_mgr)
     from stock_data.api.cache import get_cls_feed_cache
+
     get_cls_feed_cache().clear()
     r = client.get("/api/v1/news/morning-briefing?date=2026-07-14")
     assert r.status_code == 404
@@ -101,14 +105,16 @@ def test_morning_briefing_all_fetchers_raised(client, monkeypatch):
     must propagate to a 503, not collapse into a 404 via allow_none=True.
     """
     from stock_data.data_provider.base import DataFetchError
+
     mock_mgr = MagicMock()
     mock_mgr.get_morning_briefing.side_effect = DataFetchError(
-        "All fetchers failed for get_morning_briefing 2026-07-14:\n"
-        "[ClsFetcher] HTTP GET failed"
+        "All fetchers failed for get_morning_briefing 2026-07-14:\n[ClsFetcher] HTTP GET failed"
     )
     from stock_data.api.routes import cls as cls_routes
+
     monkeypatch.setattr(cls_routes, "get_manager", lambda: mock_mgr)
     from stock_data.api.cache import get_cls_feed_cache
+
     get_cls_feed_cache().clear()
     r = client.get("/api/v1/news/morning-briefing?date=2026-07-14")
     assert r.status_code == 503
@@ -119,8 +125,10 @@ def test_market_recap_success(client, sample_article, monkeypatch):
     mock_mgr = MagicMock()
     mock_mgr.get_market_recap.return_value = (sample_article, "ClsFetcher")
     from stock_data.api.routes import cls as cls_routes
+
     monkeypatch.setattr(cls_routes, "get_manager", lambda: mock_mgr)
     from stock_data.api.cache import get_cls_feed_cache
+
     get_cls_feed_cache().clear()
     r = client.get("/api/v1/news/market-recap?date=2026-07-14")
     assert r.status_code == 200

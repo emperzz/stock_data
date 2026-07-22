@@ -106,9 +106,11 @@ class TestHealthCheck:
             )
             # The reason must mention the env var that gates this fetcher
             # (logic-driven, derived from real _token state).
-            assert s["name"].upper().replace("FETCHER", "") in reason.upper() or \
-                   "TOKEN" in reason.upper() or \
-                   "SDK" in reason.upper(), (
+            assert (
+                s["name"].upper().replace("FETCHER", "") in reason.upper()
+                or "TOKEN" in reason.upper()
+                or "SDK" in reason.upper()
+            ), (
                 f"{s['name']} reason {reason!r} doesn't name the env var or "
                 f"SDK that's missing — should be derived from real state."
             )
@@ -330,13 +332,25 @@ class TestStockInfoRoute:
             # via code_to_exchange() — the fetcher payload itself does not
             # carry it).
             expected_fields = {
-                "code", "name", "ename", "market",
-                "listed_date", "delisted_date", "total_shares", "float_shares",
+                "code",
+                "name",
+                "ename",
+                "market",
+                "listed_date",
+                "delisted_date",
+                "total_shares",
+                "float_shares",
                 "concepts",
-                "registered_address", "registered_capital", "legal_representative",
-                "business_scope", "established_date",
-                "secretary", "secretary_phone", "secretary_email",
-                "exchange", "source",
+                "registered_address",
+                "registered_capital",
+                "legal_representative",
+                "business_scope",
+                "established_date",
+                "secretary",
+                "secretary_phone",
+                "secretary_email",
+                "exchange",
+                "source",
             }
             assert set(data.keys()) == expected_fields
             assert data["code"] == "600519"

@@ -1,6 +1,7 @@
 """
 Unit tests for EastMoneyFetcher.
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -53,9 +54,7 @@ class TestDatacenterQuery:
         assert result[0]["SECURITY_CODE"] == "600519"
 
     def test_query_returns_empty_on_error(self):
-        with patch.object(
-            self.fetcher._session, "get", side_effect=Exception("Network error")
-        ):
+        with patch.object(self.fetcher._session, "get", side_effect=Exception("Network error")):
             result = self.fetcher._datacenter_query(self._TEST_EP)
         assert result == []
 
@@ -74,9 +73,16 @@ class TestMarginTrading:
     @patch.object(EastMoneyFetcher, "_datacenter_query")
     def test_returns_records(self, mock_query):
         mock_query.return_value = [
-            {"DATE": "2026-05-20T00:00:00", "RZYE": 100000000, "RZMRE": 5000000,
-             "RZCHE": 3000000, "RQYE": 2000000, "RQMCL": 1000, "RQCHL": 500,
-             "RZRQYE": 102000000}
+            {
+                "DATE": "2026-05-20T00:00:00",
+                "RZYE": 100000000,
+                "RZMRE": 5000000,
+                "RZCHE": 3000000,
+                "RQYE": 2000000,
+                "RQMCL": 1000,
+                "RQCHL": 500,
+                "RZRQYE": 102000000,
+            }
         ]
         result = self.fetcher.get_margin_trading("600519")
         assert len(result) == 1
@@ -91,9 +97,15 @@ class TestBlockTrade:
     @patch.object(EastMoneyFetcher, "_datacenter_query")
     def test_returns_records_with_premium(self, mock_query):
         mock_query.return_value = [
-            {"TRADE_DATE": "2026-05-20T00:00:00", "DEAL_PRICE": 100.0,
-             "CLOSE_PRICE": 98.0, "DEAL_VOLUME": 50000, "DEAL_AMT": 5000000,
-             "BUYER_NAME": "机构专用", "SELLER_NAME": "中信证券"}
+            {
+                "TRADE_DATE": "2026-05-20T00:00:00",
+                "DEAL_PRICE": 100.0,
+                "CLOSE_PRICE": 98.0,
+                "DEAL_VOLUME": 50000,
+                "DEAL_AMT": 5000000,
+                "BUYER_NAME": "机构专用",
+                "SELLER_NAME": "中信证券",
+            }
         ]
         result = self.fetcher.get_block_trade("600519")
         assert len(result) == 1
@@ -108,9 +120,13 @@ class TestHolderNum:
     @patch.object(EastMoneyFetcher, "_datacenter_query")
     def test_returns_records(self, mock_query):
         mock_query.return_value = [
-            {"END_DATE": "2026-03-31T00:00:00", "HOLDER_NUM": 150000,
-             "HOLDER_NUM_CHANGE": -5000, "HOLDER_NUM_RATIO": -3.2,
-             "AVG_FREE_SHARES": 8000.0}
+            {
+                "END_DATE": "2026-03-31T00:00:00",
+                "HOLDER_NUM": 150000,
+                "HOLDER_NUM_CHANGE": -5000,
+                "HOLDER_NUM_RATIO": -3.2,
+                "AVG_FREE_SHARES": 8000.0,
+            }
         ]
         result = self.fetcher.get_holder_num_change("600519")
         assert len(result) == 1
@@ -125,8 +141,13 @@ class TestDividend:
     @patch.object(EastMoneyFetcher, "_datacenter_query")
     def test_returns_records(self, mock_query):
         mock_query.return_value = [
-            {"EX_DIVIDEND_DATE": "2025-06-19T00:00:00", "PRETAX_BONUS_RMB": 21.91,
-             "TRANSFER_RATIO": 0, "BONUS_RATIO": 0, "ASSIGN_PROGRESS": "实施完成"}
+            {
+                "EX_DIVIDEND_DATE": "2025-06-19T00:00:00",
+                "PRETAX_BONUS_RMB": 21.91,
+                "TRANSFER_RATIO": 0,
+                "BONUS_RATIO": 0,
+                "ASSIGN_PROGRESS": "实施完成",
+            }
         ]
         result = self.fetcher.get_dividend("600519")
         assert len(result) == 1
@@ -137,6 +158,7 @@ class TestDividend:
 class TestHistoricalNotSupported:
     def test_fetch_raw_data_raises(self):
         from stock_data.data_provider.base import DataFetchError
+
         f = EastMoneyFetcher()
         with pytest.raises(DataFetchError, match="does not support historical"):
             f._fetch_raw_data("600519", "2026-01-01", "2026-05-01")
@@ -145,6 +167,7 @@ class TestHistoricalNotSupported:
         import pandas as pd
 
         from stock_data.data_provider.base import DataFetchError
+
         f = EastMoneyFetcher()
         with pytest.raises(DataFetchError, match="does not support historical"):
             f._normalize_data(pd.DataFrame(), "600519")
@@ -169,9 +192,7 @@ class TestFundFlowMinute:
 
     def test_returns_records(self):
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "data": {"klines": ["09:30,1000,200,300,400,600"]}
-        }
+        mock_response.json.return_value = {"data": {"klines": ["09:30,1000,200,300,400,600"]}}
         with patch.object(self.fetcher._session, "get", return_value=mock_response):
             result = self.fetcher.get_fund_flow_minute("600519")
         assert len(result) == 1
@@ -179,9 +200,7 @@ class TestFundFlowMinute:
         assert result[0]["main_net"] == 1000
 
     def test_returns_empty_on_error(self):
-        with patch.object(
-            self.fetcher._session, "get", side_effect=Exception("Network error")
-        ):
+        with patch.object(self.fetcher._session, "get", side_effect=Exception("Network error")):
             result = self.fetcher.get_fund_flow_minute("600519")
         assert result == []
 
@@ -209,8 +228,13 @@ class TestReports:
     @patch.object(EastMoneyFetcher, "get_reports")
     def test_returns_records(self, mock_reports):
         mock_reports.return_value = [
-            {"title": "Test Report", "publish_date": "2026-05-20",
-             "org": "中信证券", "info_code": "ABC123", "rating": "买入"}
+            {
+                "title": "Test Report",
+                "publish_date": "2026-05-20",
+                "org": "中信证券",
+                "info_code": "ABC123",
+                "rating": "买入",
+            }
         ]
         result = self.fetcher.get_reports("600519", max_pages=1)
         assert len(result) == 1

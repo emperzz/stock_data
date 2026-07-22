@@ -42,7 +42,9 @@ class TestSourceExpansion:
             "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
             return_value=([], "ThsFetcher"),
         ):
-            r = client.get("/api/v1/boards/885595/history", params={"source": "ths", "frequency": "d"})
+            r = client.get(
+                "/api/v1/boards/885595/history", params={"source": "ths", "frequency": "d"}
+            )
         # Should NOT be 422 — auto-detection replaces the hard gate.
         assert r.status_code != 422, r.text
 
@@ -103,8 +105,9 @@ class TestFrequencyExpansion:
         assert r.status_code == 400, r.text
         body = r.json()
         # Detail shape from manager: ValueError message
-        assert "frequency" in body.get("detail", {}).get("message", "").lower() or \
-               "1m" in body.get("detail", {}).get("message", "")
+        assert "frequency" in body.get("detail", {}).get("message", "").lower() or "1m" in body.get(
+            "detail", {}
+        ).get("message", "")
 
     def test_ths_rejects_unknown_frequency(self, client):
         """Post-2026-07-14: THS supports the full 7-frequency set
@@ -315,9 +318,7 @@ class TestFrequencyAwareDaysDefault:
             ("60m", 30),
         ],
     )
-    def test_default_days_forwards_to_manager(
-        self, client, freq, expected_default
-    ):
+    def test_default_days_forwards_to_manager(self, client, freq, expected_default):
         """When caller doesn't pass ``days``, manager receives the
         freq-aware default (not the hardcoded 30)."""
         with patch(
@@ -354,14 +355,17 @@ class TestFrequencyAwareDaysDefault:
         fake_rows = [
             {
                 "date": f"2026-07-{20 + i // 240:02d} {(i % 240) // 10:02d}:{(i % 10) * 6:02d}",
-                "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
-                "volume": 100, "amount": 150.0, "frequency": "1m",
+                "open": 1.0,
+                "high": 2.0,
+                "low": 0.5,
+                "close": 1.5,
+                "volume": 100,
+                "amount": 150.0,
+                "frequency": "1m",
             }
             for i in range(800)
         ]
-        with patch.object(
-            ths_mod, "_fetch_ths_single_kline", return_value=fake_rows
-        ):
+        with patch.object(ths_mod, "_fetch_ths_single_kline", return_value=fake_rows):
             r = client.get(
                 "/api/v1/boards/881270/history",
                 params={
@@ -372,8 +376,7 @@ class TestFrequencyAwareDaysDefault:
                 },
             )
         assert r.status_code == 200, (
-            f"frequency=1m&start_date=today should be 200; got "
-            f"{r.status_code}: {r.text[:300]}"
+            f"frequency=1m&start_date=today should be 200; got {r.status_code}: {r.text[:300]}"
         )
 
     def test_explicit_days_overrides_freq_default(self, client):

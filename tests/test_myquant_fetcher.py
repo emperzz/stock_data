@@ -1,6 +1,7 @@
 """
 Unit tests for MyquantFetcher.
 """
+
 import pandas as pd
 import pytest
 
@@ -167,9 +168,7 @@ class TestGetKlineDataIndexDispatch:
                 "amount": [5.535e11, 5.012e11, 5.359e10],
                 "volume": [4.444e8, 4.500e8, 4.999e7],
                 "bob": pd.to_datetime(["2025-07-01", "2025-07-02", "2025-07-03"]),
-                "eob": pd.to_datetime(
-                    ["2025-07-01 15:00", "2025-07-02 15:00", "2025-07-03 15:00"]
-                ),
+                "eob": pd.to_datetime(["2025-07-01 15:00", "2025-07-02 15:00", "2025-07-03 15:00"]),
             }
         )
 
@@ -333,6 +332,7 @@ class TestGetKlineDataIndexDispatch:
 
     def test_index_branch_success_still_returns_df(self, monkeypatch):
         """P2-3 must not regress the happy path: real data still returns DataFrame."""
+
         def fake_history(**kwargs):
             return self._fake_index_history()
 
@@ -378,6 +378,7 @@ class TestGetKlineDataIndexDispatch:
         covered by other tests) — we just confirm no DataFetchError about
         ``to_myquant_index_format`` is raised.
         """
+
         def fake_history(**_kwargs):
             return pd.DataFrame(
                 {

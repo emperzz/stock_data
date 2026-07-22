@@ -51,7 +51,13 @@ from datetime import datetime  # used in get_trade_calendar, get_index_intraday,
 
 import pandas as pd
 
-from ..base import BaseFetcher, DataCapability, DataFetchError, SDKFetcherMixin, normalize_stock_code
+from ..base import (
+    BaseFetcher,
+    DataCapability,
+    DataFetchError,
+    SDKFetcherMixin,
+    normalize_stock_code,
+)
 from ..core.types import RealtimeSource, UnifiedRealtimeQuote, safe_float
 from ..utils.code_converter import to_myquant_format, to_myquant_index_format
 from ..utils.normalize import is_a_share_stock_code
@@ -490,9 +496,7 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
         raised consistently since the index-fetch introduction.
         """
         if not self.is_available():
-            raise DataFetchError(
-                "Myquant API not available (no token) — manager should skip"
-            )
+            raise DataFetchError("Myquant API not available (no token) — manager should skip")
         if frequency != "d":
             raise DataFetchError(
                 f"MyquantFetcher index does not support frequency={frequency!r} "
@@ -513,9 +517,7 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
                 df=True,
             )
             if df is None or df.empty:
-                raise DataFetchError(
-                    f"Myquant returned no data for index {index_code}"
-                )
+                raise DataFetchError(f"Myquant returned no data for index {index_code}")
             return self._normalize_index_df(df)
         except DataFetchError:
             raise
@@ -524,9 +526,7 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
                 f"[MyquantFetcher] get_index_historical failed for {index_code}",
                 exc_info=True,
             )
-            raise DataFetchError(
-                f"MyquantFetcher index fetch failed for {index_code}: {e}"
-            ) from e
+            raise DataFetchError(f"MyquantFetcher index fetch failed for {index_code}: {e}") from e
 
     def get_index_intraday(self, index_code: str, period: str = "5") -> pd.DataFrame | None:
         """Get intraday minute-level data for a CSI index via myquant.
@@ -642,23 +642,23 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
                 return None
             row = df.iloc[0]
             return {
-                "code":              stock_code,
-                "name":              _decode_gm_name(row.get("sec_name", "")),
-                "ename":             "",
-                "market":            "csi",
-                "listed_date":       _ts_to_date(row.get("listed_date")),
-                "delisted_date":     _ts_to_date(row.get("delisted_date")),
-                "total_shares":      None,  # free tier 不提供
-                "float_shares":      None,  # free tier 不提供
-                "concepts":          [],
+                "code": stock_code,
+                "name": _decode_gm_name(row.get("sec_name", "")),
+                "ename": "",
+                "market": "csi",
+                "listed_date": _ts_to_date(row.get("listed_date")),
+                "delisted_date": _ts_to_date(row.get("delisted_date")),
+                "total_shares": None,  # free tier 不提供
+                "float_shares": None,  # free tier 不提供
+                "concepts": [],
                 "registered_address": "",
                 "registered_capital": "",
                 "legal_representative": "",
-                "business_scope":    "",
-                "established_date":  "",
-                "secretary":         "",
-                "secretary_phone":   "",
-                "secretary_email":   "",
+                "business_scope": "",
+                "established_date": "",
+                "secretary": "",
+                "secretary_phone": "",
+                "secretary_email": "",
             }
         except Exception as e:
             logger.warning("[MyquantFetcher] get_stock_info %s failed: %s", stock_code, e)

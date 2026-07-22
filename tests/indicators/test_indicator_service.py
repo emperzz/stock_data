@@ -16,8 +16,20 @@ from stock_data.data_provider.indicators import (
 def test_registry_has_14_indicators():
     assert len(INDICATOR_REGISTRY) == 14
     expected = {
-        "ma", "macd", "boll", "kdj", "rsi", "wr", "bias",
-        "cci", "atr", "obv", "roc", "dmi", "sar", "kc",
+        "ma",
+        "macd",
+        "boll",
+        "kdj",
+        "rsi",
+        "wr",
+        "bias",
+        "cci",
+        "atr",
+        "obv",
+        "roc",
+        "dmi",
+        "sar",
+        "kc",
     }
     assert {k.value for k in INDICATOR_REGISTRY} == expected
 

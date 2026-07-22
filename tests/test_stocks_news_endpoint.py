@@ -6,6 +6,7 @@ real upstream and is tagged ``@pytest.mark.live_network`` so the default
 live_network"]``. To run it: ``pytest -m live_network
 tests/test_stocks_news_endpoint.py``.
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -27,11 +28,17 @@ def _make_fake_manager(items=None, source="EastMoneyFetcher"):
 
 def test_endpoint_returns_news(client):
     fake_items = [
-        {"title": "T1", "url": "http://x", "publish_date": "2026-07-02",
-         "source_domain": "x.com", "media_name": "X"}
+        {
+            "title": "T1",
+            "url": "http://x",
+            "publish_date": "2026-07-02",
+            "source_domain": "x.com",
+            "media_name": "X",
+        }
     ]
-    with patch("stock_data.api.routes.news.get_manager",
-               return_value=_make_fake_manager(items=fake_items)):
+    with patch(
+        "stock_data.api.routes.news.get_manager", return_value=_make_fake_manager(items=fake_items)
+    ):
         resp = client.get("/api/v1/stocks/600519/news?limit=10")
     assert resp.status_code == 200
     body = resp.json()
@@ -57,10 +64,13 @@ def test_endpoint_validates_limit_min(client):
 
 def test_endpoint_default_limit(client):
     """Default limit should be 20."""
-    fake_items = [{"title": f"T{i}", "url": "", "publish_date": "",
-                   "source_domain": "", "media_name": ""} for i in range(3)]
-    with patch("stock_data.api.routes.news.get_manager",
-               return_value=_make_fake_manager(items=fake_items)) as m:
+    fake_items = [
+        {"title": f"T{i}", "url": "", "publish_date": "", "source_domain": "", "media_name": ""}
+        for i in range(3)
+    ]
+    with patch(
+        "stock_data.api.routes.news.get_manager", return_value=_make_fake_manager(items=fake_items)
+    ) as m:
         resp = client.get("/api/v1/stocks/600519/news")
     assert resp.status_code == 200
     body = resp.json()
@@ -82,5 +92,4 @@ def test_stocks_news_endpoint_live(client):
     assert body["code"] == "600519"
     assert "data" in body
     assert len(body["data"]) > 0, "Live news feed should not be empty"
-    assert body["source"] == "EastMoneyFetcher", \
-        f"Expected EastMoneyFetcher, got {body['source']}"
+    assert body["source"] == "EastMoneyFetcher", f"Expected EastMoneyFetcher, got {body['source']}"

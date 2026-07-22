@@ -18,6 +18,7 @@ only production caller (``manager.get_trade_calendar``) passes the
 full set returned by the upstream, so its observable behavior is
 unchanged — but the function is now safe to use from any context.
 """
+
 from stock_data.data_provider.persistence.db import get_connection
 from stock_data.data_provider.persistence.trade_calendar import (
     get_cached_calendar,
@@ -65,9 +66,9 @@ def test_update_cached_calendar_preserves_unrelated_dates():
     Expect: full-replace — old dates not in the new list are removed,
     and the new date is inserted.
     """
-    keep = "2099-01-01"        # pre-existing, not in the new list
-    update = "2099-02-02"      # in the new list
-    untouched = "2099-03-03"   # pre-existing, not in the new list
+    keep = "2099-01-01"  # pre-existing, not in the new list
+    update = "2099-02-02"  # in the new list
+    untouched = "2099-03-03"  # pre-existing, not in the new list
 
     _seed(keep)
     _seed(untouched)
@@ -78,9 +79,7 @@ def test_update_cached_calendar_preserves_unrelated_dates():
 
         assert result == 1, f"Expected 1 row affected, got {result}"
         dates = _all_dates()
-        assert keep not in dates, (
-            f"Pre-existing {keep!r} should have been removed by full-replace."
-        )
+        assert keep not in dates, f"Pre-existing {keep!r} should have been removed by full-replace."
         assert untouched not in dates, (
             f"Pre-existing {untouched!r} should have been removed by full-replace."
         )

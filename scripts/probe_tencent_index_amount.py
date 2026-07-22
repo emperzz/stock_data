@@ -13,8 +13,10 @@ This probe hits Tencent's index daily endpoint directly for 000300 (HS300) and:
 Run with:
     .venv/Scripts/python.exe scripts/probe_tencent_index_amount.py
 """
+
 from __future__ import annotations
 
+import contextlib
 import sys
 
 import requests
@@ -41,6 +43,7 @@ def fetch_tx(code: str) -> dict:
     if "=" in text:
         text = text.split("=", 1)[1].rstrip(";")
     import json
+
     return json.loads(text)
 
 
@@ -96,10 +99,8 @@ def main() -> int:
         c5 = row[5] if len(row) > 5 else None
         print(f"{date:<12} {str(c5):>18}")
         if c5 is not None:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 tx_amounts.append(float(c5))
-            except (ValueError, TypeError):
-                pass
 
     print("\n=== EM index daily (last 5 trading days, with both volume + amount) ===")
     # EM often rate-limits or refuses raw requests — wrap so the probe
@@ -108,8 +109,9 @@ def main() -> int:
     try:
         em = fetch_em(INDEX_CODE)
     except Exception as e:
-        print(f"  (EM fetch failed: {type(e).__name__}: {e}; "
-              f"falling back to Tencent-only heuristic)")
+        print(
+            f"  (EM fetch failed: {type(e).__name__}: {e}; falling back to Tencent-only heuristic)"
+        )
     if em is not None:
         try:
             klines = em["data"]["klines"]
@@ -128,7 +130,7 @@ def main() -> int:
             parts = line.split(",")
             if len(parts) < 7:
                 continue
-            date, o, c, h, l, v, a = parts[:7]
+            date, o, c, h, low, v, a = parts[:7]
             print(f"{date:<12} {v:>15} {a:>20}")
             try:
                 em_volumes.append(float(v))

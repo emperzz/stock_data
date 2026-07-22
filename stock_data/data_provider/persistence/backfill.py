@@ -6,6 +6,7 @@ responses return complete board sets instead of partial ones.
 
 Reference: docs/superpowers/specs/2026-07-10-ths-board-backfill-on-startup-design.md
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -66,8 +67,8 @@ class PhaseStats:
 class BackfillReport:
     phase1: PhaseStats = field(default_factory=PhaseStats)
     phase2: PhaseStats = field(default_factory=PhaseStats)
-    phase1_boards_emitted: int = 0     # boards returned by fetch_boards_with_zzshare_backfill
-    phase2_boards_committed: int = 0   # boards whose membership upsert fired
+    phase1_boards_emitted: int = 0  # boards returned by fetch_boards_with_zzshare_backfill
+    phase2_boards_committed: int = 0  # boards whose membership upsert fired
 
 
 def run_ths_board_backfill(
@@ -137,7 +138,8 @@ def run_ths_board_backfill(
     report.phase1.duration_s = time.time() - t0
     logger.info(
         "[Startup/Backfill] phase 1 wrote %d boards in %.1fs",
-        report.phase1.success, report.phase1.duration_s,
+        report.phase1.success,
+        report.phase1.duration_s,
     )
 
     # ── Phase 2: stock_board_membership ──────────────────────────────
@@ -161,7 +163,8 @@ def run_ths_board_backfill(
             if cancel_event is not None and cancel_event.is_set():
                 logger.info(
                     "[Startup/Backfill] phase 2 cancelled at board %d/%d (cooperative)",
-                    idx, total_p2,
+                    idx,
+                    total_p2,
                 )
                 break
 
@@ -190,11 +193,11 @@ def run_ths_board_backfill(
                 report.phase2.errors += 1
                 report.phase2.consecutive_errors += 1
                 if len(report.phase2.error_samples) < 20:
-                    report.phase2.error_samples.append(
-                        f"{platecode}: {type(e).__name__}: {e}")
+                    report.phase2.error_samples.append(f"{platecode}: {type(e).__name__}: {e}")
                 logger.warning(
                     "[Startup/Backfill] phase 2 board %s failed: %s",
-                    platecode, e,
+                    platecode,
+                    e,
                 )
                 # Short-circuit on sustained outage — the upstream is down,
                 # no point burning the remaining startup window sleeping
@@ -235,7 +238,9 @@ def run_ths_board_backfill(
             if done % 50 == 0:
                 logger.info(
                     "[Startup/Backfill] phase 2 progress=%d/%d errors=%d elapsed=%.0fs",
-                    done, total_p2, report.phase2.errors,
+                    done,
+                    total_p2,
+                    report.phase2.errors,
                     time.time() - t1,
                 )
     finally:
@@ -244,7 +249,9 @@ def run_ths_board_backfill(
     report.phase2.duration_s = time.time() - t1
     logger.info(
         "[Startup/Backfill] phase 2 wrote %d boards (%d errors) in %.1fs",
-        report.phase2.success, report.phase2.errors, report.phase2.duration_s,
+        report.phase2.success,
+        report.phase2.errors,
+        report.phase2.duration_s,
     )
     return report
 

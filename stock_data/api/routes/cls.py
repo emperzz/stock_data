@@ -90,6 +90,7 @@ def _make_cls_route(
     and differ only in five small variations — this factory keeps that
     contract in one place so future response-shape changes can't drift.
     """
+
     @cls_router.get(
         path,
         response_model=ClsFeedResponse,

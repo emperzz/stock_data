@@ -103,8 +103,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="print plan, don't write")
     ap.add_argument("--in", dest="in_path", default=str(CSV_PATH))
-    ap.add_argument("--out", dest="out_path", default=None,
-                    help="output path (default: overwrite --in unless --dry-run)")
+    ap.add_argument(
+        "--out",
+        dest="out_path",
+        default=None,
+        help="output path (default: overwrite --in unless --dry-run)",
+    )
     args = ap.parse_args()
 
     # ensure stdout honors utf-8 on Windows git-bash (terminal otherwise mojibakes)
@@ -128,7 +132,7 @@ def main() -> int:
     with in_path.open(encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
 
-    fixed: list[tuple[dict, str, str]] = []     # (row, platecode, cid)
+    fixed: list[tuple[dict, str, str]] = []  # (row, platecode, cid)
     unresolved: list[dict] = []
     other_rows: list[dict] = []
 
@@ -174,7 +178,9 @@ def main() -> int:
         w.writeheader()
         w.writerows(new_rows)
 
-    print(f"[write] {out_path}: {len(new_rows)} rows ({len(fixed)} fixed, {len(unresolved)} kept verbatim)")
+    print(
+        f"[write] {out_path}: {len(new_rows)} rows ({len(fixed)} fixed, {len(unresolved)} kept verbatim)"
+    )
     return 0
 
 

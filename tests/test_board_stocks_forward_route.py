@@ -63,8 +63,8 @@ def test_get_board_stocks_reads_from_membership_table(fresh_db, monkeypatch):
         )
     )
     assert origin == "persistence"
-    assert effective_source == "ths"   # cache hit → default (historical fetcher label)
-    assert reason is None             # cache hit has no annotation
+    assert effective_source == "ths"  # cache hit → default (historical fetcher label)
+    assert reason is None  # cache hit has no annotation
     assert len(stocks) == 2
     assert {s["stock_code"] for s in stocks} == {"600519", "000858"}
     mock_manager.get_board_stocks.assert_not_called()
@@ -86,7 +86,7 @@ def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
         source="ths",
         boards=[
             {
-                "code": "301558",       # upstream cid used in mock return
+                "code": "301558",  # upstream cid used in mock return
                 "name": "白酒",
                 "subtype": "concept",
                 "platecode": "885642",
@@ -107,7 +107,7 @@ def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
 
     stocks, origin, effective_source, reason, _quote_truncated, _quote_total = (
         board_mod.get_board_stocks(
-            board_code="885642",     # platecode
+            board_code="885642",  # platecode
             source="ths",
             manager=mock_manager,
         )
@@ -119,7 +119,7 @@ def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
     # regardless of source, so the ZZSHARE leg grabs them.
     assert origin == "ths"
     assert effective_source == "zzshare"  # ZZSHARE primary served
-    assert reason is None                  # success path has no annotation
+    assert reason is None  # success path has no annotation
     assert len(stocks) == 3
     assert mock_manager.get_board_stocks.call_count == 1
     # Verify membership was populated (cache is keyed on the platecode
@@ -151,7 +151,14 @@ def test_board_stocks_include_quote_fills_board_block(client):
         patch.object(
             board_mod,
             "get_board_stocks",
-            return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths", "ths", None, False, 1),
+            return_value=(
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "ths",
+                "ths",
+                None,
+                False,
+                1,
+            ),
         ),
         patch.object(board_mod, "get_board_name_with_fallback", return_value="央企国企改革"),
         # C2: route now requires board_type from the cache to dispatch the
@@ -187,7 +194,14 @@ def test_board_stocks_include_quote_false_no_realtime_call(client):
         patch.object(
             board_mod,
             "get_board_stocks",
-            return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths", "ths", None, False, 1),
+            return_value=(
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "ths",
+                "ths",
+                None,
+                False,
+                1,
+            ),
         ),
         patch.object(board_mod, "get_board_name_with_fallback", return_value="央企国企改革"),
         patch.object(mgr_mod.DataFetcherManager, "get_board_realtime") as mock_rt,
@@ -215,7 +229,14 @@ def test_board_stocks_include_quote_best_effort_on_failure(client):
         patch.object(
             board_mod,
             "get_board_stocks",
-            return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths", "ths", None, False, 1),
+            return_value=(
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "ths",
+                "ths",
+                None,
+                False,
+                1,
+            ),
         ),
         patch.object(board_mod, "get_board_name_with_fallback", return_value="央企国企改革"),
         # C2: route requires board_type from cache before calling the fetcher.
@@ -261,7 +282,14 @@ def test_board_stocks_board_block_has_type_from_cache(client):
         patch.object(
             board_mod,
             "get_board_stocks",
-            return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths", "ths", None, False, 1),
+            return_value=(
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "ths",
+                "ths",
+                None,
+                False,
+                1,
+            ),
         ),
         patch.object(board_mod, "get_board_name_with_fallback", return_value="央企国企改革"),
         # Cache hits: route should plug board_type='concept' into BoardInfo.
@@ -301,7 +329,14 @@ def test_board_stocks_board_block_type_none_on_cache_miss(client):
         patch.object(
             board_mod,
             "get_board_stocks",
-            return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths", "ths", None, False, 1),
+            return_value=(
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "ths",
+                "ths",
+                None,
+                False,
+                1,
+            ),
         ),
         patch.object(board_mod, "get_board_name_with_fallback", return_value="x"),
         # Cache miss: helper returns None.
@@ -340,16 +375,19 @@ def test_board_stocks_unsupported_source_returns_quote_error(client):
         patch.object(
             board_mod,
             "get_board_stocks",
-            return_value=([{"stock_code": "600519", "stock_name": "x"}], "eastmoney", "eastmoney", None, False, 1),
+            return_value=(
+                [{"stock_code": "600519", "stock_name": "x"}],
+                "eastmoney",
+                "eastmoney",
+                None,
+                False,
+                1,
+            ),
         ),
         patch.object(board_mod, "get_board_name_with_fallback", return_value="x"),
-        patch.object(
-            mgr_mod.DataFetcherManager, "get_board_realtime"
-        ) as mgr_call,
+        patch.object(mgr_mod.DataFetcherManager, "get_board_realtime") as mgr_call,
     ):
-        r = client.get(
-            "/api/v1/boards/885595/stocks?source=eastmoney&include_quote=true"
-        )
+        r = client.get("/api/v1/boards/885595/stocks?source=eastmoney&include_quote=true")
     assert r.status_code == 200
     body = r.json()
     # Stocks still served by eastmoney — that part of the contract is
@@ -379,7 +417,14 @@ def test_board_stocks_include_quote_false_does_not_lookup_metadata(client):
         patch.object(
             board_mod,
             "get_board_stocks",
-            return_value=([{"stock_code": "600519", "stock_name": "贵州茅台"}], "ths", "ths", None, False, 1),
+            return_value=(
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "ths",
+                "ths",
+                None,
+                False,
+                1,
+            ),
         ),
         patch.object(board_mod, "get_board_name_with_fallback", return_value="x"),
         patch.object(board_mod, "get_board_metadata") as meta_call,

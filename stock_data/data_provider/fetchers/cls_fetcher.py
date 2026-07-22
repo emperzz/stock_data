@@ -62,9 +62,7 @@ class ClsFetcher(BaseFetcher):
     name = "ClsFetcher"
     priority = int(os.getenv("CLS_PRIORITY", "8"))
     supported_markets: set[str] = {"csi"}
-    supported_data_types = (
-        DataCapability.MORNING_BRIEFING | DataCapability.MARKET_RECAP
-    )
+    supported_data_types = DataCapability.MORNING_BRIEFING | DataCapability.MARKET_RECAP
 
     def is_available(self) -> bool:
         # Lazy bs4 import in _extract_body_text / _dedup_images; probe before
@@ -89,9 +87,7 @@ class ClsFetcher(BaseFetcher):
             raise DataFetchError("[ClsFetcher] empty HTML body")
         m = _NEXT_DATA_RE.search(html)
         if m is None:
-            raise DataFetchError(
-                "[ClsFetcher] __NEXT_DATA__ script tag not found in HTML"
-            )
+            raise DataFetchError("[ClsFetcher] __NEXT_DATA__ script tag not found in HTML")
         try:
             return json.loads(m.group(1))
         except ValueError as e:
@@ -132,11 +128,7 @@ class ClsFetcher(BaseFetcher):
             ctime = safe_int(raw.get("article_time"))
             # Pin to Asia/Shanghai so a UTC server doesn't mis-attribute the
             # 07:00 +0800 publish time to the previous calendar day.
-            date = (
-                datetime.fromtimestamp(int(ctime), _CLS_TZ).strftime("%Y-%m-%d")
-                if ctime
-                else ""
-            )
+            date = datetime.fromtimestamp(int(ctime), _CLS_TZ).strftime("%Y-%m-%d") if ctime else ""
             out.append(
                 {
                     "article_id": article_id,
@@ -154,9 +146,7 @@ class ClsFetcher(BaseFetcher):
         return out
 
     @staticmethod
-    def _find_article_id_by_date(
-        articles: list[dict], date: str
-    ) -> int | None:
+    def _find_article_id_by_date(articles: list[dict], date: str) -> int | None:
         """Find the article_id whose `date` matches the given YYYY-MM-DD.
 
         Linear scan — the upstream returns ~20 entries so a dict index is overkill.
@@ -222,9 +212,7 @@ class ClsFetcher(BaseFetcher):
         return out
 
     @staticmethod
-    def _fetch_article_detail(
-        article_id: int, html: str, *, share_num: int = 0
-    ) -> dict | None:
+    def _fetch_article_detail(article_id: int, html: str, *, share_num: int = 0) -> dict | None:
         """Parse a detail-page __NEXT_DATA__ → ClsArticle-shaped dict.
 
         Path: __NEXT_DATA__.props.pageProps.articleDetail
@@ -244,11 +232,7 @@ class ClsFetcher(BaseFetcher):
         article_id (defensive — should never happen in practice).
         """
         next_data = ClsFetcher._parse_next_data(html)
-        detail = (
-            next_data.get("props", {})
-            .get("pageProps", {})
-            .get("articleDetail", {})
-        )
+        detail = next_data.get("props", {}).get("pageProps", {}).get("articleDetail", {})
         # CLS returns an empty dict (or just an error code) for invalid article IDs
         served_id = safe_int(detail.get("id"))
         if not detail or served_id is None:
@@ -264,11 +248,7 @@ class ClsFetcher(BaseFetcher):
         ctime = safe_int(detail.get("ctime"))
         # Pin to Asia/Shanghai so a UTC server doesn't mis-attribute the
         # 07:00 +0800 publish time to the previous calendar day.
-        date = (
-            datetime.fromtimestamp(int(ctime), _CLS_TZ).strftime("%Y-%m-%d")
-            if ctime
-            else ""
-        )
+        date = datetime.fromtimestamp(int(ctime), _CLS_TZ).strftime("%Y-%m-%d") if ctime else ""
         # One BS4 parse per detail page, shared between body_text + img scan.
         content = detail.get("content", "") or ""
         soup = None
@@ -355,8 +335,7 @@ class ClsFetcher(BaseFetcher):
                 raw = getattr(r, "content", b"") or b""
                 if len(raw) > _CLS_MAX_RESPONSE_BYTES:
                     raise DataFetchError(
-                        f"[ClsFetcher] response exceeded "
-                        f"{_CLS_MAX_RESPONSE_BYTES}B cap for {url}"
+                        f"[ClsFetcher] response exceeded {_CLS_MAX_RESPONSE_BYTES}B cap for {url}"
                     )
         finally:
             close = getattr(r, "close", None)
@@ -397,9 +376,7 @@ class ClsFetcher(BaseFetcher):
         list_html = self._http_get_text(list_url)
         articles = self._parse_subject_articles(subject_id, list_html, limit=20)
         # Map article_id → share_num so the detail parser can surface it.
-        share_by_id = {
-            art["article_id"]: art.get("share_num", 0) for art in articles
-        }
+        share_by_id = {art["article_id"]: art.get("share_num", 0) for art in articles}
         article_id = self._find_article_id_by_date(articles, date)
         if article_id is None:
             return None

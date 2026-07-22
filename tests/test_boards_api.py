@@ -52,8 +52,10 @@ def test_list_boards_source_ths_passes_ths_to_persistence(client):
     from unittest.mock import patch
 
     from stock_data.data_provider.persistence import board as board_mod
-    with patch.object(board_mod, "fetch_boards_with_zzshare_backfill",
-                      return_value=[]) as mock_fetch:
+
+    with patch.object(
+        board_mod, "fetch_boards_with_zzshare_backfill", return_value=[]
+    ) as mock_fetch:
         r = client.get("/api/v1/boards?type=concept&source=ths")
     assert r.status_code == 200
     # After unification, get_board_list doesn't take 'source' kwarg
@@ -297,22 +299,26 @@ def test_list_boards_no_type_eastmoney_iterates_only_concept_industry(client):
     def fake_get_all_boards(*, source, board_type=None, subtype=None, include_quote=False):
         call_log.append((source, board_type))
         return (
-            [{
-                "code": f"BK_{board_type}",
-                "name": f"{board_type} test",
-                "type": board_type,
-                "subtype": board_type,
-                "source": source,
-            }],
+            [
+                {
+                    "code": f"BK_{board_type}",
+                    "name": f"{board_type} test",
+                    "type": board_type,
+                    "subtype": board_type,
+                    "source": source,
+                }
+            ],
             source,
         )
 
     mgr.get_all_boards.side_effect = fake_get_all_boards
     forced_refresh = type("T", (), {"is_first_call": lambda *a: True})()
 
-    with _patch("stock_data.api.routes.boards.get_manager", return_value=mgr), \
-         _patch.object(board_mod, "update_cached_boards", return_value=0), \
-         _patch.object(board_mod, "_refresh_tracker", forced_refresh):
+    with (
+        _patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+        _patch.object(board_mod, "update_cached_boards", return_value=0),
+        _patch.object(board_mod, "_refresh_tracker", forced_refresh),
+    ):
         r = client.get("/api/v1/boards?source=eastmoney")
 
     assert r.status_code == 200
@@ -320,7 +326,7 @@ def test_list_boards_no_type_eastmoney_iterates_only_concept_industry(client):
     assert called_types == {"concept", "industry"}, (
         f"source=eastmoney should iterate only concept+industry; got {called_types}"
     )
-    for src, bt in call_log:
+    for src, _bt in call_log:
         assert src == "eastmoney", f"unexpected source={src} for eastmoney query"
 
     body = r.json()
@@ -352,22 +358,26 @@ def test_list_boards_no_type_zhitu_iterates_all_four_types(client):
     def fake_get_all_boards(*, source, board_type=None, subtype=None, include_quote=False):
         call_log.append((source, board_type))
         return (
-            [{
-                "code": f"ZH_{board_type}",
-                "name": f"{board_type} test",
-                "type": board_type,
-                "subtype": board_type,
-                "source": source,
-            }],
+            [
+                {
+                    "code": f"ZH_{board_type}",
+                    "name": f"{board_type} test",
+                    "type": board_type,
+                    "subtype": board_type,
+                    "source": source,
+                }
+            ],
             source,
         )
 
     mgr.get_all_boards.side_effect = fake_get_all_boards
     forced_refresh = type("T", (), {"is_first_call": lambda *a: True})()
 
-    with _patch("stock_data.api.routes.boards.get_manager", return_value=mgr), \
-         _patch.object(board_mod, "update_cached_boards", return_value=0), \
-         _patch.object(board_mod, "_refresh_tracker", forced_refresh):
+    with (
+        _patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+        _patch.object(board_mod, "update_cached_boards", return_value=0),
+        _patch.object(board_mod, "_refresh_tracker", forced_refresh),
+    ):
         r = client.get("/api/v1/boards?source=zhitu")
 
     assert r.status_code == 200
@@ -375,7 +385,7 @@ def test_list_boards_no_type_zhitu_iterates_all_four_types(client):
     assert called_types == {"concept", "industry", "index", "special"}, (
         f"source=zhitu should iterate all 4 types; got {called_types}"
     )
-    for src, bt in call_log:
+    for src, _bt in call_log:
         assert src == "zhitu"
 
     body = r.json()
@@ -502,8 +512,10 @@ def test_get_board_stocks_source_ths_passes_ths_to_persistence(client):
     from unittest.mock import patch
 
     from stock_data.data_provider.persistence import board as board_mod
-    with patch.object(board_mod, "fetch_board_stocks_with_zzshare_fallback",
-                      return_value=([], "ths", "ths", None)) as mock_fetch:
+
+    with patch.object(
+        board_mod, "fetch_board_stocks_with_zzshare_fallback", return_value=([], "ths", "ths", None)
+    ) as mock_fetch:
         r = client.get("/api/v1/boards/885642/stocks?source=ths&refresh=true")
     assert r.status_code in (200, 404)  # empty may 404
     assert mock_fetch.call_count >= 1
@@ -762,9 +774,7 @@ def test_get_stock_boards_zzshare_type_special_returns_400(client):
     assert "special" in str(r.json().get("detail", ""))
     assert "zzshare" in str(r.json().get("detail", ""))
     # With a subtype, the existing _validate_subtype also catches it.
-    r2 = client.get(
-        "/api/v1/stocks/600000/boards?source=zzshare&type=special&subtype=同花顺题材"
-    )
+    r2 = client.get("/api/v1/stocks/600000/boards?source=zzshare&type=special&subtype=同花顺题材")
     assert r2.status_code == 400
 
 
@@ -863,8 +873,13 @@ def test_get_board_history_per_row_frequency_falls_back_to_request(client):
         # No "frequency" key in the row dict (legacy fetcher output).
         {
             "date": "2026-05-20",
-            "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05,
-            "volume": 100, "amount": 105.0, "pct_chg": 5.0,
+            "open": 1.0,
+            "high": 1.1,
+            "low": 0.9,
+            "close": 1.05,
+            "volume": 100,
+            "amount": 105.0,
+            "pct_chg": 5.0,
         },
     ]
     with patch(
@@ -894,8 +909,13 @@ def test_get_board_history_per_row_frequency_distinct_from_top_period(client):
         {
             "date": "2026-05-20",
             "frequency": "w",  # claims weekly
-            "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.05,
-            "volume": 100, "amount": 105.0, "pct_chg": 5.0,
+            "open": 1.0,
+            "high": 1.1,
+            "low": 0.9,
+            "close": 1.05,
+            "volume": 100,
+            "amount": 105.0,
+            "pct_chg": 5.0,
         },
     ]
     with patch(
@@ -939,6 +959,7 @@ def test_get_board_history_zzshare_aliases_to_ths(client):
 def test_boards_valid_sources_excludes_zzshare():
     """After unification, VALID_SOURCES must not include 'zzshare'."""
     from stock_data.data_provider.persistence import board as board_mod
+
     assert "zzshare" not in board_mod.VALID_SOURCES
     assert "ths" in board_mod.VALID_SOURCES
     assert "eastmoney" in board_mod.VALID_SOURCES
@@ -948,6 +969,7 @@ def test_boards_valid_sources_excludes_zzshare():
 def test_boards_stocks_valid_sources_excludes_zzshare():
     """_BOARD_STOCKS_VALID_SOURCES must not include 'zzshare' either."""
     from stock_data.data_provider.persistence import board as board_mod
+
     assert "zzshare" not in board_mod._BOARD_STOCKS_VALID_SOURCES
     assert "ths" in board_mod._BOARD_STOCKS_VALID_SOURCES
     assert "eastmoney" in board_mod._BOARD_STOCKS_VALID_SOURCES
@@ -959,6 +981,7 @@ def test_get_board_list_signature_has_source_arg():
     import inspect
 
     from stock_data.data_provider.persistence import board as board_mod
+
     sig = inspect.signature(board_mod.get_board_list)
     assert "source" in sig.parameters, (
         f"get_board_list missing 'source' param: {list(sig.parameters)}"
@@ -978,6 +1001,7 @@ def test_get_board_stocks_signature_has_source_kwarg():
     import inspect
 
     from stock_data.data_provider.persistence import board as board_mod
+
     sig = inspect.signature(board_mod.get_board_stocks)
     assert "source" in sig.parameters, (
         f"get_board_stocks missing 'source' param: {list(sig.parameters)}"
@@ -987,9 +1011,17 @@ def test_get_board_stocks_signature_has_source_kwarg():
 class TestBoardStocksTopNAndSort:
     """Route-level tests for sort_by / sort_order / top_n (Task 7 of plan)."""
 
-    @patch("stock_data.data_provider.persistence.board.get_board_stocks",
-           return_value=([{"stock_code": "000034", "stock_name": "x"}],
-                         "persistence", "ths", None, False, 1))
+    @patch(
+        "stock_data.data_provider.persistence.board.get_board_stocks",
+        return_value=(
+            [{"stock_code": "000034", "stock_name": "x"}],
+            "persistence",
+            "ths",
+            None,
+            False,
+            1,
+        ),
+    )
     def test_default_request_no_new_fields(self, mock_pers, client):
         """不传 sort/top_n 时 response 行为不变 (quote_* echo 全部 None)."""
         r = client.get("/api/v1/boards/885756/stocks?source=ths")
@@ -1001,9 +1033,10 @@ class TestBoardStocksTopNAndSort:
         assert body["quote_sort_order"] is None
         assert body["quote_total_in_board"] is None
 
-    @patch("stock_data.data_provider.persistence.board.get_board_stocks",
-           return_value=([{"stock_code": "000034", "stock_name": "x"}],
-                         "ths", "ths", None, False, 1))
+    @patch(
+        "stock_data.data_provider.persistence.board.get_board_stocks",
+        return_value=([{"stock_code": "000034", "stock_name": "x"}], "ths", "ths", None, False, 1),
+    )
     def test_sort_by_echoed_back(self, mock_pers, client):
         """?sort_by=price 返回时 echo 回 quote_sort_by."""
         r = client.get(
@@ -1020,8 +1053,7 @@ class TestBoardStocksTopNAndSort:
     def test_sort_by_with_non_ths_source_returns_400(self, client):
         """source='eastmoney' + sort_by=price → 400 invalid_combination (route cross-validation)."""
         r = client.get(
-            "/api/v1/boards/885756/stocks?source=eastmoney&include_quote=true"
-            "&sort_by=price"
+            "/api/v1/boards/885756/stocks?source=eastmoney&include_quote=true&sort_by=price"
         )
         assert r.status_code == 400
         body = r.json()
@@ -1031,25 +1063,17 @@ class TestBoardStocksTopNAndSort:
 
     def test_sort_by_without_include_quote_returns_400(self, client):
         """?sort_by=price 不带 include_quote=true → 400 (与 /boards sibling 一致)."""
-        r = client.get(
-            "/api/v1/boards/885756/stocks?source=ths"
-            "&sort_by=price"
-        )
+        r = client.get("/api/v1/boards/885756/stocks?source=ths&sort_by=price")
         assert r.status_code == 400
         detail = r.json().get("detail", {})
         assert detail.get("error") == "invalid_combination"
 
     def test_top_n_above_50_returns_422(self, client):
         """Query(le=50) → FastAPI 自带 422 validation."""
-        r = client.get(
-            "/api/v1/boards/885756/stocks?source=ths&include_quote=true&top_n=100"
-        )
+        r = client.get("/api/v1/boards/885756/stocks?source=ths&include_quote=true&top_n=100")
         assert r.status_code == 422
 
     def test_sort_by_invalid_literal_returns_422(self, client):
         """Literal[...] 校验 → 422."""
-        r = client.get(
-            "/api/v1/boards/885756/stocks?source=ths&include_quote=true"
-            "&sort_by=magic"
-        )
+        r = client.get("/api/v1/boards/885756/stocks?source=ths&include_quote=true&sort_by=magic")
         assert r.status_code == 422

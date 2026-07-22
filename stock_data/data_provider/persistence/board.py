@@ -1052,9 +1052,7 @@ def fetch_board_stocks_with_zzshare_fallback(
                 _f10_ret = None
             # Verify it's a 2-tuple; otherwise skip (mock quirk).
             if _f10_ret is not None and (
-                isinstance(_f10_ret, tuple)
-                and len(_f10_ret) == 2
-                and isinstance(_f10_ret[0], list)
+                isinstance(_f10_ret, tuple) and len(_f10_ret) == 2 and isinstance(_f10_ret[0], list)
             ):
                 f10_rows, _ = _f10_ret
                 if f10_rows:
@@ -1095,7 +1093,7 @@ def fetch_board_stocks_with_zzshare_fallback(
         # THS fallback path (include_quote=False from user).
         cid = _resolve_ths_cid_from_platecode(board_code)
         if not cid:
-            return [], "ths", "ths", "cid_unresolved"   # cid unresolved → empty; no fetch happened
+            return [], "ths", "ths", "cid_unresolved"  # cid unresolved → empty; no fetch happened
         try:
             rows, _ = manager.get_board_stocks(
                 board_code=cid,
@@ -1129,9 +1127,7 @@ def fetch_board_stocks_with_zzshare_fallback(
             raise
         return rows, source, source, None
 
-    raise ValueError(
-        f"fetch_board_stocks_with_zzshare_fallback: unsupported source {source!r}"
-    )
+    raise ValueError(f"fetch_board_stocks_with_zzshare_fallback: unsupported source {source!r}")
 
 
 THS_HARD_CAP = 50  # THS upstream hard cap (5 pages * 10 rows)
@@ -1336,9 +1332,7 @@ def get_board_stocks(
 
     quote_codes = {s["stock_code"] for s in stocks if s.get("stock_code")}
     suffix_no_quote = [
-        r
-        for r in (zz_rows or [])
-        if r.get("stock_code") and r["stock_code"] not in quote_codes
+        r for r in (zz_rows or []) if r.get("stock_code") and r["stock_code"] not in quote_codes
     ]
 
     # quote_truncated: True iff suffix 非空 (真截断 observed) OR
@@ -1371,10 +1365,7 @@ def get_board_stocks(
         quote_total_in_board = cached_count
 
     # 拼接最终响应列表 (top-N 在前, suffix 在后)
-    if suffix_no_quote:
-        final_stocks = stocks + suffix_no_quote
-    else:
-        final_stocks = stocks
+    final_stocks = stocks + suffix_no_quote if suffix_no_quote else stocks
 
     # 回写 cache: final_stocks 含 quote 字段, 但 update_cached_board_stocks
     # 投影只写 (board_code, source, stock_code, stock_name, board_name,
@@ -1722,9 +1713,7 @@ def get_board_name(board_code: str, source: str) -> str | None:
     return row["name"] if row else None
 
 
-def get_board_metadata(
-    board_code: str, source: str
-) -> dict[str, Any] | None:
+def get_board_metadata(board_code: str, source: str) -> dict[str, Any] | None:
     """Look up full board metadata (name + type + subtype + cid) from the SQLite cache.
 
     Same fast-path semantics as :func:`get_board_name` — single-row read
@@ -2010,11 +1999,7 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
                         #     NULL to keep the resolver contract simple)
                         # For eastmoney we keep cid=NULL — `b["code"]` is
                         # BKxxxx there, not a THS cid.
-                        (
-                            b["code"]
-                            if (source == "ths" and b.get("platecode"))
-                            else None
-                        ),
+                        (b["code"] if (source == "ths" and b.get("platecode")) else None),
                         now,
                     )
                     for b in boards

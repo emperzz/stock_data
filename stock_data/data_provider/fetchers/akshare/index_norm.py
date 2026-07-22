@@ -19,20 +19,33 @@ import pandas as pd
 # data — no `self` access — so they belong here as module-level constants.
 
 _INDEX_SINA_MAP: dict[str, str] = {
-    "date": "date", "open": "open", "high": "high",
-    "low": "low", "close": "close", "volume": "volume",
+    "date": "date",
+    "open": "open",
+    "high": "high",
+    "low": "low",
+    "close": "close",
+    "volume": "volume",
 }
 _INDEX_SINA_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume")
 
 _INDEX_TX_MAP: dict[str, str] = {
-    "date": "date", "open": "open", "close": "close",
-    "high": "high", "low": "low", "amount": "volume",
+    "date": "date",
+    "open": "open",
+    "close": "close",
+    "high": "high",
+    "low": "low",
+    "amount": "volume",
 }
 _INDEX_TX_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume")
 
 _INDEX_EM_MAP: dict[str, str] = {
-    "date": "date", "open": "open", "close": "close",
-    "high": "high", "low": "low", "volume": "volume", "amount": "amount",
+    "date": "date",
+    "open": "open",
+    "close": "close",
+    "high": "high",
+    "low": "low",
+    "volume": "volume",
+    "amount": "amount",
 }
 _INDEX_EM_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume", "amount")
 
@@ -40,6 +53,7 @@ _INDEX_EM_NUMERIC: tuple[str, ...] = ("open", "high", "low", "close", "volume", 
 # ---------------------------------------------------------------------------
 # Daily K-line normalisation (replaces 3 duplicate _normalize_index_daily*)
 # ---------------------------------------------------------------------------
+
 
 def normalize_index_df(
     df: pd.DataFrame,
@@ -84,9 +98,7 @@ def normalize_index_df(
         DataFrame with columns from ``["code", "date"] + numeric_cols``
         (only columns present after rename are kept).
     """
-    df = df.rename(
-        columns={k: v for k, v in column_mapping.items() if k in df.columns}
-    )
+    df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
     for col in numeric_cols:
@@ -102,14 +114,11 @@ def normalize_index_df(
     # probe (scripts/probe_tencent_index_amount.py, 2026-07-17) plus
     # the akshare docstring "注意单位: 手" confirm the unit IS 手 and
     # the conversion must run for all three sources.
-    volume_source_is_lots = (
-        "volume" in df.columns
-        and any(v == "volume" for k, v in column_mapping.items())
+    volume_source_is_lots = "volume" in df.columns and any(
+        v == "volume" for k, v in column_mapping.items()
     )
     if volume_source_is_lots:
-        df["volume"] = df["volume"].apply(
-            lambda v: int(v) * 100 if pd.notna(v) else 0
-        )
+        df["volume"] = df["volume"].apply(lambda v: int(v) * 100 if pd.notna(v) else 0)
     if "code" not in df.columns:
         df["code"] = code
     keep_cols = ["code", "date"] + [c for c in numeric_cols if c in df.columns]
@@ -153,7 +162,15 @@ _INTRADAY_COLUMN_MAPPING: dict[str, str] = {
     "成交额": "amount",
 }
 _INTRADAY_NUMERIC_COLS: tuple[str, ...] = ("open", "high", "low", "close", "volume", "amount")
-_INTRADAY_STANDARD_COLS: tuple[str, ...] = ("time", "open", "high", "low", "close", "volume", "amount")
+_INTRADAY_STANDARD_COLS: tuple[str, ...] = (
+    "time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+)
 
 
 def normalize_intraday_df(df: pd.DataFrame, time_col: str = "时间") -> pd.DataFrame:
@@ -192,9 +209,7 @@ def normalize_intraday_df(df: pd.DataFrame, time_col: str = "时间") -> pd.Data
     # 手 -> 股 (lots -> shares) per spec §3.4.
     # 1 手 = 100 股, so multiply by 100. NaN/None → 0.
     if "volume" in out.columns:
-        out["volume"] = out["volume"].apply(
-            lambda v: int(v) * 100 if pd.notna(v) else 0
-        )
+        out["volume"] = out["volume"].apply(lambda v: int(v) * 100 if pd.notna(v) else 0)
     # Ensure all standard columns are present (None for missing) and
     # in canonical order.
     for col in _INTRADAY_STANDARD_COLS:

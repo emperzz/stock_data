@@ -10,21 +10,20 @@ Regression coverage for the 2026-07-15 audit findings:
   the upstream actually exposes these columns.
 """
 
-from unittest.mock import patch
-
 import pandas as pd
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Seal-time normalization (the user-reported bug)
 # ---------------------------------------------------------------------------
+
 
 class TestSealTimeToHms:
     """_akshare_seal_time_to_hms must coerce upstream's 6-digit int to HH:MM:SS."""
 
     def setup_method(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         self.fetcher = AkshareFetcher()
 
     def test_int_141354(self):
@@ -63,6 +62,7 @@ class TestSealTimeToHms:
 # ---------------------------------------------------------------------------
 # _normalize_zt_pool — ZT pool
 # ---------------------------------------------------------------------------
+
 
 def _make_zt_df() -> pd.DataFrame:
     """Build a fake ZT-pool DataFrame mirroring real upstream columns.
@@ -160,6 +160,7 @@ class TestNormalizeZtPoolZt:
 
     def test_seal_times_normalized(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zt_df(), "zt")
         stock = result[0]
@@ -168,12 +169,14 @@ class TestNormalizeZtPoolZt:
 
     def test_seal_amount_populated_from_封板资金(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zt_df(), "zt")
         assert result[0]["seal_amount"] == 98243407
 
     def test_circ_mv_and_total_mv_populated(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zt_df(), "zt")
         stock = result[0]
@@ -182,18 +185,21 @@ class TestNormalizeZtPoolZt:
 
     def test_lb_count_uses_连板数(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zt_df(), "zt")
         assert result[0]["lb_count"] == 2
 
     def test_seal_count_uses_炸板次数(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zt_df(), "zt")
         assert result[0]["seal_count"] == 1
 
     def test_zt_count_uses_涨停统计(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zt_df(), "zt")
         assert result[0]["zt_count"] == "10/6"
@@ -207,6 +213,7 @@ class TestNormalizeZtPoolDt:
         looked up 连续跌停次数 which doesn't exist upstream, so lb_count was
         always None for DT pool."""
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_dt_df(), "dt")
         assert result[0]["lb_count"] == 1
@@ -216,6 +223,7 @@ class TestNormalizeZtPoolDt:
         looked up 炸板次数 which doesn't exist in the DT pool, so seal_count
         was always None for DT pool."""
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_dt_df(), "dt")
         assert result[0]["seal_count"] == 3
@@ -223,24 +231,28 @@ class TestNormalizeZtPoolDt:
     def test_dt_uses_封单资金_for_seal_amount(self):
         """DT pool's 封单资金 == ZT pool's 封板资金 (both = money on the seal)."""
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_dt_df(), "dt")
         assert result[0]["seal_amount"] == 5000000
 
     def test_dt_has_no_first_seal_time(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_dt_df(), "dt")
         assert result[0]["first_seal_time"] is None
 
     def test_dt_has_no_zt_count(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_dt_df(), "dt")
         assert result[0]["zt_count"] is None
 
     def test_dt_last_seal_time_normalized(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_dt_df(), "dt")
         assert result[0]["last_seal_time"] == "14:32:33"
@@ -251,18 +263,21 @@ class TestNormalizeZtPoolZbgc:
 
     def test_zbgc_first_seal_time_normalized(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zbgc_df(), "zbgc")
         assert result[0]["first_seal_time"] == "09:25:00"
 
     def test_zbgc_no_last_seal_time(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zbgc_df(), "zbgc")
         assert result[0]["last_seal_time"] is None
 
     def test_zbgc_no_seal_amount(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zbgc_df(), "zbgc")
         assert result[0]["seal_amount"] is None
@@ -270,24 +285,28 @@ class TestNormalizeZtPoolZbgc:
     def test_zbgc_no_lb_count(self):
         """ZBGC upstream has no 连板数 column."""
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zbgc_df(), "zbgc")
         assert result[0]["lb_count"] is None
 
     def test_zbgc_seal_count_from_炸板次数(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zbgc_df(), "zbgc")
         assert result[0]["seal_count"] == 3
 
     def test_zbgc_zt_count_from_涨停统计(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zbgc_df(), "zbgc")
         assert result[0]["zt_count"] == "3/2"
 
     def test_zbgc_circ_mv_and_total_mv_populated(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         result = fetcher._normalize_zt_pool(_make_zbgc_df(), "zbgc")
         stock = result[0]
@@ -299,20 +318,37 @@ class TestNormalizeZtPoolZbgc:
 # End-to-end: empty DataFrame (no rows)
 # ---------------------------------------------------------------------------
 
+
 def test_empty_dataframe_returns_empty_list():
     from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
     fetcher = AkshareFetcher()
-    empty = pd.DataFrame(columns=[
-        "代码", "名称", "涨跌幅", "最新价", "成交额", "流通市值", "总市值",
-        "换手率", "封板资金", "首次封板时间", "最后封板时间", "炸板次数",
-        "涨停统计", "连板数", "所属行业",
-    ])
+    empty = pd.DataFrame(
+        columns=[
+            "代码",
+            "名称",
+            "涨跌幅",
+            "最新价",
+            "成交额",
+            "流通市值",
+            "总市值",
+            "换手率",
+            "封板资金",
+            "首次封板时间",
+            "最后封板时间",
+            "炸板次数",
+            "涨停统计",
+            "连板数",
+            "所属行业",
+        ]
+    )
     assert fetcher._normalize_zt_pool(empty, "zt") == []
 
 
 # ---------------------------------------------------------------------------
 # Numeric-type consistency with ZhituFetcher / ZzshareFetcher
 # ---------------------------------------------------------------------------
+
 
 class TestNumericTypeConsistency:
     """All numeric fields must be Python ``float`` / ``int`` (not numpy scalars).
@@ -324,43 +360,55 @@ class TestNumericTypeConsistency:
 
     def test_zt_pool_numeric_types_are_python_native(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         stock = fetcher._normalize_zt_pool(_make_zt_df(), "zt")[0]
 
         # Floats
-        for key in ("price", "change_pct", "amount", "turnover_rate",
-                    "circ_mv", "total_mv", "seal_amount"):
+        for key in (
+            "price",
+            "change_pct",
+            "amount",
+            "turnover_rate",
+            "circ_mv",
+            "total_mv",
+            "seal_amount",
+        ):
             assert type(stock[key]) is float, (
                 f"{key} is {type(stock[key]).__name__}, expected float"
             )
         # Ints
         for key in ("lb_count", "seal_count"):
-            assert type(stock[key]) is int, (
-                f"{key} is {type(stock[key]).__name__}, expected int"
-            )
+            assert type(stock[key]) is int, f"{key} is {type(stock[key]).__name__}, expected int"
 
     def test_dt_pool_numeric_types_are_python_native(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         stock = fetcher._normalize_zt_pool(_make_dt_df(), "dt")[0]
 
-        for key in ("price", "change_pct", "amount", "turnover_rate",
-                    "circ_mv", "total_mv", "seal_amount"):
+        for key in (
+            "price",
+            "change_pct",
+            "amount",
+            "turnover_rate",
+            "circ_mv",
+            "total_mv",
+            "seal_amount",
+        ):
             assert type(stock[key]) is float, (
                 f"{key} is {type(stock[key]).__name__}, expected float"
             )
         for key in ("lb_count", "seal_count"):
-            assert type(stock[key]) is int, (
-                f"{key} is {type(stock[key]).__name__}, expected int"
-            )
+            assert type(stock[key]) is int, f"{key} is {type(stock[key]).__name__}, expected int"
 
     def test_zbgc_pool_numeric_types_are_python_native(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         stock = fetcher._normalize_zt_pool(_make_zbgc_df(), "zbgc")[0]
 
-        for key in ("price", "change_pct", "amount", "turnover_rate",
-                    "circ_mv", "total_mv"):
+        for key in ("price", "change_pct", "amount", "turnover_rate", "circ_mv", "total_mv"):
             assert type(stock[key]) is float, (
                 f"{key} is {type(stock[key]).__name__}, expected float"
             )
@@ -369,6 +417,7 @@ class TestNumericTypeConsistency:
     def test_zt_count_is_string(self):
         """涨停统计 is an object column (e.g. "10/6") — must be a Python str."""
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         stock = fetcher._normalize_zt_pool(_make_zt_df(), "zt")[0]
         assert type(stock["zt_count"]) is str
@@ -382,6 +431,7 @@ class TestNumericTypeConsistency:
         'NaN' in JSON. After the fix, NaN → None consistently.
         """
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         df = _make_zt_df().drop(columns=["成交额"])  # remove 成交额
         stock = fetcher._normalize_zt_pool(df, "zt")[0]
@@ -395,6 +445,7 @@ class TestNumericTypeConsistency:
         a parse error in others — breaking the schema contract.
         """
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         fetcher = AkshareFetcher()
         df = _make_zt_df().copy()
         df.loc[0, "最新价"] = float("nan")

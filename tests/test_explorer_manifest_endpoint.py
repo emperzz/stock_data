@@ -1,4 +1,5 @@
 """Integration tests for GET /control/api-manifest."""
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -79,8 +80,7 @@ def test_app_state_has_manager_after_startup():
         # Calling an endpoint forces lifespan to run before the request.
         client.get("/control/server/status")
         assert hasattr(app.state, "manager"), (
-            "app.state.manager not set — manifest builder will fail to "
-            "enumerate fetchers"
+            "app.state.manager not set — manifest builder will fail to enumerate fetchers"
         )
         assert isinstance(app.state.manager, DataFetcherManager)
 

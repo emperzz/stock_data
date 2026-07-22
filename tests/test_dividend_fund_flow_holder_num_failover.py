@@ -192,7 +192,8 @@ class TestDividendFailover:
                 EastMoneyFetcher,
                 "get_dividend",
                 side_effect=Exception("em down"),
-            ),pytest.raises(DataFetchError, match="All fetchers failed")
+            ),
+            pytest.raises(DataFetchError, match="All fetchers failed"),
         ):
             mgr.get_dividend("600519")
 
@@ -295,7 +296,8 @@ class TestFundFlowMinuteFailover:
                 EastMoneyFetcher,
                 "get_fund_flow_minute",
                 side_effect=Exception("em down"),
-            ),pytest.raises(DataFetchError, match="All fetchers failed")
+            ),
+            pytest.raises(DataFetchError, match="All fetchers failed"),
         ):
             mgr.get_fund_flow_minute("600519")
 
@@ -365,7 +367,8 @@ class TestFundFlowDailyFailover:
                 EastMoneyFetcher,
                 "get_fund_flow_120d",
                 side_effect=Exception("em down"),
-            ),pytest.raises(DataFetchError, match="All fetchers failed")
+            ),
+            pytest.raises(DataFetchError, match="All fetchers failed"),
         ):
             mgr.get_fund_flow_120d("600519")
 
@@ -465,7 +468,8 @@ class TestHolderNumFailover:
                 EastMoneyFetcher,
                 "get_holder_num_change",
                 side_effect=Exception("em down"),
-            ),pytest.raises(DataFetchError, match="All fetchers failed")
+            ),
+            pytest.raises(DataFetchError, match="All fetchers failed"),
         ):
             mgr.get_holder_num_change("600519")
 

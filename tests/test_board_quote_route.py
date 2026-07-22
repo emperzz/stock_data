@@ -51,7 +51,8 @@ def test_board_quote_no_source_param_works(client):
 
     with (
         patch.object(
-            board_mod, "get_board_metadata",
+            board_mod,
+            "get_board_metadata",
             return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
         ),
         patch.object(
@@ -83,7 +84,8 @@ def test_board_quote_extra_source_query_ignored(client):
 
     with (
         patch.object(
-            board_mod, "get_board_metadata",
+            board_mod,
+            "get_board_metadata",
             return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
         ),
         patch.object(
@@ -103,7 +105,8 @@ def test_board_quote_upstream_error_returns_503(client):
 
     with (
         patch.object(
-            board_mod, "get_board_metadata",
+            board_mod,
+            "get_board_metadata",
             return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
         ),
         patch.object(

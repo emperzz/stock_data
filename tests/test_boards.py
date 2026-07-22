@@ -349,8 +349,10 @@ class TestBoardsSourceUnification:
         from unittest.mock import patch
 
         from stock_data.data_provider.persistence import board as board_mod
-        with patch.object(board_mod, "fetch_boards_with_zzshare_backfill",
-                          return_value=[]) as mock_backfill:
+
+        with patch.object(
+            board_mod, "fetch_boards_with_zzshare_backfill", return_value=[]
+        ) as mock_backfill:
             response = client.get("/api/v1/boards?type=concept&source=ths")
         assert response.status_code == 200
         # The persistence helper is called without a 'source' arg (post-unification)
@@ -391,8 +393,9 @@ class TestBoardsSourceUnification:
         def fake_mgr_get(board_code, *, source, include_quote=False, **_kw):
             """Returns rows only on THS leg; on ZZSHARE leg returns [].
             Records each call so the assertion below can inspect ordering."""
-            call_records.append({"source": source, "include_quote": include_quote,
-                                 "board_code": board_code})
+            call_records.append(
+                {"source": source, "include_quote": include_quote, "board_code": board_code}
+            )
             if source == "ths":
                 return [{"stock_code": "300740", "stock_name": "x"}], "ths"
             return [], "zzshare"
@@ -400,11 +403,11 @@ class TestBoardsSourceUnification:
         mgr = MagicMock()
         mgr.get_board_stocks.side_effect = fake_mgr_get
 
-        with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
-                          return_value="301558"), \
-             patch.object(board_mod, "update_cached_board_stocks",
-                          return_value=0), \
-             patch("stock_data.api.routes.boards.get_manager", return_value=mgr):
+        with (
+            patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
+            patch.object(board_mod, "update_cached_board_stocks", return_value=0),
+            patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+        ):
             response = client.get(
                 "/api/v1/boards/885642/stocks?source=ths&include_quote=false&refresh=true"
             )
@@ -414,7 +417,7 @@ class TestBoardsSourceUnification:
         assert len(call_records) == 2
         assert call_records[0]["source"] == "zzshare"
         assert call_records[1]["source"] == "ths"
-        assert call_records[1]["board_code"] == "301558"   # cid translated
+        assert call_records[1]["board_code"] == "301558"  # cid translated
         # Response carries effective_source='ths' (the leg that served).
         assert body["effective_source"] == "ths"
         assert body["data_source"] == "ths"
@@ -430,18 +433,18 @@ class TestBoardsSourceUnification:
         from unittest.mock import MagicMock, patch
 
         from stock_data.data_provider.persistence import board as board_mod
+
         mgr = MagicMock()
         mgr.get_board_stocks.return_value = (
-            [{"stock_code": "300740", "stock_name": "x"}], "ths",
+            [{"stock_code": "300740", "stock_name": "x"}],
+            "ths",
         )
-        with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
-                          return_value="301558"), \
-             patch.object(board_mod, "update_cached_board_stocks",
-                          return_value=0), \
-             patch("stock_data.api.routes.boards.get_manager", return_value=mgr):
-            response = client.get(
-                "/api/v1/boards/885642/stocks?source=ths&include_quote=true"
-            )
+        with (
+            patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
+            patch.object(board_mod, "update_cached_board_stocks", return_value=0),
+            patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+        ):
+            response = client.get("/api/v1/boards/885642/stocks?source=ths&include_quote=true")
         assert response.status_code == 200
         # include_quote=true 总是 2 次调用: THS primary + ZZSHARE fill-in.
         assert mgr.get_board_stocks.call_count == 2
@@ -465,6 +468,7 @@ class TestBoardsSourceUnification:
         from unittest.mock import MagicMock, patch
 
         from stock_data.data_provider.persistence import board as board_mod
+
         mgr = MagicMock()
         # Strict routing: ths is the primary, raise propagates. zzshare is
         # only used as fill-in AFTER ths succeeded (its return is non-empty).
@@ -472,17 +476,14 @@ class TestBoardsSourceUnification:
             ([{"stock_code": "300740", "stock_name": "x"}], "ths"),
             # If implementation falls back, this gets consumed; otherwise
             # the test is invalid because ths should be raising.
-            ([{"stock_code": "999999", "stock_name": "should-not-be-called"}],
-             "zzshare"),
+            ([{"stock_code": "999999", "stock_name": "should-not-be-called"}], "zzshare"),
         ]
-        with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
-                          return_value="301558"), \
-             patch.object(board_mod, "update_cached_board_stocks",
-                          return_value=0), \
-             patch("stock_data.api.routes.boards.get_manager", return_value=mgr):
-            response = client.get(
-                "/api/v1/boards/885642/stocks?source=ths&include_quote=true"
-            )
+        with (
+            patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
+            patch.object(board_mod, "update_cached_board_stocks", return_value=0),
+            patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+        ):
+            response = client.get("/api/v1/boards/885642/stocks?source=ths&include_quote=true")
         assert response.status_code == 200
         # Strict routing: ths succeeds → ZZSHARE fill-in is called (2 total).
         assert mgr.get_board_stocks.call_count == 2
@@ -497,16 +498,15 @@ class TestBoardsSourceUnification:
 
         from stock_data.data_provider.base import DataFetchError
         from stock_data.data_provider.persistence import board as board_mod
+
         mgr = MagicMock()
         mgr.get_board_stocks.side_effect = DataFetchError("ths 503")
-        with patch.object(board_mod, "_resolve_ths_cid_from_platecode",
-                          return_value="301558"), \
-             patch.object(board_mod, "update_cached_board_stocks",
-                          return_value=0), \
-             patch("stock_data.api.routes.boards.get_manager", return_value=mgr):
-            response = client.get(
-                "/api/v1/boards/885642/stocks?source=ths&include_quote=true"
-            )
+        with (
+            patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
+            patch.object(board_mod, "update_cached_board_stocks", return_value=0),
+            patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+        ):
+            response = client.get("/api/v1/boards/885642/stocks?source=ths&include_quote=true")
         # Strict routing surfaces the THS failure as a server error
         # (the route's @map_errors turns DataFetchError into 503/502).
         assert response.status_code in (502, 503, 500)

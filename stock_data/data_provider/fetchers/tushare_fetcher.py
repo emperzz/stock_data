@@ -238,13 +238,9 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
             api_map = {"d": "index_daily", "w": "index_weekly", "m": "index_monthly"}
             api_name = api_map.get(frequency)
             if not api_name:
-                raise DataFetchError(
-                    f"TushareFetcher index only supports d/w/m, got '{frequency}'"
-                )
+                raise DataFetchError(f"TushareFetcher index only supports d/w/m, got '{frequency}'")
 
-            logger.debug(
-                f"[TushareFetcher] Calling {api_name} for {ts_code} (no adjustment)"
-            )
+            logger.debug(f"[TushareFetcher] Calling {api_name} for {ts_code} (no adjustment)")
 
             df = TushareFetcher._api.query(
                 api_name,
@@ -354,6 +350,8 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
             start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
 
         try:
-            return self.get_kline_data(index_code, start_date, end_date, days=365, frequency=frequency)
+            return self.get_kline_data(
+                index_code, start_date, end_date, days=365, frequency=frequency
+            )
         except DataFetchError:
             return None

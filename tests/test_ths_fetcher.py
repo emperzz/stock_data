@@ -1110,8 +1110,7 @@ class TestGetBoardStocks:
         assert headers["Cookie"] == "v=x"
         assert "Referer" in headers
         assert "User-Agent" not in headers, (
-            f"caller pre-sets User-Agent; _http_get's UA rotation cannot fire. "
-            f"Headers: {headers!r}"
+            f"caller pre-sets User-Agent; _http_get's UA rotation cannot fire. Headers: {headers!r}"
         )
         assert headers["X-Requested-With"] == "XMLHttpRequest"
 
@@ -1661,7 +1660,7 @@ class TestBoardStocksSortFieldMap:
             "float_market_cap": "3475914",
             "free_float_shares": "407",
         }
-        assert _THS_BOARD_STOCKS_SORT_FIELD_MAP == expected
+        assert expected == _THS_BOARD_STOCKS_SORT_FIELD_MAP
 
 
 class TestBoardStocksUrlTemplate:

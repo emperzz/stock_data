@@ -56,8 +56,8 @@ class TestResolveThsCidFromPlatecode:
     def test_concept_returns_different_cid(self, fresh_db):
         """Concept: code=885642 (public) → cid=301558 (THS internal)."""
         _seed_board(
-            code="885642",        # public platecode (was old platecode column)
-            cid="301558",          # THS concept cid (was old code column)
+            code="885642",  # public platecode (was old platecode column)
+            cid="301558",  # THS concept cid (was old code column)
             name="跨境电商",
             board_type="concept",
             source="ths",
@@ -113,10 +113,25 @@ class TestMergeThsZzshareByName:
         Realistic ZzshareFetcher output has no separate 'platecode' field —
         the plate_code value lives under 'code' only.
         """
-        ths = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
-                "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
-        zz = [{"code": "885642", "name": "跨境电商",
-               "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+        ths = [
+            {
+                "code": "301558",
+                "name": "跨境电商",
+                "platecode": "885642",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "ths",
+            }
+        ]
+        zz = [
+            {
+                "code": "885642",
+                "name": "跨境电商",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "zzshare",
+            }
+        ]
         out = board_mod._merge_ths_zzshare_by_name(ths, zz)
         assert len(out) == 1
         assert out[0]["code"] == "301558"  # ths's cid, not zzshare's plate_code
@@ -132,10 +147,25 @@ class TestMergeThsZzshareByName:
         Regression test for the production bug where 412/797 rows in
         stock_board had platecode=NULL because backfill never fired.
         """
-        ths = [{"code": "301558", "name": "跨境电商", "platecode": None,
-                "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
-        zz = [{"code": "885642", "name": "跨境电商",
-               "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+        ths = [
+            {
+                "code": "301558",
+                "name": "跨境电商",
+                "platecode": None,
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "ths",
+            }
+        ]
+        zz = [
+            {
+                "code": "885642",
+                "name": "跨境电商",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "zzshare",
+            }
+        ]
         out = board_mod._merge_ths_zzshare_by_name(ths, zz)
         assert len(out) == 1
         assert out[0]["code"] == "301558"
@@ -150,10 +180,25 @@ class TestMergeThsZzshareByName:
         r['code'] (the plate_code) into r['platecode'] before the append,
         so the persisted row has a non-NULL platecode.
         """
-        ths = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
-                "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
-        zz = [{"code": "885999", "name": "独此一家",
-               "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+        ths = [
+            {
+                "code": "301558",
+                "name": "跨境电商",
+                "platecode": "885642",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "ths",
+            }
+        ]
+        zz = [
+            {
+                "code": "885999",
+                "name": "独此一家",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "zzshare",
+            }
+        ]
         out = board_mod._merge_ths_zzshare_by_name(ths, zz)
         codes = [r["code"] for r in out]
         assert "301558" in codes
@@ -163,17 +208,31 @@ class TestMergeThsZzshareByName:
         # NEW contract: appended zzshare-only row MUST have platecode set
         # (so the DB write stores a non-NULL value).
         assert appended["platecode"] == "885999", (
-            f"expected platecode='885999' (from zzshare.code), "
-            f"got {appended.get('platecode')!r}"
+            f"expected platecode='885999' (from zzshare.code), got {appended.get('platecode')!r}"
         )
 
     def test_dedup_by_code_and_name(self):
         """Same (code, name) emitted twice → one row. Both fetchers may emit
         the same cid in rare overlap cases — dedup must still hold."""
-        ths = [{"code": "301558", "name": "跨境电商", "platecode": "885642",
-                "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
-        zz = [{"code": "301558", "name": "跨境电商",
-               "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+        ths = [
+            {
+                "code": "301558",
+                "name": "跨境电商",
+                "platecode": "885642",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "ths",
+            }
+        ]
+        zz = [
+            {
+                "code": "301558",
+                "name": "跨境电商",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "zzshare",
+            }
+        ]
         out = board_mod._merge_ths_zzshare_by_name(ths, zz)
         assert len(out) == 1
 
@@ -182,8 +241,16 @@ class TestMergeThsZzshareByName:
         # Realistic zzshare-only: no 'platecode' key — backfill must promote
         # r['code'] into r['platecode'] before persisting.
         out = board_mod._merge_ths_zzshare_by_name(
-            [], [{"code": "885999", "name": "x",
-                  "type": "concept", "subtype": "同花顺概念", "source": "zzshare"}]
+            [],
+            [
+                {
+                    "code": "885999",
+                    "name": "x",
+                    "type": "concept",
+                    "subtype": "同花顺概念",
+                    "source": "zzshare",
+                }
+            ],
         )
         assert len(out) == 1
         assert out[0]["code"] == "885999"
@@ -191,39 +258,87 @@ class TestMergeThsZzshareByName:
         assert out[0]["source"] == "ths"
         # ths-only sanity check.
         assert board_mod._merge_ths_zzshare_by_name(
-            [{"code": "301558", "name": "x", "platecode": "885642",
-              "type": "concept", "subtype": "同花顺概念", "source": "ths"}], []
-        ) == [{"code": "301558", "name": "x", "platecode": "885642",
-               "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+            [
+                {
+                    "code": "301558",
+                    "name": "x",
+                    "platecode": "885642",
+                    "type": "concept",
+                    "subtype": "同花顺概念",
+                    "source": "ths",
+                }
+            ],
+            [],
+        ) == [
+            {
+                "code": "301558",
+                "name": "x",
+                "platecode": "885642",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "ths",
+            }
+        ]
 
 
 class TestFetchBoardsWithZzshareBackfill:
     def test_returns_ths_rows_with_zzshare_backfill(self):
         """THS primary + ZZSHARE backfill; merged, source='ths' on every row."""
         from unittest.mock import MagicMock
+
         ths_rows = [
-            {"code": "301558", "name": "跨境电商", "platecode": "885642",
-             "type": "concept", "subtype": "同花顺概念", "source": "ths"},
-            {"code": "301999", "name": "无名板块", "platecode": None,  # sidebar-only
-             "type": "concept", "subtype": "同花顺概念", "source": "ths"},
+            {
+                "code": "301558",
+                "name": "跨境电商",
+                "platecode": "885642",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "ths",
+            },
+            {
+                "code": "301999",
+                "name": "无名板块",
+                "platecode": None,  # sidebar-only
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "ths",
+            },
         ]
         # Realistic ZzshareFetcher output: no 'platecode' key — the plate_code
         # value lives under 'code' only.
         zz_rows = [
-            {"code": "885642", "name": "跨境电商",
-             "type": "concept", "subtype": "同花顺概念", "source": "zzshare"},
-            {"code": "885777", "name": "无名板块",  # backfills THS via name
-             "type": "concept", "subtype": "同花顺概念", "source": "zzshare"},
-            {"code": "885888", "name": "独此一家",  # zzshare-only
-             "type": "concept", "subtype": "同花顺概念", "source": "zzshare"},
+            {
+                "code": "885642",
+                "name": "跨境电商",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "zzshare",
+            },
+            {
+                "code": "885777",
+                "name": "无名板块",  # backfills THS via name
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "zzshare",
+            },
+            {
+                "code": "885888",
+                "name": "独此一家",  # zzshare-only
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "zzshare",
+            },
         ]
         mgr = MagicMock()
         # Real manager returns tuple[list[dict], str]
         mgr.get_all_boards.side_effect = [(ths_rows, "ths"), (zz_rows, "zzshare")]
 
         out = board_mod.fetch_boards_with_zzshare_backfill(
-            board_type="concept", refresh=True, include_quote=False,
-            subtype=None, manager=mgr,
+            board_type="concept",
+            refresh=True,
+            include_quote=False,
+            subtype=None,
+            manager=mgr,
         )
 
         # 1. THS called first
@@ -243,8 +358,17 @@ class TestFetchBoardsWithZzshareBackfill:
     def test_zzshare_failure_does_not_break(self):
         """ZZSHARE upstream fails → still return THS rows + WARNING log."""
         from unittest.mock import MagicMock
-        ths_rows = [{"code": "301558", "name": "x", "platecode": "885642",
-                     "type": "concept", "subtype": "同花顺概念", "source": "ths"}]
+
+        ths_rows = [
+            {
+                "code": "301558",
+                "name": "x",
+                "platecode": "885642",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "ths",
+            }
+        ]
         mgr = MagicMock()
         # First call (ths) returns data; second call (zzshare) raises
         mgr.get_all_boards.side_effect = [
@@ -253,11 +377,15 @@ class TestFetchBoardsWithZzshareBackfill:
         ]
 
         out = board_mod.fetch_boards_with_zzshare_backfill(
-            board_type="concept", refresh=True, include_quote=False,
-            subtype=None, manager=mgr,
+            board_type="concept",
+            refresh=True,
+            include_quote=False,
+            subtype=None,
+            manager=mgr,
         )
         assert len(out) == 1
         assert out[0]["code"] == "301558"
+
 
 class TestFetchBoardStocksWithZzshareFallback:
     """Tests for the source-routing contract.
@@ -280,8 +408,10 @@ class TestFetchBoardStocksWithZzshareFallback:
         from unittest.mock import MagicMock
 
         mgr = MagicMock()
+
         def side_effect(*a, **kw):
-            return by_source_return.get(kw.get('source'), ([], 'unknown'))
+            return by_source_return.get(kw.get("source"), ([], "unknown"))
+
         mgr.get_board_stocks.side_effect = side_effect
         # Phase 3 (2026-07-20) added the F10 leg (manager.get_board_stocks_full).
         # Default the F10 leg to empty so the test exercises the legacy
@@ -291,38 +421,52 @@ class TestFetchBoardStocksWithZzshareFallback:
 
     def test_source_ths_routes_to_ths_only(self, mock_cid_resolver):
         """source='ths' → only ThsFetcher is called (zzshare NOT tried)."""
-        mgr = self._mgr({
-            'ths': ([{'stock_code': '300740', 'stock_name': 'x'}], 'ths'),
-            'zzshare': ([{'stock_code': '300740', 'stock_name': 'should-not-be-called'}],
-                        'zzshare'),
-        })
-        with mock_cid_resolver({('885642',): '301558'}):
-            stocks, origin, _effective_source, _reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='885642', source='ths',
-                include_quote=True, manager=mgr,
+        mgr = self._mgr(
+            {
+                "ths": ([{"stock_code": "300740", "stock_name": "x"}], "ths"),
+                "zzshare": (
+                    [{"stock_code": "300740", "stock_name": "should-not-be-called"}],
+                    "zzshare",
+                ),
+            }
+        )
+        with mock_cid_resolver({("885642",): "301558"}):
+            stocks, origin, _effective_source, _reason = (
+                board_mod.fetch_board_stocks_with_zzshare_fallback(
+                    board_code="885642",
+                    source="ths",
+                    include_quote=True,
+                    manager=mgr,
+                )
             )
-        assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
-        assert origin == 'ths'
+        assert stocks == [{"stock_code": "300740", "stock_name": "x"}]
+        assert origin == "ths"
         # Only the THS call should have happened.
         assert mgr.get_board_stocks.call_count == 1
         ths_call = mgr.get_board_stocks.call_args_list[0]
-        assert ths_call.kwargs['source'] == 'ths'
-        assert ths_call.kwargs['board_code'] == '301558'   # cid translated
+        assert ths_call.kwargs["source"] == "ths"
+        assert ths_call.kwargs["board_code"] == "301558"  # cid translated
 
     def test_source_zzshare_routes_to_zzshare_with_platecode(self):
         """source='zzshare' → ZzshareFetcher called with platecode (no cid translation)."""
-        mgr = self._mgr({
-            'zzshare': ([{'stock_code': '300740', 'stock_name': 'x'}], 'zzshare'),
-        })
-        stocks, origin, _effective_source, _reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
-            board_code='885642', source='zzshare',
-            include_quote=False, manager=mgr,
+        mgr = self._mgr(
+            {
+                "zzshare": ([{"stock_code": "300740", "stock_name": "x"}], "zzshare"),
+            }
         )
-        assert stocks == [{'stock_code': '300740', 'stock_name': 'x'}]
-        assert origin == 'zzshare'
+        stocks, origin, _effective_source, _reason = (
+            board_mod.fetch_board_stocks_with_zzshare_fallback(
+                board_code="885642",
+                source="zzshare",
+                include_quote=False,
+                manager=mgr,
+            )
+        )
+        assert stocks == [{"stock_code": "300740", "stock_name": "x"}]
+        assert origin == "zzshare"
         zz_call = mgr.get_board_stocks.call_args_list[0]
-        assert zz_call.kwargs['source'] == 'zzshare'
-        assert zz_call.kwargs['board_code'] == '885642'   # platecode as-is
+        assert zz_call.kwargs["source"] == "zzshare"
+        assert zz_call.kwargs["board_code"] == "885642"  # platecode as-is
 
     def test_zzshare_empty_triggers_ths_fallback(self, mock_cid_resolver):
         """source='ths' returning empty rows → falls back to ZZSHARE.
@@ -334,20 +478,26 @@ class TestFetchBoardStocksWithZzshareFallback:
         rows on the ZZSHARE leg (return value [] from the mgr for
         'zzshare') triggers THS as the fallback fetch.
         """
-        mgr = self._mgr({
-            'zzshare': ([], 'zzshare'),         # leg 1: empty → triggers fallback
-            'ths': ([{'stock_code': '300740', 'stock_name': 'ths-row'}], 'ths'),
-        })
-        with mock_cid_resolver({('885642',): '301558'}):
-            stocks, origin, effective_source, _reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='885642', source='ths',
-                include_quote=False, manager=mgr,
+        mgr = self._mgr(
+            {
+                "zzshare": ([], "zzshare"),  # leg 1: empty → triggers fallback
+                "ths": ([{"stock_code": "300740", "stock_name": "ths-row"}], "ths"),
+            }
+        )
+        with mock_cid_resolver({("885642",): "301558"}):
+            stocks, origin, effective_source, _reason = (
+                board_mod.fetch_board_stocks_with_zzshare_fallback(
+                    board_code="885642",
+                    source="ths",
+                    include_quote=False,
+                    manager=mgr,
+                )
             )
-        assert stocks == [{'stock_code': '300740', 'stock_name': 'ths-row'}]
-        assert origin == 'ths'
+        assert stocks == [{"stock_code": "300740", "stock_name": "ths-row"}]
+        assert origin == "ths"
         # effective_source reports 'ths' even though requested source was 'ths'
         # AND a fallback was attempted — the THS leg actually served.
-        assert effective_source == 'ths'
+        assert effective_source == "ths"
         # Both zzshare (empty) and ths (served) attempts; cid resolved too.
         assert mgr.get_board_stocks.call_count == 2
 
@@ -355,17 +505,18 @@ class TestFetchBoardStocksWithZzshareFallback:
         """source='ths' raising → DataFetchError propagates; NO zzshare fallback."""
         from stock_data.data_provider.base import DataFetchError
 
-        mgr = self._mgr({'ths': ([], 'ths')})
+        mgr = self._mgr({"ths": ([], "ths")})
 
         def ths_side_effect(*a, **kw):
-            raise DataFetchError('ths 503')
+            raise DataFetchError("ths 503")
 
         mgr.get_board_stocks.side_effect = ths_side_effect
-        with mock_cid_resolver({('885642',): '301558'}), \
-             pytest.raises(DataFetchError):
+        with mock_cid_resolver({("885642",): "301558"}), pytest.raises(DataFetchError):
             board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='885642', source='ths',
-                include_quote=True, manager=mgr,
+                board_code="885642",
+                source="ths",
+                include_quote=True,
+                manager=mgr,
             )
         # Single attempt to THS, then the exception propagates.
         assert mgr.get_board_stocks.call_count == 1
@@ -380,18 +531,24 @@ class TestFetchBoardStocksWithZzshareFallback:
         empty path because the THS leg didn't actually fire
         (``effective_source` is only updated when a leg completes).
         """
-        mgr = self._mgr({
-            'zzshare': ([{'stock_code': 'x', 'stock_name': 'x'}], 'zzshare'),
-            'ths': ([{'stock_code': 'x'}], 'ths'),
-        })
-        with mock_cid_resolver({('999999',): None}):
-            stocks, origin, effective_source, _reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='999999', source='ths',
-                include_quote=False, manager=mgr,
+        mgr = self._mgr(
+            {
+                "zzshare": ([{"stock_code": "x", "stock_name": "x"}], "zzshare"),
+                "ths": ([{"stock_code": "x"}], "ths"),
+            }
+        )
+        with mock_cid_resolver({("999999",): None}):
+            stocks, origin, effective_source, _reason = (
+                board_mod.fetch_board_stocks_with_zzshare_fallback(
+                    board_code="999999",
+                    source="ths",
+                    include_quote=False,
+                    manager=mgr,
+                )
             )
-        assert stocks == [{'stock_code': 'x', 'stock_name': 'x'}]
-        assert origin == 'ths'
-        assert effective_source == 'zzshare'
+        assert stocks == [{"stock_code": "x", "stock_name": "x"}]
+        assert origin == "ths"
+        assert effective_source == "zzshare"
         # One ZZSHARE call (success — not the THS path, which requires cid).
         assert mgr.get_board_stocks.call_count == 1
 
@@ -400,8 +557,10 @@ class TestFetchBoardStocksWithZzshareFallback:
         mgr = self._mgr({})
         with pytest.raises(ValueError, match="unsupported source"):
             board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='885642', source='bogus',
-                include_quote=False, manager=mgr,
+                board_code="885642",
+                source="bogus",
+                include_quote=False,
+                manager=mgr,
             )
 
     def test_cid_unresolved_returns_reason(self, mock_cid_resolver):
@@ -416,15 +575,19 @@ class TestFetchBoardStocksWithZzshareFallback:
         from stock_data.data_provider.persistence import board as board_mod
 
         # include_quote=True branch — cid=None short-circuits before any fetcher call.
-        with mock_cid_resolver({('885642',): None}):
-            stocks, origin, effective_source, reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='885642', source='ths',
-                include_quote=True, manager=None,
+        with mock_cid_resolver({("885642",): None}):
+            stocks, origin, effective_source, reason = (
+                board_mod.fetch_board_stocks_with_zzshare_fallback(
+                    board_code="885642",
+                    source="ths",
+                    include_quote=True,
+                    manager=None,
+                )
             )
         assert stocks == []
-        assert origin == 'ths'
-        assert effective_source == 'ths'
-        assert reason == 'cid_unresolved'
+        assert origin == "ths"
+        assert effective_source == "ths"
+        assert reason == "cid_unresolved"
 
         # And the include_quote=False THS-fallback branch — same behavior.
         # The ZZSHARE leg also short-circuits when cid=None? No — ZZSHARE
@@ -433,24 +596,35 @@ class TestFetchBoardStocksWithZzshareFallback:
         # the THS-fallback path, so use a manager that returns 0 rows
         # for the zzshare leg too.
         from unittest.mock import MagicMock
+
         mgr = MagicMock()
-        mgr.get_board_stocks.return_value = ([], 'zzshare')
-        mgr.get_board_stocks_full.return_value = ([], 'noop')  # F10 leg (Phase 3) → empty → continue
-        with mock_cid_resolver({('885642',): None}):
-            stocks, origin, effective_source, reason = board_mod.fetch_board_stocks_with_zzshare_fallback(
-                board_code='885642', source='ths',
-                include_quote=False, manager=mgr,
+        mgr.get_board_stocks.return_value = ([], "zzshare")
+        mgr.get_board_stocks_full.return_value = (
+            [],
+            "noop",
+        )  # F10 leg (Phase 3) → empty → continue
+        with mock_cid_resolver({("885642",): None}):
+            stocks, origin, effective_source, reason = (
+                board_mod.fetch_board_stocks_with_zzshare_fallback(
+                    board_code="885642",
+                    source="ths",
+                    include_quote=False,
+                    manager=mgr,
+                )
             )
-        assert reason == 'cid_unresolved'
+        assert reason == "cid_unresolved"
 
 
 @pytest.fixture
 def mock_cid_resolver(monkeypatch):
     from contextlib import contextmanager
+
     @contextmanager
     def _ctx(mapping):
         def fake(platecode):
             return mapping.get((platecode,))
-        monkeypatch.setattr(board_mod, '_resolve_ths_cid_from_platecode', fake)
+
+        monkeypatch.setattr(board_mod, "_resolve_ths_cid_from_platecode", fake)
         yield
+
     return _ctx

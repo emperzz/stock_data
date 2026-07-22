@@ -1,4 +1,5 @@
 """Integration tests for /control/* endpoints added for the API Explorer."""
+
 import pytest
 from fastapi.testclient import TestClient
 

@@ -117,9 +117,24 @@ class CircuitBreaker:
         cooldown_seconds: float | None = None,
         half_open_max_calls: int | None = None,
     ):
-        self.failure_threshold = int(os.getenv("CB_FAILURE_THRESHOLD", str(failure_threshold if failure_threshold is not None else 3)))
-        self.cooldown_seconds = float(os.getenv("CB_COOLDOWN_SECONDS", str(cooldown_seconds if cooldown_seconds is not None else 300.0)))
-        self.half_open_max_calls = int(os.getenv("CB_HALF_OPEN_MAX_CALLS", str(half_open_max_calls if half_open_max_calls is not None else 1)))
+        self.failure_threshold = int(
+            os.getenv(
+                "CB_FAILURE_THRESHOLD",
+                str(failure_threshold if failure_threshold is not None else 3),
+            )
+        )
+        self.cooldown_seconds = float(
+            os.getenv(
+                "CB_COOLDOWN_SECONDS",
+                str(cooldown_seconds if cooldown_seconds is not None else 300.0),
+            )
+        )
+        self.half_open_max_calls = int(
+            os.getenv(
+                "CB_HALF_OPEN_MAX_CALLS",
+                str(half_open_max_calls if half_open_max_calls is not None else 1),
+            )
+        )
         self._states: dict = {}
         self._lock = RLock()
 

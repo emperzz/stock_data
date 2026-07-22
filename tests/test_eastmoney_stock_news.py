@@ -5,6 +5,7 @@ and are tagged ``@pytest.mark.live_network`` so the default ``pytest`` run
 skips them via ``pyproject.toml addopts = ["-m", "not live_network"]``. To
 run them: ``pytest -m live_network tests/test_eastmoney_stock_news.py``.
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,9 +13,12 @@ import pytest
 from stock_data.data_provider.fetchers.eastmoney_fetcher import EastMoneyFetcher
 
 SAMPLE_RESPONSE = {
-    "code": 1, "message": "success",
+    "code": 1,
+    "message": "success",
     "data": {
-        "page_index": 1, "totle_hits": 5000, "page_size": 2,
+        "page_index": 1,
+        "totle_hits": 5000,
+        "page_size": 2,
         "list": [
             {
                 "Art_Code": "202607023791611310",
@@ -58,7 +62,7 @@ def test_returns_normalized_list():
     assert first["media_name"] == "CMS"
 
 
-def test_uses_mTypeAndCode_for_secid():  # noqa: N802 (upstream param is mTypeAndCode)
+def test_uses_mTypeAndCode_for_secid():
     fetcher = EastMoneyFetcher()
     with patch.object(fetcher._session, "get", return_value=_mock_resp(SAMPLE_RESPONSE)) as m:
         fetcher.get_stock_news("600519", limit=5)

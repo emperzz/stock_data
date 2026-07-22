@@ -99,9 +99,7 @@ def test_oversized_response_returns_fetch_error(monkeypatch):
         url="https://example.com/large",
         status_code=200,
         headers={},
-        iter_content=lambda chunk_size: iter(
-            [b"x" * (news_extractor._MAX_RESPONSE_BYTES + 1)]
-        ),
+        iter_content=lambda chunk_size: iter([b"x" * (news_extractor._MAX_RESPONSE_BYTES + 1)]),
     )
     monkeypatch.setattr(news_extractor.requests, "get", lambda *a, **k: response)
     result = NewsContentExtractor.extract(response.url)
@@ -119,9 +117,7 @@ def test_handler_typeerror_is_not_retried_as_legacy_handler():
     NewsContentExtractor.register_domain_handler("typeerror.example", broken_handler)
     try:
         with pytest.raises(TypeError, match="handler body bug"):
-            NewsContentExtractor.extract(
-                "https://typeerror.example/news", html="<html></html>"
-            )
+            NewsContentExtractor.extract("https://typeerror.example/news", html="<html></html>")
     finally:
         NewsContentExtractor.unregister_domain_handler("typeerror.example")
     assert len(calls) == 1
@@ -174,9 +170,7 @@ def test_js_shell_with_noscript_body_is_extractable():
 
 
 def test_js_shell_returns_structured_status():
-    result = NewsContentExtractor.extract(
-        "https://example.com/app", html=_fixture("js_shell.html")
-    )
+    result = NewsContentExtractor.extract("https://example.com/app", html=_fixture("js_shell.html"))
     assert result.content_status == "javascript_required"
     assert result.body == ""
     assert result.byte_size == 0
@@ -318,9 +312,7 @@ class TestDomainDispatch:
         <html><head><title>公告标题</title></head>
         <body><main><p>公告正文包含足够的内容，用于验证公告页面能够复用通用提取器并保留 notice extractor。This notice body includes enough English text to pass the generic threshold.</p></main></body></html>
         """
-        result = NewsContentExtractor.extract(
-            "https://data.eastmoney.com/notice/1.html", html=html
-        )
+        result = NewsContentExtractor.extract("https://data.eastmoney.com/notice/1.html", html=html)
         assert result.extractor == "eastmoney_notice"
         assert result.content_status == "ok"
 
@@ -336,9 +328,7 @@ class TestDomainDispatch:
           </div>
         </body></html>
         """
-        result = NewsContentExtractor.extract(
-            "https://stock.eastmoney.com/a/1.html", html=em_html
-        )
+        result = NewsContentExtractor.extract("https://stock.eastmoney.com/a/1.html", html=em_html)
         assert result.extractor == "eastmoney_v1"
         assert result.publish_date == "2026-05-29"
         assert result.author == "StockSource"

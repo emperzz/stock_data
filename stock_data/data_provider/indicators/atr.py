@@ -45,10 +45,12 @@ def calcATR(  # noqa: N802
         if tr is None:
             out.append({"atr": None, "tr": None})
         else:
-            out.append({
-                "atr": round(smoothed[i], 2) if smoothed[i] is not None else None,
-                "tr": round(tr, 2),
-            })
+            out.append(
+                {
+                    "atr": round(smoothed[i], 2) if smoothed[i] is not None else None,
+                    "tr": round(tr, 2),
+                }
+            )
 
     return out
 

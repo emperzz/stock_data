@@ -9,12 +9,11 @@ input. The fetcher's clid→platecode helper is now named
 upstream never actually emitted).
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,9 +23,7 @@ from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
 # accepts YYYYMMDD (daily/weekly/monthly) and YYYYMMDDHHMM (minute bars).
 # The first 7 columns are the canonical K-line subset
 # (date, open, high, low, close, volume, amount).
-_DAILY_BODY_2024 = (
-    'var v_x={"data":"20241215,1,2,3,4,5,6,7,8,9,10;"};'
-)
+_DAILY_BODY_2024 = 'var v_x={"data":"20241215,1,2,3,4,5,6,7,8,9,10;"};'
 _DAILY_BODY_2025 = (
     'var v_x={"data":"20250630,1,2,3,4,5,6,7,8,9,10;'
     '20250629,1.1,2.1,3.1,4.1,5.1,6.1,7.1,8.1,9.1,10.1;"};'
@@ -66,10 +63,6 @@ class TestVToken:
         v1 = _get_ths_v_token()
         v2 = _get_ths_v_token()
         assert v1 == v2  # cached (within TTL)
-
-
-
-
 
 
 class TestGetBoardHistory:
@@ -172,8 +165,11 @@ class TestGetBoardHistory:
             patch(
                 "stock_data.data_provider.persistence.board.get_board_metadata",
                 return_value={
-                    "name": "银行", "type": "industry", "subtype": "",
-                    "code": "881270", "cid": "881270",
+                    "name": "银行",
+                    "type": "industry",
+                    "subtype": "",
+                    "code": "881270",
+                    "cid": "881270",
                 },
             ),
             patch(
@@ -284,8 +280,7 @@ class TestGetBoardHistory:
         assert rows, f"freq={freq} returned 0 rows"
         for r in rows:
             assert r["frequency"] == freq, (
-                f"freq={freq} row tagged {r.get('frequency')!r}; "
-                f"date={r['date']!r}"
+                f"freq={freq} row tagged {r.get('frequency')!r}; date={r['date']!r}"
             )
 
     def test_minute_end_bound_uses_2359(self):
@@ -462,10 +457,6 @@ class TestVTokenCacheTTL:
             mod._ths_v_token_cache["expires_at"] = 0.0
 
 
-
-
-
-
 class TestGetBoardHistoryEdgeCases:
     """A5/A6/A7 — all-empty raise, span cap raise, reverse-date raise."""
 
@@ -498,7 +489,6 @@ class TestGetBoardHistoryEdgeCases:
         Post-fix: `days` is always the window width; start_date is just a
         lower bound, so a 16-year range with explicit bounds no longer
         triggers the cap — you have to ask for it via `days`."""
-        from unittest.mock import patch
 
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
@@ -543,17 +533,19 @@ class TestGetBoardHistoryEdgeCases:
         is effectively a no-op — you still get the default 30-day window,
         NOT a 1-day window. Catches future regressions where someone
         re-introduces ``start_date wins over days`` semantics."""
-        from unittest.mock import patch
         from datetime import date
+        from unittest.mock import patch
 
         from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
         f = ThsFetcher.__new__(ThsFetcher)
         captured: dict = {}
+
         def fake_fetch(board_code, *, freq_key, start_d, end_d, days):
             captured["start_d"] = start_d
             captured["end_d"] = end_d
             return []
+
         with patch(
             "stock_data.data_provider.fetchers.ths_fetcher._fetch_ths_single_kline",
             side_effect=fake_fetch,
@@ -562,7 +554,9 @@ class TestGetBoardHistoryEdgeCases:
                 board_code="881270",
                 board_type="industry",
                 frequency="5m",
-                start_date=date.today().strftime("%Y-%m-%d"),  # today's hint — should NOT shrink window
+                start_date=date.today().strftime(
+                    "%Y-%m-%d"
+                ),  # today's hint — should NOT shrink window
                 days=30,
             )
         # The fetcher received resolved dates spanning 30 days, NOT 1 day.
@@ -579,10 +573,12 @@ class TestGetBoardHistoryEdgeCases:
 
         f = ThsFetcher.__new__(ThsFetcher)
         captured: dict = {}
+
         def fake_fetch(board_code, *, freq_key, start_d, end_d, days):
             captured["start_d"] = start_d
             captured["end_d"] = end_d
             return []
+
         # Use freq=d (10y cap, won't fire here)
         with patch(
             "stock_data.data_provider.fetchers.ths_fetcher._fetch_ths_single_kline",
@@ -597,6 +593,7 @@ class TestGetBoardHistoryEdgeCases:
             )
         # start_d should be 2020-01-01, NOT (end_d - 30 days).
         from datetime import date
+
         assert captured["start_d"] == date(2020, 1, 1)
 
     def test_reversed_dates_raises(self):
@@ -738,8 +735,6 @@ class TestIsAvailable:
         assert "bs4" in reason
 
 
-
-
 class TestHuxkLineJwt:
     """Lazily-fetched JWT for the quota-h.10jqka.com.cn/single_kline endpoint."""
 
@@ -754,12 +749,15 @@ class TestHuxkLineJwt:
         class FakeResp:
             text = fake_js
             status_code = 200
-            def raise_for_status(self): pass
+
+            def raise_for_status(self):
+                pass
 
         ths_mod._ths_hxkline_jwt_cache["value"] = None
         ths_mod._ths_hxkline_jwt_cache["expires_at"] = 0.0
 
         calls = {"n": 0}
+
         def fake_get(url, timeout=15):
             calls["n"] += 1
             assert "82-" in url  # chunk hash is part of the URL
@@ -781,6 +779,7 @@ class TestHuxkLineJwt:
 
         def must_not_call(*a, **kw):
             raise AssertionError("requests.get must not be called when env override is set")
+
         monkeypatch.setattr(ths_mod.requests, "get", must_not_call)
         assert ths_mod._get_ths_hxkline_jwt() == "eyJ.env.override"
 
@@ -794,7 +793,10 @@ class TestHuxkLineJwt:
         class FakeResp:
             text = "no token here"
             status_code = 200
-            def raise_for_status(self): pass
+
+            def raise_for_status(self):
+                pass
+
         monkeypatch.setattr(ths_mod.requests, "get", lambda *a, **kw: FakeResp())
 
         with pytest.raises(DataFetchError, match="JWT not found"):
@@ -810,16 +812,34 @@ class TestParseSingleKlineResponse:
         body = {
             "status_code": 0,
             "data": {
-                "quote_data": [{
-                    "market": "48",
-                    "code": "885756",
-                    "delay": False,
-                    "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
-                    "value": [
-                        [1732550400000, 2813.92, 2845.87, 2770.84, 2771.96, 14851306000, 23828683000],
-                        [1732636800000, 2754.02, 2840.82, 2696.71, 2840.82, 16226268000, 28300843000],
-                    ],
-                }],
+                "quote_data": [
+                    {
+                        "market": "48",
+                        "code": "885756",
+                        "delay": False,
+                        "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                        "value": [
+                            [
+                                1732550400000,
+                                2813.92,
+                                2845.87,
+                                2770.84,
+                                2771.96,
+                                14851306000,
+                                23828683000,
+                            ],
+                            [
+                                1732636800000,
+                                2754.02,
+                                2840.82,
+                                2696.71,
+                                2840.82,
+                                16226268000,
+                                28300843000,
+                            ],
+                        ],
+                    }
+                ],
                 "fail_params": None,
             },
             "status_msg": "ok",
@@ -838,11 +858,28 @@ class TestParseSingleKlineResponse:
 
         body = {
             "status_code": 0,
-            "data": {"quote_data": [{
-                "market": "48", "code": "881153", "delay": False,
-                "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
-                "value": [[1781574300000, 1707.92, 1707.92, 1677.89, 1679.61, 640538570, 3271067400]],
-            }], "fail_params": None},
+            "data": {
+                "quote_data": [
+                    {
+                        "market": "48",
+                        "code": "881153",
+                        "delay": False,
+                        "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                        "value": [
+                            [
+                                1781574300000,
+                                1707.92,
+                                1707.92,
+                                1677.89,
+                                1679.61,
+                                640538570,
+                                3271067400,
+                            ]
+                        ],
+                    }
+                ],
+                "fail_params": None,
+            },
             "status_msg": "ok",
         }
         rows = _parse_ths_single_kline_response(body, freq_key="15m")
@@ -852,8 +889,10 @@ class TestParseSingleKlineResponse:
 
     def test_status_nonzero_raises(self):
         from stock_data.data_provider.fetchers.ths_fetcher import (
-            DataFetchError, _parse_ths_single_kline_response,
+            DataFetchError,
+            _parse_ths_single_kline_response,
         )
+
         with pytest.raises(DataFetchError, match="status_code"):
             _parse_ths_single_kline_response(
                 {"status_code": 40001, "status_msg": "auth failed", "data": None},
@@ -863,7 +902,11 @@ class TestParseSingleKlineResponse:
     def test_empty_quote_data_returns_empty_list(self):
         from stock_data.data_provider.fetchers.ths_fetcher import _parse_ths_single_kline_response
 
-        body = {"status_code": 0, "data": {"quote_data": [], "fail_params": None}, "status_msg": "ok"}
+        body = {
+            "status_code": 0,
+            "data": {"quote_data": [], "fail_params": None},
+            "status_msg": "ok",
+        }
         assert _parse_ths_single_kline_response(body, freq_key="d") == []
 
 
@@ -878,22 +921,34 @@ class TestFetchSingleKline:
 
         fake_body = {
             "status_code": 0,
-            "data": {"quote_data": [{
-                "market": "48", "code": "881270", "delay": False,
-                "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
-                "value": [[1732550400000, 9000.0, 9100.0, 8900.0, 9050.0, 100, 1000]],
-            }], "fail_params": None},
+            "data": {
+                "quote_data": [
+                    {
+                        "market": "48",
+                        "code": "881270",
+                        "delay": False,
+                        "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                        "value": [[1732550400000, 9000.0, 9100.0, 8900.0, 9050.0, 100, 1000]],
+                    }
+                ],
+                "fail_params": None,
+            },
             "status_msg": "ok",
         }
 
         captured_kwargs: dict = {}
+
         class FakeResp:
             status_code = 200
             headers = {"x-ratelimit-remaining": "2740", "x-ratelimit-limit": "2750"}
-            def json(self): return fake_body
+
+            def json(self):
+                return fake_body
+
         def fake_post(url, **kwargs):
             captured_kwargs.update(kwargs)
             return FakeResp()
+
         monkeypatch.setattr(ths_mod.requests, "post", fake_post)
 
         rows = _fetch_ths_single_kline("881270", freq_key="d", days=400)
@@ -913,34 +968,51 @@ class TestFetchSingleKline:
         from stock_data.data_provider.fetchers.ths_fetcher import _fetch_ths_single_kline
 
         post_calls = {"n": 0}
+
         class FakeResp:
             def __init__(self, code, body):
                 self.status_code = code
                 self._body = body
                 self.headers = {}
-            def json(self): return self._body
+
+            def json(self):
+                return self._body
+
         def fake_post(url, **kwargs):
             post_calls["n"] += 1
             if post_calls["n"] == 1:
                 return FakeResp(401, {})
-            return FakeResp(200, {
-                "status_code": 0,
-                "data": {"quote_data": [{
-                    "market": "48", "code": "881270", "delay": False,
-                    "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
-                    "value": [],
-                }], "fail_params": None},
-                "status_msg": "ok",
-            })
+            return FakeResp(
+                200,
+                {
+                    "status_code": 0,
+                    "data": {
+                        "quote_data": [
+                            {
+                                "market": "48",
+                                "code": "881270",
+                                "delay": False,
+                                "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                                "value": [],
+                            }
+                        ],
+                        "fail_params": None,
+                    },
+                    "status_msg": "ok",
+                },
+            )
+
         monkeypatch.setattr(ths_mod.requests, "post", fake_post)
 
         # Each _get_ths_hxkline_jwt call invalidates the cache to simulate
         # the natural cache-flush behavior on JWT rotation.
         jwt_iter = iter(["eyJ.iter1", "eyJ.iter2"])
+
         def fake_jwt():
             tok = next(jwt_iter)
             ths_mod._ths_hxkline_jwt_cache["value"] = None
             return tok
+
         monkeypatch.setattr(ths_mod, "_get_ths_hxkline_jwt", fake_jwt)
 
         rows = _fetch_ths_single_kline("881270", freq_key="d", days=30)
@@ -950,15 +1022,18 @@ class TestFetchSingleKline:
     def test_http_error_raises(self, monkeypatch):
         from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
         from stock_data.data_provider.fetchers.ths_fetcher import (
-            DataFetchError, _fetch_ths_single_kline,
+            DataFetchError,
+            _fetch_ths_single_kline,
         )
 
         monkeypatch.setattr(ths_mod, "_get_ths_hxkline_jwt", lambda: "eyJ.test.sig")
+
         class FakeResp:
             status_code = 500
             text = "upstream down"
             content = b"upstream down"
             headers = {}
+
         monkeypatch.setattr(ths_mod.requests, "post", lambda *a, **kw: FakeResp())
         with pytest.raises(DataFetchError, match="HTTP 500"):
             _fetch_ths_single_kline("881270", freq_key="d", days=30)
@@ -969,20 +1044,24 @@ class TestFetchSingleKline:
         message instead of silently retrying once with the same token."""
         from stock_data.data_provider.fetchers import ths_fetcher as ths_mod
         from stock_data.data_provider.fetchers.ths_fetcher import (
-            DataFetchError, _fetch_ths_single_kline,
+            DataFetchError,
+            _fetch_ths_single_kline,
         )
 
         monkeypatch.setenv("THS_HXKLINE_JWT", "eyJ.pinned.stale")
         monkeypatch.setattr(ths_mod, "_get_ths_hxkline_jwt", lambda: "eyJ.pinned.stale")
 
         post_calls = {"n": 0}
+
         class FakeResp:
             status_code = 401
             content = b""
             headers = {}
+
         def fake_post(*a, **kw):
             post_calls["n"] += 1
             return FakeResp()
+
         monkeypatch.setattr(ths_mod.requests, "post", fake_post)
 
         with pytest.raises(DataFetchError, match="THS_HXKLINE_JWT env var is stale"):
@@ -1000,26 +1079,38 @@ class TestFetchSingleKline:
         monkeypatch.setattr(ths_mod, "_get_ths_hxkline_jwt", lambda: "eyJ.test.sig")
 
         captured_kwargs: dict = {}
+
         class FakeResp:
             status_code = 200
             headers = {}
+
             def json(self):
                 return {
                     "status_code": 0,
-                    "data": {"quote_data": [{
-                        "market": "48", "code": "881270", "delay": False,
-                        "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
-                        "value": [],
-                    }], "fail_params": None},
+                    "data": {
+                        "quote_data": [
+                            {
+                                "market": "48",
+                                "code": "881270",
+                                "delay": False,
+                                "data_fields": ["1", "7", "8", "9", "11", "13", "19"],
+                                "value": [],
+                            }
+                        ],
+                        "fail_params": None,
+                    },
                     "status_msg": "ok",
                 }
+
         def fake_post(url, **kwargs):
             captured_kwargs.update(kwargs)
             return FakeResp()
+
         monkeypatch.setattr(ths_mod.requests, "post", fake_post)
 
         # days=180, end_d 100 days back → begin=-280, end=-100
         from datetime import date, timedelta
+
         end_d = date.today() - timedelta(days=100)
         _fetch_ths_single_kline("881270", freq_key="d", days=180, end_d=end_d)
         body = captured_kwargs["json"]
@@ -1031,11 +1122,15 @@ class TestFetchSingleKline:
         _resolve_ths_date_range behavior where start_d=end_d-days).
         freq_key='d' so the 800-bar cap check doesn't fire."""
         from datetime import date, timedelta
+
         from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
 
         end_d = date.today() - timedelta(days=100)
         begin, end = _compute_time_window(
-            days=180, start_d=None, end_d=end_d, freq_key="d",
+            days=180,
+            start_d=None,
+            end_d=end_d,
+            freq_key="d",
         )
         assert end == -100
         assert begin == -280  # 180 days ending 100 days back
@@ -1043,14 +1138,19 @@ class TestFetchSingleKline:
     def test_compute_time_window_end_date_today_clamped(self):
         """end_d today/future → end_time=0 (upstream '0=now', positive undefined)."""
         from datetime import date
+
         from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
 
         begin, end = _compute_time_window(
-            days=30, start_d=None, end_d=None, freq_key="d",
+            days=30,
+            start_d=None,
+            end_d=None,
+            freq_key="d",
         )
         assert end == 0
         begin, end = _compute_time_window(
-            days=30, start_d=None,
+            days=30,
+            start_d=None,
             end_d=date(2099, 1, 1),  # far future
             freq_key="d",
         )
@@ -1063,12 +1163,16 @@ class TestFetchSingleKline:
         This test mirrors what get_board_history actually passes in:
         start_d = end_d - days, end_d = today."""
         from datetime import date, timedelta
+
         from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
 
         end_d = date.today()
         start_d = end_d - timedelta(days=30)
         begin, end = _compute_time_window(
-            days=30, start_d=start_d, end_d=end_d, freq_key="d",
+            days=30,
+            start_d=start_d,
+            end_d=end_d,
+            freq_key="d",
         )
         assert end == 0
         assert begin == -30  # NOT -1, because start_d is already expanded
@@ -1084,13 +1188,17 @@ class TestFetchSingleKline:
         upstream offset uses ``(today - start_d).days`` which is 801.
         """
         from datetime import date, timedelta
+
         from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
 
         end_d = date.today() - timedelta(days=1)  # yesterday
         start_d = end_d - timedelta(days=800)  # 800d window ending yesterday
         with pytest.raises(ValueError, match="800-bar cap"):
             _compute_time_window(
-                days=800, start_d=start_d, end_d=end_d, freq_key="1m",
+                days=800,
+                start_d=start_d,
+                end_d=end_d,
+                freq_key="1m",
             )
 
     def test_compute_time_window_daily_800_bar_cap_not_fired(self):
@@ -1098,13 +1206,17 @@ class TestFetchSingleKline:
         800-bar cap guard must NOT fire for them even when (today -
         start_d).days > 800."""
         from datetime import date, timedelta
+
         from stock_data.data_provider.fetchers.ths_fetcher import _compute_time_window
 
         end_d = date.today()
         start_d = end_d - timedelta(days=2000)  # well over 800 days back
         # Should NOT raise — daily uses the 3650 cap, not 800.
         begin, end = _compute_time_window(
-            days=2000, start_d=start_d, end_d=end_d, freq_key="d",
+            days=2000,
+            start_d=start_d,
+            end_d=end_d,
+            freq_key="d",
         )
         assert end == 0
         assert begin == -2000

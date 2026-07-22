@@ -28,9 +28,7 @@ class MockFetcher(BaseFetcher):
     priority = 10
     supported_markets = {"csi", "hk"}
     supported_data_types = (
-        DataCapability.STOCK_KLINE
-        | DataCapability.STOCK_REALTIME_QUOTE
-        | DataCapability.STOCK_LIST
+        DataCapability.STOCK_KLINE | DataCapability.STOCK_REALTIME_QUOTE | DataCapability.STOCK_LIST
     )
 
     def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
@@ -91,6 +89,7 @@ class MockFetcherNoIndex(BaseFetcher):
     codes; if it is, the mock returns trivial data so any erroneous
     fallback is visible in the test result.
     """
+
     name = "MockFetcherNoIndex"
     priority = 10
     supported_markets = {"csi"}
@@ -146,7 +145,9 @@ class TestDataFetcherManagerUnit:
         name = stock_list.get_stock_name("000001", manager=None)
         assert name == ""
 
-    def test_get_stock_name_empty_db_with_manager_attempts_warm(self, manager, tmp_path, monkeypatch):
+    def test_get_stock_name_empty_db_with_manager_attempts_warm(
+        self, manager, tmp_path, monkeypatch
+    ):
         """Verify get_stock_name tries manager fallback on DB miss."""
         from stock_data.data_provider.persistence import (
             db,

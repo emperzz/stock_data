@@ -18,7 +18,9 @@ def get_db_path() -> Path:
         env_path = os.getenv("STOCK_CACHE_DB_PATH")
         # __file__ = .../data_provider/persistence/db.py
         # parent.parent.parent = <repo>/stock_data/
-        _db_path = Path(env_path) if env_path else Path(__file__).parent.parent.parent / "stock_cache.db"
+        _db_path = (
+            Path(env_path) if env_path else Path(__file__).parent.parent.parent / "stock_cache.db"
+        )
     return _db_path
 
 
@@ -46,9 +48,7 @@ def get_connection() -> sqlite3.Connection:
     """
     global _conn
     if _conn is None:
-        _conn = sqlite3.connect(
-            get_db_path(), timeout=30, check_same_thread=False
-        )
+        _conn = sqlite3.connect(get_db_path(), timeout=30, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         # Concurrency hardening (P2-1). WAL is a persistent DB-level
         # setting so this is idempotent on every fresh connection.
@@ -56,4 +56,3 @@ def get_connection() -> sqlite3.Connection:
         _conn.execute("PRAGMA busy_timeout=30000")
         _conn.execute("PRAGMA synchronous=NORMAL")
     return _conn
-

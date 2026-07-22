@@ -360,12 +360,15 @@ class TestToTushareFormat:
         # ``is_index_code`` 从 ..utils.normalize 重导出到 code_converter 模块级
         # 引用, mock 必须在 code_converter 里拦截。``get_index_type`` 是函数
         # 内 from-import, mock 必须在源模块 (index_symbols) 拦截。
-        with patch(
-            "stock_data.data_provider.utils.code_converter.is_index_code",
-            return_value=True,
-        ), patch(
-            "stock_data.data_provider.fetchers.index_symbols.get_index_type",
-            return_value="csi",
+        with (
+            patch(
+                "stock_data.data_provider.utils.code_converter.is_index_code",
+                return_value=True,
+            ),
+            patch(
+                "stock_data.data_provider.fetchers.index_symbols.get_index_type",
+                return_value="csi",
+            ),
         ):
             assert cc.to_tushare_format("399370") == "399370.SZ"
             assert cc.to_tushare_format("000370") == "000370.SH"

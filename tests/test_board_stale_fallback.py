@@ -11,6 +11,7 @@ helper must (a) return the cached rows, (b) tag origin='persistence',
 (c) tag effective_source='ths' (the unified cache key), and (d) leave
 ``reason`` set so the route layer can surface the staleness in the response.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -60,16 +61,12 @@ def test_upstream_failure_falls_back_to_cached_stocks(fresh_db, monkeypatch):
     _seed_membership("BK2001", "000001", "平安银行")
 
     # Force needs_refresh by setting the tracker to first-call
-    monkeypatch.setattr(
-        board_mod._refresh_tracker, "is_first_call", lambda key: True
-    )
+    monkeypatch.setattr(board_mod._refresh_tracker, "is_first_call", lambda key: True)
     # Simulate both ZZSHARE and THS failing
     monkeypatch.setattr(
         board_mod,
         "fetch_board_stocks_with_zzshare_fallback",
-        lambda **kwargs: (_ for _ in ()).throw(
-            DataFetchError("simulated upstream outage")
-        ),
+        lambda **kwargs: (_ for _ in ()).throw(DataFetchError("simulated upstream outage")),
     )
 
     (
@@ -99,15 +96,11 @@ def test_upstream_failure_without_cache_raises(fresh_db, monkeypatch):
     """When both upstream and cache are empty, the DataFetchError must
     still bubble up — we never silently return an empty list."""
     # No cache seed → cached_full is []
-    monkeypatch.setattr(
-        board_mod._refresh_tracker, "is_first_call", lambda key: True
-    )
+    monkeypatch.setattr(board_mod._refresh_tracker, "is_first_call", lambda key: True)
     monkeypatch.setattr(
         board_mod,
         "fetch_board_stocks_with_zzshare_fallback",
-        lambda **kwargs: (_ for _ in ()).throw(
-            DataFetchError("simulated upstream outage")
-        ),
+        lambda **kwargs: (_ for _ in ()).throw(DataFetchError("simulated upstream outage")),
     )
 
     with pytest.raises(DataFetchError, match="simulated upstream outage"):

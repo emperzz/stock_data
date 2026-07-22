@@ -14,6 +14,7 @@ comparing against the parsed sign of the ``bh`` text.
 Run with:
     .venv/Scripts/python.exe scripts/probe_zhitu_holder_num.py
 """
+
 from __future__ import annotations
 
 import os
@@ -80,8 +81,10 @@ def main() -> int:
         return 1
 
     print(f"\nGot {len(data)} records. Checking sign semantics...\n")
-    print(f"{'date':<12} {'gdhs':>10} {'gdhs_prev':>10} {'actual':>10} "
-          f"{'bh_text':>14} {'current_code':>14} {'match':>6}")
+    print(
+        f"{'date':<12} {'gdhs':>10} {'gdhs_prev':>10} {'actual':>10} "
+        f"{'bh_text':>14} {'current_code':>14} {'match':>6}"
+    )
     print("-" * 84)
 
     mismatches = 0
@@ -97,8 +100,10 @@ def main() -> int:
         match = "✓" if (actual_change > 0) == (code_change > 0) else "✗"
         if match == "✗":
             mismatches += 1
-        print(f"{data[i].get('jzrq', ''):<12} {gdhs:>10} {gdhs_prev:>10} "
-              f"{actual_change:>+10} {bh_raw:>14} {code_change:>+14} {match:>6}")
+        print(
+            f"{data[i].get('jzrq', ''):<12} {gdhs:>10} {gdhs_prev:>10} "
+            f"{actual_change:>+10} {bh_raw:>14} {code_change:>+14} {match:>6}"
+        )
 
     print()
     if mismatches == 0:

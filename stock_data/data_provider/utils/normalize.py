@@ -32,11 +32,21 @@ __all__ = [
 # 3-digit "920" doesn't shadow them.  ``is_a_share_stock_code`` handles
 # the matching order correctly.
 A_SHARE_STOCK_PREFIXES: tuple[str, ...] = (
-    "600", "601", "603", "605", "689", "688",  # Shanghai
-    "001", "002", "003",                       # Shenzhen main
-    "300", "301", "302",                       # ChiNext
-    "920",                                     # Beijing (3-digit)
-    "8", "4",                                  # Beijing (1-digit, checked last)
+    "600",
+    "601",
+    "603",
+    "605",
+    "689",
+    "688",  # Shanghai
+    "001",
+    "002",
+    "003",  # Shenzhen main
+    "300",
+    "301",
+    "302",  # ChiNext
+    "920",  # Beijing (3-digit)
+    "8",
+    "4",  # Beijing (1-digit, checked last)
 )
 
 
@@ -147,11 +157,20 @@ def market_tag(code: str) -> str:
 # are sub-boards of SSE/SZSE respectively — they keep the parent exchange.
 _CODE_PREFIX_TO_EXCHANGE: tuple[tuple[str, str], ...] = (
     # Shanghai (SSE)
-    ("600", "SH"), ("601", "SH"), ("603", "SH"), ("605", "SH"),
-    ("688", "SH"), ("689", "SH"),
+    ("600", "SH"),
+    ("601", "SH"),
+    ("603", "SH"),
+    ("605", "SH"),
+    ("688", "SH"),
+    ("689", "SH"),
     # Shenzhen (SZSE) — main board + ChiNext
-    ("000", "SZ"), ("001", "SZ"), ("002", "SZ"), ("003", "SZ"),
-    ("300", "SZ"), ("301", "SZ"), ("302", "SZ"),
+    ("000", "SZ"),
+    ("001", "SZ"),
+    ("002", "SZ"),
+    ("003", "SZ"),
+    ("300", "SZ"),
+    ("301", "SZ"),
+    ("302", "SZ"),
     # Beijing (BSE)
     ("920", "BJ"),
     # 1-digit Beijing prefixes (checked last; the 3-digit "920" shadows them

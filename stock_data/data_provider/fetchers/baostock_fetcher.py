@@ -31,9 +31,7 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
     priority = int(os.getenv("BAOSTOCK_PRIORITY", "1"))
     supported_markets: set[str] = {"csi"}
     supported_data_types = (
-        DataCapability.STOCK_KLINE
-        | DataCapability.INDEX_KLINE
-        | DataCapability.DIVIDEND
+        DataCapability.STOCK_KLINE | DataCapability.INDEX_KLINE | DataCapability.DIVIDEND
     )
 
     # SDKFetcherMixin configuration: Baostock has no token (None skips the
@@ -251,7 +249,9 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
                         break
 
             if not query_day:
-                logger.warning("[BaostockFetcher] query_all_stock returned no data for any cached trading day")
+                logger.warning(
+                    "[BaostockFetcher] query_all_stock returned no data for any cached trading day"
+                )
 
             return result
 
@@ -289,7 +289,9 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
             start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
 
         try:
-            return self.get_kline_data(index_code, start_date, end_date, days=365, frequency=frequency)
+            return self.get_kline_data(
+                index_code, start_date, end_date, days=365, frequency=frequency
+            )
         except DataFetchError:
             return None
 
@@ -358,18 +360,22 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
             out: list[dict] = []
             for row in rows[: max(1, page_size)]:
                 date = _operate_date(row)
+
                 # Per-share → per-10-share. ``safe_float`` (from core.types)
                 # already handles ``""`` / ``"-"`` / non-numeric strings and
                 # NaN/inf; only the tuple-bound guard is local.
                 def _at(idx: int, _row=row) -> float:
                     return safe_float(_row[idx], 0.0) if len(_row) > idx else 0.0
-                out.append({
-                    "date": date,
-                    "bonus_rmb": _at(9),  # dividCashPsBeforeTax (元/股, pre-tax)
-                    "transfer_ratio": _at(13) * 10,  # dividReserveToStockPs (股/股) → 股/10股
-                    "bonus_ratio": _at(11) * 10,  # dividStocksPs (送股/股) → 送股/10股
-                    "plan": "实施",  # yearType=operate → only 实施 records come back
-                })
+
+                out.append(
+                    {
+                        "date": date,
+                        "bonus_rmb": _at(9),  # dividCashPsBeforeTax (元/股, pre-tax)
+                        "transfer_ratio": _at(13) * 10,  # dividReserveToStockPs (股/股) → 股/10股
+                        "bonus_ratio": _at(11) * 10,  # dividStocksPs (送股/股) → 送股/10股
+                        "plan": "实施",  # yearType=operate → only 实施 records come back
+                    }
+                )
             return out
         except Exception as e:
             logger.warning(f"[BaostockFetcher] get_dividend failed for {code}: {e}")

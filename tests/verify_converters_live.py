@@ -26,7 +26,7 @@ from stock_data.data_provider.utils.code_converter import (  # noqa: E402
 
 PASS = "PASS"
 FAIL = "FAIL"
-NET = "NET"   # network / upstream temporarily unreachable — not a converter bug
+NET = "NET"  # network / upstream temporarily unreachable — not a converter bug
 
 results: list[tuple[str, str, str]] = []  # (name, result, detail)
 
@@ -57,31 +57,36 @@ def _err_info() -> str:
 
 # ── helpers ────────────────────────────────────────────────────────────
 
+
 def _fetch_akshare_kline(code: str) -> bool | None:
     import akshare as ak
     import requests
+
     try:
-        df = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                 start_date="2025-06-02", end_date="2025-06-06",
-                                 adjust="")
+        df = ak.stock_zh_a_hist(
+            symbol=code, period="daily", start_date="2025-06-02", end_date="2025-06-06", adjust=""
+        )
         return df is not None and not df.empty
-    except (requests.ConnectionError, requests.Timeout,
-            ConnectionError, TimeoutError, OSError):
+    except (requests.ConnectionError, requests.Timeout, ConnectionError, TimeoutError, OSError):
         return None
 
 
 def _fetch_baostock_kline(bs_code: str) -> bool | None:
     import baostock as bs
     import requests
+
     try:
         lg = bs.login()
         if lg.error_code != "0":
             bs.logout()
             return None
         rs = bs.query_history_k_data_plus(
-            bs_code, "date,open,high,low,close,volume,amount",
-            start_date="2025-06-02", end_date="2025-06-06",
-            frequency="d", adjustflag="3",
+            bs_code,
+            "date,open,high,low,close,volume,amount",
+            start_date="2025-06-02",
+            end_date="2025-06-06",
+            frequency="d",
+            adjustflag="3",
         )
         ok = rs.error_code == "0"
         data = []
@@ -89,8 +94,7 @@ def _fetch_baostock_kline(bs_code: str) -> bool | None:
             data.append(rs.get_row_data())
         bs.logout()
         return ok and len(data) > 0
-    except (requests.ConnectionError, requests.Timeout,
-            ConnectionError, TimeoutError, OSError):
+    except (requests.ConnectionError, requests.Timeout, ConnectionError, TimeoutError, OSError):
         with contextlib.suppress(Exception):
             bs.logout()
         return None
@@ -98,6 +102,7 @@ def _fetch_baostock_kline(bs_code: str) -> bool | None:
 
 def _fetch_tencent_quote(prefix: str) -> bool | None:
     import urllib.request
+
     try:
         url = f"https://qt.gtimg.cn/q={prefix}"
         resp = urllib.request.urlopen(url, timeout=15)
@@ -109,30 +114,41 @@ def _fetch_tencent_quote(prefix: str) -> bool | None:
 
 def _fetch_eastmoney_kline(secid: str) -> bool | None:
     import requests
+
     try:
         url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
         params = {
-            "secid": secid, "fields1": "f1,f2,f3,f4,f5,f6",
+            "secid": secid,
+            "fields1": "f1,f2,f3,f4,f5,f6",
             "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-            "klt": "101", "fqt": "1", "end": "20500101", "lmt": "5",
+            "klt": "101",
+            "fqt": "1",
+            "end": "20500101",
+            "lmt": "5",
         }
-        r = requests.get(url, params=params, headers={
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://quote.eastmoney.com/",
-        }, timeout=15)
+        r = requests.get(
+            url,
+            params=params,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://quote.eastmoney.com/",
+            },
+            timeout=15,
+        )
         d = r.json()
         klines = d.get("data", {}).get("klines") or []
         return len(klines) > 0
-    except (requests.ConnectionError, requests.Timeout,
-            ConnectionError, TimeoutError, OSError):
+    except (requests.ConnectionError, requests.Timeout, ConnectionError, TimeoutError, OSError):
         return None
 
 
 def _fetch_yfinance_kline(ticker: str) -> bool | None:
     import yfinance as yf
+
     try:
-        df = yf.download(tickers=ticker, start="2025-06-02", end="2025-06-06",
-                         progress=False, auto_adjust=False)
+        df = yf.download(
+            tickers=ticker, start="2025-06-02", end="2025-06-06", progress=False, auto_adjust=False
+        )
         if df is None or df.empty:
             # yfinance catches YFRateLimitError internally and returns empty
             # DataFrame — treat as upstream issue, not converter bug
@@ -146,6 +162,7 @@ def _fetch_zhitu_quote(stock_code: str) -> bool | None:
     import os
 
     import requests
+
     token = os.getenv("ZHITU_TOKEN", "")
     if not token:
         return None
@@ -166,6 +183,7 @@ def _fetch_tushare_kline(ts_code: str) -> bool | None:
 
     import requests
     import tushare as ts
+
     token = os.getenv("TUSHARE_TOKEN", "")
     if not token:
         return None
@@ -173,8 +191,7 @@ def _fetch_tushare_kline(ts_code: str) -> bool | None:
         api = ts.pro_api(token)
         df = api.daily(ts_code=ts_code, start_date="20250602", end_date="20250606")
         return df is not None and not df.empty
-    except (requests.ConnectionError, requests.Timeout,
-            ConnectionError, TimeoutError, OSError):
+    except (requests.ConnectionError, requests.Timeout, ConnectionError, TimeoutError, OSError):
         return None
 
 
@@ -203,9 +220,11 @@ try:
     assert code == "00700.hk", f"bad format: {code}"
     import akshare as ak
     import requests as _r
+
     try:
-        df = ak.stock_hk_hist(symbol="00700", period="daily",
-                               start_date="20250602", end_date="20250606", adjust="")
+        df = ak.stock_hk_hist(
+            symbol="00700", period="daily", start_date="20250602", end_date="20250606", adjust=""
+        )
         record("HK00700 HK K-line", df is not None and not df.empty)
     except (_r.ConnectionError, _r.Timeout, ConnectionError, TimeoutError, OSError):
         record("HK00700 HK K-line", None, "network error")
@@ -219,8 +238,9 @@ try:
     code = to_akshare_format("000300")
     assert code == "000300", f"bad format: {code}"
     try:
-        df = ak.index_zh_a_hist(symbol=code, period="daily",
-                                 start_date="20250602", end_date="20250606")
+        df = ak.index_zh_a_hist(
+            symbol=code, period="daily", start_date="20250602", end_date="20250606"
+        )
         record("000300 CSI index", df is not None and not df.empty)
     except (_r.ConnectionError, _r.Timeout, ConnectionError, TimeoutError, OSError):
         record("000300 CSI index", None, "network error")
@@ -400,11 +420,11 @@ except Exception:
 
 
 # ── summary ────────────────────────────────────────────────────────────
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 n_pass = sum(1 for _, m, _ in results if m == PASS)
 n_fail = sum(1 for _, m, _ in results if m == FAIL)
-n_net  = sum(1 for _, m, _ in results if m == NET)
-total  = len(results)
+n_net = sum(1 for _, m, _ in results if m == NET)
+total = len(results)
 
 print(f"  PASS: {n_pass}  FAIL: {n_fail}  NET: {n_net}  Total: {total}")
 print()

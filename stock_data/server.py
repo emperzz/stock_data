@@ -48,6 +48,7 @@ class _UTF8JSONResponse(JSONResponse):
 
     media_type = "application/json; charset=utf-8"
 
+
 # Load environment variables
 load_dotenv()
 
@@ -111,9 +112,7 @@ async def lifespan(app: FastAPI):
             # CSVs present but seed produced {} — seed_all_from_backup_dir
             # already logged a summary ERROR ("All N CSV file(s) failed").
             # Avoid the misleading "no files in ..." message here.
-            logger.error(
-                "[Startup] CSV seed produced 0 rows; check ERROR logs above for details."
-            )
+            logger.error("[Startup] CSV seed produced 0 rows; check ERROR logs above for details.")
         else:
             logger.info("[Startup] CSV seed skipped (no files in %s)", backup_dir)
     else:
@@ -213,7 +212,9 @@ app = FastAPI(
 # ({"detail": [...]}) matches FastAPI's default exactly — clients that
 # already parse 422 bodies continue to work.
 @app.exception_handler(RequestValidationError)
-async def _validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def _validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     return _UTF8JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 

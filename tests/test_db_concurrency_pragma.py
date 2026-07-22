@@ -17,6 +17,7 @@ shared singleton connection. Even with WAL, same-connection writes are
 NOT safe — this test is intentionally minimal: it just verifies that
 busy_timeout gives the second writer time to wait instead of erroring.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -137,7 +138,7 @@ def test_concurrent_readers_dont_block_each_other(fresh_db):
             c = db_mod.get_connection()
             row = c.execute("SELECT v FROM t WHERE id = 1").fetchone()
             read_results.append(row[0] if row else None)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             errors.append(e)
 
     # Run a reader in a thread while the main thread also reads.

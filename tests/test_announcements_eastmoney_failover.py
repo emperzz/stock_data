@@ -12,6 +12,7 @@ lambda and CninfoFetcher's method name), so the existing
 f.get_announcements(code, page_size))`` picks it up automatically once
 the capability flag is declared.
 """
+
 from unittest.mock import patch
 
 import pytest

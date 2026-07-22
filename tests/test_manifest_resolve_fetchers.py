@@ -1,4 +1,5 @@
 """Unit tests for _resolve_fetchers in explorer/manifest.py."""
+
 from unittest.mock import MagicMock, patch
 
 from stock_data.api.endpoint_meta import EndpointMeta
@@ -20,10 +21,14 @@ class _FakeFetcher(BaseFetcher):
     _FakeFetcherB below.
     """
 
-    def __init__(self, name: str = "_FakeFetcher", priority: int = 99,
-                 markets: set[str] | None = None,
-                 caps: DataCapability = DataCapability(0),  # noqa: B008 (test fixture)
-                 extra_methods: tuple[str, ...] = ()):
+    def __init__(
+        self,
+        name: str = "_FakeFetcher",
+        priority: int = 99,
+        markets: set[str] | None = None,
+        caps: DataCapability = DataCapability(0),  # noqa: B008 (test fixture)
+        extra_methods: tuple[str, ...] = (),
+    ):
         self.name = name
         self.priority = priority
         self.supported_markets = markets or set()
@@ -48,8 +53,9 @@ class _FakeFetcherA(_FakeFetcher):
     supported_data_types = DataCapability.STOCK_REALTIME_QUOTE
 
     def __init__(self):
-        super().__init__(name="alpha", priority=99, markets={"csi"},
-                         caps=DataCapability.STOCK_REALTIME_QUOTE)
+        super().__init__(
+            name="alpha", priority=99, markets={"csi"}, caps=DataCapability.STOCK_REALTIME_QUOTE
+        )
 
 
 class _FakeFetcherB(_FakeFetcher):
@@ -57,8 +63,9 @@ class _FakeFetcherB(_FakeFetcher):
     supported_data_types = DataCapability.STOCK_REALTIME_QUOTE
 
     def __init__(self):
-        super().__init__(name="beta", priority=99, markets={"csi"},
-                         caps=DataCapability.STOCK_REALTIME_QUOTE)
+        super().__init__(
+            name="beta", priority=99, markets={"csi"}, caps=DataCapability.STOCK_REALTIME_QUOTE
+        )
 
 
 def _mock_manager(fetchers):
@@ -83,10 +90,13 @@ def _with_only_fake_classes(mock_caps_only, fake_classes):
     different module object than `from X import Y` resolved at import.
     """
     return patch.object(
-        _manifest_mod, "_classes_declaring_capability",
-        side_effect=lambda cap: [c for c in fake_classes
-                                 if cap in (getattr(c, "supported_data_types", DataCapability(0))
-                                            or DataCapability(0))],
+        _manifest_mod,
+        "_classes_declaring_capability",
+        side_effect=lambda cap: [
+            c
+            for c in fake_classes
+            if cap in (getattr(c, "supported_data_types", DataCapability(0)) or DataCapability(0))
+        ],
     )
 
 
@@ -117,16 +127,20 @@ def test_multi_capability_same_method_merges_to_one_row():
     class _Baostock(_FakeFetcher):
         name = "baostock"
         supported_data_types = DataCapability.STOCK_KLINE
+
         def __init__(self):
             super().__init__(
-                name="baostock", priority=1, markets={"csi"},
+                name="baostock",
+                priority=1,
+                markets={"csi"},
                 caps=DataCapability.STOCK_KLINE,
             )
 
     f = _Baostock()
     manager = _mock_manager([f])
     meta = EndpointMeta(
-        summary="K线", markets=["csi"],
+        summary="K线",
+        markets=["csi"],
         capabilities=["STOCK_KLINE"],
     )
     with _with_only_fake_classes(None, [type(f)]):
@@ -142,9 +156,12 @@ def test_fetcher_method_override_wins_over_capability_default():
     class _Eastmoney(_FakeFetcher):
         name = "eastmoney"
         supported_data_types = DataCapability.DRAGON_TIGER
+
         def __init__(self):
             super().__init__(
-                name="eastmoney", priority=0, markets={"csi"},
+                name="eastmoney",
+                priority=0,
+                markets={"csi"},
                 caps=DataCapability.DRAGON_TIGER,
                 extra_methods=("get_daily_dragon_tiger",),
             )
@@ -152,7 +169,8 @@ def test_fetcher_method_override_wins_over_capability_default():
     f = _Eastmoney()
     manager = _mock_manager([f])
     meta = EndpointMeta(
-        summary="龙虎榜每日", markets=["csi"],
+        summary="龙虎榜每日",
+        markets=["csi"],
         capabilities=["DRAGON_TIGER"],
         fetcher_method="get_daily_dragon_tiger",
     )
@@ -176,9 +194,11 @@ def test_signature_field_is_populated():
     class _Alpha(_FakeFetcher):
         name = "alpha"
         supported_data_types = DataCapability.STOCK_REALTIME_QUOTE
+
         def __init__(self):
-            super().__init__(name="alpha", priority=0, markets={"csi"},
-                             caps=DataCapability.STOCK_REALTIME_QUOTE)
+            super().__init__(
+                name="alpha", priority=0, markets={"csi"}, caps=DataCapability.STOCK_REALTIME_QUOTE
+            )
 
     f = _Alpha()
     manager = _mock_manager([f])

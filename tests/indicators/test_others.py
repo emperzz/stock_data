@@ -119,7 +119,7 @@ def test_obv_up_down_constant():
         {"open": 10, "high": 11, "low": 9, "close": 10, "volume": 100},
         {"open": 11, "high": 12, "low": 10, "close": 11, "volume": 200},  # up
         {"open": 11, "high": 12, "low": 10, "close": 10, "volume": 300},  # down
-        {"open": 10, "high": 11, "low": 9, "close": 10, "volume": 400},   # flat
+        {"open": 10, "high": 11, "low": 9, "close": 10, "volume": 400},  # flat
     ]
     rows = calcOBV(bars)
     # Bar 0: no prev -> 0
@@ -184,9 +184,7 @@ def test_dmi_basic():
 
 def test_dmi_flat_market_handles_zero_smoothed_tr():
     # All bars identical -> no TR -> smoothed_tr is 0
-    bars = [
-        {"open": 10, "high": 10, "low": 10, "close": 10, "volume": 1000} for _ in range(30)
-    ]
+    bars = [{"open": 10, "high": 10, "low": 10, "close": 10, "volume": 1000} for _ in range(30)]
     rows = calcDMI(bars)
     # All entries should be null (no TR means no DI)
     for row in rows:

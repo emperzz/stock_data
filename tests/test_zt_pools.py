@@ -45,6 +45,7 @@ def client(app):
     # mock-patched manager, so we want a fresh client per test even though
     # `app` itself is shared (session-scoped in conftest.py).
     from fastapi.testclient import TestClient
+
     return TestClient(app)
 
 
@@ -57,9 +58,19 @@ class TestZTPoolAPIRoutes:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
                 [
-                    {"code": "000001", "name": "平安银行", "price": 12.5, "change_pct": 10.05,
-                     "lb_count": 1, "first_seal_time": "09:25:00", "last_seal_time": "09:34:33",
-                     "seal_amount": 98243407, "seal_count": 0, "zt_count": "1/1", "pool_date": "2024-05-10"},
+                    {
+                        "code": "000001",
+                        "name": "平安银行",
+                        "price": 12.5,
+                        "change_pct": 10.05,
+                        "lb_count": 1,
+                        "first_seal_time": "09:25:00",
+                        "last_seal_time": "09:34:33",
+                        "seal_amount": 98243407,
+                        "seal_count": 0,
+                        "zt_count": "1/1",
+                        "pool_date": "2024-05-10",
+                    },
                 ],
                 "akshare",
                 None,
@@ -85,8 +96,14 @@ class TestZTPoolAPIRoutes:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
                 [
-                    {"code": "000002", "name": "万科A", "price": 8.8, "change_pct": -9.95,
-                     "lb_count": 1, "pool_date": "2024-05-10"},
+                    {
+                        "code": "000002",
+                        "name": "万科A",
+                        "price": 8.8,
+                        "change_pct": -9.95,
+                        "lb_count": 1,
+                        "pool_date": "2024-05-10",
+                    },
                 ],
                 "persistence",
                 None,
@@ -107,8 +124,15 @@ class TestZTPoolAPIRoutes:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = (
                 [
-                    {"code": "000003", "name": "炸板股", "price": 10.0, "change_pct": 9.95,
-                     "seal_count": 2, "lb_count": 1, "pool_date": "2024-05-10"},
+                    {
+                        "code": "000003",
+                        "name": "炸板股",
+                        "price": 10.0,
+                        "change_pct": 9.95,
+                        "seal_count": 2,
+                        "lb_count": 1,
+                        "pool_date": "2024-05-10",
+                    },
                 ],
                 "akshare",
                 None,
@@ -156,7 +180,9 @@ class TestZTPoolAPIRoutes:
             # route no longer passes is_current_day; the persistence
             # layer computes volatility from the date itself.
             mock_mgr.get_zt_pool.assert_called_once_with(
-                pool_type="zt", date="2024-05-10", refresh=True,
+                pool_type="zt",
+                date="2024-05-10",
+                refresh=True,
             )
 
     def test_get_pools_no_data_returns_404(self, client):
@@ -220,7 +246,9 @@ class TestZTPoolAPIRoutes:
             # volatility from the date itself (see pool_daily.is_volatile_date).
             # We only assert the kwargs the route still actually sends.
             mock_mgr.get_zt_pool.assert_called_once_with(
-                pool_type="zt", date=latest, refresh=False,
+                pool_type="zt",
+                date=latest,
+                refresh=False,
             )
 
 
@@ -448,6 +476,7 @@ class TestZTFetcherManager:
             # Stub the upstream call so we don't hit the network
             class FakeFetcher:
                 name = "FakeFetcher"
+
                 def get_zt_pool(self, pool_type, date):
                     return [{"code": "FAKE001", "name": "Fake", "price": 1.0}]
 
@@ -457,7 +486,9 @@ class TestZTFetcherManager:
             # is_current_day kwarg is intentionally omitted: it's been ignored
             # since c40d108. Volatility is now derived from the date + calendar.
             stocks, origin, warning = real_mgr.get_zt_pool(
-                "zt", today_str, refresh=False,
+                "zt",
+                today_str,
+                refresh=False,
             )
             assert len(stocks) == 1
             assert stocks[0]["code"] == "FAKE001"
@@ -506,7 +537,8 @@ class TestVolatileDatePolicy:
         delegate to real instances — that way the function under test
         (which uses the module-level names) sees the fakes.
         """
-        from datetime import date as real_date_cls, datetime as real_datetime_cls
+        from datetime import date as real_date_cls
+
         from stock_data.data_provider.persistence import pool_daily
 
         fake_today = real_date_cls(fake_now.year, fake_now.month, fake_now.day)
@@ -528,8 +560,7 @@ class TestVolatileDatePolicy:
         """At 15:59 on a trade day, today is still volatile."""
         from datetime import datetime
 
-        from stock_data.data_provider.persistence import pool_daily
-        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence import pool_daily, trade_calendar
 
         fake_now = datetime(2026, 7, 15, 15, 59, 0)
         self._fake_clock(monkeypatch, fake_now)
@@ -541,8 +572,7 @@ class TestVolatileDatePolicy:
         """At 16:01 on a trade day, today is NO LONGER volatile."""
         from datetime import datetime
 
-        from stock_data.data_provider.persistence import pool_daily
-        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence import pool_daily, trade_calendar
 
         fake_now = datetime(2026, 7, 15, 16, 1, 0)
         self._fake_clock(monkeypatch, fake_now)
@@ -567,8 +597,7 @@ class TestVolatileDatePolicy:
         """Today is not a trade day → not volatile (calendar short-circuits)."""
         from datetime import datetime
 
-        from stock_data.data_provider.persistence import pool_daily
-        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence import pool_daily, trade_calendar
 
         fake_now = datetime(2026, 7, 15, 14, 30, 0)
         self._fake_clock(monkeypatch, fake_now)
@@ -581,7 +610,8 @@ class TestRefreshBypassOnVolatile:
     """refresh=True forces the write-back even on a volatile date."""
 
     def _fake_clock(self, monkeypatch, fake_now):
-        from datetime import date as real_date_cls, datetime as real_datetime_cls
+        from datetime import date as real_date_cls
+
         from stock_data.data_provider.persistence import pool_daily
 
         fake_today = real_date_cls(fake_now.year, fake_now.month, fake_now.day)
@@ -604,7 +634,6 @@ class TestRefreshBypassOnVolatile:
         from datetime import datetime
 
         from stock_data.data_provider import DataFetcherManager
-        from stock_data.data_provider.persistence import pool_daily
         from stock_data.data_provider.persistence import trade_calendar
         from stock_data.data_provider.persistence.db import get_connection
         from stock_data.data_provider.persistence.pool_daily import (
@@ -639,8 +668,10 @@ class TestRefreshBypassOnVolatile:
         conn.commit()
 
         try:
+
             class FakeFetcher:
                 name = "FakeFetcher"
+
                 def get_zt_pool(self, pool_type, date):
                     return [{"code": "REFR001", "name": "Refreshed", "price": 9.9}]
 
@@ -648,7 +679,9 @@ class TestRefreshBypassOnVolatile:
             real_mgr._filter_by_capability = MagicMock(return_value=[FakeFetcher()])
 
             stocks, origin, warning = real_mgr.get_zt_pool(
-                "zt", today_str, refresh=True,
+                "zt",
+                today_str,
+                refresh=True,
             )
             assert stocks[0]["code"] == "REFR001"
             assert origin == "FakeFetcher"
@@ -676,7 +709,8 @@ class TestWarningEmission:
     """The warning is emitted on every return path that yields data on a volatile date."""
 
     def _fake_clock(self, monkeypatch, fake_now):
-        from datetime import date as real_date_cls, datetime as real_datetime_cls
+        from datetime import date as real_date_cls
+
         from stock_data.data_provider.persistence import pool_daily
 
         fake_today = real_date_cls(fake_now.year, fake_now.month, fake_now.day)
@@ -698,8 +732,7 @@ class TestWarningEmission:
         """Volatile date + cache miss + upstream fetch: warning present."""
         from datetime import datetime
 
-        from stock_data.data_provider.persistence import pool_daily
-        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence import pool_daily, trade_calendar
         from stock_data.data_provider.persistence.pool_daily import init_schema
 
         fake_now = datetime(2026, 7, 15, 14, 30, 0)
@@ -713,7 +746,10 @@ class TestWarningEmission:
                 return ([{"code": "F001", "name": "x"}], "FakeFetcher")
 
         stocks, origin, warning = pool_daily.get_pool(
-            "zt", "2026-07-15", manager=FakeManager(), refresh=False,
+            "zt",
+            "2026-07-15",
+            manager=FakeManager(),
+            refresh=False,
         )
         assert len(stocks) == 1
         assert origin == "FakeFetcher"
@@ -730,8 +766,7 @@ class TestWarningEmission:
         """
         from datetime import datetime
 
-        from stock_data.data_provider.persistence import pool_daily
-        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence import pool_daily, trade_calendar
         from stock_data.data_provider.persistence.pool_daily import (
             init_schema,
             save_pool,
@@ -753,7 +788,10 @@ class TestWarningEmission:
                 raise AssertionError("cache hit must not call upstream")
 
         stocks, origin, warning = pool_daily.get_pool(
-            "zt", today_str, manager=_ShouldNotBeCalledManager(), refresh=False,
+            "zt",
+            today_str,
+            manager=_ShouldNotBeCalledManager(),
+            refresh=False,
         )
         assert len(stocks) == 1
         assert stocks[0]["code"] == "VOL001"
@@ -779,7 +817,10 @@ class TestWarningEmission:
                 return ([{"code": "H001", "name": "Historical"}], "FakeFetcher")
 
         stocks, origin, warning = pool_daily.get_pool(
-            "zt", "2024-05-10", manager=FakeManager(), refresh=False,
+            "zt",
+            "2024-05-10",
+            manager=FakeManager(),
+            refresh=False,
         )
         assert warning is None
 
@@ -787,8 +828,7 @@ class TestWarningEmission:
         """Today at 16:30 (post-cutoff): is_volatile_date is False, no warning."""
         from datetime import datetime
 
-        from stock_data.data_provider.persistence import pool_daily
-        from stock_data.data_provider.persistence import trade_calendar
+        from stock_data.data_provider.persistence import pool_daily, trade_calendar
         from stock_data.data_provider.persistence.pool_daily import init_schema
 
         fake_now = datetime(2026, 7, 15, 16, 30, 0)
@@ -802,7 +842,9 @@ class TestWarningEmission:
                 return ([{"code": "P001", "name": "PostClose"}], "FakeFetcher")
 
         stocks, origin, warning = pool_daily.get_pool(
-            "zt", "2026-07-15", manager=FakeManager(), refresh=False,
+            "zt",
+            "2026-07-15",
+            manager=FakeManager(),
+            refresh=False,
         )
         assert warning is None
-

@@ -276,6 +276,3 @@ def update_cached_stocks(market: str, stocks: list) -> int:
     except Exception as e:
         logger.error(f"[StockCache] Update failed: {e}")
         raise
-
-
-

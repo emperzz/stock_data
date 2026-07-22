@@ -113,7 +113,9 @@ class TencentFetcher(BaseFetcher):
 
             values = line.split('"')[1].split("~")
             if len(values) < 53:
-                logger.warning(f"[TencentFetcher] Insufficient fields for {stock_code}: {len(values)}")
+                logger.warning(
+                    f"[TencentFetcher] Insufficient fields for {stock_code}: {len(values)}"
+                )
                 return None
 
             def v(idx: int, scale: float = 1.0) -> float | None:

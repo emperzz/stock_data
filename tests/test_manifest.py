@@ -1,4 +1,5 @@
 """Unit tests for stock_data/explorer/manifest.py."""
+
 import logging
 
 import pytest
@@ -70,7 +71,9 @@ class TestRouteWithoutMetaSkipped:
             m = build_manifest(app)
 
         assert m["sections"] == []
-        assert any("orphan" in r.message and "no @endpoint_meta" in r.message for r in caplog.records)
+        assert any(
+            "orphan" in r.message and "no @endpoint_meta" in r.message for r in caplog.records
+        )
 
 
 class TestParamReflection:
@@ -85,8 +88,9 @@ class TestParamReflection:
         m = build_manifest(app)
         ep = m["sections"][0]["endpoints"][0]
         path_params = [p for p in ep["params"] if p["in"] == "path"]
-        assert path_params == [{"name": "stock_code", "in": "path", "required": True,
-                                "type": "string"}]
+        assert path_params == [
+            {"name": "stock_code", "in": "path", "required": True, "type": "string"}
+        ]
 
     def test_query_params_with_type_and_required(self):
         app = FastAPI()
@@ -102,8 +106,7 @@ class TestParamReflection:
 
         m = build_manifest(app)
         params = {p["name"]: p for p in m["sections"][0]["endpoints"][0]["params"]}
-        assert params["days"] == {"name": "days", "in": "query", "required": False,
-                                  "type": "int"}
+        assert params["days"] == {"name": "days", "in": "query", "required": False, "type": "int"}
         assert params["refresh"]["type"] == "bool"
         assert params["adj"]["type"] == "string"
 
@@ -192,6 +195,7 @@ class TestSectionSorting:
         app = FastAPI()
 
         for i in [10, 2, 1]:
+
             @app.get(f"/p{i}", tags=["stocks"])
             @endpoint_meta(summary=f"p{i}", capabilities=["STOCK_REALTIME_QUOTE"])
             def handler(i=i):
@@ -247,6 +251,7 @@ class TestSlugifyAndMethod:
     def test_uses_first_method_only(self):
         """If a route supports multiple methods, manifest picks one (GET preferred)."""
         from fastapi import APIRouter
+
         app = FastAPI()
         router = APIRouter()
 

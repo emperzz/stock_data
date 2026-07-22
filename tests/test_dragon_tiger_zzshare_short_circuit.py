@@ -25,6 +25,7 @@ field shape — see ``zzshare_fetcher.get_daily_dragon_tiger`` docstring
 
 See ``/api/v1/dragon-tiger`` route: ``routes/data.py::get_daily_dragon_tiger``.
 """
+
 import pandas as pd
 
 from stock_data.data_provider.base import BaseFetcher, DataCapability, DataFetchError
@@ -44,8 +45,7 @@ class _FakeDragonTigerFetcher(BaseFetcher):
         self._return_value = return_value
         self.call_count = 0
 
-    def _fetch_raw_data(self, stock_code, start_date, end_date,
-                        frequency="d", adjust=None):
+    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
         return pd.DataFrame()
 
     def _normalize_data(self, df, stock_code):
@@ -74,15 +74,24 @@ def _build_manager(zzshare_return, eastmoney_return):
 
 # ---------- /api/v1/dragon-tiger (全市场) ----------
 
+
 def test_daily_dragon_tiger_zzshare_empty_falls_through_to_eastmoney():
     """zzshare returns an empty dict → manager treats it as 'no data',
     falls through to EastMoney, source is reported as 'EastMoneyFetcher'."""
     empty_daily = {"date": "2026-07-21", "total": 0, "stocks": []}
     eastmoney_daily = {
-        "date": "2026-07-21", "total": 1,
-        "stocks": [{"code": "000001", "name": "X", "reason": "r",
-                    "change_pct": 0.0, "net_buy_wan": 0.0,
-                    "turnover_pct": 0.0}],
+        "date": "2026-07-21",
+        "total": 1,
+        "stocks": [
+            {
+                "code": "000001",
+                "name": "X",
+                "reason": "r",
+                "change_pct": 0.0,
+                "net_buy_wan": 0.0,
+                "turnover_pct": 0.0,
+            }
+        ],
     }
     mgr, zzshare, eastmoney = _build_manager(
         zzshare_return=empty_daily,
@@ -95,8 +104,7 @@ def test_daily_dragon_tiger_zzshare_empty_falls_through_to_eastmoney():
     assert data == eastmoney_daily
     assert zzshare.call_count == 1, "zzshare should be tried first"
     assert eastmoney.call_count == 1, (
-        "eastmoney should be called when zzshare returns empty; "
-        f"got {eastmoney.call_count} calls"
+        f"eastmoney should be called when zzshare returns empty; got {eastmoney.call_count} calls"
     )
 
 
@@ -105,9 +113,18 @@ def test_daily_dragon_tiger_zzshare_populated_short_circuits():
     source='zzshare' and never calls EastMoney. Locks in the priority
     order Zzshare (P2) → EastMoney (P6)."""
     full_daily = {
-        "date": "2026-07-21", "total": 1,
-        "stocks": [{"code": "600519", "name": "Kweichow", "reason": "r",
-                    "change_pct": 10.0, "net_buy_wan": 1.0, "turnover_pct": 0.0}],
+        "date": "2026-07-21",
+        "total": 1,
+        "stocks": [
+            {
+                "code": "600519",
+                "name": "Kweichow",
+                "reason": "r",
+                "change_pct": 10.0,
+                "net_buy_wan": 1.0,
+                "turnover_pct": 0.0,
+            }
+        ],
     }
     mgr, zzshare, eastmoney = _build_manager(
         zzshare_return=full_daily,
@@ -135,6 +152,7 @@ def test_daily_dragon_tiger_both_empty_raises():
     )
 
     import pytest
+
     with pytest.raises(DataFetchError):
         mgr.get_daily_dragon_tiger("2026-07-21", None)
 
@@ -147,10 +165,18 @@ def test_daily_dragon_tiger_zzshare_raises_then_eastmoney_serves():
     IS used as fallback. Distinct from the empty-result fall-through —
     exceptions still cascade."""
     eastmoney_populated = {
-        "date": "2026-07-21", "total": 1,
-        "stocks": [{"code": "000001", "name": "X", "reason": "r",
-                    "change_pct": 0.0, "net_buy_wan": 0.0,
-                    "turnover_pct": 0.0}],
+        "date": "2026-07-21",
+        "total": 1,
+        "stocks": [
+            {
+                "code": "000001",
+                "name": "X",
+                "reason": "r",
+                "change_pct": 0.0,
+                "net_buy_wan": 0.0,
+                "turnover_pct": 0.0,
+            }
+        ],
     }
     mgr, zzshare, eastmoney = _build_manager(
         zzshare_return=None,  # sentinel; we patch below
@@ -160,6 +186,7 @@ def test_daily_dragon_tiger_zzshare_raises_then_eastmoney_serves():
     def _raise(*a, **kw):
         zzshare.call_count += 1
         raise RuntimeError("simulated zzshare outage")
+
     zzshare.get_daily_dragon_tiger = _raise  # type: ignore[assignment]
 
     data, source = mgr.get_daily_dragon_tiger("2026-07-21", None)
@@ -172,6 +199,7 @@ def test_daily_dragon_tiger_zzshare_raises_then_eastmoney_serves():
 
 # ---------- /stocks/{code}/dragon-tiger (个股) ----------
 
+
 def test_dragon_tiger_zzshare_empty_falls_through_to_eastmoney():
     """Same contract for the per-stock variant: empty records from zzshare
     → fall through to EastMoney. EastMoneyFetcher.get_dragon_tiger
@@ -183,8 +211,7 @@ def test_dragon_tiger_zzshare_empty_falls_through_to_eastmoney():
         "institution": {},
     }
     eastmoney_per_stock = {
-        "records": [{"date": "2026-07-21", "reason": "r", "net_buy_wan": 0.0,
-                     "turnover_pct": 0.0}],
+        "records": [{"date": "2026-07-21", "reason": "r", "net_buy_wan": 0.0, "turnover_pct": 0.0}],
         "seats": {"buy": [], "sell": []},
         "institution": {},
     }
@@ -205,16 +232,16 @@ def test_dragon_tiger_zzshare_populated_short_circuits():
     """zzshare returns a populated per-stock dict → short-circuits,
     EastMoney not called."""
     full_per_stock = {
-        "records": [{"date": "2026-07-21", "reason": "r", "net_buy_wan": 1.0,
-                     "turnover_pct": 0.0}],
-        "seats": {"buy": [{"name": "X", "buy_wan": 1.0, "sell_wan": 0.0,
-                            "net_wan": 1.0}], "sell": []},
+        "records": [{"date": "2026-07-21", "reason": "r", "net_buy_wan": 1.0, "turnover_pct": 0.0}],
+        "seats": {
+            "buy": [{"name": "X", "buy_wan": 1.0, "sell_wan": 0.0, "net_wan": 1.0}],
+            "sell": [],
+        },
         "institution": {},
     }
     mgr, zzshare, eastmoney = _build_manager(
         zzshare_return=full_per_stock,
-        eastmoney_return={"records": [], "seats": {"buy": [], "sell": []},
-                          "institution": {}},
+        eastmoney_return={"records": [], "seats": {"buy": [], "sell": []}, "institution": {}},
     )
 
     data, source = mgr.get_dragon_tiger("600519", "2026-07-21")

@@ -52,6 +52,7 @@ from datetime import datetime, timedelta, timezone
 from importlib import resources, util
 from typing import Any
 
+import requests
 from tenacity import (
     before_sleep_log,
     retry,
@@ -59,8 +60,6 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-
-import requests
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
 from ..core.types import safe_float
@@ -187,16 +186,14 @@ _THS_HXKLINE_HEADERS_BASE: dict[str, str] = {
     ),
     "content-type": "application/json",
 }
-_THS_HXKLINE_KLINE_URL = (
-    "https://quota-h.10jqka.com.cn/fuyao/common_hq_aggr/quote/v1/single_kline"
-)
+_THS_HXKLINE_KLINE_URL = "https://quota-h.10jqka.com.cn/fuyao/common_hq_aggr/quote/v1/single_kline"
 # time_period enum. Verified 2026-07-21 against the stockpage network panel
 # for d / w / m / min_1 / min_5 / min_15 / min_30 / min_60.
 _THS_HXKLINE_PERIOD_MAP: dict[str, str] = {
     "d": "day_1",
     "w": "week_1",
     "m": "month_1",
-    "1m": "min_1",   # upstream: begin_time=-N returns N bars (capped at 800)
+    "1m": "min_1",  # upstream: begin_time=-N returns N bars (capped at 800)
     "5m": "min_5",
     "15m": "min_15",
     "30m": "min_30",
@@ -350,7 +347,10 @@ def _get_ths_hxkline_jwt() -> str:
 
 
 def _compute_time_window(
-    *, start_d: _date | None, end_d: _date | None, days: int,
+    *,
+    start_d: _date | None,
+    end_d: _date | None,
+    days: int,
     freq_key: str,
 ) -> tuple[int, int]:
     """Translate **resolved** ``(start_d, end_d)`` to upstream offsets.
@@ -430,7 +430,10 @@ def _fetch_ths_single_kline(
     time_period = _THS_HXKLINE_PERIOD_MAP[freq_key]
     headers = {**_THS_HXKLINE_HEADERS_BASE, "x-fuyao-auth": _get_ths_hxkline_jwt()}
     begin_time, end_time = _compute_time_window(
-        start_d=start_d, end_d=end_d, days=days, freq_key=freq_key,
+        start_d=start_d,
+        end_d=end_d,
+        days=days,
+        freq_key=freq_key,
     )
     body = {
         "code_list": [{"codes": [board_code], "market": "48"}],
@@ -448,12 +451,14 @@ def _fetch_ths_single_kline(
     for attempt in (1, 2):
         try:
             resp = requests.post(
-                _THS_HXKLINE_KLINE_URL, headers=headers, json=body, timeout=20,
+                _THS_HXKLINE_KLINE_URL,
+                headers=headers,
+                json=body,
+                timeout=20,
             )
         except Exception as e:
             raise DataFetchError(
-                f"[ThsFetcher] single_kline({board_code}, freq={freq_key}) "
-                f"network failed: {e}"
+                f"[ThsFetcher] single_kline({board_code}, freq={freq_key}) network failed: {e}"
             ) from e
         if resp.status_code in (401, 403):
             # When THS_HXKLINE_JWT is env-pinned, _get_ths_hxkline_jwt() returns
@@ -492,8 +497,7 @@ def _fetch_ths_single_kline(
             resp_body = resp.json()
         except Exception as e:
             raise DataFetchError(
-                f"[ThsFetcher] single_kline({board_code}, freq={freq_key}) "
-                f"response not JSON: {e}"
+                f"[ThsFetcher] single_kline({board_code}, freq={freq_key}) response not JSON: {e}"
             ) from e
         return _parse_ths_single_kline_response(resp_body, freq_key=freq_key)
     # unreachable
@@ -572,7 +576,6 @@ _THS_BASIC_HEADERS = {
     "User-Agent": THS_UA,
     "Referer": "https://basic.10jqka.com.cn/astockpc/astockmain/index.html",
 }
-
 
 
 # THS F10 板块基本资料页 — server-render 一次性给"成分股全表 + 板块新闻 + 炒作周期"
@@ -788,16 +791,18 @@ def _parse_ths_single_kline_response(body: dict, freq_key: str) -> list[dict]:
             # Beijing time (matches legacy implementation's `_THS_TZ`).
             dt = datetime.fromtimestamp(ts_ms / 1000, _THS_TZ)
             date_str = dt.strftime("%Y-%m-%d %H:%M") if use_hhmm else dt.strftime("%Y-%m-%d")
-            out.append({
-                "date": date_str,
-                "open": float(row[1]),
-                "high": float(row[2]),
-                "low": float(row[3]),
-                "close": float(row[4]),
-                "volume": int(float(row[5])),
-                "amount": float(row[6]),
-                "frequency": freq_key,
-            })
+            out.append(
+                {
+                    "date": date_str,
+                    "open": float(row[1]),
+                    "high": float(row[2]),
+                    "low": float(row[3]),
+                    "close": float(row[4]),
+                    "volume": int(float(row[5])),
+                    "amount": float(row[6]),
+                    "frequency": freq_key,
+                }
+            )
         except (TypeError, ValueError, IndexError):
             continue
     return out
@@ -818,8 +823,8 @@ class ThsFetcher(BaseFetcher):
         | DataCapability.STOCK_NEWS  # 新: 个股新闻 basic.10jqka.com.cn
         | DataCapability.ANNOUNCEMENT  # 新: 个股公告 basic.10jqka.com.cn
         # 新 (2026-07-20 spec): F10 page sections
-        | DataCapability.BOARD_NEWS     # 板块热点新闻
-        | DataCapability.BOARD_SURGES   # 板块炒作周期
+        | DataCapability.BOARD_NEWS  # 板块热点新闻
+        | DataCapability.BOARD_SURGES  # 板块炒作周期
     )
 
     @staticmethod
@@ -947,6 +952,7 @@ class ThsFetcher(BaseFetcher):
                 base.update(headers)
             headers = base
         return requests.get(url, headers=headers, timeout=timeout)
+
     def get_board_history(
         self,
         board_code: str,
@@ -1003,10 +1009,7 @@ class ThsFetcher(BaseFetcher):
             from ..persistence.board import get_board_metadata
 
             meta = get_board_metadata(board_code, "ths")
-            if meta and meta.get("type"):
-                board_type = meta["type"]
-            else:
-                board_type = "concept"  # default; matches legacy behavior
+            board_type = meta["type"] if meta and meta.get("type") else "concept"
         elif board_type not in ("concept", "industry"):
             raise DataFetchError(
                 f"[ThsFetcher] get_board_history: board_type must be "
@@ -1056,9 +1059,7 @@ class ThsFetcher(BaseFetcher):
         # min() clamp is semantically correct.
         if freq_key in _MINUTE_FREQS and start_date:
             try:
-                user_start_d = datetime.strptime(
-                    start_date.strip(), "%Y-%m-%d"
-                ).date()
+                user_start_d = datetime.strptime(start_date.strip(), "%Y-%m-%d").date()
                 start_str = user_start_d.strftime("%Y-%m-%d")
             except ValueError:
                 pass  # invalid start_date already raised in resolver
@@ -2291,9 +2292,9 @@ class ThsFetcher(BaseFetcher):
             rows.append(row)
         if not rows:
             logger.warning(
-                f"[ThsFetcher] _extract_industry_stocks_via_changecode: "
-                f"0 matches — page may have dropped the onclick pattern. "
-                f"Caller will fall back to ZZSHARE."
+                "[ThsFetcher] _extract_industry_stocks_via_changecode: "
+                "0 matches — page may have dropped the onclick pattern. "
+                "Caller will fall back to ZZSHARE."
             )
         return rows
 
@@ -2364,8 +2365,7 @@ class ThsFetcher(BaseFetcher):
             # caller's downstream parser returns []. Mirrors
             # get_board_stocks' boundary-signal handling.
             logger.warning(
-                f"[ThsFetcher] get_board_f10_page({board_code!r}): "
-                f"HTTP {status}; returning empty."
+                f"[ThsFetcher] get_board_f10_page({board_code!r}): HTTP {status}; returning empty."
             )
             return ""
         if not (200 <= status < 300):
@@ -2429,10 +2429,11 @@ class ThsFetcher(BaseFetcher):
             (F10 doesn't provide them). Empty list on 401/403 or no
             rows in HTML.
         """
-        from bs4 import BeautifulSoup
-        from ..core.types import safe_float, safe_int
         import json as _json
-        import re as _re
+
+        from bs4 import BeautifulSoup
+
+        from ..core.types import safe_int
 
         html = self.get_board_f10_page(board_code, board_type=board_type)
         if not html:
@@ -2541,20 +2542,37 @@ class ThsFetcher(BaseFetcher):
                         "stock_code": stock_code,
                         "stock_name": stock_name,
                         "exchange": exchange,
-                        "price": None, "change_pct": None, "change_amount": None,
-                        "volume": None, "amount": None, "turnover_rate": None,
-                        "amplitude": None, "high": None, "low": None,
-                        "open": None, "prev_close": None,
-                        "speed_open": None, "speed_current": None,
-                        "speed_change_pct": None, "speed_change_amount": None,
-                        "speed_volume": None, "speed_turnover_rate": None,
-                        "rise_speed": None, "ls_based_ratio": None,
-                        "rise_count": None, "fall_count": None,
-                        "leading_stock": None, "leading_stock_pct": None,
-                        "board_pct": None, "rank": None,
-                        "eps": None, "float_share_yi": None,
-                        "float_mv_yi": None, "limit_up_count_year": None,
-                        "analysis": None, "pop_info": None,
+                        "price": None,
+                        "change_pct": None,
+                        "change_amount": None,
+                        "volume": None,
+                        "amount": None,
+                        "turnover_rate": None,
+                        "amplitude": None,
+                        "high": None,
+                        "low": None,
+                        "open": None,
+                        "prev_close": None,
+                        "speed_open": None,
+                        "speed_current": None,
+                        "speed_change_pct": None,
+                        "speed_change_amount": None,
+                        "speed_volume": None,
+                        "speed_turnover_rate": None,
+                        "rise_speed": None,
+                        "ls_based_ratio": None,
+                        "rise_count": None,
+                        "fall_count": None,
+                        "leading_stock": None,
+                        "leading_stock_pct": None,
+                        "board_pct": None,
+                        "rank": None,
+                        "eps": None,
+                        "float_share_yi": None,
+                        "float_mv_yi": None,
+                        "limit_up_count_year": None,
+                        "analysis": None,
+                        "pop_info": None,
                     }
                 )
 
@@ -2629,7 +2647,6 @@ class ThsFetcher(BaseFetcher):
                 break
         return out
 
-
     def get_board_surges(
         self,
         board_code: str,
@@ -2656,8 +2673,9 @@ class ThsFetcher(BaseFetcher):
             list of dicts: {date, board_change_pct, sh_change_pct,
                              limit_up_count, limit_up_stocks, up_count, down_count}.
         """
-        from bs4 import BeautifulSoup
         import re as _re
+
+        from bs4 import BeautifulSoup
 
         html = self.get_board_f10_page(board_code, board_type=board_type)
         if not html:
@@ -2687,6 +2705,7 @@ class ThsFetcher(BaseFetcher):
             sh_pct = None
             limit_up_count = None
             if len(pct_cells) >= 3:
+
                 def _pct(cell) -> float | None:
                     # THS F10 markup uses `.upcolor` for positive pct
                     # and `.downcolor` for negative pct (`tests/fixtures/
@@ -3117,9 +3136,7 @@ def _parse_ths_board_stocks_row(tds: list) -> dict | None:
     # Exchange inferred from the code prefix (matches zzshare/eastmoney
     # convention: 'sh' for 沪, 'sz' for 深, '' for 北交所/未知).
     code_prefix = stock_code[:1]
-    exchange = (
-        "sh" if code_prefix in ("6", "9") else ("sz" if code_prefix in ("0", "3") else "")
-    )
+    exchange = "sh" if code_prefix in ("6", "9") else ("sz" if code_prefix in ("0", "3") else "")
     return {
         "stock_code": stock_code,
         "stock_name": stock_name,
@@ -3131,9 +3148,7 @@ def _parse_ths_board_stocks_row(tds: list) -> dict | None:
         "turnover_rate": safe_float(tds[7].get_text(strip=True)) if len(tds) > 7 else None,
         "volume_ratio": safe_float(tds[8].get_text(strip=True)) if len(tds) > 8 else None,
         "amplitude": safe_float(tds[9].get_text(strip=True)) if len(tds) > 9 else None,
-        "amount": _parse_free_float(tds[10].get_text(strip=True))
-        if len(tds) > 10
-        else None,
+        "amount": _parse_free_float(tds[10].get_text(strip=True)) if len(tds) > 10 else None,
         "free_float_shares": _parse_free_float(tds[11].get_text(strip=True))
         if len(tds) > 11
         else None,

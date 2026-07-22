@@ -1,4 +1,5 @@
 """Persistence-layer tests for top_n + sort + 50-stock heuristic (Task 6 of plan)."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -38,8 +39,7 @@ def test_persistence_get_board_stocks_returns_6_tuple():
         ),
         # 2026-07-13: include_quote=true 总是调 ZZSHARE. 此 board 只有 1 只成分股
         # (单元素 dict), 模拟 ZZSHARE 返回同一只 → suffix 空 → quote_truncated=False.
-        patch.object(manager, "get_board_stocks",
-                     return_value=(fake_ths_response, "zzshare")),
+        patch.object(manager, "get_board_stocks", return_value=(fake_ths_response, "zzshare")),
         patch.object(stock_board_cache, "update_cached_board_stocks", return_value=1),
     ):
         result = stock_board_cache.get_board_stocks(
@@ -81,8 +81,7 @@ def test_heuristic_triggers_zzshare_when_ths_returns_50():
         for i in range(50)
     ]
     zz_suffix = [
-        {"stock_code": f"0002{i:02d}", "stock_name": f"z{i}", "exchange": "sz"}
-        for i in range(10)
+        {"stock_code": f"0002{i:02d}", "stock_name": f"z{i}", "exchange": "sz"} for i in range(10)
     ]
     with (
         patch.object(stock_board_cache, "_read_board_stocks_from_db", return_value=[]),
@@ -134,8 +133,7 @@ def test_zzshare_always_called_for_include_quote_true():
         for i in range(30)
     ]
     zz_suffix = [
-        {"stock_code": f"0009{i:02d}", "stock_name": "z", "exchange": "sz"}
-        for i in range(5)
+        {"stock_code": f"0009{i:02d}", "stock_name": "z", "exchange": "sz"} for i in range(5)
     ]  # 5 NEW codes not in ths_30
     with (
         patch.object(stock_board_cache, "_read_board_stocks_from_db", return_value=[]),
@@ -144,8 +142,7 @@ def test_zzshare_always_called_for_include_quote_true():
             "fetch_board_stocks_with_zzshare_fallback",
             return_value=(ths_30, "ths", "ths", None),
         ),
-        patch.object(manager, "get_board_stocks",
-                     return_value=(zz_suffix, "zzshare")) as mock_zz,
+        patch.object(manager, "get_board_stocks", return_value=(zz_suffix, "zzshare")) as mock_zz,
         patch.object(stock_board_cache, "update_cached_board_stocks", return_value=35),
     ):
         result = stock_board_cache.get_board_stocks(

@@ -63,6 +63,7 @@ class AkshareFetcher(BaseFetcher):
         """
         try:
             import importlib.util
+
             return importlib.util.find_spec("akshare") is not None
         except (ImportError, ValueError):
             return False
@@ -144,7 +145,10 @@ class AkshareFetcher(BaseFetcher):
                     )
                 else:
                     df = ak.stock_zh_a_hist_min_em(
-                        symbol=code, period=frequency, start_date=start_dt, end_date=end_dt,
+                        symbol=code,
+                        period=frequency,
+                        start_date=start_dt,
+                        end_date=end_dt,
                         adjust=adj_value,
                     )
                 if df is None or df.empty:
@@ -233,9 +237,7 @@ class AkshareFetcher(BaseFetcher):
         # 手 -> 股 (lots -> shares) per spec §3.4.
         # 1 手 = 100 股, so multiply by 100.
         if "volume" in out.columns:
-            out["volume"] = out["volume"].apply(
-                lambda v: int(v) * 100 if pd.notna(v) else 0
-            )
+            out["volume"] = out["volume"].apply(lambda v: int(v) * 100 if pd.notna(v) else 0)
         return out
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
@@ -604,8 +606,9 @@ class AkshareFetcher(BaseFetcher):
             try:
                 df = ak.stock_zh_index_daily(symbol=sina_symbol)
                 if df is not None and not df.empty:
-                    df = normalize_index_df(df, code, _INDEX_SINA_MAP,
-                                            numeric_cols=_INDEX_SINA_NUMERIC)
+                    df = normalize_index_df(
+                        df, code, _INDEX_SINA_MAP, numeric_cols=_INDEX_SINA_NUMERIC
+                    )
                     if start_date or end_date:
                         df = filter_by_date(df, start_date, end_date)
                     return df
@@ -620,8 +623,7 @@ class AkshareFetcher(BaseFetcher):
                     end_date=(end_date or "").replace("-", ""),
                 )
                 if df is not None and not df.empty:
-                    df = normalize_index_df(df, code, _INDEX_TX_MAP,
-                                            numeric_cols=_INDEX_TX_NUMERIC)
+                    df = normalize_index_df(df, code, _INDEX_TX_MAP, numeric_cols=_INDEX_TX_NUMERIC)
                     return df
             except Exception as e:
                 logger.debug(f"[AkshareFetcher] stock_zh_index_daily_tx failed: {e}")
@@ -634,8 +636,7 @@ class AkshareFetcher(BaseFetcher):
                     end_date=end_date.replace("-", "") if end_date else "20500101",
                 )
                 if df is not None and not df.empty:
-                    df = normalize_index_df(df, code, _INDEX_EM_MAP,
-                                            numeric_cols=_INDEX_EM_NUMERIC)
+                    df = normalize_index_df(df, code, _INDEX_EM_MAP, numeric_cols=_INDEX_EM_NUMERIC)
                     return df
             except Exception as e:
                 logger.debug(f"[AkshareFetcher] stock_zh_index_daily_em failed: {e}")
@@ -646,9 +647,7 @@ class AkshareFetcher(BaseFetcher):
             logger.warning(f"[AkshareFetcher] get_index_historical failed: {e}")
             return None
 
-    def get_index_intraday(
-        self, index_code: str, period: str = "5"
-    ) -> pd.DataFrame | None:
+    def get_index_intraday(self, index_code: str, period: str = "5") -> pd.DataFrame | None:
         """Get intraday minute-level data for a CSI index.
 
         Args:
@@ -751,9 +750,9 @@ class AkshareFetcher(BaseFetcher):
             # Normalize to 6-digit format
             code = normalize_stock_code(code)
 
-            def _col(name: str):
+            def _col(name: str, _row=row):
                 """Read a column from the row, returning None if absent."""
-                return row[name] if name in row.index else None
+                return _row[name] if name in _row.index else None
 
             stock = {
                 "code": code,

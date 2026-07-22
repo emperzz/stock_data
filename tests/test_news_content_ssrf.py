@@ -9,6 +9,7 @@ Covers rejection of:
     IPv6 link-local (fe80::/10) — added 2026-07-16 per architecture review
   - DNS-rebounded hosts that resolve to private IPs
 """
+
 from unittest.mock import patch
 
 import pytest

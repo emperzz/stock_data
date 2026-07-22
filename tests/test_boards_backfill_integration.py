@@ -5,6 +5,7 @@ to return only the boards that happened to be queried once. After
 ``run_ths_board_backfill`` populates both tables, the reverse lookup
 returns the COMPLETE set.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -34,19 +35,32 @@ def _make_backfill_manager():
     returns BOTH boards.
     """
     boards = [
-        {"code": "301558", "name": "ConceptA", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885001"},
-        {"code": "301559", "name": "ConceptB", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885002"},
+        {
+            "code": "301558",
+            "name": "ConceptA",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885001",
+        },
+        {
+            "code": "301559",
+            "name": "ConceptB",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885002",
+        },
     ]
     mock = MagicMock()
     mock.get_all_boards.return_value = (boards, "ths")
 
     def get_board_stocks(board_code, source, include_quote):
-        return ([
-            {"stock_code": "000034", "stock_name": "Starter-000034"},
-            {"stock_code": "999999", "stock_name": "Other"},
-        ], "zzshare")
+        return (
+            [
+                {"stock_code": "000034", "stock_name": "Starter-000034"},
+                {"stock_code": "999999", "stock_name": "Other"},
+            ],
+            "zzshare",
+        )
 
     mock.get_board_stocks.side_effect = get_board_stocks
     return mock

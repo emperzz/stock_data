@@ -15,6 +15,7 @@ time as the function reference AFTER the inner @endpoint_meta has run; if
 this decorator ever wraps/replaces, `REGISTRY.get(route.endpoint)` will
 miss and the route silently disappears from the explorer manifest.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -38,6 +39,7 @@ class EndpointMeta:
     /api/v1/dragon-tiger declares DRAGON_TIGER but calls
     get_daily_dragon_tiger, not the default get_dragon_tiger).
     """
+
     summary: str
     markets: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
@@ -61,9 +63,7 @@ def endpoint_meta(
 
     def deco(func: Callable) -> Callable:
         if func in REGISTRY:
-            raise ValueError(
-                f"@endpoint_meta already registered for {func.__qualname__}"
-            )
+            raise ValueError(f"@endpoint_meta already registered for {func.__qualname__}")
         REGISTRY[func] = meta
         return func
 

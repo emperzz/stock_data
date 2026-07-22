@@ -51,9 +51,15 @@ class CninfoFetcher(BaseFetcher):
             "tabName": "fulltext",
             "pageSize": str(page_size),
             "pageNum": "1",
-            "column": "", "category": "", "plate": "",
-            "seDate": "", "searchkey": "", "secid": "",
-            "sortName": "", "sortType": "", "isHLtitle": "true",
+            "column": "",
+            "category": "",
+            "plate": "",
+            "seDate": "",
+            "searchkey": "",
+            "secid": "",
+            "sortName": "",
+            "sortType": "",
+            "isHLtitle": "true",
         }
         headers = {
             "User-Agent": CNINFO_UA,
@@ -69,12 +75,16 @@ class CninfoFetcher(BaseFetcher):
             d = r.json()
             rows = []
             for item in d.get("announcements", []) or []:
-                rows.append({
-                    "title": item.get("announcementTitle", ""),
-                    "type": item.get("announcementTypeName", ""),
-                    "date": datetime.fromtimestamp(item.get("announcementTime", 0) / 1000).strftime("%Y-%m-%d"),
-                    "url": f"https://www.cninfo.com.cn/new/disclosure/detail?annoId={item.get('announcementId', '')}",
-                })
+                rows.append(
+                    {
+                        "title": item.get("announcementTitle", ""),
+                        "type": item.get("announcementTypeName", ""),
+                        "date": datetime.fromtimestamp(
+                            item.get("announcementTime", 0) / 1000
+                        ).strftime("%Y-%m-%d"),
+                        "url": f"https://www.cninfo.com.cn/new/disclosure/detail?annoId={item.get('announcementId', '')}",
+                    }
+                )
             return rows
         except Exception as e:
             logger.warning(f"[CninfoFetcher] announcements failed: {e}")

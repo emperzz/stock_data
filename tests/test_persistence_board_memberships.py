@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from stock_data.data_provider.persistence import board as board_mod
@@ -20,8 +18,13 @@ def fresh_db(tmp_path, monkeypatch):
     yield
 
 
-def _seed_membership(stock_code: str, source: str, board_code: str,
-                     board_type: str = "concept", subtype: str = "concept") -> None:
+def _seed_membership(
+    stock_code: str,
+    source: str,
+    board_code: str,
+    board_type: str = "concept",
+    subtype: str = "concept",
+) -> None:
     """Helper: insert one membership row."""
     board_mod.upsert_membership_bulk(
         source=source,
@@ -89,9 +92,7 @@ class TestGetStockMemberships:
 
     def test_no_sources_returns_empty(self, fresh_db):
         """Empty sources list → empty entries, empty cold."""
-        entries, cold, origin = board_mod.get_stock_memberships(
-            stock_code="600519", sources=[]
-        )
+        entries, cold, origin = board_mod.get_stock_memberships(stock_code="600519", sources=[])
         assert entries == []
         assert cold == []
         assert origin == ""
@@ -129,9 +130,7 @@ class TestResolveBoardTypes:
         )
         conn.commit()
 
-        result = board_mod.resolve_board_types(
-            ["BK0615", "BK0481"], source="eastmoney"
-        )
+        result = board_mod.resolve_board_types(["BK0615", "BK0481"], source="eastmoney")
         assert result == {
             "BK0615": {"type": "concept", "subtype": "concept"},
             "BK0481": {"type": "industry", "subtype": "industry"},
@@ -147,9 +146,7 @@ class TestResolveBoardTypes:
         )
         conn.commit()
 
-        result = board_mod.resolve_board_types(
-            ["BK0615", "BK9999"], source="eastmoney"
-        )
+        result = board_mod.resolve_board_types(["BK0615", "BK9999"], source="eastmoney")
         # BK9999 absent → not in dict; caller decides what to do.
         assert "BK0615" in result
         assert "BK9999" not in result
@@ -213,14 +210,20 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
-             "industry", "industry", "2026-07-01 00:00:00"),
+            (
+                "BK1001",
+                "600519",
+                "eastmoney",
+                "BK1001",
+                "贵州茅台",
+                "industry",
+                "industry",
+                "2026-07-01 00:00:00",
+            ),
         )
         conn.commit()
 
-        entries, _, _ = board_mod.get_stock_memberships(
-            stock_code="600519", sources=["eastmoney"]
-        )
+        entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["eastmoney"])
         assert len(entries) == 1
         assert entries[0]["code"] == "BK1001"
         # The fix: name comes from stock_board, NOT from membership's stale value.
@@ -245,14 +248,20 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("BK9999", "600519", "eastmoney", "BK9999", "贵州茅台",
-             "concept", "concept", "2026-07-01 00:00:00"),
+            (
+                "BK9999",
+                "600519",
+                "eastmoney",
+                "BK9999",
+                "贵州茅台",
+                "concept",
+                "concept",
+                "2026-07-01 00:00:00",
+            ),
         )
         conn.commit()
 
-        entries, _, _ = board_mod.get_stock_memberships(
-            stock_code="600519", sources=["eastmoney"]
-        )
+        entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["eastmoney"])
         assert len(entries) == 1
         assert entries[0]["code"] == "BK9999"
         # No stock_board row → fall back to membership's stored board_name
@@ -278,14 +287,20 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("BK1001", "600519", "eastmoney", "白酒", "贵州茅台",
-             "industry", "industry", "2026-07-09 00:00:00"),
+            (
+                "BK1001",
+                "600519",
+                "eastmoney",
+                "白酒",
+                "贵州茅台",
+                "industry",
+                "industry",
+                "2026-07-09 00:00:00",
+            ),
         )
         conn.commit()
 
-        entries, _, _ = board_mod.get_stock_memberships(
-            stock_code="600519", sources=["eastmoney"]
-        )
+        entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["eastmoney"])
         assert len(entries) == 1
         assert entries[0]["name"] == "白酒"
 
@@ -309,14 +324,20 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("BK1001", "600519", "zhitu", "BK1001", "贵州茅台",
-             "industry", "industry", "2026-07-01 00:00:00"),
+            (
+                "BK1001",
+                "600519",
+                "zhitu",
+                "BK1001",
+                "贵州茅台",
+                "industry",
+                "industry",
+                "2026-07-01 00:00:00",
+            ),
         )
         conn.commit()
 
-        entries, _, _ = board_mod.get_stock_memberships(
-            stock_code="600519", sources=["zhitu"]
-        )
+        entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["zhitu"])
         assert len(entries) == 1
         # zhitu has no stock_board row → fall back to membership's board_name
         assert entries[0]["name"] == "BK1001"
@@ -340,14 +361,20 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
-             "", "industry", "2026-07-01 00:00:00"),
+            (
+                "BK1001",
+                "600519",
+                "eastmoney",
+                "BK1001",
+                "贵州茅台",
+                "",
+                "industry",
+                "2026-07-01 00:00:00",
+            ),
         )
         conn.commit()
 
-        entries, _, _ = board_mod.get_stock_memberships(
-            stock_code="600519", sources=["eastmoney"]
-        )
+        entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["eastmoney"])
         assert len(entries) == 1
         # The fix: board_type comes from stock_board, NOT from membership's empty value.
         assert entries[0]["type"] == "industry", (
@@ -374,14 +401,20 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
-             "industry", None, "2026-07-01 00:00:00"),
+            (
+                "BK1001",
+                "600519",
+                "eastmoney",
+                "BK1001",
+                "贵州茅台",
+                "industry",
+                None,
+                "2026-07-01 00:00:00",
+            ),
         )
         conn.commit()
 
-        entries, _, _ = board_mod.get_stock_memberships(
-            stock_code="600519", sources=["eastmoney"]
-        )
+        entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["eastmoney"])
         assert len(entries) == 1
         # The fix: subtype comes from stock_board, NOT from membership's NULL.
         assert entries[0]["subtype"] == "industry"
@@ -400,14 +433,20 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
-             "", None, "2026-07-01 00:00:00"),
+            (
+                "BK1001",
+                "600519",
+                "eastmoney",
+                "BK1001",
+                "贵州茅台",
+                "",
+                None,
+                "2026-07-01 00:00:00",
+            ),
         )
         conn.commit()
 
-        entries, _, _ = board_mod.get_stock_memberships(
-            stock_code="600519", sources=["eastmoney"]
-        )
+        entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["eastmoney"])
         assert len(entries) == 1
         e = entries[0]
         assert e["name"] == "白酒"
@@ -434,8 +473,16 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("BK1001", "600519", "eastmoney", "BK1001", "贵州茅台",
-             "", None, "2026-07-01 00:00:00"),
+            (
+                "BK1001",
+                "600519",
+                "eastmoney",
+                "BK1001",
+                "贵州茅台",
+                "",
+                None,
+                "2026-07-01 00:00:00",
+            ),
         )
         # zhitu membership: no stock_board counterpart — keeps legacy values
         conn.execute(
@@ -443,8 +490,16 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("BK1001", "600519", "zhitu", "BK1001-zhitu-fallback", "贵州茅台",
-             "concept", "concept", "2026-07-01 00:00:00"),
+            (
+                "BK1001",
+                "600519",
+                "zhitu",
+                "BK1001-zhitu-fallback",
+                "贵州茅台",
+                "concept",
+                "concept",
+                "2026-07-01 00:00:00",
+            ),
         )
         conn.commit()
 
@@ -488,14 +543,11 @@ class TestGetStockMembershipsBoardNameOverride:
             "(board_code, stock_code, source, board_name, stock_name, "
             " board_type, subtype, refreshed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ("885652", "000688", "ths", "885652", "国华人寿",
-             "", None, "2026-07-01 00:00:00"),
+            ("885652", "000688", "ths", "885652", "国华人寿", "", None, "2026-07-01 00:00:00"),
         )
         conn.commit()
 
-        entries, _, _ = board_mod.get_stock_memberships(
-            stock_code="000688", sources=["ths"]
-        )
+        entries, _, _ = board_mod.get_stock_memberships(stock_code="000688", sources=["ths"])
         assert len(entries) == 1
         e = entries[0]
         # The fix: the platecode arm of the JOIN matches 885652.

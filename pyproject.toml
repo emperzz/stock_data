@@ -83,6 +83,14 @@ ignore = ["E501"]
 # function calls (e.g. Body(...), DataCapability.X) in default arguments.
 "stock_data/tools/**.py" = ["T201"]
 "tests/verify_converters_live.py" = ["T201", "B008"]
+# Dev probe / smoke scripts under scripts/ are throwaway CLI tools;
+# print() is their user-facing output.
+"scripts/**.py" = ["T201"]
+# pytest-style test_* / Test* names trigger N802 under ruff's default
+# naming rules; intentionally allowed for the entire test tree.
+"tests/**.py" = ["N802"]
+# One-off maintenance scripts in tools/ use print() for CLI feedback.
+"tools/**.py" = ["T201"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

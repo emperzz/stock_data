@@ -1,6 +1,8 @@
 """Tests for persistence.backfill module."""
+
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 import time
@@ -62,18 +64,35 @@ def _make_phase1_only_manager(boards):
 def test_phase1_writes_to_stock_board(fresh_db, monkeypatch):
     """Phase 1 fetches boards, groupby type, writes to stock_board via update_cached_boards."""
     boards = [
-        {"code": "C1", "name": "Concept-1", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885001"},
-        {"code": "C2", "name": "Concept-2", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885002"},
-        {"code": "I1", "name": "Industry-1", "type": "industry",
-         "subtype": "同花顺行业", "platecode": "881001"},
+        {
+            "code": "C1",
+            "name": "Concept-1",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885001",
+        },
+        {
+            "code": "C2",
+            "name": "Concept-2",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885002",
+        },
+        {
+            "code": "I1",
+            "name": "Industry-1",
+            "type": "industry",
+            "subtype": "同花顺行业",
+            "platecode": "881001",
+        },
     ]
     mock = _make_phase1_only_manager(boards)
     monkeypatch.setattr("time.sleep", lambda *_a, **_kw: None)
 
     report = run_ths_board_backfill(
-        mock, inter_call_sleep_s=0.0, include_quote=False,
+        mock,
+        inter_call_sleep_s=0.0,
+        include_quote=False,
     )
 
     # phase1 success count = boards written to stock_board
@@ -91,12 +110,27 @@ def test_phase1_writes_to_stock_board(fresh_db, monkeypatch):
 def test_full_sweep_writes_membership(fresh_db, monkeypatch):
     """Phase 2: 3 boards × 2 stocks each → membership rows written."""
     boards = [
-        {"code": "301558", "name": "B1", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885001"},
-        {"code": "301559", "name": "B2", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885002"},
-        {"code": "881001", "name": "B3", "type": "industry",
-         "subtype": "同花顺行业", "platecode": "881001"},
+        {
+            "code": "301558",
+            "name": "B1",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885001",
+        },
+        {
+            "code": "301559",
+            "name": "B2",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885002",
+        },
+        {
+            "code": "881001",
+            "name": "B3",
+            "type": "industry",
+            "subtype": "同花顺行业",
+            "platecode": "881001",
+        },
     ]
     mock = MagicMock()
 
@@ -114,10 +148,13 @@ def test_full_sweep_writes_membership(fresh_db, monkeypatch):
         assert source == "zzshare"
         if board_code == "885002":
             return ([{"stock_code": "000002", "stock_name": "Stock-2"}], "zzshare")
-        return ([
-            {"stock_code": "000001", "stock_name": "Stock-1"},
-            {"stock_code": "000002", "stock_name": "Stock-2"},
-        ], "zzshare")
+        return (
+            [
+                {"stock_code": "000001", "stock_name": "Stock-1"},
+                {"stock_code": "000002", "stock_name": "Stock-2"},
+            ],
+            "zzshare",
+        )
 
     mock.get_board_stocks.side_effect = get_board_stocks
     monkeypatch.setattr("time.sleep", lambda *_a, **_kw: None)
@@ -138,10 +175,20 @@ def test_full_sweep_writes_membership(fresh_db, monkeypatch):
 def test_skip_platecode_none(fresh_db, monkeypatch):
     """Boards without platecode are skipped in phase 2."""
     boards = [
-        {"code": "C1", "name": "Has-PC", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885001"},
-        {"code": "C2", "name": "No-PC",  "type": "concept",
-         "subtype": "同花顺概念", "platecode": None},
+        {
+            "code": "C1",
+            "name": "Has-PC",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885001",
+        },
+        {
+            "code": "C2",
+            "name": "No-PC",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": None,
+        },
     ]
     mock = MagicMock()
 
@@ -150,14 +197,12 @@ def test_skip_platecode_none(fresh_db, monkeypatch):
         # Per-type loop only sees boards whose type matches; zzshare call
         # contributes nothing (no platecode backfill expected here).
         if source == "ths":
-            filtered = [b for b in boards
-                        if board_type is None or b.get("type") == board_type]
+            filtered = [b for b in boards if board_type is None or b.get("type") == board_type]
             return (filtered, "ths")
         return ([], source)
 
     mock.get_all_boards.side_effect = get_all_boards
-    mock.get_board_stocks.return_value = ([{"stock_code": "000001",
-                                             "stock_name": "S"}], "zzshare")
+    mock.get_board_stocks.return_value = ([{"stock_code": "000001", "stock_name": "S"}], "zzshare")
     monkeypatch.setattr("time.sleep", lambda *_a, **_kw: None)
 
     report = run_ths_board_backfill(mock, inter_call_sleep_s=0.0)
@@ -169,19 +214,33 @@ def test_skip_platecode_none(fresh_db, monkeypatch):
 def test_error_continues_with_remaining_boards(fresh_db, monkeypatch):
     """A single board's DataFetchError does NOT abort phase 2."""
     boards = [
-        {"code": "C1", "name": "OK1", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885001"},
-        {"code": "C2", "name": "FAIL", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885002"},
-        {"code": "C3", "name": "OK2", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885003"},
+        {
+            "code": "C1",
+            "name": "OK1",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885001",
+        },
+        {
+            "code": "C2",
+            "name": "FAIL",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885002",
+        },
+        {
+            "code": "C3",
+            "name": "OK2",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885003",
+        },
     ]
     mock = MagicMock()
 
     def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
         if source == "ths":
-            filtered = [b for b in boards
-                        if board_type is None or b.get("type") == board_type]
+            filtered = [b for b in boards if board_type is None or b.get("type") == board_type]
             return (filtered, "ths")
         return ([], source)
 
@@ -209,20 +268,25 @@ def test_error_continues_with_remaining_boards(fresh_db, monkeypatch):
 
 def test_idempotent_re_run_insert_or_replace(fresh_db, monkeypatch):
     """Re-running produces same row count (INSERT OR REPLACE)."""
-    boards = [{"code": "C1", "name": "B", "type": "concept",
-               "subtype": "同花顺概念", "platecode": "885001"}]
+    boards = [
+        {
+            "code": "C1",
+            "name": "B",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885001",
+        }
+    ]
     mock = MagicMock()
 
     def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
         if source == "ths":
-            filtered = [b for b in boards
-                        if board_type is None or b.get("type") == board_type]
+            filtered = [b for b in boards if board_type is None or b.get("type") == board_type]
             return (filtered, "ths")
         return ([], source)
 
     mock.get_all_boards.side_effect = get_all_boards
-    mock.get_board_stocks.return_value = (
-        [{"stock_code": "000001", "stock_name": "S"}], "zzshare")
+    mock.get_board_stocks.return_value = ([{"stock_code": "000001", "stock_name": "S"}], "zzshare")
     monkeypatch.setattr("time.sleep", lambda *_a, **_kw: None)
 
     run_ths_board_backfill(mock, inter_call_sleep_s=0.0)
@@ -237,22 +301,25 @@ def test_idempotent_re_run_insert_or_replace(fresh_db, monkeypatch):
 def test_rate_limit_enforced_with_token(monkeypatch, fresh_db):
     """3 boards × 1.2s sleep ⇒ elapsed >= 3.6s."""
     boards = [
-        {"code": f"C{i}", "name": f"B{i}", "type": "concept",
-         "subtype": "同花顺概念", "platecode": f"88500{i}"}
+        {
+            "code": f"C{i}",
+            "name": f"B{i}",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": f"88500{i}",
+        }
         for i in range(1, 4)
     ]
     mock = MagicMock()
 
     def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
         if source == "ths":
-            filtered = [b for b in boards
-                        if board_type is None or b.get("type") == board_type]
+            filtered = [b for b in boards if board_type is None or b.get("type") == board_type]
             return (filtered, "ths")
         return ([], source)
 
     mock.get_all_boards.side_effect = get_all_boards
-    mock.get_board_stocks.return_value = (
-        [{"stock_code": "000001", "stock_name": "S"}], "zzshare")
+    mock.get_board_stocks.return_value = ([{"stock_code": "000001", "stock_name": "S"}], "zzshare")
     monkeypatch.setenv("ZZSHARE_TOKEN", "fake-token")
 
     t0 = time.monotonic()
@@ -265,22 +332,25 @@ def test_rate_limit_enforced_with_token(monkeypatch, fresh_db):
 def test_rate_limit_enforced_without_token(monkeypatch, fresh_db):
     """Without ZZSHARE_TOKEN: 2 boards × 3.0s sleep ⇒ elapsed >= 6.0s."""
     boards = [
-        {"code": f"C{i}", "name": f"B{i}", "type": "concept",
-         "subtype": "同花顺概念", "platecode": f"88500{i}"}
+        {
+            "code": f"C{i}",
+            "name": f"B{i}",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": f"88500{i}",
+        }
         for i in range(1, 3)
     ]
     mock = MagicMock()
 
     def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
         if source == "ths":
-            filtered = [b for b in boards
-                        if board_type is None or b.get("type") == board_type]
+            filtered = [b for b in boards if board_type is None or b.get("type") == board_type]
             return (filtered, "ths")
         return ([], source)
 
     mock.get_all_boards.side_effect = get_all_boards
-    mock.get_board_stocks.return_value = (
-        [{"stock_code": "000001", "stock_name": "S"}], "zzshare")
+    mock.get_board_stocks.return_value = ([{"stock_code": "000001", "stock_name": "S"}], "zzshare")
     monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
 
     t0 = time.monotonic()
@@ -344,8 +414,15 @@ def test_schedule_logs_exception_via_done_callback(monkeypatch, fresh_db, caplog
     # update_cached_boards step raise — that path is NOT wrapped in
     # try/except, so the exception escapes run_ths_board_backfill.
     app.state.manager.get_all_boards.return_value = (
-        [{"code": "C1", "name": "B1", "type": "concept",
-          "subtype": "同花顺概念", "platecode": "885001"}],
+        [
+            {
+                "code": "C1",
+                "name": "B1",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "platecode": "885001",
+            }
+        ],
         "ths",
     )
 
@@ -359,28 +436,24 @@ def test_schedule_logs_exception_via_done_callback(monkeypatch, fresh_db, caplog
 
     monkeypatch.setattr(backfill.asyncio, "to_thread", fake_to_thread)
 
-    with caplog.at_level(
-        logging.ERROR, logger="stock_data.data_provider.persistence.backfill"
-    ):
+    with caplog.at_level(logging.ERROR, logger="stock_data.data_provider.persistence.backfill"):
+
         async def _run_and_drain():
             # schedule_* is intentionally sync (NOT async def) — see note in
             # the schedule_smoke test above.
             task = backfill.schedule_ths_board_backfill_on_startup(app)
-            try:
+            # We deliberately raised inside the worker to verify
+            # done_callback logs it; the await re-raises, but that's
+            # expected — the log capture is what we assert on below.
+            with contextlib.suppress(RuntimeError):
                 await task
-            except RuntimeError:
-                # We deliberately raised inside the worker to verify
-                # done_callback logs it; the await re-raises, but that's
-                # expected — the log capture is what we assert on below.
-                pass
 
         asyncio.run(_run_and_drain())
 
     # The done_callback fires _on_done which calls logger.exception —
     # message must mention "unhandled" or "raised".
     assert any(
-        ("unhandled exception" in r.message or "raised" in r.message)
-        for r in caplog.records
+        ("unhandled exception" in r.message or "raised" in r.message) for r in caplog.records
     ), f"expected exception to be logged; got records: {[r.message for r in caplog.records]}"
 
 
@@ -394,24 +467,25 @@ def test_cancel_event_breaks_phase2_loop(fresh_db, monkeypatch):
     )
 
     boards = [
-        {"code": f"C{i}", "name": f"B{i}", "type": "concept",
-         "subtype": "同花顺概念", "platecode": f"8850{i:02d}"}
+        {
+            "code": f"C{i}",
+            "name": f"B{i}",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": f"8850{i:02d}",
+        }
         for i in range(1, 51)  # 50 boards — too many to finish naturally
     ]
     mock = MagicMock()
 
     def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
         if source == "ths":
-            filtered = [
-                b for b in boards if board_type is None or b.get("type") == board_type
-            ]
+            filtered = [b for b in boards if board_type is None or b.get("type") == board_type]
             return (filtered, "ths")
         return ([], source)
 
     mock.get_all_boards.side_effect = get_all_boards
-    mock.get_board_stocks.return_value = (
-        [{"stock_code": "000001", "stock_name": "S"}], "zzshare"
-    )
+    mock.get_board_stocks.return_value = ([{"stock_code": "000001", "stock_name": "S"}], "zzshare")
 
     cancel_event = threading.Event()
 
@@ -426,7 +500,9 @@ def test_cancel_event_breaks_phase2_loop(fresh_db, monkeypatch):
     monkeypatch.setattr("time.sleep", mock_sleep)
 
     report = run_ths_board_backfill(
-        mock, inter_call_sleep_s=0.0, cancel_event=cancel_event,
+        mock,
+        inter_call_sleep_s=0.0,
+        cancel_event=cancel_event,
     )
 
     # Loop broke early — well below 50 boards.
@@ -447,17 +523,20 @@ def test_consecutive_errors_abort_phase2(fresh_db, monkeypatch):
     # 50 boards — way more than MAX_CONSECUTIVE_ERRORS, so the loop must
     # abort before processing all of them.
     boards = [
-        {"code": f"C{i}", "name": f"B{i}", "type": "concept",
-         "subtype": "同花顺概念", "platecode": f"8850{i:02d}"}
+        {
+            "code": f"C{i}",
+            "name": f"B{i}",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": f"8850{i:02d}",
+        }
         for i in range(1, 51)
     ]
     mock = MagicMock()
 
     def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
         if source == "ths":
-            filtered = [
-                b for b in boards if board_type is None or b.get("type") == board_type
-            ]
+            filtered = [b for b in boards if board_type is None or b.get("type") == board_type]
             return (filtered, "ths")
         return ([], source)
 
@@ -489,8 +568,13 @@ def test_sleep_not_called_on_error_path(fresh_db, monkeypatch):
     )
 
     boards = [
-        {"code": "C1", "name": "FAIL", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885001"},
+        {
+            "code": "C1",
+            "name": "FAIL",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885001",
+        },
     ]
     mock = MagicMock()
 
@@ -505,16 +589,15 @@ def test_sleep_not_called_on_error_path(fresh_db, monkeypatch):
 
     sleep_calls = []
     monkeypatch.setattr(
-        "time.sleep", lambda s: sleep_calls.append(s),
+        "time.sleep",
+        lambda s: sleep_calls.append(s),
     )
 
     run_ths_board_backfill(mock, inter_call_sleep_s=1.5)
 
     # The only board errored and triggered the consecutive-error abort;
     # no successful iteration means no sleep.
-    assert sleep_calls == [], (
-        f"sleep was called on error path: {sleep_calls}"
-    )
+    assert sleep_calls == [], f"sleep was called on error path: {sleep_calls}"
 
 
 # ── Fix #7: per-board zzshare→ths fallback ──────────────────────────────
@@ -530,15 +613,21 @@ def test_zzshare_empty_falls_back_to_ths(fresh_db, monkeypatch):
     )
 
     boards = [
-        {"code": "C1", "name": "B1", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885001"},
+        {
+            "code": "C1",
+            "name": "B1",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885001",
+        },
     ]
     mock = MagicMock()
 
     def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
         if source == "ths":
             return (
-                [b for b in boards if b.get("type") == board_type], "ths",
+                [b for b in boards if b.get("type") == board_type],
+                "ths",
             )
         return ([], source)
 
@@ -571,15 +660,21 @@ def test_zzshare_raises_falls_back_to_ths(fresh_db, monkeypatch):
     )
 
     boards = [
-        {"code": "C1", "name": "B1", "type": "concept",
-         "subtype": "同花顺概念", "platecode": "885001"},
+        {
+            "code": "C1",
+            "name": "B1",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "platecode": "885001",
+        },
     ]
     mock = MagicMock()
 
     def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
         if source == "ths":
             return (
-                [b for b in boards if b.get("type") == board_type], "ths",
+                [b for b in boards if b.get("type") == board_type],
+                "ths",
             )
         return ([], source)
 

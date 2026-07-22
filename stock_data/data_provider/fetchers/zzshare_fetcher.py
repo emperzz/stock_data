@@ -223,14 +223,14 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             if day_count > 14:
                 logger.warning(
                     "[ZzshareFetcher] minute K over %d days for %s — %d SDK calls expected",
-                    day_count, stock_code, day_count,
+                    day_count,
+                    stock_code,
+                    day_count,
                 )
             dfs: list[pd.DataFrame] = []
             cur = start_d
             while cur <= end_d:
-                df_one = self._fetch_minute_kline(
-                    stock_code, cur.strftime("%Y%m%d"), freq
-                )
+                df_one = self._fetch_minute_kline(stock_code, cur.strftime("%Y%m%d"), freq)
                 if df_one is not None:
                     dfs.append(df_one)
                 cur += timedelta(days=1)
@@ -357,9 +357,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
                 freq=freq,
             )
         except Exception as e:
-            logger.warning(
-                f"[ZzshareFetcher] stk_mins({ts_code}, {freq}) failed: {e}"
-            )
+            logger.warning(f"[ZzshareFetcher] stk_mins({ts_code}, {freq}) failed: {e}")
             return None
         if df is None or df.empty:
             return None
@@ -489,10 +487,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
                 or os.getenv("MYQUANT_CALENDAR_START_YEAR")
                 or "1990"
             )
-            end_year = int(
-                os.getenv("TRADE_CALENDAR_END_YEAR")
-                or str(datetime.now().year)
-            )
+            end_year = int(os.getenv("TRADE_CALENDAR_END_YEAR") or str(datetime.now().year))
             dates = api.trade_days(
                 day_start=f"{start_year}-01-01",
                 day_end=f"{end_year}-12-31",
@@ -567,9 +562,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
                 seen_codes.add(stock_code)
 
                 # Normalize seal time: upstream "HH:MM" → "HH:MM:SS"
-                seal_time = self._normalize_seal_time(
-                    str(row.get("up_limit_time", ""))
-                )
+                seal_time = self._normalize_seal_time(str(row.get("up_limit_time", "")))
 
                 out.append(
                     {
@@ -660,9 +653,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             if subtype is not None and mapped_subtype != subtype:
                 continue
             try:
-                rows = api.plates_rank(
-                    plate_type=pt, date1=date1, limit=self._PLATES_RANK_LIMIT
-                )
+                rows = api.plates_rank(plate_type=pt, date1=date1, limit=self._PLATES_RANK_LIMIT)
             except Exception as e:
                 logger.warning(f"[ZzshareFetcher] plates_rank({pt}) failed: {e}")
                 continue

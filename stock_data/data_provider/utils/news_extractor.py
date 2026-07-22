@@ -135,13 +135,13 @@ _PRIVATE_IP_RANGES = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),   # link-local / cloud metadata (AWS/GCP/Azure IMDS)
-    ipaddress.ip_network("100.64.0.0/10"),     # CGNAT
-    ipaddress.ip_network("198.18.0.0/15"),     # benchmarking
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / cloud metadata (AWS/GCP/Azure IMDS)
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
+    ipaddress.ip_network("198.18.0.0/15"),  # benchmarking
     ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
 ]
 
 
@@ -427,9 +427,7 @@ def _finalize_result(
     )
 
 
-def _call_handler(
-    handler: Callable[..., NewsContent], url: str, html: str
-) -> NewsContent:
+def _call_handler(handler: Callable[..., NewsContent], url: str, html: str) -> NewsContent:
     """Invoke current two-argument handlers without masking internal TypeErrors."""
     try:
         signature = inspect.signature(handler)
@@ -453,9 +451,7 @@ class NewsContentExtractor:
     _domain_handlers: dict[str, Callable[..., NewsContent]] = {}
 
     @classmethod
-    def register_domain_handler(
-        cls, domain: str, handler: Callable[..., NewsContent]
-    ) -> None:
+    def register_domain_handler(cls, domain: str, handler: Callable[..., NewsContent]) -> None:
         cls._domain_handlers[domain.lower().removeprefix("www.")] = handler
 
     @classmethod

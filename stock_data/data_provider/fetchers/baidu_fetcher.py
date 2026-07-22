@@ -101,8 +101,8 @@ MAX_Q_LEN = 200
 # mechanism) and is also enforced client-side as a safety net.
 DEFAULT_NEWS_DOMAINS: tuple[str, ...] = (
     "finance.eastmoney.com",  # 东方财富 (finance.eastmoney.com/a/<code>.html)
-    "www.cls.cn",             # 财联社 (www.cls.cn/detail/<id>)
-    "news.10jqka.com.cn",     # 同花顺 (news.10jqka.com.cn/<YYYYMMDD>/c<id>.shtml)
+    "www.cls.cn",  # 财联社 (www.cls.cn/detail/<id>)
+    "news.10jqka.com.cn",  # 同花顺 (news.10jqka.com.cn/<YYYYMMDD>/c<id>.shtml)
 )
 
 # Env-var override (comma-separated). Empty string disables the filter.

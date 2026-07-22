@@ -1,4 +1,5 @@
 """Tests for ZhituFetcher board methods."""
+
 from unittest.mock import MagicMock, patch
 
 from stock_data.data_provider.base import DataCapability
@@ -22,14 +23,46 @@ def test_get_all_boards_filters_by_type_and_subtype(mock_get):
     """Returns leaves matching requested type/subtype from /hs/index/tree."""
     mock_response = MagicMock()
     mock_response.json.return_value = [
-        {"name": "A股-申万行业-煤炭", "code": "sw_mt", "type1": 0, "type2": 0,
-         "level": 2, "pcode": "swhy", "pname": "A股-申万行业", "isleaf": 1},
-        {"name": "A股-证监会行业-金融业", "code": "csrc_jr", "type1": 0, "type2": 5,
-         "level": 2, "pcode": "csrc", "pname": "A股-证监会行业", "isleaf": 1},
-        {"name": "A股-热门概念-区块链", "code": "chgn_700231", "type1": 0, "type2": 2,
-         "level": 2, "pcode": "chgn", "pname": "A股-热门概念", "isleaf": 1},
-        {"name": "A股-大盘指数-沪深300", "code": "idx_hs300", "type1": 0, "type2": 9,
-         "level": 2, "pcode": "idx", "pname": "A股-大盘指数", "isleaf": 1},
+        {
+            "name": "A股-申万行业-煤炭",
+            "code": "sw_mt",
+            "type1": 0,
+            "type2": 0,
+            "level": 2,
+            "pcode": "swhy",
+            "pname": "A股-申万行业",
+            "isleaf": 1,
+        },
+        {
+            "name": "A股-证监会行业-金融业",
+            "code": "csrc_jr",
+            "type1": 0,
+            "type2": 5,
+            "level": 2,
+            "pcode": "csrc",
+            "pname": "A股-证监会行业",
+            "isleaf": 1,
+        },
+        {
+            "name": "A股-热门概念-区块链",
+            "code": "chgn_700231",
+            "type1": 0,
+            "type2": 2,
+            "level": 2,
+            "pcode": "chgn",
+            "pname": "A股-热门概念",
+            "isleaf": 1,
+        },
+        {
+            "name": "A股-大盘指数-沪深300",
+            "code": "idx_hs300",
+            "type1": 0,
+            "type2": 9,
+            "level": 2,
+            "pcode": "idx",
+            "pname": "A股-大盘指数",
+            "isleaf": 1,
+        },
     ]
     mock_response.raise_for_status = MagicMock()
     mock_get.return_value = mock_response
@@ -37,8 +70,7 @@ def test_get_all_boards_filters_by_type_and_subtype(mock_get):
     fetcher = _make_fetcher()
     boards = fetcher.get_all_boards(board_type="industry", subtype="申万行业")
     assert boards == [
-        {"code": "sw_mt", "name": "A股-申万行业-煤炭",
-         "type": "industry", "subtype": "申万行业"}
+        {"code": "sw_mt", "name": "A股-申万行业-煤炭", "type": "industry", "subtype": "申万行业"}
     ]
 
 
@@ -46,10 +78,26 @@ def test_get_all_boards_filters_by_type_and_subtype(mock_get):
 def test_get_all_boards_returns_all_subtypes_when_none(mock_get):
     mock_response = MagicMock()
     mock_response.json.return_value = [
-        {"name": "A股-申万行业-煤炭", "code": "sw_mt", "type1": 0, "type2": 0,
-         "level": 2, "pcode": "swhy", "pname": "A股-申万行业", "isleaf": 1},
-        {"name": "A股-证监会行业-金融业", "code": "csrc_jr", "type1": 0, "type2": 5,
-         "level": 2, "pcode": "csrc", "pname": "A股-证监会行业", "isleaf": 1},
+        {
+            "name": "A股-申万行业-煤炭",
+            "code": "sw_mt",
+            "type1": 0,
+            "type2": 0,
+            "level": 2,
+            "pcode": "swhy",
+            "pname": "A股-申万行业",
+            "isleaf": 1,
+        },
+        {
+            "name": "A股-证监会行业-金融业",
+            "code": "csrc_jr",
+            "type1": 0,
+            "type2": 5,
+            "level": 2,
+            "pcode": "csrc",
+            "pname": "A股-证监会行业",
+            "isleaf": 1,
+        },
     ]
     mock_response.raise_for_status = MagicMock()
     mock_get.return_value = mock_response
@@ -93,12 +141,19 @@ def test_get_stock_boards_calls_index_index_endpoint(mock_get):
     fetcher = _make_fetcher()
     boards = fetcher.get_stock_boards("000001")
     assert boards == [
-        {"code": "sw_yx", "name": "A股-申万行业-银行",
-         "type": "industry", "subtype": "申万行业"},
-        {"code": "chgn_700532", "name": "A股-热门概念-MSCI中国",
-         "type": "concept", "subtype": "热门概念"},
-        {"code": "gn_rzrq", "name": "A股-概念板块-融资融券",
-         "type": "concept", "subtype": "概念板块"},
+        {"code": "sw_yx", "name": "A股-申万行业-银行", "type": "industry", "subtype": "申万行业"},
+        {
+            "code": "chgn_700532",
+            "name": "A股-热门概念-MSCI中国",
+            "type": "concept",
+            "subtype": "热门概念",
+        },
+        {
+            "code": "gn_rzrq",
+            "name": "A股-概念板块-融资融券",
+            "type": "concept",
+            "subtype": "概念板块",
+        },
     ]
 
 

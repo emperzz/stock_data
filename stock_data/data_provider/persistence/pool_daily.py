@@ -63,7 +63,9 @@ def init_schema() -> None:
             UNIQUE(pool_type, pool_date, code)
         )
     """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pool_daily_type_date ON pool_daily(pool_type, pool_date)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pool_daily_type_date ON pool_daily(pool_type, pool_date)"
+    )
     conn.commit()
     logger.info(f"[PoolDaily] Database initialized at {get_db_path()}")
 
@@ -130,11 +132,22 @@ def save_pool(pool_type: str, date: str, stocks: list[dict]) -> int:
             # dict, missing fields are stored as NULL (allowed for seal_count
             # and zt_count, which are not present for dt_pool).
             columns = [
-                "pool_type", "pool_date", "code", "name",
-                "price", "change_pct", "amount", "circ_mv", "total_mv",
-                "turnover_rate", "lb_count",
-                "first_seal_time", "last_seal_time", "seal_amount",
-                "seal_count", "zt_count",
+                "pool_type",
+                "pool_date",
+                "code",
+                "name",
+                "price",
+                "change_pct",
+                "amount",
+                "circ_mv",
+                "total_mv",
+                "turnover_rate",
+                "lb_count",
+                "first_seal_time",
+                "last_seal_time",
+                "seal_amount",
+                "seal_count",
+                "zt_count",
             ]
             placeholders = ", ".join(["?"] * len(columns))
             insert_sql = f"""
@@ -152,10 +165,20 @@ def save_pool(pool_type: str, date: str, stocks: list[dict]) -> int:
             data_rows = []
             for stock in stocks:
                 values = [pool_type, date, stock.get("code"), stock.get("name")]
-                for col in ("price", "change_pct", "amount", "circ_mv", "total_mv",
-                            "turnover_rate", "lb_count",
-                            "first_seal_time", "last_seal_time", "seal_amount",
-                            "seal_count", "zt_count"):
+                for col in (
+                    "price",
+                    "change_pct",
+                    "amount",
+                    "circ_mv",
+                    "total_mv",
+                    "turnover_rate",
+                    "lb_count",
+                    "first_seal_time",
+                    "last_seal_time",
+                    "seal_amount",
+                    "seal_count",
+                    "zt_count",
+                ):
                     values.append(stock.get(col))
                 values.append(now)
                 data_rows.append(values)
@@ -220,6 +243,7 @@ def get_pool_count(pool_type: str, date: str) -> int:
 # derivable from the date itself + the trade calendar, so they belong
 # here next to the storage layer — not in the orchestrator or the
 # HTTP layer.
+
 
 def is_volatile_date(date_str: str) -> bool:
     """True iff ``date_str`` is today AND today is a trade date AND
@@ -316,10 +340,7 @@ def get_pool(
     if not refresh:
         cached = get_pool_cached(pool_type, date)
         if cached:
-            logger.info(
-                f"[PoolDaily] {pool_type} {date} hit in persistence "
-                f"({len(cached)} stocks)"
-            )
+            logger.info(f"[PoolDaily] {pool_type} {date} hit in persistence ({len(cached)} stocks)")
             return cached, "persistence", warning
 
     # Upstream fetch — wraps the ZT_POOL-capability failover.

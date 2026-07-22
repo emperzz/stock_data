@@ -213,8 +213,8 @@ def get_quote(
 )
 @map_errors
 @cache_endpoint(
-    cache_fn=lambda code, period, days, start_date, end_date, adjust, indicators: (
-        get_kline_cache(_period_to_freq(period))
+    cache_fn=lambda code, period, days, start_date, end_date, adjust, indicators: get_kline_cache(
+        _period_to_freq(period)
     ),
     key_builder=lambda code, period, days, start_date, end_date, adjust, indicators: (
         make_kline_cache_key(
@@ -296,9 +296,7 @@ def get_kline(
 @map_errors
 @cache_endpoint(
     cache_fn=lambda *args, **kwargs: get_dragontiger_cache(),
-    key_builder=lambda stock_code, trade_date: make_dragon_tiger_cache_key(
-        stock_code, trade_date
-    ),
+    key_builder=lambda stock_code, trade_date: make_dragon_tiger_cache_key(stock_code, trade_date),
     hit_label="dragontiger",
 )
 def get_dragon_tiger(

@@ -25,7 +25,6 @@ import pandas as pd
 
 from .registry import (
     INDICATOR_REGISTRY,
-    estimate_lookback,
     list_indicators,
     normalize_spec,
 )
@@ -40,7 +39,10 @@ def _extract_closes(df: pd.DataFrame) -> list[float | None]:
 def _extract_ohlcv(df: pd.DataFrame) -> list[OHLCV]:
     if df.empty:
         return []
-    cols = {c: df[c] if c in df.columns else pd.Series([None] * len(df)) for c in ("open", "high", "low", "close", "volume")}
+    cols = {
+        c: df[c] if c in df.columns else pd.Series([None] * len(df))
+        for c in ("open", "high", "low", "close", "volume")
+    }
     out: list[OHLCV] = []
     for i in range(len(df)):
         row: OHLCV = {}

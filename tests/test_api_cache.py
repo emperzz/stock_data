@@ -226,4 +226,6 @@ class TestCacheKeyUniqueness:
 
     def test_different_page_sizes_different_keys(self):
         assert make_margin_cache_key("600519", 10) != make_margin_cache_key("600519", 30)
-        assert make_announcements_cache_key("600519", 10) != make_announcements_cache_key("600519", 100)
+        assert make_announcements_cache_key("600519", 10) != make_announcements_cache_key(
+            "600519", 100
+        )

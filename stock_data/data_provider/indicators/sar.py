@@ -80,7 +80,9 @@ def calcSAR(  # noqa: N802
         h = bar.get("high")
         low = bar.get("low")
         if h is None or low is None:
-            out.append({"sar": None, "sar_trend": trend, "sar_ep": round(ep, 2), "sar_af": round(af, 4)})
+            out.append(
+                {"sar": None, "sar_trend": trend, "sar_ep": round(ep, 2), "sar_af": round(af, 4)}
+            )
             continue
 
         # Next SAR

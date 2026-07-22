@@ -77,9 +77,7 @@ class TestManagerStockListRouting:
         must accept the translated tag."""
         manager = _make_manager()
         stocks, source = manager.get_all_stocks("csi")
-        assert source == "Priority2Mock", (
-            f"P2 fetcher must win the failover, got source={source!r}"
-        )
+        assert source == "Priority2Mock", f"P2 fetcher must win the failover, got source={source!r}"
         assert {s["code"] for s in stocks} == {"600519", "000001"}
 
     def test_filter_by_capability_returns_priority_order(self):

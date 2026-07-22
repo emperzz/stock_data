@@ -17,17 +17,15 @@ The test mocks both ``requests.get`` (so no real network call happens)
 and ``time.sleep`` (so the test is fast — we only assert that sleep
 WAS called the right number of times, not that it actually slept).
 """
+
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from stock_data.data_provider.fetchers.ths_fetcher import (
     THS_UA,
     ThsFetcher,
 )
-
 
 # ============================================================================
 # _http_get: UA pool rotation
@@ -185,7 +183,9 @@ class TestBoardStocksPagingJitter:
         """
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.ths_fetcher.ThsFetcher._fetch_ths_board_stocks_page",
-            lambda self, code, page, **kw: ([{"stock_code": "x", "stock_name": "y"}] if page == 1 else []),
+            lambda self, code, page, **kw: (
+                [{"stock_code": "x", "stock_name": "y"}] if page == 1 else []
+            ),
         )
         sleep_calls: list[float] = []
         monkeypatch.setattr(
@@ -195,10 +195,8 @@ class TestBoardStocksPagingJitter:
         fetcher = ThsFetcher.__new__(ThsFetcher)
         monkeypatch.setattr(fetcher, "_v_token", lambda: "test_v")
 
-        rows = fetcher.get_board_stocks("885595", top_n=1)
-        assert sleep_calls == [], (
-            f"unexpected sleep(s) before first page: {sleep_calls}"
-        )
+        fetcher.get_board_stocks("885595", top_n=1)
+        assert sleep_calls == [], f"unexpected sleep(s) before first page: {sleep_calls}"
 
 
 class TestIndustrySummaryPagingJitter:
@@ -230,7 +228,7 @@ class TestIndustrySummaryPagingJitter:
         fetcher = ThsFetcher.__new__(ThsFetcher)
         monkeypatch.setattr(fetcher, "_v_token", lambda: "test_v")
 
-        out = fetcher._fetch_ths_industry_summary()
+        fetcher._fetch_ths_industry_summary()
         # _THS_INDUSTRY_SUMMARY_MAX_PAGES=5 → 4 sleeps between 5 pages.
         # (Page 1 has no preceding sleep; pages 2-5 each have one.)
         assert len(sleep_calls) == 4, (

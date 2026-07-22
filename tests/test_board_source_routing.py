@@ -10,6 +10,7 @@
 4. fetcher 调用失败时不重试其他 fetcher
 5. source 大小写不敏感匹配
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -229,7 +230,10 @@ def test_manager_get_all_boards_passes_type_and_subtype_to_fetcher():
         manager.get_all_boards(source="EastMoneyFetcher", board_type="concept", subtype="concept")
 
     em.get_all_boards.assert_called_once_with(
-        board_type="concept", subtype="concept", source="EastMoneyFetcher", include_quote=False,
+        board_type="concept",
+        subtype="concept",
+        source="EastMoneyFetcher",
+        include_quote=False,
     )
 
 
@@ -305,7 +309,10 @@ def test_manager_get_board_history_rejects_unknown_source():
     # Literal is later widened.
     with pytest.raises(ValueError, match="does not support frequency '2h'"):
         manager.get_board_history(
-            "BK0996", source="EastMoneyFetcher", frequency="2h", days=30,
+            "BK0996",
+            source="EastMoneyFetcher",
+            frequency="2h",
+            days=30,
         )
 
 
@@ -319,7 +326,10 @@ def test_manager_get_board_history_rejects_unsupported_source():
     # the (non-existent) _with_source dispatch.
     with pytest.raises(ValueError, match="Unknown source .* for board K-line"):
         manager.get_board_history(
-            "sw_mt", source="zhitu", frequency="d", days=30,
+            "sw_mt",
+            source="zhitu",
+            frequency="d",
+            days=30,
         )
 
 
@@ -368,8 +378,10 @@ def test_manager_returns_source_name_in_tuple():
 
 # ===== Wiring fix: slug-based fetcher routing =====
 
+
 class ProductionStyleFetcher:
     """Real-world fetcher with PascalCase name (matches actual production fetchers)."""
+
     def __init__(self, capabilities, markets=None):
         self.name = "ZhituFetcher"  # PascalCase like real fetchers
         self.priority = 1

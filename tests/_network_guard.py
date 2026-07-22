@@ -68,6 +68,7 @@ try:
 
     _URLError: type[BaseException] = _urllib_error.URLError
 except Exception:  # pragma: no cover — defensive only
+
     class _URLError(BaseException):  # type: ignore[no-redef]
         pass
 
@@ -79,6 +80,7 @@ except Exception:  # pragma: no cover — defensive only
 try:
     from yfinance.exceptions import YFRateLimitError as _YFRateLimitError
 except Exception:  # pragma: no cover — defensive only
+
     class _YFRateLimitError(BaseException):  # type: ignore[no-redef]
         pass
 
@@ -89,6 +91,7 @@ except Exception:  # pragma: no cover — defensive only
 try:
     from stock_data.data_provider.base import DataFetchError as _DataFetchError
 except Exception:  # pragma: no cover — defensive only
+
     class _DataFetchError(Exception):  # type: ignore[no-redef]
         pass
 
@@ -100,19 +103,19 @@ except Exception:  # pragma: no cover — defensive only
 #: ``conftest.py`` hook for any test marked ``@pytest.mark.live_network``.
 UPSTREAM_ERRORS: Final[tuple[type[BaseException], ...]] = (
     # ── raw network errors (the upstream call never completed) ──
-    requests.ConnectionError,            # DNS / TCP / TLS handshake failure
-    requests.Timeout,                     # upstream too slow
-    requests.HTTPError,                   # 5xx (raise_for_status path)
+    requests.ConnectionError,  # DNS / TCP / TLS handshake failure
+    requests.Timeout,  # upstream too slow
+    requests.HTTPError,  # 5xx (raise_for_status path)
     requests.exceptions.SSLError,
     requests.exceptions.ChunkedEncodingError,
-    _URLError,                            # urllib.error.URLError
-    socket.gaierror,                      # DNS resolution failure
-    socket.timeout,                       # raw socket timeout
-    TimeoutError,                         # builtin (used by yfinance etc.)
-    ConnectionError,                      # builtin
-    OSError,                              # covers "Network is unreachable" etc.
+    _URLError,  # urllib.error.URLError
+    socket.gaierror,  # DNS resolution failure
+    socket.timeout,  # raw socket timeout
+    TimeoutError,  # builtin (used by yfinance etc.)
+    ConnectionError,  # builtin
+    OSError,  # covers "Network is unreachable" etc.
     # ── upstream-specific rate-limit errors ──
-    _YFRateLimitError,                    # yfinance 'Too Many Requests'
+    _YFRateLimitError,  # yfinance 'Too Many Requests'
     # ── project-internal wrappers (manager catches everything here) ──
     # The manager wraps any per-fetcher failure in DataFetchError; the
     # original exception is usually only present in the message. Treating

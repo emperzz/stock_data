@@ -5,6 +5,7 @@ and are tagged ``@pytest.mark.live_network`` so the default ``pytest`` run
 skips them via ``pyproject.toml addopts = ["-m", "not live_network"]``. To
 run them: ``pytest -m live_network tests/test_eastmoney_stock_boards.py``.
 """
+
 import json
 from unittest.mock import MagicMock, patch
 
@@ -19,12 +20,39 @@ SAMPLE_RESPONSE = {
     "data": {
         "total": 29,
         "diff": [
-            {"f3": 34, "f4": 8180, "f12": "BK0438", "f13": 90, "f14": "食品饮料",
-             "f128": "中炬高新", "f140": "600872", "f141": 1, "f152": 2},
-            {"f3": -105, "f4": -4222, "f12": "BK1277", "f13": 90, "f14": "白酒Ⅱ",
-             "f128": "贵州茅台", "f140": "600519", "f141": 1, "f152": 2},
-            {"f3": -12, "f4": -4387, "f12": "BK0477", "f13": 90, "f14": "酿酒概念",
-             "f128": "*ST西发", "f140": "000752", "f141": 0, "f152": 2},
+            {
+                "f3": 34,
+                "f4": 8180,
+                "f12": "BK0438",
+                "f13": 90,
+                "f14": "食品饮料",
+                "f128": "中炬高新",
+                "f140": "600872",
+                "f141": 1,
+                "f152": 2,
+            },
+            {
+                "f3": -105,
+                "f4": -4222,
+                "f12": "BK1277",
+                "f13": 90,
+                "f14": "白酒Ⅱ",
+                "f128": "贵州茅台",
+                "f140": "600519",
+                "f141": 1,
+                "f152": 2,
+            },
+            {
+                "f3": -12,
+                "f4": -4387,
+                "f12": "BK0477",
+                "f13": 90,
+                "f14": "酿酒概念",
+                "f128": "*ST西发",
+                "f140": "000752",
+                "f141": 0,
+                "f152": 2,
+            },
         ],
     },
 }
@@ -122,7 +150,8 @@ class TestGetStockBoardsTypeOverride:
         return board_mod
 
     def test_known_concept_overrides_industry_fallback(
-        self, _seed_stock_board,
+        self,
+        _seed_stock_board,
     ):
         """BK0477 is cached as concept → fetcher output uses 'concept', not 'industry'."""
         fetcher = EastMoneyFetcher()
@@ -133,7 +162,8 @@ class TestGetStockBoardsTypeOverride:
         assert by_code["BK0477"]["subtype"] == "concept"
 
     def test_known_industry_keeps_industry_tag(
-        self, _seed_stock_board,
+        self,
+        _seed_stock_board,
     ):
         """BK0438 is cached as industry → fetcher output matches cache."""
         fetcher = EastMoneyFetcher()
@@ -144,7 +174,8 @@ class TestGetStockBoardsTypeOverride:
         assert by_code["BK0438"]["subtype"] == "industry"
 
     def test_unknown_board_keeps_fetcher_fallback(
-        self, _seed_stock_board,
+        self,
+        _seed_stock_board,
     ):
         """BK1277 not in cache → fetcher's hardcoded 'industry' / 'industry' stays."""
         fetcher = EastMoneyFetcher()
@@ -195,8 +226,9 @@ class TestGetStockBoardsLive:
         # BK1277 = 白酒Ⅱ, BK0438 = 食品饮料 — both should appear
         assert "BK1277" in codes, f"Expected BK1277 in {codes}"
         assert any("白酒" in n for n in names), f"Expected 白酒* in {names}"
-        assert any("食品饮料" in n or "酿酒" in n for n in names), \
+        assert any("食品饮料" in n or "酿酒" in n for n in names), (
             f"Expected 食品饮料/酿酒 in {names}"
+        )
 
     def test_000001_sz_secid(self, fetcher):
         """平安银行 (SZ) — verify secid construction works for non-SH codes."""

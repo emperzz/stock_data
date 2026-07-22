@@ -1,10 +1,13 @@
 """Tests for stock_data/explorer/static/index.html structure."""
+
 from pathlib import Path
 
 import pytest
 from bs4 import BeautifulSoup
 
-HTML_PATH = Path(__file__).resolve().parent.parent / "stock_data" / "explorer" / "static" / "index.html"
+HTML_PATH = (
+    Path(__file__).resolve().parent.parent / "stock_data" / "explorer" / "static" / "index.html"
+)
 
 
 @pytest.fixture
@@ -35,7 +38,7 @@ class TestHtmlStructure:
         """The 1000-line hand-written ENDPOINTS block is gone; replaced by
         a fetch of /control/api-manifest + ENDPOINTS shim."""
         assert "const ENDPOINTS = {" not in html_text
-        assert "fetch(\"/control/api-manifest\"" in html_text
+        assert 'fetch("/control/api-manifest"' in html_text
         assert "loadManifest" in html_text
 
     def test_has_capability_definitions(self, html_text):
@@ -57,7 +60,7 @@ class TestHtmlStructure:
 
     def test_has_theme_variables(self, html_text):
         assert "--bg:" in html_text
-        assert "[data-theme=\"dark\"]" in html_text
+        assert '[data-theme="dark"]' in html_text
 
     def test_has_search_input(self, soup):
         assert soup.select_one("#search") is not None
@@ -71,6 +74,7 @@ class TestHtmlStructure:
     def test_has_no_external_dependencies(self, html_text):
         """No <script src=...> or <link href=...> to external URLs."""
         import re
+
         external = re.findall(r'(?:src|href)="https?://[^"]+"', html_text)
         assert external == [], f"Found external resources: {external}"
 

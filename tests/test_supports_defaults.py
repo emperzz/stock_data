@@ -1,17 +1,18 @@
 """Default BaseFetcher.supports_kline / supports_quote per spec §4.2 / §4.2.1."""
+
 from stock_data.data_provider.base import BaseFetcher, DataCapability
 
 
 class _StockOnlyFetcher(BaseFetcher):
     """Concrete subclass with only STOCK_KLINE + STOCK_REALTIME_QUOTE."""
+
     name = "FakeStock"
     priority = 99
     supported_markets = {"csi"}
-    supported_data_types = (
-        DataCapability.STOCK_KLINE | DataCapability.STOCK_REALTIME_QUOTE
-    )
+    supported_data_types = DataCapability.STOCK_KLINE | DataCapability.STOCK_REALTIME_QUOTE
 
-    def is_available(self) -> bool: return True
+    def is_available(self) -> bool:
+        return True
 
     def _fetch_raw_data(self, *args, **kwargs):  # pragma: no cover - not exercised here
         return None
@@ -22,14 +23,14 @@ class _StockOnlyFetcher(BaseFetcher):
 
 class _IndexOnlyFetcher(BaseFetcher):
     """Concrete subclass with only INDEX_KLINE + INDEX_REALTIME_QUOTE."""
+
     name = "FakeIndex"
     priority = 99
     supported_markets = {"us"}
-    supported_data_types = (
-        DataCapability.INDEX_KLINE | DataCapability.INDEX_REALTIME_QUOTE
-    )
+    supported_data_types = DataCapability.INDEX_KLINE | DataCapability.INDEX_REALTIME_QUOTE
 
-    def is_available(self) -> bool: return True
+    def is_available(self) -> bool:
+        return True
 
     def _fetch_raw_data(self, *args, **kwargs):  # pragma: no cover - not exercised here
         return None

@@ -93,7 +93,18 @@ def test_parse_subject_articles_normal(fetcher, list_html):
     assert len(arts) >= 1
     first = arts[0]
     # All canonical fields present
-    for k in ("article_id", "title", "brief", "author", "ctime", "date", "read_num", "comments_num", "share_num", "images"):
+    for k in (
+        "article_id",
+        "title",
+        "brief",
+        "author",
+        "ctime",
+        "date",
+        "read_num",
+        "comments_num",
+        "share_num",
+        "images",
+    ):
         assert k in first, f"missing field: {k}"
     # date format check
     assert len(first["date"]) == 10 and first["date"][4] == "-"
@@ -104,12 +115,8 @@ def test_parse_subject_articles_normal(fetcher, list_html):
 def test_parse_subject_articles_skips_zero_id(fetcher, list_html):
     """Articles with article_id=0 or missing should be skipped (defensive guard)."""
     # Inject a malformed article alongside a valid one
-    inner = json.loads(
-        (FIXTURE_DIR / "cls_subject_list.json").read_text(encoding="utf-8")
-    )
-    inner["articles"].insert(
-        0, {"article_id": 0, "article_title": "skipped", "article_time": 0}
-    )
+    inner = json.loads((FIXTURE_DIR / "cls_subject_list.json").read_text(encoding="utf-8"))
+    inner["articles"].insert(0, {"article_id": 0, "article_title": "skipped", "article_time": 0})
     envelope = {"props": {"pageProps": {"data": inner}}}
     html = f'<html><script id="__NEXT_DATA__" type="application/json">{json.dumps(envelope, ensure_ascii=False)}</script></html>'
     arts = fetcher._parse_subject_articles(1151, html)
@@ -221,10 +228,10 @@ def test_dedup_images(fetcher):
         # `images` field is the list-page thumbnail — must NOT appear in output.
         "images": ["https://a.com/cover.jpg"],
         "content": (
-            '<p>lead</p>'
+            "<p>lead</p>"
             '<p><img src="https://a.com/HEADER.png"></p>'  # skipped (first <img>)
-            '<p><strong>section</strong></p>'
-            '<p>text</p>'
+            "<p><strong>section</strong></p>"
+            "<p>text</p>"
             '<p><img src="https://a.com/CHART1.png"></p>'  # kept
             '<p><img src="https://a.com/CHART2.png"></p>'  # kept
         ),
@@ -238,19 +245,23 @@ def test_dedup_images(fetcher):
 
 def test_dedup_images_no_content_images(fetcher):
     """content 里 0 张图时, 返回空列表 (不抛错)."""
-    out = fetcher._dedup_images({
-        "images": ["https://a.com/cover.jpg"],  # list-page thumb — still dropped
-        "content": "<p>text only, no images</p>",
-    })
+    out = fetcher._dedup_images(
+        {
+            "images": ["https://a.com/cover.jpg"],  # list-page thumb — still dropped
+            "content": "<p>text only, no images</p>",
+        }
+    )
     assert out == []
 
 
 def test_dedup_images_only_one_content_image_skipped(fetcher):
     """content 只有 1 张图时, 跳过它后应剩空列表 (用户认为 header 是 logo)."""
-    out = fetcher._dedup_images({
-        "images": [],
-        "content": '<p><img src="https://a.com/ONLY.png"></p>',
-    })
+    out = fetcher._dedup_images(
+        {
+            "images": [],
+            "content": '<p><img src="https://a.com/ONLY.png"></p>',
+        }
+    )
     assert out == []
 
 
@@ -277,9 +288,7 @@ def test_fetch_article_detail_normal(fetcher, detail_html):
     assert len(art["date"]) == 10 and art["date"][4] == "-"
     # images: only the trailing chart img survives (header cover + images[]
     # list-page thumb both dropped). Pin content to catch silent regressions.
-    assert art["images"] == [
-        "https://image.cls.cn/images/20260714/market_chart_911x466.png"
-    ]
+    assert art["images"] == ["https://image.cls.cn/images/20260714/market_chart_911x466.png"]
 
 
 def test_fetch_article_detail_empty_dict(fetcher):
@@ -445,7 +454,6 @@ def test_is_available_requires_bs4(fetcher, monkeypatch):
     """Regression: is_available() must probe the bs4 dep so a missing-bs4
     server doesn't register a fetcher that 100% fails at runtime.
     """
-    import builtins
 
     # Patch importlib.util.find_spec to report bs4 missing.
     from importlib import util as importlib_util
@@ -546,9 +554,11 @@ def test_http_get_text_rejects_oversize_response(fetcher):
     oversize = b"x" * (_CLS_MAX_RESPONSE_BYTES + 1)
     fake = _FakeStreamResponse(oversize)
 
-    with patch("stock_data.data_provider.fetchers.cls_fetcher.requests.get", return_value=fake):
-        with pytest.raises(DataFetchError, match="exceeded"):
-            fetcher._http_get_text("https://www.cls.cn/subject/1151")
+    with (
+        patch("stock_data.data_provider.fetchers.cls_fetcher.requests.get", return_value=fake),
+        pytest.raises(DataFetchError, match="exceeded"),
+    ):
+        fetcher._http_get_text("https://www.cls.cn/subject/1151")
     assert fake.closed, "response must be closed after size cap fires"
 
 
@@ -567,7 +577,9 @@ def test_http_get_text_returns_datafetch_error_on_5xx(fetcher):
     """5xx response must raise DataFetchError (unchanged from pre-P3-b2)."""
     fake = _FakeStreamResponse(b"server boom", status_code=503)
 
-    with patch("stock_data.data_provider.fetchers.cls_fetcher.requests.get", return_value=fake):
-        with pytest.raises(DataFetchError, match="503"):
-            fetcher._http_get_text("https://www.cls.cn/subject/1151")
+    with (
+        patch("stock_data.data_provider.fetchers.cls_fetcher.requests.get", return_value=fake),
+        pytest.raises(DataFetchError, match="503"),
+    ):
+        fetcher._http_get_text("https://www.cls.cn/subject/1151")
     assert fake.closed, "response must be closed when status check fails"

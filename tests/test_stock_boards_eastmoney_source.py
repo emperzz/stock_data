@@ -11,6 +11,7 @@ default ``pytest`` run skips it via ``pyproject.toml addopts = ["-m", "not
 live_network"]``. To run it: ``pytest -m live_network
 tests/test_stock_boards_eastmoney_source.py``.
 """
+
 from unittest.mock import patch
 
 import pytest
@@ -23,8 +24,6 @@ def _make_fake_manager(*, boards, fetcher_name="EastMoneyFetcher"):
     mgr = MagicMock()
     mgr.get_stock_boards = MagicMock(return_value=(boards, fetcher_name))
     return mgr
-
-
 
 
 def test_eastmoney_source_invalid_code_returns_200_with_cold_sources(client):
@@ -41,8 +40,6 @@ def test_eastmoney_source_invalid_code_returns_200_with_cold_sources(client):
     assert "eastmoney" in body["cold_sources"]
 
 
-
-
 def test_eastmoney_source_routes_through_persistence_layer(client):
     """Sanity check: the route delegates to ``stock_board_cache.get_stock_memberships``,
     not directly to ``manager.get_stock_boards``. We patch the persistence helper
@@ -51,8 +48,13 @@ def test_eastmoney_source_routes_through_persistence_layer(client):
     from stock_data.api.routes import boards as boards_route
 
     fake_entries = [
-        {"code": "BK0001", "name": "测试板块",
-         "type": "industry", "subtype": "industry", "source": "eastmoney"},
+        {
+            "code": "BK0001",
+            "name": "测试板块",
+            "type": "industry",
+            "subtype": "industry",
+            "source": "eastmoney",
+        },
     ]
     with patch.object(
         boards_route.stock_board_cache,

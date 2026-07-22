@@ -11,9 +11,6 @@ contract:
 
 from __future__ import annotations
 
-from contextlib import ExitStack
-from unittest.mock import MagicMock
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -21,8 +18,6 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client(monkeypatch):
     """FastAPI TestClient with manager.get_board_news / get_board_surges mocked."""
-    from stock_data.api.routes import boards as boards_route
-    from stock_data.api.routes.helpers import get_manager
 
     fake_news_rows = [
         {
@@ -62,14 +57,12 @@ def client(monkeypatch):
 
     # Patch the manager methods via direct monkey-patching on the class.
     from stock_data.data_provider.manager import DataFetcherManager
-    monkeypatch.setattr(
-        DataFetcherManager, "get_board_news", fake_get_board_news
-    )
-    monkeypatch.setattr(
-        DataFetcherManager, "get_board_surges", fake_get_board_surges
-    )
+
+    monkeypatch.setattr(DataFetcherManager, "get_board_news", fake_get_board_news)
+    monkeypatch.setattr(DataFetcherManager, "get_board_surges", fake_get_board_surges)
 
     import stock_data.server as server
+
     yield TestClient(server.app)
 
 

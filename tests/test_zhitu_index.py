@@ -411,9 +411,7 @@ class TestGetKlineDataIndexDispatch:
         # 2025-07-01 SSE Comp: c=3457.75, a=553556536157, expected ~12.46 元/股
         first = df.iloc[0]
         implied = first["amount"] / first["volume"]
-        assert 5.0 < implied < 50.0, (
-            f"implied per-share={implied:.2f} 元/股, 偏离沪市合理区间"
-        )
+        assert 5.0 < implied < 50.0, f"implied per-share={implied:.2f} 元/股, 偏离沪市合理区间"
 
     @patch("stock_data.data_provider.utils.http.requests.get")
     def test_empty_history_returns_empty_dataframe(self, mock_get, monkeypatch):

@@ -95,8 +95,9 @@ INDICATOR_REGISTRY: dict[IndicatorKey, _IndicatorSpec] = {
         IndicatorKey.MA,
         "closes",
         {"periods": [5, 10, 20, 30, 60], "type": "sma"},
-        lambda o: max(o.get("periods") or [5, 10, 20, 30, 60, 120, 250]) * (
-            3 if (o.get("type") or "sma") == "ema" else 1
+        lambda o: (
+            max(o.get("periods") or [5, 10, 20, 30, 60, 120, 250])
+            * (3 if (o.get("type") or "sma") == "ema" else 1)
         ),
         lambda o: [f"ma{p}" for p in (o.get("periods") or [5, 10, 20, 30, 60, 120, 250])],
         _ma.calcMA,
@@ -178,10 +179,9 @@ INDICATOR_REGISTRY: dict[IndicatorKey, _IndicatorSpec] = {
         IndicatorKey.ROC,
         "closes",
         {"period": 12, "signalPeriod": 0},
-        lambda o: int(o.get("period") or 12) + (
-            int(o.get("signalPeriod") or 0) * 3
-            if int(o.get("signalPeriod") or 0)
-            else 0
+        lambda o: (
+            int(o.get("period") or 12)
+            + (int(o.get("signalPeriod") or 0) * 3 if int(o.get("signalPeriod") or 0) else 0)
         ),
         lambda o: ["roc", "roc_signal"] if int(o.get("signalPeriod") or 0) > 0 else ["roc"],
         _roc.calcROC,
@@ -255,8 +255,7 @@ def normalize_spec(
             return IndicatorKey(raw)
         except ValueError:
             raise ValueError(
-                f"unknown indicator: {raw!r}. "
-                f"Supported: {sorted(valid_keys)}"
+                f"unknown indicator: {raw!r}. Supported: {sorted(valid_keys)}"
             ) from None
 
     if isinstance(spec, list):
@@ -294,9 +293,7 @@ def estimate_lookback(
     if not spec:
         return 0
     if isinstance(spec, list):
-        normalized = {
-            key: {} for key in spec if key in (k.value for k in IndicatorKey)
-        }
+        normalized = {key: {} for key in spec if key in (k.value for k in IndicatorKey)}
     else:
         normalized = spec
 

@@ -22,6 +22,7 @@ Modules in this package:
 Backward-compat: ``stock_data.data_provider.fetchers.eastmoney_fetcher`` is
 a thin shim that re-exports ``EastMoneyFetcher`` and ``_DCEndpoint``.
 """
+
 from ._endpoints import _DCEndpoint
 from .fetcher import EastMoneyFetcher
 

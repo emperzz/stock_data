@@ -30,16 +30,21 @@ def test_board_news_item_required_fields():
 
 def test_board_news_item_full():
     item = BoardNewsItem(
-        title="t", url="http://x",
-        publish_date="2026-07-20", publish_time="08:44",
-        summary="s", source_domain="custom.example",
+        title="t",
+        url="http://x",
+        publish_date="2026-07-20",
+        publish_time="08:44",
+        summary="s",
+        source_domain="custom.example",
     )
     assert item.source_domain == "custom.example"
 
 
 def test_board_news_response_construction():
     resp = BoardNewsResponse(
-        board_code="885914", source="ThsFetcher", total=1,
+        board_code="885914",
+        source="ThsFetcher",
+        total=1,
         data=[BoardNewsItem(title="t", url="http://x")],
     )
     assert resp.total == 1
@@ -72,7 +77,9 @@ def test_board_surge_item_full():
 
 def test_board_surges_response_construction():
     resp = BoardSurgesResponse(
-        board_code="885914", source="ThsFetcher", total=1,
+        board_code="885914",
+        source="ThsFetcher",
+        total=1,
         data=[BoardSurgeItem(date="2026-07-14", limit_up_count=4)],
     )
     assert resp.total == 1

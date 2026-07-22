@@ -39,6 +39,7 @@ came from — ``f"get_stock_news(000034)"``, ``f"search_news"``, etc.
 strips a JSONP wrapper before JSON-parsing) can use it without the
 ``.json()`` try/except being wasted on them.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -80,15 +81,17 @@ def cffi_json_get(
             exception is chained via ``raise ... from e``.
     """
     resp = cffi_json_get_resp(
-        session, url, params=params, headers=headers, timeout=timeout,
+        session,
+        url,
+        params=params,
+        headers=headers,
+        timeout=timeout,
         error_label=error_label,
     )
     try:
         return resp.json()
     except ValueError as e:
-        raise DataFetchError(
-            f"[EastMoneyFetcher] {error_label} bad JSON: {e}"
-        ) from e
+        raise DataFetchError(f"[EastMoneyFetcher] {error_label} bad JSON: {e}") from e
 
 
 def cffi_json_get_resp(
@@ -118,11 +121,7 @@ def cffi_json_get_resp(
     try:
         resp = session.get(url, params=params, headers=headers, timeout=timeout)
     except Exception as e:
-        raise DataFetchError(
-            f"[EastMoneyFetcher] {error_label} network error: {e}"
-        ) from e
+        raise DataFetchError(f"[EastMoneyFetcher] {error_label} network error: {e}") from e
     if resp.status_code != 200:
-        raise DataFetchError(
-            f"[EastMoneyFetcher] {error_label} HTTP {resp.status_code}"
-        )
+        raise DataFetchError(f"[EastMoneyFetcher] {error_label} HTTP {resp.status_code}")
     return resp

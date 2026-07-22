@@ -375,18 +375,16 @@ class BoardStockInfo(BaseModel):
     amount: float | None = Field(default=None, description="Trading amount (元)")
     turnover_rate: float | None = Field(default=None, description="Turnover rate (%)")
     # === 2026-07-13 新增 (THS /field/<code> 14 列全部暴露) ===
-    change_speed: float | None = Field(
-        default=None, description="涨速(%) — THS upstream column 6")
-    volume_ratio: float | None = Field(
-        default=None, description="量比 — THS upstream column 8")
-    amplitude: float | None = Field(
-        default=None, description="振幅(%) — THS upstream column 9")
+    change_speed: float | None = Field(default=None, description="涨速(%) — THS upstream column 6")
+    volume_ratio: float | None = Field(default=None, description="量比 — THS upstream column 8")
+    amplitude: float | None = Field(default=None, description="振幅(%) — THS upstream column 9")
     free_float_shares: int | None = Field(
-        default=None, description="流通股(股) — THS upstream column 11 parsed from 'N.NN亿'")
+        default=None, description="流通股(股) — THS upstream column 11 parsed from 'N.NN亿'"
+    )
     float_market_cap: float | None = Field(
-        default=None, description="流通市值(元) — THS upstream column 12")
-    pe_ratio: float | None = Field(
-        default=None, description="市盈率 — THS upstream column 13")
+        default=None, description="流通市值(元) — THS upstream column 12"
+    )
+    pe_ratio: float | None = Field(default=None, description="市盈率 — THS upstream column 13")
 
 
 class BoardListResponse(BaseModel):
@@ -466,8 +464,7 @@ class BoardStocksResponse(BaseModel):
     quote_sort_by: str | None = Field(
         default=None,
         description=(
-            "Echo of the request's sort_by literal. None when the "
-            "caller did not request sorting."
+            "Echo of the request's sort_by literal. None when the caller did not request sorting."
         ),
     )
     quote_sort_order: str | None = Field(

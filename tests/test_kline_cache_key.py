@@ -13,9 +13,13 @@ from stock_data.api.cache import (
 def test_kline_cache_key_contains_all_components():
     """Key contains code, frequency, days, start_date, end_date, adjust, indicators."""
     k = make_kline_cache_key(
-        code="600519", frequency="5",
-        days=1, start_date="2026-06-20", end_date="2026-06-29",
-        adjust="qfq", indicators=["ma"],
+        code="600519",
+        frequency="5",
+        days=1,
+        start_date="2026-06-20",
+        end_date="2026-06-29",
+        adjust="qfq",
+        indicators=["ma"],
     )
     assert "600519" in k
     assert "5" in k
@@ -28,9 +32,13 @@ def test_kline_cache_key_contains_all_components():
 def test_kline_cache_key_empty_indicators():
     """Empty indicators list produces key without trailing comma."""
     k = make_kline_cache_key(
-        code="600519", frequency="d",
-        days=30, start_date=None, end_date=None,
-        adjust=None, indicators=[],
+        code="600519",
+        frequency="d",
+        days=30,
+        start_date=None,
+        end_date=None,
+        adjust=None,
+        indicators=[],
     )
     assert "600519" in k
     assert "d" in k
@@ -41,9 +49,13 @@ def test_kline_cache_key_empty_indicators():
 def test_kline_cache_key_prefix():
     """All kline cache keys start with 'kline:' prefix."""
     k = make_kline_cache_key(
-        code="000001", frequency="d",
-        days=30, start_date=None, end_date=None,
-        adjust=None, indicators=[],
+        code="000001",
+        frequency="d",
+        days=30,
+        start_date=None,
+        end_date=None,
+        adjust=None,
+        indicators=[],
     )
     assert k.startswith("kline:")
 
@@ -78,13 +90,21 @@ def test_get_kline_cache_monthly_uses_history_ttl():
 def test_kline_cache_key_indicator_order_independent():
     """Same indicator set in different orders produces the same cache key."""
     k1 = make_kline_cache_key(
-        code="600519", frequency="d", days=30,
-        start_date=None, end_date=None, adjust=None,
+        code="600519",
+        frequency="d",
+        days=30,
+        start_date=None,
+        end_date=None,
+        adjust=None,
         indicators=["ma", "macd", "kdj"],
     )
     k2 = make_kline_cache_key(
-        code="600519", frequency="d", days=30,
-        start_date=None, end_date=None, adjust=None,
+        code="600519",
+        frequency="d",
+        days=30,
+        start_date=None,
+        end_date=None,
+        adjust=None,
         indicators=["kdj", "ma", "macd"],
     )
     assert k1 == k2

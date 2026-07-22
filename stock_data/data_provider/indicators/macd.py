@@ -60,11 +60,7 @@ def calcMACD(  # noqa: N802
             {
                 "macd_dif": round(d, 2) if d is not None else None,
                 "macd_dea": round(e, 2) if e is not None else None,
-                "macd_hist": (
-                    round((d - e) * 2.0, 2)
-                    if d is not None and e is not None
-                    else None
-                ),
+                "macd_hist": (round((d - e) * 2.0, 2) if d is not None and e is not None else None),
             }
         )
     return out

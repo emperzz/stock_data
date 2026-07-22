@@ -70,6 +70,7 @@ def test_board_components_keeps_f16_in_request_but_unmapped_in_field_map():
         "Otherwise the upstream request has an unmapped field."
     )
 
+
 _CONCEPT_ROW_TEMPLATE = {
     "f2": 1234.56,  # price
     "f3": 2.35,  # change_pct
@@ -900,9 +901,7 @@ def test_fetch_clist_paginated_returns_empty_when_all_variants_fail():
     with patch.object(
         fetcher._session,
         "get",
-        side_effect=_cffi_requests.exceptions.ConnectionError(
-            "Connection closed abruptly"
-        ),
+        side_effect=_cffi_requests.exceptions.ConnectionError("Connection closed abruptly"),
     ):
         assert fetcher._fetch_clist_paginated(ENDPOINTS.BOARD_LIST_CONCEPT) == []
 

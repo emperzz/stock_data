@@ -40,12 +40,13 @@ def _patched_fetcher(response_factory):
     """Patch + return fetcher (caller closes the stack)."""
     stack = ExitStack()
     stack.enter_context(
-        patch.object(ThsFetcher, "_http_get",
-                     side_effect=lambda url, *, headers=None, timeout=10: response_factory())
+        patch.object(
+            ThsFetcher,
+            "_http_get",
+            side_effect=lambda url, *, headers=None, timeout=10: response_factory(),
+        )
     )
-    stack.enter_context(
-        patch.object(ThsFetcher, "_v_token", return_value="fake")
-    )
+    stack.enter_context(patch.object(ThsFetcher, "_v_token", return_value="fake"))
     return ThsFetcher(), stack
 
 
@@ -64,12 +65,29 @@ def test_get_board_stocks_full_shape_and_quote_none(fake_html_bytes):
         rows = fetcher.get_board_stocks_full("885914")
         assert rows
         quote_keys = (
-            "price", "change_pct", "change_amount", "volume", "amount",
-            "turnover_rate", "amplitude", "high", "low", "open",
-            "prev_close", "speed_open", "speed_current",
-            "speed_change_pct", "speed_change_amount", "speed_volume",
-            "speed_turnover_rate", "eps", "float_share_yi",
-            "float_mv_yi", "limit_up_count_year", "analysis", "pop_info",
+            "price",
+            "change_pct",
+            "change_amount",
+            "volume",
+            "amount",
+            "turnover_rate",
+            "amplitude",
+            "high",
+            "low",
+            "open",
+            "prev_close",
+            "speed_open",
+            "speed_current",
+            "speed_change_pct",
+            "speed_change_amount",
+            "speed_volume",
+            "speed_turnover_rate",
+            "eps",
+            "float_share_yi",
+            "float_mv_yi",
+            "limit_up_count_year",
+            "analysis",
+            "pop_info",
         )
         for r in rows[:5]:
             for k in quote_keys:
@@ -134,12 +152,12 @@ def test_get_board_stocks_full_industry_via_changecode():
 
     # Exchange is inferred from prefix.
     exch_map = {r["stock_code"]: r["exchange"] for r in rows}
-    assert exch_map["002213"] == "sz"   # 0/3 → SZ
+    assert exch_map["002213"] == "sz"  # 0/3 → SZ
     assert exch_map["002371"] == "sz"
-    assert exch_map["600519"] == "sh"   # 6 → SH
-    assert exch_map["688049"] == "sh"   # 6 → SH (科创板)
-    assert exch_map["301536"] == "sz"   # 3 → SZ (创业板)
-    assert exch_map["830799"] == "bj"   # 8 → BJ (北交所)
+    assert exch_map["600519"] == "sh"  # 6 → SH
+    assert exch_map["688049"] == "sh"  # 6 → SH (科创板)
+    assert exch_map["301536"] == "sz"  # 3 → SZ (创业板)
+    assert exch_map["830799"] == "bj"  # 8 → BJ (北交所)
 
     # Names decoded correctly (GBK).
     names = {r["stock_code"]: r["stock_name"] for r in rows}

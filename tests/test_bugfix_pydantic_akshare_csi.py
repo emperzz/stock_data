@@ -76,9 +76,7 @@ class TestFetcherMarketTag:
         """cn is the fetcher-internal tag for A-shares — must hit the
         A-share branch (ak.stock_info_a_code_name)."""
         fetcher = AkshareFetcher()
-        fake_df = pd.DataFrame(
-            {"code": ["600519", "000001"], "name": ["贵州茅台", "平安银行"]}
-        )
+        fake_df = pd.DataFrame({"code": ["600519", "000001"], "name": ["贵州茅台", "平安银行"]})
         with patch("akshare.stock_info_a_code_name", return_value=fake_df) as mock_ak:
             stocks = fetcher.get_all_stocks("cn")
             assert len(stocks) == 2
@@ -158,9 +156,7 @@ class TestPersistenceMarketConversion:
 
         try:
             # force refresh so we hit the upstream path
-            stocks, _origin = stock_list.get_stock_list(
-                "csi", refresh=True, manager=manager
-            )
+            stocks, _origin = stock_list.get_stock_list("csi", refresh=True, manager=manager)
             assert _origin == "ZzshareFetcher", (
                 f"Expected Zzshare (P2) to win the failover after the "
                 f"csi→cn contract fix, got {_origin!r}"

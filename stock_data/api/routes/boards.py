@@ -442,10 +442,19 @@ def get_board_stocks(
     include_quote: bool = Query(False, description="Include realtime quote data"),
     refresh: bool = Query(False, description="Force fetch latest from upstream"),
     sort_by: Literal[
-        "change_pct", "price", "turnover_rate", "volume_ratio",
-        "amplitude", "change_amount", "change_speed", "amount",
-        "pe_ratio", "float_market_cap", "free_float_shares",
-    ] | None = Query(
+        "change_pct",
+        "price",
+        "turnover_rate",
+        "volume_ratio",
+        "amplitude",
+        "change_amount",
+        "change_speed",
+        "amount",
+        "pe_ratio",
+        "float_market_cap",
+        "free_float_shares",
+    ]
+    | None = Query(
         None,
         description=(
             "Sort by field. ONLY effective when include_quote=true. "
@@ -457,10 +466,13 @@ def get_board_stocks(
         ),
     ),
     sort_order: Literal["asc", "desc"] = Query(
-        "desc", description="Sort direction. ONLY effective when include_quote=true.",
+        "desc",
+        description="Sort direction. ONLY effective when include_quote=true.",
     ),
     top_n: int = Query(
-        50, ge=1, le=50,
+        50,
+        ge=1,
+        le=50,
         description=(
             "Max number of stocks to fetch live quotes for "
             "(default 50, mirrors THS upstream hard cap). "
@@ -491,7 +503,7 @@ def get_board_stocks(
     # (a) source == 'ths' and (b) include_quote == True.
     # Mirrors sibling /boards UX (api/routes/boards.py:327-335) and
     # avoids eastmoney/zhitu TypeError→5xx due to fixed signatures.
-    if (sort_by is not None or top_n != 50 or sort_order != "desc"):
+    if sort_by is not None or top_n != 50 or sort_order != "desc":
         if source != "ths":
             raise HTTPException(
                 status_code=400,
@@ -645,9 +657,7 @@ def get_board_stocks(
                 # the source of truth — fetcher's internal fallback is
                 # reserved for callers that bypass the route (e.g. Stage 2
                 # fetcher-test). On cache miss, surface a clear error.
-                cached_metadata = stock_board_cache.get_board_metadata(
-                    board_code, "ths"
-                )
+                cached_metadata = stock_board_cache.get_board_metadata(board_code, "ths")
                 if cached_metadata and cached_metadata.get("type"):
                     cached_type = cached_metadata["type"]
                     try:
@@ -703,13 +713,14 @@ def get_board_stocks(
         # explicitly requested, so the response shape stays the same
         # for default requests (mirrors /boards sibling UX contract).
         quote_truncated=quote_truncated,
-        quote_top_n=top_n if (sort_by is not None or sort_order != "desc"
-                              or top_n != 50) else None,
+        quote_top_n=top_n if (sort_by is not None or sort_order != "desc" or top_n != 50) else None,
         quote_sort_by=sort_by,
-        quote_sort_order=sort_order if (sort_by is not None or sort_order != "desc"
-                                        or top_n != 50) else None,
-        quote_total_in_board=total_in_board if (sort_by is not None or sort_order != "desc"
-                                                or top_n != 50) and total_in_board > 0 else None,
+        quote_sort_order=sort_order
+        if (sort_by is not None or sort_order != "desc" or top_n != 50)
+        else None,
+        quote_total_in_board=total_in_board
+        if (sort_by is not None or sort_order != "desc" or top_n != 50) and total_in_board > 0
+        else None,
     )
 
 
@@ -766,9 +777,7 @@ def get_board_quote(
                 "board_code": board_code,
             },
         )
-    quote, origin = manager.get_board_realtime(
-        board_code, source="ths", board_type=board_type
-    )
+    quote, origin = manager.get_board_realtime(board_code, source="ths", board_type=board_type)
     return BoardQuoteResponse(
         board_code=quote.get("board_code") or board_code,
         board_name=quote.get("board_name", ""),
@@ -1031,8 +1040,8 @@ def get_board_history(
 )
 @endpoint_meta(
     summary="板块新闻 (THS news.10jqka.com.cn timeline API, marketId=48). "
-            "游标分页无 14 条上限,带 summary。v1 仅 THS 实现,?source=ths 是默认值"
-            "(其他 source → 422 由 Literal 保证)。",
+    "游标分页无 14 条上限,带 summary。v1 仅 THS 实现,?source=ths 是默认值"
+    "(其他 source → 422 由 Literal 保证)。",
     markets=["csi"],
     capabilities=["BOARD_NEWS"],
     fetcher_method="get_board_news",
@@ -1074,7 +1083,7 @@ def get_board_news_route(
 )
 @endpoint_meta(
     summary="板块炒作周期 (THS F10 #period section). "
-            "v1 仅 THS 实现,?source=ths 是默认值(其他 source → 422 由 Literal 保证)。",
+    "v1 仅 THS 实现,?source=ths 是默认值(其他 source → 422 由 Literal 保证)。",
     markets=["csi"],
     capabilities=["BOARD_SURGES"],
     fetcher_method="get_board_surges",

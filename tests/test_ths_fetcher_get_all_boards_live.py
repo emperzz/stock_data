@@ -221,9 +221,12 @@ class TestParseIndustrySummary:
 
     def test_returns_empty_on_blank_html(self):
         assert self.fetcher._parse_ths_industry_summary_page("") == []
-        assert self.fetcher._parse_ths_industry_summary_page(
-            "<html><body><table></table></body></html>"
-        ) == []
+        assert (
+            self.fetcher._parse_ths_industry_summary_page(
+                "<html><body><table></table></body></html>"
+            )
+            == []
+        )
 
     def test_skips_short_rows(self):
         # Row with <6 cells (missing net_inflow) is dropped
@@ -284,6 +287,7 @@ class TestUniformResponseShape:
 
 # ── Live-network smoke tests ─────────────────────────────────────────
 
+
 @pytest.fixture(scope="module")
 def ths() -> ThsFetcher:
     return ThsFetcher()
@@ -336,9 +340,7 @@ def test_ths_get_all_boards_industry(ths):
         assert r["source"] == "ths"
         # For industry, code == platecode (no separate cid).
         assert r["code"] == r["platecode"]
-        assert r["code"].startswith("881"), (
-            f"industry code {r['code']!r} should start with '881'"
-        )
+        assert r["code"].startswith("881"), f"industry code {r['code']!r} should start with '881'"
 
     # Spot-check: 半导体 should be present
     semi = next((r for r in rows if r["name"] == "半导体"), None)
@@ -367,9 +369,7 @@ def test_ths_get_all_boards_combined(ths):
 @pytest.mark.live_network
 def test_ths_get_all_boards_subtype_filter(ths):
     """subtype filter narrows result to one type's rows."""
-    concept_rows = ths.get_all_boards(
-        board_type="concept", subtype=THS_CONCEPT_SUBTYPE
-    )
+    concept_rows = ths.get_all_boards(board_type="concept", subtype=THS_CONCEPT_SUBTYPE)
     assert all(r["subtype"] == THS_CONCEPT_SUBTYPE for r in concept_rows)
     # Should match the unfiltered concept count (only one subtype)
     unfiltered = ths.get_all_boards(board_type="concept")
@@ -402,9 +402,18 @@ def test_ths_get_all_boards_industry_with_quote_enrichment(ths):
     assert semi is not None, "半导体 should be in the industry board list"
     # Every realtime field should be populated for 半导体 (rank-table
     # always has top-50-by-cap entries).
-    for k in ("change_pct", "net_inflow", "volume", "amount", "up_count",
-              "down_count", "avg_price", "leading_stock",
-              "leading_stock_price", "leading_stock_pct"):
+    for k in (
+        "change_pct",
+        "net_inflow",
+        "volume",
+        "amount",
+        "up_count",
+        "down_count",
+        "avg_price",
+        "leading_stock",
+        "leading_stock_price",
+        "leading_stock_pct",
+    ):
         assert semi[k] is not None, f"半导体.{k} should be populated, got None"
 
 
@@ -426,7 +435,12 @@ def test_ths_get_all_boards_uniform_shape(ths):
     industry_rows = ths.get_all_boards(board_type="industry", include_quote=True)
 
     required_keys = {
-        "code", "name", "type", "subtype", "source", "platecode",
+        "code",
+        "name",
+        "type",
+        "subtype",
+        "source",
+        "platecode",
         *ThsFetcher._REALTIME_BOARD_FIELDS,
     }
     for r in concept_rows:

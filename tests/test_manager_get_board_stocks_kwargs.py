@@ -2,6 +2,7 @@
 
 Commit 396800f: feat(manager): forward sort_by / sort_order / top_n in get_board_stocks.
 """
+
 from unittest.mock import MagicMock, patch
 
 from stock_data.data_provider.manager import DataFetcherManager
@@ -18,13 +19,21 @@ def test_manager_forwards_sort_kwargs_to_ths_fetcher():
         "ths",
     )
 
-    with patch.object(manager, "_with_source", return_value=(
-        fake_ths_fetcher.get_board_stocks.return_value[0],
-        fake_ths_fetcher.name,
-    )) as mock_with_source:
+    with patch.object(
+        manager,
+        "_with_source",
+        return_value=(
+            fake_ths_fetcher.get_board_stocks.return_value[0],
+            fake_ths_fetcher.name,
+        ),
+    ) as mock_with_source:
         manager.get_board_stocks(
-            board_code="885756", source="ths", include_quote=True,
-            sort_by="price", sort_order="asc", top_n=10,
+            board_code="885756",
+            source="ths",
+            include_quote=True,
+            sort_by="price",
+            sort_order="asc",
+            top_n=10,
         )
         call_kwargs = mock_with_source.call_args.kwargs["call"]
         call_kwargs(fake_ths_fetcher)
@@ -49,13 +58,19 @@ def test_manager_forwards_default_sort_kwargs_when_omitted():
     fake_ths_fetcher.name = "ThsFetcher"
     fake_ths_fetcher.get_board_stocks.return_value = ([], "ths")
 
-    with patch.object(manager, "_with_source", return_value=(
-        fake_ths_fetcher.get_board_stocks.return_value[0],
-        fake_ths_fetcher.name,
-    )) as mock_with_source:
+    with patch.object(
+        manager,
+        "_with_source",
+        return_value=(
+            fake_ths_fetcher.get_board_stocks.return_value[0],
+            fake_ths_fetcher.name,
+        ),
+    ) as mock_with_source:
         # Caller omits sort_by / sort_order / top_n — defaults should still propagate.
         manager.get_board_stocks(
-            board_code="885756", source="ths", include_quote=True,
+            board_code="885756",
+            source="ths",
+            include_quote=True,
         )
         call_kwargs = mock_with_source.call_args.kwargs["call"]
         call_kwargs(fake_ths_fetcher)

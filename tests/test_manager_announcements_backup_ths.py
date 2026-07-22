@@ -98,7 +98,6 @@ def test_get_announcements_empty_chain_returns_empty_list_not_misleading_error()
     returns ``([], "")`` so the route can serve a normal empty list to
     clients.
     """
-    from stock_data.data_provider.base import DataFetchError
 
     mgr = _make_manager()
     fetchers = mgr._filter_by_capability("csi", DataCapability.ANNOUNCEMENT)
@@ -106,9 +105,7 @@ def test_get_announcements_empty_chain_returns_empty_list_not_misleading_error()
         pytest.skip("No ANNOUNCEMENT-capable fetcher registered")
 
     # Patch every candidate to return [] — no exceptions, just empty data.
-    patches = [
-        patch.object(f, "get_announcements", return_value=[]) for f in fetchers
-    ]
+    patches = [patch.object(f, "get_announcements", return_value=[]) for f in fetchers]
     from contextlib import ExitStack
 
     with ExitStack() as stack:
@@ -117,6 +114,4 @@ def test_get_announcements_empty_chain_returns_empty_list_not_misleading_error()
         # Should NOT raise. Should return ([], "") so route serves empty list.
         items, source = mgr.get_announcements("300740", page_size=10)
     assert items == []
-    assert source == "", (
-        f"empty-chain source should be '' (no fetcher succeeded), got {source!r}"
-    )
+    assert source == "", f"empty-chain source should be '' (no fetcher succeeded), got {source!r}"

@@ -25,6 +25,7 @@ Methods:
   :func:`stock_data.data_provider.utils.text.strip_em_tags` and is
   shared with :class:`ThsFetcher`.
 """
+
 from __future__ import annotations
 
 import json
@@ -279,7 +280,9 @@ class NewsMixin:
             "pageSize": limit,
         }
         payload = cffi_json_get(
-            self._session, URLS.STOCK_NEWS, params=params,
+            self._session,
+            URLS.STOCK_NEWS,
+            params=params,
             headers={"Referer": "https://quote.eastmoney.com/"},
             error_label=f"get_stock_news({code})",
         )
@@ -298,13 +301,15 @@ class NewsMixin:
             try:
                 url = rec.get("Art_Url") or rec.get("Art_OriginUrl") or ""
                 source_domain = source_domain_from_url(url)
-                out.append({
-                    "title": rec.get("Art_Title", ""),
-                    "url": url,
-                    "source_domain": source_domain,
-                    "publish_date": (rec.get("Art_ShowTime") or "")[:10],
-                    "media_name": rec.get("Np_dst", "") or rec.get("Author", "") or "",
-                })
+                out.append(
+                    {
+                        "title": rec.get("Art_Title", ""),
+                        "url": url,
+                        "source_domain": source_domain,
+                        "publish_date": (rec.get("Art_ShowTime") or "")[:10],
+                        "media_name": rec.get("Np_dst", "") or rec.get("Author", "") or "",
+                    }
+                )
             except (KeyError, TypeError) as e:
                 logger.warning(f"[EastMoneyFetcher] skipping malformed news row: {e}")
                 continue
@@ -314,9 +319,7 @@ class NewsMixin:
     # Announcements (np-anotice-stock)
     # ------------------------------------------------------------------
 
-    def get_announcements(
-        self, code: str, page_size: int = 30, page_index: int = 1
-    ) -> list[dict]:
+    def get_announcements(self, code: str, page_size: int = 30, page_index: int = 1) -> list[dict]:
         """Get corporate announcements via np-anotice-stock.
 
         Mirrors CninfoFetcher.get_announcements
@@ -354,7 +357,9 @@ class NewsMixin:
             "s_node": 0,
         }
         payload = cffi_json_get(
-            self._session, URLS.STOCK_ANNOUNCEMENTS, params=params,
+            self._session,
+            URLS.STOCK_ANNOUNCEMENTS,
+            params=params,
             headers={"Referer": "https://data.eastmoney.com/"},
             error_label=f"get_announcements({code})",
         )
@@ -371,16 +376,16 @@ class NewsMixin:
                 if codes and isinstance(codes[0], dict):
                     ann_type = codes[0].get("ann_type", "") or ""
                 url = f"https://data.eastmoney.com/notices/detail/{code}/{art_code}.html"
-                out.append({
-                    "title": rec.get("title", ""),
-                    "type": ann_type,
-                    "date": date_str,
-                    "url": url,
-                })
-            except (KeyError, TypeError) as e:
-                logger.warning(
-                    f"[EastMoneyFetcher] skipping malformed announcement row: {e}"
+                out.append(
+                    {
+                        "title": rec.get("title", ""),
+                        "type": ann_type,
+                        "date": date_str,
+                        "url": url,
+                    }
                 )
+            except (KeyError, TypeError) as e:
+                logger.warning(f"[EastMoneyFetcher] skipping malformed announcement row: {e}")
                 continue
         return out
 
@@ -475,7 +480,10 @@ class NewsMixin:
             "Referer": "https://kuaixun.eastmoney.com/",
         }
         payload = cffi_json_get(
-            self._session, URLS.FLASH_NEWS, params=params, headers=headers,
+            self._session,
+            URLS.FLASH_NEWS,
+            params=params,
+            headers=headers,
             error_label="fetch_flash_news",
         )
 

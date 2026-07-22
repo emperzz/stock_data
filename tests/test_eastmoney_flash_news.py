@@ -3,6 +3,7 @@ Unit tests for EastMoneyFetcher.fetch_flash_news().
 
 覆盖字段映射、limit 边界、上游错误码、空响应、复用 _session。
 """
+
 import json
 from unittest.mock import MagicMock, patch
 
@@ -32,9 +33,7 @@ class TestFetchFlashNewsHappyPath:
 
     def test_returns_normalized_dicts(self):
         fixture = _load_fixture()
-        with patch.object(
-            self.fetcher._session, "get", return_value=_mock_response(fixture)
-        ):
+        with patch.object(self.fetcher._session, "get", return_value=_mock_response(fixture)):
             results = self.fetcher.fetch_flash_news(limit=50)
 
         assert len(results) == 2
@@ -97,32 +96,30 @@ class TestFetchFlashNewsErrors:
 
     def test_non_zero_code_raises(self):
         bad = {"code": -1, "message": "rate limit", "data": None}
-        with patch.object(
-            self.fetcher._session, "get", return_value=_mock_response(bad)
-        ), pytest.raises(DataFetchError, match="code=-1"):
+        with (
+            patch.object(self.fetcher._session, "get", return_value=_mock_response(bad)),
+            pytest.raises(DataFetchError, match="code=-1"),
+        ):
             self.fetcher.fetch_flash_news(limit=10)
 
     def test_http_error_raises(self):
         bad = _mock_response({}, status=500)
-        with patch.object(
-            self.fetcher._session, "get", return_value=bad
-        ), pytest.raises(DataFetchError, match="HTTP 500"):
+        with (
+            patch.object(self.fetcher._session, "get", return_value=bad),
+            pytest.raises(DataFetchError, match="HTTP 500"),
+        ):
             self.fetcher.fetch_flash_news(limit=10)
 
     def test_empty_fast_news_list_returns_empty(self):
         """fastNewsList 缺失或为 null → 返回 []，不抛错。"""
         empty = {"code": 0, "message": "ok", "data": {"size": 0, "fastNewsList": None}}
-        with patch.object(
-            self.fetcher._session, "get", return_value=_mock_response(empty)
-        ):
+        with patch.object(self.fetcher._session, "get", return_value=_mock_response(empty)):
             results = self.fetcher.fetch_flash_news(limit=10)
         assert results == []
 
     def test_zero_items_in_list_returns_empty(self):
         zero = {"code": 0, "message": "ok", "data": {"size": 0, "fastNewsList": []}}
-        with patch.object(
-            self.fetcher._session, "get", return_value=_mock_response(zero)
-        ):
+        with patch.object(self.fetcher._session, "get", return_value=_mock_response(zero)):
             results = self.fetcher.fetch_flash_news(limit=10)
         assert results == []
 
@@ -161,9 +158,7 @@ class TestFetchFlashNewsErrors:
                 ],
             },
         }
-        with patch.object(
-            self.fetcher._session, "get", return_value=_mock_response(fixture)
-        ):
+        with patch.object(self.fetcher._session, "get", return_value=_mock_response(fixture)):
             results = self.fetcher.fetch_flash_news(limit=10)
         # 只有 1 条正常数据,坏数据被跳过
         assert len(results) == 1

@@ -261,9 +261,7 @@ class TestGetKlineDataStockUnchanged:
 
             args, kwargs = fetcher._api.query.call_args
             api_name = args[0]
-            assert api_name == "daily", (
-                f"stock branch must use 'daily' API; got {api_name!r}"
-            )
+            assert api_name == "daily", f"stock branch must use 'daily' API; got {api_name!r}"
             assert kwargs["ts_code"] == "600519.SH"
 
         assert df is not None and not df.empty

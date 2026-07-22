@@ -6,9 +6,8 @@ Tests verify code-converter delegation, basic metadata, and key edge
 cases without hitting upstream APIs.
 """
 
-from unittest.mock import patch
-
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 
@@ -19,10 +18,12 @@ from stock_data.data_provider.utils import code_converter as cc
 # AkshareFetcher
 # ====================================================================
 
+
 class TestAkshareFetcher:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.fetchers.akshare import AkshareFetcher
+
         return AkshareFetcher()
 
     def test_name_and_priority(self, fetcher):
@@ -38,6 +39,7 @@ class TestAkshareFetcher:
         environment-independent.
         """
         from unittest.mock import MagicMock
+
         with patch("importlib.util.find_spec", return_value=MagicMock()) as m:
             assert fetcher.is_available() is True
             m.assert_called_with("akshare")
@@ -54,9 +56,11 @@ class TestAkshareFetcher:
     def test_capabilities(self, fetcher):
         caps = [
             DataCapability.STOCK_KLINE,
-            DataCapability.STOCK_REALTIME_QUOTE, DataCapability.STOCK_LIST,
+            DataCapability.STOCK_REALTIME_QUOTE,
+            DataCapability.STOCK_LIST,
             DataCapability.TRADE_CALENDAR,
-            DataCapability.INDEX_REALTIME_QUOTE, DataCapability.INDEX_KLINE,
+            DataCapability.INDEX_REALTIME_QUOTE,
+            DataCapability.INDEX_KLINE,
             DataCapability.STOCK_ZT_POOL,
         ]
         for c in caps:
@@ -100,10 +104,12 @@ class TestAkshareFetcher:
 # BaostockFetcher
 # ====================================================================
 
+
 class TestBaostockFetcher:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
+
         return BaostockFetcher()
 
     def test_name_and_priority(self, fetcher):
@@ -131,6 +137,7 @@ class TestBaostockFetcher:
 
     def test_convert_code_non_csi_index_raises(self, fetcher):
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError, match="Baostock does not support"):
             fetcher._convert_code("SPX")
 
@@ -152,10 +159,12 @@ class TestBaostockFetcher:
 # YfinanceFetcher
 # ====================================================================
 
+
 class TestYfinanceFetcher:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.fetchers.yfinance_fetcher import YfinanceFetcher
+
         return YfinanceFetcher()
 
     def test_name_and_priority(self, fetcher):
@@ -169,7 +178,8 @@ class TestYfinanceFetcher:
     def test_capabilities(self, fetcher):
         caps = [
             DataCapability.STOCK_KLINE,
-            DataCapability.STOCK_REALTIME_QUOTE, DataCapability.INDEX_KLINE,
+            DataCapability.STOCK_REALTIME_QUOTE,
+            DataCapability.INDEX_KLINE,
             DataCapability.INDEX_REALTIME_QUOTE,
         ]
         for c in caps:
@@ -204,10 +214,12 @@ class TestYfinanceFetcher:
 # ZhituFetcher
 # ====================================================================
 
+
 class TestZhituFetcher:
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
+
         return ZhituFetcher()
 
     def test_name_and_priority(self, fetcher):
@@ -240,26 +252,37 @@ class TestZhituFetcher:
 # TushareFetcher
 # ====================================================================
 
+
 class TestTushareFetcher:
     @pytest.fixture(autouse=True)
     def _isolate_cls_state(self):
         from stock_data.data_provider.fetchers.tushare_fetcher import TushareFetcher
-        saved = (TushareFetcher._init_attempted, TushareFetcher._init_ok,
-                 TushareFetcher._cls_token, TushareFetcher._init_error,
-                 TushareFetcher._api)
+
+        saved = (
+            TushareFetcher._init_attempted,
+            TushareFetcher._init_ok,
+            TushareFetcher._cls_token,
+            TushareFetcher._init_error,
+            TushareFetcher._api,
+        )
         TushareFetcher._init_attempted = False
         TushareFetcher._init_ok = False
         TushareFetcher._cls_token = ""
         TushareFetcher._init_error = None
         TushareFetcher._api = None
         yield
-        (TushareFetcher._init_attempted, TushareFetcher._init_ok,
-         TushareFetcher._cls_token, TushareFetcher._init_error,
-         TushareFetcher._api) = saved
+        (
+            TushareFetcher._init_attempted,
+            TushareFetcher._init_ok,
+            TushareFetcher._cls_token,
+            TushareFetcher._init_error,
+            TushareFetcher._api,
+        ) = saved
 
     @pytest.fixture
     def fetcher(self):
         from stock_data.data_provider.fetchers.tushare_fetcher import TushareFetcher
+
         return TushareFetcher()
 
     def test_name_and_priority(self, fetcher):
@@ -271,7 +294,8 @@ class TestTushareFetcher:
 
     def test_capabilities(self, fetcher):
         caps = [
-            DataCapability.STOCK_KLINE, DataCapability.STOCK_REALTIME_QUOTE,
+            DataCapability.STOCK_KLINE,
+            DataCapability.STOCK_REALTIME_QUOTE,
             DataCapability.INDEX_KLINE,
         ]
         for c in caps:
@@ -284,6 +308,7 @@ class TestTushareFetcher:
     @patch("stock_data.data_provider.fetchers.tushare_fetcher.TushareFetcher._ensure_api")
     def test_is_available_without_token(self, mock_ensure, fetcher):
         from stock_data.data_provider.fetchers.tushare_fetcher import TushareFetcher
+
         TushareFetcher._init_attempted = True
         TushareFetcher._init_ok = False
         TushareFetcher._api = None
@@ -297,19 +322,29 @@ class TestTushareFetcher:
 # MyquantFetcher
 # ====================================================================
 
+
 class TestMyquantFetcher:
     @pytest.fixture(autouse=True)
     def _isolate_cls_state(self):
         from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
-        saved = (MyquantFetcher._init_attempted, MyquantFetcher._init_ok,
-                 MyquantFetcher._cls_token, MyquantFetcher._init_error)
+
+        saved = (
+            MyquantFetcher._init_attempted,
+            MyquantFetcher._init_ok,
+            MyquantFetcher._cls_token,
+            MyquantFetcher._init_error,
+        )
         MyquantFetcher._init_attempted = False
         MyquantFetcher._init_ok = False
         MyquantFetcher._cls_token = ""
         MyquantFetcher._init_error = None
         yield
-        (MyquantFetcher._init_attempted, MyquantFetcher._init_ok,
-         MyquantFetcher._cls_token, MyquantFetcher._init_error) = saved
+        (
+            MyquantFetcher._init_attempted,
+            MyquantFetcher._init_ok,
+            MyquantFetcher._cls_token,
+            MyquantFetcher._init_error,
+        ) = saved
 
     @pytest.fixture
     def fetcher(self, monkeypatch):
@@ -330,6 +365,7 @@ class TestMyquantFetcher:
         pytest.importorskip("gm")
         monkeypatch.setattr("gm.api.set_token", lambda *_a, **_k: None, raising=False)
         from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
+
         return MyquantFetcher()
 
     @pytest.fixture
@@ -337,6 +373,7 @@ class TestMyquantFetcher:
         """Build a fetcher without a token."""
         monkeypatch.delenv("MYQUANT_TOKEN", raising=False)
         from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
+
         return MyquantFetcher()
 
     def test_name_and_priority(self, fetcher):
@@ -351,14 +388,17 @@ class TestMyquantFetcher:
     def test_capabilities(self, fetcher):
         caps = [
             DataCapability.STOCK_KLINE,
-            DataCapability.STOCK_REALTIME_QUOTE, DataCapability.STOCK_LIST,
-            DataCapability.TRADE_CALENDAR, DataCapability.INDEX_KLINE,
+            DataCapability.STOCK_REALTIME_QUOTE,
+            DataCapability.STOCK_LIST,
+            DataCapability.TRADE_CALENDAR,
+            DataCapability.INDEX_KLINE,
         ]
         for c in caps:
             assert c in fetcher.supported_data_types, f"missing {c}"
 
     def test_is_available_with_token(self, fetcher):
         from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
+
         # is_available() must trigger _ensure_initialized() — once it
         # returns True, _init_ok stays True so subsequent gm.api calls
         # have a configured token.
@@ -367,6 +407,7 @@ class TestMyquantFetcher:
 
     def test_is_available_without_token(self, fetcher_no_token):
         from stock_data.data_provider.fetchers.myquant_fetcher import MyquantFetcher
+
         # Without MYQUANT_TOKEN, is_available() returns False (and
         # _init_ok stays False so the fetcher is not registered).
         assert fetcher_no_token.is_available() is False
@@ -392,6 +433,7 @@ class TestMyquantFetcher:
         sys.modules.pop("stock_data.data_provider.fetchers.myquant_fetcher", None)
         importlib.import_module("stock_data.data_provider.fetchers.myquant_fetcher")
         import os
+
         assert os.environ.get("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION") == "python"
 
     def test_map_adjust(self, fetcher):
@@ -400,6 +442,7 @@ class TestMyquantFetcher:
             ADJUST_POST,
             ADJUST_PREV,
         )
+
         assert fetcher._map_adjust("") == ADJUST_NONE
         assert fetcher._map_adjust(None) == ADJUST_NONE
         assert fetcher._map_adjust("qfq") == ADJUST_PREV
@@ -407,29 +450,35 @@ class TestMyquantFetcher:
 
     def test_convert_code_sh(self, fetcher):
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         assert fetcher._convert_code("600519") == to_myquant_format("600519")
 
     def test_convert_code_sz(self, fetcher):
         from stock_data.data_provider.utils.code_converter import to_myquant_format
+
         assert fetcher._convert_code("000002") == to_myquant_format("000002")
 
     def test_convert_code_hk_raises(self, fetcher):
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError, match="Myquant does not support"):
             fetcher._convert_code("HK00700")
 
     def test_fetch_unsupported_weekly_raises(self, fetcher):
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError, match="does not support frequency"):
             fetcher._fetch_raw_data("600519", "2024-01-01", "2024-01-31", frequency="w")
 
     def test_fetch_unsupported_monthly_raises(self, fetcher):
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError, match="does not support frequency"):
             fetcher._fetch_raw_data("600519", "2024-01-01", "2024-01-31", frequency="m")
 
     def test_fetch_unsupported_1min_raises(self, fetcher):
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError, match="does not support frequency"):
             fetcher._fetch_raw_data("600519", "2024-01-01", "2024-01-31", frequency="1")
 
@@ -437,18 +486,21 @@ class TestMyquantFetcher:
         """myquant history returns columns: open, close, high, low, amount, volume, bob, eob.
         Normalization should map 'bob' → 'date' and produce STANDARD_COLUMNS."""
         import pandas as pd
-        raw = pd.DataFrame({
-            "symbol": ["SHSE.600519"] * 3,
-            "frequency": ["1d"] * 3,
-            "open": [1700.0, 1710.0, 1720.0],
-            "close": [1710.0, 1720.0, 1730.0],
-            "high": [1715.0, 1725.0, 1735.0],
-            "low": [1695.0, 1705.0, 1715.0],
-            "amount": [1e9, 1.1e9, 1.2e9],
-            "volume": [1e6, 1.1e6, 1.2e6],
-            "bob": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
-            "eob": pd.to_datetime(["2024-01-01 15:00", "2024-01-02 15:00", "2024-01-03 15:00"]),
-        })
+
+        raw = pd.DataFrame(
+            {
+                "symbol": ["SHSE.600519"] * 3,
+                "frequency": ["1d"] * 3,
+                "open": [1700.0, 1710.0, 1720.0],
+                "close": [1710.0, 1720.0, 1730.0],
+                "high": [1715.0, 1725.0, 1735.0],
+                "low": [1695.0, 1705.0, 1715.0],
+                "amount": [1e9, 1.1e9, 1.2e9],
+                "volume": [1e6, 1.1e6, 1.2e6],
+                "bob": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+                "eob": pd.to_datetime(["2024-01-01 15:00", "2024-01-02 15:00", "2024-01-03 15:00"]),
+            }
+        )
         normalized = fetcher._normalize_data(raw, "600519")
         # Required STANDARD_COLUMNS
         for col in ["date", "open", "high", "low", "close", "volume", "amount"]:
@@ -473,16 +525,19 @@ class TestMyquantFetcher:
         date before computing pct_chg so the result is correct.
         """
         import pandas as pd
-        raw = pd.DataFrame({
-            # Note: deliberately out of order
-            "bob": pd.to_datetime(["2024-01-03", "2024-01-01", "2024-01-02"]),
-            "open": [1720.0, 1700.0, 1710.0],
-            "close": [1730.0, 1710.0, 1720.0],
-            "high": [1735.0, 1715.0, 1725.0],
-            "low": [1715.0, 1695.0, 1705.0],
-            "amount": [1.2e9, 1.0e9, 1.1e9],
-            "volume": [1.2e6, 1.0e6, 1.1e6],
-        })
+
+        raw = pd.DataFrame(
+            {
+                # Note: deliberately out of order
+                "bob": pd.to_datetime(["2024-01-03", "2024-01-01", "2024-01-02"]),
+                "open": [1720.0, 1700.0, 1710.0],
+                "close": [1730.0, 1710.0, 1720.0],
+                "high": [1735.0, 1715.0, 1725.0],
+                "low": [1715.0, 1695.0, 1705.0],
+                "amount": [1.2e9, 1.0e9, 1.1e9],
+                "volume": [1.2e6, 1.0e6, 1.1e6],
+            }
+        )
         normalized = fetcher._normalize_data(raw, "600519")
         # After sort by date, the rows are [1710, 1720, 1730] and pct_chg
         # is derived as [(NaN), (1720-1710)/1710, (1730-1720)/1720].
@@ -538,16 +593,16 @@ class TestMyquantFetcher:
         import pandas as pd
 
         def fake_calendar(*_args, **_kwargs):
-            return pd.DataFrame({
-                "date": ["2024-01-01", "2024-01-02", "2024-01-03"],
-                "trade_date": ["", "2024-01-02", "2024-01-03"],
-                "pre_trade_date": ["", "2023-12-29", "2024-01-02"],
-                "next_trade_date": ["2024-01-02", "2024-01-03", "2024-01-04"],
-            })
+            return pd.DataFrame(
+                {
+                    "date": ["2024-01-01", "2024-01-02", "2024-01-03"],
+                    "trade_date": ["", "2024-01-02", "2024-01-03"],
+                    "pre_trade_date": ["", "2023-12-29", "2024-01-02"],
+                    "next_trade_date": ["2024-01-02", "2024-01-03", "2024-01-04"],
+                }
+            )
 
-        monkeypatch.setattr(
-            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
-        )
+        monkeypatch.setattr("gm.api.get_trading_dates_by_year", fake_calendar, raising=False)
         dates = fetcher.get_trade_calendar()
         assert dates == ["2024-01-02", "2024-01-03"]  # Empty trade_date filtered, sorted asc
 
@@ -563,11 +618,10 @@ class TestMyquantFetcher:
             captured["args"] = args
             captured["kwargs"] = _kwargs
             import pandas as pd
+
             return pd.DataFrame({"trade_date": ["2026-01-02"]})
 
-        monkeypatch.setattr(
-            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
-        )
+        monkeypatch.setattr("gm.api.get_trading_dates_by_year", fake_calendar, raising=False)
         fetcher.get_trade_calendar()
         assert captured["kwargs"].get("start_year") == 1990
         assert captured["kwargs"].get("end_year") == date.today().year
@@ -582,11 +636,10 @@ class TestMyquantFetcher:
         def fake_calendar(*args, **_kwargs):
             captured["kwargs"] = _kwargs
             import pandas as pd
+
             return pd.DataFrame({"trade_date": ["2005-01-03"]})
 
-        monkeypatch.setattr(
-            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
-        )
+        monkeypatch.setattr("gm.api.get_trading_dates_by_year", fake_calendar, raising=False)
         fetcher.get_trade_calendar()
         assert captured["kwargs"].get("start_year") == 2005
 
@@ -600,11 +653,10 @@ class TestMyquantFetcher:
         def fake_calendar(*args, **_kwargs):
             captured["kwargs"] = _kwargs
             import pandas as pd
+
             return pd.DataFrame({"trade_date": ["2026-01-02"]})
 
-        monkeypatch.setattr(
-            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
-        )
+        monkeypatch.setattr("gm.api.get_trading_dates_by_year", fake_calendar, raising=False)
         fetcher.get_trade_calendar()
         assert captured["kwargs"].get("end_year") == 2030
 
@@ -619,11 +671,10 @@ class TestMyquantFetcher:
         def fake_calendar(*args, **_kwargs):
             captured["kwargs"] = _kwargs
             import pandas as pd
+
             return pd.DataFrame({"trade_date": ["2015-01-05"]})
 
-        monkeypatch.setattr(
-            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
-        )
+        monkeypatch.setattr("gm.api.get_trading_dates_by_year", fake_calendar, raising=False)
         fetcher.get_trade_calendar()
         assert captured["kwargs"].get("start_year") == 2015
 
@@ -637,11 +688,10 @@ class TestMyquantFetcher:
         def fake_calendar(*args, **_kwargs):
             captured["kwargs"] = _kwargs
             import pandas as pd
+
             return pd.DataFrame({"trade_date": ["2008-01-02"]})
 
-        monkeypatch.setattr(
-            "gm.api.get_trading_dates_by_year", fake_calendar, raising=False
-        )
+        monkeypatch.setattr("gm.api.get_trading_dates_by_year", fake_calendar, raising=False)
         fetcher.get_trade_calendar()
         assert captured["kwargs"].get("start_year") == 2008
 
@@ -657,24 +707,26 @@ class TestMyquantFetcher:
             return bytes(s, "gbk").decode("latin-1")
 
         def fake_get_symbols(*_args, **_kwargs):
-            return pd.DataFrame({
-                # 600519 (Shanghai main, passes filter)
-                # 002415 (Shenzhen main, starts with "002" — passes filter)
-                # 000001 (Shenzhen, starts with "000" — fails filter; 000xxx
-                #   is reserved for Shanghai indices in A_SHARE_STOCK_PREFIXES
-                #   and defensively excluded even when returned under SZSE)
-                "symbol": ["SHSE.600519", "SZSE.002415", "SZSE.000001"],
-                # gm 3.x returns these double-encoded; the fetcher's
-                # _decode_gm_name helper must reverse the encoding.
-                "sec_name": [_g("贵州茅台"), _g("海康威视"), _g("平安银行")],
-                "is_st": [False, False, False],
-                "is_suspended": [False, False, False],
-                "upper_limit": [1872.10, 35.00, 11.55],
-                "lower_limit": [1531.72, 28.50, 9.45],
-                "turn_rate": [0.5, 0.3, 0.4],
-                "adj_factor": [1.0, 1.0, 1.0],
-                "pre_close": [1701.91, 30.00, 10.50],
-            })
+            return pd.DataFrame(
+                {
+                    # 600519 (Shanghai main, passes filter)
+                    # 002415 (Shenzhen main, starts with "002" — passes filter)
+                    # 000001 (Shenzhen, starts with "000" — fails filter; 000xxx
+                    #   is reserved for Shanghai indices in A_SHARE_STOCK_PREFIXES
+                    #   and defensively excluded even when returned under SZSE)
+                    "symbol": ["SHSE.600519", "SZSE.002415", "SZSE.000001"],
+                    # gm 3.x returns these double-encoded; the fetcher's
+                    # _decode_gm_name helper must reverse the encoding.
+                    "sec_name": [_g("贵州茅台"), _g("海康威视"), _g("平安银行")],
+                    "is_st": [False, False, False],
+                    "is_suspended": [False, False, False],
+                    "upper_limit": [1872.10, 35.00, 11.55],
+                    "lower_limit": [1531.72, 28.50, 9.45],
+                    "turn_rate": [0.5, 0.3, 0.4],
+                    "adj_factor": [1.0, 1.0, 1.0],
+                    "pre_close": [1701.91, 30.00, 10.50],
+                }
+            )
 
         monkeypatch.setattr("gm.api.get_symbols", fake_get_symbols, raising=False)
         stocks = fetcher.get_all_stocks("csi")
@@ -711,16 +763,18 @@ class TestMyquantFetcher:
         import pandas as pd
 
         def fake_get_symbols(*_args, **_kwargs):
-            return pd.DataFrame({
-                "symbol": [
-                    "SHSE.600519",   # pass — Shanghai main
-                    "SHSE.510500",   # drop — ETF (51 prefix)
-                    "SHSE.510880",   # drop — ETF
-                    "SHSE.000300",   # drop — index (000xxx reserved for indices)
-                    "SHSE.600000",   # pass — Shanghai main
-                ],
-                "sec_name": ["贵州茅台", "ETF1", "ETF2", "沪深300", "浦发银行"],
-            })
+            return pd.DataFrame(
+                {
+                    "symbol": [
+                        "SHSE.600519",  # pass — Shanghai main
+                        "SHSE.510500",  # drop — ETF (51 prefix)
+                        "SHSE.510880",  # drop — ETF
+                        "SHSE.000300",  # drop — index (000xxx reserved for indices)
+                        "SHSE.600000",  # pass — Shanghai main
+                    ],
+                    "sec_name": ["贵州茅台", "ETF1", "ETF2", "沪深300", "浦发银行"],
+                }
+            )
 
         monkeypatch.setattr("gm.api.get_symbols", fake_get_symbols, raising=False)
         stocks = fetcher.get_all_stocks("csi")
@@ -740,6 +794,7 @@ class TestMyquantFetcher:
 
     def test_intraday_data_unsupported_1min_raises(self, fetcher):
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError, match="intraday does not support period"):
             fetcher.get_intraday_data("600519", period="1")
 
@@ -749,26 +804,32 @@ class TestMyquantFetcher:
         import pandas as pd
 
         def fake_history(*_args, **_kwargs):
-            return pd.DataFrame({
-                "symbol": ["SHSE.600519"] * 3,
-                "frequency": ["300s"] * 3,
-                "open": [1700.0, 1705.0, 1710.0],
-                "close": [1705.0, 1710.0, 1715.0],
-                "high": [1708.0, 1712.0, 1717.0],
-                "low": [1698.0, 1702.0, 1708.0],
-                "amount": [1e8, 1.1e8, 1.2e8],
-                "volume": [1e5, 1.1e5, 1.2e5],
-                "bob": pd.to_datetime([
-                    "2024-01-15 09:35:00",
-                    "2024-01-15 09:40:00",
-                    "2024-01-15 09:45:00",
-                ]),
-                "eob": pd.to_datetime([
-                    "2024-01-15 09:40:00",
-                    "2024-01-15 09:45:00",
-                    "2024-01-15 09:50:00",
-                ]),
-            })
+            return pd.DataFrame(
+                {
+                    "symbol": ["SHSE.600519"] * 3,
+                    "frequency": ["300s"] * 3,
+                    "open": [1700.0, 1705.0, 1710.0],
+                    "close": [1705.0, 1710.0, 1715.0],
+                    "high": [1708.0, 1712.0, 1717.0],
+                    "low": [1698.0, 1702.0, 1708.0],
+                    "amount": [1e8, 1.1e8, 1.2e8],
+                    "volume": [1e5, 1.1e5, 1.2e5],
+                    "bob": pd.to_datetime(
+                        [
+                            "2024-01-15 09:35:00",
+                            "2024-01-15 09:40:00",
+                            "2024-01-15 09:45:00",
+                        ]
+                    ),
+                    "eob": pd.to_datetime(
+                        [
+                            "2024-01-15 09:40:00",
+                            "2024-01-15 09:45:00",
+                            "2024-01-15 09:50:00",
+                        ]
+                    ),
+                }
+            )
 
         monkeypatch.setattr("gm.api.history", fake_history, raising=False)
         df = fetcher.get_intraday_data("600519", period="5")
@@ -807,27 +868,27 @@ class TestMyquantFetcher:
         from stock_data.data_provider.base import DataFetchError
 
         with pytest.raises(DataFetchError, match="not available"):
-            fetcher_no_token.get_index_historical(
-                "000300", "2024-01-01", "2024-01-31", "d"
-            )
+            fetcher_no_token.get_index_historical("000300", "2024-01-01", "2024-01-31", "d")
 
     def test_index_historical_uses_myquant(self, fetcher, monkeypatch):
         pytest.importorskip("gm")
         import pandas as pd
 
         def fake_history(*_args, **_kwargs):
-            return pd.DataFrame({
-                "symbol": ["SHSE.000300"] * 2,
-                "frequency": ["1d"] * 2,
-                "open": [3500.0, 3510.0],
-                "close": [3510.0, 3520.0],
-                "high": [3520.0, 3530.0],
-                "low": [3490.0, 3500.0],
-                "amount": [1e11, 1.1e11],
-                "volume": [1e8, 1.1e8],
-                "bob": pd.to_datetime(["2024-01-01", "2024-01-02"]),
-                "eob": pd.to_datetime(["2024-01-01 15:00", "2024-01-02 15:00"]),
-            })
+            return pd.DataFrame(
+                {
+                    "symbol": ["SHSE.000300"] * 2,
+                    "frequency": ["1d"] * 2,
+                    "open": [3500.0, 3510.0],
+                    "close": [3510.0, 3520.0],
+                    "high": [3520.0, 3530.0],
+                    "low": [3490.0, 3500.0],
+                    "amount": [1e11, 1.1e11],
+                    "volume": [1e8, 1.1e8],
+                    "bob": pd.to_datetime(["2024-01-01", "2024-01-02"]),
+                    "eob": pd.to_datetime(["2024-01-01 15:00", "2024-01-02 15:00"]),
+                }
+            )
 
         monkeypatch.setattr("gm.api.history", fake_history, raising=False)
         df = fetcher.get_index_historical("000300", "2024-01-01", "2024-01-31", "d")
@@ -837,15 +898,18 @@ class TestMyquantFetcher:
 
     def test_index_historical_minute_raises(self, fetcher):
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError, match="index does not support frequency"):
             fetcher.get_index_historical("000300", "2024-01-01", "2024-01-31", "5")
 
     def test_index_intraday_unsupported_1min_raises(self, fetcher):
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError, match="index intraday does not support"):
             fetcher.get_index_intraday("000300", period="1")
 
     def test_index_intraday_non_csi_raises(self, fetcher):
         from stock_data.data_provider.base import DataFetchError
+
         with pytest.raises(DataFetchError, match="Myquant does not support"):
             fetcher.get_index_intraday("HSI", period="5")

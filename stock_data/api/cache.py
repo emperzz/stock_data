@@ -45,8 +45,10 @@ _TTL_NEWS_SEARCH = int(os.getenv("CACHE_TTL_NEWS_SEARCH", "300"))
 _TTL_NEWS_CONTENT = int(os.getenv("CACHE_TTL_NEWS_CONTENT", "3600"))
 _TTL_NEWS_FLASH = int(os.getenv("CACHE_TTL_NEWS_FLASH", "60"))  # 7x24 快讯 (60s)
 _TTL_CLS_FEED = int(os.getenv("CACHE_TTL_CLS_FEED", "3600"))  # CLS 早报/复盘 (1h, immutable)
-_TTL_BOARD_NEWS = int(os.getenv("CACHE_TTL_BOARD_NEWS", "1800"))    # 板块新闻 (30min, 半实时)
-_TTL_BOARD_SURGES = int(os.getenv("CACHE_TTL_BOARD_SURGES", "3600"))  # 板块炒作周期 (1h, 月度粒度变动慢)
+_TTL_BOARD_NEWS = int(os.getenv("CACHE_TTL_BOARD_NEWS", "1800"))  # 板块新闻 (30min, 半实时)
+_TTL_BOARD_SURGES = int(
+    os.getenv("CACHE_TTL_BOARD_SURGES", "3600")
+)  # 板块炒作周期 (1h, 月度粒度变动慢)
 
 # Cache instances
 _dragontiger_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_DRAGON_TIGER)

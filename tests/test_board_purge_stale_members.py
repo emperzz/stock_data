@@ -10,6 +10,7 @@ The fix is a DELETE-by-(board_code, source) immediately before the
 INSERT OR REPLACE, inside the same ``with conn:`` transaction so the
 two operations are atomic. All four tests here exercise that path.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -89,17 +90,20 @@ def test_update_purge_does_not_touch_other_boards(fresh_db):
     _seed_stock_board("BK1002", "新能源")
 
     board_mod.update_cached_board_stocks(
-        "BK1001", "ths",
+        "BK1001",
+        "ths",
         [{"stock_code": "600519", "stock_name": "A"}],
     )
     board_mod.update_cached_board_stocks(
-        "BK1002", "ths",
+        "BK1002",
+        "ths",
         [{"stock_code": "000858", "stock_name": "B"}],
     )
 
     # Refresh BK1001 — BK1002's row must survive.
     board_mod.update_cached_board_stocks(
-        "BK1001", "ths",
+        "BK1001",
+        "ths",
         [{"stock_code": "600000", "stock_name": "C"}],
     )
 
@@ -119,17 +123,20 @@ def test_update_purge_does_not_touch_other_sources(fresh_db):
     _seed_stock_board("BK1001", "白酒")
 
     board_mod.update_cached_board_stocks(
-        "BK1001", "ths",
+        "BK1001",
+        "ths",
         [{"stock_code": "600519", "stock_name": "A"}],
     )
     board_mod.update_cached_board_stocks(
-        "BK1001", "eastmoney",
+        "BK1001",
+        "eastmoney",
         [{"stock_code": "000858", "stock_name": "B"}],
     )
 
     # Refresh ths row — eastmoney row must survive.
     board_mod.update_cached_board_stocks(
-        "BK1001", "ths",
+        "BK1001",
+        "ths",
         [{"stock_code": "600000", "stock_name": "C"}],
     )
 

@@ -1,6 +1,7 @@
 """
 Unit tests for ZhituFetcher.
 """
+
 from unittest.mock import MagicMock, patch
 
 import requests
@@ -223,6 +224,7 @@ class TestGetAllStocks:
 
     def test_returns_empty_when_unavailable(self, monkeypatch):
         import os as _os
+
         _real_getenv = _os.getenv  # capture before patching (os is shared)
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -364,6 +366,7 @@ class TestGetRealtimeQuoteVolumeUnit:
         修复后: 输出 4_000_000,与 Myquant/Akshare 数量级一致。
         """
         import os as _os
+
         _real_getenv = _os.getenv
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -377,7 +380,7 @@ class TestGetRealtimeQuoteVolumeUnit:
             "p": 1206.91,
             "pc": 1.04,
             "ud": 12.46,
-            "v": 4.1,             # 万手 — public 源实测是万手
+            "v": 4.1,  # 万手 — public 源实测是万手
             "cje": 4913750668.0,
             "zf": 2.93,
             "hs": 0.33,
@@ -454,7 +457,7 @@ class TestNormalizeIntradayZhitu:
                     "h": 10.52,
                     "l": 10.48,
                     "c": 10.51,
-                    "v": 1000.0,        # 万手
+                    "v": 1000.0,  # 万手
                     "a": 10_500_000.0,  # 元
                 }
             ]
@@ -482,8 +485,8 @@ class TestNormalizeIntradayZhitu:
                     "h": 10.52,
                     "l": 10.48,
                     "c": 10.51,
-                    "v": 1000.0,                  # 万手
-                    "a": 10.51 * 1000 * 1_000_000, # cje = price × volume_shares
+                    "v": 1000.0,  # 万手
+                    "a": 10.51 * 1000 * 1_000_000,  # cje = price × volume_shares
                 }
             ]
         )
@@ -517,7 +520,13 @@ class TestNormalizeIntradayZhitu:
         )
         out = self.fetcher._normalize_intraday_zhitu(df)
         assert set(out.columns) == {
-            "time", "open", "high", "low", "close", "volume", "amount",
+            "time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
         }
         assert out.iloc[0]["time"] == "09:35:00"
 
@@ -527,8 +536,15 @@ class TestNormalizeIntradayZhitu:
 
         df = pd.DataFrame(
             [
-                {"t": "2025-02-21T10:00:00", "o": "10.0", "h": "10.1",
-                 "l": "9.9", "c": "10.05", "v": "500", "a": "502500"}
+                {
+                    "t": "2025-02-21T10:00:00",
+                    "o": "10.0",
+                    "h": "10.1",
+                    "l": "9.9",
+                    "c": "10.05",
+                    "v": "500",
+                    "a": "502500",
+                }
             ]
         )
         out = self.fetcher._normalize_intraday_zhitu(df)
@@ -540,9 +556,18 @@ class TestNormalizeIntradayZhitu:
 
         df = pd.DataFrame(
             [
-                {"t": "2025-02-21T10:00:00", "o": 10.0, "h": 10.1,
-                 "l": 9.9, "c": 10.05, "v": 100.0, "a": 100_500.0,
-                 "pc": 9.95, "sf": 0.0, "extra_field": "noise"}
+                {
+                    "t": "2025-02-21T10:00:00",
+                    "o": 10.0,
+                    "h": 10.1,
+                    "l": 9.9,
+                    "c": 10.05,
+                    "v": 100.0,
+                    "a": 100_500.0,
+                    "pc": 9.95,
+                    "sf": 0.0,
+                    "extra_field": "noise",
+                }
             ]
         )
         out = self.fetcher._normalize_intraday_zhitu(df)
@@ -556,12 +581,33 @@ class TestNormalizeIntradayZhitu:
 
         df = pd.DataFrame(
             [
-                {"t": "2025-02-21T14:55:00", "o": 10.0, "h": 10.1, "l": 9.9,
-                 "c": 10.05, "v": 200.0, "a": 2_010_000.0},
-                {"t": "2025-02-21T14:56:00", "o": 10.1, "h": 10.2, "l": 10.0,
-                 "c": 10.15, "v": 300.0, "a": 3_045_000.0},
-                {"t": "2025-02-21T14:57:00", "o": 10.2, "h": 10.3, "l": 10.1,
-                 "c": 10.25, "v": 400.0, "a": 4_100_000.0},
+                {
+                    "t": "2025-02-21T14:55:00",
+                    "o": 10.0,
+                    "h": 10.1,
+                    "l": 9.9,
+                    "c": 10.05,
+                    "v": 200.0,
+                    "a": 2_010_000.0,
+                },
+                {
+                    "t": "2025-02-21T14:56:00",
+                    "o": 10.1,
+                    "h": 10.2,
+                    "l": 10.0,
+                    "c": 10.15,
+                    "v": 300.0,
+                    "a": 3_045_000.0,
+                },
+                {
+                    "t": "2025-02-21T14:57:00",
+                    "o": 10.2,
+                    "h": 10.3,
+                    "l": 10.1,
+                    "c": 10.25,
+                    "v": 400.0,
+                    "a": 4_100_000.0,
+                },
             ]
         )
         out = self.fetcher._normalize_intraday_zhitu(df)
@@ -576,8 +622,15 @@ class TestNormalizeIntradayZhitu:
 
         df = pd.DataFrame(
             [
-                {"t": "2025-02-21T10:00:00", "o": 10.0, "h": 10.1, "l": 9.9,
-                 "c": 10.05, "v": 100.0, "a": 1_005_000.0}
+                {
+                    "t": "2025-02-21T10:00:00",
+                    "o": 10.0,
+                    "h": 10.1,
+                    "l": 9.9,
+                    "c": 10.05,
+                    "v": 100.0,
+                    "a": 1_005_000.0,
+                }
             ]
         )
         original_v = df["v"].iloc[0]  # 100.0 (万手)
@@ -593,6 +646,7 @@ class TestNormalizeIntradayZhitu:
         归一后应为股. 1 万手 → 1_000_000 股.
         """
         import os as _os
+
         _real_getenv = _os.getenv
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -610,16 +664,22 @@ class TestNormalizeIntradayZhitu:
         mock_response.json.return_value = [
             {
                 "t": "2025-02-21T09:35:00",
-                "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.05,
-                "v": 5.0,          # 5 万手
+                "o": 10.0,
+                "h": 10.1,
+                "l": 9.9,
+                "c": 10.05,
+                "v": 5.0,  # 5 万手
                 "a": 5_025_000.0,  # cje 应等于 5 × 1M × 10.05 = 50,250,000
-                                  # 这里故意给个不匹配 cje, 让 cje/v 不变量测试在校验
-                                  # volume 之前先通过(volume 是归一后的真值)
+                # 这里故意给个不匹配 cje, 让 cje/v 不变量测试在校验
+                # volume 之前先通过(volume 是归一后的真值)
             },
             {
                 "t": "2025-02-21T09:40:00",
-                "o": 10.1, "h": 10.2, "l": 10.0, "c": 10.15,
-                "v": 7.5,          # 7.5 万手
+                "o": 10.1,
+                "h": 10.2,
+                "l": 10.0,
+                "c": 10.15,
+                "v": 7.5,  # 7.5 万手
                 "a": 7_612_500.0,
             },
         ]
@@ -638,11 +698,10 @@ class TestNormalizeIntradayZhitu:
             assert 1e5 < v < 1e8, f"volume {v} 数量级异常"
 
     @patch("stock_data.data_provider.utils.http.requests.get")
-    def test_get_intraday_data_returns_none_for_empty_list(
-        self, mock_get, monkeypatch
-    ):
+    def test_get_intraday_data_returns_none_for_empty_list(self, mock_get, monkeypatch):
         """上游返空 list(节假日/无数据) → 应返 None 让 manager failover。"""
         import os as _os
+
         _real_getenv = _os.getenv
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",
@@ -662,11 +721,10 @@ class TestNormalizeIntradayZhitu:
         assert self.fetcher.get_intraday_data("000001", period="5") is None
 
     @patch("stock_data.data_provider.utils.http.requests.get")
-    def test_get_intraday_data_returns_none_on_http_error(
-        self, mock_get, monkeypatch
-    ):
+    def test_get_intraday_data_returns_none_on_http_error(self, mock_get, monkeypatch):
         """HTTP 5xx 应让 _fetch_json 返 None, get_intraday_data 应传播 None。"""
         import os as _os
+
         _real_getenv = _os.getenv
         monkeypatch.setattr(
             "stock_data.data_provider.fetchers.zhitu_fetcher.os.getenv",

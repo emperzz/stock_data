@@ -1035,9 +1035,7 @@ class TestSearchNewsMobileFilter:
     @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
     def test_drops_m_subdomain(self, mock_post, monkeypatch):
         monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
-        monkeypatch.setenv(
-            "BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn"
-        )
+        monkeypatch.setenv("BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn")
         monkeypatch.delenv("BAIDU_NEWS_MOBILE_PREFIXES", raising=False)
         payload = {
             "references": [
@@ -1090,9 +1088,7 @@ class TestSearchNewsMobileFilter:
     @patch("stock_data.data_provider.fetchers.baidu_fetcher.requests.post")
     def test_drops_mobile_and_mb_subdomains(self, mock_post, monkeypatch):
         monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
-        monkeypatch.setenv(
-            "BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn"
-        )
+        monkeypatch.setenv("BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn")
         monkeypatch.delenv("BAIDU_NEWS_MOBILE_PREFIXES", raising=False)
         payload = {
             "references": [
@@ -1132,9 +1128,7 @@ class TestSearchNewsMobileFilter:
         mobile-filter behavior under the legacy 3-source whitelist via
         env var, where all 4 desktop subdomains should pass."""
         monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
-        monkeypatch.setenv(
-            "BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn"
-        )
+        monkeypatch.setenv("BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn")
         monkeypatch.delenv("BAIDU_NEWS_MOBILE_PREFIXES", raising=False)
         payload = {
             "references": [
@@ -1181,9 +1175,7 @@ class TestSearchNewsMobileFilter:
         — under the new default whitelist (`finance.eastmoney.com` only),
         `m.eastmoney.com` would never reach the mobile filter."""
         monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
-        monkeypatch.setenv(
-            "BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn"
-        )
+        monkeypatch.setenv("BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn")
         monkeypatch.setenv("BAIDU_NEWS_MOBILE_PREFIXES", "")
         monkeypatch.setenv("BAIDU_NEWS_BLOCKED_DOMAINS", "")
         # Use a whitelisted mobile-style host: it would be caught by the
@@ -1209,9 +1201,7 @@ class TestSearchNewsMobileFilter:
         include cls.cn so `www.cls.cn` and `mini.cls.cn` are both in scope
         for the mobile filter to act on."""
         monkeypatch.setenv("BAIDU_API_KEY", "bce-v3/TESTKEY")
-        monkeypatch.setenv(
-            "BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn"
-        )
+        monkeypatch.setenv("BAIDU_NEWS_DOMAINS", "eastmoney.com,cls.cn,10jqka.com.cn")
         monkeypatch.setenv("BAIDU_NEWS_MOBILE_PREFIXES", "m.,wap.,mobile.,mb.,mini.")
         payload = {
             "references": [
@@ -1373,5 +1363,3 @@ class TestSearchNewsBlockWebsites:
 
         results = BaiduFetcher().search_news(q="test", limit=10)
         assert results == []
-
-

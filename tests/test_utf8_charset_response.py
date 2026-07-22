@@ -52,9 +52,7 @@ def test_kline_serves_utf8_charset():
     r = client.get("/api/v1/stocks/600519/kline?days=5&frequency=d")
     assert r.status_code == 200, r.text
     ct = r.headers.get("content-type", "")
-    assert "charset=utf-8" in ct.lower(), (
-        f"missing charset=utf-8 in Content-Type: {ct!r}"
-    )
+    assert "charset=utf-8" in ct.lower(), f"missing charset=utf-8 in Content-Type: {ct!r}"
 
 
 def test_http_exception_serves_utf8_charset():
@@ -74,6 +72,4 @@ def test_http_exception_serves_utf8_charset():
     r = client.get("/api/v1/this-path-does-not-exist")
     assert r.status_code == 404, r.text
     ct = r.headers.get("content-type", "")
-    assert "charset=utf-8" in ct.lower(), (
-        f"missing charset=utf-8 on HTTPException 404: {ct!r}"
-    )
+    assert "charset=utf-8" in ct.lower(), f"missing charset=utf-8 on HTTPException 404: {ct!r}"

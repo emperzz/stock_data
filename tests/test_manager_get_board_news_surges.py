@@ -27,6 +27,7 @@ def _build_manager_with_ths(ths_mock) -> DataFetcherManager:
     mgr = DataFetcherManager.__new__(DataFetcherManager)
     # Manager init sets up _lock + _slug_index; we replicate just enough.
     from threading import RLock
+
     mgr._lock = RLock()
     mgr._fetchers = [ths_mock]
     mgr._slug_index = {"ths": ths_mock}
@@ -36,9 +37,7 @@ def _build_manager_with_ths(ths_mock) -> DataFetcherManager:
 def test_manager_get_board_news_forwards_to_ths():
     fake = MagicMock(spec=ThsFetcher)
     fake.supported_markets = {"csi"}
-    fake.supported_data_types = (
-        DataCapability.BOARD_NEWS | DataCapability.STOCK_BOARD
-    )
+    fake.supported_data_types = DataCapability.BOARD_NEWS | DataCapability.STOCK_BOARD
     fake.get_board_news.return_value = [{"title": "x"}]
 
     mgr = _build_manager_with_ths(fake)
@@ -82,9 +81,7 @@ def test_manager_get_board_news_board_type_plumbed_through():
 
     mgr = _build_manager_with_ths(fake)
     mgr.get_board_news("881101", "ths", limit=10, board_type="industry")
-    fake.get_board_news.assert_called_once_with(
-        "881101", limit=10, board_type="industry"
-    )
+    fake.get_board_news.assert_called_once_with("881101", limit=10, board_type="industry")
 
 
 def test_manager_raises_valueerror_when_fetcher_lacks_capability():

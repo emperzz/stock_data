@@ -17,10 +17,10 @@ Background (``docs/optimization-plan-2026-07-16.md`` §P2-2 / §P3-a5):
   assumption was the M8 audit's "wrong-direction hypothesis" — resolved
   by the live probe.
 """
+
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from stock_data.data_provider.fetchers.akshare.index_norm import (
     _INDEX_EM_MAP,

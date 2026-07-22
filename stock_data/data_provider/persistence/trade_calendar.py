@@ -92,8 +92,7 @@ def update_cached_calendar(dates: list) -> int:
             cursor.execute("DELETE FROM trade_calendar")
 
             cursor.executemany(
-                "INSERT INTO trade_calendar "
-                "(trade_date, updated_at) VALUES (?, ?)",
+                "INSERT INTO trade_calendar (trade_date, updated_at) VALUES (?, ?)",
                 [(date, now) for date in dates],
             )
 
@@ -125,6 +124,7 @@ def get_latest_cached_trade_date() -> str | None:
 # "current trading day vs historical" routing decision.
 # ---------------------------------------------------------------------------
 
+
 def is_trade_date(date_str: str) -> bool:
     """True iff the given YYYY-MM-DD is in the cached A-share trade calendar.
 
@@ -154,4 +154,3 @@ def get_latest_trade_date_on_or_before(date_str: str) -> str | None:
     if row is None:
         return None
     return row[0] if row[0] else None
-

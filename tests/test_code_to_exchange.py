@@ -79,9 +79,9 @@ class TestNonAShare:
             "HK00700",  # Tencent
             "HK01810",  # Xiaomi
             "HK00939",  # 建设银行
-            "AAPL",     # US
-            "TSLA",     # US
-            "MSFT",     # US
+            "AAPL",  # US
+            "TSLA",  # US
+            "MSFT",  # US
         ],
     )
     def test_non_a_share_returns_none(self, code):
@@ -96,15 +96,15 @@ class TestInputNormalization:
     @pytest.mark.parametrize(
         "raw,expected",
         [
-            ("SH600519", "SH"),     # bare prefix
+            ("SH600519", "SH"),  # bare prefix
             ("SZ000001", "SZ"),
             ("BJ830799", "BJ"),
-            ("600519.SS", "SH"),    # yfinance suffix
+            ("600519.SS", "SH"),  # yfinance suffix
             ("000001.SZ", "SZ"),
             ("830799.BJ", "BJ"),
-            ("600519.SH", "SH"),    # other suffix forms
+            ("600519.SH", "SH"),  # other suffix forms
             ("000001.SZ", "SZ"),
-            ("sh600519", "SH"),     # case-insensitive
+            ("sh600519", "SH"),  # case-insensitive
             ("SZ000001", "SZ"),
         ],
     )
@@ -117,14 +117,14 @@ class TestInvalidInput:
     @pytest.mark.parametrize(
         "code",
         [
-            "",            # empty
-            "  ",          # whitespace
-            "12345",       # 5 digits
-            "1234567",     # 7 digits
-            "12345a",      # non-numeric
-            "abcdef",      # 6 letters (could be confused with US, but US is
-                           # 1-5 letters — 6 letters is invalid)
-            "600",         # 3 digits
+            "",  # empty
+            "  ",  # whitespace
+            "12345",  # 5 digits
+            "1234567",  # 7 digits
+            "12345a",  # non-numeric
+            "abcdef",  # 6 letters (could be confused with US, but US is
+            # 1-5 letters — 6 letters is invalid)
+            "600",  # 3 digits
         ],
     )
     def test_invalid_returns_none(self, code):
@@ -141,9 +141,9 @@ class TestPrefixOrder:
     @pytest.mark.parametrize(
         "code,expected",
         [
-            ("688981", "SH"),   # STAR — must NOT be matched as "8" → BJ
+            ("688981", "SH"),  # STAR — must NOT be matched as "8" → BJ
             ("689009", "SH"),
-            ("830799", "BJ"),   # BSE — "8" prefix
+            ("830799", "BJ"),  # BSE — "8" prefix
             ("830000", "BJ"),
         ],
     )

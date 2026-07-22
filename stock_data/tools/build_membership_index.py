@@ -227,7 +227,9 @@ def main(argv: list[str] | None = None) -> int:
         description="Build stock_board_membership reverse index by walking all boards per source."
     )
     parser.add_argument(
-        "--source", choices=VALID_SOURCES, default=None,
+        "--source",
+        choices=VALID_SOURCES,
+        default=None,
         help=f"Limit to one source (default: all {len(VALID_SOURCES)})",
     )
     parser.add_argument(

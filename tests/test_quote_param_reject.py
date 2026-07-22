@@ -23,7 +23,9 @@ def client():
     return TestClient(app)
 
 
-@pytest.mark.parametrize("bad_param", ["period", "adjust", "days", "start_date", "end_date", "indicators"])
+@pytest.mark.parametrize(
+    "bad_param", ["period", "adjust", "days", "start_date", "end_date", "indicators"]
+)
 def test_stocks_quote_rejects_bad_param(client, bad_param):
     """GET /stocks/{code}/quote?<bad_param>=foo -> 422."""
     r = client.get(f"/api/v1/stocks/600519/quote?{bad_param}=foo")
@@ -32,7 +34,9 @@ def test_stocks_quote_rejects_bad_param(client, bad_param):
     assert detail["error"] == "param_not_applicable"
 
 
-@pytest.mark.parametrize("bad_param", ["period", "adjust", "days", "start_date", "end_date", "indicators"])
+@pytest.mark.parametrize(
+    "bad_param", ["period", "adjust", "days", "start_date", "end_date", "indicators"]
+)
 def test_indices_quote_rejects_bad_param(client, bad_param):
     """GET /indices/{code}/quote?<bad_param>=foo -> 422."""
     r = client.get(f"/api/v1/indices/000300/quote?{bad_param}=foo")

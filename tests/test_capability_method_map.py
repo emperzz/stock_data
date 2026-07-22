@@ -9,6 +9,7 @@ have a {label, icon} entry in `explorer.tags.CAPABILITY_LABELS` (the
 HTML `CAPABILITY_GROUPS` sidebar filter was removed in commit 37e52ed).
 Missing entries silently drop endpoints from the UI.
 """
+
 from pathlib import Path
 
 import pytest
@@ -49,7 +50,7 @@ _CONCRETE_FETCHERS = (
     TushareFetcher,
     YfinanceFetcher,
     ZhituFetcher,
-    ZzshareFetcher,   # NEW
+    ZzshareFetcher,  # NEW
 )
 
 
@@ -57,8 +58,7 @@ _CONCRETE_FETCHERS = (
 def test_every_capability_has_intent_declared(cap):
     """Every DataCapability MUST be mapped to a method in CAPABILITY_TO_METHOD."""
     assert cap in CAPABILITY_TO_METHOD, (
-        f"DataCapability.{cap.name} is not in CAPABILITY_TO_METHOD. "
-        f"Add it to declare intent."
+        f"DataCapability.{cap.name} is not in CAPABILITY_TO_METHOD. Add it to declare intent."
     )
 
 
@@ -123,7 +123,9 @@ def test_every_capability_is_in_capability_labels():
     )
 
 
-_HTML_PATH = Path(__file__).resolve().parent.parent / "stock_data" / "explorer" / "static" / "index.html"
+_HTML_PATH = (
+    Path(__file__).resolve().parent.parent / "stock_data" / "explorer" / "static" / "index.html"
+)
 
 
 def _extract_capability_groups(html_text: str) -> dict[str, list[str]]:

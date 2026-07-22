@@ -14,27 +14,35 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.persistence.board import (
-    _resolve_ths_cid_from_platecode,
     fetch_board_stocks_with_zzshare_fallback,
 )
-
 
 # Sample fixture rows to mimic the F10 leg's shape — quote-shaped fields
 # all None, dict shape matches ``get_board_stocks``'s BoardStockInfo keys.
 F10_FULL_ROWS = [
     {
-        "stock_code": "600227", "stock_name": "赤天化", "exchange": "sh",
-        "price": None, "change_pct": None, "change_amount": None,
-        "volume": None, "amount": None, "turnover_rate": None,
+        "stock_code": "600227",
+        "stock_name": "赤天化",
+        "exchange": "sh",
+        "price": None,
+        "change_pct": None,
+        "change_amount": None,
+        "volume": None,
+        "amount": None,
+        "turnover_rate": None,
     },
     {
-        "stock_code": "600744", "stock_name": "华银电力", "exchange": "sh",
-        "price": None, "change_pct": None, "change_amount": None,
-        "volume": None, "amount": None, "turnover_rate": None,
+        "stock_code": "600744",
+        "stock_name": "华银电力",
+        "exchange": "sh",
+        "price": None,
+        "change_pct": None,
+        "change_amount": None,
+        "volume": None,
+        "amount": None,
+        "turnover_rate": None,
     },
 ]
 
@@ -53,7 +61,10 @@ def test_f10_leg_serves_request_when_nonempty(monkeypatch):
     mgr.get_board_stocks_full.return_value = (F10_FULL_ROWS, "ThsFetcher")
 
     rows, src_label, effective, reason = fetch_board_stocks_with_zzshare_fallback(
-        board_code="885914", source="ths", include_quote=False, manager=mgr,
+        board_code="885914",
+        source="ths",
+        include_quote=False,
+        manager=mgr,
     )
 
     assert rows == F10_FULL_ROWS
@@ -61,7 +72,9 @@ def test_f10_leg_serves_request_when_nonempty(monkeypatch):
     assert reason is None
     assert src_label == "ths"  # user-facing source label unchanged
     mgr.get_board_stocks_full.assert_called_once_with(
-        board_code="885914", source="ths", board_type="concept",
+        board_code="885914",
+        source="ths",
+        board_type="concept",
     )
     # F10 served — neither ZZSHARE nor THS AJAX fired.
     mgr.get_board_stocks.assert_not_called()
@@ -77,7 +90,10 @@ def test_f10_datafetcherror_falls_back_to_zzshare(monkeypatch):
     )
 
     rows, src_label, effective, _ = fetch_board_stocks_with_zzshare_fallback(
-        board_code="885914", source="ths", include_quote=False, manager=mgr,
+        board_code="885914",
+        source="ths",
+        include_quote=False,
+        manager=mgr,
     )
 
     assert rows == [{"stock_code": "000001", "stock_name": "平安银行"}]
@@ -94,11 +110,15 @@ def test_f10_empty_falls_back_to_zzshare(monkeypatch):
     mgr = MagicMock()
     mgr.get_board_stocks_full.return_value = ([], "ThsFetcher")
     mgr.get_board_stocks.return_value = (
-        [{"stock_code": "000002"}], "ZzshareFetcher",
+        [{"stock_code": "000002"}],
+        "ZzshareFetcher",
     )
 
     rows, _src, effective, _ = fetch_board_stocks_with_zzshare_fallback(
-        board_code="885914", source="ths", include_quote=False, manager=mgr,
+        board_code="885914",
+        source="ths",
+        include_quote=False,
+        manager=mgr,
     )
     assert effective == "zzshare"
     mgr.get_board_stocks.assert_called_once()
@@ -118,7 +138,10 @@ def test_f10_fails_and_zzshare_fails_falls_to_ths_ajax(monkeypatch):
     ]
 
     rows, _src, effective, _ = fetch_board_stocks_with_zzshare_fallback(
-        board_code="885914", source="ths", include_quote=False, manager=mgr,
+        board_code="885914",
+        source="ths",
+        include_quote=False,
+        manager=mgr,
     )
 
     assert rows == [{"stock_code": "600001", "price": 1.0}]
@@ -131,11 +154,15 @@ def test_include_quote_true_skips_f10_leg(monkeypatch):
     _patch_cid_resolution(monkeypatch, "301558")
     mgr = MagicMock()
     mgr.get_board_stocks.return_value = (
-        [{"stock_code": "600001", "price": 1.0}], "ThsFetcher",
+        [{"stock_code": "600001", "price": 1.0}],
+        "ThsFetcher",
     )
 
     rows, _src, effective, _ = fetch_board_stocks_with_zzshare_fallback(
-        board_code="885914", source="ths", include_quote=True, manager=mgr,
+        board_code="885914",
+        source="ths",
+        include_quote=True,
+        manager=mgr,
     )
     assert effective == "ths"
     mgr.get_board_stocks_full.assert_not_called()
@@ -147,11 +174,15 @@ def test_zzshare_serves_when_f10_returns_empty(monkeypatch):
     mgr = MagicMock()
     mgr.get_board_stocks_full.return_value = ([], "ThsFetcher")
     mgr.get_board_stocks.return_value = (
-        [{"stock_code": "000004"}], "ZzshareFetcher",
+        [{"stock_code": "000004"}],
+        "ZzshareFetcher",
     )
 
     rows, _src, effective, _ = fetch_board_stocks_with_zzshare_fallback(
-        board_code="885914", source="ths", include_quote=False, manager=mgr,
+        board_code="885914",
+        source="ths",
+        include_quote=False,
+        manager=mgr,
     )
     assert effective == "zzshare"
     assert len(rows) == 1
