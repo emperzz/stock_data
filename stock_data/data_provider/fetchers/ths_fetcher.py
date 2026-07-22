@@ -576,11 +576,34 @@ _THS_BASIC_HEADERS = {
 
 
 # THS F10 板块基本资料页 — server-render 一次性给"成分股全表 + 板块新闻 + 炒作周期"
-# 三段(详见 spec 2026-07-20 §3.2.1)。Marketid 直写 /48/ 对应 concept 板;
-# industry F10 (/47/) 未实测,违背 upstream-probe-success-case,留到 probe 后再加。
-# Keyed by `board_code` (the public THS platecode) — same identifier that
-# /boards/{board_code}/stocks accepts.
-_THS_F10_BOARD_URL = "https://basic.10jqka.com.cn/48/{board_code}/"
+# 三段(详见 spec 2026-07-20 §3.2.1)。
+#
+# Concept boards use marketId prefix /48/ (THS upstream convention;
+#   verified 2026-07-21 against 885914 / 885756).
+# Industry boards use NO marketId prefix (verified 2026-07-22 against
+#   881121 — page is reachable at /881121/ directly, same shape as
+#   concept minus the inline #concept_data JSON).
+# ``market_id`` param picks the right prefix; default "48" keeps legacy
+# concept callers working without changes.
+_THS_F10_BOARD_URL = "https://basic.10jqka.com.cn/{market_id_prefix}{board_code}/"
+
+# ``<a onclick="changecode('XXXXXX')">`` → 6-digit A-share code.
+# Industry F10 pages use this onclick attribute as the canonical
+# stock-click handler (probed 2026-07-22 against 881121).
+_THS_CHANGECODE_RE = re.compile(r"changecode\('(\d{6})'\)")
+
+# A-share first-digit → exchange suffix. Matches the project-wide
+# convention used in ``data_provider/utils/normalize.py`` (6/9 → SH,
+# 0/3 → SZ, 4/8 → BJ) and the inline exchange column on the concept
+# F10 page (``上交所 / 深交所 / 北交所``).
+_THS_FIRST_DIGIT_TO_EXCHANGE: dict[str, str] = {
+    "6": "sh",  # 沪市主板 + 科创板
+    "9": "sh",  # 沪市 B 股
+    "0": "sz",  # 深市主板 + 中小板
+    "3": "sz",  # 深市创业板
+    "4": "bj",  # 北交所
+    "8": "bj",  # 北交所
+}
 
 # Module-level short TTL HTML cache for the F10 page. Three sections
 # (stocks / news / surges) all read the same URL; caching the HTML
@@ -2176,13 +2199,116 @@ class ThsFetcher(BaseFetcher):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _throttle_f10_cache_key(board_code: str) -> str:
+    def _boardstockinfo_template() -> dict:
+        """Empty BoardStockInfo dict with all quote-shaped fields as None.
+
+        Shared between concept's ``#concept_data`` parser and industry's
+        ``onclick="changecode(...)"`` parser — both ship full-membership
+        data without realtime quote, so the field shape is identical.
+        """
+        return {
+            "stock_code": "",
+            "stock_name": "",
+            "exchange": "",
+            "price": None,
+            "change_pct": None,
+            "change_amount": None,
+            "volume": None,
+            "amount": None,
+            "turnover_rate": None,
+            "amplitude": None,
+            "high": None,
+            "low": None,
+            "open": None,
+            "prev_close": None,
+            "speed_open": None,
+            "speed_current": None,
+            "speed_change_pct": None,
+            "speed_change_amount": None,
+            "speed_volume": None,
+            "speed_turnover_rate": None,
+            "rise_speed": None,
+            "ls_based_ratio": None,
+            "rise_count": None,
+            "fall_count": None,
+            "leading_stock": None,
+            "leading_stock_pct": None,
+            "board_pct": None,
+            "rank": None,
+            "eps": None,
+            "float_share_yi": None,
+            "float_mv_yi": None,
+            "limit_up_count_year": None,
+            "analysis": None,
+            "pop_info": None,
+        }
+
+    def _extract_industry_stocks_via_changecode(self, soup) -> list[dict]:
+        """Extract industry F10 board members from inline ``onclick="changecode(...)"``.
+
+        THS industry F10 pages (``basic.10jqka.com.cn/{board_code}/``,
+        no ``/48/`` prefix) server-render the full member list inside the
+        「个股对比」 section as ``<a href="javascript:void(0)"
+        onclick="changecode('XXXXXX')">name</a>``. All rows are inline
+        (the 1/16 pagination is client-side tableSorter); a single
+        page fetch returns the whole board.
+
+        Probed 2026-07-22 against ``881121`` (半导体): 157 unique
+        A-share codes extracted (page reports 177 — the diff is
+        B-share / 4-8-9 prefix codes that don't match ``\\d{6}``; those
+        rows are caught by the ZZSHARE fallback at the persistence
+        layer).
+
+        Exchange is inferred from the code prefix (6/9 → SH, 0/3 → SZ,
+        4/8 → BJ). All quote-shaped fields are ``None`` — F10 has no
+        realtime data.
+
+        Returns:
+            list of BoardStockInfo dicts; empty list on zero matches
+            (which the caller treats as a soft failure → falls back to
+            the ZZSHARE primary + THS AJAX chain in
+            ``persistence/board.py``).
+        """
+        rows: list[dict] = []
+        seen: set[str] = set()
+        # find_all with onclick=re keeps the regex to a single compiled
+        # constant; BeautifulSoup still does the attribute-level scan.
+        for a in soup.find_all("a", onclick=_THS_CHANGECODE_RE):
+            m = _THS_CHANGECODE_RE.search(a.get("onclick", ""))
+            if not m:
+                continue
+            stock_code = m.group(1)
+            if stock_code in seen:
+                continue
+            stock_name = a.get_text(strip=True)
+            if not stock_name:
+                continue
+            seen.add(stock_code)
+            row = self._boardstockinfo_template()
+            row["stock_code"] = stock_code
+            row["stock_name"] = stock_name
+            row["exchange"] = _THS_FIRST_DIGIT_TO_EXCHANGE.get(stock_code[0], "")
+            rows.append(row)
+        if not rows:
+            logger.warning(
+                f"[ThsFetcher] _extract_industry_stocks_via_changecode: "
+                f"0 matches — page may have dropped the onclick pattern. "
+                f"Caller will fall back to ZZSHARE."
+            )
+        return rows
+
+    @staticmethod
+    def _throttle_f10_cache_key(board_code: str, board_type: str | None) -> str:
         """Stable cache key for the F10 HTML cache. Stored as-is in
         :data:`_f10_html_cache`. The route layer wraps each public method
         call in its own `@cache_endpoint` (30min TTL), so this cache only
         covers intra-window multiple-section reads (stocks + news + surges
-        on the same process hit)."""
-        return f"ths-f10-html::{board_code}"
+        on the same process hit).
+
+        Includes ``board_type`` so concept (``/48/{code}/``) and industry
+        (``/{code}/``) URLs don't collide for the same platecode.
+        """
+        return f"ths-f10-html::{board_type or 'concept'}::{board_code}"
 
     def get_board_f10_page(self, board_code: str, *, board_type: str | None = None) -> str:
         """Fetch the THS F10 HTML page for a board, with a short TTL HTML cache.
@@ -2194,33 +2320,26 @@ class ThsFetcher(BaseFetcher):
         when all three are called in succession.
 
         Args:
-            board_code: THS public platecode (e.g. ``"885914"``).
-            board_type: Optional hint. ``"industry"`` short-circuits with
-                empty string (industry F10 path not probed yet — see
-                spec §3.2 stub note); ``"concept"`` / ``None`` fetches.
+            board_code: THS public platecode (e.g. ``"885914"`` concept,
+                ``"881121"`` industry).
+            board_type: ``"concept"`` → URL prefix ``/48/`` (default for
+                legacy callers passing ``None``); ``"industry"`` → no
+                marketId prefix (verified 2026-07-22 against 881121).
 
         Returns:
-            The HTML body as GBK-decoded text, or ``""`` on:
-              - HTTP 401/403 (boundary signal — same handling as
-                ``get_board_stocks``)
-              - ``board_type="industry"`` (v1 stub — see spec §3.2)
+            The HTML body as GBK-decoded text, or ``""`` on HTTP 401/403
+            (boundary signal — same handling as ``get_board_stocks``).
 
         Raises:
             DataFetchError: 5xx / network failure (not 401/403 — those
                 are surfaced as empty string so callers can transparently
                 fall back to the existing ZZSHARE+THS chain).
         """
-        if board_type == "industry":
-            # v1 doesn't support industry F10 — return empty so the
-            # caller's `if html == "": return []` logic kicks in.
-            logger.info(
-                f"[ThsFetcher] get_board_f10_page: industry F10 page "
-                f"not implemented in v1 (board_code={board_code!r}); "
-                f"caller should fall back to the canonical path."
-            )
-            return ""
+        # Industry uses no marketId prefix; concept uses /48/. Concept is
+        # the default so legacy callers (board_type=None) keep working.
+        market_id_prefix = "" if board_type == "industry" else "48/"
 
-        cache_key = self._throttle_f10_cache_key(board_code)
+        cache_key = self._throttle_f10_cache_key(board_code, board_type)
         now = time.monotonic()
         cached = _f10_html_cache.get(cache_key)
         if cached is not None:
@@ -2230,7 +2349,7 @@ class ThsFetcher(BaseFetcher):
             # TTL expired — drop and refetch.
             _f10_html_cache.pop(cache_key, None)
 
-        url = _THS_F10_BOARD_URL.format(board_code=board_code)
+        url = _THS_F10_BOARD_URL.format(market_id_prefix=market_id_prefix, board_code=board_code)
         headers = {"Cookie": f"v={self._v_token()}"}
         try:
             r = self._http_get(url, headers=headers, timeout=10)
@@ -2271,31 +2390,44 @@ class ThsFetcher(BaseFetcher):
         board_type: str | None = None,
         **kwargs,
     ) -> list[dict]:
-        """THS F10 concept page's full membership — 90+ / 800+ concept stocks.
+        """THS F10 page's full membership — 90+ / 800+ concept stocks,
+        ~150-180 industry stocks (no 50-cap).
 
         Distinct from ``get_board_stocks`` (q.10jqka AJAX, hard cap 50
         with realtime sort keys). F10 has no realtime quote — all
         quote-shaped fields are ``None``.
 
-        Data source on the page: ``<div id="concept_data" style="display:none;">
-        {JSON}</div>``. THS's client JS at ``s.thsi.cn/js/basic/exponent/index.js``
-        ``eval()``s it and renders into ``#c_table``. We parse the inline JSON
+        Concept boards (default, ``board_type=None``): inline JSON in
+        ``<div id="concept_data" style="display:none;">{...}</div>``.
+        THS's client JS at ``s.thsi.cn/js/basic/exponent/index.js`` ``eval()``s
+        it and renders into ``#c_table``. We parse the inline JSON
         directly because our fetcher doesn't run JS — the raw HTML has the
         c_table shell but no rows. Probed 2026-07-21: 885914 → 90 rows,
         885756 → 905 rows (vs q.10jqka's 50-cap).
 
+        Industry boards (``board_type="industry"``): no inline JSON; full
+        membership is encoded as ``<a onclick="changecode('XXXXXX')">``
+        inside the 「个股对比」 table on
+        ``basic.10jqka.com.cn/{board_code}/``. Probed 2026-07-22 against
+        881121 → 157 unique codes (page header reports 177 — the diff
+        is B-share / 4-8-9 prefix codes that don't match the 6-digit
+        ``changecode`` pattern; those are caught by the existing
+        ZZSHARE fallback in ``persistence/board.py``).
+
         Args:
-            board_code: THS public platecode (e.g. ``"885914"``).
-            board_type: Optional hint. ``"industry"`` returns ``[]``
-                (v1 stub — see :meth:`get_board_f10_page`).
+            board_code: THS public platecode (e.g. ``"885914"`` concept,
+                ``"881121"`` industry).
+            board_type: ``"industry"`` switches to the inline-changecode
+                extractor; ``None`` / ``"concept"`` uses the
+                ``#concept_data`` JSON path.
             **kwargs: Absorbed silently so callers can pass arbitrary
                 kwargs through ``_with_source`` without crashing.
 
         Returns:
             list of dicts with shape matching ``get_board_stocks``'s
             BoardStockInfo fields, with all quote-shaped values ``None``
-            (F10 doesn't provide them). Empty list on industry,
-            401/403, no rows in HTML.
+            (F10 doesn't provide them). Empty list on 401/403 or no
+            rows in HTML.
         """
         from bs4 import BeautifulSoup
         from ..core.types import safe_float, safe_int
@@ -2307,6 +2439,14 @@ class ThsFetcher(BaseFetcher):
             return []
 
         soup = BeautifulSoup(html, features="lxml")
+
+        # Industry path: page has no inline JSON like concept's
+        # ``#concept_data``; the 个股对比 table renders all rows inline as
+        # ``<a href="javascript:void(0)" onclick="changecode('XXXXXX')">name</a>``.
+        # Probed 2026-07-22 against 881121 — 157 unique codes extracted via
+        # this single regex on the SSR HTML (zero AJAX / pagination needed).
+        if board_type == "industry":
+            return self._extract_industry_stocks_via_changecode(soup)
 
         # Primary path: parse the inline #concept_data JSON. Each entry:
         #   [stock_code, stock_name, exchange, rank, ?, ?, 涨停次数, summary, ...]
