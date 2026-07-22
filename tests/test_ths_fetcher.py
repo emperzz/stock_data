@@ -1671,7 +1671,7 @@ class TestBoardStocksUrlTemplate:
         )
 
         url = _BOARD_STOCKS_URL_TEMPLATE.format(
-            concept_id="301085", field_code="10", order="desc", page=1
+            section="gn", board_code="301085", field_code="10", order="desc", page=1
         )
         assert url == (
             "https://q.10jqka.com.cn/gn/detail/code/301085/field/10/order/desc/page/1/ajax/1/"

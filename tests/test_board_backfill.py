@@ -546,7 +546,7 @@ def test_zzshare_empty_falls_back_to_ths(fresh_db, monkeypatch):
 
     ths_stocks = [{"stock_code": "000099", "stock_name": "From-THS"}]
 
-    def get_board_stocks(board_code, source, include_quote):
+    def get_board_stocks(board_code, source, include_quote, board_type=None):
         if source == "zzshare":
             return ([], "zzshare")  # empty — should fall back to ths
         return (ths_stocks, "ths")
@@ -589,7 +589,7 @@ def test_zzshare_raises_falls_back_to_ths(fresh_db, monkeypatch):
 
     call_log = []
 
-    def get_board_stocks(board_code, source, include_quote):
+    def get_board_stocks(board_code, source, include_quote, board_type=None):
         call_log.append(source)
         if source == "zzshare":
             raise DataFetchError("zzshare 503")

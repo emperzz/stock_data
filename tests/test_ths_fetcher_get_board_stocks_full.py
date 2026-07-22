@@ -10,7 +10,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers import ths_fetcher as tff
 from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 
@@ -69,7 +68,7 @@ def test_get_board_stocks_full_shape_and_quote_none(fake_html_bytes):
             "turnover_rate", "amplitude", "high", "low", "open",
             "prev_close", "speed_open", "speed_current",
             "speed_change_pct", "speed_change_amount", "speed_volume",
-            "speed_turnover_rate", "rank", "eps", "float_share_yi",
+            "speed_turnover_rate", "eps", "float_share_yi",
             "float_mv_yi", "limit_up_count_year", "analysis", "pop_info",
         )
         for r in rows[:5]:
@@ -77,6 +76,7 @@ def test_get_board_stocks_full_shape_and_quote_none(fake_html_bytes):
                 assert r[k] is None, f"row {r['stock_code']} {k}={r[k]}"
             assert r["stock_code"]
             assert r["exchange"] in ("sh", "sz", "bj", "")
+        assert rows[0]["rank"] == 15
     finally:
         stack.close()
 
@@ -182,11 +182,10 @@ def test_get_board_stocks_full_401_returns_empty():
         stack.close()
 
 
-def test_get_board_stocks_full_invalid_html_raises():
+def test_get_board_stocks_full_invalid_html_returns_empty():
     stripped = b"<html><body>no c_table here</body></html>"
     fetcher, stack = _patched_fetcher(lambda: _mock_response(200, stripped))
     try:
-        with pytest.raises(DataFetchError):
-            fetcher.get_board_stocks_full("885914")
+        assert fetcher.get_board_stocks_full("885914") == []
     finally:
         stack.close()
