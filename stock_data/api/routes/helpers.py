@@ -107,18 +107,28 @@ def _reject_invalid_stock_code(code: str, *, endpoint_kind: str, manager: DataFe
 
     Positive validation: a code is a valid stock iff the ``stock_list`` persistence
     layer (authoritative source) has a row for it. On a cold persistence layer
-    (DB empty / fresh install), ``get_stock_name`` triggers exactly one
-    ``manager.get_stock_list(market)`` upstream fetch to auto-warm the cache;
+    (DB empty / fresh install), ``get_stock_name`` triggers exactly one upstream
+    fetch via ``manager.get_all_stocks(market)`` to auto-warm the cache;
     subsequent calls hit the DB directly.
+
+    The 400 message distinguishes two falsy-lookup outcomes so the caller can
+    tell a *redirect* (ambiguous code, likely wanted ``/indices/...``) from a
+    *genuinely unknown* code (typo / delisted / unsupported market tag):
+
+    - ``is_index_code(code)`` true  → "Index X is not supported via this
+      endpoint. Use /indices/X/<kind> instead." (redirect hint)
+    - ``is_index_code(code)`` false → "Stock code X was not found in the
+      stock list." (no redirect — caller really did mean a stock)
     """
     if not stock_list.get_stock_name(code, manager=manager):
-        hint = _INDEX_CODE_HINT_TEMPLATES[endpoint_kind].format(code=code)
+        if is_index_code(code):
+            hint = _INDEX_CODE_HINT_TEMPLATES[endpoint_kind].format(code=code)
+            message = f"Index {code} is not supported via this endpoint. {hint}"
+        else:
+            message = f"Stock code {code} was not found in the stock list."
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "invalid_request",
-                "message": f"Index {code} is not supported via this endpoint. {hint}",
-            },
+            detail={"error": "invalid_request", "message": message},
         )
 
 

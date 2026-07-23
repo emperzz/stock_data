@@ -282,11 +282,70 @@ class TestKline:
         assert len(data["data"]) <= 30
 
     def test_kline_invalid_stock(self, client):
+        """A code that's neither in ``CSI_INDEX_MAP`` nor in ``stock_list`` gets a
+        "stock-not-found" 400, NOT the misleading "Index X is not supported" message.
+
+        The 5f41aee helper used to emit the same "Index X is not supported"
+        template regardless of whether ``code`` looked like an index. After the
+        helpers.py disambiguation, this branch (no index-code match) reads as a
+        plain not-found error.
+        """
         response = client.get("/api/v1/stocks/INVALID/kline?period=daily&days=5")
         assert response.status_code == 400
         detail = response.json()["detail"]
         assert detail["error"] == "invalid_request"
         assert "INVALID" in detail["message"]
+        assert "not found" in detail["message"]
+        assert "Index" not in detail["message"]
+
+    def test_kline_index_coded_input_redirects_message(self, client, monkeypatch):
+        """A CSI-index code that isn't in ``stock_list`` (cold cache or upstream
+        down) still hits the *index redirect* branch — message reads as
+        "Index X is not supported via this endpoint. Use /indices/.../kline
+        instead." rather than the misleading not-found text.
+
+        ``is_index_code("000300")`` is True (CSI_INDEX_MAP), and we simulate
+        a stock_list miss by patching ``stock_list.get_stock_name`` to return
+        ``""``. This is the realistic trigger for the redirect branch in
+        production: e.g. zzshare upstream is briefly unavailable so
+        ``manager.get_all_stocks`` returns empty, and the auto-warm in
+        ``stock_list.get_stock_name`` silently fails (its ``except Exception:
+        pass`` swallow).
+        """
+        from stock_data.api.routes import helpers as route_helpers
+
+        monkeypatch.setattr(
+            route_helpers.stock_list, "get_stock_name", lambda *a, **kw: ""
+        )
+        response = client.get("/api/v1/stocks/000300/kline?period=daily&days=5")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["error"] == "invalid_request"
+        assert "Index 000300" in detail["message"]
+        assert "/indices/000300/kline" in detail["message"]
+
+
+    def test_kline_unknown_code_gets_not_found_message(self, client, monkeypatch):
+        """A code that's neither in CSI_INDEX_MAP nor in stock_list gets the
+        "stock-not-found" message — NOT the index-redirect hint.
+
+        Same monkeypatch mechanism as above; uses ``NOTASTOCK`` so ``is_index_code``
+        returns False.
+        """
+        from stock_data.api.routes import helpers as route_helpers
+
+        monkeypatch.setattr(
+            route_helpers.stock_list, "get_stock_name", lambda *a, **kw: ""
+        )
+        response = client.get("/api/v1/stocks/NOTASTOCK/kline?period=daily&days=5")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["error"] == "invalid_request"
+        assert "NOTASTOCK" in detail["message"]
+        assert "not found" in detail["message"]
+        assert "Index" not in detail["message"]
+        assert "/indices/" not in detail["message"]
+
 
     def test_kline_ambiguous_000001_routes_as_stock(self, client):
         """``000001`` is both Ping An Bank (stock) and 上证综指 (CSI index).

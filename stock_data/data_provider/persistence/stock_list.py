@@ -173,10 +173,17 @@ def get_stock_name(code: str, market: str | None = None, manager=None) -> str:
     if name:
         return name
 
-    # DB miss — try auto-warming via manager if available
+    # DB miss — try auto-warming via manager if available. Delegate to the
+    # persistence-level ``get_stock_list`` helper, which handles both the
+    # upstream fetch and the ``update_cached_stocks`` write. (Previously this
+    # called ``manager.get_stock_list(...)``, a method that does not exist on
+    # ``DataFetcherManager``; the resulting ``AttributeError`` was silently
+    # swallowed by ``except Exception: pass``, leaving the DB unwarmed and
+    # turning every cold-DB request into a 400 with the misleading "Index {code}
+    # is not supported" message.)
     if manager is not None:
         try:
-            manager.get_stock_list(market, refresh=False)  # auto-warm DB
+            get_stock_list(market, manager=manager)  # auto-warm DB
             name = _get_stock_name_from_db(normalized, market)
         except Exception:
             pass
