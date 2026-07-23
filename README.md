@@ -121,6 +121,8 @@ The `/quote` and `/kline` endpoints are cached using an in-memory TTLCache to av
 
 The persistence layer caches stock lists, board metadata, trade calendar, and ZT/DT/ZBGC pool history across processes. It lives in `stock_data/data_provider/persistence/` and is separate from the in-process TTLCache above.
 
+**Cold-cache auto-warm**: the first `/stocks/{code}/...` request after a fresh SQLite (or after `STOCK_DB_INIT=true` reset) triggers a one-shot upstream `get_all_stocks` to populate `stock_list` — may add 1-3 s of latency. Subsequent hits use SQLite directly. See `CLAUDE.md → Standardized Data Schema → "/stocks/{code}/* 400 contract"` for the 400-message split that distinguishes "redirect to /indices/..." from "genuinely not found".
+
 **Board persistence**: boards are cached per `(board_type, source)` pair.
 The persistence layer calls the fetcher via `manager.get_all_boards()` for
 all types (concept/industry/index/special); fetchers return `[]` for types

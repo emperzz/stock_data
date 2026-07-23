@@ -64,10 +64,11 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 
 1. **HTTP 5xx 错误**：服务器内部错误、上游 API 不可用（503 / 502 / 500）
 2. **HTTP 422 / 404**：端点存在但请求的资源不存在（如未知股票代码、未知板块）
-3. **返回空数据**：响应 `data: []`、`total: 0`，且与已知市场状态不符（如交易日 9:30 后龙虎榜仍为空）
-4. **服务器未运行**：连接拒绝、超时
-5. **特殊端点 28 天窗口限制**：`/news/morning-briefing` 和 `/news/market-recap` 仅支持最近 28 天；超出窗口时 fallback
-6. **能力缺失**：服务器无对应端点（如某些仅在开盘期间才有的快讯）
+3. **HTTP 400 含指数重定向提示**（`message` 形如 `"...Use /indices/<code>/<kind> instead."`）：**不要 fallback** — 资源存在于指数端点。把 URL 从 `/stocks/<code>/...` 改写到 `/indices/<code>/<kind>` 后重试即可。400 但 *不带* 重定向提示意味着真 not-found（如 `"Stock code <code> was not found in the stock list."`），按 #2 fallback。
+4. **返回空数据**：响应 `data: []`、`total: 0`，且与已知市场状态不符（如交易日 9:30 后龙虎榜仍为空）
+5. **服务器未运行**：连接拒绝、超时
+6. **特殊端点 28 天窗口限制**：`/news/morning-briefing` 和 `/news/market-recap` 仅支持最近 28 天；超出窗口时 fallback
+7. **能力缺失**：服务器无对应端点（如某些仅在开盘期间才有的快讯）
 
 ### 3.2 Fallback 优先级
 
