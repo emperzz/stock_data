@@ -29,28 +29,32 @@ def _make_manager_with_zzshare_only():
     return mgr, fake_api
 
 
-def test_manager_routes_minute_kline_to_zzshare():
-    """manager.get_kline_data(frequency="5") → ZzshareFetcher → stk_mins."""
+def test_manager_routes_one_minute_kline_to_zzshare():
+    """manager.get_kline_data(frequency="1") → stk_mins, not daily."""
     mgr, fake_api = _make_manager_with_zzshare_only()
     fake_api.stk_mins = MagicMock(
         return_value=pd.DataFrame(
             {
-                "trade_time": ["202605200935", "202605200940"],
-                "open": [1700.0, 1705.0],
-                "high": [1708.0, 1712.0],
-                "low": [1698.0, 1702.0],
-                "close": [1705.0, 1710.0],
-                "vol": [1e5, 1.1e5],
-                "amount": [1e8, 1.1e8],
+                "trade_time": ["202607231000", "202607231001"],
+                "open": [10.0, 10.1],
+                "high": [10.1, 10.2],
+                "low": [9.9, 10.0],
+                "close": [10.1, 10.2],
+                "vol": [1000, 1100],
+                "amount": [10000, 11000],
             }
         )
     )
 
     df, source = mgr.get_kline_data(
-        "600519", start_date="2026-05-20", end_date="2026-05-20", frequency="5"
+        "000001",
+        start_date="2026-07-23",
+        end_date="2026-07-23",
+        frequency="1",
+        asset="stock",
     )
 
     assert source == "ZzshareFetcher"
-    assert fake_api.stk_mins.called
-    assert "date" in df.columns
     assert len(df) == 2
+    assert fake_api.stk_mins.called
+    assert not fake_api.daily.called

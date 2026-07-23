@@ -207,7 +207,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             )
 
         # Minute-frequency branch — multi-day loop with concat
-        if frequency in ("5", "15", "30", "60"):
+        if frequency in ("1", "5", "15", "30", "60"):
             # Mirror the daily branch's SDK-availability check so users get
             # a distinct "SDK 不可用" error instead of a misleading "无分钟数据".
             self._ensure_api()
