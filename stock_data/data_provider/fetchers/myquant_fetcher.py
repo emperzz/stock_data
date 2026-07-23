@@ -203,6 +203,8 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
         days: int = 30,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Dispatch index codes to ``get_index_historical`` (CSI + daily only).
 
@@ -219,6 +221,7 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
             days,
             frequency,
             adjust,
+            asset=asset,
         )
 
     def _fetch_raw_data(
@@ -228,6 +231,8 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
         end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Fetch K-line data from myquant (stocks only — indices use get_index_historical).
 
@@ -244,7 +249,19 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
         try:
             from gm.api import history  # type: ignore
 
-            symbol = self._convert_code(stock_code)
+            if asset == "stock":
+                # /stocks/{code}/... — force stock-format code regardless of
+                # is_index_code. 000001 → SZSE.000001 (Ping An Bank) instead
+                # of raising ValueError like to_myquant_format does.
+                from ..utils.code_converter import to_myquant_stock_format
+                try:
+                    symbol = to_myquant_stock_format(stock_code)
+                except ValueError as e:
+                    raise DataFetchError(
+                        f"Myquant does not support code {stock_code}: {e}"
+                    ) from e
+            else:
+                symbol = self._convert_code(stock_code)
             df = history(
                 symbol=symbol,
                 frequency=_FREQ_MAP[frequency],

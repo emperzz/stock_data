@@ -323,6 +323,8 @@ class BaseFetcher(ABC):
         end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Fetch raw data from the source. Returns DataFrame with source-specific columns.
 
@@ -413,6 +415,8 @@ class BaseFetcher(ABC):
         days: int,
         frequency: str,
         adjust: str | None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Dispatch a K-line request to a fetcher's **separate** index API.
 
@@ -434,17 +438,19 @@ class BaseFetcher(ABC):
             (remaining args mirror ``get_kline_data``)
 
         Dispatch:
-        - ``index_market_tag(stock_code)`` non-None → index branch.
-        - Otherwise → ``BaseFetcher.get_kline_data`` (stock path). Every
+        - ``asset == "index"`` → index branch (caller is ``/indices/...``).
+        - ``asset is None`` and ``index_market_tag(stock_code)`` non-None →
+          index branch (legacy auto-detect path for direct fetcher callers).
+        - Otherwise → ``BaseFetcher.get_kline_data`` (stock path). The
           current caller's ``super().get_kline_data`` resolves here anyway
           (MRO: ``SDKFetcherMixin`` has no ``get_kline_data``), so calling it
           explicitly is behavior-preserving and avoids re-dispatch recursion.
         """
-        if index_market_tag(stock_code) is not None:
+        if asset == "index" or (asset is None and index_market_tag(stock_code) is not None):
             start_date, end_date = self._resolve_kline_window(start_date, end_date, days)
             return index_fn(stock_code, start_date, end_date, frequency)
         return BaseFetcher.get_kline_data(
-            self, stock_code, start_date, end_date, days, frequency, adjust
+            self, stock_code, start_date, end_date, days, frequency, adjust, asset=asset
         )
 
     def get_kline_data(
@@ -455,6 +461,8 @@ class BaseFetcher(ABC):
         days: int = 30,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """
         Get K-line data (daily, weekly, monthly, or minute).
@@ -466,6 +474,11 @@ class BaseFetcher(ABC):
             days: Number of days when start_date not provided
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
             adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权 (unified, mapped per-provider)
+            asset: Server-internal override. ``"stock"`` / ``"index"`` is plumbed
+                through from the manager (which gets it from the route's URL path)
+                so ``_fetch_raw_data`` picks the correct upstream API. ``None``
+                (default) keeps the pre-existing ``is_index_code(stock_code)``
+                auto-detection — used by direct fetcher callers in tests.
 
         Returns:
             DataFrame with standard columns and technical indicators
@@ -481,7 +494,7 @@ class BaseFetcher(ABC):
 
         try:
             raw_df = self._fetch_raw_data(
-                stock_code, start_date, end_date, frequency, provider_adjust
+                stock_code, start_date, end_date, frequency, provider_adjust, asset=asset
             )
             if raw_df is None or raw_df.empty:
                 raise DataFetchError(f"[{self.name}] No data for {stock_code}")

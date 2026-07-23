@@ -31,7 +31,7 @@ class MockFetcher(BaseFetcher):
         DataCapability.STOCK_KLINE | DataCapability.STOCK_REALTIME_QUOTE | DataCapability.STOCK_LIST
     )
 
-    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
+    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None, *, asset=None):
         dates = pd.date_range(start_date, end_date, freq="B")
         return pd.DataFrame(
             {
@@ -72,7 +72,7 @@ class MockFetcherNoRealtime(BaseFetcher):
     supported_markets = {"csi"}
     supported_data_types = DataCapability.STOCK_KLINE | DataCapability.STOCK_LIST
 
-    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
+    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None, *, asset=None):
         raise DataFetchError("Not available")
 
     def _normalize_data(self, df, stock_code):
@@ -95,7 +95,7 @@ class MockFetcherNoIndex(BaseFetcher):
     supported_markets = {"csi"}
     supported_data_types = DataCapability.STOCK_KLINE
 
-    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
+    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None, *, asset=None):
         raise DataFetchError("MockFetcherNoIndex: should not be called for index codes")
 
     def _normalize_data(self, df, stock_code):

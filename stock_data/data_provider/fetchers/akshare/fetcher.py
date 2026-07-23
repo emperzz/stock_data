@@ -92,6 +92,8 @@ class AkshareFetcher(BaseFetcher):
         end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Fetch K-line data from Akshare.
 
@@ -107,13 +109,24 @@ class AkshareFetcher(BaseFetcher):
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线,
                        '1'/'5'/'15'/'30'/'60'=分钟线 (A-share stocks & CSI indices only)
             adjust: Adjustment type - None/''=不复权, 'qfq'=前复权, 'hfq'=后复权.
+            asset: Server-internal override from the manager. ``"stock"`` forces
+                the stock upstream API even when ``is_index_code(stock_code)`` is
+                True (handles ambiguous codes like ``000001`` which is both
+                Ping An Bank stock and the SH composite index). ``"index"``
+                forces the index API. ``None`` falls back to the
+                ``is_index_code(stock_code)`` auto-detection for direct callers.
         """
         try:
             import akshare as ak
 
             code = self._convert_code(stock_code)
             is_hk = is_hk_market(stock_code)
-            is_index = is_index_code(stock_code)
+            if asset == "stock":
+                is_index = False
+            elif asset == "index":
+                is_index = True
+            else:
+                is_index = is_index_code(stock_code)
             index_type = get_index_type(stock_code) if is_index else None
 
             logger.debug(f"[AkshareFetcher] Fetching {code} ({frequency})")

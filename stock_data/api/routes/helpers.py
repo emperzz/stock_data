@@ -28,6 +28,7 @@ from ...data_provider.fetchers.index_symbols import get_all_indices
 from ...data_provider.indicators import compute
 from ...data_provider.indicators.registry import estimate_lookback
 from ...data_provider.indicators.types import IndicatorKey
+from ...data_provider.persistence import stock_list
 from ...data_provider.utils.normalize import is_index_code
 from ..schemas import KLineData
 
@@ -101,9 +102,16 @@ _INDEX_CODE_HINT_TEMPLATES = {
 }
 
 
-def _reject_index_code(code: str, *, endpoint_kind: str) -> None:
-    """Raise 400 if ``code`` is an index code. Used by ``/stocks/{code}/*``."""
-    if is_index_code(code):
+def _reject_invalid_stock_code(code: str, *, endpoint_kind: str, manager: DataFetcherManager | None = None) -> None:
+    """Raise 400 if ``code`` is not a recognized stock code. Used by ``/stocks/{code}/*``.
+
+    Positive validation: a code is a valid stock iff the ``stock_list`` persistence
+    layer (authoritative source) has a row for it. On a cold persistence layer
+    (DB empty / fresh install), ``get_stock_name`` triggers exactly one
+    ``manager.get_stock_list(market)`` upstream fetch to auto-warm the cache;
+    subsequent calls hit the DB directly.
+    """
+    if not stock_list.get_stock_name(code, manager=manager):
         hint = _INDEX_CODE_HINT_TEMPLATES[endpoint_kind].format(code=code)
         raise HTTPException(
             status_code=400,

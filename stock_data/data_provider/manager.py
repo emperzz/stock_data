@@ -476,6 +476,8 @@ class DataFetcherManager:
         days: int = 30,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> tuple[pd.DataFrame, str]:
         """
         Get K-line data with automatic failover (spec §4.4 two-stage filter).
@@ -487,6 +489,14 @@ class DataFetcherManager:
             days: Number of days when start_date not provided
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
             adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权
+            asset: Server-internal override for asset routing. ``"stock"`` or
+                ``"index"`` — the route handler picks this based on the URL
+                path (``/stocks/{code}/kline`` vs ``/indices/{code}/kline``)
+                and passes it down so the fetcher chooses the correct upstream
+                API instead of guessing from ``is_index_code(code)`` (which
+                mis-routes ambiguous codes like ``000001`` that are both a
+                stock and a CSI index). ``None`` (default) preserves the
+                pre-existing auto-detection for direct callers / tests.
 
         Returns:
             Tuple of (DataFrame, source_name)
@@ -496,9 +506,16 @@ class DataFetcherManager:
                 (e.g. 1m + qfq), or when every supporting fetcher fails.
         """
         stock_code = normalize_stock_code(stock_code)
-        index_tag = index_market_tag(stock_code)
-        market = index_tag or market_tag(stock_code)
-        asset = "index" if index_tag else "stock"
+        if asset is None:
+            index_tag = index_market_tag(stock_code)
+            asset = "index" if index_tag else "stock"
+            market = index_tag or market_tag(stock_code)
+        elif asset == "index":
+            # Caller is /indices/... — respect index-market tag (e.g. HSI →
+            # "hk", not "us" from market_tag falling through on alpha codes).
+            market = index_market_tag(stock_code) or market_tag(stock_code)
+        else:  # asset == "stock"
+            market = market_tag(stock_code)
 
         candidates = self._kline_candidates(market, asset, frequency, adjust)
         if not candidates:
@@ -512,7 +529,9 @@ class DataFetcherManager:
             cap,
             market,
             f"kline {stock_code} {frequency}",
-            lambda f: f.get_kline_data(stock_code, start_date, end_date, days, frequency, adjust),
+            lambda f: f.get_kline_data(
+                stock_code, start_date, end_date, days, frequency, adjust, asset=asset
+            ),
             return_source=True,
             circuit_breaker=KLINE_CIRCUIT_BREAKER,
             candidates=sorted(candidates, key=lambda f: f.priority),

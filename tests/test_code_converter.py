@@ -376,6 +376,136 @@ class TestToTushareFormat:
 
 
 # ============================================================================
+# Stock-format overrides (bypass is_index_code)
+# ============================================================================
+
+
+class TestToTushareStockFormat:
+    """``to_tushare_stock_format`` ignores CSI_INDEX_MAP and treats every 6-digit
+    A-share code as a stock. The corresponding non-stock variant
+    (``to_tushare_format``) would map ``000001`` → ``000001.SH`` (SH index);
+    the stock variant must map it to ``000001.SZ`` (Ping An Bank) instead."""
+
+    def test_ambiguous_000001_routes_to_sz_not_sh(self):
+        assert cc.to_tushare_stock_format("000001") == "000001.SZ"
+
+    def test_all_ambiguous_csi_indices_route_to_stock_exchange(self):
+        # 000300, 000688, 000016 are all CSI indices per CSI_INDEX_MAP.
+        # as /stocks/... they must take the stock exchange (SZ for 000xxx).
+        assert cc.to_tushare_stock_format("000300") == "000300.SZ"
+        assert cc.to_tushare_stock_format("000688") == "000688.SZ"
+        assert cc.to_tushare_stock_format("000016") == "000016.SZ"
+
+    def test_bj_codes(self):
+        assert cc.to_tushare_stock_format("830799") == "830799.BJ"
+        assert cc.to_tushare_stock_format("920001") == "920001.BJ"
+
+    def test_sh_codes(self):
+        assert cc.to_tushare_stock_format("600519") == "600519.SH"
+        assert cc.to_tushare_stock_format("688981") == "688981.SH"
+
+    def test_hk_raises(self):
+        with pytest.raises(ValueError, match="HK"):
+            cc.to_tushare_stock_format("HK00700")
+
+    def test_us_raises(self):
+        with pytest.raises(ValueError, match="US"):
+            cc.to_tushare_stock_format("AAPL")
+
+
+class TestToYfinanceStockFormat:
+    """Same bypass semantics for the yfinance ticker format."""
+
+    def test_ambiguous_000001_routes_to_sz_not_ss(self):
+        assert cc.to_yfinance_stock_format("000001") == "000001.SZ"
+
+    def test_bj_codes(self):
+        assert cc.to_yfinance_stock_format("830799") == "830799.BJ"
+        assert cc.to_yfinance_stock_format("920001") == "920001.BJ"
+
+    def test_sh_codes(self):
+        assert cc.to_yfinance_stock_format("600519") == "600519.SS"
+        assert cc.to_yfinance_stock_format("688981") == "688981.SS"
+
+    def test_hk_unchanged(self):
+        assert cc.to_yfinance_stock_format("HK00700") == "00700.HK"
+
+    def test_us_unchanged(self):
+        assert cc.to_yfinance_stock_format("AAPL") == "AAPL"
+
+
+class TestToMyquantStockFormat:
+    """Mirrors ``to_myquant_format`` but skips the ``is_index_code`` rejection
+    so ambiguous codes like ``000001`` resolve to ``SZSE.000001`` instead of
+    raising ``ValueError``."""
+
+    def test_ambiguous_000001_resolves_to_szse(self):
+        assert cc.to_myquant_stock_format("000001") == "SZSE.000001"
+
+    def test_sh_codes(self):
+        assert cc.to_myquant_stock_format("600519") == "SHSE.600519"
+
+    def test_bj_codes(self):
+        # Myquant uses SZSE.* for BJ listings; 920 prefix must be detected
+        # BEFORE the 9→SHSE fallback (regression for 930xxx fund mis-routing).
+        assert cc.to_myquant_stock_format("920001") == "SZSE.920001"
+        assert cc.to_myquant_stock_format("830799") == "SZSE.830799"
+        assert cc.to_myquant_stock_format("430001") == "SZSE.430001"
+
+    def test_9xx_non_bj_funds_stay_on_shanghai_branch(self):
+        # 930xxx codes are funds, not BJ listings — must stay on the SH branch.
+        assert cc.to_myquant_stock_format("930001") == "SHSE.930001"
+
+    def test_hk_raises(self):
+        with pytest.raises(ValueError, match="HK"):
+            cc.to_myquant_stock_format("HK00700")
+
+    def test_us_raises(self):
+        with pytest.raises(ValueError, match="US"):
+            cc.to_myquant_stock_format("AAPL")
+
+
+# ============================================================================
+# Baostock stock-format helper (module-private)
+# ============================================================================
+
+
+class TestToBaostockStockCode:
+    """``_to_baostock_stock_code`` lives in ``baostock_fetcher.py`` (private).
+    Mirrors the prefix→exchange logic but bypasses ``CSI_INDEX_MAP`` so
+    ambiguous codes like ``000001`` resolve to the SZ stock listing.
+    """
+
+    @staticmethod
+    def _bs(code: str) -> str:
+        from stock_data.data_provider.fetchers.baostock_fetcher import (
+            _to_baostock_stock_code,
+        )
+        return _to_baostock_stock_code(code)
+
+    def test_ambiguous_000001_routes_to_sz(self):
+        assert self._bs("000001") == "sz.000001"
+
+    def test_bj_codes(self):
+        assert self._bs("830799") == "bj.830799"
+        assert self._bs("430001") == "bj.430001"
+        assert self._bs("920001") == "bj.920001"
+
+    def test_sh_codes(self):
+        assert self._bs("600519") == "sh.600519"
+        assert self._bs("688981") == "sh.688981"
+        assert self._bs("510500") == "sh.510500"  # 5xxxxx ETF
+
+    def test_9xx_non_bj_funds_stay_on_shanghai_branch(self):
+        # 930xxx codes are funds, not BJ. Must stay on SH (regression).
+        assert self._bs("930001") == "sh.930001"
+
+    def test_sz_codes(self):
+        assert self._bs("300750") == "sz.300750"
+        assert self._bs("000002") == "sz.000002"
+
+
+# ============================================================================
 # Cross-function consistency
 # ============================================================================
 

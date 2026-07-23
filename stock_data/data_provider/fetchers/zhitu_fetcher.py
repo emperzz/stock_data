@@ -612,6 +612,8 @@ class ZhituFetcher(BaseFetcher):
         days: int = 30,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Dispatch index codes to ``_get_index_kline_data`` (``/hz/`` prefix).
 
@@ -628,6 +630,7 @@ class ZhituFetcher(BaseFetcher):
             days,
             frequency,
             adjust,
+            asset=asset,
         )
 
     # ---------- board methods ----------

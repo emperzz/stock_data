@@ -35,13 +35,13 @@ class _FakeFetcher(BaseFetcher):
         return self._supports_quote_result
 
     # ABC stubs — not exercised in this test file
-    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None):
+    def _fetch_raw_data(self, stock_code, start_date, end_date, frequency="d", adjust=None, *, asset=None):
         return pd.DataFrame()
 
     def _normalize_data(self, df, stock_code):
         return df
 
-    def get_kline_data(self, stock_code, start_date, end_date, days, frequency, adjust):
+    def get_kline_data(self, stock_code, start_date, end_date, days, frequency, adjust, *, asset=None):
         return pd.DataFrame({"date": ["2026-06-29"], "close": [1.0]}), "fake"
 
 
@@ -98,7 +98,7 @@ def test_manager_picks_only_supporting_fetcher():
         def _normalize_data(self, df, stock_code):
             return df
 
-        def get_kline_data(self, stock_code, start_date, end_date, days, frequency, adjust):
+        def get_kline_data(self, stock_code, start_date, end_date, days, frequency, adjust, *, asset=None):
             captured.append((self.name, frequency, adjust))
             return pd.DataFrame({"date": ["2026-06-29"], "close": [1.0]}), self.name
 

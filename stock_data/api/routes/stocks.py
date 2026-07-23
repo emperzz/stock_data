@@ -74,7 +74,7 @@ from .helpers import (
     _format_date,
     _parse_indicators_param,
     _period_to_freq,
-    _reject_index_code,
+    _reject_invalid_stock_code,
     get_manager,
 )
 
@@ -154,9 +154,9 @@ def get_quote(
         Index codes are not supported. Use /indices/{index_code}/quote instead.
     """
     _forbid_quote_params(request)
-    _reject_index_code(stock_code, endpoint_kind="quote")
-
     manager = get_manager()
+    _reject_invalid_stock_code(stock_code, endpoint_kind="quote", manager=manager)
+
     quote = manager.get_realtime_quote(stock_code)
 
     if quote is None:
@@ -246,13 +246,13 @@ def get_kline(
     ``supports_kline`` at manager level decides fetcher availability;
     no route-layer reject for minute+adjust.
     """
-    _reject_index_code(code, endpoint_kind="kline")
+    manager = get_manager()
+    _reject_invalid_stock_code(code, endpoint_kind="kline", manager=manager)
     freq = _period_to_freq(period)
 
     requested_indicators = _parse_indicators_param(indicators)
     actual_days = _expand_indicator_lookback(requested_indicators, days)
 
-    manager = get_manager()
     df, source = manager.get_kline_data(
         code,
         start_date=start_date,
@@ -260,6 +260,7 @@ def get_kline(
         days=actual_days,
         frequency=freq,
         adjust=adjust or None,
+        asset="stock",
     )
     df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
     name = stock_list.get_stock_name(code, manager=manager)

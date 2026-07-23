@@ -191,6 +191,8 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Fetch K-line from zzshare.
 

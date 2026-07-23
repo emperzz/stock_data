@@ -70,6 +70,8 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
         end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Fetch K-line data from Tushare (supports d/w/m for stocks and CSI indices).
 
@@ -80,6 +82,11 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线
             adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权.
                    Only effective for stocks with 'd' frequency. Indices ignore this parameter.
+            asset: Server-internal override from the manager. ``"stock"`` forces
+                the stock upstream API (Tushare's ``daily``) regardless of
+                whether ``is_index_code(code)`` is True; ``"index"`` forces
+                the index API (``index_daily``); ``None`` keeps the
+                ``is_index_code`` auto-detect for direct callers.
         """
         self._ensure_api()
         if TushareFetcher._api is None:
@@ -87,10 +94,22 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
 
         try:
             code = normalize_stock_code(stock_code)
-            is_index = is_index_code(code) and get_index_type(code) == "csi"
+            if asset == "stock":
+                is_index = False
+            elif asset == "index":
+                is_index = True
+            else:
+                is_index = is_index_code(code) and get_index_type(code) == "csi"
 
             try:
-                ts_code = to_tushare_format(stock_code)
+                if asset == "stock":
+                    # /stocks/{code}/... — force stock-format code regardless
+                    # of CSI_INDEX_MAP classification. 000001 → 000001.SZ
+                    # (Ping An Bank) not 000001.SH (SH composite index).
+                    from ..utils.code_converter import to_tushare_stock_format
+                    ts_code = to_tushare_stock_format(stock_code)
+                else:
+                    ts_code = to_tushare_format(stock_code)
             except ValueError as e:
                 raise DataFetchError(str(e)) from e
 
@@ -174,6 +193,8 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
         days: int = 30,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Dispatch index codes to Tushare's separate ``index_daily/weekly/monthly``.
 
@@ -191,6 +212,7 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
             days,
             frequency,
             adjust,
+            asset=asset,
         )
 
     def _fetch_index_kline(

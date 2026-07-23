@@ -21,6 +21,25 @@ from ..core.types import UnifiedRealtimeQuote, safe_float
 from ..utils.code_converter import to_baostock_format
 from ..utils.normalize import get_index_type, is_a_share_stock_code, is_index_code
 
+
+def _to_baostock_stock_code(code: str) -> str:
+    """Stock-format baostock code regardless of CSI_INDEX_MAP classification.
+
+    ``000001`` → ``"sz.000001"`` (Ping An Bank), NOT ``"sh.000001"`` (SH index).
+    Used by ``/stocks/...`` handlers where asset is ``"stock"``.
+
+    BJ only covers ``8xxxxx``/``4xxxxx``/``920xxx`` per
+    ``A_SHARE_STOCK_PREFIXES``. ``9``-prefix codes that aren't BJ (e.g.
+    ``930xxx`` funds) fall through to the SH branch.
+    """
+    normalized = normalize_stock_code(code)
+    # Beijing: 920 prefix (3-digit) must be checked BEFORE the SH 9-branch.
+    if normalized.startswith(("8", "4", "920")):
+        return f"bj.{normalized}"
+    if normalized.startswith(("5", "6", "7", "9")):
+        return f"sh.{normalized}"
+    return f"sz.{normalized}"
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,6 +107,8 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
         end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Fetch K-line data from Baostock (supports d/w/m/5/15/30/60 for stocks, d/w/m for indices).
 
@@ -98,6 +119,10 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
             adjust: Adjustment type - None/3=不复权, '2'=前复权, '1'=后复权.
                    Defaults to '2' (前复权) if not specified.
+            asset: Server-internal override from the manager. Plumbed through
+                to ``_convert_code`` so e.g. ``000001`` on ``/stocks/`` keeps its
+                stock-format baostock code (``sh.600519`` style) instead of
+                being mis-routed to the index branch.
         """
         self._ensure_api()
         if not BaostockFetcher._init_ok:
@@ -106,13 +131,19 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
         # Check if requesting minute frequency for an index (indices don't support minute data)
         if frequency in ("5", "15", "30", "60"):
             code = normalize_stock_code(stock_code)
-            if is_index_code(code) and get_index_type(code) == "csi":
+            if asset == "index" or (asset is None and is_index_code(code) and get_index_type(code) == "csi"):
                 raise DataFetchError("Baostock does not support minute frequency for indices")
 
         try:
             import baostock as bs
 
-            bs_code, _ = self._convert_code(stock_code)
+            if asset == "stock":
+                # /stocks/{code}/... — force stock-format code regardless of
+                # CSI_INDEX_MAP classification. 000001 → sz.000001 (Ping An
+                # Bank) not sh.000001 (SH composite index).
+                bs_code = _to_baostock_stock_code(stock_code)
+            else:
+                bs_code, _ = self._convert_code(stock_code)
 
             # adjust is already mapped by _map_adjust
             adjflag = adjust or "3"

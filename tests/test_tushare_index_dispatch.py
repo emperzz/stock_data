@@ -127,6 +127,8 @@ class TestTushareIndexCapabilities:
         Guards against an accidental signature drift (e.g. dropping the
         ``adjust`` parameter) that would silently break callers using
         keyword arguments via the explorer's fetcher-test endpoint.
+        ``asset`` is the server-internal override plumbed through from the
+        manager; see ``BaseFetcher.get_kline_data``.
         """
         sig = inspect.signature(TushareFetcher.get_kline_data)
         params = list(sig.parameters)
@@ -138,6 +140,7 @@ class TestTushareIndexCapabilities:
             "days",
             "frequency",
             "adjust",
+            "asset",
         ]
 
 

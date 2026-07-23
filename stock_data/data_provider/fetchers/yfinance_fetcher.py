@@ -89,6 +89,8 @@ class YfinanceFetcher(BaseFetcher):
         end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
+        *,
+        asset: str | None = None,
     ) -> pd.DataFrame:
         """Fetch K-line data from yfinance (supports d/w/m/5/15/30/60).
 
@@ -99,11 +101,22 @@ class YfinanceFetcher(BaseFetcher):
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
             adjust: Adjustment type - None/True=调整后(前复权), False=未调整.
                    Defaults to True (前复权) if not specified.
+            asset: Server-internal override from the manager. ``"stock"``
+                forces the stock-format yfinance symbol (e.g. ``000001``
+                → ``000001.SZ`` for SZ listing, not ``000001.SS`` for
+                SH composite index). ``"index"`` lets ``_convert_code``
+                take its normal code-based path. ``None`` keeps the
+                pre-existing auto-detection for direct callers.
         """
         try:
             import yfinance as yf
 
-            code = self._convert_code(stock_code)
+            if asset == "stock":
+                from ..utils.code_converter import to_yfinance_stock_format
+
+                code = to_yfinance_stock_format(stock_code)
+            else:
+                code = self._convert_code(stock_code)
             logger.debug(f"[YfinanceFetcher] Fetching {code} ({frequency})")
 
             # yfinance interval mapping

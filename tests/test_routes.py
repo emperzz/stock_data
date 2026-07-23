@@ -283,7 +283,27 @@ class TestKline:
 
     def test_kline_invalid_stock(self, client):
         response = client.get("/api/v1/stocks/INVALID/kline?period=daily&days=5")
-        assert response.status_code == 503
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["error"] == "invalid_request"
+        assert "INVALID" in detail["message"]
+
+    def test_kline_ambiguous_000001_routes_as_stock(self, client):
+        """``000001`` is both Ping An Bank (stock) and 上证综指 (CSI index).
+
+        ``/stocks/000001/kline`` must NOT 400 (the old guard rejected it via
+        ``is_index_code``), and the manager must propagate ``asset="stock"``
+        to the fetcher so the stock upstream API is used instead of the
+        index one. We can't assert the actual upstream payload here without
+        mocking, so we assert status != 400 and, more importantly, that the
+        route accepts the request (not 400) — the fetcher-level plumbing is
+        covered by unit tests in test_base_unit / test_manager_two_stage_filter.
+        """
+        response = client.get("/api/v1/stocks/000001/kline?period=daily&days=5")
+        # Was 400 before the fix. Now 200 (real data via zzshare/akshare) or
+        # 503 (all upstreams down) — but never 400.
+        assert response.status_code != 400
+        assert response.status_code in (200, 503)
 
 
 class TestIndicesBlocksStocks:

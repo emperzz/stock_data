@@ -190,6 +190,7 @@ def get_index_kline(
         days=actual_days,
         frequency=freq,
         adjust=None,  # adjust already rejected above
+        asset="index",
     )
     df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
     index_name = _resolve_index_name(index_code)

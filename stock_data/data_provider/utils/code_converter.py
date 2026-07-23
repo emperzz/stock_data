@@ -264,6 +264,33 @@ def to_yfinance_format(code: str) -> str:
     return f"{code}.SZ"
 
 
+def to_yfinance_stock_format(code: str) -> str:
+    """Convert to yfinance ticker as if ``code`` is a stock (bypass index lookup).
+
+    Same as ``to_yfinance_format`` but skips the ``is_index_code(code)`` branch
+    so ambiguous codes like ``000001`` resolve to the SZ stock listing
+    (``000001.SZ``) instead of the SH composite index (``000001.SS``).
+    Used by ``/stocks/{code}/...`` where the route's URL path asserts stock
+    semantics, not the code's membership in ``CSI_INDEX_MAP``.
+    """
+    code = code.strip().upper()
+    if code.endswith((".SS", ".SZ", ".HK", ".BJ")):
+        return code
+    if code.isalpha() and len(code) <= 5:
+        return code
+    if code.startswith("HK"):
+        digits = code[2:]
+        return f"{digits}.HK"
+    # Beijing exchange
+    if code.startswith(("8", "4", "920")):
+        return f"{code}.BJ"
+    # Shanghai
+    if code.startswith(("6", "5", "7")):
+        return f"{code}.SS"
+    # Shenzhen (default; covers 000/001/002/003/300/301/302)
+    return f"{code}.SZ"
+
+
 # ---------------------------------------------------------------------------
 # Tushare
 # ---------------------------------------------------------------------------
@@ -304,6 +331,33 @@ def to_tushare_format(code: str) -> str:
     raise ValueError(f"Tushare does not support code {code}")
 
 
+def to_tushare_stock_format(code: str) -> str:
+    """Convert to Tushare ``ts_code`` as if ``code`` is a stock (bypass index lookup).
+
+    ``000001`` → ``000001.SZ`` (Ping An Bank, SZ listing) NOT ``000001.SH``
+    (SH composite index). Used by ``/stocks/{code}/...`` where the route's URL
+    path asserts stock semantics, not the code's membership in ``CSI_INDEX_MAP``.
+
+    HK / US / non-6-digit codes raise ``ValueError`` — Tushare has no stock
+    endpoint for those markets, mirroring :func:`to_tushare_format`.
+    """
+    from .normalize import is_hk_market
+
+    code = normalize_stock_code(code)
+    if is_hk_market(code):
+        raise ValueError(f"Tushare does not support HK market {code}")
+    if code.isalpha() and len(code) <= 5:
+        raise ValueError(f"Tushare does not support US market {code}")
+    # Beijing
+    if code.startswith(("8", "4", "920")):
+        return f"{code}.BJ"
+    # Shanghai
+    if code.startswith(("6", "5", "7")):
+        return f"{code}.SH"
+    # Shenzhen (default; covers 000/001/002/003/300/301/302)
+    return f"{code}.SZ"
+
+
 # ---------------------------------------------------------------------------
 # Myquant
 # ---------------------------------------------------------------------------
@@ -332,6 +386,35 @@ def to_myquant_format(code: str) -> str:
         return f"SHSE.{code}"
     # Default Shenzhen prefix covers 0/1/2/3/4 (SZ main + ChiNext) and 8 (BJ)
     if code.startswith(("0", "1", "2", "3", "4", "8")):
+        return f"SZSE.{code}"
+    raise ValueError(f"Cannot map code {code} to myquant format")
+
+
+def to_myquant_stock_format(code: str) -> str:
+    """Convert to myquant ``SHSE/SZSE.{code}`` as a stock (bypass index lookup).
+
+    ``000001`` → ``SZSE.000001`` (Ping An Bank) — does NOT raise
+    ``ValueError`` like :func:`to_myquant_format` does for codes that
+    ``is_index_code`` flags as indices. Used by ``/stocks/{code}/...`` where
+    the route's URL path asserts stock semantics.
+
+    BJ handling: Myquant uses ``SZSE.{code}`` for BJ listings, so ``920001``
+    resolves to ``SZSE.920001``. ``9``-prefix codes that aren't BJ (e.g.
+    ``930xxx`` funds) stay on the SH branch.
+    """
+    code = normalize_stock_code(code)
+    if is_hk_market(code):
+        raise ValueError(f"Myquant does not support HK market {code}")
+    if code.isalpha() and len(code) <= 5:
+        raise ValueError(f"Myquant does not support US market {code}")
+    # Beijing: 920 prefix (3-digit) must be checked BEFORE the SH 9-branch.
+    if code.startswith(("8", "4", "920")):
+        return f"SZSE.{code}"
+    # Shanghai
+    if code.startswith(("5", "6", "7", "9")):
+        return f"SHSE.{code}"
+    # Default Shenzhen prefix covers 0/1/2/3 (SZ main + ChiNext)
+    if code.startswith(("0", "1", "2", "3")):
         return f"SZSE.{code}"
     raise ValueError(f"Cannot map code {code} to myquant format")
 
