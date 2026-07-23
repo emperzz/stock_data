@@ -240,7 +240,24 @@ GET /api/v1/stocks/{code}/quote
 }
 ```
 
-**Note:** Index codes are not supported via `/stocks/{code}/quote`. Use `/indices/{code}/quote` instead.
+**400 contract** (post-2026-07-23): the route raises 400 via
+`_reject_invalid_stock_code` (`api/routes/helpers.py`) when
+`stock_list.get_stock_name(code)` returns empty. The message branches on
+`is_index_code(code)`:
+
+- `True` (code in `CSI_INDEX_MAP`, e.g. `000001`, `000300`):
+  `"Index {code} is not supported via this endpoint. Use /indices/{code}/quote instead."` —
+  caller likely wanted `/indices/...`; follow the redirect hint.
+- `False` (typo / delisted / unknown market tag):
+  `"Stock code {code} was not found in the stock list."` —
+  genuine not-found; no redirect.
+
+The same contract applies to `/stocks/{code}/kline`. Pinned by
+`tests/test_routes.py::TestKline::{test_kline_invalid_stock,test_kline_index_coded_input_redirects_message,test_kline_unknown_code_gets_not_found_message}` (the helper is shared between the two routes).
+
+**Cold-cache note:** the first call after a fresh `stock_list` table (or
+`STOCK_DB_INIT=true` reset) may add 1-3 s for a one-shot upstream
+`manager.get_all_stocks` warm; subsequent hits use SQLite directly.
 
 ---
 
