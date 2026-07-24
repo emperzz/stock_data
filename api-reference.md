@@ -538,7 +538,7 @@ GET /api/v1/boards/881270/history?source=ths&frequency=1m&board_type=industry
 **Parameters for `GET /boards`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `type` | string | null (all) | Board type: `concept`, `industry`, `index`, `special`. Omit to return every type the source exposes. `eastmoney` only supports `concept` + `industry`; `?type=index` / `?type=special` returns 400 on `source=eastmoney`. |
+| `type` | string | null (all) | Board type: `concept`, `industry`, `index`, `special`. Omit to query every type the source exposes (fan-out internally). Per-source coverage: `ths` supports `concept`+`industry` only (code prefix `885xxx`/`881xxx`); `eastmoney` supports `concept`+`industry` only (no index/special upstream); `zhitu` supports all 4 types. `?type=index`/`?type=special` returns 400 on `source=ths` or `source=eastmoney`. |
 | `source` | string | Required | Data source: `ths`, `eastmoney`, or `zhitu` |
 | `subtype` | string | null | Source-specific subtype (e.g. `申万行业` for zhitu). Validated per (source, type) pair. |
 | `include_quote` | bool | `false` | Include realtime price/change/market data (EastMoney only; ThsFetcher + Zhitu ignore) |
@@ -546,6 +546,15 @@ GET /api/v1/boards/881270/history?source=ths&frequency=1m&board_type=industry
 | `sort_order` | string | `desc` | Sort order: `asc` or `desc` |
 | `limit` | int | null | Max items (1-500) |
 | `refresh` | bool | `false` | Force fetch latest from upstream |
+
+**Board type coverage by source:**
+
+| Type | `ths` | `eastmoney` | `zhitu` |
+|---|---|---|---|
+| `concept` | ✅ `同花顺概念` / `同花顺题材` | ✅ `concept` | ✅ `热门概念` / `概念板块` / `地域板块` |
+| `industry` | ✅ `同花顺行业` | ✅ `industry` | ✅ `申万行业` / `申万二级` / `证监会行业` |
+| `index` | ❌ | ❌ | ✅ `分类` / `指数成分` / `大盘指数` |
+| `special` | ❌ | ❌ | ✅ `风险警示` / `次新股` / `沪港通` / `深港通` |
 
 **Response (with `include_quote=false`, default):**
 ```json
