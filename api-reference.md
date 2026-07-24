@@ -481,7 +481,7 @@ GET /api/v1/stocks?market=csi&offset=0&limit=100
 `exchange` is `"SH"` / `"SZ"` / `"BJ"` when known, else `null`.
 
 **Caching behavior:**
-- First call fetches from upstream (Tushare for A-share if token, otherwise Akshare)
+- First call fetches from upstream (Zzshare primary → Akshare / Zhitu / Myquant fallback; Tushare has no STOCK_LIST capability)
 - Subsequent calls return cached data (~50ms)
 - Use `refresh=true` to force update from upstream
 
@@ -1093,10 +1093,10 @@ GET /api/v1/news/search?q=茅台&from=2026-05-01&to=2026-05-20&limit=20
 | `limit` | int | 20 | Result count (1-100) |
 
 Routed via `NEWS_SEARCH` capability. **EastMoney** (P6) is primary;
-**BaiduFetcher** (P7, requires `BAIDU_API_KEY`) is the failover. Both
-sources are restricted to canonical news subdomains (`finance.eastmoney.com`,
-`www.cls.cn`, `news.10jqka.com.cn`); Baidu also honors `BAIDU_NEWS_DOMAINS`
-overrides.
+**ThsFetcher** (P7) and **BaiduFetcher** (P7, requires `BAIDU_API_KEY`) are
+the failovers. All three sources are restricted to canonical news
+subdomains (`finance.eastmoney.com`, `www.cls.cn`, `news.10jqka.com.cn`);
+Baidu also honors `BAIDU_NEWS_DOMAINS` overrides.
 
 ```json
 {
@@ -1167,7 +1167,11 @@ points at internal networks (`127.0.0.1`, `10.0.0.0/8`, etc.).
   "author": "财经早知道",
   "source_domain": "finance.eastmoney.com",
   "extractor": "default",
-  "byte_size": 4321
+  "byte_size": 4321,
+  "content_status": "ok",
+  "reason": null,
+  "canonical_url": "https://finance.eastmoney.com/news/...",
+  "http_status": 200
 }
 ```
 

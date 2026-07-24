@@ -191,11 +191,16 @@ An interactive docs UI is mounted at `/explorer/` (after `python -m stock_data.s
 
 ### A-share Stocks (China)
 
-| Market | Format | Examples |
-|--------|--------|----------|
-| Shanghai | 6 digits + `.SS` | `600519.SS`, `000001.SS` |
-| Shenzhen | 6 digits + `.SZ` | `000001.SZ`, `399006.SZ` |
-| Beijing | 6 digits + `.BJ` | `430001.BJ` |
+**Inbound API format is always bare 6-digit.** The server canonicalizes
+all variants via `normalize_stock_code()` (server-side, see CLAUDE.md).
+The `.SS` / `.SZ` / `.BJ` suffixes below are the **Yfinance outbound
+protocol** (used by the fetcher's SDK call, never by API input).
+
+| Market | API input | Yfinance outbound (fetcher-internal) |
+|--------|-----------|--------------------------------------|
+| Shanghai | `600519`, `000001` | `600519.SS`, `000001.SS` |
+| Shenzhen | `000001`, `399006` | `000001.SZ`, `399006.SZ` |
+| Beijing | `430001` | `430001.BJ` |
 
 **Input examples (all normalized to 6-digit code):**
 ```bash
