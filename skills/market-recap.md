@@ -243,7 +243,7 @@ agent 在执行步骤 4-5 时，按需跳读 `market-principles` 取判断方法
 
 ## 7. Anti-patterns（不要做）
 
-- **不要**重复列端点目录 —— 端点走 `market-data-obtain`，本 skill 列了就是双源真相
+- **不要**凭记忆猜或硬编端点 —— 取数时去 `market-data-obtain` 查当前端点（服务器端点会变，硬编即漂移）
 - **不要**规定判断标准（"消息影响市场的判定：政策 > 业绩 > 行业新闻"等） —— 判断标准走 `market-principles`
 - **不要**把北交所个股与主板 / 创业板直接比较连板高度 —— 北交所 30cm 涨跌幅与独立行情，龙头识别时单独评估
 - **不要**写完文件不更新 `market_tracking.md` —— watchlist 是本 skill 的核心产出
