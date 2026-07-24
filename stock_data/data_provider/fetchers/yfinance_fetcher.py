@@ -8,6 +8,7 @@ Stooq is used as fallback for US stocks.
 import csv
 import logging
 import os
+from datetime import datetime, timedelta
 from io import StringIO
 from urllib.request import Request, urlopen
 
@@ -134,10 +135,18 @@ class YfinanceFetcher(BaseFetcher):
             # adjust already mapped by _map_adjust: None=不复权, "qfq"=前复权
             auto_adjust = adjust is not None
 
+            # Yfinance treats ``end`` as EXCLUSIVE — passing end_date=today
+            # returns data through yesterday, not today. Add 1 day so the
+            # caller's inclusive end_date semantics hold. base.py resolves
+            # end_date to non-None before reaching here, so no None guard.
+            end_date_for_yf = (
+                datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+
             df = yf.download(
                 tickers=code,
                 start=start_date,
-                end=end_date,
+                end=end_date_for_yf,
                 progress=False,
                 auto_adjust=auto_adjust,
                 multi_level_index=True,
