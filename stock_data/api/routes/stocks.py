@@ -72,6 +72,7 @@ from .helpers import (
     _expand_indicator_lookback,
     _forbid_quote_params,
     _format_date,
+    _maybe_merge_today_bar,
     _parse_indicators_param,
     _period_to_freq,
     _reject_invalid_stock_code,
@@ -263,6 +264,7 @@ def get_kline(
         asset="stock",
     )
     df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
+    df = _maybe_merge_today_bar(df, code, end_date, freq, manager, asset="stock")
     name = stock_list.get_stock_name(code, manager=manager)
 
     records = df.to_dict("records")

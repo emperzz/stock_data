@@ -415,6 +415,19 @@ query param as `/stocks/{code}/kline` and runs through the same
 The `KLineData` response shape and its conditional serialization behavior
 are the same as stocks (see [Standardized Data Schema](#standardized-data-schema)).
 
+## K-line today's partial bar
+
+K 线 routes (`/stocks/{code}/kline` + `/indices/{code}/kline`) 默认在以下条件全部满足时合并今日 partial bar：
+
+1. `frequency ∈ {"d", "w", "m"}`（minute 频段不触发——单点 tick 不能混入聚合 bar）
+2. `end_date`（显式或默认）包含今天
+3. 今天在 A 股交易日历中（`is_trade_date(today)` 为 True）
+4. K 线响应末根日期 ≠ 今天
+
+合并 source：`manager.get_realtime_quote(code)` (stock) 或 `manager.get_index_realtime_quote(code)` (index)，best-effort，失败时回退到原 K 线。今日 partial bar **不**带 `?indicators=` 计算结果（指标只对已收盘数据计算）。详见 `docs/kline-today-bar-merge-spec-2026-07-24.md`。
+
+**时区假设**：server 跑在 CST（Asia/Shanghai）；非 CST 环境下 `date.today()` 与 A 股交易日可能错位（晚 8h 才跨日）。
+
 ## Common Commands
 
 > **Use `.venv` when present; fall back to system Python otherwise.** The
@@ -523,6 +536,7 @@ The non-obvious knobs worth memorizing here:
 - **Don't** treat `data_source` on `/boards/{code}/stocks` as the user's fetcher choice — read `effective_source` instead. As of 2026-07-10 the helper transparently falls back from THS to ZZSHARE (or vice-versa) for `include_quote=false` requests on `source='ths'`; clients that compare `query_source` vs `data_source` to detect fallback will get false positives (cache hit reports `'persistence'`, real upstream serving reports `'ths'`/`'zzshare'`). The `effective_source` field is the only reliable fallback detector; `data_source=='persistence'` means "from cache" regardless of which fetcher originally wrote the row.
 - **Don't** trust `stocks.length == top_n` as evidence that the board has exactly N members — it could mean truncation (THS upstream 50-stock login wall). Always read `quote_truncated` and `quote_total_in_board` together. (2026-07-13)
 - **Don't** reintroduce `manager.get_stock_list(market, refresh=False)` in `persistence/stock_list.py::get_stock_name`'s cold-cache auto-warm branch. That method does NOT exist on `DataFetcherManager` (the public name is `get_all_stocks`); the `AttributeError` is silently swallowed by `except Exception: pass`, so the DB stays empty and every cold-cache request 400s. Use the persistence-level `get_stock_list(market, manager=manager)` (same file, line 105), which already wires fetch + `update_cached_stocks`. Likewise **don't** collapse `_reject_invalid_stock_code`'s two message branches into one template — the "Index X is not supported..." wording is correct ONLY when `is_index_code(code)` is true; for genuinely-unknown codes the helper emits "Stock code X was not found..." (see Standardized Data Schema → "/stocks/{code}/* 400 contract"). (2026-07-23)
+- **Don't** 在 fetcher 层 hardcode "今日 partial bar" 合并逻辑；统一在 K-line route 层 helper 走。Fetcher 层的"今日 bar"逻辑会跨 fetcher 行为不一致，并绕过 manager 的短路与熔断保护。统一在 `api/routes/helpers.py::_maybe_merge_today_bar` 触发（见 [K-line today's partial bar](#k-line-todays-partial-bar)）。
 
 ## Skill Discipline
 

@@ -18,8 +18,10 @@ lifts, not redesigns.
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import TYPE_CHECKING
 
+import pandas as pd
 from fastapi import HTTPException, Request
 
 from ...data_provider import DataFetcherManager
@@ -29,11 +31,12 @@ from ...data_provider.indicators import compute
 from ...data_provider.indicators.registry import estimate_lookback
 from ...data_provider.indicators.types import IndicatorKey
 from ...data_provider.persistence import stock_list
+from ...data_provider.persistence.trade_calendar import is_trade_date
 from ...data_provider.utils.normalize import is_index_code
 from ..schemas import KLineData
 
 if TYPE_CHECKING:
-    import pandas as pd
+    pass
 
 
 logger = logging.getLogger(__name__)
@@ -102,7 +105,9 @@ _INDEX_CODE_HINT_TEMPLATES = {
 }
 
 
-def _reject_invalid_stock_code(code: str, *, endpoint_kind: str, manager: DataFetcherManager | None = None) -> None:
+def _reject_invalid_stock_code(
+    code: str, *, endpoint_kind: str, manager: DataFetcherManager | None = None
+) -> None:
     """Raise 400 if ``code`` is not a recognized stock code. Used by ``/stocks/{code}/*``.
 
     Positive validation: a code is a valid stock iff the ``stock_list`` persistence
@@ -264,6 +269,90 @@ def _apply_indicators(
     if actual_days > days and len(df) > days:
         df = df.tail(days).reset_index(drop=True)
     return df
+
+
+# Minute frequencies (1m/5m/15m/30m/60m) — see _MINUTE_FREQS. We don't
+# inject a single quote tick into an intraday-aggregate bar because the
+# semantics are wrong (a 5m bar is a 5-minute aggregate, not a single tick).
+_MINUTE_FREQS: frozenset[str] = frozenset({"1", "5", "15", "30", "60"})
+
+
+def _maybe_merge_today_bar(
+    df: pd.DataFrame,
+    code: str,
+    end_date: str | None,
+    frequency: str,
+    manager: DataFetcherManager,
+    *,
+    asset: str = "stock",
+) -> pd.DataFrame:
+    """If end_date includes today AND today is a trading day AND the K-line
+    doesn't already contain today's bar, best-effort fetch realtime quote
+    and append today's partial bar.
+
+    Only triggers for daily/weekly/monthly frequency; minute bars are
+    intraday aggregates and a single quote tick is semantically wrong to
+    inject as a 5m/15m bar.
+
+    See docs/kline-today-bar-merge-spec-2026-07-24.md §3 for contract.
+    """
+    # 0. minute freq → skip (semantically wrong)
+    if frequency in _MINUTE_FREQS:
+        return df
+
+    if df is None or df.empty:
+        return df
+
+    today_str = date.today().isoformat()
+    effective_end = end_date or today_str
+
+    # 1. end_date must include today
+    if effective_end < today_str:
+        return df
+
+    # 2. today must be a trading day (fail-closed on DB error)
+    try:
+        trade_day = is_trade_date(today_str)
+    except Exception as e:
+        logger.debug(f"[maybe_merge_today_bar] is_trade_date failed for {today_str}: {e}")
+        return df
+    if not trade_day:
+        return df
+
+    # 3. df already has today's bar → no-op (avoid quote call)
+    last_date = str(df.iloc[-1]["date"])[:10]
+    if last_date == today_str:
+        return df
+
+    # 4. best-effort fetch realtime quote. Broadly catching Exception
+    # because a quote outage must NEVER break the K-line response.
+    try:
+        quote = (
+            manager.get_realtime_quote(code)
+            if asset == "stock"
+            else manager.get_index_realtime_quote(code)
+        )
+    except Exception as e:
+        logger.debug(f"[maybe_merge_today_bar] quote fetch failed for {code}: {e}")
+        return df
+
+    if quote is None or quote.price is None:
+        return df
+
+    # 5. construct today's partial bar (safe_float/safe_int per project
+    # invariant: NaN/inf/-inf must never leak into numeric fields; nullable
+    # fields retain None).
+    today_bar = {
+        "date": today_str,
+        "open": safe_float(quote.open_price, 0.0),
+        "high": safe_float(quote.high, 0.0),
+        "low": safe_float(quote.low, 0.0),
+        "close": safe_float(quote.price, 0.0),
+        "volume": safe_int(quote.volume, 0),
+        "amount": safe_float(quote.amount, None),
+        "pct_chg": safe_float(quote.change_pct, None),
+    }
+    return pd.concat([df, pd.DataFrame([today_bar])], ignore_index=True)
 
 
 def _build_kline_data(row: dict, format_date) -> KLineData:

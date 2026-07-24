@@ -32,6 +32,7 @@ from .helpers import (
     _expand_indicator_lookback,
     _forbid_quote_params,
     _format_date,
+    _maybe_merge_today_bar,
     _parse_indicators_param,
     _period_to_freq,
     _reject_non_index_code,
@@ -193,6 +194,7 @@ def get_index_kline(
         asset="index",
     )
     df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
+    df = _maybe_merge_today_bar(df, index_code, end_date, freq, manager, asset="index")
     index_name = _resolve_index_name(index_code)
 
     records = df.to_dict("records")
