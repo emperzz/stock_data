@@ -89,3 +89,31 @@ class TestWithZtFlags:
             data = response.json()
             assert data["stocks"][0]["is_limit_up"] is False
             assert data["stocks"][0]["lb_count"] is None
+
+    def test_with_zt_flags_pool_raises_falls_back(self, client):
+        """zt-pool raises (e.g. upstream error) → route still returns 200, is_limit_up=False
+        and lb_count=None for every stock (never 5xx — best-effort annotation contract)."""
+        from stock_data.data_provider.base import DataFetchError
+
+        with patch(_PERSISTENCE_PATCH) as mock_bs, patch(_ZT_POOL_PATCH) as mock_zt:
+            mock_bs.return_value = (
+                [
+                    {"stock_code": "600519", "stock_name": "贵州茅台"},
+                    {"stock_code": "000001", "stock_name": "平安银行"},
+                ],
+                "persistence",
+                "ths",
+                None,
+                False,
+                2,
+            )
+            mock_zt.side_effect = DataFetchError("network error")
+            response = client.get(
+                "/api/v1/boards/885595/stocks?source=ths&include_quote=false&with_zt_flags=true"
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["stocks"]) == 2
+            for stock in data["stocks"]:
+                assert stock["is_limit_up"] is False
+                assert stock["lb_count"] is None

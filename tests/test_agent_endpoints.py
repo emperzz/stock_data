@@ -298,6 +298,43 @@ class TestFilterStocks:
             assert data["summary"]["matched"] == 1
             assert data["matched_stocks"][0]["code"] == "A"
 
+    def test_filter_excludes_row_when_value_is_none(self, client):
+        """When a filter is set but the row's value is None, the row is excluded.
+
+        Pins the contract: ``_passes_range(value, range_)`` returns False when
+        ``value is None and range_ is not None`` (the "no data → no match"
+        rule). Stocks with ``turnover_rate=None`` (or missing) must be
+        filtered out when ``turnover_pct.min`` is set.
+        """
+        rows = [
+            # A: turnover_rate explicitly None → excluded
+            {"stock_code": "A", "stock_name": "A", "price": 10.0, "change_pct": 5.0,
+             "turnover_rate": None, "amount": 1e9, "total_mv": 1e9, "open": 9.0,
+             "high": 10.0, "low": 9.0, "volume": 0},
+            # B: turnover_rate field omitted entirely → also None → excluded
+            {"stock_code": "B", "stock_name": "B", "price": 10.0, "change_pct": 5.0,
+             "amount": 1e9, "total_mv": 1e9, "open": 9.0, "high": 10.0,
+             "low": 9.0, "volume": 0},
+            # C: turnover_rate=8.0 (>= 5.0) → included
+            {"stock_code": "C", "stock_name": "C", "price": 20.0, "change_pct": 7.0,
+             "turnover_rate": 8.0, "amount": 5e9, "total_mv": 5e9, "open": 19.0,
+             "high": 21.0, "low": 19.0, "volume": 0},
+        ]
+        with self._patch_board(rows):
+            response = client.post(
+                "/api/v1/agent/boards/filter-stocks",
+                json={
+                    "board_code": "885005",
+                    "source": "ths",
+                    "filters": {"turnover_pct": {"min": 5.0}},
+                },
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["summary"]["total_in_board"] == 3
+            assert data["summary"]["matched"] == 1
+            assert data["matched_stocks"][0]["code"] == "C"
+
 
 class TestAgentManifest:
     def test_agent_endpoints_appear_in_manifest(self, client):
@@ -318,3 +355,78 @@ class TestAgentManifest:
         assert "/api/v1/agent/boards/stock-overlap" in paths
         assert "/api/v1/agent/stocks/board-overlap" in paths
         assert "/api/v1/agent/boards/filter-stocks" in paths
+
+
+class TestAgentCacheHit:
+    """Second request with identical body must hit the TTLCache and skip the
+    persistence/manager call. One test per agent endpoint (3 endpoints).
+    """
+
+    def test_cache_hit_boards_stock_overlap(self, client):
+        with patch(_BOARD_STOCKS_PATCH) as mock_bs:
+            mock_bs.return_value = (
+                [{"stock_code": "600519", "stock_name": "贵州茅台"}],
+                "persistence",
+                "ths",
+                None,
+                False,
+                1,
+            )
+            payload = {"codes": ["cache_boards_overlap_a", "cache_boards_overlap_b"]}
+            r1 = client.post("/api/v1/agent/boards/stock-overlap", json=payload)
+            # 1 board fetch per stock; 2 boards → 2 calls. Then assert the 2nd
+            # request is a cache hit (call count stays at 2, not 4).
+            assert mock_bs.call_count == 2
+            r2 = client.post("/api/v1/agent/boards/stock-overlap", json=payload)
+            assert r1.status_code == 200
+            assert r2.status_code == 200
+            assert r1.json() == r2.json()
+            assert mock_bs.call_count == 2  # 2nd request hit cache, no extra calls
+
+    def test_cache_hit_stocks_board_overlap(self, client):
+        with patch(_STOCK_MEMBERSHIPS_PATCH) as mock_sm:
+            mock_sm.side_effect = [
+                (
+                    [{"code": "885xxx", "name": "半导体", "type": "concept",
+                      "subtype": "", "source": "ths"}],
+                    [],
+                    "persistence",
+                ),
+                (
+                    [{"code": "885xxx", "name": "半导体", "type": "concept",
+                      "subtype": "", "source": "ths"}],
+                    [],
+                    "persistence",
+                ),
+            ]
+            payload = {"codes": ["cache_stocks_overlap_c", "cache_stocks_overlap_d"]}
+            r1 = client.post("/api/v1/agent/stocks/board-overlap", json=payload)
+            # 1 membership fetch per stock; 2 stocks → 2 calls. Then assert
+            # the 2nd request is a cache hit (call count stays at 2, not 4).
+            assert mock_sm.call_count == 2
+            r2 = client.post("/api/v1/agent/stocks/board-overlap", json=payload)
+            assert r1.status_code == 200
+            assert r2.status_code == 200
+            assert r1.json() == r2.json()
+            assert mock_sm.call_count == 2  # 2nd request hit cache, no extra calls
+
+    def test_cache_hit_filter_stocks(self, client):
+        rows = [
+            {"stock_code": "X", "stock_name": "X", "price": 10.0, "change_pct": 5.0,
+             "turnover_rate": 8.0, "amount": 1e9, "total_mv": 1e9, "open": 9.0,
+             "high": 10.0, "low": 9.0, "volume": 0},
+        ]
+        with patch(_BOARD_STOCKS_PATCH, return_value=(
+            rows, "persistence", "ths", None, False, len(rows),
+        )) as mock_bs:
+            payload = {
+                "board_code": "cache_filter_stocks_board_001",
+                "source": "ths",
+                "filters": {"turnover_pct": {"min": 5.0}},
+            }
+            r1 = client.post("/api/v1/agent/boards/filter-stocks", json=payload)
+            r2 = client.post("/api/v1/agent/boards/filter-stocks", json=payload)
+            assert r1.status_code == 200
+            assert r2.status_code == 200
+            assert r1.json() == r2.json()
+            mock_bs.assert_called_once()
