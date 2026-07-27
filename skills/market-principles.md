@@ -82,7 +82,7 @@ A 股市场判断的**总入口 skill**。本 skill 本身**不绑定任何特�
 |---|---|---|---|
 | `market-data-obtain` | 任何市场数据获取请求（行情、资金、新闻、公告、研报、板块） | 列出全部服务器端点 + 服务器失败时的 fallback 策略 | [skills/market-data-obtain.md](./market-data-obtain.md) |
 | `market-recap` | 复盘流程执行（盘前 / 盘中 / 盘后三时段统一触发；写入 `./market_recap/{date}.md` + `market_tracking.md`） | 复盘流程的工程化（读取顺序、写入策略、chat / 文件分工）；归因方法论仍由本 skill 提供 | [skills/market-recap.md](./market-recap.md) |
-| `stock-picking` | 用户明确选股需求（"帮我选票" / "龙头带动的票" / 指定板块内挑票） | 选股流程执行器：实时筛强势板块 → 板块内定龙头 → 技术 / 量价 / 业务 / 财务漏斗；tracking 只做富化 | [skills/stock-picking.md](./stock-picking.md) |
+| `stock-picking` | 用户明确选股需求（"帮我选票" / "龙头带动的跟随票" / 指定板块内挑票） | 选股流程执行器：**板块漏斗**（成分股数 / 涨停结构双硬门槛）→ **板块内定龙头**（锚定参照，不进候选）→ **个股漏斗**（量价换手含最高涨幅 → K 线 / MA60 → 5 分钟分时软排序 → 业务相似双重门控 → 财务 tiebreaker）；tracking 只做富化 | [skills/stock-picking.md](./stock-picking.md) |
 
 **调用约定**：
 
@@ -113,7 +113,7 @@ A 股市场判断的**总入口 skill**。本 skill 本身**不绑定任何特�
 
 | 文档块 | 策略 | 工具操作 |
 |---|---|---|
-| 每日 md 顶部"消息" / "复盘" 块 | **覆写** | Edit 替换该 section 内容 |
+| 每日 md 顶部"消息"块 | **覆写** | Edit 替换该 section 内容 |
 | 每日 md 时间戳"判断"块 | **追加** | Edit 在"判断演化日志"前插入新块 |
 | 持久化文档 | **按需更新**（全量重写或 diff 增量均可） | 每次写每日 md 时视需要同步更新 |
 

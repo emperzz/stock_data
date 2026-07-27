@@ -623,8 +623,8 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 ## 14. 与 `market-principles` 的协作
 
 - **入口**：agent 收到市场判断请求 → 触发 `market-principles`
-- **数据采集**：`market-principles` 工作流第 5 步（"收集当日消息、行情数据"）→ 通过**本 skill** 选定服务器端点
-- **判断**：采集完数据后，回到 `market-principles` 第 4 节核心原则做判断
-- **回写**：判断结果按 `market-principles` 第 7/8 节模板写入每日 md 和 `market_tracking.md`
+- **数据采集**：`market-principles` 工作流第 5 步（通过配套 skill 收集消息、行情、板块、资金数据）→ 通过**本 skill** 选定服务器端点
+- **判断**：采集完数据后，回到 `market-principles` **第 5 节核心原则 + 第 6 节龙头股判断方法**做判断
+- **回写**：判断结果按 `market-principles` **第 9 节（每日 md 文件模板）** + **第 10 节（持久化文档模板）** 写入每日 md 和 `market_tracking.md`
 
 详细工作流见 `market-principles` 第 9 节。
