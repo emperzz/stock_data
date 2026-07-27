@@ -415,12 +415,17 @@ def make_stocks_board_overlap_cache_key(codes: list[str]) -> str:
     return "agent_stocks_board_overlap:" + ",".join(sorted(codes))
 
 
-def make_filter_stocks_cache_key(board_code: str, source: str, filters: dict) -> str:
-    """Cache key for POST /agent/boards/filter-stocks. Includes board, source, and a
-    stable JSON-serialized filter dict (sorted keys)."""
+def make_filter_stocks_cache_key(
+    board_code: str,
+    source: str,
+    filters: dict,
+    limit: int | None,
+) -> str:
+    """Cache key for POST /agent/boards/filter-stocks."""
     import hashlib
     import json
 
+    payload = {"filters": filters or {}, "limit": limit}
     # json.dumps with sort_keys + separators produces a deterministic compact repr.
-    filt_repr = json.dumps(filters or {}, sort_keys=True, separators=(",", ":"), default=str)
-    return "agent_filter_stocks:" + board_code + ":" + source + ":" + hashlib.sha256(filt_repr.encode("utf-8")).hexdigest()[:16]
+    payload_repr = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return "agent_filter_stocks:" + board_code + ":" + source + ":" + hashlib.sha256(payload_repr.encode("utf-8")).hexdigest()[:16]

@@ -278,7 +278,10 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
     fields are required for the spec's stock-picking §4 step 6 thresholds.
     """
     cache_key = make_filter_stocks_cache_key(
-        payload.board_code, payload.source, payload.filters.model_dump()
+        payload.board_code,
+        payload.source,
+        payload.filters.model_dump(),
+        payload.limit,
     )
     hit = cached_lookup(get_quote_cache, cache_key, "agent_filter_stocks")
     if hit is not None:
@@ -292,6 +295,7 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
                 source=payload.source,
                 include_quote=True,
                 manager=manager,
+                top_n=payload.limit or 50,
             )
         )
     except (DataFetchError, ValueError) as exc:

@@ -410,7 +410,39 @@ class TestAgentCacheHit:
             assert r1.json() == r2.json()
             assert mock_sm.call_count == 2  # 2nd request hit cache, no extra calls
 
-    def test_cache_hit_filter_stocks(self, client):
+    def test_different_limits_use_different_cache_entries(self, client):
+        """Limit participates in the cache key because it is applied upstream."""
+        rows = [
+            {"stock_code": f"L{i}", "stock_name": f"L{i}", "price": 10.0 + i,
+             "change_pct": 5.0, "turnover_rate": 5.0, "amount": 1e9, "total_mv": 1e9,
+             "open": 9.0, "high": 10.0, "low": 9.0, "volume": 0}
+            for i in range(4)
+        ]
+        with patch(_BOARD_STOCKS_PATCH, return_value=(
+            rows, "persistence", "ths", None, False, len(rows),
+        )) as mock_bs:
+            base = {
+                "board_code": "cache_filter_limit_board_001",
+                "source": "ths",
+                "filters": {},
+            }
+            first = client.post(
+                "/api/v1/agent/boards/filter-stocks",
+                json={**base, "limit": 1},
+            )
+            second = client.post(
+                "/api/v1/agent/boards/filter-stocks",
+                json={**base, "limit": 3},
+            )
+
+            assert first.status_code == 200
+            assert second.status_code == 200
+            assert len(first.json()["matched_stocks"]) == 1
+            assert len(second.json()["matched_stocks"]) == 3
+            assert mock_bs.call_count == 2
+            assert mock_bs.call_args_list[0].kwargs["top_n"] == 1
+            assert mock_bs.call_args_list[1].kwargs["top_n"] == 3
+
         rows = [
             {"stock_code": "X", "stock_name": "X", "price": 10.0, "change_pct": 5.0,
              "turnover_rate": 8.0, "amount": 1e9, "total_mv": 1e9, "open": 9.0,
