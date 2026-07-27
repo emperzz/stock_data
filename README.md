@@ -73,6 +73,40 @@ curl 'http://localhost:8888/api/v1/news/morning-briefing?date=2026-07-14'
 curl 'http://localhost:8888/api/v1/news/market-recap?date=2026-07-14'
 ```
 
+**Agent batch endpoints** (server-side aggregations for AI agents — replace the typical agent N+1 fetch + manual set-arithmetic pattern):
+
+```bash
+# Pairwise stock-set intersection + Jaccard across 2-10 boards
+curl -X POST http://localhost:8888/api/v1/agent/boards/stock-overlap \
+  -H 'Content-Type: application/json' \
+  -d '{"codes": ["885595", "881270", "885914"]}'
+
+# Pairwise board-set intersection + Jaccard across 2-10 stocks
+curl -X POST http://localhost:8888/api/v1/agent/stocks/board-overlap \
+  -H 'Content-Type: application/json' \
+  -d '{"codes": ["600519", "000858", "000568"]}'
+
+# Server-side numeric filter on a board's constituents
+curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "board_code": "885595",
+    "source": "ths",
+    "filters": {
+      "turnover_pct": {"min": 5.0, "max": 20.0},
+      "change_pct": {"min": 0.0}
+    },
+    "limit": 10
+  }'
+```
+
+All three live under `/api/v1/agent/*` and use a 60s in-memory cache
+(`limit` participates in the `filter-stocks` cache key — different
+limits trigger separate upstream `top_n` fetches and separate cache
+entries). Per-item upstream failures are reported in `errors[]` and
+do not abort the response. See **[api-reference.md](api-reference.md#agent-batch-api)** for full
+request/response shapes.
+
 ## API Endpoints
 
 Full per-endpoint reference (request params, response shapes, JSON
@@ -84,7 +118,8 @@ company profile · per-stock news · trade calendar · indices · stock list ·
 boards (list / stocks / stock→boards / quote / news / surges / history) · 涨跌停股池 ·
 margin · block trade · holder count · dividend · dragon-tiger · fund flow ·
 hot topics · north-bound flow · research reports · announcements ·
-news search / flash / content · 财联社早报 / 焦点复盘.
+news search / flash / content · 财联社早报 / 焦点复盘 · **agent batch**
+(boards/stock-overlap · stocks/board-overlap · boards/filter-stocks).
 
 ## API Response Caching
 

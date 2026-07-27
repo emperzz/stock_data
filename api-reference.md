@@ -1249,3 +1249,253 @@ Subject ids are imported from `stock_data.data_provider.fetchers.cls_fetcher`
 (`CLS_SUBJECT_MORNING_BRIEFING = 1151`, `CLS_SUBJECT_MARKET_RECAP = 1135`,
 probed 2026-07-14); if CLS rotates these the manifest will surface drift
 via the `subject_id mismatch` warning before the article body.
+
+---
+
+## Agent Batch API
+
+All routes in this section are JSON-in / JSON-out `POST` endpoints under
+`/api/v1/agent/*` (`stock_data/api/routes/agent.py`). They are server-side
+aggregations: the typical AI-agent flow of "fetch N boards, pairwise
+compute intersection, summarize" is folded into one request.
+
+**Common contract:**
+
+- **Per-item error isolation.** One upstream `DataFetchError` / `ValueError`
+  on a single code is recorded in the response `errors[]` array; the
+  remaining items still complete. The route never aborts the whole
+  response on a single failure.
+- **60s in-memory cache.** Cached under the existing `get_quote_cache`
+  (reused as a generic 60s TTLCache slot for agent results). The
+  `filter-stocks` cache key also includes `limit`, because `limit` is
+  forwarded to upstream `get_board_stocks(..., top_n=limit)`.
+- **No LLM judgment.** These endpoints emit only numeric / set-arithmetic
+  facts. "Which stock is the leader" / "Which board is the better pick"
+  remains the agent's job via `skills/market-principles.md`.
+- **Capability-free.** Routes are decorated with
+  `@endpoint_meta(capabilities=[])` — they don't map to a single
+  `DataCapability` flag.
+
+---
+
+### POST /api/v1/agent/boards/stock-overlap
+
+Pairwise intersection + Jaccard of the stock sets belonging to 2-10
+boards. Use case: "given 2-10 candidate boards, which stocks appear in
+more than one?".
+
+```bash
+POST /api/v1/agent/boards/stock-overlap
+Content-Type: application/json
+```
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `codes` | string[] | yes | 2-10 board codes (THS platecode — `885xxx` concept, `881xxx` industry). |
+
+**Response (200):**
+
+```json
+{
+  "sets": [
+    {"code": "885595", "count": 87, "source": "ths"},
+    {"code": "881270", "count": 12, "source": "ths"}
+  ],
+  "pairs": [
+    {
+      "a": "881270",
+      "b": "885595",
+      "intersection": ["000568", "600519"],
+      "intersection_count": 2,
+      "jaccard": 0.0206
+    }
+  ],
+  "errors": []
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `sets[].code` | string | The board code. |
+| `sets[].count` | int | Number of stocks in the board's set (post-dedupe). |
+| `sets[].source` | string | `effective_source` (the fetcher that actually served the upstream call). On a persistence hit this is the cache-key label (`"ths"`). |
+| `pairs[].a` / `pairs[].b` | string | The two board codes (alphabetical, `a < b`). |
+| `pairs[].intersection` | string[] | Stock codes appearing in both sets, sorted ascending. |
+| `pairs[].intersection_count` | int | `len(intersection)`. |
+| `pairs[].jaccard` | float | `|A ∩ B| / |A ∪ B|`. `0.0` when union is empty. |
+| `errors[]` | object[] | Per-code failure records. Empty on success. |
+
+**Error record shape:** `{"code": "<board_code>", "error": "<ExceptionClassName>", "message": "<str>"}`.
+
+**Errors:**
+
+- `400 invalid_request` — empty `codes` / > 10 codes / non-string items.
+- `503 board_unavailable` — every board in `codes` failed (no successful
+  set to compare); partial failures are still in `errors[]` with HTTP 200.
+- `422 cid_unresolved` — returned by the shared `get_board_stocks`
+  helper when the THS platecode→cid index is cold; the route propagates
+  this as 422, not a misleading 200 with empty `matched_stocks`.
+
+**Cache:** `make_boards_overlap_cache_key(sorted(codes))` →
+`agent_boards_stock_overlap:<sorted_codes>`. Same key across `?include_quote=`
+variants (always fetches with `include_quote=False`).
+
+---
+
+### POST /api/v1/agent/stocks/board-overlap
+
+Pairwise intersection + Jaccard of the board sets each of 2-10 stocks
+belongs to. Use case: "given 2-10 candidate stocks, do they share
+sector/board affinity?".
+
+```bash
+POST /api/v1/agent/stocks/board-overlap
+Content-Type: application/json
+```
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `codes` | string[] | yes | 2-10 stock codes (bare 6-digit A-share). |
+
+**Response (200):**
+
+```json
+{
+  "sets": [
+    {
+      "code": "600519",
+      "boards": [
+        {"code": "885595", "name": "白酒", "type": "industry", "subtype": "同花顺行业", "source": "ths"}
+      ]
+    }
+  ],
+  "pairs": [
+    {
+      "a": "000858",
+      "b": "600519",
+      "common_boards": [
+        {"code": "881270", "name": "白酒", "type": "industry", "subtype": "同花顺行业", "source": "ths"}
+      ],
+      "intersection_count": 1,
+      "jaccard": 0.5
+    }
+  ],
+  "errors": []
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `sets[].code` | string | The stock code. |
+| `sets[].boards[]` | object[] | `{code, name, type, subtype, source}` — the stock's full board membership as returned by the persistence layer. |
+| `pairs[].a` / `pairs[].b` | string | The two stock codes (alphabetical). |
+| `pairs[].common_boards` | object[] | Boards that both stocks belong to (deduped by `(code, name)`, sorted by code). |
+| `pairs[].intersection_count` | int | `len(common_boards)`. |
+| `pairs[].jaccard` | float | `|A ∩ B| / |A ∪ B|`. |
+| `errors[]` | object[] | Per-stock failure records. |
+
+**Cache:** `make_stocks_board_overlap_cache_key(sorted(codes))` →
+`agent_stocks_board_overlap:<sorted_codes>`. Internal `get_stock_memberships`
+call hard-codes `sources=['ths']` (the documented default for agent
+inference per spec §3.2.5).
+
+---
+
+### POST /api/v1/agent/boards/filter-stocks
+
+Server-side numeric filter on a board's constituent stocks. Use case:
+"given board X, return members passing turnover / change / amount /
+mcap / max-gain thresholds" — the server runs the filter, so the agent
+doesn't have to fetch and re-parse the full list itself.
+
+```bash
+POST /api/v1/agent/boards/filter-stocks
+Content-Type: application/json
+```
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `board_code` | string | yes | THS platecode (`885xxx` / `881xxx`). |
+| `source` | string | yes | Data source: `ths` (recommended), `eastmoney`, or `zhitu`. `zzshare` returns 422. |
+| `filters.turnover_pct` | `{min?, max?}` | no | Range filter on turnover rate (%). |
+| `filters.change_pct` | `{min?, max?}` | no | Range filter on change percent (%). |
+| `filters.amount_yi` | `{min?, max?}` | no | Range filter on traded amount in **亿元**. |
+| `filters.mcap_yi` | `{min?, max?}` | no | Range filter on total market cap in **亿元**. |
+| `filters.max_gain_pct` | `{min?, max?}` | no | Range filter on `(high - open) / open * 100`. |
+| `limit` | int | no | Max rows to return (also forwarded as upstream `top_n`; default 50, THS upstream hard cap). |
+
+**Range semantics:**
+
+- `min` / `max` are both optional; `{min: 5.0}` is a one-sided lower bound.
+- A constituent row with `value=None` is **excluded** when the corresponding
+  range is set, **included** when the range is absent. (Pinned by
+  `tests/test_agent_endpoints.py::TestFilterStocks::test_filter_excludes_row_when_value_is_none`.)
+- An empty `filters` object returns all constituents (subject to `limit`).
+
+**Response (200):**
+
+```json
+{
+  "board_code": "885595",
+  "board_name": "白酒",
+  "filters_applied": {"turnover_pct": {"min": 5.0, "max": 20.0}, "change_pct": {"min": 0.0}},
+  "matched_stocks": [
+    {
+      "code": "000568",
+      "name": "泸州老窖",
+      "price": 178.5,
+      "change_pct": 1.23,
+      "max_gain_pct": 2.11,
+      "turnover_pct": 7.4,
+      "amount_yi": 12.3,
+      "mcap_yi": 2610.0
+    }
+  ],
+  "summary": {
+    "total_in_board": 87,
+    "matched": 1,
+    "limit_applied": true
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `board_code` / `board_name` | string | The board; `board_name` is best-effort (cache miss ⇒ fallback to the code). |
+| `filters_applied` | object | Echo of the request `filters`. |
+| `matched_stocks[]` | object[] | Sorted by `max_gain_pct desc, turnover_pct desc`; truncated to `limit` if set. |
+| `summary.total_in_board` | int | The board's total membership (best-effort; equals `len(stocks)` when the THS 50-row heuristic didn't fire). |
+| `summary.matched` | int | `len(matched_stocks)`. |
+| `summary.limit_applied` | bool | `true` if `limit` was set; otherwise `false` (the cache hit does not retroactively re-truncate). |
+
+**Sort order:** `(max_gain_pct desc, turnover_pct desc)`. `None` values
+sort to the bottom (treated as `-inf` for both keys).
+
+**Errors:**
+
+- `400 invalid_request` — missing `board_code` / `source` / `filters`,
+  or `limit` outside [1, 500].
+- `503 board_unavailable` — upstream `get_board_stocks` raised
+  `DataFetchError` or `ValueError` (e.g. THS 50-row login wall, network
+  failure, source-routed fetcher outage). `board_unavailable` is **not**
+  silently swallowed as "0 matches".
+- `422 cid_unresolved` — THS platecode→cid index is cold; the
+  persistence helper cannot dispatch. Run a board-list refresh
+  (`GET /boards?source=ths`) before retrying. (Pinned by
+  `test_cid_unresolved_returns_422`.)
+
+**Caching — important:** `make_filter_stocks_cache_key(board_code, source, filters, limit)`
+hashes `{filters, limit}` together. Two requests with identical
+board/source/filters but **different `limit`** use **different cache
+entries** and trigger **separate upstream `top_n` fetches**. The cached
+value stores the upstream-bounded (un-truncated) result; the response
+path applies `limit` on the way out. This is required for correctness
+when `limit` is forwarded as upstream `top_n` — do not collapse
+`filter-stocks` and `boards/stock-overlap` into a single cache key
+namespace.

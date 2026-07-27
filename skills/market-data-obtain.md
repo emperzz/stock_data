@@ -176,6 +176,67 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 > - ths 的 board 类接口覆盖更全、稳定性更好
 > - `?source=zzshare` 已不再作为独立选项——会归一到 ths；需要区分 `include_quote=True/False` 时的实际服务 fetcher 时读响应里的 `effective_source`
 
+### 9.1 Agent 批量端点（板块集合运算 / 数值过滤）
+
+> 本节端点位于 `/api/v1/agent/*`，面向 LLM agent 的高频组合查询——把"多板块两两交集 / 个股所属板块两两交集 / 板块成分股数值过滤"这些典型操作下沉到服务端，避免 agent 自己 N+1 调用 + 手算 set-op。
+
+| 端点 | 输入 | 用途 | 失败 fallback |
+|---|---|---|---|
+| `POST /api/v1/agent/boards/stock-overlap` | `{"codes": ["885xxx", "881xxx", ...]}` (2-10 板块) | 多板块成分股两两交集 + Jaccard；用于"判断哪些概念/行业同时覆盖了某批候选股" | 5xx → 网络搜索工具 `"板块 成分股 列表"`；422 → 检查 `codes` 是否在 board 缓存中（board list 未刷新） |
+| `POST /api/v1/agent/stocks/board-overlap` | `{"codes": ["600519", "000001", ...]}` (2-10 个股) | 多股票所属板块两两交集；用于"龙头/候选是否同板块系"判断 | 5xx → 网络搜索工具 `"{code} 所属概念"`；422 → 检查 stock_list 缓存 |
+| `POST /api/v1/agent/boards/filter-stocks` | `{"board_code", "source", "filters": {...}, "limit"?}` | 板块成分股服务端数值过滤（换手/涨跌幅/成交额/市值/最高涨幅） | 5xx / 503 `board_unavailable` → 网络搜索工具 `"板块成分股 换手 排名"`；422 `cid_unresolved` → 刷新 board 缓存 |
+
+**通用行为**：
+
+- **逐项错误隔离**：单个 `code` 拉取失败**不会**中断整体响应；失败项进入响应 `errors[]`，成功的项仍正常出现在 `sets[]` / `matched_stocks`。
+- **缓存**：60s in-memory TTLCache（复用 `get_quote_cache`），TTL 内同 payload 直接命中。`filter-stocks` 的 `limit` 参与缓存键——不同 `limit` 会分别向上游 `top_n` 取数并各自缓存。
+- **不做判断**：本节端点只返回"事实型"算结果（集合运算 / 过滤后列表 / Jaccard 系数），不输出"龙头/候选"等结论——结论仍由 agent 用 `market-principles` 的工作流生成。
+- **板 K 线 / 板实时行情** 仍在第 9 节的主表（不走 agent）。
+
+**`filter-stocks` 关键参数**：
+
+- `filters.turnover_pct` / `change_pct` / `amount_yi` / `mcap_yi` / `max_gain_pct` —— 每个字段独立 `{min?, max?}`；`value=None` 的成分股在该字段有 filter 时直接剔除
+- `limit` 缺省时上游按 `top_n=50` 拉取，缓存键再额外包含 `limit`；**不同 `limit` 不会复用同一缓存**（避免"先 limit=1 再 limit=3"得到错误结果）
+- 排序：先按 `max_gain_pct desc`，再按 `turnover_pct desc`
+- 字段单位：`amount_yi` / `mcap_yi` 单位为**亿元**（agent 不要与原始 `amount` / `total_mv` 混用）
+
+**`boards/stock-overlap` 关键字段**：
+
+- 响应 `sets[]` 每项 `{code, count, source}` —— `source` 即 `effective_source`（`include_quote=False` 时若走 ZZSHARE 兜底会是 `"zzshare"`）
+- 响应 `pairs[]` 每项 `{a, b, intersection, intersection_count, jaccard}` —— `intersection` 是按字母升序的成分股代码数组
+
+**`stocks/board-overlap` 关键字段**：
+
+- 响应 `sets[]` 每项 `{code, boards[]}` —— `boards[]` 是 `{code, name, type, subtype, source}`
+- 响应 `pairs[]` 每项 `{a, b, common_boards, intersection_count, jaccard}` —— `common_boards` 按 `code` 字母升序
+
+**典型调用模式**（`market-principles` 第 5 节"判断龙头股"步骤中可串入）：
+
+```bash
+# 1. 圈定候选池后，看这些候选股两两是否同板块
+curl -X POST http://localhost:8888/api/v1/agent/stocks/board-overlap \
+  -H 'Content-Type: application/json' \
+  -d '{"codes": ["600519", "000858", "000568"]}'
+
+# 2. 拿到热点板块后，做板块间成分股重叠（判断是否同源炒作）
+curl -X POST http://localhost:8888/api/v1/agent/boards/stock-overlap \
+  -H 'Content-Type: application/json' \
+  -d '{"codes": ["885595", "885914", "881270"]}'
+
+# 3. 在单个板块上做数值过滤（候选股筛选）
+curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "board_code": "885595",
+    "source": "ths",
+    "filters": {
+      "turnover_pct": {"min": 5.0, "max": 20.0},
+      "change_pct": {"min": 0.0}
+    },
+    "limit": 10
+  }'
+```
+
 ---
 
 ## 10. 新闻 / 消息（News）
@@ -234,6 +295,9 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 | 3. 看板块行情 | `GET /boards/{board_code}/quote` 或 `GET /boards?type=concept&include_quote=true` |
 | 4. 看板块 K 线 | `GET /boards/{board_code}/history` |
 | 5. 看个股 K 线 + 量价 | `GET /stocks/{code}/kline?period=daily&days=30` |
+| 5.1 **看候选股两两同板块** | `POST /agent/stocks/board-overlap`（取代手算 N×N 交集） |
+| 5.2 **看候选板块两两同成分股** | `POST /agent/boards/stock-overlap` |
+| 5.3 **板块成分股数值过滤** | `POST /agent/boards/filter-stocks`（取代手写 SQL/if 链） |
 
 ---
 

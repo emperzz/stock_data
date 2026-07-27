@@ -428,6 +428,36 @@ K 线 routes (`/stocks/{code}/kline` + `/indices/{code}/kline`) 默认在以下�
 
 **时区假设**：server 跑在 CST（Asia/Shanghai）；非 CST 环境下 `date.today()` 与 A 股交易日可能错位（晚 8h 才跨日）。
 
+## Agent Batch API (`/api/v1/agent/*`)
+
+All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. They are server-side aggregations designed to replace the LLM agent's typical N+1 fetch + manual set-arithmetic pattern.
+
+### Routes
+
+| Route | Purpose | Internal call |
+|---|---|---|
+| `POST /agent/boards/stock-overlap` | Pairwise stock-set intersection + Jaccard across 2-10 boards. | per-code `stock_board_cache.get_board_stocks(source='ths', include_quote=False)` |
+| `POST /agent/stocks/board-overlap` | Pairwise board-set intersection + Jaccard across 2-10 stocks. | per-code `stock_board_cache.get_stock_memberships(sources=['ths'])` |
+| `POST /agent/boards/filter-stocks` | Server-side numeric filter (turnover / change_pct / amount / mcap / max_gain_pct) on a board's constituents. | `stock_board_cache.get_board_stocks(source=<user>, include_quote=True, top_n=payload.limit or 50)` |
+
+### Design contract (don't violate these without a spec change)
+
+- **Per-item error isolation.** A single upstream failure is reported in `errors[]`; the rest of the response is still emitted. Do not abort the whole response on first failure.
+- **No LLM judgment.** These endpoints emit *only* numeric / set-arithmetic facts. "Which stock is the leader" / "Which board is the better pick" stays in `market-principles`, not here.
+- **`@endpoint_meta(capabilities=[])`** — these endpoints don't map to a single `DataCapability` flag; leave the list empty.
+- **Cache key is `(payload-hash, label)`.** The label is the user-facing route name (`agent_boards_stock_overlap` / `agent_stocks_board_overlap` / `agent_filter_stocks`). Keys reuse `get_quote_cache` as a generic 60s TTLCache slot; this is the documented layering exception to "don't reuse quote cache for non-quote data" — if a future change introduces a dedicated `agent_cache`, the `make_*_cache_key` signatures stay stable.
+- **`filter-stocks` cache key MUST include `limit`.** `limit` is forwarded to the upstream `get_board_stocks(..., top_n=limit)`, so two requests with identical board/source/filters but different `limit` MUST use different cache entries. `make_filter_stocks_cache_key(board_code, source, filters, limit)` hashes `{filters, limit}` together. Do not remove `limit` from the signature; do not cache the *post-truncation* `matched_stocks` (upstream is already size-bounded, so a "cache full + truncate at response" optimization is not worth the cache-stale risk).
+- **Default `top_n` when `limit` is omitted is 50** — matches the historical `stock_board_cache.get_board_stocks` default and keeps the response within THS's hard cap (5 pages × 10 rows).
+- **422 on cid_unresolved.** `post_filter_stocks` calls the persistence helper which can return `reason='cid_unresolved'` when the THS platecode→cid index is cold; the route MUST translate that into a 422 (not a 200 with empty `matched_stocks`). Pinned by `tests/test_agent_endpoints.py::test_cid_unresolved_returns_422`. The shared `fetch_board_stocks_with_zzshare_fallback` helper handles this for `/boards/{code}/stocks` already; agent reuses the same path.
+
+### Anti-patterns
+
+- **Don't** add a new `DataCapability` flag "just to give agent endpoints a non-empty `@endpoint_meta(capabilities=...)` list" — the empty list is the documented signal that the endpoint is an aggregation, not a fetcher-routed one.
+- **Don't** skip writing the response to the cache on success even when `is_cache_enabled()` is True. The cache is the only thing that makes the route usable from agents under fan-out (N+1 board fetches otherwise dominate latency).
+- **Don't** call `manager.get_board_stocks(...)` directly from agent code. Always go through `stock_board_cache` (the persistence layer), which handles the ZZSHARE↔THS fallback chain and the `effective_source` plumbing. This is the same rule `/boards/{code}/stocks` follows.
+- **Don't** truncate `matched_stocks` before caching in `post_filter_stocks`; truncate in the response path only. Cached entry must reflect the upstream-bounded, un-truncated result, so a later `?limit=200` request (still within upstream cap) doesn't have to re-fetch.
+- **Don't** collapse the three `make_*_cache_key` builders into a single generic helper — the keys live in a shared namespace and a typo or hash-input change here would silently invalidate *all* agent caches.
+
 ## Common Commands
 
 > **Use `.venv` when present; fall back to system Python otherwise.** The
