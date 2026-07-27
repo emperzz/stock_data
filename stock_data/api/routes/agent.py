@@ -20,6 +20,8 @@ Routes added in Phase 1 (this file):
 import logging
 from itertools import combinations
 
+from fastapi import HTTPException
+
 from ...data_provider.base import DataFetchError
 from ...data_provider.persistence import board as stock_board_cache
 from ..cache import (
@@ -28,6 +30,7 @@ from ..cache import (
     get_quote_cache,  # reused as generic in-memory slot for agent results
     is_cache_enabled,
     make_boards_overlap_cache_key,
+    make_filter_stocks_cache_key,
     make_stocks_board_overlap_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
@@ -37,6 +40,9 @@ from ..schemas import (
     BoardsOverlapResponse,
     BoardsOverlapSet,
     ErrorResponse,
+    FilterStocksMatchedStock,
+    FilterStocksRequest,
+    FilterStocksResponse,
     StocksBoardOverlapPair,
     StocksBoardOverlapRequest,
     StocksBoardOverlapResponse,
@@ -207,6 +213,139 @@ def post_stocks_board_overlap(payload: StocksBoardOverlapRequest) -> StocksBoard
         )
 
     result = StocksBoardOverlapResponse(sets=sets_out, pairs=pairs, errors=errors)
+    if is_cache_enabled():
+        cached_store(get_quote_cache, cache_key, result)
+    return result
+
+
+def _safe_div(num, den):
+    return (num / den) if (den not in (None, 0)) else None
+
+
+def _row_to_matched(s: dict) -> FilterStocksMatchedStock:
+    open_v = s.get("open")
+    high_v = s.get("high")
+    max_gain = None
+    if open_v not in (None, 0) and high_v is not None:
+        try:
+            max_gain = (float(high_v) - float(open_v)) / float(open_v) * 100.0
+        except (TypeError, ValueError):
+            max_gain = None
+    amount = s.get("amount")
+    total_mv = s.get("total_mv")
+    return FilterStocksMatchedStock(
+        code=s.get("stock_code", ""),
+        name=s.get("stock_name", ""),
+        price=s.get("price"),
+        change_pct=s.get("change_pct"),
+        max_gain_pct=max_gain,
+        turnover_pct=s.get("turnover_rate"),
+        amount_yi=_safe_div(amount, 1e8) if amount is not None else None,
+        mcap_yi=_safe_div(total_mv, 1e8) if total_mv is not None else None,
+    )
+
+
+def _passes_range(value, range_):
+    if range_ is None or value is None:
+        return range_ is None  # if no range, no filter; if range but no value, exclude
+    return not (
+        (range_.min is not None and value < range_.min)
+        or (range_.max is not None and value > range_.max)
+    )
+
+
+@router.post(
+    "/agent/boards/filter-stocks",
+    response_model=FilterStocksResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid request"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="板块成分股数值过滤（量价/换手/市值/最高涨幅 服务端化）",
+    markets=["csi"],
+    capabilities=[],
+)
+@map_errors
+def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
+    """Apply numeric filters to a board's constituent stocks server-side.
+
+    All filters are optional; an empty ``filters`` object returns every
+    constituent (subject to ``limit``). The route fetches via
+    ``include_quote=True`` because ``turnover_rate`` / ``amount`` / quote
+    fields are required for the spec's stock-picking §4 step 6 thresholds.
+    """
+    cache_key = make_filter_stocks_cache_key(
+        payload.board_code, payload.source, payload.filters.model_dump()
+    )
+    hit = cached_lookup(get_quote_cache, cache_key, "agent_filter_stocks")
+    if hit is not None:
+        return hit
+
+    manager = get_manager()
+    try:
+        stocks, _origin, _eff, _reason, _qtrunc, total_in_board = (
+            stock_board_cache.get_board_stocks(
+                payload.board_code,
+                source=payload.source,
+                include_quote=True,
+                manager=manager,
+            )
+        )
+    except (DataFetchError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503 if isinstance(exc, DataFetchError) else 400,
+            detail={"error": "board_unavailable", "message": str(exc)},
+        ) from exc
+
+    # Build candidate rows + apply filters
+    matched: list[FilterStocksMatchedStock] = []
+    f = payload.filters
+    for s in stocks or []:
+        row = _row_to_matched(s)
+        if not _passes_range(row.turnover_pct, f.turnover_pct):
+            continue
+        if not _passes_range(row.change_pct, f.change_pct):
+            continue
+        if not _passes_range(row.amount_yi, f.amount_yi):
+            continue
+        if not _passes_range(row.mcap_yi, f.mcap_yi):
+            continue
+        if not _passes_range(row.max_gain_pct, f.max_gain_pct):
+            continue
+        matched.append(row)
+
+    # Sort: matched_stocks ordered by max_gain_pct desc, then turnover_rate desc
+    matched.sort(
+        key=lambda r: (
+            -(r.max_gain_pct or float("-inf")),
+            -(r.turnover_pct or float("-inf")),
+        )
+    )
+
+    limit_applied = payload.limit is not None
+    if limit_applied:
+        matched = matched[: payload.limit]
+
+    # Best-effort board name
+    board_name = (
+        stock_board_cache.get_board_name_with_fallback(payload.board_code, payload.source, manager=manager)
+        or payload.board_code
+    )
+
+    result = FilterStocksResponse(
+        board_code=payload.board_code,
+        board_name=board_name,
+        filters_applied=f,
+        matched_stocks=matched,
+        summary={
+            "total_in_board": total_in_board or len(stocks or []),
+            "matched": len(matched),
+            "limit_applied": limit_applied,
+        },
+    )
     if is_cache_enabled():
         cached_store(get_quote_cache, cache_key, result)
     return result

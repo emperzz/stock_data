@@ -195,3 +195,105 @@ class TestStocksBoardOverlap:
             data = response.json()
             assert {s["code"] for s in data["sets"]} == {"A", "C"}
             assert any(e["code"] == "B" for e in data["errors"])
+
+
+class TestFilterStocks:
+    def _patch_board(self, stocks):
+        return patch(_BOARD_STOCKS_PATCH, return_value=(
+            stocks, "persistence", "ths", None, False, len(stocks),
+        ))
+
+    def test_filter_turnover_min_excludes_below(self, client):
+        """Stocks below the turnover minimum are excluded."""
+        rows = [
+            {"stock_code": "A", "stock_name": "A", "price": 10.0, "change_pct": 5.0,
+             "turnover_rate": 3.0, "amount": 1e9, "total_mv": 1e9, "open": 9.0, "high": 10.0,
+             "low": 9.0, "volume": 0},
+            {"stock_code": "B", "stock_name": "B", "price": 20.0, "change_pct": 7.0,
+             "turnover_rate": 8.0, "amount": 5e9, "total_mv": 5e9, "open": 19.0, "high": 21.0,
+             "low": 19.0, "volume": 0},
+        ]
+        with self._patch_board(rows):
+            response = client.post(
+                "/api/v1/agent/boards/filter-stocks",
+                json={
+                    "board_code": "885001",
+                    "source": "ths",
+                    "filters": {"turnover_pct": {"min": 5.0}},
+                },
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["summary"]["total_in_board"] == 2
+            assert data["summary"]["matched"] == 1
+            assert data["matched_stocks"][0]["code"] == "B"
+            # B: amount = 5e9 元 → 50 亿; mcap = 5e9 → 50 亿
+            assert abs(data["matched_stocks"][0]["amount_yi"] - 50.0) < 1e-6
+            assert abs(data["matched_stocks"][0]["mcap_yi"] - 50.0) < 1e-6
+            # max_gain = (21 - 19) / 19 * 100 ≈ 10.526
+            assert abs(data["matched_stocks"][0]["max_gain_pct"] - (2 / 19 * 100)) < 1e-6
+
+    def test_max_gain_pct_min_filter(self, client):
+        """max_gain_pct < min excludes stocks with low intraday gain."""
+        rows = [
+            {"stock_code": "A", "stock_name": "A", "price": 10.0, "change_pct": 1.0,
+             "turnover_rate": 5.0, "amount": 1e9, "total_mv": 1e9, "open": 10.0, "high": 10.2,
+             "low": 9.8, "volume": 0},
+            {"stock_code": "B", "stock_name": "B", "price": 20.0, "change_pct": 6.0,
+             "turnover_rate": 10.0, "amount": 5e9, "total_mv": 5e9, "open": 19.0, "high": 21.0,
+             "low": 19.0, "volume": 0},
+        ]
+        with self._patch_board(rows):
+            response = client.post(
+                "/api/v1/agent/boards/filter-stocks",
+                json={
+                    "board_code": "885002",
+                    "source": "ths",
+                    "filters": {"max_gain_pct": {"min": 5.0}},
+                },
+            )
+            assert response.status_code == 200
+            data = response.json()
+            # A: max_gain = 0.2/10*100 = 2% (excluded)
+            # B: max_gain = 2/19*100 ≈ 10.526% (included)
+            assert data["summary"]["matched"] == 1
+            assert data["matched_stocks"][0]["code"] == "B"
+
+    def test_limit_truncates(self, client):
+        rows = [
+            {"stock_code": f"S{i}", "stock_name": f"S{i}", "price": 10.0 + i,
+             "change_pct": 5.0, "turnover_rate": 5.0, "amount": 1e9, "total_mv": 1e9,
+             "open": 9.0, "high": 10.0, "low": 9.0, "volume": 0}
+            for i in range(10)
+        ]
+        with self._patch_board(rows):
+            response = client.post(
+                "/api/v1/agent/boards/filter-stocks",
+                json={
+                    "board_code": "885003",
+                    "source": "ths",
+                    "filters": {},
+                    "limit": 3,
+                },
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["summary"]["matched"] == 3
+            assert data["summary"]["limit_applied"] is True
+            assert len(data["matched_stocks"]) == 3
+
+    def test_empty_filters_returns_all(self, client):
+        rows = [
+            {"stock_code": "A", "stock_name": "A", "price": 10.0, "change_pct": 0.0,
+             "turnover_rate": 1.0, "amount": 0, "total_mv": 1e8, "open": 10.0, "high": 10.0,
+             "low": 10.0, "volume": 0},
+        ]
+        with self._patch_board(rows):
+            response = client.post(
+                "/api/v1/agent/boards/filter-stocks",
+                json={"board_code": "885004", "source": "ths", "filters": {}},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["summary"]["matched"] == 1
+            assert data["matched_stocks"][0]["code"] == "A"

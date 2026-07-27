@@ -1341,3 +1341,89 @@ class StocksBoardOverlapResponse(BaseModel):
     sets: list[StocksBoardOverlapStockSet] = Field(default_factory=list)
     pairs: list[StocksBoardOverlapPair] = Field(default_factory=list)
     errors: list[dict] = Field(default_factory=list)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Agent board filter endpoint (Phase 1 §3.2.6 — numerical filter on
+# a board's constituents). Optional everywhere so that an empty
+# ``filters`` object means "return every stock, subject to ``limit``".
+# ────────────────────────────────────────────────────────────────────────
+
+
+class FilterStocksTurnoverRange(BaseModel):
+    min: float | None = Field(default=None, description="min turnover % (inclusive)")
+    max: float | None = Field(default=None, description="max turnover % (inclusive)")
+
+
+class FilterStocksChangePctRange(BaseModel):
+    min: float | None = Field(default=None)
+    max: float | None = Field(default=None)
+
+
+class FilterStocksAmountRange(BaseModel):
+    min: float | None = Field(default=None, description="min 成交额 亿元")
+    max: float | None = Field(default=None, description="max 成交额 亿元")
+
+
+class FilterStocksMcapRange(BaseModel):
+    min: float | None = Field(default=None, description="min 总市值 亿元")
+    max: float | None = Field(default=None, description="max 总市值 亿元")
+
+
+class FilterStocksMaxGainRange(BaseModel):
+    min: float | None = Field(default=None, description="min 最高涨幅 % ((high-open)/open*100)")
+    max: float | None = Field(default=None)
+
+
+class FilterStocksFilters(BaseModel):
+    """All-optional filter set. Empty = return all stocks (subject to ``limit``)."""
+
+    turnover_pct: FilterStocksTurnoverRange | None = None
+    change_pct: FilterStocksChangePctRange | None = None
+    amount_yi: FilterStocksAmountRange | None = None
+    mcap_yi: FilterStocksMcapRange | None = None
+    max_gain_pct: FilterStocksMaxGainRange | None = None
+
+
+class FilterStocksRequest(BaseModel):
+    """POST body for /agent/boards/filter-stocks."""
+
+    board_code: str = Field(..., description="Board code (e.g. ths platecode 885xxx)")
+    source: str = Field(
+        default="ths",
+        description="Fetcher slug (ths/eastmoney/zhitu). Quote fields require include_quote=True upstream.",
+    )
+    filters: FilterStocksFilters = Field(default_factory=FilterStocksFilters)
+    limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Truncate to first N after sorting; None = no truncation.",
+    )
+
+
+class FilterStocksMatchedStock(BaseModel):
+    code: str
+    name: str
+    price: float | None = None
+    change_pct: float | None = None
+    max_gain_pct: float | None = Field(
+        default=None, description="(high - open) / open * 100, None when either is missing.",
+    )
+    turnover_pct: float | None = None
+    amount_yi: float | None = Field(
+        default=None, description="成交额 亿元 (= amount / 1e8 when amount is in 元).",
+    )
+    mcap_yi: float | None = Field(
+        default=None, description="总市值 亿元 (= total_mv / 1e8 when total_mv is in 元).",
+    )
+
+
+class FilterStocksResponse(BaseModel):
+    board_code: str
+    board_name: str | None = None
+    filters_applied: FilterStocksFilters
+    matched_stocks: list[FilterStocksMatchedStock] = Field(default_factory=list)
+    summary: dict = Field(
+        default_factory=dict,
+        description="{total_in_board, matched, limit_applied}",
+    )
