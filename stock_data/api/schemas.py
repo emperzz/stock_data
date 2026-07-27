@@ -1241,3 +1241,59 @@ class ClsFeedResponse(BaseModel):
     date: str  # 入参 date
     article: ClsArticle | None  # None → 404
     source: str = Field(default="", description="数据来源 fetcher 名")
+
+
+# ============================================================================
+# Agent batch / aggregation endpoints (Phase 1 of agent-batch-api-proposal)
+# ============================================================================
+
+
+class BoardsOverlapSet(BaseModel):
+    """One input board + its membership count for /agent/boards/stock-overlap."""
+
+    code: str = Field(description="Board code (e.g. ths platecode 885xxx)")
+    count: int = Field(description="Number of constituent stocks")
+    source: str = Field(description="Fetcher that served the membership list (ths/eastmoney/zhitu)")
+
+
+class BoardsOverlapPair(BaseModel):
+    """Intersection of two boards in /agent/boards/stock-overlap."""
+
+    a: str = Field(description="First board code")
+    b: str = Field(description="Second board code")
+    intersection: list[str] = Field(
+        default_factory=list,
+        description="Sorted list of stock codes present in BOTH boards",
+    )
+    intersection_count: int = Field(description="Length of intersection")
+    jaccard: float = Field(
+        description="|A ∩ B| / |A ∪ B|. 0.0 when both boards are empty (union=0).",
+    )
+
+
+class BoardsOverlapRequest(BaseModel):
+    """POST body for /agent/boards/stock-overlap."""
+
+    codes: list[str] = Field(
+        ...,
+        min_length=2,
+        max_length=10,
+        description="Board codes to compare (2-10). Each is fetched via source='ths'.",
+    )
+
+
+class BoardsOverlapResponse(BaseModel):
+    """POST response for /agent/boards/stock-overlap."""
+
+    sets: list[BoardsOverlapSet] = Field(
+        default_factory=list,
+        description="Per-input-board metadata (code, count, fetcher served)",
+    )
+    pairs: list[BoardsOverlapPair] = Field(
+        default_factory=list,
+        description="Pairwise intersection results (C(n, 2) entries)",
+    )
+    errors: list[dict] = Field(
+        default_factory=list,
+        description="Per-code upstream failures (does not abort the response)",
+    )
