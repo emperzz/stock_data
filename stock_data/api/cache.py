@@ -403,3 +403,24 @@ def cache_endpoint(
         return wrapper
 
     return decorator
+
+
+def make_boards_overlap_cache_key(codes: list[str]) -> str:
+    """Cache key for POST /agent/boards/stock-overlap. Sorted for order-perturbation immunity."""
+    return "agent_boards_stock_overlap:" + ",".join(sorted(codes))
+
+
+def make_stocks_board_overlap_cache_key(codes: list[str]) -> str:
+    """Cache key for POST /agent/stocks/board-overlap. Sorted."""
+    return "agent_stocks_board_overlap:" + ",".join(sorted(codes))
+
+
+def make_filter_stocks_cache_key(board_code: str, source: str, filters: dict) -> str:
+    """Cache key for POST /agent/boards/filter-stocks. Includes board, source, and a
+    stable JSON-serialized filter dict (sorted keys)."""
+    import hashlib
+    import json
+
+    # json.dumps with sort_keys + separators produces a deterministic compact repr.
+    filt_repr = json.dumps(filters or {}, sort_keys=True, separators=(",", ":"), default=str)
+    return "agent_filter_stocks:" + board_code + ":" + source + ":" + hashlib.sha256(filt_repr.encode("utf-8")).hexdigest()[:16]
