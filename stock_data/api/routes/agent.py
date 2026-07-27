@@ -28,6 +28,7 @@ from ..cache import (
     get_quote_cache,  # reused as generic in-memory slot for agent results
     is_cache_enabled,
     make_boards_overlap_cache_key,
+    make_stocks_board_overlap_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
@@ -36,6 +37,10 @@ from ..schemas import (
     BoardsOverlapResponse,
     BoardsOverlapSet,
     ErrorResponse,
+    StocksBoardOverlapPair,
+    StocksBoardOverlapRequest,
+    StocksBoardOverlapResponse,
+    StocksBoardOverlapStockSet,
 )
 from ._router import router
 from .errors import map_errors
@@ -118,6 +123,90 @@ def post_boards_stock_overlap(payload: BoardsOverlapRequest) -> BoardsOverlapRes
         )
 
     result = BoardsOverlapResponse(sets=sets_out, pairs=pairs, errors=errors)
+    if is_cache_enabled():
+        cached_store(get_quote_cache, cache_key, result)
+    return result
+
+
+@router.post(
+    "/agent/stocks/board-overlap",
+    response_model=StocksBoardOverlapResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid request"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="股票所属板块两两重叠度（龙头 / 候选 板块重叠度服务端化）",
+    markets=["csi"],
+    capabilities=[],
+)
+@map_errors
+def post_stocks_board_overlap(payload: StocksBoardOverlapRequest) -> StocksBoardOverlapResponse:
+    """Pairwise board-overlap across 2-10 stocks.
+
+    Each stock is reverse-looked-up via
+    ``stock_board_cache.get_stock_memberships`` with ``source='ths'``
+    (per spec §3.2.5). Boards are deduped by ``(code, name)`` to absorb
+    name differences across fetchers (irrelevant here — we always use
+    ths — but the dedup is a cheap defense).
+    """
+    cache_key = make_stocks_board_overlap_cache_key(payload.codes)
+    hit = cached_lookup(get_quote_cache, cache_key, "agent_stocks_board_overlap")
+    if hit is not None:
+        return hit
+
+    manager = get_manager()
+    sets_out: list[StocksBoardOverlapStockSet] = []
+    sets_index: dict[str, set[tuple[str, str]]] = {}
+    errors: list[dict] = []
+
+    for code in payload.codes:
+        try:
+            entries, _cold, _origin = stock_board_cache.get_stock_memberships(
+                stock_code=code,
+                sources=["ths"],
+                manager=manager,
+            )
+        except (DataFetchError, ValueError) as exc:
+            logger.warning(f"[agent/stocks/board-overlap] {code} failed: {exc}")
+            errors.append({"code": code, "error": type(exc).__name__, "message": str(exc)})
+            continue
+        boards = [
+            {
+                "code": e["code"],
+                "name": e.get("name", ""),
+                "type": e.get("type", ""),
+                "subtype": e.get("subtype", ""),
+                "source": e.get("source", ""),
+            }
+            for e in entries
+        ]
+        sets_index[code] = {(b["code"], b["name"]) for b in boards}
+        sets_out.append(StocksBoardOverlapStockSet(code=code, boards=boards))
+
+    pairs: list[StocksBoardOverlapPair] = []
+    for a, b in combinations(sets_index.keys(), 2):
+        sa, sb = sets_index[a], sets_index[b]
+        common_keys = sa & sb
+        common_boards = [
+            {"code": k, "name": n, "type": "", "subtype": "", "source": "ths"}
+            for (k, n) in sorted(common_keys)
+        ]
+        union = sa | sb
+        jaccard = (len(common_keys) / len(union)) if union else 0.0
+        pairs.append(
+            StocksBoardOverlapPair(
+                a=a,
+                b=b,
+                common_boards=common_boards,
+                intersection_count=len(common_keys),
+                jaccard=jaccard,
+            )
+        )
+
+    result = StocksBoardOverlapResponse(sets=sets_out, pairs=pairs, errors=errors)
     if is_cache_enabled():
         cached_store(get_quote_cache, cache_key, result)
     return result

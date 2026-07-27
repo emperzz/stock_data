@@ -1297,3 +1297,47 @@ class BoardsOverlapResponse(BaseModel):
         default_factory=list,
         description="Per-code upstream failures (does not abort the response)",
     )
+
+
+class StocksBoardOverlapStockSet(BaseModel):
+    """One input stock + the boards it belongs to."""
+
+    code: str = Field(description="Stock code")
+    boards: list[dict] = Field(
+        default_factory=list,
+        description="[{code, name, type, subtype, source}] from stock_board_membership",
+    )
+
+
+class StocksBoardOverlapPair(BaseModel):
+    """Common boards between a leader and a candidate."""
+
+    a: str = Field(description="First stock code")
+    b: str = Field(description="Second stock code")
+    common_boards: list[dict] = Field(
+        default_factory=list,
+        description="Boards that BOTH stocks belong to (deduped by (code, name))",
+    )
+    intersection_count: int = Field(description="Number of common boards")
+    jaccard: float = Field(
+        description="|A ∩ B| / |A ∪ B|. 0.0 when both have zero boards.",
+    )
+
+
+class StocksBoardOverlapRequest(BaseModel):
+    """POST body for /agent/stocks/board-overlap."""
+
+    codes: list[str] = Field(
+        ...,
+        min_length=2,
+        max_length=10,
+        description="Stock codes to compare (2-10). Each is reverse-looked-up via source='ths'.",
+    )
+
+
+class StocksBoardOverlapResponse(BaseModel):
+    """POST response for /agent/stocks/board-overlap."""
+
+    sets: list[StocksBoardOverlapStockSet] = Field(default_factory=list)
+    pairs: list[StocksBoardOverlapPair] = Field(default_factory=list)
+    errors: list[dict] = Field(default_factory=list)

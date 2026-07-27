@@ -118,3 +118,80 @@ class TestBoardsOverlap:
             assert any(e.get("code") == "B" for e in data["errors"])
             # Pairs that include B are dropped; A-C pair still present
             assert all("B" not in (p["a"], p["b"]) for p in data["pairs"])
+
+
+_STOCK_MEMBERSHIPS_PATCH = (
+    "stock_data.data_provider.persistence.board.get_stock_memberships"
+)
+
+
+class TestStocksBoardOverlap:
+    def test_two_stocks_common_boards(self, client):
+        with patch(_STOCK_MEMBERSHIPS_PATCH) as mock_sm:
+            mock_sm.side_effect = [
+                (
+                    [
+                        {"code": "885xxx", "name": "半导体", "type": "concept", "subtype": "", "source": "ths"},
+                        {"code": "881yyy", "name": "电子", "type": "industry", "subtype": "", "source": "ths"},
+                    ],
+                    [],
+                    "persistence",
+                ),
+                (
+                    [
+                        {"code": "885xxx", "name": "半导体", "type": "concept", "subtype": "", "source": "ths"},
+                        {"code": "882zzz", "name": "新能源", "type": "concept", "subtype": "", "source": "ths"},
+                    ],
+                    [],
+                    "persistence",
+                ),
+            ]
+            response = client.post(
+                "/api/v1/agent/stocks/board-overlap",
+                json={"codes": ["600519", "688981"]},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["sets"]) == 2
+            assert len(data["pairs"]) == 1
+            pair = data["pairs"][0]
+            assert pair["intersection_count"] == 1
+            assert pair["common_boards"][0]["code"] == "885xxx"
+            # union = {885xxx, 881yyy, 882zzz} = 3, intersection = 1
+            assert abs(pair["jaccard"] - 1 / 3) < 1e-9
+
+    def test_codes_out_of_range_422(self, client):
+        response = client.post(
+            "/api/v1/agent/stocks/board-overlap",
+            json={"codes": ["600519"]},
+        )
+        assert response.status_code == 422
+
+    def test_per_stock_error_isolated(self, client):
+        with patch(_STOCK_MEMBERSHIPS_PATCH) as mock_sm:
+            from stock_data.data_provider.base import DataFetchError
+
+            mock_sm.side_effect = [
+                # First stock OK
+                (
+                    [{"code": "885xxx", "name": "X", "type": "concept", "subtype": "", "source": "ths"}],
+                    [],
+                    "persistence",
+                ),
+                # Second stock upstream fails
+                DataFetchError("network error"),
+                # Third stock OK
+                (
+                    [{"code": "885xxx", "name": "X", "type": "concept", "subtype": "", "source": "ths"}],
+                    [],
+                    "persistence",
+                ),
+            ]
+            response = client.post(
+                "/api/v1/agent/stocks/board-overlap",
+                json={"codes": ["A", "B", "C"]},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert {s["code"] for s in data["sets"]} == {"A", "C"}
+            assert any(e["code"] == "B" for e in data["errors"])
