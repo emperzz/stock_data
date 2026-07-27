@@ -297,3 +297,24 @@ class TestFilterStocks:
             data = response.json()
             assert data["summary"]["matched"] == 1
             assert data["matched_stocks"][0]["code"] == "A"
+
+
+class TestAgentManifest:
+    def test_agent_endpoints_appear_in_manifest(self, client):
+        """All 3 new agent endpoints surface in /control/api-manifest under tag=agent."""
+        # No mocking needed: the manifest is built from the live router.
+        response = client.get("/control/api-manifest")
+        assert response.status_code == 200
+        manifest = response.json()
+        # Find the agent section. Manifest emits `id` (the route tag, see
+        # explorer/manifest.py:99), not `tag` — the brief code used `tag`,
+        # which doesn't exist on the section dict.
+        agent_section = next(
+            (s for s in manifest.get("sections", []) if s.get("id") == "agent"),
+            None,
+        )
+        assert agent_section is not None, "No 'agent' tag section in manifest"
+        paths = {ep.get("path") for ep in agent_section.get("endpoints", [])}
+        assert "/api/v1/agent/boards/stock-overlap" in paths
+        assert "/api/v1/agent/stocks/board-overlap" in paths
+        assert "/api/v1/agent/boards/filter-stocks" in paths
