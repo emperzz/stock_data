@@ -385,6 +385,24 @@ class BoardStockInfo(BaseModel):
         default=None, description="流通市值(元) — THS upstream column 12"
     )
     pe_ratio: float | None = Field(default=None, description="市盈率 — THS upstream column 13")
+    # === 2026-07-27 新增 (?with_zt_flags=true 投影) ===
+    is_limit_up: bool | None = Field(
+        default=None,
+        description=(
+            "True iff stock_code is in the ZT pool for the resolved date "
+            "(populated only when ?with_zt_flags=true). Computed server-side "
+            "by membership-test against manager.get_zt_pool('zt') to avoid "
+            "drift vs upstream 涨停判定 logic."
+        ),
+    )
+    lb_count: int | None = Field(
+        default=None,
+        description=(
+            "连板数 from the ZT pool row (populated only when "
+            "?with_zt_flags=true AND is_limit_up=true). None when the stock "
+            "is not in the ZT pool, or when the upstream row has no lb_count."
+        ),
+    )
 
 
 class BoardListResponse(BaseModel):
