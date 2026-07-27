@@ -66,6 +66,40 @@ _SOURCES = stock_board_cache.VALID_SOURCES
 _TYPES = stock_board_cache.VALID_BOARD_TYPES
 
 
+def _build_board_stock_info(
+    s: dict,
+    *,
+    is_limit_up: bool | None = None,
+    lb_count: int | None = None,
+) -> BoardStockInfo:
+    """Map a persistence row to BoardStockInfo.
+
+    The two optional kwargs are populated only on the ``?with_zt_flags=true``
+    path; on the default path they stay None (matching the pre-existing
+    ``BoardStockInfo`` defaults).
+    """
+    return BoardStockInfo(
+        code=s.get("stock_code", ""),
+        name=s.get("stock_name", ""),
+        price=s.get("price"),
+        change_pct=s.get("change_pct"),
+        change_amount=s.get("change_amount"),
+        volume=s.get("volume"),
+        amount=s.get("amount"),
+        turnover_rate=s.get("turnover_rate"),
+        # 2026-07-13 新增投影 (THS 14 列 6 字段)
+        change_speed=s.get("change_speed"),
+        volume_ratio=s.get("volume_ratio"),
+        amplitude=s.get("amplitude"),
+        free_float_shares=s.get("free_float_shares"),
+        float_market_cap=s.get("float_market_cap"),
+        pe_ratio=s.get("pe_ratio"),
+        # 2026-07-27 新增 (?with_zt_flags=true 投影)
+        is_limit_up=is_limit_up,
+        lb_count=lb_count,
+    )
+
+
 def _resolve_source(source: str) -> str:
     """Validate the source name; raise HTTPException(400) on invalid.
 
@@ -482,6 +516,14 @@ def get_board_stocks(
             "fill-in added rows (or ZZSHARE itself failed)."
         ),
     ),
+    with_zt_flags: bool = Query(
+        False,
+        description=(
+            "When true, also fetch the ZT pool for the resolved date and "
+            "annotate each stock with is_limit_up (bool) + lb_count (int|None). "
+            "Omit for default behavior (no ZT join, no extra network call)."
+        ),
+    ),
 ) -> BoardStocksResponse:
     """Get stocks belonging to a board.
 
@@ -597,26 +639,34 @@ def get_board_stocks(
         or board_code
     )
 
-    stock_list = [
-        BoardStockInfo(
-            code=s.get("stock_code", ""),
-            name=s.get("stock_name", ""),
-            price=s.get("price"),
-            change_pct=s.get("change_pct"),
-            change_amount=s.get("change_amount"),
-            volume=s.get("volume"),
-            amount=s.get("amount"),
-            turnover_rate=s.get("turnover_rate"),
-            # 2026-07-13 新增投影 (THS 14 列 6 字段)
-            change_speed=s.get("change_speed"),
-            volume_ratio=s.get("volume_ratio"),
-            amplitude=s.get("amplitude"),
-            free_float_shares=s.get("free_float_shares"),
-            float_market_cap=s.get("float_market_cap"),
-            pe_ratio=s.get("pe_ratio"),
-        )
-        for s in stocks
-    ]
+    stock_list = [_build_board_stock_info(s) for s in stocks]
+
+    # ZT-pool join (opt-in via ?with_zt_flags=true). 1 extra upstream call
+    # (or persistence cache hit) per request; best-effort, never raises.
+    if with_zt_flags:
+        zt_index: dict[str, dict] = {}
+        try:
+            zt_stocks, _, _ = manager.get_zt_pool(pool_type="zt")
+            for z in zt_stocks or []:
+                zt_code = z.get("code") or z.get("stock_code")
+                if zt_code:
+                    zt_index[zt_code] = z
+        except Exception as exc:  # noqa: BLE001 — best-effort annotation, never 5xx
+            logger.warning(
+                f"[boards] with_zt_flags: zt-pool fetch failed: {exc}"
+            )
+            zt_index = {}
+        # Re-construct with ZT annotations. The default path above already
+        # produced the unannotated list; on the join path we replace it
+        # rather than mutating, so the two branches stay readable.
+        stock_list = [
+            _build_board_stock_info(
+                s,
+                is_limit_up=(code := s.get("stock_code", "")) in zt_index,
+                lb_count=(zt_index.get(code) or {}).get("lb_count"),
+            )
+            for s in stocks
+        ]
 
     # include_quote=true → also pull the board-level realtime quote.
     # Post-2026-07-10: the quote call is no longer hardcoded to ths. The
