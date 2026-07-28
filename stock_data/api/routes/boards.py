@@ -86,7 +86,7 @@ def _build_board_stock_info(
         change_amount=s.get("change_amount"),
         volume=s.get("volume"),
         amount=s.get("amount"),
-        turnover_rate=s.get("turnover_rate"),
+        turnover_pct=s.get("turnover_rate"),
         # 2026-07-13 新增投影 (THS 14 列 6 字段)
         change_speed=s.get("change_speed"),
         volume_ratio=s.get("volume_ratio"),
@@ -425,7 +425,7 @@ def list_boards(
                 change_amount=b.get("change_amount"),
                 volume=b.get("volume"),
                 amount=b.get("amount"),
-                turnover_rate=b.get("turnover_rate"),
+                turnover_pct=b.get("turnover_rate"),
                 total_mv=b.get("total_mv"),
                 net_inflow=b.get("net_inflow"),
                 up_count=b.get("up_count"),
@@ -478,7 +478,7 @@ def get_board_stocks(
     sort_by: Literal[
         "change_pct",
         "price",
-        "turnover_rate",
+        "turnover_pct",
         "volume_ratio",
         "amplitude",
         "change_amount",
@@ -494,7 +494,7 @@ def get_board_stocks(
             "Sort by field. ONLY effective when include_quote=true. "
             "Defaults to 'change_pct desc' (THS upstream default). "
             "Field code mapping: change_pct=199112, price=10, "
-            "turnover_rate=1968584, volume_ratio=1771976, amplitude=526792, "
+            "turnover_pct=1968584, volume_ratio=1771976, amplitude=526792, "
             "change_amount=264648, change_speed=48, amount=19, "
             "pe_ratio=2034120, float_market_cap=3475914, free_float_shares=407."
         ),
@@ -528,7 +528,7 @@ def get_board_stocks(
     """Get stocks belonging to a board.
 
     Quote fields (price / change_pct / change_amount / volume / amount /
-    turnover_rate) come from the upstream fetcher. THS populates them by
+    turnover_pct) come from the upstream fetcher. THS populates them by
     default; eastmoney requires ``?include_quote=true``. Zzshare and
     Zhitu do not emit quote fields at all. When quote data is unavailable,
     affected fields are null in the response — not omitted.
@@ -829,7 +829,7 @@ def get_board_quote(
         )
     quote, origin = manager.get_board_realtime(board_code, source="ths", board_type=board_type)
     return BoardQuoteResponse(
-        board_code=quote.get("board_code") or board_code,
+        code=quote.get("board_code") or board_code,
         board_name=quote.get("board_name", ""),
         source=origin,
         price=quote.get("price"),
@@ -913,7 +913,7 @@ def get_stock_boards(
     top_source = "merged" if len(normalized_sources) > 1 else origin
 
     return StockBoardsResponse(
-        stock_code=stock_code,
+        code=stock_code,
         source=top_source,
         data=[
             StockBoardInfo(
@@ -1055,7 +1055,7 @@ def get_board_history(
                     close=safe_float(row.get("close"), 0.0),
                     volume=safe_int(row.get("volume"), 0),
                     amount=_safe_optional_float(row.get("amount")),
-                    change_percent=_safe_optional_float(row.get("pct_chg")),
+                    change_pct=_safe_optional_float(row.get("pct_chg")),
                 )
             )
         except (TypeError, ValueError):
@@ -1066,7 +1066,7 @@ def get_board_history(
     board_name = stock_board_cache.get_board_name(board_code, source) or ""
 
     return BoardKlineResponse(
-        board_code=board_code,
+        code=board_code,
         board_name=board_name,
         period=frequency,
         data=kline_data,
@@ -1115,7 +1115,7 @@ def get_board_news_route(
     manager = get_manager()
     rows, origin = manager.get_board_news(board_code, source, limit=limit)
     return BoardNewsResponse(
-        board_code=board_code,
+        code=board_code,
         source=origin,
         total=len(rows),
         data=[BoardNewsItem(**r) for r in rows],
@@ -1156,7 +1156,7 @@ def get_board_surges_route(
     manager = get_manager()
     rows, origin = manager.get_board_surges(board_code, source, limit=limit)
     return BoardSurgesResponse(
-        board_code=board_code,
+        code=board_code,
         source=origin,
         total=len(rows),
         data=[BoardSurgeItem(**r) for r in rows],
@@ -1262,7 +1262,7 @@ def get_pools(
             amount=s.get("amount"),
             circ_mv=s.get("circ_mv"),
             total_mv=s.get("total_mv"),
-            turnover_rate=s.get("turnover_rate"),
+            turnover_pct=s.get("turnover_rate"),
             lb_count=s.get("lb_count"),
             first_seal_time=s.get("first_seal_time"),
             last_seal_time=s.get("last_seal_time"),

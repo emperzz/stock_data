@@ -42,7 +42,7 @@ def test_board_news_item_full():
 
 def test_board_news_response_construction():
     resp = BoardNewsResponse(
-        board_code="885914",
+        code="885914",
         source="ThsFetcher",
         total=1,
         data=[BoardNewsItem(title="t", url="http://x")],
@@ -77,7 +77,7 @@ def test_board_surge_item_full():
 
 def test_board_surges_response_construction():
     resp = BoardSurgesResponse(
-        board_code="885914",
+        code="885914",
         source="ThsFetcher",
         total=1,
         data=[BoardSurgeItem(date="2026-07-14", limit_up_count=4)],

@@ -70,6 +70,7 @@ from ..schemas import (
     StockBatchProfileEntry,
     StockBatchProfileRequest,
     StockBatchProfileResponse,
+    StockQuote,
     StocksBoardOverlapPair,
     StocksBoardOverlapRequest,
     StocksBoardOverlapResponse,
@@ -421,7 +422,7 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
     )
 
     result = FilterStocksResponse(
-        board_code=payload.board_code,
+        code=payload.board_code,
         board_name=board_name,
         filters_applied=f,
         matched_stocks=matched,
@@ -779,27 +780,11 @@ def _serialize_stock_aspect_value(aspect: str, raw: object) -> object:
     if raw is None:
         return None
     if aspect == "quote":
-        # UnifiedRealtimeQuote dataclass
-        q = raw
-        return {
-            "code": q.code,
-            "name": q.name,
-            "source": q.source.value if hasattr(q.source, "value") else str(q.source),
-            "price": q.price,
-            "change_pct": q.change_pct,
-            "change_amount": q.change_amount,
-            "open_price": q.open_price,
-            "high": q.high,
-            "low": q.low,
-            "pre_close": q.pre_close,
-            "volume": q.volume,
-            "amount": q.amount,
-            "turnover_rate": q.turnover_rate,
-            "pe_ratio": q.pe_ratio,
-            "pb_ratio": q.pb_ratio,
-            "total_mv": q.total_mv,
-            "circ_mv": q.circ_mv,
-        }
+        # UnifiedRealtimeQuote dataclass — delegate to StockQuote.from_unified_quote
+        # so the batch-profile quote shape is bit-for-bit identical to
+        # /stocks/{code}/quote. Unit conversion (元→亿元) and field-name
+        # mapping live in one place (schemas.py).
+        return StockQuote.from_unified_quote(raw).model_dump()
     if aspect in ("kline", "kline_5m"):
         # (df, source) tuple
         df, source = raw  # type: ignore[misc]

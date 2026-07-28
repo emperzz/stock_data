@@ -143,7 +143,7 @@ the `days` you asked for. You don't need to pre-compute a larger
 ```json
 {
   "code": "600519",
-  "stock_name": "贵州茅台",
+  "name": "贵州茅台",
   "period": "daily",
   "data": [
     {
@@ -154,7 +154,7 @@ the `days` you asked for. You don't need to pre-compute a larger
       "close": 1698.0,
       "volume": 1234567,
       "amount": 2087654321.0,
-      "change_percent": 1.52
+      "change_pct": 1.52
     }
   ]
 }
@@ -163,14 +163,14 @@ the `days` you asked for. You don't need to pre-compute a larger
 > **Note:** the `indicators` field is **omitted from the response entirely**
 > when `?indicators=` is not passed — instead of being present-but-null.
 > To get per-bar indicator values, opt in with `?indicators=ma` (or any
-> indicator set). `amount` and `change_percent` keep their original
+> indicator set). `amount` and `change_pct` keep their original
 > "null when missing" behavior.
 
 **Response (with `?indicators=ma,macd,kdj,boll`):**
 ```json
 {
   "code": "600519",
-  "stock_name": "贵州茅台",
+  "name": "贵州茅台",
   "period": "daily",
   "data": [
     {
@@ -181,7 +181,7 @@ the `days` you asked for. You don't need to pre-compute a larger
       "close": 1708.0,
       "volume": 1234567,
       "amount": 2100000000.0,
-      "change_percent": 0.59,
+      "change_pct": 0.59,
       "ma5": 1701.0,
       "ma10": 1695.0,
       "ma20": 1678.0,
@@ -226,11 +226,11 @@ GET /api/v1/stocks/{code}/quote
 ```json
 {
   "code": "600519",
-  "stock_name": "贵州茅台",
+  "name": "贵州茅台",
   "source": "AkshareFetcher",
   "current_price": 1698.0,
-  "change": 25.5,
-  "change_percent": 1.52,
+  "change_amount": 25.5,
+  "change_pct": 1.52,
   "open": 1680.0,
   "high": 1700.0,
   "low": 1670.0,
@@ -389,8 +389,8 @@ GET /api/v1/indices/{index_code}/quote
   "name": "沪深300",
   "source": "akshare",
   "current_price": 4833.52,
-  "change": -26.07,
-  "change_percent": -0.536,
+  "change_amount": -26.07,
+  "change_pct": -0.536,
   "open": 4836.33,
   "high": 4868.60,
   "low": 4806.15,
@@ -587,7 +587,7 @@ as `source="ths"`.
       "change_amount": 42.3,
       "volume": 52000000,
       "amount": 95800000000.0,
-      "turnover_rate": 3.58,
+      "turnover_pct": 3.58,
       "total_mv": 2345000000000.0,
       "up_count": 45,
       "down_count": 12,
@@ -682,7 +682,7 @@ from the SQLite board cache; a cache miss returns `422 board_type_unresolved`
 
 ```json
 {
-  "board_code": "885595",
+  "code": "885595",
   "board_name": "互联网服务",
   "source": "ths",
   "price": 1850.5, "change_pct": 2.35, "change_amount": 42.3,
@@ -708,7 +708,7 @@ value → 422. Cursor-paginated (no 14-item cap), items carry a `summary`.
 
 ```json
 {
-  "board_code": "885914",
+  "code": "885914",
   "source": "ths",
   "total": 20,
   "data": [
@@ -740,7 +740,7 @@ other value → 422.
 
 ```json
 {
-  "board_code": "885914",
+  "code": "885914",
   "source": "ths",
   "total": 5,
   "data": [
@@ -784,7 +784,7 @@ current trading day, which is volatile and TTLCache-only).
     {
       "code": "601001", "name": "晋控煤业", "price": 12.5, "change_pct": 10.02,
       "amount": 850000000.0, "circ_mv": 21000000000.0, "total_mv": 21000000000.0,
-      "turnover_rate": 4.1, "lb_count": 2, "first_seal_time": "09:41",
+      "turnover_pct": 4.1, "lb_count": 2, "first_seal_time": "09:41",
       "last_seal_time": "10:15", "seal_amount": 120000000.0,
       "seal_count": 3, "zt_count": 1
     }
@@ -802,7 +802,7 @@ The `/quote` endpoint now returns enhanced valuation fields:
 ```json
 {
   "code": "600519",
-  "stock_name": "贵州茅台",
+  "name": "贵州茅台",
   "current_price": 1698.0,
   "pe_ttm": 28.5,
   "pe_static": null,
@@ -813,7 +813,7 @@ The `/quote` endpoint now returns enhanced valuation fields:
   "amplitude_pct": 2.75,
   "limit_up": null,
   "limit_down": null,
-  "vol_ratio": 1.2
+  "volume_ratio": 1.2
 }
 ```
 
@@ -1003,7 +1003,7 @@ GET /api/v1/hot-topics?date=2026-05-20
       "name": "绿的谐波",
       "reason": "人形机器人+减速器+特斯拉",
       "change_pct": 12.5,
-      "turnover_rate": 8.3,
+      "turnover_pct": 8.3,
       "amount": 5000000000.0,
       "dde_net": 1500.0
     }
@@ -1442,7 +1442,7 @@ Content-Type: application/json
 
 ```json
 {
-  "board_code": "885595",
+  "code": "885595",
   "board_name": "白酒",
   "filters_applied": {"turnover_pct": {"min": 5.0, "max": 20.0}, "change_pct": {"min": 0.0}},
   "matched_stocks": [

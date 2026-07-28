@@ -616,7 +616,7 @@ def test_get_board_stocks_projects_change_amount_and_turnover_rate(client):
     assert r.status_code == 200
     stock = r.json()["stocks"][0]
     assert stock["change_amount"] == 0.32
-    assert stock["turnover_rate"] == 12.32
+    assert stock["turnover_pct"] == 12.32
 
 
 def test_get_board_stocks_projects_change_amount_and_turnover_rate_null_when_absent(client):
@@ -651,7 +651,7 @@ def test_get_board_stocks_projects_change_amount_and_turnover_rate_null_when_abs
     assert r.status_code == 200
     stock = r.json()["stocks"][0]
     assert stock["change_amount"] is None
-    assert stock["turnover_rate"] is None
+    assert stock["turnover_pct"] is None
 
 
 def test_get_board_stocks_ths_falls_back_when_get_all_boards_unavailable(client):
@@ -724,7 +724,7 @@ def test_get_stock_boards_zhitu_returns_200_with_cold_sources_when_empty(client)
         r = client.get(f"/api/v1/stocks/{stock_code}/boards?source=zhitu")
         assert r.status_code == 200
         body = r.json()
-        assert body["stock_code"] == stock_code
+        assert body["code"] == stock_code
         assert body["data"] == []
         assert body["cold_sources"] == ["zhitu"]
         # cache hit (empty), no fetcher call -> origin "persistence"
@@ -852,7 +852,7 @@ def test_get_board_history_ths_returns_kline(client):
         )
     assert r.status_code == 200
     body = r.json()
-    assert body["board_code"] == "881270"
+    assert body["code"] == "881270"
     # period echoes the requested frequency
     assert body["period"] == "d"
     assert body["source"] == "ThsFetcher"

@@ -35,7 +35,7 @@ def test_stock_board_info_optional_subtype():
 
 def test_stock_boards_response_shape():
     resp = StockBoardsResponse(
-        stock_code="000001",
+        code="000001",
         source="zhitu",
         data=[
             StockBoardInfo(
@@ -54,7 +54,7 @@ def test_stock_boards_response_shape():
             ),
         ],
     )
-    assert resp.stock_code == "000001"
+    assert resp.code == "000001"
     assert resp.source == "zhitu"
     assert len(resp.data) == 2
     assert resp.data[0].code == "sw_yx"
@@ -64,14 +64,14 @@ def test_stock_boards_response_shape():
 
 def test_stock_boards_response_empty_data():
     """Empty boards list is valid (stock belongs to no known boards)."""
-    resp = StockBoardsResponse(stock_code="000001", source="zhitu", data=[])
+    resp = StockBoardsResponse(code="000001", source="zhitu", data=[])
     assert resp.data == []
     assert resp.cold_sources == []
 
 
 def test_stock_boards_response_default_source_empty():
     """source field defaults to empty string (matches existing patterns)."""
-    resp = StockBoardsResponse(stock_code="000001")
+    resp = StockBoardsResponse(code="000001")
     assert resp.source == ""
     assert resp.data == []
     assert resp.cold_sources == []
@@ -80,7 +80,7 @@ def test_stock_boards_response_default_source_empty():
 def test_stock_boards_response_serialization():
     """JSON serialization produces camel/snake as configured."""
     resp = StockBoardsResponse(
-        stock_code="000001",
+        code="000001",
         source="zhitu",
         data=[
             StockBoardInfo(
@@ -93,7 +93,7 @@ def test_stock_boards_response_serialization():
         ],
     )
     json_data = resp.model_dump()
-    assert json_data["stock_code"] == "000001"
+    assert json_data["code"] == "000001"
     assert json_data["source"] == "zhitu"
     assert json_data["data"][0]["code"] == "sw_yx"
     assert json_data["data"][0]["source"] == "zhitu"
@@ -131,14 +131,14 @@ class TestStockBoardsResponseSchema:
     def test_response_has_cold_sources_default_empty(self):
         from stock_data.api.schemas import StockBoardsResponse
 
-        r = StockBoardsResponse(stock_code="600519", source="eastmoney", data=[])
+        r = StockBoardsResponse(code="600519", source="eastmoney", data=[])
         assert r.cold_sources == []
 
     def test_response_cold_sources_populated(self):
         from stock_data.api.schemas import StockBoardsResponse
 
         r = StockBoardsResponse(
-            stock_code="600519", source="merged", data=[], cold_sources=["zhitu", "zzshare"]
+            code="600519", source="merged", data=[], cold_sources=["zhitu", "zzshare"]
         )
         assert r.cold_sources == ["zhitu", "zzshare"]
 
@@ -153,7 +153,7 @@ def test_board_stock_info_accepts_6_new_optional_fields():
         price=12.34,
         change_pct=5.5,
         change_amount=0.65,
-        turnover_rate=8.7,
+        turnover_pct=8.7,
         # 6 new fields (2026-07-13):
         change_speed=0.10,
         volume_ratio=1.85,

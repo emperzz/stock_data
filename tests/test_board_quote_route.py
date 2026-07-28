@@ -62,7 +62,7 @@ def test_board_quote_no_source_param_works(client):
         r = client.get("/api/v1/boards/885595/quote")
     assert r.status_code == 200
     body = r.json()
-    assert body["board_code"] == "885595"
+    assert body["code"] == "885595"
     assert body["board_name"] == "央企国企改革"
     assert body["open"] == 2921.12
     assert body["up_count"] == 175

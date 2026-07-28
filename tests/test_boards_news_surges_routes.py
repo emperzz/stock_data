@@ -71,7 +71,7 @@ def test_news_route_returns_board_news(client):
     r = client.get("/api/v1/boards/885914/news?limit=5&source=ths")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["board_code"] == "885914"
+    assert body["code"] == "885914"
     assert body["source"] == "ThsFetcher" or "ths" in body["source"]
     assert body["total"] == 2
     assert len(body["data"]) == 2
@@ -111,7 +111,7 @@ def test_surges_route_returns_board_surges(client):
     r = client.get("/api/v1/boards/885914/surges?limit=5&source=ths")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["board_code"] == "885914"
+    assert body["code"] == "885914"
     assert body["total"] == 1
     s = body["data"][0]
     assert s["date"] == "2026-07-14"

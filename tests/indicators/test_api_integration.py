@@ -100,10 +100,10 @@ def test_history_default_no_indicators(client):
     # the response entirely (model_serializer drops it when None/empty).
     for row in body["data"]:
         assert "indicators" not in row
-        # amount / change_percent keep the original "null when missing"
+        # amount / change_pct keep the original "null when missing"
         # semantics — always present, possibly null.
         assert "amount" in row
-        assert "change_percent" in row
+        assert "change_pct" in row
 
 
 def test_history_with_ma_indicator(client):
@@ -184,9 +184,9 @@ def test_index_history_supports_indicators(client):
     assert r2.status_code == 200
     last2 = r2.json()["data"][-1]
     assert "indicators" not in last2
-    # amount/change_percent remain
+    # amount/change_pct remain
     assert "amount" in last2
-    assert "change_percent" in last2
+    assert "change_pct" in last2
 
 
 def test_index_history_unknown_indicator_rejected(client):

@@ -290,13 +290,13 @@ CSS 变量驱动，支持 light / dark 主题切换，主题状态持久到 `loc
   ],
   response_fields: [
     { group: "基础", fields: [
-      "code", "stock_name", "source", "current_price", "change",
-      "change_percent", "open", "high", "low", "prev_close",
+      "code", "name", "source", "current_price", "change_amount",
+      "change_pct", "open", "high", "low", "prev_close",
       "volume", "amount", "update_time"
     ]},
     { group: "估值增强", fields: [
       "pe_ttm", "pe_static", "pb", "mcap_yi", "float_mcap_yi",
-      "turnover_pct", "amplitude_pct", "limit_up", "limit_down", "vol_ratio"
+      "turnover_pct", "amplitude_pct", "limit_up", "limit_down", "volume_ratio"
     ]}
   ],
   cache: { ttl_sec: 60, env: "CACHE_TTL_QUOTE" },

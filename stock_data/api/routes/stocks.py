@@ -166,29 +166,9 @@ def get_quote(
             detail={"error": "not_found", "message": f"Quote not available for {stock_code}"},
         )
 
-    return StockQuote(
-        code=quote.code,
-        stock_name=quote.name or stock_list.get_stock_name(stock_code, manager=manager),
-        source=quote.source.value,
-        current_price=quote.price or 0.0,
-        change=quote.change_amount,
-        change_percent=quote.change_pct,
-        open=quote.open_price,
-        high=quote.high,
-        low=quote.low,
-        prev_close=quote.pre_close,
-        volume=quote.volume,
-        amount=quote.amount,
-        pe_ttm=quote.pe_ratio,
-        pe_static=None,
-        pb=quote.pb_ratio,
-        mcap_yi=quote.total_mv / 1e8 if quote.total_mv else None,
-        float_mcap_yi=quote.circ_mv / 1e8 if quote.circ_mv else None,
-        turnover_pct=quote.turnover_rate,
-        amplitude_pct=quote.amplitude,
-        limit_up=None,
-        limit_down=None,
-        vol_ratio=quote.volume_ratio,
+    return StockQuote.from_unified_quote(
+        quote,
+        name_fallback=stock_list.get_stock_name(stock_code, manager=manager),
     )
 
 
@@ -270,7 +250,7 @@ def get_kline(
     records = df.to_dict("records")
     return StockHistoryResponse(
         code=code,
-        stock_name=name,
+        name=name,
         period=period,
         data=[_build_kline_data(r, _format_date) for r in records],
         source=source,
@@ -390,7 +370,13 @@ def get_block_trade(
     manager = get_manager()
     data, source = manager.get_block_trade(stock_code, page_size)
     stock_name = stock_list.get_stock_name(stock_code, manager=manager)
-    records = [BlockTradeRecord(**r) for r in data]
+    # Upstream (EastMoney fetcher) emits ``vol`` for BlockTradeRecord's
+    # renamed ``volume`` field; pre-translate the dict key so Pydantic
+    # v2's extra='ignore' doesn't silently drop it.
+    records = [
+        BlockTradeRecord(**{**r, "volume": r.get("vol", r.get("volume", 0))})
+        for r in data
+    ]
     return BlockTradeResponse(
         code=stock_code,
         name=stock_name or "",

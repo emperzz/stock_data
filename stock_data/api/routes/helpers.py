@@ -201,8 +201,8 @@ def _index_quote_from(q, code: str) -> IndexQuote:
         name=q.name or _resolve_index_name(code),
         source=q.source.value if hasattr(q.source, "value") else str(q.source),
         current_price=q.price or 0.0,
-        change=q.change_amount,
-        change_percent=q.change_pct,
+        change_amount=q.change_amount,
+        change_pct=q.change_pct,
         open=q.open_price,
         high=q.high,
         low=q.low,
@@ -389,7 +389,7 @@ def _build_kline_data(row: dict, format_date) -> KLineData:
         close=safe_float(row.get("close"), 0.0),
         volume=safe_int(row.get("volume"), 0),
         amount=safe_float(row.get("amount")),
-        change_percent=safe_float(row.get("pct_chg")),
+        change_pct=safe_float(row.get("pct_chg")),
         indicators=ind or None,
     )
 

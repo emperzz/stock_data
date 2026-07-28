@@ -50,11 +50,11 @@ class StockQuote(BaseModel):
     """Stock realtime quote response."""
 
     code: str = Field(description="Stock code")
-    stock_name: str = Field(default="", description="Stock name")
+    name: str = Field(default="", description="Stock name")
     source: str = Field(default="", description="Data source")
     current_price: float = Field(default=0.0, description="Current price")
-    change: float | None = Field(default=None, description="Price change amount")
-    change_percent: float | None = Field(default=None, description="Price change percent")
+    change_amount: float | None = Field(default=None, description="Price change amount")
+    change_pct: float | None = Field(default=None, description="Price change percent")
     open: float | None = Field(default=None, description="Opening price")
     high: float | None = Field(default=None, description="Highest price")
     low: float | None = Field(default=None, description="Lowest price")
@@ -75,7 +75,60 @@ class StockQuote(BaseModel):
     amplitude_pct: float | None = Field(default=None, description="Amplitude (%)")
     limit_up: float | None = Field(default=None, description="Limit up price (涨停价)")
     limit_down: float | None = Field(default=None, description="Limit down price (跌停价)")
-    vol_ratio: float | None = Field(default=None, description="Volume ratio (量比)")
+    volume_ratio: float | None = Field(default=None, description="Volume ratio (量比)")
+
+    @classmethod
+    def from_unified_quote(cls, q: Any, name_fallback: str = "") -> "StockQuote":
+        """Build a StockQuote from a UnifiedRealtimeQuote dataclass.
+
+        Single source of truth for the manager-layer → API-layer field
+        mapping. Reused by both ``/stocks/{code}/quote`` and the agent
+        batch-profile ``quote`` aspect so the two endpoints cannot drift.
+
+        ``name_fallback`` is used when ``q.name`` is empty — typically the
+        stock_list lookup for ``/stocks/{code}/quote``. Agent callers pass
+        no fallback (default ``""``) so a missing upstream name becomes
+        empty rather than triggering a stock_list hit per quote.
+
+        Unit conversions:
+        - ``total_mv`` / ``circ_mv`` (元) → ``mcap_yi`` / ``float_mcap_yi`` (亿元) by /1e8.
+        - Drops ``pe_static`` (UnifiedRealtimeQuote only carries the
+          single ``pe_ratio``; v1 has always emitted ``pe_ttm`` only).
+        - Returns None for ``update_time`` / ``pe_static`` /
+          ``limit_up`` / ``limit_down`` (not carried by
+          UnifiedRealtimeQuote; preserved as None to match StockQuote shape).
+        """
+        src = q.source.value if hasattr(q.source, "value") else str(q.source or "")
+
+        def _yi(v):
+            return None if v is None else v / 1e8
+
+        return cls(
+            code=q.code,
+            name=q.name or name_fallback,
+            source=src,
+            current_price=q.price or 0.0,
+            change_amount=q.change_amount,
+            change_pct=q.change_pct,
+            open=q.open_price,
+            high=q.high,
+            low=q.low,
+            prev_close=q.pre_close,
+            volume=q.volume,
+            volume_unit=q.volume_unit or "share",
+            amount=q.amount,
+            update_time=None,
+            pe_ttm=q.pe_ratio,
+            pe_static=None,
+            pb=q.pb_ratio,
+            mcap_yi=_yi(q.total_mv),
+            float_mcap_yi=_yi(q.circ_mv),
+            turnover_pct=q.turnover_rate,
+            amplitude_pct=q.amplitude,
+            limit_up=None,
+            limit_down=None,
+            volume_ratio=q.volume_ratio,
+        )
 
 
 class KLineData(BaseModel):
@@ -84,7 +137,7 @@ class KLineData(BaseModel):
     The ``indicators`` field is conditionally serialized: it is omitted
     from the JSON response entirely when its value is None / empty. This
     keeps the response clean when the caller did not pass
-    ``?indicators=...``. The ``amount`` and ``change_percent`` fields
+    ``?indicators=...``. The ``amount`` and ``change_pct`` fields
     keep their "null when missing" semantics (always present, possibly
     null).
     """
@@ -118,7 +171,7 @@ class KLineData(BaseModel):
         "normalization per spec §3.4.",
     )
     amount: float | None = Field(default=None, description="Amount")
-    change_percent: float | None = Field(default=None, description="Change percent")
+    change_pct: float | None = Field(default=None, description="Change percent")
     # Per-bar indicator values. Populated only when the request
     # supplies `?indicators=...` (or a JSON body with `indicators`).
     # Keys are indicator-prefixed (e.g. ma5, macd_dif, kdj_k, boll_upper).
@@ -142,7 +195,7 @@ class KLineData(BaseModel):
             "volume": self.volume,
             "volume_unit": self.volume_unit,
             "amount": self.amount,
-            "change_percent": self.change_percent,
+            "change_pct": self.change_pct,
         }
         # Per-bar frequency tag: only emit when populated. The route
         # layer falls back to the request's `?frequency=` for fetchers
@@ -164,7 +217,7 @@ class StockHistoryResponse(BaseModel):
     """Stock historical K-line response."""
 
     code: str = Field(description="Stock code")
-    stock_name: str = Field(default="", description="Stock name")
+    name: str = Field(default="", description="Stock name")
     period: str = Field(default="daily", description="K-line period")
     data: list[KLineData] = Field(default_factory=list, description="K-line data points")
     source: str = Field(
@@ -290,7 +343,7 @@ class IntradayResponse(BaseModel):
     """Intraday minute-level data response."""
 
     code: str = Field(description="Stock code")
-    stock_name: str = Field(default="", description="Stock name")
+    name: str = Field(default="", description="Stock name")
     period: str = Field(description="Minute period (1m/5m/15m/30m/60m)")
     adjust: str = Field(default="", description="Adjustment type")
     date: str = Field(description="Trade date (YYYY-MM-DD)")
@@ -327,7 +380,7 @@ class BoardInfo(BaseModel):
     )
     volume: int | None = Field(default=None, description="Volume (requires include_quote=True)")
     amount: float | None = Field(default=None, description="Amount (requires include_quote=True)")
-    turnover_rate: float | None = Field(
+    turnover_pct: float | None = Field(
         default=None, description="Turnover rate (requires include_quote=True)"
     )
     total_mv: float | None = Field(
@@ -373,7 +426,7 @@ class BoardStockInfo(BaseModel):
         default=None, description="Volume (shares; only populated when upstream exposes it)"
     )
     amount: float | None = Field(default=None, description="Trading amount (元)")
-    turnover_rate: float | None = Field(default=None, description="Turnover rate (%)")
+    turnover_pct: float | None = Field(default=None, description="Turnover rate (%)")
     # === 2026-07-13 新增 (THS /field/<code> 14 列全部暴露) ===
     change_speed: float | None = Field(default=None, description="涨速(%) — THS upstream column 6")
     volume_ratio: float | None = Field(default=None, description="量比 — THS upstream column 8")
@@ -506,7 +559,7 @@ class BoardStocksResponse(BaseModel):
 class BoardQuoteResponse(BaseModel):
     """Response for board realtime quote endpoint (`/boards/{board_code}/quote`)."""
 
-    board_code: str = Field(description="Board platecode (e.g. 885595)")
+    code: str = Field(description="Board platecode (e.g. 885595)")
     board_name: str = Field(default="", description="Board name")
     source: str = Field(
         default="",
@@ -543,7 +596,7 @@ class BoardQuoteResponse(BaseModel):
 class BoardKlineResponse(BaseModel):
     """Response for board K-line endpoint (`/boards/{board_code}/history`)."""
 
-    board_code: str = Field(description="Board code (source-specific; echoed verbatim)")
+    code: str = Field(description="Board code (source-specific; echoed verbatim)")
     board_name: str = Field(default="", description="Board name (best-effort lookup; may be empty)")
     period: str = Field(
         default="daily",
@@ -593,7 +646,7 @@ class BoardNewsItem(BaseModel):
 class BoardNewsResponse(BaseModel):
     """Response for /boards/{board_code}/news (THS 板块新闻 timeline feed)."""
 
-    board_code: str = Field(description="Board code echoed back")
+    code: str = Field(description="Board code echoed back")
     source: str = Field(default="ths", description="Source label (THS-only v1)")
     total: int = Field(description="Number of items in `data`")
     data: list[BoardNewsItem] = Field(default_factory=list, description="News items")
@@ -632,7 +685,7 @@ class BoardSurgeItem(BaseModel):
 class BoardSurgesResponse(BaseModel):
     """Response for /boards/{board_code}/surges (THS F10 板块炒作周期)."""
 
-    board_code: str = Field(description="Board code echoed back")
+    code: str = Field(description="Board code echoed back")
     source: str = Field(default="ths", description="Source label (THS-only v1)")
     total: int = Field(description="Number of items in `data`")
     data: list[BoardSurgeItem] = Field(default_factory=list, description="Surge/cycle entries")
@@ -657,7 +710,7 @@ class StockBoardInfo(BaseModel):
 class StockBoardsResponse(BaseModel):
     """Unified response for /stocks/{stock_code}/boards endpoint."""
 
-    stock_code: str = Field(description="Stock code queried")
+    code: str = Field(description="Stock code queried")
     source: str = Field(
         default="",
         description="数据来源 fetcher 名 (e.g. 'zhitu'), 'persistence' on cache hit, "
@@ -681,8 +734,8 @@ class IndexQuote(BaseModel):
     name: str = Field(default="", description="Index name")
     source: str = Field(default="", description="Data source")
     current_price: float = Field(default=0.0, description="Current price")
-    change: float | None = Field(default=None, description="Price change amount")
-    change_percent: float | None = Field(default=None, description="Price change percent")
+    change_amount: float | None = Field(default=None, description="Price change amount")
+    change_pct: float | None = Field(default=None, description="Price change percent")
     open: float | None = Field(default=None, description="Opening price")
     high: float | None = Field(default=None, description="Highest price")
     low: float | None = Field(default=None, description="Lowest price")
@@ -732,7 +785,7 @@ class ZTPoolStock(BaseModel):
     amount: float | None = Field(default=None, description="Trading amount (元)")
     circ_mv: float | None = Field(default=None, description="Circulating market value (元)")
     total_mv: float | None = Field(default=None, description="Total market value (元)")
-    turnover_rate: float | None = Field(default=None, description="Turnover rate (%)")
+    turnover_pct: float | None = Field(default=None, description="Turnover rate (%)")
     lb_count: int | None = Field(
         default=None, description="Consecutive limit-up count (涨停连板数) / 连续跌停次数"
     )
@@ -875,7 +928,7 @@ class BlockTradeRecord(BaseModel):
     price: float = Field(default=0, description="成交价")
     close: float = Field(default=0, description="收盘价")
     premium_pct: float = Field(default=0, description="溢价率(%)")
-    vol: float = Field(default=0, description="成交量(股)")
+    volume: float = Field(default=0, description="成交量(股)")
     amount: float = Field(default=0, description="成交额(元)")
     buyer: str = Field(default="", description="买方营业部")
     seller: str = Field(default="", description="卖方营业部")
@@ -980,7 +1033,7 @@ class HotTopicRecord(BaseModel):
     name: str = Field(default="", description="股票名称")
     reason: str = Field(default="", description="题材归因")
     change_pct: float = Field(default=0, description="涨幅(%)")
-    turnover_rate: float = Field(default=0, description="换手率(%)")
+    turnover_pct: float = Field(default=0, description="换手率(%)")
     volume: float = Field(default=0, description="成交量")
     amount: float = Field(default=0, description="成交额")
     dde_net: float = Field(default=0, description="大单净量")
@@ -1422,7 +1475,7 @@ class FilterStocksMatchedStock(BaseModel):
 
 
 class FilterStocksResponse(BaseModel):
-    board_code: str
+    code: str
     board_name: str | None = None
     filters_applied: FilterStocksFilters
     matched_stocks: list[FilterStocksMatchedStock] = Field(default_factory=list)

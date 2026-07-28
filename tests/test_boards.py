@@ -583,7 +583,7 @@ class TestBoardSchemas:
             change_amount=42.3,
             volume=52000000,
             amount=95800000000.0,
-            turnover_rate=3.58,
+            turnover_pct=3.58,
             total_mv=2345000000000.0,
             up_count=45,
             down_count=12,
@@ -652,7 +652,7 @@ class TestBoardSchemas:
         from stock_data.api.schemas import BoardKlineResponse, KLineData
 
         r = BoardKlineResponse(
-            board_code="883957",
+            code="883957",
             board_name="同花顺全A",
             period="daily",
             data=[
@@ -664,13 +664,13 @@ class TestBoardSchemas:
                     close=104.0,
                     volume=1_000_000,
                     amount=104_000_000.0,
-                    change_percent=4.0,
+                    change_pct=4.0,
                 ),
             ],
             source="ZzshareFetcher",
         )
         out = r.model_dump()
-        assert out["board_code"] == "883957"
+        assert out["code"] == "883957"
         assert out["board_name"] == "同花顺全A"
         assert out["period"] == "daily"
         assert out["source"] == "ZzshareFetcher"

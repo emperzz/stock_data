@@ -104,7 +104,13 @@ def get_hot_topics(
     """Get daily hot stocks with reason tags."""
     manager = get_manager()
     data, source = manager.get_hot_topics(date)
-    topics = [HotTopicRecord(**r) for r in data]
+    # Upstream (THS fetcher) emits ``turnover_rate`` for HotTopicRecord's
+    # renamed ``turnover_pct`` field; pre-translate so Pydantic v2's
+    # extra='ignore' doesn't silently drop the value.
+    topics = [
+        HotTopicRecord(**{**r, "turnover_pct": r.get("turnover_rate", r.get("turnover_pct", 0))})
+        for r in data
+    ]
     actual_date = date or datetime.now().strftime("%Y-%m-%d")
     return HotTopicResponse(date=actual_date, total=len(topics), topics=topics, source=source)
 

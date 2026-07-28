@@ -211,7 +211,7 @@ class TestIndexQuote:
         assert data["code"] == "000300"
         assert "name" in data
         assert "current_price" in data
-        assert "change_percent" in data
+        assert "change_pct" in data
 
     def test_index_quote_399006(self, client):
         response = client.get("/api/v1/indices/399006/quote")
