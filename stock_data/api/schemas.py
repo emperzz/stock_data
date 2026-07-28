@@ -586,7 +586,7 @@ class BoardQuoteResponse(BaseModel):
             "层 (Stage 2: /control/fetcher-test) 或在 route 层把字段类型升级为 float."
         ),
     )
-    amount: float | None = Field(default=None, description="成交额 (亿元)")
+    amount: float | None = Field(default=None, description="成交额 (元)")
     net_inflow: float | None = Field(default=None, description="资金净流入 (亿元)")
     up_count: int | None = Field(default=None, description="上涨家数")
     down_count: int | None = Field(default=None, description="下跌家数")
@@ -833,9 +833,9 @@ class DragonTigerSeat(BaseModel):
 class DragonTigerInstitution(BaseModel):
     """机构买卖统计"""
 
-    buy_amt: float = Field(default=0, description="机构买入(万元)")
-    sell_amt: float = Field(default=0, description="机构卖出(万元)")
-    net_amt: float = Field(default=0, description="机构净买入(万元)")
+    buy_wan: float = Field(default=0, description="机构买入(万元)")
+    sell_wan: float = Field(default=0, description="机构卖出(万元)")
+    net_wan: float = Field(default=0, description="机构净买入(万元)")
 
 
 class DragonTigerRecord(BaseModel):

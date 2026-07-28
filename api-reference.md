@@ -941,7 +941,7 @@ GET /api/v1/stocks/{code}/dragon-tiger?trade_date=2026-05-20
     "buy": [{"name": "机构专用", "buy_wan": 8900.0, "sell_wan": 1200.0, "net_wan": 7700.0}],
     "sell": [{"name": "中信证券", "buy_wan": 500.0, "sell_wan": 4500.0, "net_wan": -4000.0}]
   },
-  "institution": {"buy_amt": 8900.0, "sell_amt": 600.0, "net_amt": 8300.0},
+  "institution": {"buy_wan": 8900.0, "sell_wan": 600.0, "net_wan": 8300.0},
   "source": "eastmoney"
 }
 ```

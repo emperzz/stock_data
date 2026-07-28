@@ -25,7 +25,7 @@ _QUOTE = {
     "high": 2936.89,
     "low": 2870.11,
     "volume": 15343,
-    "amount": 2642.50,
+    "amount": 2642.50,  # upstream emits 亿元; route ×1e8 → 264250000000.0
     "up_count": 175,
     "down_count": 207,
     "net_inflow": 34.79,
@@ -68,6 +68,8 @@ def test_board_quote_no_source_param_works(client):
     assert body["up_count"] == 175
     assert body["net_inflow"] == 34.79
     assert body["rank"] == "229/389"
+    # amount: upstream emits 亿元 (2642.50), route layer ×1e8 → 元 (2.6425e11).
+    assert body["amount"] == 2642.50 * 1e8
     assert body["source"] == "ths"
     # Route internally routes to ths unconditionally, and forwards
     # board_type from the cache (C2: persistence is the source of truth).

@@ -298,7 +298,23 @@ def get_dragon_tiger(
             "buy": [DragonTigerSeat(**s) for s in seats_data.get("buy", [])],
             "sell": [DragonTigerSeat(**s) for s in seats_data.get("sell", [])],
         },
-        institution=DragonTigerInstitution(**data.get("institution", {})),
+        # Eastmoney fetcher emits institution keys as ``buy_amt/sell_amt/net_amt``
+        # (legacy _amt suffix despite values already being 万元). Translate
+        # to the schema's ``_wan`` keys so Pydantic v2 extra='ignore' doesn't
+        # silently drop them.
+        institution=DragonTigerInstitution(
+            **{
+                "buy_wan": data.get("institution", {}).get(
+                    "buy_amt", data.get("institution", {}).get("buy_wan", 0)
+                ),
+                "sell_wan": data.get("institution", {}).get(
+                    "sell_amt", data.get("institution", {}).get("sell_wan", 0)
+                ),
+                "net_wan": data.get("institution", {}).get(
+                    "net_amt", data.get("institution", {}).get("net_wan", 0)
+                ),
+            }
+        ),
         source=source,
     )
 

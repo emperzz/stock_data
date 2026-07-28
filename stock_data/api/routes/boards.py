@@ -828,6 +828,9 @@ def get_board_quote(
             },
         )
     quote, origin = manager.get_board_realtime(board_code, source="ths", board_type=board_type)
+    # THS upstream emits amount in 亿元 (per ths_fetcher.py:1375, 2151); BoardQuoteResponse
+    # schema is 元-aligned with the rest of the API surface, so ×1e8 here.
+    raw_amount = quote.get("amount")
     return BoardQuoteResponse(
         code=quote.get("board_code") or board_code,
         board_name=quote.get("board_name", ""),
@@ -840,7 +843,7 @@ def get_board_quote(
         low=quote.get("low"),
         prev_close=quote.get("prev_close"),
         volume=quote.get("volume"),
-        amount=quote.get("amount"),
+        amount=raw_amount * 1e8 if raw_amount is not None else None,
         net_inflow=quote.get("net_inflow"),
         up_count=quote.get("up_count"),
         down_count=quote.get("down_count"),
