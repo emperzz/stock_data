@@ -25,10 +25,10 @@ Routes added in Phase 2 (this file):
 import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime
 from datetime import time as dt_time
 from itertools import combinations
-from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Query
@@ -40,7 +40,6 @@ from ..cache import (
     cached_lookup,
     cached_store,
     get_quote_cache,  # reused as generic in-memory slot for agent results
-    is_cache_enabled,
     make_boards_overlap_cache_key,
     make_filter_stocks_cache_key,
     make_indices_batch_profile_cache_key,
@@ -81,6 +80,7 @@ from .errors import map_errors
 from .helpers import (
     _build_kline_data,
     _format_date,
+    _index_quote_from,
     _resolve_index_name,
     get_manager,
 )
@@ -113,48 +113,31 @@ _INDICES_KLINE_DAYS: dict[str, tuple[str, int]] = {
 }
 
 # Per-stock aspects supported by /agent/stocks/batch-profile. The dict
-# value is (callable, kwargs). Adding an aspect requires a new entry
-# here AND extending the StockBatchAspect Literal in schemas.py.
+# value is (manager method name, kwargs). Adding an aspect requires a
+# new entry here AND extending the StockBatchAspect Literal in schemas.py.
+# `boards` is persistence-routed (NOT manager.get_stock_boards) so the
+# call goes through stock_board_membership and inherits the ZZSHARE↔THS
+# fallback chain + effective_source plumbing used by /stocks/{code}/boards.
+# See CLAUDE.md "Persistence-Only Routing".
 _STOCK_ASPECT_DISPATCH: dict[str, tuple[str, dict]] = {
     "quote": ("get_realtime_quote", {}),
     "kline": ("get_kline_data", {"frequency": "d", "days": 60, "asset": "stock"}),
     "kline_5m": ("get_kline_data", {"frequency": "5", "days": 2, "asset": "stock"}),
     "info": ("get_stock_info", {}),
-    # boards: persistence-routed (NOT manager.get_stock_boards) so the
-    # call goes through stock_board_membership and inherits the
-    # ZZSHARE↔THS fallback chain + effective_source plumbing used by
-    # /stocks/{code}/boards. See CLAUDE.md "Persistence-Only Routing".
-    "boards": ("__persistence_stock_memberships__", {"sources": ["ths"]}),
 }
+_PERSISTENCE_ROUTED_ASPECTS = frozenset({"boards"})
 
 
-def _reorder_indices_batch_profile(
-    cached: IndicesBatchProfileResponse, input_order: list[str]
-) -> IndicesBatchProfileResponse:
-    """Reorder ``cached.indices`` to mirror ``input_order`` on a cache hit.
+def _reorder_by_code(cached, input_order: list[str], field: str):
+    """Reorder ``cached.<field>`` (a list of items with .code) to match ``input_order``.
 
     The cache key is sorted (so two requests with the same set in
     different order share one entry), but the response contract is
-    "indices in input order". This helper projects the cached set
-    onto the new order. Codes missing from the cache (shouldn't
+    "items in input order". Codes missing from the cache (shouldn't
     happen but be defensive) are silently skipped.
     """
-    by_code = {p.code: p for p in cached.indices}
-    new_indices = [by_code[c] for c in input_order if c in by_code]
-    return cached.model_copy(update={"indices": new_indices})
-
-
-def _reorder_stocks_batch_profile(
-    cached: StockBatchProfileResponse, input_order: list[str]
-) -> StockBatchProfileResponse:
-    """Reorder ``cached.results`` to mirror ``input_order`` on a cache hit.
-
-    Same rationale as ``_reorder_indices_batch_profile`` but for the
-    stocks variant.
-    """
-    by_code = {r.code: r for r in cached.results}
-    new_results = [by_code[c] for c in input_order if c in by_code]
-    return cached.model_copy(update={"results": new_results})
+    by_code = {item.code: item for item in getattr(cached, field)}
+    return cached.model_copy(update={field: [by_code[c] for c in input_order if c in by_code]})
 
 
 @router.post(
@@ -231,8 +214,7 @@ def post_boards_stock_overlap(payload: BoardsOverlapRequest) -> BoardsOverlapRes
         )
 
     result = BoardsOverlapResponse(sets=sets_out, pairs=pairs, errors=errors)
-    if is_cache_enabled():
-        cached_store(get_quote_cache, cache_key, result)
+    cached_store(get_quote_cache, cache_key, result)
     return result
 
 
@@ -315,13 +297,8 @@ def post_stocks_board_overlap(payload: StocksBoardOverlapRequest) -> StocksBoard
         )
 
     result = StocksBoardOverlapResponse(sets=sets_out, pairs=pairs, errors=errors)
-    if is_cache_enabled():
-        cached_store(get_quote_cache, cache_key, result)
+    cached_store(get_quote_cache, cache_key, result)
     return result
-
-
-def _safe_div(num, den):
-    return (num / den) if (den not in (None, 0)) else None
 
 
 def _row_to_matched(s: dict) -> FilterStocksMatchedStock:
@@ -342,8 +319,8 @@ def _row_to_matched(s: dict) -> FilterStocksMatchedStock:
         change_pct=s.get("change_pct"),
         max_gain_pct=max_gain,
         turnover_pct=s.get("turnover_rate"),
-        amount_yi=_safe_div(amount, 1e8) if amount is not None else None,
-        mcap_yi=_safe_div(total_mv, 1e8) if total_mv is not None else None,
+        amount_yi=(amount / 1e8) if amount is not None else None,
+        mcap_yi=(total_mv / 1e8) if total_mv is not None else None,
     )
 
 
@@ -454,8 +431,7 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
             "limit_applied": limit_applied,
         },
     )
-    if is_cache_enabled():
-        cached_store(get_quote_cache, cache_key, result)
+    cached_store(get_quote_cache, cache_key, result)
     return result
 
 
@@ -464,8 +440,8 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
 # ============================================================================
 
 
-def _classify_market_session(trade_date: str, is_trade_day: bool) -> str:
-    """Map server-local CST time + trade-date to a session label.
+def _classify_market_session(is_trade_day: bool) -> str:
+    """Map server-local CST time to a session label.
 
     Anchors from proposal §3.2.3: 09:15 / 15:00 Asia/Shanghai. Returns
     ``"closed"`` for non-trade-days. Uses ``datetime.now(CST)``; the
@@ -474,21 +450,29 @@ def _classify_market_session(trade_date: str, is_trade_day: bool) -> str:
     if not is_trade_day:
         return "closed"
     now = datetime.now(_CST).time()
-    pre_cutoff = dt_time(9, 15)
-    post_cutoff = dt_time(15, 0)
-    if now < pre_cutoff:
+    if now < dt_time(9, 15):
         return "pre-market"
-    if now < post_cutoff:
+    if now < dt_time(15, 0):
         return "intraday"
     return "post-market"
 
 
-def _summarize_dragon_tiger(stocks: list[dict], top_n: int = 10) -> MarketContextDragonTigerSummary:
+def _batch_summary(requested: int, ok: int, started: float) -> dict:
+    """Build the standard {requested, ok, failed, elapsed_ms} summary block."""
+    return {
+        "requested": requested,
+        "ok": ok,
+        "failed": requested - ok,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
+def _summarize_dragon_tiger(stocks: list[dict]) -> MarketContextDragonTigerSummary:
     """Compute the dragon-tiger summary block.
 
     - total_net_buy_wan = sum across ALL rows (signed: positive = 净买入, negative = 净卖出)
-    - top_by_net_buy: top N by net_buy_wan DESC (positive-first)
-    - top_by_net_sell: top N by net_buy_wan ASC, but only rows with
+    - top_by_net_buy: top 10 by net_buy_wan DESC (positive-first)
+    - top_by_net_sell: top 10 by net_buy_wan ASC, but only rows with
       net_buy_wan < 0 (a positive row is by definition NOT a sell-side
       candidate; surfacing it as "top sell" would be misleading on
       all-positive days).
@@ -502,9 +486,9 @@ def _summarize_dragon_tiger(stocks: list[dict], top_n: int = 10) -> MarketContex
         for s in (stocks or [])
     ]
     total = sum(r.net_buy_wan for r in rows)
-    top_buy = sorted(rows, key=lambda r: -r.net_buy_wan)[:top_n]
+    top_buy = sorted(rows, key=lambda r: -r.net_buy_wan)[:10]
     negative_only = [r for r in rows if r.net_buy_wan < 0]
-    top_sell = sorted(negative_only, key=lambda r: r.net_buy_wan)[:top_n]
+    top_sell = sorted(negative_only, key=lambda r: r.net_buy_wan)[:10]
     return MarketContextDragonTigerSummary(
         total_net_buy_wan=total,
         top_by_net_buy=top_buy,
@@ -536,14 +520,6 @@ def get_indices_batch_profile(
             "isolated into entry.errors[frequency]."
         ),
     ),
-    format: Literal["json"] = Query(
-        default="json",
-        description=(
-            "Output format. Only ``json`` is supported today. ``md`` is "
-            "deferred to Phase 2.4 (proposal §3.2); a 422 is returned "
-            "if requested to prevent silent contract drift."
-        ),
-    ),
 ) -> IndicesBatchProfileResponse:
     """Per-index fan-out: realtime quote + 5m/d/w K-line.
 
@@ -553,16 +529,14 @@ def get_indices_batch_profile(
     """
     code_list = [
         c.strip() for c in (codes.split(",") if codes else _DEFAULT_CORE_CSI_INDICES) if c.strip()
-    ]
-    if not code_list:
-        code_list = list(_DEFAULT_CORE_CSI_INDICES)
+    ] or list(_DEFAULT_CORE_CSI_INDICES)
 
     cache_key = make_indices_batch_profile_cache_key(code_list)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_indices_batch_profile")
     if hit is not None:
         # Cache key is sorted; reorder cached list to the caller's order
         # so the "indices" list mirrors the input `codes` (response contract).
-        return _reorder_indices_batch_profile(hit, code_list)
+        return _reorder_by_code(hit, code_list, "indices")
 
     started = time.monotonic()
     manager = get_manager()
@@ -592,20 +566,7 @@ def get_indices_batch_profile(
             entry_ok = False
         else:
             errors["quote"] = None
-            quote_dict = {
-                "code": q.code,
-                "name": q.name or _resolve_index_name(code),
-                "source": q.source.value if hasattr(q.source, "value") else str(q.source),
-                "current_price": q.price or 0.0,
-                "change": q.change_amount,
-                "change_percent": q.change_pct,
-                "open": q.open_price,
-                "high": q.high,
-                "low": q.low,
-                "prev_close": q.pre_close,
-                "volume": q.volume,
-                "amount": q.amount,
-            }
+            quote_dict = _index_quote_from(q, code).model_dump()
 
         # 2) per-frequency K-line. 5m/d/w ordered most-recent-first so
         # the user reads the small frame first.
@@ -633,12 +594,10 @@ def get_indices_batch_profile(
                     f"[agent/indices/batch-profile] kline {code} {mgr_freq} failed: {exc}",
                     exc_info=True,
                 )
-                errors[user_freq] = f"{type(exc).__name__}: {exc}"
                 entry_ok = False
-                klines[user_freq] = IndexKlineBlock(data=[], error=errors[user_freq])
+                klines[user_freq] = IndexKlineBlock(data=[], error=f"{type(exc).__name__}: {exc}")
                 continue
             klines[user_freq] = IndexKlineBlock(data=bars, error=None)
-            errors[user_freq] = None
 
         if entry_ok:
             n_ok += 1
@@ -652,18 +611,11 @@ def get_indices_batch_profile(
             )
         )
 
-    elapsed_ms = int((time.monotonic() - started) * 1000)
     result = IndicesBatchProfileResponse(
         indices=profiles,
-        summary={
-            "requested": len(code_list),
-            "ok": n_ok,
-            "failed": len(code_list) - n_ok,
-            "elapsed_ms": elapsed_ms,
-        },
+        summary=_batch_summary(len(code_list), n_ok, started),
     )
-    if is_cache_enabled():
-        cached_store(get_quote_cache, cache_key, result)
+    cached_store(get_quote_cache, cache_key, result)
     return result
 
 
@@ -693,14 +645,6 @@ def get_market_context(
         description=(
             "交易日 YYYY-MM-DD;不传默认 = get_latest_trade_date_on_or_before(today). "
             "影响早报/复盘/龙虎榜的查询日期;涨跌停与快讯不受影响(涨跌停按 today,快讯按实时)。"
-        ),
-    ),
-    format: Literal["json"] = Query(
-        default="json",
-        description=(
-            "Output format. Only ``json`` is supported today. ``md`` is "
-            "deferred to Phase 2.4; a 422 is returned if requested to "
-            "prevent silent contract drift."
         ),
     ),
 ) -> MarketContextResponse:
@@ -734,7 +678,7 @@ def get_market_context(
         # Fall back to the most recent trade date on/before today.
         target_date = trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
 
-    session = _classify_market_session(target_date, is_trade_day)
+    session = _classify_market_session(is_trade_day)
     # Cache key MUST include the session — pre/intra/post/closed produce
     # materially different responses (pre-market forces zt/dt to null;
     # post-market returns full pool data). Without this, a 09:00 pre-market
@@ -746,80 +690,67 @@ def get_market_context(
 
     started = time.monotonic()
     manager = get_manager()
-    # "Requested" is the number of upstream calls we ATTEMPT. Pre-market
-    # intentionally skips zt+dt (per spec §3.2.3), so requested drops to 4
-    # in that session. The summary below reflects the actual attempt set.
-    n_requested = 6
+    # Pre-market intentionally skips zt+dt (per spec §3.2.3 — 涨跌停池
+    # may not be formed yet); don't even attempt, so requested drops.
+    # Spec requires per-block isolation: a runtime error from upstream
+    # serialization (e.g. CLS HTML parser crash) must NOT abort the
+    # whole response. Each call below is wrapped in a per-block try.
+    attempts: list[tuple[str, Callable, object]] = [
+        ("morning_briefing", lambda: manager.get_morning_briefing(target_date)[0], None),
+        ("market_recap", lambda: manager.get_market_recap(target_date)[0], None),
+        # flash default is [] (not None) — empty list counts as a successful
+        # attempt (the upstream may legitimately have no flash in quiet periods).
+        ("flash_news", lambda: manager.get_flash_news(limit=flash_limit)[0], []),
+    ]
+    if session != "pre-market":
+        attempts.extend(
+            [
+                (
+                    "zt_pool",
+                    lambda: manager.get_zt_pool(pool_type="zt", date=target_date)[0],
+                    None,
+                ),
+                (
+                    "dt_pool",
+                    lambda: manager.get_zt_pool(pool_type="dt", date=target_date)[0],
+                    None,
+                ),
+            ]
+        )
+    attempts.append(
+        (
+            "daily_dragon_tiger",
+            lambda: manager.get_daily_dragon_tiger(target_date, min_net_buy=None)[0],
+            None,
+        ),
+    )
+
+    results: dict[str, object] = {}
     n_ok = 0
-
-    # 1) morning briefing. _fetch_cls_optional returns (None, '') when no
-    # article exists — that's a valid "no article for this date" outcome
-    # (NOT a failure, NOT a 503). We count it as ok so the upstream
-    # resolution is reflected in the summary. n_requested stays at 6.
-    # Broad except: spec requires per-block isolation, so a runtime
-    # error from upstream serialization (e.g. CLS HTML parser crash on
-    # malformed body) must NOT abort the whole market-context response.
-    morning: dict | None = None
-    try:
-        morning, _src = manager.get_morning_briefing(target_date)
-        n_ok += 1
-    except Exception as exc:
-        logger.warning(f"[agent/market-context] morning_briefing failed: {exc}", exc_info=True)
-
-    # 2) market recap (same contract as morning_briefing)
-    recap: dict | None = None
-    try:
-        recap, _src = manager.get_market_recap(target_date)
-        n_ok += 1
-    except Exception as exc:
-        logger.warning(f"[agent/market-context] market_recap failed: {exc}", exc_info=True)
-
-    # 3) flash news — empty list counts as a successful attempt (the
-    # upstream may legitimately have no flash in quiet periods).
-    flash: list[dict] = []
-    try:
-        flash, _src = manager.get_flash_news(limit=flash_limit)
-        n_ok += 1
-    except Exception as exc:
-        logger.warning(f"[agent/market-context] flash_news failed: {exc}", exc_info=True)
-
-    # 4) zt / dt pools. Force null in pre-market (per spec §3.2.3 —
-    # 涨跌停池 may not be formed yet). In pre-market, we don't even
-    # ATTEMPT the fetch, so requested drops by 2.
-    if session == "pre-market":
-        zt: list[dict] | None = None
-        dt: list[dict] | None = None
-        n_requested -= 2
-    else:
-        zt = None
+    for name, fn, default in attempts:
         try:
-            zt_stocks, _origin, _warn = manager.get_zt_pool(pool_type="zt", date=target_date)
-            zt = zt_stocks
+            results[name] = fn()
             n_ok += 1
         except Exception as exc:
-            logger.warning(f"[agent/market-context] zt_pool failed: {exc}", exc_info=True)
-        dt = None
-        try:
-            dt_stocks, _origin, _warn = manager.get_zt_pool(pool_type="dt", date=target_date)
-            dt = dt_stocks
-            n_ok += 1
-        except Exception as exc:
-            logger.warning(f"[agent/market-context] dt_pool failed: {exc}", exc_info=True)
+            logger.warning(f"[agent/market-context] {name} failed: {exc}", exc_info=True)
+            results[name] = default
 
-    # 5) dragon-tiger
-    dtiger: MarketContextDragonTiger | None = None
-    try:
-        data, _src = manager.get_daily_dragon_tiger(target_date, min_net_buy=None)
-        stocks = data.get("stocks", []) if isinstance(data, dict) else []
-        dtiger = MarketContextDragonTiger(
+    morning = results["morning_briefing"]
+    recap = results["market_recap"]
+    flash = results["flash_news"]
+    zt = results.get("zt_pool")
+    dt = results.get("dt_pool")
+    data = results["daily_dragon_tiger"]
+    if isinstance(data, dict):
+        stocks = data.get("stocks", [])
+        dtiger: MarketContextDragonTiger | None = MarketContextDragonTiger(
             stocks=stocks,
             summary=_summarize_dragon_tiger(stocks),
         )
-        n_ok += 1
-    except Exception as exc:
-        logger.warning(f"[agent/market-context] dragon_tiger failed: {exc}", exc_info=True)
+    else:
+        # daily_dragon_tiger failed; results[] holds the default (None).
+        dtiger = None
 
-    elapsed_ms = int((time.monotonic() - started) * 1000)
     result = MarketContextResponse(
         trade_date=target_date,
         is_trade_day=is_trade_day,
@@ -831,15 +762,9 @@ def get_market_context(
         ),
         limit_pools=MarketContextLimitPools(zt=zt, dt=dt),
         dragon_tiger=dtiger,
-        summary={
-            "requested": n_requested,
-            "ok": n_ok,
-            "failed": n_requested - n_ok,
-            "elapsed_ms": elapsed_ms,
-        },
+        summary=_batch_summary(len(attempts), n_ok, started),
     )
-    if is_cache_enabled():
-        cached_store(get_quote_cache, cache_key, result)
+    cached_store(get_quote_cache, cache_key, result)
     return result
 
 
@@ -911,14 +836,6 @@ def _serialize_stock_aspect_value(aspect: str, raw: object) -> object:
 @map_errors
 def post_stocks_batch_profile(
     payload: StockBatchProfileRequest,
-    format: Literal["json"] = Query(
-        default="json",
-        description=(
-            "Output format. Only ``json`` is supported today. ``md`` is "
-            "deferred to Phase 2.4; a 422 is returned if requested to "
-            "prevent silent contract drift."
-        ),
-    ),
 ) -> StockBatchProfileResponse:
     """Per-code fan-out across the requested aspects.
 
@@ -935,21 +852,12 @@ def post_stocks_batch_profile(
         # the same (set, set) from any order shares one entry. On hit
         # we reorder the cached list back to the caller's input order
         # (response contract: results mirror input codes).
-        return _reorder_stocks_batch_profile(hit, payload.codes)
+        return _reorder_by_code(hit, payload.codes, "results")
 
     started = time.monotonic()
     manager = get_manager()
     results: list[StockBatchProfileEntry] = []
     n_ok = 0
-
-    # Validate aspects once (Pydantic Literal already enforces set
-    # membership; this is just defense in depth).
-    bad = [a for a in payload.aspects if a not in _STOCK_ASPECT_DISPATCH]
-    if bad:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "invalid_aspect", "message": f"Unknown aspects: {bad}"},
-        )
 
     for code in payload.codes:
         data: dict = {}
@@ -957,69 +865,32 @@ def post_stocks_batch_profile(
         any_aspect_ok = False
 
         for aspect in payload.aspects:
-            method_name, kwargs = _STOCK_ASPECT_DISPATCH[aspect]
-            # Special-case: boards bypasses the manager and goes through
-            # the persistence layer (CLAUDE.md "Persistence-Only Routing").
-            if method_name == "__persistence_stock_memberships__":
-                try:
+            try:
+                if aspect in _PERSISTENCE_ROUTED_ASPECTS:
                     entries, _cold, _origin = stock_board_cache.get_stock_memberships(
                         stock_code=code,
-                        sources=kwargs["sources"],
+                        sources=["ths"],
                         manager=manager,
                     )
-                except (DataFetchError, ValueError) as exc:
-                    logger.warning(f"[agent/stocks/batch-profile] {code} {aspect} failed: {exc}")
-                    errors.append(
-                        StockBatchAspectError(
-                            aspect=aspect,
-                            error=type(exc).__name__,
-                            message=str(exc),
-                        )
+                    # Match the (list, source) tuple shape
+                    # _serialize_stock_aspect_value expects for the boards aspect.
+                    raw = (entries, "persistence")
+                else:
+                    method_name, kwargs = _STOCK_ASPECT_DISPATCH[aspect]
+                    raw = getattr(manager, method_name)(code, **kwargs)
+            except Exception as exc:
+                logger.warning(
+                    f"[agent/stocks/batch-profile] {code} {aspect} failed: {exc}",
+                    exc_info=True,
+                )
+                errors.append(
+                    StockBatchAspectError(
+                        aspect=aspect,
+                        error=type(exc).__name__,
+                        message=str(exc),
                     )
-                    continue
-                except Exception as exc:
-                    logger.warning(
-                        f"[agent/stocks/batch-profile] {code} {aspect} crashed: {exc}",
-                        exc_info=True,
-                    )
-                    errors.append(
-                        StockBatchAspectError(
-                            aspect=aspect,
-                            error=type(exc).__name__,
-                            message=str(exc),
-                        )
-                    )
-                    continue
-                # Match the (list, source) tuple shape _serialize_stock_aspect_value
-                # expects for the boards aspect.
-                raw = (entries, "persistence")
-            else:
-                method = getattr(manager, method_name)
-                try:
-                    raw = method(code, **kwargs)
-                except (DataFetchError, ValueError) as exc:
-                    logger.warning(f"[agent/stocks/batch-profile] {code} {aspect} failed: {exc}")
-                    errors.append(
-                        StockBatchAspectError(
-                            aspect=aspect,
-                            error=type(exc).__name__,
-                            message=str(exc),
-                        )
-                    )
-                    continue
-                except Exception as exc:
-                    logger.warning(
-                        f"[agent/stocks/batch-profile] {code} {aspect} crashed: {exc}",
-                        exc_info=True,
-                    )
-                    errors.append(
-                        StockBatchAspectError(
-                            aspect=aspect,
-                            error=type(exc).__name__,
-                            message=str(exc),
-                        )
-                    )
-                    continue
+                )
+                continue
             try:
                 data[aspect] = _serialize_stock_aspect_value(aspect, raw)
                 any_aspect_ok = True
@@ -1044,16 +915,9 @@ def post_stocks_batch_profile(
             )
         )
 
-    elapsed_ms = int((time.monotonic() - started) * 1000)
     resp = StockBatchProfileResponse(
         results=results,
-        summary={
-            "requested": len(payload.codes),
-            "ok": n_ok,
-            "failed": len(payload.codes) - n_ok,
-            "elapsed_ms": elapsed_ms,
-        },
+        summary=_batch_summary(len(payload.codes), n_ok, started),
     )
-    if is_cache_enabled():
-        cached_store(get_quote_cache, cache_key, resp)
+    cached_store(get_quote_cache, cache_key, resp)
     return resp

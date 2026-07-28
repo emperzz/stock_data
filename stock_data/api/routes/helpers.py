@@ -33,7 +33,7 @@ from ...data_provider.indicators.types import IndicatorKey
 from ...data_provider.persistence import stock_list
 from ...data_provider.persistence.trade_calendar import is_trade_date
 from ...data_provider.utils.normalize import is_index_code
-from ..schemas import KLineData
+from ..schemas import IndexQuote, KLineData
 
 if TYPE_CHECKING:
     pass
@@ -187,6 +187,29 @@ def _resolve_index_name(code: str) -> str:
         if entry["code"] == code:
             return entry["name"]
     return code
+
+
+def _index_quote_from(q, code: str) -> IndexQuote:
+    """Build an IndexQuote from a UnifiedRealtimeQuote, applying the
+    standard name fallback when upstream didn't carry one.
+
+    Shared by GET /indices/{code}/quote and the agent batch-profile
+    endpoints so the field mapping + name fallback stays in one place.
+    """
+    return IndexQuote(
+        code=q.code,
+        name=q.name or _resolve_index_name(code),
+        source=q.source.value if hasattr(q.source, "value") else str(q.source),
+        current_price=q.price or 0.0,
+        change=q.change_amount,
+        change_percent=q.change_pct,
+        open=q.open_price,
+        high=q.high,
+        low=q.low,
+        prev_close=q.pre_close,
+        volume=q.volume,
+        amount=q.amount,
+    )
 
 
 # ---------- indicator parsing ----------

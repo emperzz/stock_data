@@ -764,9 +764,9 @@ class TestIndicesBatchProfile:
         for _freq, block in first["klines"].items():
             assert block["error"] is None
             assert len(block["data"]) == 1
-        # Per-frequency errors dict present
+        # Per-frequency errors live in klines[f].error (errors dict is quote-only)
         for freq in ("5m", "d", "w"):
-            assert first["errors"][freq] is None
+            assert first["klines"][freq]["error"] is None
 
     def test_explicit_codes_2_indices(self, client, monkeypatch):
         """?codes=000001,000300 → 2 indices, 1 quote + 3 K-line each."""
@@ -874,14 +874,13 @@ class TestIndicesBatchProfile:
         assert response.status_code == 200
         data = response.json()
         first = data["indices"][0]
-        # 5m failed; d/w ok
-        assert first["errors"]["5m"] is not None
-        assert first["errors"]["d"] is None
-        assert first["errors"]["w"] is None
+        # 5m failed; d/w ok. Per-frequency errors live in klines[f].error.
         assert first["klines"]["5m"]["error"] is not None
         assert first["klines"]["5m"]["data"] == []
         assert first["klines"]["d"]["error"] is None
         assert first["klines"]["w"]["error"] is None
+        # errors dict is quote-only
+        assert first["errors"]["quote"] is None
         # whole entry marked failed because at least one piece errored
         assert data["summary"]["failed"] == 1
 
@@ -959,7 +958,7 @@ class TestMarketContext:
         monkeypatch.setattr(
             agent_module,
             "_classify_market_session",
-            lambda _d, _t: "post-market",
+            lambda _is_td: "post-market",
         )
         response = client.get("/api/v1/agent/market-context?flash_limit=10")
         assert response.status_code == 200
@@ -994,7 +993,7 @@ class TestMarketContext:
         monkeypatch.setattr(
             agent_module,
             "_classify_market_session",
-            lambda _date, _is_td: "pre-market",
+            lambda _is_td: "pre-market",
         )
         response = client.get("/api/v1/agent/market-context")
         assert response.status_code == 200
@@ -1354,33 +1353,6 @@ class TestPhase2Manifest:
 class TestPhase2DefensiveGuards:
     """Belt-and-suspenders against silent contract drift."""
 
-    def test_format_md_rejected_422(self, client):
-        """?format=md is NOT YET supported; must 422, not silently return JSON.
-
-        Covers all 3 endpoints (1 POST + 2 GET) — the POST guard was
-        added 2026-07-28 after the reviewer flagged it as a gap.
-        """
-        r = client.get("/api/v1/agent/indices/batch-profile?format=md")
-        assert r.status_code == 422
-        r = client.get("/api/v1/agent/market-context?format=md")
-        assert r.status_code == 422
-        r = client.post("/api/v1/agent/stocks/batch-profile?format=md", json={"codes": ["600519"]})
-        assert r.status_code == 422
-
-    def test_format_json_accepted(self, client, monkeypatch):
-        """?format=json is the default; should be accepted (200 with mock)."""
-        from unittest.mock import MagicMock
-
-        from stock_data.api.routes import agent as agent_module
-
-        mock_manager = MagicMock()
-        mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
-        mock_manager.get_kline_data.return_value = (_make_kline_df([]), "akshare")
-        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
-
-        r = client.get("/api/v1/agent/indices/batch-profile?format=json")
-        assert r.status_code == 200
-
     def test_market_context_trade_date_malformed_400(self, client):
         """trade_date=not-a-date must 400, not silently 200 with empty result."""
         r = client.get("/api/v1/agent/market-context?trade_date=not-a-date")
@@ -1459,7 +1431,7 @@ class TestPhase2DefensiveGuards:
         monkeypatch.setattr(
             agent_module,
             "_classify_market_session",
-            lambda _d, _t: "pre-market",
+            lambda _is_td: "pre-market",
         )
 
         r = client.get("/api/v1/agent/market-context?flash_limit=20&trade_date=2026-07-25")

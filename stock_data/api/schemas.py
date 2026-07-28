@@ -1477,7 +1477,7 @@ class IndexProfile(BaseModel):
     )
     errors: dict[str, str | None] = Field(
         default_factory=dict,
-        description="Per-frequency error map; null = no error for that frequency.",
+        description="Quote error map; null = ok. Per-frequency K-line errors live in klines[f].error.",
     )
 
 

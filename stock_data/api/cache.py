@@ -405,14 +405,24 @@ def cache_endpoint(
     return decorator
 
 
+def _make_code_set_cache_key(label: str, codes: list[str]) -> str:
+    """Private helper for agent cache keys whose input is a sorted code set.
+
+    Kept private plus the public one-liners below so a future typo or
+    hash-input change here can't silently invalidate *all* agent caches
+    (the project memory note: don't collapse these into a generic helper).
+    """
+    return f"agent_{label}:" + ",".join(sorted(codes))
+
+
 def make_boards_overlap_cache_key(codes: list[str]) -> str:
     """Cache key for POST /agent/boards/stock-overlap. Sorted for order-perturbation immunity."""
-    return "agent_boards_stock_overlap:" + ",".join(sorted(codes))
+    return _make_code_set_cache_key("boards_stock_overlap", codes)
 
 
 def make_stocks_board_overlap_cache_key(codes: list[str]) -> str:
     """Cache key for POST /agent/stocks/board-overlap. Sorted."""
-    return "agent_stocks_board_overlap:" + ",".join(sorted(codes))
+    return _make_code_set_cache_key("stocks_board_overlap", codes)
 
 
 def make_filter_stocks_cache_key(
@@ -445,7 +455,7 @@ def make_indices_batch_profile_cache_key(codes: list[str]) -> str:
     to one cache entry (the response is then reordered to the input
     order on hit — see agent.get_indices_batch_profile).
     """
-    return "agent_indices_batch_profile:" + ",".join(sorted(codes))
+    return _make_code_set_cache_key("indices_batch_profile", codes)
 
 
 def make_market_context_cache_key(flash_limit: int, trade_date: str, session: str) -> str:
