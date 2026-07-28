@@ -1382,6 +1382,41 @@
         field.appendChild(input);
         ti.appendChild(field);
       });
+      // Body (JSON): POST/PUT/PATCH endpoints ship a Pydantic body model.
+      // The manifest emits ep.body.schema (full JSON Schema); we pre-fill
+      // an example from the schema's properties and let the user edit
+      // before sending. A single textarea is intentional — nested objects
+      // (e.g. filter-stocks' `filters`) are simpler to author as JSON than
+      // as a recursive input tree.
+      if (ep.body && ep.body.schema) {
+        const bodyLabel = el("label", {
+          textContent: ep.body.required ? "Body (JSON, required):" : "Body (JSON):",
+        });
+        ti.appendChild(bodyLabel);
+        const ta = el("textarea", {
+          rows: 8,
+          spellcheck: "false",
+          "aria-label": "Request body JSON",
+        });
+        ta.dataset.paramName = "__body__";
+        ta.style.width = "100%";
+        ta.style.font = "13px/1.5 \"SF Mono\",\"JetBrains Mono\",Menlo,Consolas,monospace";
+        ta.style.padding = "8px 10px";
+        ta.style.borderRadius = "6px";
+        ta.style.border = "1px solid var(--border)";
+        ta.style.background = "var(--bg-card)";
+        ta.style.color = "var(--text)";
+        ta.style.resize = "vertical";
+        ta.value = JSON.stringify(_exampleFromSchema(ep.body.schema, ep.body.schema), null, 2);
+        ti.appendChild(ta);
+        // Inline parse error slot — populated by tryIt() when JSON is invalid.
+        const errSlot = el("div", {
+          className: "try-it-body-err",
+          style: "color:#c00;font-size:12px;margin-top:4px;display:none;",
+        });
+        errSlot.dataset.role = "body-err";
+        ti.appendChild(errSlot);
+      }
       const sendBtn = el("button", { textContent: "Send (Try it)" });
       sendBtn.onclick = () => tryIt(ep, ti);
       ti.appendChild(sendBtn);
@@ -1390,6 +1425,39 @@
       // intentionally minimal — input fields + Send button only.
       wrap.appendChild(ti);
       return wrap;
+    }
+
+    // Build a JSON example value from a JSON Schema. Honors `example` /
+    // `default` when present; otherwise generates a type-shaped placeholder
+    // (string→"", number→0, array→[one item], object→{each property}).
+    // Resolves `$ref` against the root schema's `$defs` so nested model
+    // refs (e.g. FilterStocksFilters) get a real example instead of null.
+    function _exampleFromSchema(schema, root) {
+      if (!schema || typeof schema !== "object") return null;
+      if (schema.example !== undefined) return schema.example;
+      if (schema.$ref) {
+        // "#/$defs/TypeName" → look up in root.$defs (or legacy definitions).
+        const m = schema.$ref.match(/^#\/\$defs\/(.+)$/);
+        if (m && root && root.$defs && root.$defs[m[1]]) {
+          return _exampleFromSchema(root.$defs[m[1]], root);
+        }
+        return {};
+      }
+      if (schema.default !== undefined) return schema.default;
+      if (schema.type === "object") {
+        const obj = {};
+        for (const [k, v] of Object.entries(schema.properties || {})) {
+          obj[k] = _exampleFromSchema(v, root);
+        }
+        return obj;
+      }
+      if (schema.type === "array") {
+        return [_exampleFromSchema(schema.items || {}, root)];
+      }
+      if (schema.type === "string") return "";
+      if (schema.type === "number" || schema.type === "integer") return 0;
+      if (schema.type === "boolean") return false;
+      return null;
     }
 
     async function tryIt(ep, container) {
@@ -1407,6 +1475,32 @@
       });
       const fullUrl = `${path}${qs.toString() ? "?" + qs.toString() : ""}`;
       const url = `${state.baseUrl}${fullUrl}`;
+      const errSlot = container.querySelector('[data-role="body-err"]');
+      if (errSlot) { errSlot.style.display = "none"; errSlot.textContent = ""; }
+
+      // Body: for POST/PUT/PATCH with a schema, parse the textarea as JSON
+      // and attach. If JSON is malformed, surface the parse error inline
+      // and skip the network call — letting the server return 422 hides
+      // the real problem (typo, missing quote) behind a generic Pydantic
+      // message that's harder to debug.
+      const method = (ep.method || "GET").toUpperCase();
+      const needsBody = ["POST", "PUT", "PATCH"].includes(method);
+      const bodyEl = container.querySelector('textarea[data-param-name="__body__"]');
+      let bodyPayload = null;
+      if (needsBody && bodyEl) {
+        const raw = bodyEl.value.trim();
+        if (raw) {
+          try {
+            bodyPayload = JSON.parse(raw);
+          } catch (e) {
+            if (errSlot) {
+              errSlot.textContent = `Invalid JSON: ${e.message}`;
+              errSlot.style.display = "block";
+            }
+            return;
+          }
+        }
+      }
 
       // Show loading state in the right panel; the request itself is in flight.
       ResultPanel.showLoading();
@@ -1416,7 +1510,12 @@
       let bodyText = "";
       let error = null;
       try {
-        response = await fetch(url);
+        const fetchOpts = { method };
+        if (bodyPayload !== null) {
+          fetchOpts.headers = { "Content-Type": "application/json" };
+          fetchOpts.body = JSON.stringify(bodyPayload);
+        }
+        response = await fetch(url, fetchOpts);
         bodyText = await response.text();
       } catch (e) {
         error = e;

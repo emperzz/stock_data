@@ -125,6 +125,26 @@ def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager) -> dict:
                 "type": _python_type_to_str(p.field_info.annotation),
             }
         )
+    # Body: 反射 POST/PUT/PATCH 的 Pydantic 模型,前端据此渲染 JSON textarea。
+    # `route.dependant.body_params[0].field_info.annotation` 在 FastAPI 0.100+/Pydantic v2
+    # 下即为请求体模型类;`.model_json_schema()` 返回标准 JSON Schema(含
+    # properties / required / description / minItems / nested object 描述),
+    # 足以驱动一个预填示例的 JSON 编辑器。
+    body: dict | None = None
+    body_params = route.dependant.body_params
+    if body_params:
+        annotation = body_params[0].field_info.annotation
+        if annotation is not None and hasattr(annotation, "model_json_schema"):
+            try:
+                body = {
+                    "required": bool(body_params[0].field_info.is_required()),
+                    "schema": annotation.model_json_schema(),
+                }
+            except Exception as e:  # pragma: no cover — defensive
+                logger.warning(
+                    f"[manifest] body schema reflection failed for {route.path}: {e}"
+                )
+                body = None
     # 完整 URL: FastAPI 在 include_router(prefix=...) 时已把 prefix 合并到 route.path
     full_path = route.path
     # HTTP method: route.methods 是 frozenset, 例 {'GET'} 或 {'GET', 'HEAD'}
@@ -138,6 +158,7 @@ def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager) -> dict:
         "markets": list(meta.markets),
         "capabilities": list(meta.capabilities),
         "params": params,
+        "body": body,
         "response_model": route.response_model.__name__ if route.response_model else None,
         "fetchers": fetchers,
     }
