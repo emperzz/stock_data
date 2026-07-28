@@ -15,15 +15,27 @@ Routes added in Phase 1 (this file):
 - POST /agent/boards/stock-overlap (renamed from boards/overlap per 2026-07-27 user request)
 - POST /agent/stocks/board-overlap
 - POST /agent/boards/filter-stocks
+
+Routes added in Phase 2 (this file):
+- GET /agent/indices/batch-profile (renamed from indices/market-snapshot per user request)
+- GET /agent/market-context
+- POST /agent/stocks/batch-profile (renamed from stocks/batch/profile per user request)
 """
 
 import logging
+import re
+import time
+from datetime import datetime
+from datetime import time as dt_time
 from itertools import combinations
+from typing import Literal
+from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 
 from ...data_provider.base import DataFetchError
 from ...data_provider.persistence import board as stock_board_cache
+from ...data_provider.persistence import trade_calendar
 from ..cache import (
     cached_lookup,
     cached_store,
@@ -31,6 +43,9 @@ from ..cache import (
     is_cache_enabled,
     make_boards_overlap_cache_key,
     make_filter_stocks_cache_key,
+    make_indices_batch_profile_cache_key,
+    make_market_context_cache_key,
+    make_stocks_batch_profile_cache_key,
     make_stocks_board_overlap_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
@@ -43,6 +58,19 @@ from ..schemas import (
     FilterStocksMatchedStock,
     FilterStocksRequest,
     FilterStocksResponse,
+    IndexKlineBlock,
+    IndexProfile,
+    IndicesBatchProfileResponse,
+    MarketContextDragonTiger,
+    MarketContextDragonTigerSummary,
+    MarketContextDragonTigerSummaryTop,
+    MarketContextLimitPools,
+    MarketContextMessages,
+    MarketContextResponse,
+    StockBatchAspectError,
+    StockBatchProfileEntry,
+    StockBatchProfileRequest,
+    StockBatchProfileResponse,
     StocksBoardOverlapPair,
     StocksBoardOverlapRequest,
     StocksBoardOverlapResponse,
@@ -50,9 +78,83 @@ from ..schemas import (
 )
 from ._router import router
 from .errors import map_errors
-from .helpers import get_manager
+from .helpers import (
+    _build_kline_data,
+    _format_date,
+    _resolve_index_name,
+    get_manager,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# Server-local timezone for market_session classification. The
+# proposal anchors pre/intra/post-market to 09:15 / 15:00 Asia/Shanghai.
+_CST = ZoneInfo("Asia/Shanghai")
+
+# YYYY-MM-DD gate for ?trade_date= on /agent/market-context. Loose regex
+# (no calendar validity — Feb 30 etc. is fine; the upstream will return
+# empty results and the caller can detect that). What we want to catch
+# is "not a date" (e.g. "yesterday") which would otherwise silently 200.
+_TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# 4 core CSI indices used when ?codes is omitted on
+# /agent/indices/batch-profile. Aligned with market-recap §4 step 3
+# "指数全景" default set: 上证 + 深证 + 创业板 + 北证 50.
+_DEFAULT_CORE_CSI_INDICES: tuple[str, ...] = ("000001", "399001", "399006", "899050")
+
+# K-line frequency → bar count for /agent/indices/batch-profile. Pinning
+# here (not from the request) keeps the response shape stable; clients
+# that want a different bar count still go through /indices/{code}/kline.
+_INDICES_KLINE_DAYS: dict[str, tuple[str, int]] = {
+    "5m": ("5", 2),  # 2 trading days → 2 × 48 = 96 5-min bars
+    "d": ("d", 30),  # 30 daily bars
+    "w": ("w", 48),  # 48 weekly bars (~1 year)
+}
+
+# Per-stock aspects supported by /agent/stocks/batch-profile. The dict
+# value is (callable, kwargs). Adding an aspect requires a new entry
+# here AND extending the StockBatchAspect Literal in schemas.py.
+_STOCK_ASPECT_DISPATCH: dict[str, tuple[str, dict]] = {
+    "quote": ("get_realtime_quote", {}),
+    "kline": ("get_kline_data", {"frequency": "d", "days": 60, "asset": "stock"}),
+    "kline_5m": ("get_kline_data", {"frequency": "5", "days": 2, "asset": "stock"}),
+    "info": ("get_stock_info", {}),
+    # boards: persistence-routed (NOT manager.get_stock_boards) so the
+    # call goes through stock_board_membership and inherits the
+    # ZZSHARE↔THS fallback chain + effective_source plumbing used by
+    # /stocks/{code}/boards. See CLAUDE.md "Persistence-Only Routing".
+    "boards": ("__persistence_stock_memberships__", {"sources": ["ths"]}),
+}
+
+
+def _reorder_indices_batch_profile(
+    cached: IndicesBatchProfileResponse, input_order: list[str]
+) -> IndicesBatchProfileResponse:
+    """Reorder ``cached.indices`` to mirror ``input_order`` on a cache hit.
+
+    The cache key is sorted (so two requests with the same set in
+    different order share one entry), but the response contract is
+    "indices in input order". This helper projects the cached set
+    onto the new order. Codes missing from the cache (shouldn't
+    happen but be defensive) are silently skipped.
+    """
+    by_code = {p.code: p for p in cached.indices}
+    new_indices = [by_code[c] for c in input_order if c in by_code]
+    return cached.model_copy(update={"indices": new_indices})
+
+
+def _reorder_stocks_batch_profile(
+    cached: StockBatchProfileResponse, input_order: list[str]
+) -> StockBatchProfileResponse:
+    """Reorder ``cached.results`` to mirror ``input_order`` on a cache hit.
+
+    Same rationale as ``_reorder_indices_batch_profile`` but for the
+    stocks variant.
+    """
+    by_code = {r.code: r for r in cached.results}
+    new_results = [by_code[c] for c in input_order if c in by_code]
+    return cached.model_copy(update={"results": new_results})
 
 
 @router.post(
@@ -335,7 +437,9 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
 
     # Best-effort board name
     board_name = (
-        stock_board_cache.get_board_name_with_fallback(payload.board_code, payload.source, manager=manager)
+        stock_board_cache.get_board_name_with_fallback(
+            payload.board_code, payload.source, manager=manager
+        )
         or payload.board_code
     )
 
@@ -353,3 +457,603 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
     if is_cache_enabled():
         cached_store(get_quote_cache, cache_key, result)
     return result
+
+
+# ============================================================================
+# Phase 2 endpoints (3.2.1 / 3.2.2 / 3.2.3 of agent-batch-api-proposal)
+# ============================================================================
+
+
+def _classify_market_session(trade_date: str, is_trade_day: bool) -> str:
+    """Map server-local CST time + trade-date to a session label.
+
+    Anchors from proposal §3.2.3: 09:15 / 15:00 Asia/Shanghai. Returns
+    ``"closed"`` for non-trade-days. Uses ``datetime.now(CST)``; the
+    proposal explicitly notes server runs in CST.
+    """
+    if not is_trade_day:
+        return "closed"
+    now = datetime.now(_CST).time()
+    pre_cutoff = dt_time(9, 15)
+    post_cutoff = dt_time(15, 0)
+    if now < pre_cutoff:
+        return "pre-market"
+    if now < post_cutoff:
+        return "intraday"
+    return "post-market"
+
+
+def _summarize_dragon_tiger(stocks: list[dict], top_n: int = 10) -> MarketContextDragonTigerSummary:
+    """Compute the dragon-tiger summary block.
+
+    - total_net_buy_wan = sum across ALL rows (signed: positive = 净买入, negative = 净卖出)
+    - top_by_net_buy: top N by net_buy_wan DESC (positive-first)
+    - top_by_net_sell: top N by net_buy_wan ASC, but only rows with
+      net_buy_wan < 0 (a positive row is by definition NOT a sell-side
+      candidate; surfacing it as "top sell" would be misleading on
+      all-positive days).
+    """
+    rows = [
+        MarketContextDragonTigerSummaryTop(
+            code=s.get("code", ""),
+            name=s.get("name", ""),
+            net_buy_wan=float(s.get("net_buy_wan") or 0),
+        )
+        for s in (stocks or [])
+    ]
+    total = sum(r.net_buy_wan for r in rows)
+    top_buy = sorted(rows, key=lambda r: -r.net_buy_wan)[:top_n]
+    negative_only = [r for r in rows if r.net_buy_wan < 0]
+    top_sell = sorted(negative_only, key=lambda r: r.net_buy_wan)[:top_n]
+    return MarketContextDragonTigerSummary(
+        total_net_buy_wan=total,
+        top_by_net_buy=top_buy,
+        top_by_net_sell=top_sell,
+    )
+
+
+@router.get(
+    "/agent/indices/batch-profile",
+    response_model=IndicesBatchProfileResponse,
+    responses={
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="指数批量画像（实时报价 + 5m/d/w 三频率 K 线，单次 fan-out）",
+    markets=["csi"],
+    capabilities=[],
+)
+@map_errors
+def get_indices_batch_profile(
+    codes: str | None = Query(
+        default=None,
+        description=(
+            "Comma-separated index codes. Empty = 4 core CSI indices "
+            "(上证/深证/创业板/北证50). Each code is fanned out to "
+            "1 quote + 3 K-line frequencies; per-frequency failure is "
+            "isolated into entry.errors[frequency]."
+        ),
+    ),
+    format: Literal["json"] = Query(
+        default="json",
+        description=(
+            "Output format. Only ``json`` is supported today. ``md`` is "
+            "deferred to Phase 2.4 (proposal §3.2); a 422 is returned "
+            "if requested to prevent silent contract drift."
+        ),
+    ),
+) -> IndicesBatchProfileResponse:
+    """Per-index fan-out: realtime quote + 5m/d/w K-line.
+
+    Renamed from proposal §3.2.1 ``indices/market-snapshot`` per
+    2026-07-28 user request; the route now matches the stocks variant's
+    ``/batch-profile`` naming.
+    """
+    code_list = [
+        c.strip() for c in (codes.split(",") if codes else _DEFAULT_CORE_CSI_INDICES) if c.strip()
+    ]
+    if not code_list:
+        code_list = list(_DEFAULT_CORE_CSI_INDICES)
+
+    cache_key = make_indices_batch_profile_cache_key(code_list)
+    hit = cached_lookup(get_quote_cache, cache_key, "agent_indices_batch_profile")
+    if hit is not None:
+        # Cache key is sorted; reorder cached list to the caller's order
+        # so the "indices" list mirrors the input `codes` (response contract).
+        return _reorder_indices_batch_profile(hit, code_list)
+
+    started = time.monotonic()
+    manager = get_manager()
+    profiles: list[IndexProfile] = []
+    n_ok = 0
+
+    for code in code_list:
+        errors: dict[str, str | None] = {}
+        klines: dict[str, IndexKlineBlock] = {}
+        quote_dict: dict | None = None
+        entry_ok = True
+
+        # 1) realtime quote. get_index_realtime_quote returns None when
+        # no fetcher could serve (vs DataFetchError when ALL fetchers
+        # raised). We treat None as a soft failure (errors["quote"] set,
+        # entry marked failed) — returning a "successful but empty" quote
+        # would mask a real upstream outage.
+        try:
+            q = manager.get_index_realtime_quote(code)
+        except (DataFetchError, ValueError) as exc:
+            logger.warning(f"[agent/indices/batch-profile] quote {code} failed: {exc}")
+            errors["quote"] = str(exc)
+            entry_ok = False
+            q = None
+        if q is None:
+            errors.setdefault("quote", "no fetcher could serve realtime quote")
+            entry_ok = False
+        else:
+            errors["quote"] = None
+            quote_dict = {
+                "code": q.code,
+                "name": q.name or _resolve_index_name(code),
+                "source": q.source.value if hasattr(q.source, "value") else str(q.source),
+                "current_price": q.price or 0.0,
+                "change": q.change_amount,
+                "change_percent": q.change_pct,
+                "open": q.open_price,
+                "high": q.high,
+                "low": q.low,
+                "prev_close": q.pre_close,
+                "volume": q.volume,
+                "amount": q.amount,
+            }
+
+        # 2) per-frequency K-line. 5m/d/w ordered most-recent-first so
+        # the user reads the small frame first.
+        # The dict value is (manager-internal freq, days); the public
+        # label (`user_freq`) keeps "5m" so the response contract is
+        # stable while the manager gets the canonical "5".
+        for user_freq, (mgr_freq, days) in _INDICES_KLINE_DAYS.items():
+            # Per-frequency block. The broad except here is on purpose:
+            # the spec requires per-frequency isolation, so a RuntimeError
+            # from upstream serialization (e.g. _build_kline_data choking
+            # on a malformed bar) must NOT abort the whole request — it
+            # should surface as an error on that frequency and let the
+            # other frequencies continue.
+            try:
+                df, _src = manager.get_kline_data(
+                    code,
+                    days=days,
+                    frequency=mgr_freq,
+                    asset="index",
+                )
+                records = df.to_dict("records") if df is not None else []
+                bars = [_build_kline_data(r, _format_date) for r in records]
+            except Exception as exc:
+                logger.warning(
+                    f"[agent/indices/batch-profile] kline {code} {mgr_freq} failed: {exc}",
+                    exc_info=True,
+                )
+                errors[user_freq] = f"{type(exc).__name__}: {exc}"
+                entry_ok = False
+                klines[user_freq] = IndexKlineBlock(data=[], error=errors[user_freq])
+                continue
+            klines[user_freq] = IndexKlineBlock(data=bars, error=None)
+            errors[user_freq] = None
+
+        if entry_ok:
+            n_ok += 1
+        profiles.append(
+            IndexProfile(
+                code=code,
+                name=_resolve_index_name(code),
+                quote=quote_dict,
+                klines=klines,
+                errors=errors,
+            )
+        )
+
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    result = IndicesBatchProfileResponse(
+        indices=profiles,
+        summary={
+            "requested": len(code_list),
+            "ok": n_ok,
+            "failed": len(code_list) - n_ok,
+            "elapsed_ms": elapsed_ms,
+        },
+    )
+    if is_cache_enabled():
+        cached_store(get_quote_cache, cache_key, result)
+    return result
+
+
+@router.get(
+    "/agent/market-context",
+    response_model=MarketContextResponse,
+    responses={
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="市场全景（早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜；含时段判断）",
+    markets=["csi"],
+    capabilities=[],
+)
+@map_errors
+def get_market_context(
+    flash_limit: int = Query(
+        default=20,
+        ge=1,
+        le=200,
+        description="快讯条数上限 1-200;默认 20;与上游 fetch_flash_news 的 pageSize 硬 cap 对齐",
+    ),
+    trade_date: str | None = Query(
+        default=None,
+        description=(
+            "交易日 YYYY-MM-DD;不传默认 = get_latest_trade_date_on_or_before(today). "
+            "影响早报/复盘/龙虎榜的查询日期;涨跌停与快讯不受影响(涨跌停按 today,快讯按实时)。"
+        ),
+    ),
+    format: Literal["json"] = Query(
+        default="json",
+        description=(
+            "Output format. Only ``json`` is supported today. ``md`` is "
+            "deferred to Phase 2.4; a 422 is returned if requested to "
+            "prevent silent contract drift."
+        ),
+    ),
+) -> MarketContextResponse:
+    """Aggregate morning-briefing + market-recap + flash + zt + dt + dragon-tiger.
+
+    Per spec §3.2.3:
+    - zt/dt forced to null in pre-market (池子可能未成形);
+    - morning/recap return null on per-source failure (NOT 503);
+    - flash + dragon-tiger always attempt;
+    - dragon-tiger summary is server-computed.
+    """
+    # trade_date format gate. The manager chain accepts arbitrary strings
+    # and may return 200 with empty results; better to 400 here with a
+    # clear "not a date" message than to silently produce an empty snapshot.
+    if trade_date is not None and not _TRADE_DATE_RE.match(trade_date):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_trade_date",
+                "message": (
+                    f"trade_date must be YYYY-MM-DD; got {trade_date!r}. "
+                    "Empty = server-defaulted to most recent trade date on/before today."
+                ),
+            },
+        )
+    today_str = datetime.now(_CST).date().isoformat()
+    is_trade_day = trade_calendar.is_trade_date(today_str)
+    if trade_date:
+        target_date = trade_date
+    else:
+        # Fall back to the most recent trade date on/before today.
+        target_date = trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
+
+    session = _classify_market_session(target_date, is_trade_day)
+    # Cache key MUST include the session — pre/intra/post/closed produce
+    # materially different responses (pre-market forces zt/dt to null;
+    # post-market returns full pool data). Without this, a 09:00 pre-market
+    # cache hit would mask a 16:00 post-market refresh.
+    cache_key = make_market_context_cache_key(flash_limit, target_date, session)
+    hit = cached_lookup(get_quote_cache, cache_key, "agent_market_context")
+    if hit is not None:
+        return hit
+
+    started = time.monotonic()
+    manager = get_manager()
+    # "Requested" is the number of upstream calls we ATTEMPT. Pre-market
+    # intentionally skips zt+dt (per spec §3.2.3), so requested drops to 4
+    # in that session. The summary below reflects the actual attempt set.
+    n_requested = 6
+    n_ok = 0
+
+    # 1) morning briefing. _fetch_cls_optional returns (None, '') when no
+    # article exists — that's a valid "no article for this date" outcome
+    # (NOT a failure, NOT a 503). We count it as ok so the upstream
+    # resolution is reflected in the summary. n_requested stays at 6.
+    # Broad except: spec requires per-block isolation, so a runtime
+    # error from upstream serialization (e.g. CLS HTML parser crash on
+    # malformed body) must NOT abort the whole market-context response.
+    morning: dict | None = None
+    try:
+        morning, _src = manager.get_morning_briefing(target_date)
+        n_ok += 1
+    except Exception as exc:
+        logger.warning(f"[agent/market-context] morning_briefing failed: {exc}", exc_info=True)
+
+    # 2) market recap (same contract as morning_briefing)
+    recap: dict | None = None
+    try:
+        recap, _src = manager.get_market_recap(target_date)
+        n_ok += 1
+    except Exception as exc:
+        logger.warning(f"[agent/market-context] market_recap failed: {exc}", exc_info=True)
+
+    # 3) flash news — empty list counts as a successful attempt (the
+    # upstream may legitimately have no flash in quiet periods).
+    flash: list[dict] = []
+    try:
+        flash, _src = manager.get_flash_news(limit=flash_limit)
+        n_ok += 1
+    except Exception as exc:
+        logger.warning(f"[agent/market-context] flash_news failed: {exc}", exc_info=True)
+
+    # 4) zt / dt pools. Force null in pre-market (per spec §3.2.3 —
+    # 涨跌停池 may not be formed yet). In pre-market, we don't even
+    # ATTEMPT the fetch, so requested drops by 2.
+    if session == "pre-market":
+        zt: list[dict] | None = None
+        dt: list[dict] | None = None
+        n_requested -= 2
+    else:
+        zt = None
+        try:
+            zt_stocks, _origin, _warn = manager.get_zt_pool(pool_type="zt", date=target_date)
+            zt = zt_stocks
+            n_ok += 1
+        except Exception as exc:
+            logger.warning(f"[agent/market-context] zt_pool failed: {exc}", exc_info=True)
+        dt = None
+        try:
+            dt_stocks, _origin, _warn = manager.get_zt_pool(pool_type="dt", date=target_date)
+            dt = dt_stocks
+            n_ok += 1
+        except Exception as exc:
+            logger.warning(f"[agent/market-context] dt_pool failed: {exc}", exc_info=True)
+
+    # 5) dragon-tiger
+    dtiger: MarketContextDragonTiger | None = None
+    try:
+        data, _src = manager.get_daily_dragon_tiger(target_date, min_net_buy=None)
+        stocks = data.get("stocks", []) if isinstance(data, dict) else []
+        dtiger = MarketContextDragonTiger(
+            stocks=stocks,
+            summary=_summarize_dragon_tiger(stocks),
+        )
+        n_ok += 1
+    except Exception as exc:
+        logger.warning(f"[agent/market-context] dragon_tiger failed: {exc}", exc_info=True)
+
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    result = MarketContextResponse(
+        trade_date=target_date,
+        is_trade_day=is_trade_day,
+        market_session=session,  # type: ignore[arg-type]
+        messages=MarketContextMessages(
+            morning_briefing=morning,
+            market_recap=recap,
+            flash_news=flash,
+        ),
+        limit_pools=MarketContextLimitPools(zt=zt, dt=dt),
+        dragon_tiger=dtiger,
+        summary={
+            "requested": n_requested,
+            "ok": n_ok,
+            "failed": n_requested - n_ok,
+            "elapsed_ms": elapsed_ms,
+        },
+    )
+    if is_cache_enabled():
+        cached_store(get_quote_cache, cache_key, result)
+    return result
+
+
+def _serialize_stock_aspect_value(aspect: str, raw: object) -> object:
+    """Coerce a manager-returned value into a JSON-serializable shape.
+
+    UnifiedRealtimeQuote is a dataclass; K-line is a DataFrame (turn
+    into records); info is already a dict; boards is already a dict list.
+    On any failure, return the raw object (Pydantic will surface the
+    error in the test, but production code should not raise here).
+    """
+    if raw is None:
+        return None
+    if aspect == "quote":
+        # UnifiedRealtimeQuote dataclass
+        q = raw
+        return {
+            "code": q.code,
+            "name": q.name,
+            "source": q.source.value if hasattr(q.source, "value") else str(q.source),
+            "price": q.price,
+            "change_pct": q.change_pct,
+            "change_amount": q.change_amount,
+            "open_price": q.open_price,
+            "high": q.high,
+            "low": q.low,
+            "pre_close": q.pre_close,
+            "volume": q.volume,
+            "amount": q.amount,
+            "turnover_rate": q.turnover_rate,
+            "pe_ratio": q.pe_ratio,
+            "pb_ratio": q.pb_ratio,
+            "total_mv": q.total_mv,
+            "circ_mv": q.circ_mv,
+        }
+    if aspect in ("kline", "kline_5m"):
+        # (df, source) tuple
+        df, source = raw  # type: ignore[misc]
+        records = df.to_dict("records") if df is not None else []
+        return {
+            "source": source,
+            "data": [_build_kline_data(r, _format_date).model_dump() for r in records],
+        }
+    if aspect == "info":
+        # (info_dict, source) tuple
+        info, source = raw  # type: ignore[misc]
+        return {"source": source, "data": info}
+    if aspect == "boards":
+        # (boards_list, source) tuple — boards_list may be None per manager contract
+        boards, source = raw  # type: ignore[misc]
+        return {"source": source, "data": boards or []}
+    return raw  # pragma: no cover — exhaustive above
+
+
+@router.post(
+    "/agent/stocks/batch-profile",
+    response_model=StockBatchProfileResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid request (codes out of range)"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="股票批量画像（quote + kline + kline_5m + info + boards，per-aspect 错误隔离）",
+    markets=["csi"],
+    capabilities=[],
+)
+@map_errors
+def post_stocks_batch_profile(
+    payload: StockBatchProfileRequest,
+    format: Literal["json"] = Query(
+        default="json",
+        description=(
+            "Output format. Only ``json`` is supported today. ``md`` is "
+            "deferred to Phase 2.4; a 422 is returned if requested to "
+            "prevent silent contract drift."
+        ),
+    ),
+) -> StockBatchProfileResponse:
+    """Per-code fan-out across the requested aspects.
+
+    Renamed from proposal §3.2.2 ``stocks/batch/profile`` per 2026-07-28
+    user request. Codes are 1-5 (hard cap matches the stock-picking
+    funnel); per-aspect failures live in ``results[i].errors[]``; the
+    whole entry is only marked ``ok=False`` when the code itself is
+    unrecoverable (e.g. all 5 aspects raised).
+    """
+    cache_key = make_stocks_batch_profile_cache_key(payload.codes, payload.aspects)
+    hit = cached_lookup(get_quote_cache, cache_key, "agent_stocks_batch_profile")
+    if hit is not None:
+        # Cache key collapses (sorted codes, sorted deduped aspects) so
+        # the same (set, set) from any order shares one entry. On hit
+        # we reorder the cached list back to the caller's input order
+        # (response contract: results mirror input codes).
+        return _reorder_stocks_batch_profile(hit, payload.codes)
+
+    started = time.monotonic()
+    manager = get_manager()
+    results: list[StockBatchProfileEntry] = []
+    n_ok = 0
+
+    # Validate aspects once (Pydantic Literal already enforces set
+    # membership; this is just defense in depth).
+    bad = [a for a in payload.aspects if a not in _STOCK_ASPECT_DISPATCH]
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_aspect", "message": f"Unknown aspects: {bad}"},
+        )
+
+    for code in payload.codes:
+        data: dict = {}
+        errors: list[StockBatchAspectError] = []
+        any_aspect_ok = False
+
+        for aspect in payload.aspects:
+            method_name, kwargs = _STOCK_ASPECT_DISPATCH[aspect]
+            # Special-case: boards bypasses the manager and goes through
+            # the persistence layer (CLAUDE.md "Persistence-Only Routing").
+            if method_name == "__persistence_stock_memberships__":
+                try:
+                    entries, _cold, _origin = stock_board_cache.get_stock_memberships(
+                        stock_code=code,
+                        sources=kwargs["sources"],
+                        manager=manager,
+                    )
+                except (DataFetchError, ValueError) as exc:
+                    logger.warning(f"[agent/stocks/batch-profile] {code} {aspect} failed: {exc}")
+                    errors.append(
+                        StockBatchAspectError(
+                            aspect=aspect,
+                            error=type(exc).__name__,
+                            message=str(exc),
+                        )
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        f"[agent/stocks/batch-profile] {code} {aspect} crashed: {exc}",
+                        exc_info=True,
+                    )
+                    errors.append(
+                        StockBatchAspectError(
+                            aspect=aspect,
+                            error=type(exc).__name__,
+                            message=str(exc),
+                        )
+                    )
+                    continue
+                # Match the (list, source) tuple shape _serialize_stock_aspect_value
+                # expects for the boards aspect.
+                raw = (entries, "persistence")
+            else:
+                method = getattr(manager, method_name)
+                try:
+                    raw = method(code, **kwargs)
+                except (DataFetchError, ValueError) as exc:
+                    logger.warning(f"[agent/stocks/batch-profile] {code} {aspect} failed: {exc}")
+                    errors.append(
+                        StockBatchAspectError(
+                            aspect=aspect,
+                            error=type(exc).__name__,
+                            message=str(exc),
+                        )
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        f"[agent/stocks/batch-profile] {code} {aspect} crashed: {exc}",
+                        exc_info=True,
+                    )
+                    errors.append(
+                        StockBatchAspectError(
+                            aspect=aspect,
+                            error=type(exc).__name__,
+                            message=str(exc),
+                        )
+                    )
+                    continue
+            try:
+                data[aspect] = _serialize_stock_aspect_value(aspect, raw)
+                any_aspect_ok = True
+            except Exception as exc:
+                errors.append(
+                    StockBatchAspectError(
+                        aspect=aspect,
+                        error="SerializationError",
+                        message=str(exc),
+                    )
+                )
+
+        entry_ok = any_aspect_ok
+        if entry_ok:
+            n_ok += 1
+        results.append(
+            StockBatchProfileEntry(
+                code=code,
+                ok=entry_ok,
+                data=data,
+                errors=errors,
+            )
+        )
+
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    resp = StockBatchProfileResponse(
+        results=results,
+        summary={
+            "requested": len(payload.codes),
+            "ok": n_ok,
+            "failed": len(payload.codes) - n_ok,
+            "elapsed_ms": elapsed_ms,
+        },
+    )
+    if is_cache_enabled():
+        cached_store(get_quote_cache, cache_key, resp)
+    return resp

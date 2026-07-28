@@ -428,4 +428,47 @@ def make_filter_stocks_cache_key(
     payload = {"filters": filters or {}, "limit": limit}
     # json.dumps with sort_keys + separators produces a deterministic compact repr.
     payload_repr = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return "agent_filter_stocks:" + board_code + ":" + source + ":" + hashlib.sha256(payload_repr.encode("utf-8")).hexdigest()[:16]
+    return (
+        "agent_filter_stocks:"
+        + board_code
+        + ":"
+        + source
+        + ":"
+        + hashlib.sha256(payload_repr.encode("utf-8")).hexdigest()[:16]
+    )
+
+
+def make_indices_batch_profile_cache_key(codes: list[str]) -> str:
+    """Cache key for GET /agent/indices/batch-profile.
+
+    Codes are SORTED so the same set in different input order collapses
+    to one cache entry (the response is then reordered to the input
+    order on hit — see agent.get_indices_batch_profile).
+    """
+    return "agent_indices_batch_profile:" + ",".join(sorted(codes))
+
+
+def make_market_context_cache_key(flash_limit: int, trade_date: str, session: str) -> str:
+    """Cache key for GET /agent/market-context.
+
+    Includes ``session`` (pre-market/intraday/post-market/closed) because
+    the same (flash_limit, trade_date) can produce materially different
+    responses across sessions (e.g. pre-market forces zt/dt to null).
+    Without it a 09:00 cache hit would mask a 16:00 post-market refresh.
+    """
+    return f"agent_market_context:{flash_limit}:{trade_date}:{session}"
+
+
+def make_stocks_batch_profile_cache_key(codes: list[str], aspects: list[str]) -> str:
+    """Cache key for POST /agent/stocks/batch-profile.
+
+    Both args are SORTED so the same (set, set) pair collapses to one
+    cache entry; the response is reordered to input order on hit.
+    Aspects are deduped (Pydantic Literal) so set-equality is well-defined.
+    """
+    return (
+        "agent_stocks_batch_profile:"
+        + ",".join(sorted(codes))
+        + "|"
+        + ",".join(sorted(set(aspects)))
+    )

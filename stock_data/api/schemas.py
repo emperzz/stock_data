@@ -1407,14 +1407,17 @@ class FilterStocksMatchedStock(BaseModel):
     price: float | None = None
     change_pct: float | None = None
     max_gain_pct: float | None = Field(
-        default=None, description="(high - open) / open * 100, None when either is missing.",
+        default=None,
+        description="(high - open) / open * 100, None when either is missing.",
     )
     turnover_pct: float | None = None
     amount_yi: float | None = Field(
-        default=None, description="成交额 亿元 (= amount / 1e8 when amount is in 元).",
+        default=None,
+        description="成交额 亿元 (= amount / 1e8 when amount is in 元).",
     )
     mcap_yi: float | None = Field(
-        default=None, description="总市值 亿元 (= total_mv / 1e8 when total_mv is in 元).",
+        default=None,
+        description="总市值 亿元 (= total_mv / 1e8 when total_mv is in 元).",
     )
 
 
@@ -1426,4 +1429,244 @@ class FilterStocksResponse(BaseModel):
     summary: dict = Field(
         default_factory=dict,
         description="{total_in_board, matched, limit_applied}",
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Agent indices batch-profile (Phase 2 §3.2.1 — multi-frequency K-line
+# fan-out for one batch of indices). Renamed from "market-snapshot" in
+# the original proposal because the agent-side route table uses
+# /batch-profile consistently.
+# ────────────────────────────────────────────────────────────────────────
+
+
+class IndexKlineBlock(BaseModel):
+    """Per-frequency K-line block for /agent/indices/batch-profile.
+
+    Each block holds the bars for one frequency (5m / d / w). On
+    per-frequency upstream failure ``error`` is set and ``data`` is
+    empty; on success ``data`` carries the bars.
+    """
+
+    data: list[KLineData] = Field(
+        default_factory=list,
+        description="Bar list (newest last). Empty when the upstream failed.",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Per-frequency upstream failure message; null on success.",
+    )
+
+
+class IndexProfile(BaseModel):
+    """One index in /agent/indices/batch-profile.
+
+    ``errors`` is a per-frequency dict (mirrors the per-aspect dict
+    in the stocks variant): ``{"5m": "...", "d": null, "w": null}``.
+    """
+
+    code: str
+    name: str = Field(default="", description="Index name (from index_symbols map or upstream)")
+    quote: dict | None = Field(
+        default=None,
+        description="Realtime quote dict (forwarded from IndexQuote fields). null when upstream failed.",
+    )
+    klines: dict[str, IndexKlineBlock] = Field(
+        default_factory=dict,
+        description="K-line blocks keyed by frequency (5m / d / w).",
+    )
+    errors: dict[str, str | None] = Field(
+        default_factory=dict,
+        description="Per-frequency error map; null = no error for that frequency.",
+    )
+
+
+class IndicesBatchProfileResponse(BaseModel):
+    """GET response for /agent/indices/batch-profile."""
+
+    indices: list[IndexProfile] = Field(
+        default_factory=list,
+        description="Per-index profile (quote + 3-frequency K-line).",
+    )
+    summary: dict = Field(
+        default_factory=dict,
+        description="{requested, ok, failed, elapsed_ms}",
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Agent market-context (Phase 2 §3.2.3 — news + zt/dt pools + dragon
+# tiger aggregation). Replaces the originally-planned
+# /agent/news/cls/bundle + /agent/zt + /agent/dragon-tiger trio.
+# ────────────────────────────────────────────────────────────────────────
+
+
+MarketSession = Literal["pre-market", "intraday", "post-market", "closed"]
+
+
+class MarketContextMessages(BaseModel):
+    """News block of /agent/market-context. Each field null on per-source failure."""
+
+    morning_briefing: dict | None = Field(
+        default=None,
+        description="CLS 早报 article dict (ClsArticle fields); null when no article / fetch failed.",
+    )
+    market_recap: dict | None = Field(
+        default=None,
+        description="CLS 复盘 article dict; null when no article / fetch failed.",
+    )
+    flash_news: list[dict] = Field(
+        default_factory=list,
+        description="Flash news list (FlashNewsItem-shaped dicts). Empty on upstream failure.",
+    )
+
+
+class MarketContextLimitPools(BaseModel):
+    """涨跌停 block of /agent/market-context.
+
+    Both pools forced to null in pre-market (per spec §3.2.3). Otherwise
+    null only when the upstream failed entirely.
+    """
+
+    zt: list[dict] | None = Field(
+        default=None,
+        description="涨停池 list. null in pre-market OR on upstream failure.",
+    )
+    dt: list[dict] | None = Field(
+        default=None,
+        description="跌停池 list. null in pre-market OR on upstream failure.",
+    )
+
+
+class MarketContextDragonTigerSummaryTop(BaseModel):
+    """One row in top_by_net_buy / top_by_net_sell."""
+
+    code: str
+    name: str
+    net_buy_wan: float = Field(default=0, description="净买入(万元)")
+
+
+class MarketContextDragonTigerSummary(BaseModel):
+    """Server-side rollup over the day's dragon-tiger list."""
+
+    total_net_buy_wan: float = Field(default=0, description="全市场净买入合计 (万元)")
+    top_by_net_buy: list[MarketContextDragonTigerSummaryTop] = Field(
+        default_factory=list,
+        description="净买入 Top 10 (default)",
+    )
+    top_by_net_sell: list[MarketContextDragonTigerSummaryTop] = Field(
+        default_factory=list,
+        description="净卖出 Top 10 (default, signed net_buy_wan < 0)",
+    )
+
+
+class MarketContextDragonTiger(BaseModel):
+    """龙虎榜 block of /agent/market-context.
+
+    On upstream failure both fields are null (caller can detect via
+    the explicit null).
+    """
+
+    stocks: list[dict] | None = Field(
+        default=None,
+        description="龙虎榜个股列表 (DailyDragonTigerStock-shaped dicts). null on failure.",
+    )
+    summary: MarketContextDragonTigerSummary | None = Field(
+        default=None,
+        description="Server-computed summary (totals + top 10). null on failure.",
+    )
+
+
+class MarketContextResponse(BaseModel):
+    """GET response for /agent/market-context."""
+
+    trade_date: str = Field(description="The trade date this snapshot represents (YYYY-MM-DD).")
+    is_trade_day: bool = Field(description="Whether today (server local) is a trade day.")
+    market_session: MarketSession = Field(
+        description="Server-local time + trade-calendar derived session label.",
+    )
+    messages: MarketContextMessages = Field(default_factory=MarketContextMessages)
+    limit_pools: MarketContextLimitPools = Field(default_factory=MarketContextLimitPools)
+    dragon_tiger: MarketContextDragonTiger | None = Field(
+        default=None,
+        description="龙虎榜 block; null when upstream failed entirely.",
+    )
+    summary: dict = Field(
+        default_factory=dict,
+        description="{requested, ok, failed, elapsed_ms}",
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Agent stocks batch-profile (Phase 2 §3.2.2 — per-aspect fan-out
+# for one batch of stocks). Renamed from "batch/profile" in the
+# original proposal to match the /batch-profile naming convention.
+# ────────────────────────────────────────────────────────────────────────
+
+
+# Stable aspect enum. Order is the route's default iteration order;
+# both request and response use this set. Adding a new aspect requires
+# updating ASPECT_TO_CALLER in routes/agent.py.
+StockBatchAspect = Literal["quote", "kline", "kline_5m", "info", "boards"]
+
+
+class StockBatchAspectError(BaseModel):
+    """Per-aspect failure in /agent/stocks/batch-profile."""
+
+    aspect: str = Field(description="Aspect name (quote/kline/kline_5m/info/boards)")
+    error: str = Field(description="Error class name (e.g. DataFetchError)")
+    message: str = Field(default="", description="Underlying error message")
+
+
+class StockBatchProfileEntry(BaseModel):
+    """One stock in /agent/stocks/batch-profile.
+
+    Per-aspect results live in ``data`` keyed by aspect name; per-aspect
+    failures live in ``errors``. ``ok=False`` when the whole entry is
+    irrecoverable (e.g. code not found AND no aspect could be served);
+    otherwise individual aspect errors are reported in ``errors[]``.
+    """
+
+    code: str
+    ok: bool = Field(default=True, description="True unless the whole entry is irrecoverable.")
+    data: dict = Field(
+        default_factory=dict,
+        description="Per-aspect result dict: {quote, kline, kline_5m, info, boards} (subset of requested).",
+    )
+    errors: list[StockBatchAspectError] = Field(
+        default_factory=list,
+        description="Per-aspect failure list; does not abort other aspects.",
+    )
+
+
+class StockBatchProfileRequest(BaseModel):
+    """POST body for /agent/stocks/batch-profile."""
+
+    codes: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=5,
+        description="Stock codes (1-5). Hard cap matches the stock-picking funnel.",
+    )
+    aspects: list[StockBatchAspect] = Field(
+        default_factory=lambda: ["quote", "kline", "kline_5m", "info", "boards"],
+        min_length=1,
+        description=(
+            "Aspects to fetch per code. Default = all 5. Must contain at "
+            "least one aspect (an empty ``aspects`` list would yield an "
+            "empty response with no per-aspect error isolation possible)."
+        ),
+    )
+
+
+class StockBatchProfileResponse(BaseModel):
+    """POST response for /agent/stocks/batch-profile."""
+
+    results: list[StockBatchProfileEntry] = Field(
+        default_factory=list,
+        description="Per-code results (same order as input codes).",
+    )
+    summary: dict = Field(
+        default_factory=dict,
+        description="{requested, ok, failed, elapsed_ms}",
     )
