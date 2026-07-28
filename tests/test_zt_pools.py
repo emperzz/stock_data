@@ -421,7 +421,7 @@ class TestZTFetcherManager:
         stocks = mgr.get_zt_pool("zt", "2024-05-10", refresh=False)
         assert len(stocks) >= 1
 
-    def test_manager_get_zt_pool_skips_write_on_volatile_date(self):
+    def test_manager_get_zt_pool_skips_write_on_volatile_date(self, monkeypatch):
         """Volatile date: reads from cache, fetches upstream on miss, skips the write.
 
         Post-2026-07-15 contract: ``is_volatile_date(date)`` is the single source
@@ -441,8 +441,10 @@ class TestZTFetcherManager:
         Clean up the seeded row in finally.
         """
         from datetime import date as date_cls
+        from datetime import datetime as real_datetime
 
         from stock_data.data_provider import DataFetcherManager
+        from stock_data.data_provider.persistence import pool_daily
         from stock_data.data_provider.persistence.db import get_connection
         from stock_data.data_provider.persistence.pool_daily import (
             get_pool_cached,
@@ -459,6 +461,16 @@ class TestZTFetcherManager:
         init_calendar_schema()
 
         today_str = date_cls.today().strftime("%Y-%m-%d")
+
+        # Force wall-clock to 10:00 so ``is_volatile_date(today)`` is True
+        # regardless of when the suite runs (the 16:00 cutoff would
+        # otherwise make this test fail after-hours).
+        class _FrozenDatetime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):  # noqa: ARG003
+                return real_datetime(2000, 1, 1, 10, 0, 0)
+
+        monkeypatch.setattr(pool_daily, "datetime", _FrozenDatetime)
 
         # Seed trade_calendar with today so is_volatile_date(today) -> True.
         # update_cached_calendar is a pure upsert (post-fix), so this is safe

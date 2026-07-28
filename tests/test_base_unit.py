@@ -160,10 +160,14 @@ class TestDataFetcherManagerUnit:
         monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list_mod.init_schema()
 
-        # With a real manager that has no fetchers, get_stock_list will fail gracefully
-        # and get_stock_name should still return ""
+        # The shared ``manager`` fixture ships MockFetcher, whose
+        # ``get_all_stocks`` returns ``[{"code": "000001", "name": "Test"}]``,
+        # so the auto-warm path SUCCEEDS and the second lookup returns "Test".
+        # This proves the fallback ran (and is intentionally different from
+        # ``test_get_stock_name_empty_db_no_manager_returns_empty``, which
+        # uses ``manager=None`` to exercise the cold path).
         name = stock_list.get_stock_name("000001", manager=manager)
-        assert name == ""
+        assert name == "Test"
 
     def test_market_filtering_historical(self, manager):
         """Test that historical-only fetchers are excluded from realtime queries."""
