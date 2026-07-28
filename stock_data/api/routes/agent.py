@@ -99,10 +99,10 @@ _CST = ZoneInfo("Asia/Shanghai")
 # is "not a date" (e.g. "yesterday") which would otherwise silently 200.
 _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# 4 core CSI indices used when ?codes is omitted on
+# 3 core CSI indices used when ?codes is omitted on
 # /agent/indices/batch-profile. Aligned with market-recap §4 step 3
-# "指数全景" default set: 上证 + 深证 + 创业板 + 北证 50.
-_DEFAULT_CORE_CSI_INDICES: tuple[str, ...] = ("000001", "399001", "399006", "899050")
+# "指数全景" default set: 上证 + 深证 + 创业板.
+_DEFAULT_CORE_CSI_INDICES: tuple[str, ...] = ("000001", "399001", "399006")
 
 # K-line frequency → bar count for /agent/indices/batch-profile. Pinning
 # here (not from the request) keeps the response shape stable; clients
@@ -515,8 +515,8 @@ def get_indices_batch_profile(
     codes: str | None = Query(
         default=None,
         description=(
-            "Comma-separated index codes. Empty = 4 core CSI indices "
-            "(上证/深证/创业板/北证50). Each code is fanned out to "
+            "Comma-separated index codes. Empty = 3 core CSI indices "
+            "(上证/深证/创业板). Each code is fanned out to "
             "1 quote + 3 K-line frequencies; per-frequency failure is "
             "isolated into entry.errors[frequency]."
         ),

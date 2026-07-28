@@ -719,8 +719,8 @@ def _bind_manager(monkeypatch, mock_manager):
 class TestIndicesBatchProfile:
     """GET /agent/indices/batch-profile — per-index fan-out (quote + 3 K-line)."""
 
-    def test_default_4_indices_all_ok(self, client, monkeypatch):
-        """No ?codes → use the 4 core CSI indices; all 4 succeed."""
+    def test_default_3_indices_all_ok(self, client, monkeypatch):
+        """No ?codes → use the 3 core CSI indices; all 3 succeed."""
         from unittest.mock import MagicMock
 
         mock_manager = MagicMock()
@@ -747,13 +747,13 @@ class TestIndicesBatchProfile:
         response = client.get("/api/v1/agent/indices/batch-profile")
         assert response.status_code == 200
         data = response.json()
-        # 4 default codes
-        assert data["summary"]["requested"] == 4
-        assert data["summary"]["ok"] == 4
+        # 3 default codes
+        assert data["summary"]["requested"] == 3
+        assert data["summary"]["ok"] == 3
         assert data["summary"]["failed"] == 0
-        assert len(data["indices"]) == 4
+        assert len(data["indices"]) == 3
         codes = [p["code"] for p in data["indices"]]
-        assert codes == ["000001", "399001", "399006", "899050"]
+        assert codes == ["000001", "399001", "399006"]
         # Per-index shape
         first = data["indices"][0]
         assert first["name"]  # resolved from index_symbols
