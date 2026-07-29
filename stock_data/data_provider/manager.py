@@ -807,7 +807,7 @@ class DataFetcherManager:
             f"realtime_quotes {market}",
             _call,
             circuit_breaker=QUOTE_LIST_CIRCUIT_BREAKER,
-            candidates=candidates,
+            candidates=sorted(candidates, key=lambda f: f.priority),
             return_source=True,
             allow_none=True,
         )
