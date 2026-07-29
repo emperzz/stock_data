@@ -884,6 +884,55 @@ class TestRealtimeQuote:
             assert fetcher.get_realtime_quote("600519") is None
 
 
+class TestNormalizeRtKRow:
+    def test_normalize_rt_k_row_basic_fields(self):
+        from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+        fetcher = ZzshareFetcher()
+        row = {
+            "ts_code": "600519.SH",
+            "name": "贵州茅台",
+            "pre_close": 1700.0,
+            "open": 1710.0,
+            "high": 1725.0,
+            "low": 1695.0,
+            "close": 1720.0,
+            "vol": 1e6,
+            "amount": 1e9,
+            "quote_rate": 1.18,
+            "turnover_rate": 0.5,
+            "market_value": 2.16e12,
+            "circulation_value": 2.16e12,
+            "ttm_pe_rate": 25.5,
+        }
+        from stock_data.data_provider.core.types import RealtimeSource
+        quote = fetcher._normalize_rt_k_row(row, "600519")
+        assert quote.code == "600519"
+        assert quote.name == "贵州茅台"
+        assert quote.source == RealtimeSource.ZZSHARE
+        assert quote.price == 1720.0
+        assert quote.change_pct == 1.18
+        assert quote.change_amount == 1720.0 - 1700.0  # close - pre_close
+        assert quote.pre_close == 1700.0
+        assert quote.open_price == 1710.0
+        assert quote.high == 1725.0
+        assert quote.low == 1695.0
+        assert quote.volume == 1_000_000
+        assert quote.amount == 1e9
+        assert quote.turnover_rate == 0.5
+        assert quote.total_mv == 2.16e12
+        assert quote.circ_mv == 2.16e12
+        assert quote.pe_ratio == 25.5
+
+    def test_normalize_rt_k_row_missing_change_amount_when_pre_close_none(self):
+        from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+        fetcher = ZzshareFetcher()
+        row = {"ts_code": "000001.SZ", "name": "平安银行", "close": 12.5, "pre_close": None}
+        quote = fetcher._normalize_rt_k_row(row, "000001")
+        assert quote.change_amount is None  # not computable
+        assert quote.price == 12.5
+        assert quote.pre_close is None
+
+
 # ====================================================================
 # STOCK_LIST
 # ====================================================================
