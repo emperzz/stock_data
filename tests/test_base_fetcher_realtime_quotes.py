@@ -10,7 +10,10 @@ class _MinimalFetcher(BaseFetcher):
     name = "MinimalFetcher"
     priority = 99
 
-    def _normalize_data(self, df, stock_code):  # noqa: ARG002 — trivial stub
+    def _normalize_data(self, df, stock_code):
+        # Trivial stub: BaseFetcher._normalize_data is @abstractmethod; the
+        # _MinimalFetcher only needs to be instantiable so get_realtime_quotes
+        # can be exercised. This stub is never called in these tests.
         return df
 
 
