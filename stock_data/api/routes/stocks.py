@@ -8,12 +8,16 @@ Hosts every route under ``/stocks/...``:
   per-stock data surfaces
 """
 
+from typing import Literal
+
 from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.persistence import stock_list
 from ...data_provider.utils.normalize import code_to_exchange
 from ..cache import (
     cache_endpoint,
+    cached_lookup,
+    cached_store,
     get_announcements_cache,
     get_block_trade_cache,
     get_dividend_cache,
@@ -26,6 +30,8 @@ from ..cache import (
     get_quote_cache,
     get_reports_cache,
     get_stock_info_cache,
+    get_stock_list_cache,
+    get_stock_list_quote_cache,
     make_announcements_cache_key,
     make_block_trade_cache_key,
     make_dividend_cache_key,
@@ -38,6 +44,8 @@ from ..cache import (
     make_quote_cache_key,
     make_reports_cache_key,
     make_stock_info_cache_key,
+    make_stock_list_cache_key,
+    make_stock_list_quote_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
@@ -87,41 +95,81 @@ from .helpers import (
     "/stocks",
     response_model=list[StockInfo],
     responses={
-        400: {"model": "ErrorResponse", "description": "Invalid market parameter"},
+        400: {"model": ErrorResponse, "description": "sort_by without include_quote"},
+        422: {"model": ErrorResponse, "description": "Invalid request"},
+        503: {"model": ErrorResponse, "description": "All fetchers failed"},
+        500: {"model": ErrorResponse, "description": "Server error"},
     },
     tags=["stocks"],
 )
 @endpoint_meta(
-    summary="股票列表（分页）",
+    summary="股票列表（支持全市场实时行情 + 排序）",
     markets=["csi", "hk", "us"],
-    capabilities=["STOCK_LIST"],
+    capabilities=["STOCK_LIST", "STOCK_REALTIME_QUOTE"],
 )
 @map_errors
 def list_stocks(
     market: str = Query(..., pattern="^(csi|hk|us)$", description="Market: csi/hk/us"),
-    refresh: bool = Query(False, description="Force fetch latest from upstream"),
+    include_quote: bool = Query(False, description="Include realtime quote for csi"),
+    sort_by: Literal["change_pct", "amount", "turnover_rate", "price", "total_mv", "volume"] | None = Query(None),
+    sort_order: Literal["asc", "desc"] = Query("desc"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    limit: int = Query(100, ge=1, le=1000, description="Pagination limit"),
+    limit: int = Query(100, ge=1, le=10000, description="Pagination limit"),
 ) -> list[StockInfo]:
     """List all available stocks for a specified market.
 
-    Note:
-        A-shares are exposed as ``csi`` (中证). The legacy ``cn`` tag is
-        an internal fetcher convention and is NOT a valid value here —
-        ``csi`` is the single public-facing A-share tag.
+    ``include_quote=true`` returns a full-market A-share realtime snapshot
+    (single upstream call, cached 60s). HK/US do not support include_quote.
+
+    ``sort_by`` requires ``include_quote=true``; sort applies to quote
+    fields only. Default order is upstream-natural (ts_code ascending);
+    sort_by overrides for the response.
     """
     manager = get_manager()
-    stocks, _origin = stock_list.get_stock_list(market, refresh=refresh, manager=manager)
-    page = stocks[offset : offset + limit]
-    return [
+
+    if include_quote and market != "csi":
+        raise HTTPException(422, detail={
+            "error": "include_quote_unsupported",
+            "message": "include_quote=true only supports market=csi; hk/us have no all-market realtime source.",
+        })
+
+    if sort_by is not None and not include_quote:
+        raise HTTPException(400, detail={
+            "error": "sort_requires_quote",
+            "message": "sort_by requires include_quote=true (sortable fields are quote-only).",
+        })
+
+    # Path B will be added in Task 10. For now, ignore include_quote / sort_by
+    # and route through path A (metadata only) — callers without
+    # include_quote=true keep working unchanged.
+    if include_quote or sort_by is not None:
+        # Task 10 will replace this with the quote path
+        raise HTTPException(503, detail={
+            "error": "not_yet_implemented",
+            "message": "include_quote path B implementation lands in Task 10.",
+        })
+
+    # Path A — metadata only (current behavior)
+    cache_key = make_stock_list_cache_key(market, offset, limit)
+    hit = cached_lookup(get_stock_list_cache, cache_key, "stock_list")
+    if hit is not None:
+        return hit
+
+    meta_stocks, origin = stock_list.get_stock_list(market, manager=manager)
+    page = meta_stocks[offset : offset + limit]
+    rows = [
         StockInfo(
             code=s["code"],
             name=s["name"],
             market=market,
             exchange=s.get("exchange"),
+            quote=None,
+            source=origin,
         )
         for s in page
     ]
+    cached_store(get_stock_list_cache, cache_key, rows)
+    return rows
 
 
 # ============================================================================
