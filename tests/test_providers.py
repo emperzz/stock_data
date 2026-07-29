@@ -239,6 +239,69 @@ class TestAkshareSpotRowNormalize:
         assert quote.volume is None  # safe_int(0) * 100 = 0, not None
 
 
+class TestAkshareGetRealtimeQuotes:
+    """Tests for AkshareFetcher.get_realtime_quotes (all-market)."""
+
+    def _fetcher(self):
+        from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+        return AkshareFetcher()
+
+    def test_get_realtime_quotes_csi(self, monkeypatch):
+        """Single ak.stock_zh_a_spot_em() call → list of UnifiedRealtimeQuote."""
+        import pandas as pd
+
+        fake_df = pd.DataFrame([
+            {"代码": "600519", "名称": "贵州茅台", "最新价": 1680.5, "涨跌幅": 1.23,
+             "涨跌额": 20.5, "成交量": 12345, "成交额": 2.07e8, "今开": 1680.0,
+             "最高": 1685.0, "最低": 1678.0, "昨收": 1660.0, "振幅": 0.4,
+             "换手率": 0.5, "量比": 1.2, "市盈率": 28.5, "市净率": 9.1},
+            {"代码": "000001", "名称": "平安银行", "最新价": 12.5, "涨跌幅": -0.5,
+             "涨跌额": -0.06, "成交量": 80000, "成交额": 1.0e8, "今开": 12.6,
+             "最高": 12.7, "最低": 12.4, "昨收": 12.56, "振幅": 2.4,
+             "换手率": 0.3, "量比": 0.8, "市盈率": 5.2, "市净率": 0.6},
+        ])
+
+        def fake_spot_em():
+            return fake_df
+        import stock_data.data_provider.fetchers.akshare.fetcher as akshare_mod
+        monkeypatch.setattr(akshare_mod, "ak", type("ak", (), {"stock_zh_a_spot_em": staticmethod(fake_spot_em)}))
+
+        fetcher = self._fetcher()
+        quotes = fetcher.get_realtime_quotes("csi")
+        assert quotes is not None
+        assert len(quotes) == 2
+        codes = {q.code for q in quotes}
+        assert codes == {"600519", "000001"}
+        maotai = next(q for q in quotes if q.code == "600519")
+        assert maotai.name == "贵州茅台"
+        assert maotai.price == 1680.5
+
+    def test_get_realtime_quotes_returns_none_on_failure(self, monkeypatch):
+        """Upstream exception → None (not raise)."""
+        def fake_spot_em():
+            raise ConnectionError("akshare network down")
+        import stock_data.data_provider.fetchers.akshare.fetcher as akshare_mod
+        monkeypatch.setattr(akshare_mod, "ak", type("ak", (), {"stock_zh_a_spot_em": staticmethod(fake_spot_em)}))
+
+        fetcher = self._fetcher()
+        assert fetcher.get_realtime_quotes("csi") is None
+
+    def test_get_realtime_quotes_returns_none_on_empty_df(self, monkeypatch):
+        """Empty upstream response → None."""
+        import pandas as pd
+        import stock_data.data_provider.fetchers.akshare.fetcher as akshare_mod
+        monkeypatch.setattr(akshare_mod, "ak", type("ak", (), {"stock_zh_a_spot_em": staticmethod(lambda: pd.DataFrame())}))
+
+        fetcher = self._fetcher()
+        assert fetcher.get_realtime_quotes("csi") is None
+
+    def test_get_realtime_quotes_unsupported_market_returns_none(self):
+        """market other than csi/cn → None (no all-market source)."""
+        fetcher = self._fetcher()
+        assert fetcher.get_realtime_quotes("hk") is None
+        assert fetcher.get_realtime_quotes("us") is None
+
+
 class TestYfinanceFetcher:
     """Tests for YfinanceFetcher."""
 
