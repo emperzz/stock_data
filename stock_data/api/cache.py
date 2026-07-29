@@ -28,6 +28,10 @@ _quote_cache: TTLCache = TTLCache(maxsize=1024, ttl=_TTL_QUOTE)
 _index_quote_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_INDEX_QUOTE)
 _stock_intraday_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INTRADAY)
 
+# /api/v1/stocks caches (Task 2 — see docs/superpowers/plans/2026-07-29-stocks-list-include-quote.md)
+_stock_list_cache: TTLCache = TTLCache(maxsize=64, ttl=300)        # metadata only
+_stock_list_quote_cache: TTLCache = TTLCache(maxsize=8, ttl=60)    # full-market quote
+
 # TTL constants for uncached APIs
 _TTL_DRAGON_TIGER = int(os.getenv("CACHE_TTL_DRAGON_TIGER", "300"))
 _TTL_MARGIN = int(os.getenv("CACHE_TTL_MARGIN", "300"))
@@ -82,6 +86,25 @@ def get_index_quote_cache() -> TTLCache:
 
 def get_stock_intraday_cache() -> TTLCache:
     return _stock_intraday_cache
+
+
+def get_stock_list_cache() -> TTLCache:
+    """Return the cache for /api/v1/stocks metadata-only responses.
+
+    TTL 300s (5 min). Metadata changes slowly; this just dedupes dashboard
+    refreshes. Path A only (no quote, no sort).
+    """
+    return _stock_list_cache
+
+
+def get_stock_list_quote_cache() -> TTLCache:
+    """Return the cache for /api/v1/stocks full-market quote responses.
+
+    TTL 60s (1 min). One entry per market (csi). Multiple sort_by/limit
+    requests within the window share the cached upstream fetch and
+    re-sort/slice in-memory. Path B only (include_quote=true or sort_by).
+    """
+    return _stock_list_quote_cache
 
 
 def get_history_cache(frequency: str) -> TTLCache:
@@ -214,6 +237,21 @@ def make_quote_cache_key(stock_code: str) -> str:
 
 def make_index_quote_cache_key(index_code: str) -> str:
     return f"idx_quote:{index_code}"
+
+
+def make_stock_list_cache_key(market: str, offset: int, limit: int) -> str:
+    """Cache key for /api/v1/stocks metadata-only responses."""
+    return f"stock_list:{market}:{offset}:{limit}"
+
+
+def make_stock_list_quote_cache_key(market: str) -> str:
+    """Cache key for /api/v1/stocks full-market quote responses (path B).
+
+    Single key per market — the cached value is the unsorted, unsliced
+    full-market upstream response. offset/limit/sort are applied in-memory
+    on cache hit.
+    """
+    return f"stock_list_quote:{market}"
 
 
 def make_dragon_tiger_cache_key(stock_code: str, trade_date: str) -> str:
