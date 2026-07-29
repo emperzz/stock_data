@@ -23,6 +23,13 @@ pytestmark = pytest.mark.live_network
 def reset_before_test():
     """Reset manager state before each test."""
     reset_manager()
+    # Clear the route-level TTLCaches so per-test monkeypatched fetchers
+    # aren't masked by a previous test's cached payload. Without this,
+    # the new TestListStocks cases (which patch manager.get_realtime_quotes
+    # and stock_list.get_stock_list) see stale rows from earlier tests.
+    from stock_data.api.cache import get_stock_list_cache, get_stock_list_quote_cache
+    get_stock_list_cache().clear()
+    get_stock_list_quote_cache().clear()
     yield
 
 

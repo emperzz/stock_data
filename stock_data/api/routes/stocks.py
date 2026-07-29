@@ -109,6 +109,7 @@ from .helpers import (
 )
 @map_errors
 def list_stocks(
+    request: Request,
     market: str = Query(..., pattern="^(csi|hk|us)$", description="Market: csi/hk/us"),
     include_quote: bool = Query(False, description="Include realtime quote for csi"),
     sort_by: Literal["change_pct", "amount", "turnover_rate", "price", "total_mv", "volume"] | None = Query(None),
@@ -139,17 +140,103 @@ def list_stocks(
             "message": "sort_by requires include_quote=true (sortable fields are quote-only).",
         })
 
-    # Path B will be added in Task 10. For now, ignore include_quote / sort_by
-    # and route through path A (metadata only) — callers without
-    # include_quote=true keep working unchanged.
-    if include_quote or sort_by is not None:
-        # Task 10 will replace this with the quote path
-        raise HTTPException(503, detail={
-            "error": "not_yet_implemented",
-            "message": "include_quote path B implementation lands in Task 10.",
+    # FastAPI 0.115+ silently ignores unknown query params by default.
+    # The refresh param was removed in Task 9 (BREAKING) — reject any
+    # leftover query keys so clients get a clear 422 instead of a silent
+    # 200. Pinned by TestListStocks::test_list_stocks_refresh_param_removed.
+    _ALLOWED_QUERY_PARAMS = {"market", "include_quote", "sort_by", "sort_order", "offset", "limit"}
+    unknown = set(request.query_params.keys()) - _ALLOWED_QUERY_PARAMS
+    if unknown:
+        raise HTTPException(422, detail={
+            "error": "unknown_query_param",
+            "message": f"Unknown query param(s): {sorted(unknown)}",
         })
 
-    # Path A — metadata only (current behavior)
+    # Determine execution path
+    use_quote_path = include_quote or sort_by is not None
+
+    if use_quote_path:
+        return _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order)
+    else:
+        return _list_stocks_metadata_only(market, manager, offset, limit)
+
+
+# Whitelist mapping: sort_by param → UnifiedRealtimeQuote field name.
+# Adding a new sortable quote field = add an entry here. Pydantic Literal
+# on the Query param prevents unknown values at the route layer.
+_SORT_FIELD_MAP = {
+    "change_pct": "change_pct",
+    "amount": "amount",
+    "turnover_rate": "turnover_rate",
+    "price": "price",
+    "total_mv": "total_mv",
+    "volume": "volume",
+}
+
+
+def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
+    """Path B: include_quote=true or sort_by set → single upstream quote call.
+
+    **Contract**: caller MUST have rejected hk/us with `?include_quote=true`
+    (path C, route layer top) before calling this helper. The market
+    argument is hardcoded to `"csi"` to make this assumption explicit and
+    prevent future refactors from accidentally passing through the user's
+    market tag — which could silently bypass the route-level 422.
+
+    Cached at the route layer (60s, single key per market). sort_by and
+    slice are applied in-memory on cache hit so multiple sort/limit combos
+    share the upstream fetch.
+    """
+    market = "csi"  # hardcoded — see docstring contract above
+    cache_key = make_stock_list_quote_cache_key(market)
+    hit = cached_lookup(get_stock_list_quote_cache, cache_key, "stock_list_quote")
+
+    if hit is not None:
+        quotes, quote_source = hit
+    else:
+        quotes, quote_source = manager.get_realtime_quotes(market)
+        # Spec §2.4: both "all failed" and "all returned empty" → 503.
+        # Per manager.py:415-419, _with_failover with allow_none=True returns
+        # (last_empty_result, "") where last_empty_result can be None (all
+        # raised) or [] (all returned empty). The route MUST distinguish.
+        if not quotes:
+            raise HTTPException(503, detail={
+                "error": "quote_unavailable",
+                "message": "All realtime fetchers failed or returned empty for market=csi",
+            })
+        cached_store(get_stock_list_quote_cache, cache_key, (quotes, quote_source))
+
+    # Build StockInfo list from quote data only (no persistence join).
+    # market is hardcoded "csi" (constant in path B); exchange derived
+    # from code prefix via the existing code_to_exchange helper.
+    rows = []
+    for q in quotes:
+        try:
+            exchange = code_to_exchange(q.code)
+        except Exception:
+            exchange = None
+        rows.append(StockInfo(
+            code=q.code,
+            name=q.name,
+            market=market,
+            exchange=exchange,
+            quote=StockQuote.from_unified_quote(q),
+            source=quote_source,
+        ))
+
+    # Sort (path B never has quote=null entries — every row came from quote data).
+    if sort_by is not None:
+        field = _SORT_FIELD_MAP[sort_by]
+        rows.sort(
+            key=lambda r: getattr(r.quote, field) or float("-inf"),
+            reverse=(sort_order == "desc"),
+        )
+
+    return rows[offset : offset + limit]
+
+
+def _list_stocks_metadata_only(market, manager, offset, limit):
+    """Path A: metadata only (current behavior)."""
     cache_key = make_stock_list_cache_key(market, offset, limit)
     hit = cached_lookup(get_stock_list_cache, cache_key, "stock_list")
     if hit is not None:
