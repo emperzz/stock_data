@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from stock_data.data_provider.base import DataCapability, DataFetchError
 from stock_data.data_provider.core.types import (
     REALTIME_CIRCUIT_BREAKER,
