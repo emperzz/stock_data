@@ -110,10 +110,11 @@ class TestManagerGetRealtimeQuotes:
             pass
 
     def test_empty_results_fall_through_to_next_fetcher(self):
-        """Empty list from primary fetcher → fall through (per _is_meaningful)."""
+        """Empty list from primary (highest-priority) fetcher → fall through to next."""
         mgr = self._manager()
+        # Akshare P1 (higher precedence than Zzshare P2) returns empty → fall through
         akshare = self._add_fetcher(
-            mgr, "AkshareFetcher", 3,
+            mgr, "AkshareFetcher", 1,  # P1 < P2
             DataCapability.STOCK_REALTIME_QUOTE,
             get_realtime_quotes_return=[],   # empty → not meaningful
         )
@@ -125,6 +126,7 @@ class TestManagerGetRealtimeQuotes:
         quotes, source = mgr.get_realtime_quotes("csi")
         assert source == "ZzshareFetcher"
         assert len(quotes) == 1
+        assert akshare.get_realtime_quotes.call_count == 1  # tried first, then fall-through
         assert akshare.get_realtime_quotes.call_count == 1
 
     def test_uses_dedicated_quote_list_circuit_breaker(self):
