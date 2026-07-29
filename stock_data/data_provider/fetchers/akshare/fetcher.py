@@ -280,6 +280,35 @@ class AkshareFetcher(BaseFetcher):
             pb_ratio=safe_float(row.get("市净率")),
         )
 
+    def get_realtime_quotes(self, market: str = "csi") -> list[UnifiedRealtimeQuote] | None:
+        """A-share all-market realtime quote via ``ak.stock_zh_a_spot_em()``.
+
+        Single upstream call. Returns ``None`` on upstream failure or
+        empty response; otherwise a list with one ``UnifiedRealtimeQuote``
+        per A-share stock in the upstream universe.
+
+        Note: ``market="cn"`` (legacy fetcher-internal alias) accepted
+        alongside ``"csi"`` for symmetry with ``get_all_stocks``.
+        """
+        if market not in ("csi", "cn"):
+            return None
+        try:
+            import akshare as ak
+
+            df = ak.stock_zh_a_spot_em()
+        except Exception as e:
+            logger.warning(f"[AkshareFetcher] stock_zh_a_spot_em failed: {e}")
+            return None
+        if df is None or df.empty:
+            return None
+        out: list = []
+        for _, row in df.iterrows():
+            code = str(row.get("代码", "")).strip()
+            if not code:
+                continue
+            out.append(self._normalize_spot_row(row, code))
+        return out
+
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Get realtime quote from Akshare.
 

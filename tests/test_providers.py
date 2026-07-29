@@ -263,8 +263,8 @@ class TestAkshareGetRealtimeQuotes:
 
         def fake_spot_em():
             return fake_df
-        import stock_data.data_provider.fetchers.akshare.fetcher as akshare_mod
-        monkeypatch.setattr(akshare_mod, "ak", type("ak", (), {"stock_zh_a_spot_em": staticmethod(fake_spot_em)}))
+        import akshare
+        monkeypatch.setattr(akshare, "stock_zh_a_spot_em", fake_spot_em)
 
         fetcher = self._fetcher()
         quotes = fetcher.get_realtime_quotes("csi")
@@ -280,8 +280,8 @@ class TestAkshareGetRealtimeQuotes:
         """Upstream exception → None (not raise)."""
         def fake_spot_em():
             raise ConnectionError("akshare network down")
-        import stock_data.data_provider.fetchers.akshare.fetcher as akshare_mod
-        monkeypatch.setattr(akshare_mod, "ak", type("ak", (), {"stock_zh_a_spot_em": staticmethod(fake_spot_em)}))
+        import akshare
+        monkeypatch.setattr(akshare, "stock_zh_a_spot_em", fake_spot_em)
 
         fetcher = self._fetcher()
         assert fetcher.get_realtime_quotes("csi") is None
@@ -289,8 +289,8 @@ class TestAkshareGetRealtimeQuotes:
     def test_get_realtime_quotes_returns_none_on_empty_df(self, monkeypatch):
         """Empty upstream response → None."""
         import pandas as pd
-        import stock_data.data_provider.fetchers.akshare.fetcher as akshare_mod
-        monkeypatch.setattr(akshare_mod, "ak", type("ak", (), {"stock_zh_a_spot_em": staticmethod(lambda: pd.DataFrame())}))
+        import akshare
+        monkeypatch.setattr(akshare, "stock_zh_a_spot_em", lambda: pd.DataFrame())
 
         fetcher = self._fetcher()
         assert fetcher.get_realtime_quotes("csi") is None
