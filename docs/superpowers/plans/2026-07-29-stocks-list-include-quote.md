@@ -1169,6 +1169,48 @@ class TestManagerGetRealtimeQuotes:
         assert source == "ZzshareFetcher"
         assert len(quotes) == 1
         assert akshare.get_realtime_quotes.call_count == 1
+
+    def test_uses_dedicated_quote_list_circuit_breaker(self):
+        """REGRESSION: get_realtime_quotes uses QUOTE_LIST_CIRCUIT_BREAKER,
+        NOT the singleton REALTIME_CIRCUIT_BREAKER shared with single-stock
+        path. If a future refactor passes REALTIME_CIRCUIT_BREAKER instead,
+        ABC-raise skips from get_realtime_quotes would poison the breaker
+        and break /stocks/{code}/quote's PE/PB enhancement fallback (D1).
+        """
+        from stock_data.data_provider.core.types import (
+            QUOTE_LIST_CIRCUIT_BREAKER,
+            REALTIME_CIRCUIT_BREAKER,
+        )
+        # The two breakers must be distinct singletons.
+        assert QUOTE_LIST_CIRCUIT_BREAKER is not REALTIME_CIRCUIT_BREAKER
+
+        # Trip the dedicated breaker with ABC-raise skips; verify the
+        # single-stock REALTIME_CIRCUIT_BREAKER is unaffected.
+        mgr = self._manager()
+        # TushareFetcher-equivalent: has capability, raises DataFetchError
+        # (the ABC default behavior — simulates Tencent/Zhitu/Tushare/Myquant)
+        tushare_like = self._add_fetcher(
+            mgr, "TushareFetcher", 0,
+            DataCapability.STOCK_REALTIME_QUOTE,
+            raises=DataFetchError("does not support all-market realtime quote"),
+        )
+        # Akshare succeeds — short-circuits before Tushare is hit... wait,
+        # Tushare is P0 (lower priority number = tried first per _with_failover).
+        # So Tushare is tried first, raises, then Akshare succeeds.
+        self._add_fetcher(
+            mgr, "AkshareFetcher", 3,
+            DataCapability.STOCK_REALTIME_QUOTE,
+            get_realtime_quotes_return=[_make_quote()],
+        )
+
+        # First call: Tushare raises → record_failure on QUOTE_LIST_CB.
+        mgr.get_realtime_quotes("csi")
+        # REALTIME_CB must be unaffected by the all-market path.
+        realtime_state = REALTIME_CIRCUIT_BREAKER.snapshot_state("TushareFetcher")
+        assert realtime_state["state"] == "closed"  # NOT affected
+        # QUOTE_LIST_CB DID record a failure for Tushare.
+        quote_list_state = QUOTE_LIST_CIRCUIT_BREAKER.snapshot_state("TushareFetcher")
+        assert quote_list_state["failures"] >= 1
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1179,7 +1221,22 @@ Expected: AttributeError on `get_realtime_quotes` method (only `get_realtime_quo
 
 - [ ] **Step 3: Implement `DataFetcherManager.get_realtime_quotes`**
 
-In `stock_data/data_provider/manager.py`, immediately after the existing `get_realtime_quote` method (line 734-755), add:
+First, add a dedicated circuit breaker instance in `stock_data/data_provider/core/types.py` (right after the existing `REALTIME_CIRCUIT_BREAKER` and `KLINE_CIRCUIT_BREAKER` declarations around line 259-267):
+
+```python
+# Dedicated CB for the all-market realtime quote path (Task 8).
+# Separated from REALTIME_CIRCUIT_BREAKER (single-stock path) so that
+# fetchers which legitimately don't support all-market quote
+# (TencentFetcher / ZhituFetcher / TushareFetcher / MyquantFetcher —
+# all per-code only, ABC default-raise) cannot trip the CB and break
+# the single-stock /quote endpoint that depends on those fetchers'
+# PE/PB enhancement fields. See plan §D1.
+QUOTE_LIST_CIRCUIT_BREAKER = CircuitBreaker(
+    failure_threshold=3, cooldown_seconds=300.0, half_open_max_calls=1
+)
+```
+
+Then in `stock_data/data_provider/manager.py`, immediately after the existing `get_realtime_quote` method (line 734-755), add:
 
 ```python
     def get_realtime_quotes(
@@ -1193,6 +1250,15 @@ In `stock_data/data_provider/manager.py`, immediately after the existing `get_re
         TencentFetcher / ZhituFetcher / TushareFetcher / MyquantFetcher
         (per-code only) co-exist with AkshareFetcher / ZzshareFetcher
         (all-market) without bumping them out of the capability filter.
+
+        Uses a dedicated circuit breaker (``QUOTE_LIST_CIRCUIT_BREAKER``)
+        separate from the single-stock ``REALTIME_CIRCUIT_BREAKER``. This
+        isolation prevents ABC-raise skips (which ``_with_failover``
+        treats as "non-meaningful" + records ``record_failure`` — see
+        ``manager.py:403-404``) from tripping the CB for fetchers that
+        also serve the single-stock path (Tencent's PE/PB enhancement,
+        Zhitu's enhanced quote, etc.). The single-stock path is unaffected
+        by this method's CB state.
 
         Returns:
             ``(quotes_or_None, fetcher_name_or_empty)`` tuple. ``quotes``
@@ -1210,9 +1276,12 @@ In `stock_data/data_provider/manager.py`, immediately after the existing `get_re
                 return f.get_realtime_quotes(market)
             except DataFetchError as e:
                 # ABC default raise = "this fetcher doesn't support all-market".
-                # Skip without recording a circuit-breaker failure (the fetcher
-                # is intentionally not advertising this capability — it's not
-                # "broken", it's "not applicable").
+                # Returning None lets _with_failover treat this as
+                # "not meaningful" and move on, but per manager.py:403-404
+                # it ALSO records circuit_breaker.record_failure() for this
+                # fetcher. We use a dedicated QUOTE_LIST_CIRCUIT_BREAKER so
+                # that trip events here don't poison the singleton
+                # REALTIME_CIRCUIT_BREAKER used by single-stock get_realtime_quote.
                 logger.debug(f"[Manager] {f.name} get_realtime_quotes unsupported: {e}")
                 return None
 
@@ -1221,18 +1290,37 @@ In `stock_data/data_provider/manager.py`, immediately after the existing `get_re
             market,
             f"realtime_quotes {market}",
             _call,
-            circuit_breaker=REALTIME_CIRCUIT_BREAKER,
+            circuit_breaker=QUOTE_LIST_CIRCUIT_BREAKER,
             candidates=sorted(candidates, key=lambda f: f.priority),
             return_source=True,
             allow_none=True,
         )
 ```
 
-`_filter_by_capability`, `_with_failover`, `REALTIME_CIRCUIT_BREAKER`, `DataFetchError`, `DataCapability`, and `UnifiedRealtimeQuote` are already imported at the top of `manager.py`.
+Update the existing import in `manager.py` line 13-18 to include `QUOTE_LIST_CIRCUIT_BREAKER`:
 
-**Critical note on `allow_none=True`**: when every fetcher raises or returns empty, `_with_failover` returns `(None, "")` rather than raising. The route layer must check for `(None, "")` and emit a 503 — see Task 10.
+```python
+from .core.types import (
+    KLINE_CIRCUIT_BREAKER,
+    QUOTE_LIST_CIRCUIT_BREAKER,    # NEW — see Task 8
+    REALTIME_CIRCUIT_BREAKER,
+    CircuitBreaker,
+    UnifiedRealtimeQuote,
+)
+```
 
-**Critical note on circuit breaker**: when `_call` returns `None` (from our explicit `except DataFetchError`), `_with_failover` does NOT call `circuit_breaker.record_failure()` because there's no exception — it just sees a None return and treats it as "not meaningful" (per `_is_meaningful`). So the ABC-raise path does NOT poison the breaker. ✓
+`_filter_by_capability`, `_with_failover`, `DataFetchError`, `DataCapability`, and `UnifiedRealtimeQuote` are already imported.
+
+**On `allow_none=True`**: when every fetcher raises or returns empty, `_with_failover` returns `(None, "")` rather than raising. The route layer must check for `(None, "")` and emit a 503 — see Task 10.
+
+**On `last_empty_result=[]` from `_with_failover`**: per `manager.py:415-419`, when all candidates return empty (no errors), the manager returns `(last_empty_result, "")`. The route layer's `if quotes is None` check misses the `[]` case (False). Per spec §2.4 the contract is "all returned empty → 503 `quote_empty`", so the route layer MUST distinguish None from []:
+
+```python
+if quotes is None or len(quotes) == 0:
+    raise HTTPException(503, detail={"error": "quote_unavailable", ...})
+```
+
+This is added in Task 10 step 3 (the implementation block).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1303,7 +1391,13 @@ Hosts every route under ``/stocks/...``:
 
 - [ ] **Step 3: Update `calendar.py` to remove the relocated function**
 
-In `stock_data/api/routes/calendar.py`, delete the entire `list_stocks` route definition (lines 15-53). Also remove the now-unused import `from ...data_provider.persistence import stock_list` (line 7). Verify with:
+In `stock_data/api/routes/calendar.py`, delete the entire `list_stocks` route definition (lines 15-53). Also remove the now-unused import `from ...data_provider.persistence import stock_list` (line 7) AND the now-unused `StockInfo` from the `..schemas` import on line 9 (it was only used by `list_stocks`). After deletion, line 9 should become:
+
+```python
+from ..schemas import TradeCalendarResponse
+```
+
+Verify with:
 
 ```bash
 grep -n "stock_list\|list_stocks" stock_data/api/routes/calendar.py
@@ -1451,7 +1545,8 @@ Append to `tests/test_routes.py::TestListStocks` (test classes 17-31 of the spec
 
 ```python
 def test_list_stocks_include_quote_csi_cache_miss(self, client, monkeypatch):
-    """include_quote=true with cold cache → manager.get_realtime_quotes called once."""
+    """include_quote=true with cold cache → manager.get_realtime_quotes called once
+    with market="csi" (regression: never accidentally called with hk/us)."""
     from stock_data.data_provider.core.types import (
         RealtimeSource, UnifiedRealtimeQuote,
     )
@@ -1465,9 +1560,9 @@ def test_list_stocks_include_quote_csi_cache_miss(self, client, monkeypatch):
                              change_pct=-0.5, amount=1.0e8,
                              turnover_rate=0.3, total_mv=2.4e11),
     ]
-    call_count = {"n": 0}
+    call_log = []
     def fake_get_rt_quotes(market):
-        call_count["n"] += 1
+        call_log.append(market)
         return list(fake_quotes), "akshare"
     from stock_data.api.routes.helpers import get_manager
     mgr = get_manager()
@@ -1481,7 +1576,125 @@ def test_list_stocks_include_quote_csi_cache_miss(self, client, monkeypatch):
     assert data[0]["quote"] is not None
     assert data[0]["quote"]["current_price"] == 1680.5
     assert data[0]["source"] == "akshare"
-    assert call_count["n"] == 1  # cold cache → exactly one upstream call
+    assert call_log == ["csi"]  # regression: must call with market="csi" exactly once
+
+
+def test_list_stocks_include_quote_csi_cache_hit(self, client, monkeypatch):
+    """Second request within TTL window → manager.get_realtime_quotes NOT called."""
+    from stock_data.data_provider.core.types import (
+        RealtimeSource, UnifiedRealtimeQuote,
+    )
+    fake_quotes = [
+        UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                             source=RealtimeSource.AKSHARE, price=1680.5),
+    ]
+    call_count = {"n": 0}
+    def fake_get_rt_quotes(market):
+        call_count["n"] += 1
+        return list(fake_quotes), "akshare"
+    from stock_data.api.routes.helpers import get_manager
+    mgr = get_manager()
+    monkeypatch.setattr(mgr, "get_realtime_quotes", fake_get_rt_quotes)
+
+    # First request → cache miss → fetcher called
+    r1 = client.get("/api/v1/stocks?market=csi&include_quote=true&limit=10")
+    assert r1.status_code == 200
+    assert call_count["n"] == 1
+    # Second request → cache hit → fetcher NOT called again
+    r2 = client.get("/api/v1/stocks?market=csi&include_quote=true&limit=10")
+    assert r2.status_code == 200
+    assert call_count["n"] == 1   # unchanged
+
+
+def test_list_stocks_include_quote_exchange_from_code_prefix(self, client, monkeypatch):
+    """REGRESSION for code_to_exchange usage: SH/SZ/BJ derived from code prefix."""
+    from stock_data.data_provider.core.types import (
+        RealtimeSource, UnifiedRealtimeQuote,
+    )
+    fake_quotes = [
+        UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                             source=RealtimeSource.AKSHARE),
+        UnifiedRealtimeQuote(code="000001", name="平安银行",
+                             source=RealtimeSource.AKSHARE),
+        UnifiedRealtimeQuote(code="830799", name="北交所某股",
+                             source=RealtimeSource.AKSHARE),
+    ]
+    from stock_data.api.routes.helpers import get_manager
+    mgr = get_manager()
+    monkeypatch.setattr(mgr, "get_realtime_quotes",
+                        lambda market: (fake_quotes, "akshare"))
+
+    response = client.get("/api/v1/stocks?market=csi&include_quote=true")
+    assert response.status_code == 200
+    data = {s["code"]: s for s in response.json()}
+    assert data["600519"]["exchange"] == "SH"
+    assert data["000001"]["exchange"] == "SZ"
+    assert data["830799"]["exchange"] == "BJ"
+
+
+def test_list_stocks_include_quote_does_not_call_stock_list(self, client, monkeypatch):
+    """REGRESSION: path B MUST NOT call stock_list.get_stock_list.
+
+    Spec §3.4 explicit decision — joining with persistence would add an
+    upstream call and re-introduce the join logic. If a future refactor
+    adds the call, this test fails (detected via call_count==0).
+    """
+    from stock_data.data_provider.core.types import (
+        RealtimeSource, UnifiedRealtimeQuote,
+    )
+    from stock_data.data_provider.persistence import stock_list as sl_mod
+    fake_quotes = [
+        UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                             source=RealtimeSource.AKSHARE),
+    ]
+    from stock_data.api.routes.helpers import get_manager
+    mgr = get_manager()
+    monkeypatch.setattr(mgr, "get_realtime_quotes",
+                        lambda market: (fake_quotes, "akshare"))
+
+    call_count = {"n": 0}
+    real_get = sl_mod.get_stock_list
+    def counting_get(*args, **kwargs):
+        call_count["n"] += 1
+        return real_get(*args, **kwargs)
+    monkeypatch.setattr(sl_mod, "get_stock_list", counting_get)
+
+    response = client.get("/api/v1/stocks?market=csi&include_quote=true")
+    assert response.status_code == 200
+    assert call_count["n"] == 0   # path B MUST NOT touch persistence
+
+
+def test_list_stocks_path_a_persistence_hit(self, client, monkeypatch):
+    """REGRESSION: path A + DB hit → every row's source == 'persistence'."""
+    from stock_data.data_provider.persistence import stock_list as sl_mod
+    fake_meta = [
+        {"code": "600519", "name": "贵州茅台", "exchange": "SH"},
+        {"code": "000001", "name": "平安银行", "exchange": "SZ"},
+    ]
+    monkeypatch.setattr(sl_mod, "get_stock_list",
+                        lambda market, manager, refresh=False: (fake_meta, "persistence"))
+
+    response = client.get("/api/v1/stocks?market=csi&limit=10")
+    assert response.status_code == 200
+    data = response.json()
+    assert all(s["source"] == "persistence" for s in data)
+    assert all(s["quote"] is None for s in data)
+
+
+def test_list_stocks_path_a_upstream_refresh(self, client, monkeypatch):
+    """REGRESSION: path A + DB miss → fetcher called → source == fetcher name."""
+    from stock_data.data_provider.persistence import stock_list as sl_mod
+    fake_meta = [
+        {"code": "600519", "name": "贵州茅台", "exchange": "SH"},
+    ]
+    monkeypatch.setattr(sl_mod, "get_stock_list",
+                        lambda market, manager, refresh=False: (fake_meta, "akshare"))
+
+    response = client.get("/api/v1/stocks?market=csi&limit=10")
+    assert response.status_code == 200
+    data = response.json()
+    assert data[0]["source"] == "akshare"
+    assert data[0]["code"] == "600519"
 
 
 def test_list_stocks_include_quote_hk_returns_422(self, client):
@@ -1580,6 +1793,31 @@ def test_list_stocks_sort_by_change_pct_asc(self, client, monkeypatch):
     assert codes == ["000001", "600519"]
 
 
+def test_list_stocks_sort_by_amount(self, client, monkeypatch):
+    """REGRESSION for _SORT_FIELD_MAP: sort_by=amount exercises a non-change_pct key."""
+    from stock_data.data_provider.core.types import (
+        RealtimeSource, UnifiedRealtimeQuote,
+    )
+    fake_quotes = [
+        UnifiedRealtimeQuote(code="000001", name="平安银行",
+                             source=RealtimeSource.AKSHARE, amount=1.0e8),
+        UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                             source=RealtimeSource.AKSHARE, amount=2.07e9),
+        UnifiedRealtimeQuote(code="300750", name="宁德时代",
+                             source=RealtimeSource.AKSHARE, amount=5.0e8),
+    ]
+    from stock_data.api.routes.helpers import get_manager
+    mgr = get_manager()
+    monkeypatch.setattr(mgr, "get_realtime_quotes",
+                        lambda market: (fake_quotes, "akshare"))
+
+    response = client.get("/api/v1/stocks?market=csi&include_quote=true&sort_by=amount")
+    assert response.status_code == 200
+    codes = [s["code"] for s in response.json()]
+    # desc by amount: 600519 (2.07e9) > 300750 (5e8) > 000001 (1e8)
+    assert codes == ["600519", "300750", "000001"]
+
+
 def test_list_stocks_include_quote_respects_limit(self, client, monkeypatch):
     """limit=2 on 5400 upstream quotes → response has 2 rows."""
     from stock_data.data_provider.core.types import (
@@ -1636,11 +1874,17 @@ _SORT_FIELD_MAP = {
 def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
     """Path B: include_quote=true or sort_by set → single upstream quote call.
 
+    **Contract**: caller MUST have rejected hk/us with `?include_quote=true`
+    (path C, route layer top) before calling this helper. The market
+    argument is hardcoded to `"csi"` to make this assumption explicit and
+    prevent future refactors from accidentally passing through the user's
+    market tag — which could silently bypass the route-level 422.
+
     Cached at the route layer (60s, single key per market). sort_by and
     slice are applied in-memory on cache hit so multiple sort/limit combos
     share the upstream fetch.
     """
-    market = "csi"  # path B is csi-only; route layer rejects hk/us upstream
+    market = "csi"  # hardcoded — see docstring contract above
     cache_key = make_stock_list_quote_cache_key(market)
     hit = cached_lookup(get_stock_list_quote_cache, cache_key, "stock_list_quote")
 
@@ -1648,10 +1892,14 @@ def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
         quotes, quote_source = hit
     else:
         quotes, quote_source = manager.get_realtime_quotes(market)
-        if quotes is None:
+        # Spec §2.4: both "all failed" and "all returned empty" → 503.
+        # Per manager.py:415-419, _with_failover with allow_none=True returns
+        # (last_empty_result, "") where last_empty_result can be None (all
+        # raised) or [] (all returned empty). The route MUST distinguish.
+        if not quotes:
             raise HTTPException(503, detail={
                 "error": "quote_unavailable",
-                "message": "All realtime fetchers failed for market=csi",
+                "message": "All realtime fetchers failed or returned empty for market=csi",
             })
         cached_store(get_stock_list_quote_cache, cache_key, (quotes, quote_source))
 
