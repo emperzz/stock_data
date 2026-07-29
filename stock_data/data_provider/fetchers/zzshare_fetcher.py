@@ -365,28 +365,17 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             return None
         return df
 
-    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
-        """Fetch realtime snapshot from zzshare rt_k(fields='all').
+    def _normalize_rt_k_row(self, row, code: str) -> UnifiedRealtimeQuote:
+        """Convert one ``api.rt_k()`` row → UnifiedRealtimeQuote.
 
-        Returns None if SDK unavailable or upstream returns empty.
+        Shared by ``get_realtime_quote`` (single code) and
+        ``get_realtime_quotes`` (wildcard all-market). Preserves the
+        pre-existing field mapping verbatim — this is a pure refactor.
         """
-        self._ensure_api()
-        api = self.__class__._api
-        if api is None:
-            return None
-        ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
-        try:
-            df = api.rt_k(ts_code=ts_code, fields="all")
-        except Exception as e:
-            logger.warning(f"[ZzshareFetcher] rt_k({ts_code}) failed: {e}")
-            return None
-        if df is None or df.empty:
-            return None
-        row = df.iloc[0].to_dict()
         pre_close = safe_float(row.get("pre_close"))
         close = safe_float(row.get("close"))
         return UnifiedRealtimeQuote(
-            code=normalize_stock_code(stock_code),
+            code=normalize_stock_code(code),
             name=str(row.get("name", "")),
             source=RealtimeSource.ZZSHARE,
             price=close,
@@ -405,6 +394,27 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             circ_mv=safe_float(row.get("circulation_value")),
             pe_ratio=safe_float(row.get("ttm_pe_rate")),
         )
+
+    def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
+        """Fetch realtime snapshot from zzshare ``rt_k(fields='all')``.
+
+        Single-stock path. Upstream call shape is unchanged from the
+        pre-refactor version — only the row-mapping is delegated to
+        ``_normalize_rt_k_row``. For all-market use ``get_realtime_quotes``.
+        """
+        self._ensure_api()
+        api = self.__class__._api
+        if api is None:
+            return None
+        ts_code = _to_zzshare_ts_code(normalize_stock_code(stock_code))
+        try:
+            df = api.rt_k(ts_code=ts_code, fields="all")
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] rt_k({ts_code}) failed: {e}")
+            return None
+        if df is None or df.empty:
+            return None
+        return self._normalize_rt_k_row(df.iloc[0], stock_code)
 
     def get_all_stocks(self, market: str = "csi") -> list:
         """Fetch the A-share stock list from zzshare stock_basic(exchange='ALL').
