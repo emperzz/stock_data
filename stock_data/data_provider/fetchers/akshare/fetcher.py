@@ -253,8 +253,38 @@ class AkshareFetcher(BaseFetcher):
             out["volume"] = out["volume"].apply(lambda v: int(v) * 100 if pd.notna(v) else 0)
         return out
 
+    def _normalize_spot_row(self, row, code: str) -> UnifiedRealtimeQuote:
+        """Convert one ``ak.stock_zh_a_spot_em()`` row → UnifiedRealtimeQuote.
+
+        Shared by ``get_realtime_quote`` (single-stock filter) and
+        ``get_realtime_quotes`` (all-market iteration).
+        """
+        volume = safe_int(row.get("成交量"))
+        return UnifiedRealtimeQuote(
+            code=normalize_stock_code(code),
+            name=str(row.get("名称", "")),
+            source=RealtimeSource.AKSHARE,
+            price=safe_float(row.get("最新价")),
+            change_pct=safe_float(row.get("涨跌幅")),
+            change_amount=safe_float(row.get("涨跌额")),
+            volume=volume * 100 if volume is not None else None,  # 手→股 per spec §3.4
+            amount=safe_float(row.get("成交额")),
+            open_price=safe_float(row.get("今开")),
+            high=safe_float(row.get("最高")),
+            low=safe_float(row.get("最低")),
+            pre_close=safe_float(row.get("昨收")),
+            amplitude=safe_float(row.get("振幅")),
+            turnover_rate=safe_float(row.get("换手率")),
+            volume_ratio=safe_float(row.get("量比")),
+            pe_ratio=safe_float(row.get("市盈率")),
+            pb_ratio=safe_float(row.get("市净率")),
+        )
+
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
-        """Get realtime quote from Akshare."""
+        """Get realtime quote from Akshare.
+
+        Single-stock path. For all-market use ``get_realtime_quotes``.
+        """
         try:
             import akshare as ak
 
@@ -290,6 +320,7 @@ class AkshareFetcher(BaseFetcher):
                 if row.empty:
                     return None
                 row = row.iloc[0]
+                return self._normalize_spot_row(row, stock_code)
 
             return UnifiedRealtimeQuote(
                 code=normalize_stock_code(stock_code),
