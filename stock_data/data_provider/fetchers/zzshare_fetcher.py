@@ -101,6 +101,13 @@ def _to_zzshare_ts_code(code: str) -> str:
     return c  # 兜底: 无法识别时不加后缀
 
 
+# Wildcard pattern covering all A-share markets: SH main + STAR + SZ main + ChiNext + BJ.
+# Used by get_realtime_quotes() for all-market single-call upstream.
+# Per docs/zzshare/02-realtime.md, single-call "all market" via comma-separated wildcards
+# is documented but rate-limited (20 calls/min); the route layer caches the response 60s.
+_RT_K_ALL_MARKET_TS_CODE = "60*.SH,68*.SH,0*.SZ,3*.SZ,9*.BJ"
+
+
 def _to_yyyymmdd(date: str) -> str:
     """'2026-05-20' -> '20260520' (strips dashes).
 
@@ -394,6 +401,38 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             circ_mv=safe_float(row.get("circulation_value")),
             pe_ratio=safe_float(row.get("ttm_pe_rate")),
         )
+
+    def get_realtime_quotes(self, market: str = "csi") -> list[UnifiedRealtimeQuote] | None:
+        """A-share all-market realtime quote via ``rt_k`` wildcard + ``fields='all'``.
+
+        Single upstream call returning ~5400 rows. Returns ``[]`` on empty
+        upstream, ``None`` on upstream failure / SDK unavailable.
+
+        ``market="cn"`` (legacy fetcher-internal alias) accepted alongside
+        ``"csi"`` for symmetry with ``get_all_stocks``.
+        """
+        self._ensure_api()
+        api = self.__class__._api
+        if api is None or market not in ("csi", "cn"):
+            return None
+        try:
+            df = api.rt_k(ts_code=_RT_K_ALL_MARKET_TS_CODE, fields="all")
+        except Exception as e:
+            logger.warning(f"[ZzshareFetcher] rt_k all-market failed: {e}")
+            return None
+        if df is None:
+            return None
+        if df.empty:
+            return []
+        out: list = []
+        for _, row in df.iterrows():
+            ts_code = str(row.get("ts_code", ""))
+            if not ts_code:
+                continue
+            # ts_code like "600519.SH" -> bare "600519"
+            code = ts_code.split(".")[0]
+            out.append(self._normalize_rt_k_row(row, code))
+        return out
 
     def get_realtime_quote(self, stock_code: str) -> UnifiedRealtimeQuote | None:
         """Fetch realtime snapshot from zzshare ``rt_k(fields='all')``.
