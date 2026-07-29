@@ -10,6 +10,7 @@ as ``xfail`` (output line ``x``) rather than ``failed`` (``F``). See
 from __future__ import annotations
 
 import os
+import tempfile
 
 import pytest
 
@@ -19,6 +20,22 @@ import pytest
 # var must be set BEFORE the very first ``import gm.api`` (which happens
 # transitively via monkeypatch.setattr's __import__ path-resolution).
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
+# ── session-wide DB isolation ─────────────────────────────────────────────
+#
+# The repo's `.env` sets ``STOCK_DB_INIT=true``, which makes the FastAPI
+# lifespan handler DROP and recreate EVERY persistence table on startup.
+# The session-scoped ``client`` fixture below enters that lifespan, so an
+# un-isolated test run WIPES the developer's real ``stock_cache.db`` — and
+# every later test that reads persistence then sees an empty DB, producing
+# ordering-dependent failures that vanish when the file is run alone.
+#
+# Both env vars must be set at IMPORT time (before ``stock_data.server`` is
+# imported at the bottom of this file), not in a fixture: ``db.get_db_path()``
+# memoizes the path into ``db._db_path`` on first call.
+_TEST_DB_DIR = tempfile.mkdtemp(prefix="stock_data_test_db_")
+os.environ["STOCK_CACHE_DB_PATH"] = os.path.join(_TEST_DB_DIR, "session.db")
+os.environ["STOCK_DB_INIT"] = "false"
 
 
 # ── network-to-xfail hook ─────────────────────────────────────────────────
@@ -112,6 +129,39 @@ def pytest_runtest_makereport(item, call):
 from fastapi.testclient import TestClient  # noqa: E402
 
 from stock_data.server import app as _app  # noqa: E402
+
+
+@pytest.fixture
+def tmp_db(tmp_path, monkeypatch):
+    """Point the persistence layer at a per-test throwaway SQLite file.
+
+    The session-wide isolation at the top of this file already keeps writes
+    off the developer's real ``stock_cache.db``. This fixture adds *per-test*
+    isolation on top: any test that WRITES through persistence should request
+    it, so its rows don't leak into the shared session DB and change what
+    later tests read (``update_cached_stocks`` DELETEs a whole market before
+    inserting). That leakage was the ordering-dependent failure cluster
+    fixed on 2026-07-29.
+    """
+    from stock_data.data_provider.persistence import (
+        board,
+        db,
+        pool_daily,
+        stock_list,
+        trade_calendar,
+    )
+
+    monkeypatch.setattr(db, "_db_path", None)
+    monkeypatch.setattr(db, "_conn", None)
+    monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "test.db"))
+    for mod in (board, pool_daily, stock_list, trade_calendar):
+        monkeypatch.setattr(mod, "_schema_initialized_paths", set())
+        # Create the tables eagerly: read helpers like
+        # ``stock_list._get_stock_name_from_db`` call ``get_connection()``
+        # directly without an ``init_schema()`` guard, so a lazily-created
+        # empty file would raise "no such table".
+        mod.init_schema()
+    yield
 
 
 @pytest.fixture(scope="session")

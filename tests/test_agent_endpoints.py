@@ -1136,9 +1136,15 @@ class TestStocksBatchProfile:
         # The route's boards dispatch uses __persistence_stock_memberships__
         # so the manager.get_stock_boards branch is never hit. Patch the
         # persistence entry instead.
-        self._boards_patcher = patch(
-            _STOCK_MEMBERSHIPS_PATCH,
-            return_value=(
+        # monkeypatch (not patcher.start()) so teardown is automatic — a
+        # leaked patcher here silently mocks get_stock_memberships for every
+        # subsequent test file in the session.
+        from stock_data.data_provider.persistence import board as board_mod
+
+        monkeypatch.setattr(
+            board_mod,
+            "get_stock_memberships",
+            lambda *a, **kw: (
                 [
                     {
                         "code": "885xxx",
@@ -1152,7 +1158,6 @@ class TestStocksBatchProfile:
                 "persistence",
             ),
         )
-        self._boards_patcher.start()
         return mock_manager
 
     def test_happy_path_2_codes_5_aspects(self, client, monkeypatch):

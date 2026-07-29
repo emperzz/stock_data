@@ -45,8 +45,13 @@ def test_indices_quote_rejects_bad_param(client, bad_param):
     assert detail["error"] == "param_not_applicable"
 
 
-def test_stocks_quote_accepts_no_params(client):
-    """GET /stocks/{code}/quote with no extra params should not 422."""
+def test_stocks_quote_accepts_no_params(client, tmp_db):
+    """GET /stocks/{code}/quote with no extra params should not 422.
+
+    Needs ``tmp_db``: the route validates the code against the ``stock_list``
+    persistence layer, whose cold-cache auto-warm WRITES the stock list.
+    Without ``tmp_db`` that write lands in the real stock_cache.db.
+    """
     r = client.get("/api/v1/stocks/600519/quote")
     # 200 = success, 404 = no fetcher available, 503 = all failed
     assert r.status_code in (200, 404, 503)

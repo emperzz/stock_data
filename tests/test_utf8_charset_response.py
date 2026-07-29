@@ -41,11 +41,15 @@ def test_validation_error_422_serves_utf8_charset():
     assert "application/json" in ct.lower()
 
 
-def test_kline_serves_utf8_charset():
+def test_kline_serves_utf8_charset(tmp_db):
     """K-line has no Chinese, but the framework default still applies.
 
     If the default-response-class wiring ever regresses, this catches it
-    without needing CLS network access."""
+    without needing CLS network access.
+
+    Needs ``tmp_db``: the route validates the code against the ``stock_list``
+    persistence layer, whose cold-cache auto-warm WRITES the stock list.
+    Without ``tmp_db`` that write lands in the real stock_cache.db."""
     from stock_data.server import app
 
     client = TestClient(app)

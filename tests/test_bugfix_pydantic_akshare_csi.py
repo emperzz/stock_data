@@ -110,7 +110,7 @@ class TestPersistenceMarketConversion:
     """Layer 2 boundary: persistence converts public csi to internal cn
     at the single call site to fetcher.get_all_stocks()."""
 
-    def test_persistence_calls_fetcher_with_cn_for_csi_market(self):
+    def test_persistence_calls_fetcher_with_cn_for_csi_market(self, tmp_db):
         """When the public API asks for market=csi, the fetcher must be
         called with market='cn' (not 'csi'). Verified by patching the
         underlying SDK of whichever fetcher wins the failover and

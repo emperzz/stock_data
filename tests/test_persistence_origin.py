@@ -77,7 +77,7 @@ def test_get_board_list_returns_tuple(monkeypatch):
     assert origin == "ths"
 
 
-def test_get_board_stocks_returns_tuple(monkeypatch):
+def test_get_board_stocks_returns_tuple(monkeypatch, tmp_db):
     """board.get_board_stocks 应该返回 (stocks, origin)."""
 
     # Mock manager — unified entry point only.
@@ -122,7 +122,7 @@ def test_get_board_stocks_returns_tuple(monkeypatch):
     assert reason is None
 
 
-def test_get_board_stocks_f10_leg_sets_ths_effective_source(monkeypatch):
+def test_get_board_stocks_f10_leg_sets_ths_effective_source(monkeypatch, tmp_db):
     """When the THS F10 full-listing leg fires, effective_source reports
     'ths' (unified under the ths label post-2026-07-21; the F10 internal
     detail is not exposed to clients)."""
@@ -153,7 +153,7 @@ def test_get_board_stocks_f10_leg_sets_ths_effective_source(monkeypatch):
     assert reason is None
 
 
-def test_get_stock_list_returns_tuple(monkeypatch):
+def test_get_stock_list_returns_tuple(monkeypatch, tmp_db):
     """stock_list.get_stock_list 应该返回 (stocks, origin)."""
     from stock_data.data_provider.persistence import stock_list
 

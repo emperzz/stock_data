@@ -133,7 +133,7 @@ class TestBoardAPIRoutes:
         assert "subtype" in str(body)
         assert "type" in str(body)
 
-    def test_get_board_stocks(self, client):
+    def test_get_board_stocks(self, client, tmp_db):
         """Test GET /api/v1/boards/{board_code}/stocks."""
         with (
             patch(
@@ -169,7 +169,7 @@ class TestBoardAPIRoutes:
             assert data["board"]["code"] == "BK1048"
             assert len(data["stocks"]) == 2
 
-    def test_get_board_stocks_with_quote(self, client):
+    def test_get_board_stocks_with_quote(self, client, tmp_db):
         """Test GET /api/v1/boards/{board_code}/stocks?include_quote=true.
 
         After the refactor, the route still calls ``get_realtime_quote`` for

@@ -57,6 +57,14 @@ def _patch_cid_resolution(monkeypatch, value: str | None = "301558") -> None:
 
 def test_f10_leg_serves_request_when_nonempty(monkeypatch):
     """F10 returns 90+ rows → used; ZZSHARE / THS AJAX never called."""
+    # ``board_type`` is resolved from the ``stock_board`` table, not derived
+    # from the code. Stub the lookup instead of relying on the ambient DB
+    # happening to hold a row for 885914 (that implicit dependency made this
+    # test order-dependent before 2026-07-29).
+    monkeypatch.setattr(
+        "stock_data.data_provider.persistence.board.get_board_metadata",
+        lambda code, source: {"type": "concept"},
+    )
     mgr = MagicMock()
     mgr.get_board_stocks_full.return_value = (F10_FULL_ROWS, "ThsFetcher")
 
