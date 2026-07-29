@@ -302,15 +302,32 @@ class IndexInfo(BaseModel):
 
 
 class StockInfo(BaseModel):
-    """Stock information response."""
+    """Stock list entry. `quote` populated when request includes
+    ?include_quote=true; null otherwise. `source` identifies the origin
+    fetcher (or "persistence" for DB hits)."""
 
     code: str = Field(description="Stock code (e.g., 600519, AAPL, HK00700)")
     name: str = Field(description="Stock name")
     market: str = Field(description="Market type: csi/hk/us")
     exchange: str | None = Field(
         default=None,
-        description="Exchange code (SH/SZ/BJ) when known; null otherwise. "
-        "Clients may derive from code prefix as a fallback.",
+        description="Exchange code (SH/SZ/BJ) when known; null otherwise.",
+    )
+    quote: StockQuote | None = Field(
+        default=None,
+        description=(
+            "Realtime quote snapshot. Populated only when ?include_quote=true; "
+            "null otherwise. quote.source identifies which fetcher served it."
+        ),
+    )
+    source: str = Field(
+        default="",
+        description=(
+            "Origin of this list entry's data. For include_quote=true: the "
+            "fetcher that served the realtime quote (akshare/zzshare). "
+            "For include_quote=false: the source of the metadata "
+            "(akshare/zzshare/persistence)."
+        ),
     )
 
 
