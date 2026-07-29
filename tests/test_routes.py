@@ -207,7 +207,8 @@ class TestListStocks:
         """include_quote=true with cold cache → manager.get_realtime_quotes called once
         with market="csi" (regression: never accidentally called with hk/us)."""
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
         fake_quotes = [
             UnifiedRealtimeQuote(code="600519", name="贵州茅台",
@@ -240,7 +241,8 @@ class TestListStocks:
     def test_list_stocks_include_quote_csi_cache_hit(self, client, monkeypatch):
         """Second request within TTL window → manager.get_realtime_quotes NOT called."""
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
         fake_quotes = [
             UnifiedRealtimeQuote(code="600519", name="贵州茅台",
@@ -266,7 +268,8 @@ class TestListStocks:
     def test_list_stocks_include_quote_exchange_from_code_prefix(self, client, monkeypatch):
         """REGRESSION for code_to_exchange usage: SH/SZ/BJ derived from code prefix."""
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
         fake_quotes = [
             UnifiedRealtimeQuote(code="600519", name="贵州茅台",
@@ -296,7 +299,8 @@ class TestListStocks:
         adds the call, this test fails (detected via call_count==0).
         """
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
         from stock_data.data_provider.persistence import stock_list as sl_mod
         fake_quotes = [
@@ -376,6 +380,7 @@ class TestListStocks:
 
     def test_list_stocks_include_quote_all_fetchers_fail_returns_503(self, client, monkeypatch):
         from unittest.mock import MagicMock
+
         from stock_data.api.routes.helpers import get_manager
         from stock_data.data_provider.base import DataFetchError
         mgr = get_manager()
@@ -396,7 +401,8 @@ class TestListStocks:
     def test_list_stocks_sort_by_change_pct_desc(self, client, monkeypatch):
         """Path B: sort by quote.change_pct desc — applied after cache hit."""
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
         fake_quotes = [
             UnifiedRealtimeQuote(code="000001", name="平安银行",
@@ -419,7 +425,8 @@ class TestListStocks:
 
     def test_list_stocks_sort_by_change_pct_asc(self, client, monkeypatch):
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
         fake_quotes = [
             UnifiedRealtimeQuote(code="000001", name="平安银行",
@@ -440,7 +447,8 @@ class TestListStocks:
     def test_list_stocks_sort_by_amount(self, client, monkeypatch):
         """REGRESSION for _SORT_FIELD_MAP: sort_by=amount exercises a non-change_pct key."""
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
         fake_quotes = [
             UnifiedRealtimeQuote(code="000001", name="平安银行",
@@ -464,7 +472,8 @@ class TestListStocks:
     def test_list_stocks_include_quote_respects_limit(self, client, monkeypatch):
         """limit=2 on 5400 upstream quotes → response has 2 rows."""
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
         fake_quotes = [
             UnifiedRealtimeQuote(code=f"{600000+i:06d}", name=f"测试{i}",

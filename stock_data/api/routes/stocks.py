@@ -144,8 +144,8 @@ def list_stocks(
     # The refresh param was removed in Task 9 (BREAKING) — reject any
     # leftover query keys so clients get a clear 422 instead of a silent
     # 200. Pinned by TestListStocks::test_list_stocks_refresh_param_removed.
-    _ALLOWED_QUERY_PARAMS = {"market", "include_quote", "sort_by", "sort_order", "offset", "limit"}
-    unknown = set(request.query_params.keys()) - _ALLOWED_QUERY_PARAMS
+    _allowed_query_params = {"market", "include_quote", "sort_by", "sort_order", "offset", "limit"}
+    unknown = set(request.query_params.keys()) - _allowed_query_params
     if unknown:
         raise HTTPException(422, detail={
             "error": "unknown_query_param",
