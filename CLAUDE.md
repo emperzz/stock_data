@@ -152,7 +152,7 @@ The non-obvious behaviors worth memorizing here are:
 | 板块成分股 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
 | 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
 
-> **注意**: `/stocks` 和 `/calendar` 当前响应**不暴露** source 字段 (其 response model 没有 source 字段), 持久化层 origin 仍被透传但被丢弃。这是 YAGNI 决策——如果未来要暴露, 给对应 response model 加 `source: str` 字段即可, 路由层已准备好。
+> `/stocks` 暴露 `source` 字段 (post-2026-07-29): 每个 list entry 的 source 是 metadata origin (akshare/zzshare/persistence) 或 quote fetcher (当 `?include_quote=true`)。`/calendar` 仍然不暴露 source (response model 无该字段)。
 
 ## Stage 1/2 Fetcher Drill-down (Explorer)
 
@@ -232,8 +232,8 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 |---|---|---|---|---|---|
 | `TushareFetcher` | 0 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` | `TUSHARE_TOKEN` | |
 | `BaostockFetcher` | 1 | csi | `STOCK_KLINE` `INDEX_KLINE` `DIVIDEND` | none | |
-| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_POOL` `DRAGON_TIGER` `HOT_TOPICS` | `ZZSHARE_TOKEN` (optional) | Board endpoints: not a public source label (unified under `ths`). `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. |
-| `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` `STOCK_ZT_POOL` | none | |
+| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_POOL` `DRAGON_TIGER` `HOT_TOPICS` | `ZZSHARE_TOKEN` (optional) | Board endpoints: not a public source label (unified under `ths`). `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. `get_realtime_quotes(csi) via rt_k(ts_code='60*.SH,68*.SH,0*.SZ,3*.SZ,9*.BJ', fields='all')` (single call; rate-limited 20/min). |
+| `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` `STOCK_ZT_POOL` | none | `get_realtime_quotes(csi) via ak.stock_zh_a_spot_em()` (single call). |
 | `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` `INDEX_REALTIME_QUOTE` | none | |
 | `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE` `STOCK_ZT_POOL` `STOCK_INFO` `STOCK_KLINE` (minute fallback) `STOCK_LIST` `STOCK_BOARD` `DIVIDEND` `FUND_FLOW` `HOLDER_NUM` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` | `ZHITU_TOKEN` | Index K-line via `/hz/` prefix |
 | `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none | |
