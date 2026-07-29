@@ -12,6 +12,7 @@ import pandas as pd
 from .base import BaseFetcher, DataCapability, DataFetchError
 from .core.types import (
     KLINE_CIRCUIT_BREAKER,
+    QUOTE_LIST_CIRCUIT_BREAKER,
     REALTIME_CIRCUIT_BREAKER,
     CircuitBreaker,
     UnifiedRealtimeQuote,
@@ -752,6 +753,63 @@ class DataFetcherManager:
             lambda f: f.get_realtime_quote(stock_code),
             circuit_breaker=REALTIME_CIRCUIT_BREAKER,
             candidates=sorted(candidates, key=lambda f: f.priority),
+        )
+
+    def get_realtime_quotes(
+        self, market: str
+    ) -> tuple[list[UnifiedRealtimeQuote] | None, str]:
+        """All-market realtime quote with priority-based failover + circuit breaker.
+
+        Routes via existing STOCK_REALTIME_QUOTE capability — no new flag.
+        Fetchers whose ``get_realtime_quotes`` raises ``DataFetchError``
+        (e.g. the ABC default) are skipped, not failed; this lets
+        TencentFetcher / ZhituFetcher / TushareFetcher / MyquantFetcher
+        (per-code only) co-exist with AkshareFetcher / ZzshareFetcher
+        (all-market) without bumping them out of the capability filter.
+
+        Uses a dedicated circuit breaker (``QUOTE_LIST_CIRCUIT_BREAKER``)
+        separate from the single-stock ``REALTIME_CIRCUIT_BREAKER``. This
+        isolation prevents ABC-raise skips (which ``_with_failover``
+        treats as "non-meaningful" + records ``record_failure`` — see
+        ``manager.py:403-404``) from tripping the CB for fetchers that
+        also serve the single-stock path (Tencent's PE/PB enhancement,
+        Zhitu's enhanced quote, etc.). The single-stock path is unaffected
+        by this method's CB state.
+
+        Returns:
+            ``(quotes_or_None, fetcher_name_or_empty)`` tuple. ``quotes``
+            is the first non-empty list returned by any candidate; ``None``
+            when every candidate either raised or returned empty.
+            ``fetcher_name`` is the name of the fetcher that returned the
+            non-empty list, or ``""`` when no fetcher produced data.
+        """
+        candidates = self._filter_by_capability(market, DataCapability.STOCK_REALTIME_QUOTE)
+        if not candidates:
+            raise DataFetchError(f"No fetcher supports quote market={market}")
+
+        def _call(f):
+            try:
+                return f.get_realtime_quotes(market)
+            except DataFetchError as e:
+                # ABC default raise = "this fetcher doesn't support all-market".
+                # Returning None lets _with_failover treat this as
+                # "not meaningful" and move on, but per manager.py:403-404
+                # it ALSO records circuit_breaker.record_failure() for this
+                # fetcher. We use a dedicated QUOTE_LIST_CIRCUIT_BREAKER so
+                # that trip events here don't poison the singleton
+                # REALTIME_CIRCUIT_BREAKER used by single-stock get_realtime_quote.
+                logger.debug(f"[Manager] {f.name} get_realtime_quotes unsupported: {e}")
+                return None
+
+        return self._with_failover(
+            DataCapability.STOCK_REALTIME_QUOTE,
+            market,
+            f"realtime_quotes {market}",
+            _call,
+            circuit_breaker=QUOTE_LIST_CIRCUIT_BREAKER,
+            candidates=candidates,
+            return_source=True,
+            allow_none=True,
         )
 
     # ---------- trade calendar (with persistence) ----------

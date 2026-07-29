@@ -260,6 +260,17 @@ REALTIME_CIRCUIT_BREAKER = CircuitBreaker(
     failure_threshold=3, cooldown_seconds=300.0, half_open_max_calls=1
 )
 
+# Dedicated CB for the all-market realtime quote path (Task 8).
+# Separated from REALTIME_CIRCUIT_BREAKER (single-stock path) so that
+# fetchers which legitimately don't support all-market quote
+# (TencentFetcher / ZhituFetcher / TushareFetcher / MyquantFetcher —
+# all per-code only, ABC default-raise) cannot trip the CB and break
+# the single-stock /quote endpoint that depends on those fetchers'
+# PE/PB enhancement fields. See plan §D1.
+QUOTE_LIST_CIRCUIT_BREAKER = CircuitBreaker(
+    failure_threshold=3, cooldown_seconds=300.0, half_open_max_calls=1
+)
+
 # Global circuit breaker for K-line data. Same thresholds as realtime —
 # a fetcher that fails 3 times in a row gets 5 min cooldown.
 KLINE_CIRCUIT_BREAKER = CircuitBreaker(
