@@ -933,6 +933,87 @@ class TestNormalizeRtKRow:
         assert quote.pre_close is None
 
 
+class TestRealtimeQuotes:
+    """Tests for ZzshareFetcher.get_realtime_quotes (all-market)."""
+
+    def _fetcher_with_api(self, fake_rt_k):
+        fetcher = ZzshareFetcher()
+        fake_api = MagicMock()
+        fake_api.rt_k = MagicMock(return_value=fake_rt_k)
+        ZzshareFetcher._api = fake_api
+        ZzshareFetcher._init_attempted = True
+        return fetcher
+
+    def test_realtime_quotes_uses_wildcard(self):
+        """Pin the rt_k(ts_code=wildcard, fields='all') call shape."""
+        raw = pd.DataFrame([
+            {"ts_code": "600519.SH", "name": "贵州茅台", "close": 1720.0,
+             "pre_close": 1700.0, "open": 1710.0, "high": 1725.0,
+             "low": 1695.0, "vol": 1e6, "amount": 1e9, "quote_rate": 1.18,
+             "turnover_rate": 0.5, "market_value": 2.16e12,
+             "circulation_value": 2.16e12, "ttm_pe_rate": 25.5},
+        ])
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_realtime_quotes("csi")
+        call = ZzshareFetcher._api.rt_k.call_args
+        assert "60*.SH" in call.kwargs["ts_code"]
+        assert "68*.SH" in call.kwargs["ts_code"]
+        assert "0*.SZ" in call.kwargs["ts_code"]
+        assert "3*.SZ" in call.kwargs["ts_code"]
+        assert "9*.BJ" in call.kwargs["ts_code"]
+        assert call.kwargs.get("fields") == "all"
+
+    def test_realtime_quote_uses_single_code_not_wildcard(self):
+        """REGRESSION GUARD: single-stock path MUST NOT use the wildcard.
+
+        If a future refactor makes get_realtime_quote call
+        get_realtime_quotes + filter, this test fails — preventing the
+        ~5400-row over-fetch regression.
+        """
+        raw = pd.DataFrame([{"ts_code": "600519.SH", "name": "贵州茅台", "close": 1720.0}])
+        fetcher = self._fetcher_with_api(raw)
+        fetcher.get_realtime_quote("600519")
+        call = ZzshareFetcher._api.rt_k.call_args
+        assert call.kwargs["ts_code"] == "600519.SH"
+        assert "60*.SH" not in call.kwargs["ts_code"]
+
+    def test_realtime_quotes_returns_all_rows(self):
+        raw = pd.DataFrame([
+            {"ts_code": "600519.SH", "name": "贵州茅台", "close": 1720.0,
+             "pre_close": 1700.0},
+            {"ts_code": "000001.SZ", "name": "平安银行", "close": 12.5,
+             "pre_close": 12.56},
+            {"ts_code": "300750.SZ", "name": "宁德时代", "close": 200.0,
+             "pre_close": 198.0},
+        ])
+        fetcher = self._fetcher_with_api(raw)
+        quotes = fetcher.get_realtime_quotes("csi")
+        assert quotes is not None
+        assert len(quotes) == 3
+        codes = {q.code for q in quotes}
+        assert codes == {"600519", "000001", "300750"}
+
+    def test_realtime_quotes_empty_df_returns_empty_list(self):
+        fetcher = self._fetcher_with_api(pd.DataFrame())
+        assert fetcher.get_realtime_quotes("csi") == []
+
+    def test_realtime_quotes_sdk_unavailable_returns_none(self, monkeypatch):
+        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
+        with patch("importlib.util.find_spec", return_value=None):
+            fetcher = ZzshareFetcher()
+            assert fetcher.get_realtime_quotes("csi") is None
+
+    def test_realtime_quotes_unsupported_market_returns_none(self):
+        """market other than csi/cn → None."""
+        fetcher = ZzshareFetcher()
+        ZzshareFetcher._api = MagicMock()
+        ZzshareFetcher._init_attempted = True
+        assert fetcher.get_realtime_quotes("hk") is None
+        assert fetcher.get_realtime_quotes("us") is None
+        # rt_k should not be called for unsupported markets
+        ZzshareFetcher._api.rt_k.assert_not_called()
+
+
 # ====================================================================
 # STOCK_LIST
 # ====================================================================
