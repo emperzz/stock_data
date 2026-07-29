@@ -1,9 +1,11 @@
-"""Per-stock endpoints. Everything under ``/stocks/{code}/...`` plus the
-related dragon-tiger / margin / block-trade / holder-num / dividend / fund-flow /
-reports / announcements / info / quote / kline surfaces.
+"""Per-stock endpoints + the stock-list endpoint.
 
-The stock-list endpoint (``GET /stocks``) lives in :mod:`.calendar` because
-it's a list-level query, not per-stock.
+Hosts every route under ``/stocks/...``:
+- ``GET /stocks`` — list endpoint (was previously in ``calendar.py``; relocated
+  2026-07-29 when include_quote/sort_by support made it more than a list-level
+  query — see docs/superpowers/specs/2026-07-29-stocks-list-include-quote-design.md)
+- ``GET /stocks/{code}/{info,quote,kline,dragon-tiger,margin,block-trade,...}`` —
+  per-stock data surfaces
 """
 
 from fastapi import HTTPException, Path, Query, Request
@@ -61,6 +63,7 @@ from ..schemas import (
     ReportRecord,
     ReportResponse,
     StockHistoryResponse,
+    StockInfo,
     StockInfoResponse,
     StockQuote,
 )
@@ -78,6 +81,48 @@ from .helpers import (
     _reject_invalid_stock_code,
     get_manager,
 )
+
+
+@router.get(
+    "/stocks",
+    response_model=list[StockInfo],
+    responses={
+        400: {"model": "ErrorResponse", "description": "Invalid market parameter"},
+    },
+    tags=["stocks"],
+)
+@endpoint_meta(
+    summary="股票列表（分页）",
+    markets=["csi", "hk", "us"],
+    capabilities=["STOCK_LIST"],
+)
+@map_errors
+def list_stocks(
+    market: str = Query(..., pattern="^(csi|hk|us)$", description="Market: csi/hk/us"),
+    refresh: bool = Query(False, description="Force fetch latest from upstream"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    limit: int = Query(100, ge=1, le=1000, description="Pagination limit"),
+) -> list[StockInfo]:
+    """List all available stocks for a specified market.
+
+    Note:
+        A-shares are exposed as ``csi`` (中证). The legacy ``cn`` tag is
+        an internal fetcher convention and is NOT a valid value here —
+        ``csi`` is the single public-facing A-share tag.
+    """
+    manager = get_manager()
+    stocks, _origin = stock_list.get_stock_list(market, refresh=refresh, manager=manager)
+    page = stocks[offset : offset + limit]
+    return [
+        StockInfo(
+            code=s["code"],
+            name=s["name"],
+            market=market,
+            exchange=s.get("exchange"),
+        )
+        for s in page
+    ]
+
 
 # ============================================================================
 # Stock info (公司画像)

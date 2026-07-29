@@ -1,56 +1,14 @@
-"""Calendar and stock-list endpoints."""
+"""Calendar endpoints."""
 
 from datetime import datetime
 
 from fastapi import Query
 
-from ...data_provider.persistence import stock_list
 from ..endpoint_meta import endpoint_meta
-from ..schemas import StockInfo, TradeCalendarResponse
+from ..schemas import TradeCalendarResponse
 from ._router import router
 from .errors import map_errors
 from .helpers import get_manager
-
-
-@router.get(
-    "/stocks",
-    response_model=list[StockInfo],
-    responses={
-        400: {"model": "ErrorResponse", "description": "Invalid market parameter"},
-    },
-    tags=["stocks"],
-)
-@endpoint_meta(
-    summary="股票列表（分页）",
-    markets=["csi", "hk", "us"],
-    capabilities=["STOCK_LIST"],
-)
-@map_errors
-def list_stocks(
-    market: str = Query(..., pattern="^(csi|hk|us)$", description="Market: csi/hk/us"),
-    refresh: bool = Query(False, description="Force fetch latest from upstream"),
-    offset: int = Query(0, ge=0, description="Pagination offset"),
-    limit: int = Query(100, ge=1, le=1000, description="Pagination limit"),
-) -> list[StockInfo]:
-    """List all available stocks for a specified market.
-
-    Note:
-        A-shares are exposed as ``csi`` (中证). The legacy ``cn`` tag is
-        an internal fetcher convention and is NOT a valid value here —
-        ``csi`` is the single public-facing A-share tag.
-    """
-    manager = get_manager()
-    stocks, _origin = stock_list.get_stock_list(market, refresh=refresh, manager=manager)
-    page = stocks[offset : offset + limit]
-    return [
-        StockInfo(
-            code=s["code"],
-            name=s["name"],
-            market=market,
-            exchange=s.get("exchange"),
-        )
-        for s in page
-    ]
 
 
 @router.get(
