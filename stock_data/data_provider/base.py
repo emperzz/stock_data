@@ -537,6 +537,30 @@ class BaseFetcher(ABC):
         """Get realtime quote. Override in subclass if supported."""
         return None
 
+    def get_realtime_quotes(self, market: str) -> list[UnifiedRealtimeQuote] | None:
+        """Single-call all-market realtime snapshot.
+
+        Fetchers whose upstream exposes the full market in one call
+        (akshare's ``stock_zh_a_spot_em``, zzshare's ``rt_k`` wildcard)
+        override this. The default raises ``DataFetchError``; the manager
+        routes via existing ``STOCK_REALTIME_QUOTE`` capability + failover
+        and treats per-fetcher ``DataFetchError`` as "unsupported, skip".
+
+        Args:
+            market: Public market tag (``"csi"`` for A-shares).
+
+        Returns:
+            ``list[UnifiedRealtimeQuote]`` on success; ``None`` when upstream
+            returns empty or unavailable.
+
+        Raises:
+            DataFetchError: when the fetcher does not support all-market
+                realtime quote (default behavior).
+        """
+        raise DataFetchError(
+            f"{type(self).__name__} does not support all-market realtime quote"
+        )
+
     def get_stock_name(self, stock_code: str) -> str | None:
         """Get stock name. Override in subclass if supported."""
         return None
