@@ -179,6 +179,66 @@ class TestAkshareFetcher:
         assert "ma20" not in df.columns
 
 
+class TestAkshareSpotRowNormalize:
+    """Unit tests for AkshareFetcher._normalize_spot_row."""
+
+    def _fetcher(self):
+        # Lazy import to avoid loading akshare at test collection time
+        from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+        return AkshareFetcher()
+
+    def test_normalize_spot_row_basic_fields(self):
+        fetcher = self._fetcher()
+        row = {
+            "代码": "600519",
+            "名称": "贵州茅台",
+            "最新价": 1680.5,
+            "涨跌幅": 1.23,
+            "涨跌额": 20.5,
+            "成交量": 12345,        # 手
+            "成交额": 2.07e8,
+            "今开": 1680.0,
+            "最高": 1685.0,
+            "最低": 1678.0,
+            "昨收": 1660.0,
+            "振幅": 0.4,
+            "换手率": 0.5,
+            "量比": 1.2,
+            "市盈率": 28.5,
+            "市净率": 9.1,
+        }
+        from stock_data.data_provider.core.types import RealtimeSource
+        quote = fetcher._normalize_spot_row(row, "600519")
+        assert quote.code == "600519"
+        assert quote.name == "贵州茅台"
+        assert quote.source == RealtimeSource.AKSHARE
+        assert quote.price == 1680.5
+        assert quote.change_pct == 1.23
+        assert quote.change_amount == 20.5
+        assert quote.volume == 12345 * 100     # 手 → 股 (spec §3.4)
+        assert quote.amount == 2.07e8
+        assert quote.open_price == 1680.0
+        assert quote.high == 1685.0
+        assert quote.low == 1678.0
+        assert quote.pre_close == 1660.0
+        assert quote.amplitude == 0.4
+        assert quote.turnover_rate == 0.5
+        assert quote.volume_ratio == 1.2
+        assert quote.pe_ratio == 28.5
+        assert quote.pb_ratio == 9.1
+
+    def test_normalize_spot_row_missing_fields_returns_none(self):
+        """Missing optional fields → None, not crash."""
+        fetcher = self._fetcher()
+        row = {"代码": "000001", "名称": "平安银行"}  # minimal row
+        quote = fetcher._normalize_spot_row(row, "000001")
+        assert quote.code == "000001"
+        assert quote.name == "平安银行"
+        assert quote.price is None
+        assert quote.change_pct is None
+        assert quote.volume is None  # safe_int(0) * 100 = 0, not None
+
+
 class TestYfinanceFetcher:
     """Tests for YfinanceFetcher."""
 
