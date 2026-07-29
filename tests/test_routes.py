@@ -196,6 +196,283 @@ class TestListStocks:
             assert "source" in stock
             assert isinstance(stock["source"], str)
 
+    def test_list_stocks_include_quote_csi_cache_miss(self, client, monkeypatch):
+        """include_quote=true with cold cache → manager.get_realtime_quotes called once
+        with market="csi" (regression: never accidentally called with hk/us)."""
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+        fake_quotes = [
+            UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                                 source=RealtimeSource.AKSHARE, price=1680.5,
+                                 change_pct=1.23, amount=2.07e8,
+                                 turnover_rate=0.5, total_mv=2.16e12),
+            UnifiedRealtimeQuote(code="000001", name="平安银行",
+                                 source=RealtimeSource.AKSHARE, price=12.5,
+                                 change_pct=-0.5, amount=1.0e8,
+                                 turnover_rate=0.3, total_mv=2.4e11),
+        ]
+        call_log = []
+        def fake_get_rt_quotes(market):
+            call_log.append(market)
+            return list(fake_quotes), "akshare"
+        from stock_data.api.routes.helpers import get_manager
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes", fake_get_rt_quotes)
+
+        response = client.get("/api/v1/stocks?market=csi&include_quote=true&limit=10")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 2
+        assert data[0]["code"] == "600519"
+        assert data[0]["quote"] is not None
+        assert data[0]["quote"]["current_price"] == 1680.5
+        assert data[0]["source"] == "akshare"
+        assert call_log == ["csi"]  # regression: must call with market="csi" exactly once
+
+    def test_list_stocks_include_quote_csi_cache_hit(self, client, monkeypatch):
+        """Second request within TTL window → manager.get_realtime_quotes NOT called."""
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+        fake_quotes = [
+            UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                                 source=RealtimeSource.AKSHARE, price=1680.5),
+        ]
+        call_count = {"n": 0}
+        def fake_get_rt_quotes(market):
+            call_count["n"] += 1
+            return list(fake_quotes), "akshare"
+        from stock_data.api.routes.helpers import get_manager
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes", fake_get_rt_quotes)
+
+        # First request → cache miss → fetcher called
+        r1 = client.get("/api/v1/stocks?market=csi&include_quote=true&limit=10")
+        assert r1.status_code == 200
+        assert call_count["n"] == 1
+        # Second request → cache hit → fetcher NOT called again
+        r2 = client.get("/api/v1/stocks?market=csi&include_quote=true&limit=10")
+        assert r2.status_code == 200
+        assert call_count["n"] == 1   # unchanged
+
+    def test_list_stocks_include_quote_exchange_from_code_prefix(self, client, monkeypatch):
+        """REGRESSION for code_to_exchange usage: SH/SZ/BJ derived from code prefix."""
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+        fake_quotes = [
+            UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                                 source=RealtimeSource.AKSHARE),
+            UnifiedRealtimeQuote(code="000001", name="平安银行",
+                                 source=RealtimeSource.AKSHARE),
+            UnifiedRealtimeQuote(code="830799", name="北交所某股",
+                                 source=RealtimeSource.AKSHARE),
+        ]
+        from stock_data.api.routes.helpers import get_manager
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes",
+                            lambda market: (fake_quotes, "akshare"))
+
+        response = client.get("/api/v1/stocks?market=csi&include_quote=true")
+        assert response.status_code == 200
+        data = {s["code"]: s for s in response.json()}
+        assert data["600519"]["exchange"] == "SH"
+        assert data["000001"]["exchange"] == "SZ"
+        assert data["830799"]["exchange"] == "BJ"
+
+    def test_list_stocks_include_quote_does_not_call_stock_list(self, client, monkeypatch):
+        """REGRESSION: path B MUST NOT call stock_list.get_stock_list.
+
+        Spec §3.4 explicit decision — joining with persistence would add an
+        upstream call and re-introduce the join logic. If a future refactor
+        adds the call, this test fails (detected via call_count==0).
+        """
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+        from stock_data.data_provider.persistence import stock_list as sl_mod
+        fake_quotes = [
+            UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                                 source=RealtimeSource.AKSHARE),
+        ]
+        from stock_data.api.routes.helpers import get_manager
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes",
+                            lambda market: (fake_quotes, "akshare"))
+
+        call_count = {"n": 0}
+        real_get = sl_mod.get_stock_list
+        def counting_get(*args, **kwargs):
+            call_count["n"] += 1
+            return real_get(*args, **kwargs)
+        monkeypatch.setattr(sl_mod, "get_stock_list", counting_get)
+
+        response = client.get("/api/v1/stocks?market=csi&include_quote=true")
+        assert response.status_code == 200
+        assert call_count["n"] == 0   # path B MUST NOT touch persistence
+
+    def test_list_stocks_path_a_persistence_hit(self, client, monkeypatch):
+        """REGRESSION: path A + DB hit → every row's source == 'persistence'."""
+        from stock_data.data_provider.persistence import stock_list as sl_mod
+        fake_meta = [
+            {"code": "600519", "name": "贵州茅台", "exchange": "SH"},
+            {"code": "000001", "name": "平安银行", "exchange": "SZ"},
+        ]
+        monkeypatch.setattr(sl_mod, "get_stock_list",
+                            lambda market, manager, refresh=False: (fake_meta, "persistence"))
+
+        response = client.get("/api/v1/stocks?market=csi&limit=10")
+        assert response.status_code == 200
+        data = response.json()
+        assert all(s["source"] == "persistence" for s in data)
+        assert all(s["quote"] is None for s in data)
+
+    def test_list_stocks_path_a_upstream_refresh(self, client, monkeypatch):
+        """REGRESSION: path A + DB miss → fetcher called → source == fetcher name."""
+        from stock_data.data_provider.persistence import stock_list as sl_mod
+        fake_meta = [
+            {"code": "600519", "name": "贵州茅台", "exchange": "SH"},
+        ]
+        monkeypatch.setattr(sl_mod, "get_stock_list",
+                            lambda market, manager, refresh=False: (fake_meta, "akshare"))
+
+        response = client.get("/api/v1/stocks?market=csi&limit=10")
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["source"] == "akshare"
+        assert data[0]["code"] == "600519"
+
+    def test_list_stocks_include_quote_hk_returns_422(self, client):
+        response = client.get("/api/v1/stocks?market=hk&include_quote=true")
+        assert response.status_code == 422
+        body = response.json()
+        assert body["detail"]["error"] == "include_quote_unsupported"
+
+    def test_list_stocks_include_quote_us_returns_422(self, client):
+        response = client.get("/api/v1/stocks?market=us&include_quote=true")
+        assert response.status_code == 422
+
+    def test_list_stocks_sort_without_quote_returns_400(self, client):
+        response = client.get("/api/v1/stocks?market=csi&sort_by=change_pct")
+        assert response.status_code == 400
+        body = response.json()
+        assert body["detail"]["error"] == "sort_requires_quote"
+
+    def test_list_stocks_invalid_sort_by_returns_422(self, client):
+        response = client.get("/api/v1/stocks?market=csi&include_quote=true&sort_by=foobar")
+        assert response.status_code == 422
+
+    def test_list_stocks_limit_exceeds_max_returns_422(self, client):
+        response = client.get("/api/v1/stocks?market=csi&limit=10001")
+        assert response.status_code == 422
+
+    def test_list_stocks_include_quote_all_fetchers_fail_returns_503(self, client, monkeypatch):
+        from unittest.mock import MagicMock
+        from stock_data.api.routes.helpers import get_manager
+        from stock_data.data_provider.base import DataFetchError
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes",
+                            MagicMock(side_effect=DataFetchError("all failed")))
+        response = client.get("/api/v1/stocks?market=csi&include_quote=true")
+        assert response.status_code == 503
+
+    def test_list_stocks_offset_out_of_range_returns_empty(self, client):
+        response = client.get("/api/v1/stocks?market=csi&offset=100000")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_list_stocks_refresh_param_removed(self, client):
+        response = client.get("/api/v1/stocks?market=csi&refresh=true")
+        assert response.status_code == 422  # FastAPI unknown query param
+
+    def test_list_stocks_sort_by_change_pct_desc(self, client, monkeypatch):
+        """Path B: sort by quote.change_pct desc — applied after cache hit."""
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+        fake_quotes = [
+            UnifiedRealtimeQuote(code="000001", name="平安银行",
+                                 source=RealtimeSource.AKSHARE, change_pct=-1.0),
+            UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                                 source=RealtimeSource.AKSHARE, change_pct=2.0),
+            UnifiedRealtimeQuote(code="300750", name="宁德时代",
+                                 source=RealtimeSource.AKSHARE, change_pct=0.5),
+        ]
+        from stock_data.api.routes.helpers import get_manager
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes",
+                            lambda market: (fake_quotes, "akshare"))
+
+        response = client.get("/api/v1/stocks?market=csi&include_quote=true&sort_by=change_pct&sort_order=desc")
+        assert response.status_code == 200
+        data = response.json()
+        codes = [s["code"] for s in data]
+        assert codes == ["600519", "300750", "000001"]  # 2.0, 0.5, -1.0
+
+    def test_list_stocks_sort_by_change_pct_asc(self, client, monkeypatch):
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+        fake_quotes = [
+            UnifiedRealtimeQuote(code="000001", name="平安银行",
+                                 source=RealtimeSource.AKSHARE, change_pct=-1.0),
+            UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                                 source=RealtimeSource.AKSHARE, change_pct=2.0),
+        ]
+        from stock_data.api.routes.helpers import get_manager
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes",
+                            lambda market: (fake_quotes, "akshare"))
+
+        response = client.get("/api/v1/stocks?market=csi&include_quote=true&sort_by=change_pct&sort_order=asc")
+        assert response.status_code == 200
+        codes = [s["code"] for s in response.json()]
+        assert codes == ["000001", "600519"]
+
+    def test_list_stocks_sort_by_amount(self, client, monkeypatch):
+        """REGRESSION for _SORT_FIELD_MAP: sort_by=amount exercises a non-change_pct key."""
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+        fake_quotes = [
+            UnifiedRealtimeQuote(code="000001", name="平安银行",
+                                 source=RealtimeSource.AKSHARE, amount=1.0e8),
+            UnifiedRealtimeQuote(code="600519", name="贵州茅台",
+                                 source=RealtimeSource.AKSHARE, amount=2.07e9),
+            UnifiedRealtimeQuote(code="300750", name="宁德时代",
+                                 source=RealtimeSource.AKSHARE, amount=5.0e8),
+        ]
+        from stock_data.api.routes.helpers import get_manager
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes",
+                            lambda market: (fake_quotes, "akshare"))
+
+        response = client.get("/api/v1/stocks?market=csi&include_quote=true&sort_by=amount")
+        assert response.status_code == 200
+        codes = [s["code"] for s in response.json()]
+        # desc by amount: 600519 (2.07e9) > 300750 (5e8) > 000001 (1e8)
+        assert codes == ["600519", "300750", "000001"]
+
+    def test_list_stocks_include_quote_respects_limit(self, client, monkeypatch):
+        """limit=2 on 5400 upstream quotes → response has 2 rows."""
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+        fake_quotes = [
+            UnifiedRealtimeQuote(code=f"{600000+i:06d}", name=f"测试{i}",
+                                 source=RealtimeSource.AKSHARE)
+            for i in range(5400)
+        ]
+        from stock_data.api.routes.helpers import get_manager
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes",
+                            lambda market: (fake_quotes, "akshare"))
+
+        response = client.get("/api/v1/stocks?market=csi&include_quote=true&limit=2")
+        assert response.status_code == 200
+        assert len(response.json()) == 2
+
 
 class TestQuote:
     """Tests for /api/v1/stocks/{code}/quote endpoint."""
