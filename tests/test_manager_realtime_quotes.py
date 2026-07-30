@@ -50,10 +50,17 @@ class TestManagerGetRealtimeQuotes:
         assert akshare.get_realtime_quotes.call_count == 1
         assert akshare.get_realtime_quotes.call_args.args == ("csi",)
 
-    def test_akshare_fails_falls_through_to_zzshare(self):
+    def test_akshare_raises_falls_through_to_zzshare(self):
+        """Raising primary (highest-priority) fetcher → fall through to next.
+
+        Akshare MUST be P1 here: candidates are tried in ascending priority
+        order, so with Akshare at its default P3 vs Zzshare P2, Zzshare would
+        win outright and the raise-then-fall-through path would never run
+        (the test would pass even if get_realtime_quotes were deleted).
+        """
         mgr = self._manager()
-        self._add_fetcher(
-            mgr, "AkshareFetcher", 3,
+        akshare = self._add_fetcher(
+            mgr, "AkshareFetcher", 1,  # P1 < P2 — tried first
             DataCapability.STOCK_REALTIME_QUOTE,
             raises=DataFetchError("akshare timeout"),
         )
@@ -65,6 +72,8 @@ class TestManagerGetRealtimeQuotes:
         quotes, source = mgr.get_realtime_quotes("csi")
         assert source == "ZzshareFetcher"
         assert len(quotes) == 1
+        assert akshare.get_realtime_quotes.call_count == 1  # raised, then fell through
+        assert zzshare.get_realtime_quotes.call_count == 1
 
     def test_tencent_fetcher_raises_skipped_via_abc_default(self):
         """TencentFetcher doesn't override get_realtime_quotes → ABC default raises.

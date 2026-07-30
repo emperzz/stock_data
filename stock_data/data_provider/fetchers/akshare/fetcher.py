@@ -349,27 +349,12 @@ class AkshareFetcher(BaseFetcher):
                 if row.empty:
                     return None
                 row = row.iloc[0]
-                return self._normalize_spot_row(row, stock_code)
 
-            return UnifiedRealtimeQuote(
-                code=normalize_stock_code(stock_code),
-                name=str(row.get("名称", "")),
-                source=RealtimeSource.AKSHARE,
-                price=safe_float(row.get("最新价")),
-                change_pct=safe_float(row.get("涨跌幅")),
-                change_amount=safe_float(row.get("涨跌额")),
-                volume=safe_int(row.get("成交量"), 0) * 100,  # 手→股 per spec §3.4
-                amount=safe_float(row.get("成交额")),
-                open_price=safe_float(row.get("今开")),
-                high=safe_float(row.get("最高")),
-                low=safe_float(row.get("最低")),
-                pre_close=safe_float(row.get("昨收")),
-                amplitude=safe_float(row.get("振幅")),
-                turnover_rate=safe_float(row.get("换手率")),
-                volume_ratio=safe_float(row.get("量比")),
-                pe_ratio=safe_float(row.get("市盈率")),
-                pb_ratio=safe_float(row.get("市净率")),
-            )
+            # All three branches (hk / csi-index / a-share) share the same EM
+            # Chinese-column layout, so they all normalize through the one
+            # helper. Keeping a second inline mapping here is how the two
+            # copies drifted on missing-volume (None vs 0) before.
+            return self._normalize_spot_row(row, stock_code)
 
         except Exception:
             logger.warning(

@@ -395,8 +395,15 @@ class TestListStocks:
         assert response.json() == []
 
     def test_list_stocks_refresh_param_removed(self, client):
+        """?refresh= was removed; our hand-rolled whitelist 422s on it.
+
+        FastAPI itself ignores unknown query params, so this 422 (and its
+        `{"error", "message"}` body) is the route's own contract, not
+        FastAPI's RequestValidationError shape.
+        """
         response = client.get("/api/v1/stocks?market=csi&refresh=true")
-        assert response.status_code == 422  # FastAPI unknown query param
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "unknown_query_param"
 
     def test_list_stocks_sort_by_change_pct_desc(self, client, monkeypatch):
         """Path B: sort by quote.change_pct desc — applied after cache hit."""
@@ -445,7 +452,7 @@ class TestListStocks:
         assert codes == ["000001", "600519"]
 
     def test_list_stocks_sort_by_amount(self, client, monkeypatch):
-        """REGRESSION for _SORT_FIELD_MAP: sort_by=amount exercises a non-change_pct key."""
+        """sort_by=amount exercises a non-change_pct sort key."""
         from stock_data.data_provider.core.types import (
             RealtimeSource,
             UnifiedRealtimeQuote,
@@ -468,6 +475,46 @@ class TestListStocks:
         codes = [s["code"] for s in response.json()]
         # desc by amount: 600519 (2.07e9) > 300750 (5e8) > 000001 (1e8)
         assert codes == ["600519", "300750", "000001"]
+
+    def test_list_stocks_sort_treats_zero_as_zero_not_missing(self, client, monkeypatch):
+        """REGRESSION: a flat (0.0%) stock must sort between negative and positive.
+
+        The sort key used to be `getattr(...) or float("-inf")`, and `0.0 or -inf`
+        is `-inf` in Python — so a flat stock sank to the bottom under BOTH desc
+        and asc, and the client could never get it in the middle. Only None may
+        map to -inf.
+        """
+        from stock_data.data_provider.core.types import (
+            RealtimeSource,
+            UnifiedRealtimeQuote,
+        )
+        fake_quotes = [
+            UnifiedRealtimeQuote(code="600519", name="涨",
+                                 source=RealtimeSource.AKSHARE, change_pct=2.0),
+            UnifiedRealtimeQuote(code="000001", name="跌",
+                                 source=RealtimeSource.AKSHARE, change_pct=-1.0),
+            UnifiedRealtimeQuote(code="300750", name="平",
+                                 source=RealtimeSource.AKSHARE, change_pct=0.0),
+            UnifiedRealtimeQuote(code="000002", name="停牌",
+                                 source=RealtimeSource.AKSHARE, change_pct=None),
+        ]
+        from stock_data.api.routes.helpers import get_manager
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_realtime_quotes",
+                            lambda market: (fake_quotes, "akshare"))
+
+        desc = client.get(
+            "/api/v1/stocks?market=csi&include_quote=true&sort_by=change_pct&sort_order=desc"
+        )
+        assert desc.status_code == 200
+        # 2.0 > 0.0 > -1.0 > None(-inf); the flat stock is NOT at the bottom
+        assert [s["code"] for s in desc.json()] == ["600519", "300750", "000001", "000002"]
+
+        asc = client.get(
+            "/api/v1/stocks?market=csi&include_quote=true&sort_by=change_pct&sort_order=asc"
+        )
+        assert asc.status_code == 200
+        assert [s["code"] for s in asc.json()] == ["000002", "000001", "300750", "600519"]
 
     def test_list_stocks_include_quote_respects_limit(self, client, monkeypatch):
         """limit=2 on 5400 upstream quotes → response has 2 rows."""
