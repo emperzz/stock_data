@@ -1271,6 +1271,40 @@ def fetch_board_stocks_with_zzshare_fallback(
     raise ValueError(f"fetch_board_stocks_with_zzshare_fallback: unsupported source {source!r}")
 
 
+def _enrich_suffix_with_market_quote(
+    suffix_rows: list[dict], market_quotes: list,
+) -> list[dict]:
+    """Project 13 quote fields (via _project_unified_quote_to_dict) onto
+    each suffix row whose stock_code exists in the market-quote index.
+    Rows whose code is absent (停牌/新上市/北交所冷门) are kept as-is.
+
+    THS-only fields (change_speed, free_float_shares, float_market_cap)
+    are never set by _project_unified_quote_to_dict — they stay
+    absent from the returned dict and surface as None via the route
+    layer's _build_board_stock_info. ZT-pool join fields
+    (is_limit_up, lb_count) are also not set here.
+
+    Returns a new list; input is not mutated.
+    """
+    if not suffix_rows or not market_quotes:
+        return list(suffix_rows)
+
+    q_index = {q.code: q for q in market_quotes}
+    out: list[dict] = []
+    for row in suffix_rows:
+        sc = row.get("stock_code", "")
+        q = q_index.get(sc)
+        if q is None:
+            out.append(row)
+            continue
+        out.append(
+            _project_unified_quote_to_dict(
+                code=sc, name=row.get("stock_name", ""), q=q,
+            )
+        )
+    return out
+
+
 THS_HARD_CAP = 50  # THS upstream hard cap (5 pages * 10 rows)
 
 
@@ -1475,6 +1509,29 @@ def get_board_stocks(
     suffix_no_quote = [
         r for r in (zz_rows or []) if r.get("stock_code") and r["stock_code"] not in quote_codes
     ]
+
+    # === Cross-endpoint quote fillup (2026-07-30) ===
+    # Reuse the /api/v1/stocks full-market quote cache to enrich suffix
+    # rows whose stock_code exists upstream. THS top-50 rows in `stocks`
+    # are NOT modified — only the suffix (members beyond THS's 50-cap)
+    # is touched. On cache miss + fetch failure, suffix stays as-is
+    # and the quote_truncated / quote_total_in_board logic below
+    # preserves the prior behavior.
+    if suffix_no_quote:
+        cached_quotes = get_cached_market_quotes(manager)
+        if cached_quotes:
+            before = len(suffix_no_quote)
+            suffix_no_quote = _enrich_suffix_with_market_quote(
+                suffix_no_quote, cached_quotes,
+            )
+            n_filled = sum(
+                1 for r in suffix_no_quote if r.get("price") is not None
+            )
+            logger.info(
+                f"[BoardCache] suffix fill: {n_filled}/{before} "
+                f"rows enriched from /stocks quote cache for "
+                f"board {board_code}"
+            )
 
     # quote_truncated: True iff suffix 非空 (真截断 observed) OR
     # ZZSHARE 失败/空 (无法验证, 保守 True). False iff suffix 空且

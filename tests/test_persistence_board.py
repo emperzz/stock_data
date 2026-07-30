@@ -285,3 +285,113 @@ class TestGetCachedMarketQuotes:
         assert mgr.called is False
         # Cleanup
         cache_mod._stock_list_quote_slow.clear()
+
+
+class TestEnrichSuffixWithMarketQuote:
+    """Tests for _enrich_suffix_with_market_quote (spec 2026-07-30, plan task 4).
+
+    This helper takes the suffix rows (members beyond THS's 50-cap) and
+    enriches each row whose stock_code exists in the market-quote
+    index. Rows whose code is absent (停牌/新上市) are kept as-is.
+    """
+
+    def test_suffix_rows_enriched_with_13_fields(self):
+        """When market quote has a code that suffix has, the 13 quote
+        fields are projected onto the suffix row dict (upstream-style
+        keys). THS top-50 rows are NOT touched (not in scope of this
+        helper)."""
+        from stock_data.data_provider.persistence import board as pb
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+
+        suffix_rows = [
+            {"stock_code": "600000", "stock_name": "浦发银行"},
+            {"stock_code": "601318", "stock_name": "中国平安"},
+        ]
+        market_quotes = [
+            UnifiedRealtimeQuote(
+                code="600000", name="浦发银行", source=RealtimeSource.ZZSHARE,
+                price=8.0, change_pct=0.0, change_amount=0.0,
+                volume=5000000, amount=4.0e7,
+                turnover_rate=0.3, amplitude=1.5,
+                open_price=7.95, high=8.05, low=7.90, pre_close=8.0,
+                pe_ratio=5.0,
+            ),
+            UnifiedRealtimeQuote(
+                code="601318", name="中国平安", source=RealtimeSource.ZZSHARE,
+                price=50.0, change_pct=2.0, change_amount=1.0,
+                volume=10000000, amount=5.0e8,
+                turnover_rate=0.4, amplitude=2.5,
+                open_price=49.5, high=50.5, low=49.0, pre_close=49.0,
+                pe_ratio=8.0,
+            ),
+        ]
+
+        enriched = pb._enrich_suffix_with_market_quote(suffix_rows, market_quotes)
+        assert len(enriched) == 2
+        # 600000 was enriched with upstream-style dict keys
+        row_600000 = next(r for r in enriched if r["stock_code"] == "600000")
+        assert row_600000["stock_code"] == "600000"
+        assert row_600000["stock_name"] == "浦发银行"
+        assert row_600000["price"] == 8.0
+        assert row_600000["open"] == 7.95
+        assert row_600000["amplitude"] == 1.5      # upstream-style, NOT amplitude_pct
+        assert row_600000["turnover_rate"] == 0.3 # upstream-style, NOT turnover_pct
+        # THS-only fields stay absent (not None — they're not in the dict)
+        assert "change_speed" not in row_600000
+        assert "free_float_shares" not in row_600000
+        assert "float_market_cap" not in row_600000
+        # 601318 was enriched
+        row_601318 = next(r for r in enriched if r["stock_code"] == "601318")
+        assert row_601318["price"] == 50.0
+        assert row_601318["turnover_rate"] == 0.4
+
+    def test_suffix_row_not_in_market_quote_kept_as_is(self):
+        """A suffix code absent from market quote (停牌/新上市) is kept as-is."""
+        from stock_data.data_provider.persistence import board as pb
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+
+        suffix_rows = [{"stock_code": "688999", "stock_name": "新股A"}]
+        market_quotes = [
+            UnifiedRealtimeQuote(
+                code="600000", name="浦发银行", source=RealtimeSource.ZZSHARE,
+            ),
+        ]
+        enriched = pb._enrich_suffix_with_market_quote(suffix_rows, market_quotes)
+        # 688999 not in index → kept as-is, no quote fields
+        assert len(enriched) == 1
+        assert enriched[0]["stock_code"] == "688999"
+        assert enriched[0].get("price") is None
+        assert enriched[0].get("amplitude") is None
+
+    def test_empty_market_quote_returns_input_unchanged(self):
+        """Empty market_quote → return copy of suffix_rows without enrichment."""
+        from stock_data.data_provider.persistence import board as pb
+
+        suffix_rows = [{"stock_code": "600000", "stock_name": "x"}]
+        enriched = pb._enrich_suffix_with_market_quote(suffix_rows, [])
+        assert enriched == suffix_rows
+        # Verify it's a copy (not the same list reference) for safety.
+        assert enriched is not suffix_rows
+
+    def test_input_list_not_mutated(self):
+        """Helper returns a new list; input suffix_rows is not mutated."""
+        from stock_data.data_provider.persistence import board as pb
+        from stock_data.data_provider.core.types import (
+            RealtimeSource, UnifiedRealtimeQuote,
+        )
+
+        suffix_rows = [{"stock_code": "600000", "stock_name": "x"}]
+        market_quotes = [
+            UnifiedRealtimeQuote(
+                code="600000", name="x", source=RealtimeSource.ZZSHARE,
+                price=10.0,
+            ),
+        ]
+        pb._enrich_suffix_with_market_quote(suffix_rows, market_quotes)
+        # Input dict not mutated (the helper builds new dicts, not edits)
+        assert "price" not in suffix_rows[0]
+        assert "amplitude" not in suffix_rows[0]
