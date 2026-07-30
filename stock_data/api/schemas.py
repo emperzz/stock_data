@@ -499,6 +499,13 @@ class BoardStockInfo(BaseModel):
     code: str = Field(description="Stock code")
     name: str = Field(default="", description="Stock name")
     price: float | None = Field(default=None, description="Current price")
+    # === 2026-07-30 新增 (4 fields, align with StockQuote; populated from
+    # /stocks quote cache for suffix rows; THS top-50 rows stay None —
+    # THS 14 columns don't include them) ===
+    open: float | None = Field(default=None, description="Open price")
+    high: float | None = Field(default=None, description="High price")
+    low: float | None = Field(default=None, description="Low price")
+    prev_close: float | None = Field(default=None, description="Previous close")
     change_pct: float | None = Field(default=None, description="Change percent")
     change_amount: float | None = Field(default=None, description="Change amount (元)")
     volume: int | None = Field(
@@ -509,7 +516,13 @@ class BoardStockInfo(BaseModel):
     # === 2026-07-13 新增 (THS /field/<code> 14 列全部暴露) ===
     change_speed: float | None = Field(default=None, description="涨速(%) — THS upstream column 6")
     volume_ratio: float | None = Field(default=None, description="量比 — THS upstream column 8")
-    amplitude: float | None = Field(default=None, description="振幅(%) — THS upstream column 9")
+    # 2026-07-30: renamed from `amplitude` to `amplitude_pct` to align with
+    # StockQuote.amplitude_pct. Route layer reads s.get("amplitude") from
+    # fetcher dicts (THS upstream key, unchanged) and writes into
+    # amplitude_pct. No Pydantic alias (breaking change is explicit).
+    amplitude_pct: float | None = Field(
+        default=None, description="振幅(%) — THS upstream column 9 / fallback (h-l)/prev_close*100"
+    )
     free_float_shares: int | None = Field(
         default=None, description="流通股(股) — THS upstream column 11 parsed from 'N.NN亿'"
     )

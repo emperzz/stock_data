@@ -481,6 +481,11 @@ class TestBoardsSourceUnification:
         with (
             patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
             patch.object(board_mod, "update_cached_board_stocks", return_value=0),
+            # 2026-07-30: cross-endpoint quote fillup is out of scope for
+            # this test (no MagicMock setup for get_realtime_quotes).
+            # Stub get_cached_market_quotes to None so the suffix
+            # enrichment step no-ops.
+            patch.object(board_mod, "get_cached_market_quotes", return_value=None),
             patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
         ):
             response = client.get("/api/v1/boards/885642/stocks?source=ths&include_quote=true")

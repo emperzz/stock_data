@@ -11,7 +11,13 @@ from stock_data.data_provider.persistence import board as stock_board_cache
 @pytest.fixture(autouse=True)
 def reset_mgr():
     reset_manager()
-    yield
+    # 2026-07-30: get_board_stocks' include_quote=True path now calls
+    # get_cached_market_quotes for suffix enrichment. Tests in this file
+    # are about top_n / ZZSHARE suffix logic, not cross-endpoint
+    # enrichment, so the market-quote helper is stubbed to return
+    # None (no enrichment) by default.
+    with patch.object(stock_board_cache, "get_cached_market_quotes", return_value=None):
+        yield
 
 
 def test_persistence_get_board_stocks_returns_6_tuple():

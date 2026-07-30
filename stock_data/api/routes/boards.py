@@ -82,6 +82,13 @@ def _build_board_stock_info(
         code=s.get("stock_code", ""),
         name=s.get("stock_name", ""),
         price=s.get("price"),
+        # 2026-07-30 新增 (4 fields, populated by suffix fillup from
+        # /stocks quote cache; THS top-50 rows stay None — THS 14
+        # columns don't include them).
+        open=s.get("open"),
+        high=s.get("high"),
+        low=s.get("low"),
+        prev_close=s.get("prev_close"),
         change_pct=s.get("change_pct"),
         change_amount=s.get("change_amount"),
         volume=s.get("volume"),
@@ -90,7 +97,11 @@ def _build_board_stock_info(
         # 2026-07-13 新增投影 (THS 14 列 6 字段)
         change_speed=s.get("change_speed"),
         volume_ratio=s.get("volume_ratio"),
-        amplitude=s.get("amplitude"),
+        # 2026-07-30: amplitude → amplitude_pct (BoardStockInfo field rename).
+        # Fetcher dicts still use upstream key "amplitude" (THS column 9,
+        # or helper-computed by _project_unified_quote_to_dict). Read the
+        # upstream key; write into the renamed model field.
+        amplitude_pct=s.get("amplitude"),
         free_float_shares=s.get("free_float_shares"),
         float_market_cap=s.get("float_market_cap"),
         pe_ratio=s.get("pe_ratio"),
@@ -651,7 +662,7 @@ def get_board_stocks(
                 zt_code = z.get("code") or z.get("stock_code")
                 if zt_code:
                     zt_index[zt_code] = z
-        except Exception as exc:  # noqa: BLE001 — best-effort annotation, never 5xx
+        except Exception as exc:
             logger.warning(
                 f"[boards] with_zt_flags: zt-pool fetch failed: {exc}"
             )

@@ -869,3 +869,70 @@ class TestIndexKline:
         assert "period" in data
         assert "data" in data
         assert "source" in data
+
+
+# ============================================================
+# Board stocks schema rename + 4 new fields E2E (spec 2026-07-30)
+# ============================================================
+#
+# Added 2026-07-30 alongside the cross-endpoint quote-cache fillup.
+# These tests pin two contract changes in /boards/{code}/stocks:
+#   1. `amplitude` field renamed to `amplitude_pct` (BoardStockInfo model).
+#   2. 4 new fields `open` / `high` / `low` / `prev_close` default None
+#      (populated for suffix rows by _project_unified_quote_to_dict;
+#      THS top-50 rows stay None since THS 14 columns don't include them).
+# Tests live in Task 2 (not Task 5) because they verify the schema
+# changes that ship with the rename + new fields; Task 5 tests suffix
+# fillup behavior (a different concern).
+
+
+class TestBoardStocksAmplitudeRenameE2E:
+    """E2E for amplitude → amplitude_pct rename + 4 new field defaults."""
+
+    def test_amplitude_field_in_response_is_amplitude_pct(self, client, monkeypatch):
+        """amplitude field is renamed to amplitude_pct in the JSON response."""
+        from stock_data.data_provider.persistence import board as pb
+
+        # Stub the persistence helper to return one row with amplitude set;
+        # route layer should read s.get("amplitude") and write into
+        # amplitude_pct.
+        monkeypatch.setattr(
+            pb, "get_board_stocks",
+            lambda *a, **kw: (
+                [{
+                    "stock_code": "600519", "stock_name": "贵州茅台",
+                    "price": 1700.0, "change_pct": 1.5,
+                    "amplitude": 2.0,  # upstream-style key (THS column 9)
+                }],
+                "persistence", "ths", None, False, 1,
+            ),
+        )
+
+        r = client.get("/api/v1/boards/885595/stocks?source=ths&include_quote=true")
+        assert r.status_code == 200
+        stock = r.json()["stocks"][0]
+        assert "amplitude_pct" in stock
+        assert "amplitude" not in stock
+        assert stock["amplitude_pct"] == 2.0
+
+    def test_new_fields_open_high_low_prev_close_default_none(self, client, monkeypatch):
+        """4 new fields appear in the JSON response with None default."""
+        from stock_data.data_provider.persistence import board as pb
+
+        # Stub without open/high/low/prev_close → these default to None
+        # in the route's _build_board_stock_info since THS upstream
+        # doesn't carry them.
+        monkeypatch.setattr(
+            pb, "get_board_stocks",
+            lambda *a, **kw: (
+                [{"stock_code": "600519", "stock_name": "M"}],
+                "persistence", "ths", None, False, 1,
+            ),
+        )
+        r = client.get("/api/v1/boards/885595/stocks?source=ths")
+        assert r.status_code == 200
+        stock = r.json()["stocks"][0]
+        for f in ("open", "high", "low", "prev_close"):
+            assert f in stock and stock[f] is None, (
+                f"{f} should be present and None"
+            )

@@ -7,7 +7,13 @@ upstream API calls which are slow and may fail.
 
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
+from datetime import time as _dt_time
+from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from ..core.types import UnifiedRealtimeQuote
 from typing import Any
 
 from ..base import DataFetchError
@@ -16,6 +22,142 @@ from ._refresh import DailyRefreshTracker
 from .db import get_connection, get_db_path
 
 logger = logging.getLogger(__name__)
+
+
+def _project_unified_quote_to_dict(
+    code: str, name: str, q: "UnifiedRealtimeQuote",
+) -> dict:
+    """Project UnifiedRealtimeQuote onto an upstream-style dict for
+    suffix row enrichment. Returns 13 quote fields + stock_code/name
+    using fetcher-style keys (stock_code/stock_name/turnover_rate/
+    amplitude/open/high/low/prev_close) so the result is
+    interchangeable with THS/ZZSHARE fetcher output rows.
+
+    Reuses the same amplitude fallback logic as StockQuote.from_unified_quote
+    (schemas.py:156-192): when q.amplitude is None and high/low/pre_close
+    are all set, compute (high - low) / pre_close * 100.
+
+    THS-only fields (change_speed, free_float_shares, float_market_cap)
+    are not set here — they stay absent from the returned dict and
+    surface as None via the route layer's _build_board_stock_info.
+
+    Added 2026-07-30 alongside the cross-endpoint quote-cache fillup:
+    /boards/{code}/stocks?include_quote=true suffix rows (members
+    beyond THS's 50-cap) are enriched from the /api/v1/stocks
+    full-market quote cache via this helper.
+    """
+    amplitude = q.amplitude
+    if (
+        amplitude is None
+        and q.high is not None
+        and q.low is not None
+        and q.pre_close
+    ):
+        amplitude = (q.high - q.low) / q.pre_close * 100
+    return {
+        "stock_code": code,
+        "stock_name": name or q.name,
+        "price": q.price,
+        "open": q.open_price,
+        "high": q.high,
+        "low": q.low,
+        "prev_close": q.pre_close,
+        "change_amount": q.change_amount,
+        "change_pct": q.change_pct,
+        "volume": q.volume,
+        "amount": q.amount,
+        "turnover_rate": q.turnover_rate,
+        "amplitude": amplitude,
+        "volume_ratio": q.volume_ratio,
+        "pe_ratio": q.pe_ratio,
+    }
+
+
+def get_cached_market_quotes(manager) -> list | None:
+    """Read the /api/v1/stocks full-market quote cache. On miss, fetch
+    and write back. Returns the unsorted, unsliced upstream list, or
+    None on upstream failure.
+
+    Reuses the same cache namespace (stock_list_quote:csi) and TTL
+    (60s intraday, 7d close-tagged slow) as /stocks?include_quote=true,
+    so any request that touches /stocks naturally warms this cache.
+
+    Cache hit = zero upstream. Cache miss + fetch fail = None, which
+    leaves suffix rows at None in the caller — never raises, by
+    contract (the route layer's include_quote path is best-effort).
+
+    Added 2026-07-30 alongside the cross-endpoint quote-cache fillup
+    for /boards/{code}/stocks suffix rows.
+
+    Note: intraday/slow-cache branch + (date, session) tag for slow
+    cache write are inlined here rather than extracted to helpers
+    (avoids duplicating /stocks route's _is_intraday / _latest_past_close,
+    and there's only one call site).
+    """
+    from datetime import date as _date
+
+    from ...api.cache import (
+        cached_lookup,
+        cached_store,
+        get_stock_list_quote_cache,
+        get_stock_list_quote_slow,
+    )
+    from . import trade_calendar
+
+    cache_key = "stock_list_quote:csi"
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    today = now.date()
+    t = now.time()
+    is_trade_day = trade_calendar.is_trade_date(today.isoformat())
+    # Inlined: intraday = 09:15-11:30 or 13:00-15:00 on a trade day.
+    in_intraday = is_trade_day and (
+        (_dt_time(9, 15) <= t < _dt_time(11, 30))
+        or (_dt_time(13, 0) <= t < _dt_time(15, 0))
+    )
+
+    if in_intraday:
+        hit = cached_lookup(
+            get_stock_list_quote_cache, cache_key, "stock_list_quote"
+        )
+        if hit is not None:
+            return hit[0]
+    else:
+        hit = cached_lookup(
+            get_stock_list_quote_slow, cache_key, "stock_list_quote"
+        )
+        if hit is not None:
+            _, _, cached_quotes, _ = hit
+            if cached_quotes is not None:
+                return cached_quotes
+
+    # Cache miss → fetch
+    quotes, source = manager.get_realtime_quotes("csi")
+    if not quotes:
+        return None
+
+    if in_intraday:
+        cached_store(
+            get_stock_list_quote_cache, cache_key, (quotes, source)
+        )
+    else:
+        # Inlined: pick (date, session) for the slow-cache tag — mirrors
+        # /stocks route's _latest_past_close. Falls back to (today,
+        # "afternoon") on empty calendar.
+        if not is_trade_day or t < _dt_time(11, 30):
+            prev = trade_calendar.get_latest_trade_date_on_or_before(
+                (today - timedelta(days=1)).isoformat()
+            )
+            target_date = _date.fromisoformat(prev) if prev else today
+            target_session = "afternoon"
+        elif t < _dt_time(15, 0):
+            target_date, target_session = today, "morning"
+        else:
+            target_date, target_session = today, "afternoon"
+        cached_store(
+            get_stock_list_quote_slow, cache_key,
+            (target_date, target_session, quotes, source),
+        )
+    return quotes
 
 _refresh_tracker = DailyRefreshTracker()
 _schema_initialized_paths: set[str] = set()
@@ -1130,6 +1272,40 @@ def fetch_board_stocks_with_zzshare_fallback(
     raise ValueError(f"fetch_board_stocks_with_zzshare_fallback: unsupported source {source!r}")
 
 
+def _enrich_suffix_with_market_quote(
+    suffix_rows: list[dict], market_quotes: list,
+) -> list[dict]:
+    """Project 13 quote fields (via _project_unified_quote_to_dict) onto
+    each suffix row whose stock_code exists in the market-quote index.
+    Rows whose code is absent (停牌/新上市/北交所冷门) are kept as-is.
+
+    THS-only fields (change_speed, free_float_shares, float_market_cap)
+    are never set by _project_unified_quote_to_dict — they stay
+    absent from the returned dict and surface as None via the route
+    layer's _build_board_stock_info. ZT-pool join fields
+    (is_limit_up, lb_count) are also not set here.
+
+    Returns a new list; input is not mutated.
+    """
+    if not suffix_rows or not market_quotes:
+        return list(suffix_rows)
+
+    q_index = {q.code: q for q in market_quotes}
+    out: list[dict] = []
+    for row in suffix_rows:
+        sc = row.get("stock_code", "")
+        q = q_index.get(sc)
+        if q is None:
+            out.append(row)
+            continue
+        out.append(
+            _project_unified_quote_to_dict(
+                code=sc, name=row.get("stock_name", ""), q=q,
+            )
+        )
+    return out
+
+
 THS_HARD_CAP = 50  # THS upstream hard cap (5 pages * 10 rows)
 
 
@@ -1334,6 +1510,29 @@ def get_board_stocks(
     suffix_no_quote = [
         r for r in (zz_rows or []) if r.get("stock_code") and r["stock_code"] not in quote_codes
     ]
+
+    # === Cross-endpoint quote fillup (2026-07-30) ===
+    # Reuse the /api/v1/stocks full-market quote cache to enrich suffix
+    # rows whose stock_code exists upstream. THS top-50 rows in `stocks`
+    # are NOT modified — only the suffix (members beyond THS's 50-cap)
+    # is touched. On cache miss + fetch failure, suffix stays as-is
+    # and the quote_truncated / quote_total_in_board logic below
+    # preserves the prior behavior.
+    if suffix_no_quote:
+        cached_quotes = get_cached_market_quotes(manager)
+        if cached_quotes:
+            before = len(suffix_no_quote)
+            suffix_no_quote = _enrich_suffix_with_market_quote(
+                suffix_no_quote, cached_quotes,
+            )
+            n_filled = sum(
+                1 for r in suffix_no_quote if r.get("price") is not None
+            )
+            logger.info(
+                f"[BoardCache] suffix fill: {n_filled}/{before} "
+                f"rows enriched from /stocks quote cache for "
+                f"board {board_code}"
+            )
 
     # quote_truncated: True iff suffix 非空 (真截断 observed) OR
     # ZZSHARE 失败/空 (无法验证, 保守 True). False iff suffix 空且
