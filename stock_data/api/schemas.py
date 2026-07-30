@@ -4,7 +4,7 @@ Pydantic schemas for API request/response models.
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_serializer, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_serializer, model_validator
 
 
 class _UpstreamSanitizedModel(BaseModel):
@@ -47,7 +47,15 @@ class _UpstreamSanitizedModel(BaseModel):
 
 
 class StockQuote(BaseModel):
-    """Stock realtime quote response."""
+    """Stock realtime quote response.
+
+    Top-level response (``/stocks/{code}/quote``, agent batch profile)
+    emits ``code`` / ``name`` / ``source`` as the response's only
+    identifiers. Nested response (``/stocks?include_quote=true`` →
+    ``StockInfo.quote``) drops them, since the outer ``StockInfo``
+    envelope already carries the same values — see ``_nested`` below
+    and the ``nested=`` param on ``from_unified_quote``.
+    """
 
     code: str = Field(description="Stock code")
     name: str = Field(default="", description="Stock name")
@@ -64,7 +72,6 @@ class StockQuote(BaseModel):
         default="share", description="Volume unit. Always 'share' (股) per spec §3.4."
     )
     amount: float | None = Field(default=None, description="Trading amount")
-    update_time: str | None = Field(default=None, description="Update timestamp")
     # Valuation metrics (from Tencent财经)
     pe_ttm: float | None = Field(default=None, description="PE(TTM)")
     pe_static: float | None = Field(default=None, description="PE(静)")
@@ -77,8 +84,48 @@ class StockQuote(BaseModel):
     limit_down: float | None = Field(default=None, description="Limit down price (跌停价)")
     volume_ratio: float | None = Field(default=None, description="Volume ratio (量比)")
 
+    # Internal flag — NOT serialized. When True, ``_serialize`` drops
+    # ``code`` / ``name`` / ``source`` because the outer envelope already
+    # carries them. Set via ``from_unified_quote(..., nested=True)`` or
+    # directly on the instance when building nested quotes.
+    _nested: bool = PrivateAttr(default=False)
+
+    @model_serializer
+    def _serialize(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "current_price": self.current_price,
+            "change_amount": self.change_amount,
+            "change_pct": self.change_pct,
+            "open": self.open,
+            "high": self.high,
+            "low": self.low,
+            "prev_close": self.prev_close,
+            "volume": self.volume,
+            "volume_unit": self.volume_unit,
+            "amount": self.amount,
+            "pe_ttm": self.pe_ttm,
+            "pe_static": self.pe_static,
+            "pb": self.pb,
+            "mcap_yi": self.mcap_yi,
+            "float_mcap_yi": self.float_mcap_yi,
+            "turnover_pct": self.turnover_pct,
+            "amplitude_pct": self.amplitude_pct,
+            "limit_up": self.limit_up,
+            "limit_down": self.limit_down,
+            "volume_ratio": self.volume_ratio,
+        }
+        # Top-level responses must include the identifiers; nested
+        # responses drop them (outer StockInfo already carries them).
+        if not self._nested:
+            data["code"] = self.code
+            data["name"] = self.name
+            data["source"] = self.source
+        return data
+
     @classmethod
-    def from_unified_quote(cls, q: Any, name_fallback: str = "") -> "StockQuote":
+    def from_unified_quote(
+        cls, q: Any, name_fallback: str = "", nested: bool = False
+    ) -> "StockQuote":
         """Build a StockQuote from a UnifiedRealtimeQuote dataclass.
 
         Single source of truth for the manager-layer → API-layer field
@@ -90,20 +137,34 @@ class StockQuote(BaseModel):
         no fallback (default ``""``) so a missing upstream name becomes
         empty rather than triggering a stock_list hit per quote.
 
+        ``nested=True`` drops ``code`` / ``name`` / ``source`` from the
+        serialized JSON (outer envelope carries them). Use this when the
+        quote is embedded inside a parent response like ``StockInfo``.
+
         Unit conversions:
         - ``total_mv`` / ``circ_mv`` (元) → ``mcap_yi`` / ``float_mcap_yi`` (亿元) by /1e8.
         - Drops ``pe_static`` (UnifiedRealtimeQuote only carries the
           single ``pe_ratio``; v1 has always emitted ``pe_ttm`` only).
-        - Returns None for ``update_time`` / ``pe_static`` /
-          ``limit_up`` / ``limit_down`` (not carried by
-          UnifiedRealtimeQuote; preserved as None to match StockQuote shape).
+        - Returns None for ``pe_static`` / ``limit_up`` / ``limit_down``
+          (not carried by UnifiedRealtimeQuote; preserved as None to
+          match StockQuote shape).
+
+        ``amplitude_pct`` fallback: if upstream didn't carry
+        ``amplitude`` but ``high`` / ``low`` / ``pre_close`` are all
+        available, compute ``(high - low) / pre_close * 100`` (same
+        formula YfinanceFetcher uses, ``yfinance_fetcher.py:251``).
         """
         src = q.source.value if hasattr(q.source, "value") else str(q.source or "")
 
         def _yi(v):
             return None if v is None else v / 1e8
 
-        return cls(
+        # amplitude fallback (only when upstream omitted it)
+        amplitude = q.amplitude
+        if amplitude is None and q.high is not None and q.low is not None and q.pre_close:
+            amplitude = (q.high - q.low) / q.pre_close * 100
+
+        obj = cls(
             code=q.code,
             name=q.name or name_fallback,
             source=src,
@@ -117,18 +178,19 @@ class StockQuote(BaseModel):
             volume=q.volume,
             volume_unit=q.volume_unit or "share",
             amount=q.amount,
-            update_time=None,
             pe_ttm=q.pe_ratio,
             pe_static=None,
             pb=q.pb_ratio,
             mcap_yi=_yi(q.total_mv),
             float_mcap_yi=_yi(q.circ_mv),
             turnover_pct=q.turnover_rate,
-            amplitude_pct=q.amplitude,
+            amplitude_pct=amplitude,
             limit_up=None,
             limit_down=None,
             volume_ratio=q.volume_ratio,
         )
+        obj._nested = nested
+        return obj
 
 
 class KLineData(BaseModel):

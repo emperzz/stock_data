@@ -140,10 +140,12 @@ def list_stocks(
             "message": "sort_by requires include_quote=true (sortable fields are quote-only).",
         })
 
-    # FastAPI 0.115+ silently ignores unknown query params by default.
-    # The refresh param was removed in Task 9 (BREAKING) — reject any
-    # leftover query keys so clients get a clear 422 instead of a silent
-    # 200. Pinned by TestListStocks::test_list_stocks_refresh_param_removed.
+    # FastAPI silently ignores unknown query params, so `?refresh=true`
+    # (removed in this change, BREAKING) would otherwise return a silent 200
+    # with the caller believing a refresh happened. Hand-rolled whitelist so
+    # clients get an explicit 422 instead. NOTE: the body shape here is our
+    # own `{"error", "message"}` contract, NOT FastAPI's RequestValidationError
+    # shape. Pinned by TestListStocks::test_list_stocks_refresh_param_removed.
     _allowed_query_params = {"market", "include_quote", "sort_by", "sort_order", "offset", "limit"}
     unknown = set(request.query_params.keys()) - _allowed_query_params
     if unknown:
@@ -159,19 +161,6 @@ def list_stocks(
         return _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order)
     else:
         return _list_stocks_metadata_only(market, manager, offset, limit)
-
-
-# Whitelist mapping: sort_by param → UnifiedRealtimeQuote field name.
-# Adding a new sortable quote field = add an entry here. Pydantic Literal
-# on the Query param prevents unknown values at the route layer.
-_SORT_FIELD_MAP = {
-    "change_pct": "change_pct",
-    "amount": "amount",
-    "turnover_rate": "turnover_rate",
-    "price": "price",
-    "total_mv": "total_mv",
-    "volume": "volume",
-}
 
 
 def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
@@ -195,10 +184,13 @@ def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
         quotes, quote_source = hit
     else:
         quotes, quote_source = manager.get_realtime_quotes(market)
-        # Spec §2.4: both "all failed" and "all returned empty" → 503.
-        # Per manager.py:415-419, _with_failover with allow_none=True returns
-        # (last_empty_result, "") where last_empty_result can be None (all
-        # raised) or [] (all returned empty). The route MUST distinguish.
+        # Single 503 code for both "all raised" and "all returned empty".
+        # The spec asked for two distinct codes (quote_unavailable /
+        # quote_empty) but that is NOT implementable here: get_realtime_quotes
+        # calls _with_failover(allow_none=True), and manager.py:414-415 returns
+        # (None, "") for BOTH cases — the distinction is erased before the route
+        # sees it. Splitting the codes requires changing the _with_failover
+        # return contract first; don't add a branch here that cannot fire.
         if not quotes:
             raise HTTPException(503, detail={
                 "error": "quote_unavailable",
@@ -220,15 +212,24 @@ def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
             name=q.name,
             market=market,
             exchange=exchange,
-            quote=StockQuote.from_unified_quote(q),
+            quote=StockQuote.from_unified_quote(q, nested=True),
             source=quote_source,
         ))
 
-    # Sort (path B never has quote=null entries — every row came from quote data).
+    # Sort (path B never has quote=null entries — every row came from quote data,
+    # so r.quote is always set; individual quote FIELDS can still be None when
+    # upstream omits them). Missing values sort last-in-ascending; must be an
+    # explicit `is None` test — `value or -inf` would collapse a legitimate 0.0
+    # (flat change_pct) onto -inf and misorder it against negative values.
+    # sort_by is constrained by the Literal on the Query param, so it is safe
+    # to use directly as the attribute name.
     if sort_by is not None:
-        field = _SORT_FIELD_MAP[sort_by]
         rows.sort(
-            key=lambda r: getattr(r.quote, field) or float("-inf"),
+            key=lambda r: (
+                float("-inf")
+                if getattr(r.quote, sort_by) is None
+                else getattr(r.quote, sort_by)
+            ),
             reverse=(sort_order == "desc"),
         )
 
