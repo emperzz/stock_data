@@ -17,6 +17,55 @@ from .db import get_connection, get_db_path
 
 logger = logging.getLogger(__name__)
 
+
+def _project_unified_quote_to_dict(
+    code: str, name: str, q: "UnifiedRealtimeQuote",
+) -> dict:
+    """Project UnifiedRealtimeQuote onto an upstream-style dict for
+    suffix row enrichment. Returns 13 quote fields + stock_code/name
+    using fetcher-style keys (stock_code/stock_name/turnover_rate/
+    amplitude/open/high/low/prev_close) so the result is
+    interchangeable with THS/ZZSHARE fetcher output rows.
+
+    Reuses the same amplitude fallback logic as StockQuote.from_unified_quote
+    (schemas.py:156-192): when q.amplitude is None and high/low/pre_close
+    are all set, compute (high - low) / pre_close * 100.
+
+    THS-only fields (change_speed, free_float_shares, float_market_cap)
+    are not set here — they stay absent from the returned dict and
+    surface as None via the route layer's _build_board_stock_info.
+
+    Added 2026-07-30 alongside the cross-endpoint quote-cache fillup:
+    /boards/{code}/stocks?include_quote=true suffix rows (members
+    beyond THS's 50-cap) are enriched from the /api/v1/stocks
+    full-market quote cache via this helper.
+    """
+    amplitude = q.amplitude
+    if (
+        amplitude is None
+        and q.high is not None
+        and q.low is not None
+        and q.pre_close
+    ):
+        amplitude = (q.high - q.low) / q.pre_close * 100
+    return {
+        "stock_code": code,
+        "stock_name": name or q.name,
+        "price": q.price,
+        "open": q.open_price,
+        "high": q.high,
+        "low": q.low,
+        "prev_close": q.pre_close,
+        "change_amount": q.change_amount,
+        "change_pct": q.change_pct,
+        "volume": q.volume,
+        "amount": q.amount,
+        "turnover_rate": q.turnover_rate,
+        "amplitude": amplitude,
+        "volume_ratio": q.volume_ratio,
+        "pe_ratio": q.pe_ratio,
+    }
+
 _refresh_tracker = DailyRefreshTracker()
 _schema_initialized_paths: set[str] = set()
 
