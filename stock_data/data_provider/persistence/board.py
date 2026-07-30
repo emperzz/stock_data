@@ -1268,8 +1268,12 @@ def _enrich_rows_with_market_quote(
     if not rows or not market_quotes:
         return list(rows)
 
-    # Map: dict key (upstream-style, used by route layer) →
-    #       UnifiedRealtimeQuote attribute name
+    # Map: dict key (matches BoardStockInfo field name + route layer
+    # _build_board_stock_info reads) → UnifiedRealtimeQuote attribute name.
+    # Important: the dict_key must match what _build_board_stock_info
+    # reads (e.g., "open" not "open_price" — see boards.py:88-91). The
+    # previous typo "pre_close" → "pre_close" stored the value under
+    # the UnifiedRealtimeQuote key, which the route never reads.
     fillable: list[tuple[str, str]] = [
         ("price", "price"),
         ("change_pct", "change_pct"),
@@ -1282,7 +1286,7 @@ def _enrich_rows_with_market_quote(
         ("open", "open_price"),
         ("high", "high"),
         ("low", "low"),
-        ("pre_close", "pre_close"),
+        ("prev_close", "pre_close"),
     ]
 
     q_index = {q.code: q for q in market_quotes}
@@ -1294,8 +1298,6 @@ def _enrich_rows_with_market_quote(
             out.append(row)
             continue
 
-        # Build a copy: existing non-None values preserved,
-        # None / missing fields filled from UnifiedRealtimeQuote.
         new_row = dict(row)
         for dict_key, quote_attr in fillable:
             if new_row.get(dict_key) is None:
@@ -1304,7 +1306,6 @@ def _enrich_rows_with_market_quote(
                     new_row[dict_key] = v
 
         # amplitude: fill from q.amplitude, else compute fallback
-        # (mirrors _project_unified_quote_to_dict and StockQuote.from_unified_quote)
         if new_row.get("amplitude") is None:
             if q.amplitude is not None:
                 new_row["amplitude"] = q.amplitude
@@ -1314,8 +1315,6 @@ def _enrich_rows_with_market_quote(
         out.append(new_row)
     return out
 
-
-THS_HARD_CAP = 50  # THS upstream hard cap (5 pages * 10 rows)
 
 
 def get_board_stocks(

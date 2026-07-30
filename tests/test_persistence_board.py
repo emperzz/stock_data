@@ -96,7 +96,7 @@ class TestEnrichRowsWithMarketQuote:
         # 13 fillable fields populated
         for f in ("price", "change_pct", "change_amount", "volume", "amount",
                   "turnover_rate", "amplitude", "volume_ratio", "pe_ratio",
-                  "open", "high", "low", "pre_close"):
+                  "open", "high", "low", "prev_close"):
             assert row_600000.get(f) is not None, f"{f} should be filled"
         # THS-only fields stay absent
         assert "change_speed" not in row_600000
@@ -172,7 +172,7 @@ class TestEnrichRowsWithMarketQuote:
         assert out["open"] == 50.5
         assert out["high"] == 52.0
         assert out["low"] == 50.0
-        assert out["pre_close"] == 48.17
+        assert out["prev_close"] == 48.17
         # pe_ratio was None in THS, filled from /stocks
         assert out["pe_ratio"] == 42.0
 
@@ -481,7 +481,7 @@ class TestGetBoardStocksUnionFillupE2E:
         assert ths_row["open"] == 50.5
         assert ths_row["high"] == 52.0
         assert ths_row["low"] == 50.0
-        assert ths_row["pre_close"] == 48.17
+        assert ths_row["prev_close"] == 48.17
         # pe_ratio was None in THS, filled from /stocks
         assert ths_row["pe_ratio"] == 42.0
 
@@ -492,7 +492,7 @@ class TestGetBoardStocksUnionFillupE2E:
         assert suf_row["open"] == 9.9
         assert suf_row["high"] == 10.1
         assert suf_row["low"] == 9.8
-        assert suf_row["pre_close"] == 9.85
+        assert suf_row["prev_close"] == 9.85
         assert suf_row["amplitude"] == 2.5
         assert suf_row["pe_ratio"] == 15.0
 
