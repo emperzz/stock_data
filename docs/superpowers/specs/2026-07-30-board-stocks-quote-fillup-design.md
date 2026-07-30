@@ -1,7 +1,7 @@
 # `/boards/{code}/stocks` Suffix Quote Fillup (跨端点 quote 缓存复用)
 
 **Date**: 2026-07-30
-**Status**: Draft
+**Status**: Implemented (2026-07-30)
 **Author**: brainstorm session
 **Scope**: `stock_data/api/schemas.py`, `stock_data/data_provider/persistence/board.py`
 
@@ -468,3 +468,20 @@ class TestBoardStocksSuffixQuoteFillupE2E:
 - `core/types.py:55-91` —— `UnifiedRealtimeQuote` dataclass
 - `schemas.py:156-192` —— `StockQuote.from_unified_quote`(amplitude fallback 复用参考)
 - `zzshare_fetcher.py:725-763` —— ZZSHARE suffix row 只有 code/name/exchange
+
+## 13. Implementation History
+
+- **2026-07-30**: Implemented via plan `docs/superpowers/plans/2026-07-30-board-stocks-quote-fillup.md` on branch `feat/board-stocks-quote-fillup`. Commits landed in order:
+
+  1. `feat(persistence): add _project_unified_quote_to_dict helper for suffix fillup` (Task 1 — helper + 7 unit tests)
+  2. `feat(schemas): rename BoardStockInfo.amplitude → amplitude_pct + add open/high/low/prev_close` (Task 2 — schema rename + 4 new fields + `_build_board_stock_info` projection update + 2 E2E tests)
+  3. `feat(persistence): add get_cached_market_quotes helper for cross-endpoint fillup` (Task 3 — `get_cached_market_quotes` reads shared `/stocks` cache, intraday/slow branch + slow-cache write tag inlined rather than duplicated as helpers; 4 unit tests)
+  4. `feat(persistence): enrich /boards/{code}/stocks suffix from /stocks quote cache` (Task 4 — `_enrich_suffix_with_market_quote` + integration in `get_board_stocks`; 4 unit tests)
+  5. `test: stub get_cached_market_quotes in board tests that don't exercise fillup` (Task 5 — pre-existing `test_persistence_board_topn.py` + `test_boards.py::TestBoardsSourceUnification` fixed to stub the new helper)
+
+  Pre-existing test failures (`test_providers.py::TestAkshareFetcher`, `test_persistence_zzshare_fallback_live.py`, `test_stock_boards_eastmoney_source.py::test_stocks_boards_eastmoney_source_live`) were verified pre-existing via `git stash` comparison — caused by missing network/SDK conditions, not by this spec.
+
+  **Decisions captured during implementation**:
+  - Spec's "factory classmethod" design (v1) was changed to "module-level helper returning dict" (v2) after code-review caught a critical `KeyError` risk: `BoardStockInfo.model_dump()` emits model field names (`code`/`name`/`turnover_pct`/`amplitude_pct`), but the rest of the system (persistence + route) reads upstream-style keys (`stock_code`/`stock_name`/`turnover_rate`/`amplitude`). The helper directly returns an upstream-style dict to keep `update_cached_board_stocks` working.
+  - Spec's "extract `_is_intraday` and `_latest_past_close` as separate helpers" (v1) was changed to "inline the logic in `get_cached_market_quotes`" (v2) after user feedback in execution: YAGNI, single call site, avoids cross-module dependency.
+  - E2E tests for the rename + new fields were moved from Task 5 to Task 2 (where the rename lands) per code-review feedback (strict TDD, no forward-deps in test ordering).
