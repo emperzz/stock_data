@@ -9,10 +9,13 @@ Hosts every route under ``/stocks/...``:
 """
 
 from typing import Literal
+from datetime import date as _date
+from datetime import datetime, time as dt_time, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Path, Query, Request
 
-from ...data_provider.persistence import stock_list
+from ...data_provider.persistence import stock_list, trade_calendar
 from ...data_provider.utils.normalize import code_to_exchange
 from ..cache import (
     cache_endpoint,
@@ -32,6 +35,7 @@ from ..cache import (
     get_stock_info_cache,
     get_stock_list_cache,
     get_stock_list_quote_cache,
+    get_stock_list_quote_slow,
     make_announcements_cache_key,
     make_block_trade_cache_key,
     make_dividend_cache_key,
@@ -163,6 +167,74 @@ def list_stocks(
         return _list_stocks_metadata_only(market, manager, offset, limit)
 
 
+_CST = ZoneInfo("Asia/Shanghai")
+_MORNING_CLOSE = dt_time(11, 30)
+_AFTERNOON_CLOSE = dt_time(15, 0)
+_MORNING_OPEN = dt_time(9, 15)
+_AFTERNOON_OPEN = dt_time(13, 0)
+
+
+def _is_intraday(is_trade_day: bool) -> bool:
+    """True iff A-share continuous trading or call auction is live.
+
+    - 09:15-11:30: morning (集合竞价 + 连续撮合)
+    - 11:30-13:00: lunch (撮合暂停 → 不算 intraday)
+    - 13:00-15:00: afternoon (连续撮合 + 收盘集合竞价)
+
+    Lunch is non-intraday because no new ticks form during that window;
+    upstream returns the 11:30 close snapshot until 13:00.
+    """
+    if not is_trade_day:
+        return False
+    now = datetime.now(_CST).time()
+    return (
+        (_MORNING_OPEN <= now < _MORNING_CLOSE)
+        or (_AFTERNOON_OPEN <= now < _AFTERNOON_CLOSE)
+    )
+
+
+def _latest_past_close() -> tuple[_date, str]:
+    """Return ``(date, session)`` of the most recent A-share close.
+
+    ``session`` is ``"morning"`` (11:30 早盘收) or ``"afternoon"`` (15:00 收盘).
+    Non-trade days collapse to ``(latest_prev_trade_date, "afternoon")``.
+    """
+    now = datetime.now(_CST)
+    today = now.date()
+    t = now.time()
+
+    if not trade_calendar.is_trade_date(today.isoformat()):
+        prev_str = trade_calendar.get_latest_trade_date_on_or_before(
+            (today - timedelta(days=1)).isoformat()
+        )
+        return (_date.fromisoformat(prev_str), "afternoon") if prev_str else (today, "afternoon")
+
+    if t < _MORNING_CLOSE:
+        prev_str = trade_calendar.get_latest_trade_date_on_or_before(
+            (today - timedelta(days=1)).isoformat()
+        )
+        return (_date.fromisoformat(prev_str), "afternoon") if prev_str else (today, "afternoon")
+    if t < _AFTERNOON_CLOSE:
+        return (today, "morning")
+    return (today, "afternoon")
+
+
+def _fetch_quote(manager) -> tuple[list, str]:
+    """Single upstream quote call. Raises 503 if all fetchers fail or return empty.
+
+    The 503 code is the same for "all raised" and "all returned empty" — see
+    ``manager.get_realtime_quotes`` (calls _with_failover(allow_none=True));
+    splitting the codes requires changing the _with_failover return contract.
+    """
+    quotes, quote_source = manager.get_realtime_quotes("csi")
+    if not quotes:
+        raise HTTPException(503, detail={
+            "error": "quote_unavailable",
+            "message": "All realtime fetchers failed or returned empty for market=csi",
+        })
+    return quotes, quote_source
+
+
 def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
     """Path B: include_quote=true or sort_by set → single upstream quote call.
 
@@ -172,31 +244,46 @@ def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
     prevent future refactors from accidentally passing through the user's
     market tag — which could silently bypass the route-level 422.
 
-    Cached at the route layer (60s, single key per market). sort_by and
-    slice are applied in-memory on cache hit so multiple sort/limit combos
-    share the upstream fetch.
+    Cached at the route layer with **session-aware TTL**:
+      - Intraday (09:15-11:30 + 13:00-15:00) → 60s fast cache.
+      - Non-intraday (pre-market, lunch, post-market, closed) → 7d slow cache
+        tagged with ``(close_date, close_session)``. The entry is reused only
+        if the stored tag still matches the current ``_latest_past_close()``;
+        on mismatch (11:30 cross, 15:00 cross, next trading day) the upstream
+        is re-queried. sort_by and slice are applied in-memory on cache hit so
+        multiple sort/limit combos share the upstream fetch.
     """
     market = "csi"  # hardcoded — see docstring contract above
     cache_key = make_stock_list_quote_cache_key(market)
-    hit = cached_lookup(get_stock_list_quote_cache, cache_key, "stock_list_quote")
+    is_trade_day = trade_calendar.is_trade_date(datetime.now(_CST).date().isoformat())
+    in_intraday = _is_intraday(is_trade_day)
+    target_date, target_session = _latest_past_close()
 
-    if hit is not None:
-        quotes, quote_source = hit
+    if in_intraday:
+        cache_fn = get_stock_list_quote_cache
+        hit = cached_lookup(cache_fn, cache_key, "stock_list_quote")
+        if hit is None:
+            quotes, quote_source = _fetch_quote(manager)
+            cached_store(cache_fn, cache_key, (quotes, quote_source))
+        else:
+            quotes, quote_source = hit
     else:
-        quotes, quote_source = manager.get_realtime_quotes(market)
-        # Single 503 code for both "all raised" and "all returned empty".
-        # The spec asked for two distinct codes (quote_unavailable /
-        # quote_empty) but that is NOT implementable here: get_realtime_quotes
-        # calls _with_failover(allow_none=True), and manager.py:414-415 returns
-        # (None, "") for BOTH cases — the distinction is erased before the route
-        # sees it. Splitting the codes requires changing the _with_failover
-        # return contract first; don't add a branch here that cannot fire.
-        if not quotes:
-            raise HTTPException(503, detail={
-                "error": "quote_unavailable",
-                "message": "All realtime fetchers failed or returned empty for market=csi",
-            })
-        cached_store(get_stock_list_quote_cache, cache_key, (quotes, quote_source))
+        cache_fn = get_stock_list_quote_slow
+        hit = cached_lookup(cache_fn, cache_key, "stock_list_quote")
+        if hit is not None:
+            cached_date, cached_session, cached_quotes, cached_source = hit
+            if cached_date == target_date and cached_session == target_session:
+                quotes, quote_source = cached_quotes, cached_source
+            else:
+                # close_date/session drifted (11:30 / 15:00 / 跨日) → refetch
+                hit = None
+        if hit is None:
+            quotes, quote_source = _fetch_quote(manager)
+            cached_store(
+                cache_fn,
+                cache_key,
+                (target_date, target_session, quotes, quote_source),
+            )
 
     # Build StockInfo list from quote data only (no persistence join).
     # market is hardcoded "csi" (constant in path B); exchange derived

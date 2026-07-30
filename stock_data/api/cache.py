@@ -30,7 +30,12 @@ _stock_intraday_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INTRADAY)
 
 # /api/v1/stocks caches (Task 2 — see docs/superpowers/plans/2026-07-29-stocks-list-include-quote.md)
 _stock_list_cache: TTLCache = TTLCache(maxsize=64, ttl=300)        # metadata only
-_stock_list_quote_cache: TTLCache = TTLCache(maxsize=8, ttl=60)    # full-market quote
+_stock_list_quote_cache: TTLCache = TTLCache(maxsize=8, ttl=60)    # full-market quote (intraday, 60s)
+# Slow companion for /api/v1/stocks?include_quote=true outside trading hours.
+# Holds the most recent "frozen" snapshot keyed by (close_date, close_session).
+# 7d TTL is a safety cap; the real freshness gate is the (date, session) match
+# done at the route layer — see _list_stocks_with_quote in api/routes/stocks.py.
+_stock_list_quote_slow: TTLCache = TTLCache(maxsize=8, ttl=86400 * 7)
 
 # TTL constants for uncached APIs
 _TTL_DRAGON_TIGER = int(os.getenv("CACHE_TTL_DRAGON_TIGER", "300"))
@@ -105,6 +110,20 @@ def get_stock_list_quote_cache() -> TTLCache:
     re-sort/slice in-memory. Path B only (include_quote=true or sort_by).
     """
     return _stock_list_quote_cache
+
+
+def get_stock_list_quote_slow() -> TTLCache:
+    """Return the slow cache for /api/v1/stocks full-market quote responses.
+
+    Used when the request arrives outside intraday hours (pre-market / lunch /
+    post-market / closed). Stores ``(close_date, close_session, quotes, source)``
+    so the route can verify the snapshot still represents the current "latest
+    close" — if not, the entry is discarded and the upstream is re-queried.
+
+    7d TTL is a safety cap; the route-level (date, session) match is the real
+    freshness gate.
+    """
+    return _stock_list_quote_slow
 
 
 def get_history_cache(frequency: str) -> TTLCache:
