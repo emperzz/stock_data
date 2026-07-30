@@ -161,6 +161,53 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
                 adjustflag=adjflag,
             )
 
+            # Self-heal: baostock's ``default_socket`` is a process-global
+            # singleton created once on bs.login(); if the server-side peer
+            # drops it (idle timeout / nightly maintenance), every subsequent
+            # call returns BSERR_RECVSOCK_FAIL ("10002007") / "网络接收错误。"
+            # even though individual fresh-process calls still work. Wipe
+            # the dead socket + open a fresh one + retry once on this exact
+            # signature. ``bs.logout()`` would re-use the same dead socket,
+            # so we go through ``SocketUtil().connect()`` directly to replace
+            # ``default_socket`` in-place.
+            if (
+                rs.error_code != "0"
+                and rs.error_msg
+                and "网络接收错误" in rs.error_msg
+            ):
+                try:
+                    import baostock.common.context as _bs_conx
+                    import baostock.util.socketutil as _bs_sock
+
+                    old_sock = getattr(_bs_conx, "default_socket", None)
+                    if old_sock is not None:
+                        try:
+                            old_sock.close()
+                        except Exception:
+                            pass
+                    _bs_sock.SocketUtil().connect()  # overwrites default_socket
+                    rs = bs.query_history_k_data_plus(
+                        bs_code,
+                        "date,open,high,low,close,volume,amount,pctChg",
+                        start_date=start_date,
+                        end_date=end_date,
+                        frequency=frequency,
+                        adjustflag=adjflag,
+                    )
+                except Exception:
+                    # If the rebuild itself faults (e.g. DNS / connect
+                    # refused mid-maintenance, or the baostock-internal
+                    # ``mySockect`` UnboundLocalError on socket-failure
+                    # path), fall through to the outer raise below —
+                    # the manager's failover chain absorbs it.
+                    # Narrowing to ``(ConnectionError, OSError)`` would
+                    # surface baostock-internal bugs as ugly tracebacks;
+                    # the outer ``DataFetchError`` carry-through is
+                    # cleaner. ``KeyboardInterrupt`` / ``SystemExit``
+                    # are NOT caught here (they live above ``Exception``
+                    # in the hierarchy).
+                    pass
+
             if rs.error_code != "0":
                 raise DataFetchError(f"Baostock query failed: {rs.error_msg}")
 

@@ -164,12 +164,17 @@ class TestCircuitBreakerConfig:
     """Tests for CircuitBreaker environment variable configuration."""
 
     def test_default_values(self):
-        """Test CircuitBreaker uses default values when no env vars set."""
+        """Test CircuitBreaker uses default values when no env vars set.
+
+        ``failure_threshold`` default is 5 (bumped from 3 on 2026-07-30 to
+        widen the noise floor above the batch-profile fan-out footprint;
+        see ``CircuitBreaker.__init__`` comment + CLAUDE.md change log).
+        """
         with patch.dict(os.environ, {}, clear=True):
             from stock_data.data_provider.core.types import CircuitBreaker
 
             cb = CircuitBreaker()
-            assert cb.failure_threshold == 3
+            assert cb.failure_threshold == 5
             assert cb.cooldown_seconds == 300.0
             assert cb.half_open_max_calls == 1
 

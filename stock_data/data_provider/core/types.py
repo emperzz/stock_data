@@ -110,9 +110,15 @@ class CircuitBreaker:
     - HALF_OPEN: Probe after cooldown, allow limited requests
 
     Configuration via environment variables:
-    - CB_FAILURE_THRESHOLD: failures before opening (default: 3)
+    - CB_FAILURE_THRESHOLD: failures before opening (default: 5)
     - CB_COOLDOWN_SECONDS: time before probing (default: 300)
     - CB_HALF_OPEN_MAX_CALLS: max calls in half-open (default: 1)
+
+    Default ``failure_threshold`` was 3 prior to 2026-07-30; bumped to 5
+    because a single ``/agent/indices/batch-profile`` call (3 indices ×
+    3 frequencies = 9 calls) could simultaneously trip every
+    INDEX_KLINE fetcher's CB into OPEN state. See the constructor
+    comment for the rationale.
     """
 
     CLOSED = "closed"
@@ -128,7 +134,16 @@ class CircuitBreaker:
         self.failure_threshold = int(
             os.getenv(
                 "CB_FAILURE_THRESHOLD",
-                str(failure_threshold if failure_threshold is not None else 3),
+                # Default bumped 3 → 5 (2026-07-30). Rationale: a single
+                # /agent/indices/batch-profile call fans out to 3 indices
+                # × 3 frequencies = 9 K-line calls. With threshold=3, one
+                # such call could simultaneously trip every INDEX_KLINE
+                # fetcher's CB into OPEN state, producing persistent
+                # "all fetchers fail" log spam for the next 5 minutes.
+                # Bumping to 5 keeps the protective behavior on sustained
+                # failures while raising the noise floor above the
+                # batch-profile fan-out footprint. Still env-overridable.
+                str(failure_threshold if failure_threshold is not None else 5),
             )
         )
         self.cooldown_seconds = float(
@@ -264,8 +279,9 @@ class CircuitBreaker:
 # Global circuit breaker for realtime quotes. Imported directly by callers —
 # the previous ``get_realtime_circuit_breaker()`` factory only added a
 # no-op indirection over this module-level singleton.
+# ``failure_threshold=5`` matches the new default (post-2026-07-30 bump).
 REALTIME_CIRCUIT_BREAKER = CircuitBreaker(
-    failure_threshold=3, cooldown_seconds=300.0, half_open_max_calls=1
+    failure_threshold=5, cooldown_seconds=300.0, half_open_max_calls=1
 )
 
 # Dedicated CB for the all-market realtime quote path (Task 8).
@@ -275,12 +291,14 @@ REALTIME_CIRCUIT_BREAKER = CircuitBreaker(
 # all per-code only, ABC default-raise) cannot trip the CB and break
 # the single-stock /quote endpoint that depends on those fetchers'
 # PE/PB enhancement fields. See plan §D1.
+# ``failure_threshold=5`` matches the new default (post-2026-07-30 bump).
 QUOTE_LIST_CIRCUIT_BREAKER = CircuitBreaker(
-    failure_threshold=3, cooldown_seconds=300.0, half_open_max_calls=1
+    failure_threshold=5, cooldown_seconds=300.0, half_open_max_calls=1
 )
 
-# Global circuit breaker for K-line data. Same thresholds as realtime —
-# a fetcher that fails 3 times in a row gets 5 min cooldown.
+# Global circuit breaker for K-line data. ``failure_threshold=5``
+# matches the new default (post-2026-07-30 bump); see the comment on
+# ``CircuitBreaker.__init__`` for the rationale.
 KLINE_CIRCUIT_BREAKER = CircuitBreaker(
-    failure_threshold=3, cooldown_seconds=300.0, half_open_max_calls=1
+    failure_threshold=5, cooldown_seconds=300.0, half_open_max_calls=1
 )

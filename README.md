@@ -472,7 +472,7 @@ The server automatically routes requests to the appropriate data source based on
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CB_FAILURE_THRESHOLD` | Failures before opening circuit | 3 |
+| `CB_FAILURE_THRESHOLD` | Failures before opening circuit | 5 |
 | `CB_COOLDOWN_SECONDS` | Time before probing after open (s) | 300 |
 | `CB_HALF_OPEN_MAX_CALLS` | Max calls in half-open state | 1 |
 
