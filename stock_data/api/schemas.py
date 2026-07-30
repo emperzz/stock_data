@@ -1564,6 +1564,19 @@ class FilterStocksMatchedStock(BaseModel):
         default=None,
         description="总市值 亿元 (= total_mv / 1e8 when total_mv is in 元).",
     )
+    # 2026-07-30: v2 union fillup exposes full quote on every row; flat-dump
+    # the 9 additional fields so agents can read open/high/low/prev_close
+    # (gap calc), volume/volume_ratio (量比), pe_ratio (估值), change_amount
+    # (涨跌额), amplitude_pct (振幅) without re-fetching /stocks/{code}/quote.
+    change_amount: float | None = None
+    volume: float | None = None
+    volume_ratio: float | None = None
+    pe_ratio: float | None = None
+    open: float | None = Field(default=None, description="Today's open (yuan).")
+    high: float | None = Field(default=None, description="Today's high (yuan).")
+    low: float | None = Field(default=None, description="Today's low (yuan).")
+    prev_close: float | None = Field(default=None, description="Previous close (yuan).")
+    amplitude_pct: float | None = Field(default=None, description="振幅(%) — THS upstream column 9, fallback (h-l)/prev_close*100.")
 
 
 class FilterStocksResponse(BaseModel):

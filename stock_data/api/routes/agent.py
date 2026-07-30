@@ -322,6 +322,21 @@ def _row_to_matched(s: dict) -> FilterStocksMatchedStock:
         turnover_pct=s.get("turnover_rate"),
         amount_yi=(amount / 1e8) if amount is not None else None,
         mcap_yi=(total_mv / 1e8) if total_mv is not None else None,
+        # 2026-07-30: v2 union fillup flat-dumps 9 extra quote fields. Row
+        # dict keys are server-canonical for the new 8 (change_amount/volume/
+        # volume_ratio/pe_ratio/open/high/low/prev_close); amplitude keeps
+        # its row dict key `amplitude` (THS upstream column name) and the
+        # route-layer translation lands it into the `amplitude_pct` schema
+        # field — same convention as boards.py::_build_board_stock_info.
+        change_amount=s.get("change_amount"),
+        volume=s.get("volume"),
+        volume_ratio=s.get("volume_ratio"),
+        pe_ratio=s.get("pe_ratio"),
+        open=s.get("open"),
+        high=s.get("high"),
+        low=s.get("low"),
+        prev_close=s.get("prev_close"),
+        amplitude_pct=s.get("amplitude"),
     )
 
 
@@ -356,6 +371,14 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
     constituent (subject to ``limit``). The route fetches via
     ``include_quote=True`` because ``turnover_rate`` / ``amount`` / quote
     fields are required for the spec's stock-picking §4 step 6 thresholds.
+
+    2026-07-30: v2 union fillup in ``persistence.board`` fills
+    ``open/high/prev_close/volume`` on THS top-50 rows from the /stocks
+    quote cache, so ``max_gain_pct`` now applies to ALL rows (was
+    suffix-only before v2 — top-50 rows were silently excluded by the
+    None→exclude contract in ``_passes_range``). THS-only fields like
+    ``total_mv`` remain THS-row-only (suffix rows still report
+    ``mcap_yi=None`` and are excluded by any ``mcap_yi`` filter).
     """
     cache_key = make_filter_stocks_cache_key(
         payload.board_code,
