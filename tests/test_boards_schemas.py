@@ -157,14 +157,14 @@ def test_board_stock_info_accepts_6_new_optional_fields():
         # 6 new fields (2026-07-13):
         change_speed=0.10,
         volume_ratio=1.85,
-        amplitude=2.31,
+        amplitude_pct=2.31,  # 2026-07-30: renamed from amplitude
         free_float_shares=473_000_000,
         float_market_cap=66_300_000_000.0,
         pe_ratio=37.59,
     )
     assert row.change_speed == 0.10
     assert row.volume_ratio == 1.85
-    assert row.amplitude == 2.31
+    assert row.amplitude_pct == 2.31
     assert row.free_float_shares == 473_000_000
     assert row.float_market_cap == 66_300_000_000.0
     assert row.pe_ratio == 37.59
@@ -177,7 +177,7 @@ def test_board_stock_info_new_fields_default_none():
     row = BoardStockInfo(code="000034", name="x")
     assert row.change_speed is None
     assert row.volume_ratio is None
-    assert row.amplitude is None
+    assert row.amplitude_pct is None  # 2026-07-30: renamed from amplitude
     assert row.free_float_shares is None
     assert row.float_market_cap is None
     assert row.pe_ratio is None
