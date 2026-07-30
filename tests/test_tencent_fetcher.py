@@ -186,6 +186,56 @@ class TestParseTencentResponse:
         assert quote.pe_ratio is None
         assert quote.pb_ratio is None
 
+    def test_parse_limit_up_down(self):
+        """Field 47 (涨停价) + field 48 (跌停价) → UnifiedRealtimeQuote.limit_up / limit_down.
+
+        Regression: prior to 2026-07-30, _parse_tencent_response
+        constructed UnifiedRealtimeQuote WITHOUT limit_up/limit_down
+        even though field 47/48 carry the values. That meant
+        ``/stocks/600519/quote`` (Tencent-served) emitted
+        ``quote.limit_up = null`` despite the data being in hand.
+
+        Tencent is the only fetcher that surfaces limit prices for the
+        single-stock path; Zzshare surfaces them for the all-market
+        path. The unified type must carry both, regardless of source.
+        """
+        f = TencentFetcher()
+        response = self._build_response({47: "1870.00", 48: "1530.00"})
+        quote = f._parse_tencent_response(response, "600519")
+
+        assert quote is not None
+        assert quote.limit_up == 1870.00
+        assert quote.limit_down == 1530.00
+
+    def test_parse_limit_up_down_none_when_upstream_omits(self):
+        """Guard: empty / missing field 47/48 → limit_up/limit_down = None.
+
+        Some upstream rows (e.g. pre-market, paused, ST-suspended)
+        return "" for these fields. Must not synthesize values.
+        """
+        f = TencentFetcher()
+        response = self._build_response({47: "", 48: ""})
+        quote = f._parse_tencent_response(response, "600519")
+
+        assert quote is not None
+        assert quote.limit_up is None
+        assert quote.limit_down is None
+
+    def test_parse_limit_up_down_safe_float_on_garbage(self):
+        """safe_float must reject "nan" / "--" / non-numeric upstream values.
+
+        If Tencent ever returns garbage for these fields, the
+        normalizer must not let them through to the unified type —
+        they'd corrupt ``is_limit_up`` derivation in boards.py.
+        """
+        f = TencentFetcher()
+        response = self._build_response({47: "nan", 48: "--"})
+        quote = f._parse_tencent_response(response, "600519")
+
+        assert quote is not None
+        assert quote.limit_up is None
+        assert quote.limit_down is None
+
 
 class TestGetRealtimeQuote:
     """Tests for get_realtime_quote() method."""

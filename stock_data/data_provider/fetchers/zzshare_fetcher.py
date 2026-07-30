@@ -396,6 +396,13 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             high=safe_float(row.get("high")),
             low=safe_float(row.get("low")),
             pre_close=pre_close,
+            # 涨跌停价 — rt_k(fields='all') exposes them as high_limit / low_limit
+            # (per the upstream column list in the project memory and the
+            # existing test mock at tests/test_zzshare_fetcher.py:824-825).
+            # safe_float rejects "nan" / "--" / inf so a malformed row
+            # doesn't poison downstream is_limit_up derivation.
+            limit_up=safe_float(row.get("high_limit")),
+            limit_down=safe_float(row.get("low_limit")),
             turnover_rate=safe_float(row.get("turnover_rate")),
             total_mv=safe_float(row.get("market_value")),
             circ_mv=safe_float(row.get("circulation_value")),

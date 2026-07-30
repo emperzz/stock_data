@@ -84,6 +84,14 @@ class UnifiedRealtimeQuote:
     high: float | None = None
     low: float | None = None
     pre_close: float | None = None
+    # Limit prices (涨跌停价). Populated by:
+    #   - ZzshareFetcher: maps rt_k ``high_limit`` / ``low_limit``
+    #   - TencentFetcher: maps field 47 / 48
+    # Other fetchers (Akshare, Zhitu, Yfinance, Tushare, Myquant) do
+    # NOT surface limit prices — leave None. Clients that derive
+    # ``is_limit_up`` from price vs limit_up must handle None.
+    limit_up: float | None = None
+    limit_down: float | None = None
 
     # Valuation
     pe_ratio: float | None = None

@@ -150,6 +150,15 @@ class TencentFetcher(BaseFetcher):
                 total_mv=v(44, 1e8),  # 亿 -> 元
                 circ_mv=v(45, 1e8),  # 亿 -> 元
                 pb_ratio=v(46),
+                # 涨跌停价 — field 47 = limit up, field 48 = limit down.
+                # Tencent is the only fetcher that surfaces limit prices
+                # for the single-stock path (the all-market /stocks list
+                # path goes through Zzshare rt_k high_limit/low_limit
+                # instead). safe_float rejects "nan" / "--" / inf so
+                # upstream garbage doesn't poison downstream
+                # is_limit_up derivation in boards.py.
+                limit_up=v(47),
+                limit_down=v(48),
                 volume_ratio=v(49),
             )
         except Exception as e:

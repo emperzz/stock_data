@@ -843,6 +843,11 @@ class TestRealtimeQuote:
         assert quote.circ_mv == 2.16e12
         assert quote.pe_ratio == 25.5
         assert quote.turnover_rate == 0.5
+        # rt_k(fields='all') returns 涨跌停价 as high_limit / low_limit;
+        # ZzshareFetcher must surface them as limit_up / limit_down
+        # so /stocks?include_quote=true can show the 涨停价.
+        assert quote.limit_up == 1870.0
+        assert quote.limit_down == 1530.0
 
     def test_realtime_uses_fields_all(self):
 
@@ -931,6 +936,66 @@ class TestNormalizeRtKRow:
         assert quote.change_amount is None  # not computable
         assert quote.price == 12.5
         assert quote.pre_close is None
+
+    def test_normalize_rt_k_row_maps_limit_prices(self):
+        """high_limit / low_limit → UnifiedRealtimeQuote.limit_up / limit_down.
+
+        Regression: prior to 2026-07-30 the normalizer dropped these
+        fields, so /stocks?include_quote=true always emitted
+        ``quote.limit_up = null`` for Zzshare-served rows. The upstream
+        rt_k(fields='all') payload DOES carry high_limit / low_limit
+        (per the column list in the fetcher docstring + the runtime
+        probe at the project root); we just weren't mapping them.
+        """
+        from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+        fetcher = ZzshareFetcher()
+        row = {
+            "ts_code": "600519.SH",
+            "name": "贵州茅台",
+            "close": 1720.0,
+            "pre_close": 1700.0,
+            "high_limit": 1870.0,
+            "low_limit": 1530.0,
+        }
+        quote = fetcher._normalize_rt_k_row(row, "600519")
+        assert quote.limit_up == 1870.0
+        assert quote.limit_down == 1530.0
+
+    def test_normalize_rt_k_row_limit_prices_none_when_upstream_omits(self):
+        """Guard: row missing high_limit/low_limit → limit_up/limit_down = None.
+
+        Some upstream rows (e.g. ST stocks with custom limits, or
+        pre-2020 historical rows) may not carry these fields. The
+        normalizer must not synthesize values from pre_close.
+        """
+        from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+        fetcher = ZzshareFetcher()
+        row = {"ts_code": "600519.SH", "name": "贵州茅台", "close": 1720.0, "pre_close": 1700.0}
+        quote = fetcher._normalize_rt_k_row(row, "600519")
+        assert quote.limit_up is None
+        assert quote.limit_down is None
+
+    def test_normalize_rt_k_row_limit_prices_safe_float_on_garbage(self):
+        """safe_float must reject NaN / inf / non-numeric upstream values.
+
+        If rt_k ever returns 'nan' or 'Infinity' for these fields (it
+        shouldn't, but defensive coding), the normalizer must not let
+        them through to the unified type — they'd corrupt
+        ``is_limit_up`` derivation in the boards route.
+        """
+        from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+        fetcher = ZzshareFetcher()
+        row = {
+            "ts_code": "600519.SH",
+            "name": "贵州茅台",
+            "close": 1720.0,
+            "pre_close": 1700.0,
+            "high_limit": "nan",
+            "low_limit": "--",
+        }
+        quote = fetcher._normalize_rt_k_row(row, "600519")
+        assert quote.limit_up is None
+        assert quote.limit_down is None
 
 
 class TestRealtimeQuotes:

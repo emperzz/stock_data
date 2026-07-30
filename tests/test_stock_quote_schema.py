@@ -154,6 +154,58 @@ class TestAmplitudePctDerivation:
         assert d["amplitude_pct"] == pytest.approx(3.3333, rel=1e-3)
 
 
+class TestLimitUpDownForwarding:
+    """StockQuote.from_unified_quote forwards q.limit_up / q.limit_down.
+
+    Regression: prior to 2026-07-30, the unified type did NOT carry
+    limit_up/limit_down, and ``from_unified_quote`` hardcoded both to
+    ``None`` — so ``/stocks?include_quote=true`` always returned
+    ``quote.limit_up = null`` even though the upstream Zzshare rt_k
+    fields=``all`` payload (and Tencent field 47/48) carry the values.
+
+    After the fix:
+    - ``UnifiedRealtimeQuote`` carries ``limit_up`` / ``limit_down`` (None default).
+    - ``StockQuote.from_unified_quote`` forwards them.
+    - ZzshareFetcher maps ``high_limit`` / ``low_limit`` → ``limit_up`` / ``limit_down``.
+    - TencentFetcher maps field 47 / field 48 → ``limit_up`` / ``limit_down``.
+    """
+
+    def test_limit_up_down_forwarded_when_set_on_unified_quote(self):
+        q = _make_quote(limit_up=1870.0, limit_down=1530.0)
+        sq = StockQuote.from_unified_quote(q)
+        d = sq.model_dump()
+        assert d["limit_up"] == 1870.0
+        assert d["limit_down"] == 1530.0
+
+    def test_limit_up_down_none_when_unified_quote_carries_none(self):
+        """UnifiedRealtimeQuote defaults to None for both → StockQuote also None.
+
+        This is the contract for fetchers that don't surface limit prices
+        (Akshare, Zhitu, Yfinance, Tushare, Myquant, ...). Quote endpoints
+        served by those fetchers emit null, and clients must handle that
+        gracefully (see ``is_limit_up`` derivation in boards.py).
+        """
+        q = _make_quote()  # no limit_up / limit_down overrides
+        sq = StockQuote.from_unified_quote(q)
+        d = sq.model_dump()
+        assert d["limit_up"] is None
+        assert d["limit_down"] is None
+
+    def test_limit_up_down_forwarded_in_nested_mode(self):
+        """Limit price fields also survive the nested-serialization path.
+
+        ``/stocks?include_quote=true`` builds StockQuote with
+        ``nested=True`` (the outer StockInfo already carries code/name/source).
+        The nested _serialize() must keep limit_up/limit_down — clients
+        that derive ``is_limit_up`` from price vs limit_up still need them.
+        """
+        q = _make_quote(limit_up=1870.0, limit_down=1530.0)
+        sq = StockQuote.from_unified_quote(q, nested=True)
+        d = sq.model_dump()
+        assert d["limit_up"] == 1870.0
+        assert d["limit_down"] == 1530.0
+
+
 class TestRouteLevelNested:
     """End-to-end: /stocks?include_quote=true emits nested quotes without identifiers."""
 

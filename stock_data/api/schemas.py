@@ -145,9 +145,10 @@ class StockQuote(BaseModel):
         - ``total_mv`` / ``circ_mv`` (元) → ``mcap_yi`` / ``float_mcap_yi`` (亿元) by /1e8.
         - Drops ``pe_static`` (UnifiedRealtimeQuote only carries the
           single ``pe_ratio``; v1 has always emitted ``pe_ttm`` only).
-        - Returns None for ``pe_static`` / ``limit_up`` / ``limit_down``
-          (not carried by UnifiedRealtimeQuote; preserved as None to
-          match StockQuote shape).
+        - Forwards ``limit_up`` / ``limit_down`` verbatim (Z)
+          (2026-07-30 — previously hardcoded None because the unified
+          type did not carry the fields; ZzshareFetcher.rt_k and
+          TencentFetcher field 47/48 are the upstream sources).
 
         ``amplitude_pct`` fallback: if upstream didn't carry
         ``amplitude`` but ``high`` / ``low`` / ``pre_close`` are all
@@ -185,8 +186,8 @@ class StockQuote(BaseModel):
             float_mcap_yi=_yi(q.circ_mv),
             turnover_pct=q.turnover_rate,
             amplitude_pct=amplitude,
-            limit_up=None,
-            limit_down=None,
+            limit_up=q.limit_up,
+            limit_down=q.limit_down,
             volume_ratio=q.volume_ratio,
         )
         obj._nested = nested
