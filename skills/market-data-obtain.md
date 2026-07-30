@@ -325,7 +325,7 @@ curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
 | `turnover_pct` | 换手率(%) | `volume / float_share` |
 | `amplitude_pct` | 振幅(%) | `(high-low)/prev_close*100` |
 | `vol_ratio` | 量比 | 现量/过去 5 日同时段均量 |
-| `limit_up` / `limit_down` | 涨停价/跌停价 | **本服务固定返回 null**，按昨收 ±10% 自行计算 |
+| `limit_up` / `limit_down` | 涨停价/跌停价 | Zzshare / Tencent 返回真实值，其他 fetcher (Akshare / Zhitu / Yfinance / Tushare / Myquant) 仍为 null；缺数据时按 `prev_close × (1 ± 10%)` 自行计算 |
 | `source` | 数据来源 fetcher 名（zzshare/akshare/...） | 用于判断数据新鲜度 |
 
 #### `GET /stocks/{code}/kline` — K 线

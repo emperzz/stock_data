@@ -817,6 +817,8 @@ The `/quote` endpoint now returns enhanced valuation fields:
 }
 ```
 
+> `limit_up` / `limit_down` 由 ZzshareFetcher (`rt_k` `high_limit` / `low_limit`) 和 TencentFetcher (qt.gtimg.cn 字段 47/48) 提供；Akshare / Zhitu / Yfinance / Tushare / Myquant 上游不暴露这两个字段，返回 `null`。详见 schema `StockQuote` (post 2026-07-30, commit b878841)。
+
 ---
 
 ### Margin Trading (融资融券)
@@ -1454,7 +1456,16 @@ Content-Type: application/json
       "max_gain_pct": 2.11,
       "turnover_pct": 7.4,
       "amount_yi": 12.3,
-      "mcap_yi": 2610.0
+      "mcap_yi": 2610.0,
+      "change_amount": 2.16,
+      "volume": 1234567,
+      "volume_ratio": 1.4,
+      "pe_ratio": 25.8,
+      "open": 176.0,
+      "high": 179.2,
+      "low": 175.5,
+      "prev_close": 176.3,
+      "amplitude_pct": 2.1
     }
   ],
   "summary": {
@@ -1464,6 +1475,8 @@ Content-Type: application/json
   }
 }
 ```
+
+> v2 union fillup (post 2026-07-30, commit 4e6a570) 在 THS top-50 行上也补齐 `open`/`high`/`prev_close`/`volume`，所以 `max_gain_pct` 过滤会对**全部**行生效（之前仅对 suffix 行生效——top-50 行的 None 值会被 `_passes_range` 剔除）。`change_amount` / `volume_ratio` / `pe_ratio` / `amplitude_pct` 为新增可读字段；`total_mv` 仍是 THS-only（suffix 行 `mcap_yi=None` 仍会触发任何 `mcap_yi` 过滤剔除）。
 
 | Field | Type | Description |
 |---|---|---|
