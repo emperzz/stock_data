@@ -662,7 +662,7 @@ def get_board_stocks(
                 zt_code = z.get("code") or z.get("stock_code")
                 if zt_code:
                     zt_index[zt_code] = z
-        except Exception as exc:  # noqa: BLE001 — best-effort annotation, never 5xx
+        except Exception as exc:
             logger.warning(
                 f"[boards] with_zt_flags: zt-pool fetch failed: {exc}"
             )

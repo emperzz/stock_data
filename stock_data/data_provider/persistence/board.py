@@ -7,8 +7,8 @@ upstream API calls which are slow and may fail.
 
 import logging
 import sqlite3
-from datetime import datetime, time as _dt_time
-from datetime import timedelta
+from datetime import datetime, timedelta
+from datetime import time as _dt_time
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
@@ -95,6 +95,7 @@ def get_cached_market_quotes(manager) -> list | None:
     and there's only one call site).
     """
     from datetime import date as _date
+
     from ...api.cache import (
         cached_lookup,
         cached_store,
