@@ -7,7 +7,13 @@ upstream API calls which are slow and may fail.
 
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, time as _dt_time
+from datetime import timedelta
+from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from ..core.types import UnifiedRealtimeQuote
 from typing import Any
 
 from ..base import DataFetchError
@@ -65,6 +71,92 @@ def _project_unified_quote_to_dict(
         "volume_ratio": q.volume_ratio,
         "pe_ratio": q.pe_ratio,
     }
+
+
+def get_cached_market_quotes(manager) -> list | None:
+    """Read the /api/v1/stocks full-market quote cache. On miss, fetch
+    and write back. Returns the unsorted, unsliced upstream list, or
+    None on upstream failure.
+
+    Reuses the same cache namespace (stock_list_quote:csi) and TTL
+    (60s intraday, 7d close-tagged slow) as /stocks?include_quote=true,
+    so any request that touches /stocks naturally warms this cache.
+
+    Cache hit = zero upstream. Cache miss + fetch fail = None, which
+    leaves suffix rows at None in the caller — never raises, by
+    contract (the route layer's include_quote path is best-effort).
+
+    Added 2026-07-30 alongside the cross-endpoint quote-cache fillup
+    for /boards/{code}/stocks suffix rows.
+
+    Note: intraday/slow-cache branch + (date, session) tag for slow
+    cache write are inlined here rather than extracted to helpers
+    (avoids duplicating /stocks route's _is_intraday / _latest_past_close,
+    and there's only one call site).
+    """
+    from datetime import date as _date
+    from ...api.cache import (
+        cached_lookup,
+        cached_store,
+        get_stock_list_quote_cache,
+        get_stock_list_quote_slow,
+    )
+    from . import trade_calendar
+
+    cache_key = "stock_list_quote:csi"
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    today = now.date()
+    t = now.time()
+    is_trade_day = trade_calendar.is_trade_date(today.isoformat())
+    # Inlined: intraday = 09:15-11:30 or 13:00-15:00 on a trade day.
+    in_intraday = is_trade_day and (
+        (_dt_time(9, 15) <= t < _dt_time(11, 30))
+        or (_dt_time(13, 0) <= t < _dt_time(15, 0))
+    )
+
+    if in_intraday:
+        hit = cached_lookup(
+            get_stock_list_quote_cache, cache_key, "stock_list_quote"
+        )
+        if hit is not None:
+            return hit[0]
+    else:
+        hit = cached_lookup(
+            get_stock_list_quote_slow, cache_key, "stock_list_quote"
+        )
+        if hit is not None:
+            _, _, cached_quotes, _ = hit
+            if cached_quotes is not None:
+                return cached_quotes
+
+    # Cache miss → fetch
+    quotes, source = manager.get_realtime_quotes("csi")
+    if not quotes:
+        return None
+
+    if in_intraday:
+        cached_store(
+            get_stock_list_quote_cache, cache_key, (quotes, source)
+        )
+    else:
+        # Inlined: pick (date, session) for the slow-cache tag — mirrors
+        # /stocks route's _latest_past_close. Falls back to (today,
+        # "afternoon") on empty calendar.
+        if not is_trade_day or t < _dt_time(11, 30):
+            prev = trade_calendar.get_latest_trade_date_on_or_before(
+                (today - timedelta(days=1)).isoformat()
+            )
+            target_date = _date.fromisoformat(prev) if prev else today
+            target_session = "afternoon"
+        elif t < _dt_time(15, 0):
+            target_date, target_session = today, "morning"
+        else:
+            target_date, target_session = today, "afternoon"
+        cached_store(
+            get_stock_list_quote_slow, cache_key,
+            (target_date, target_session, quotes, source),
+        )
+    return quotes
 
 _refresh_tracker = DailyRefreshTracker()
 _schema_initialized_paths: set[str] = set()
