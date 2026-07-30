@@ -3,8 +3,9 @@
 Added 2026-07-30: _project_unified_quote_to_dict helper unit tests
 (spec 2026-07-30, plan task 1).
 """
-import pytest
 from zoneinfo import ZoneInfo
+
+import pytest
 
 from stock_data.data_provider.core.types import (
     RealtimeSource,
@@ -143,10 +144,9 @@ class TestGetCachedMarketQuotes:
 
     def test_returns_none_when_both_caches_miss_and_fetch_returns_none(self, monkeypatch):
         """Cache miss + upstream returns None → helper returns None, never raises."""
-        from stock_data.data_provider.persistence import board as pb
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
+
         import stock_data.api.cache as cache_mod
+        from stock_data.data_provider.persistence import board as pb
 
         cache_mod._stock_list_quote_cache.clear()
         cache_mod._stock_list_quote_slow.clear()
@@ -168,8 +168,8 @@ class TestGetCachedMarketQuotes:
     def test_cache_hit_returns_quotes_without_calling_manager(self, monkeypatch):
         """Cache hit → helper returns cached list, manager is never called.
         Pre-populate BOTH caches; helper should hit one and not call manager."""
-        from stock_data.data_provider.persistence import board as pb
         import stock_data.api.cache as cache_mod
+        from stock_data.data_provider.persistence import board as pb
 
         cache_mod._stock_list_quote_cache.clear()
         cache_mod._stock_list_quote_slow.clear()
@@ -211,10 +211,11 @@ class TestGetCachedMarketQuotes:
 
     def test_cache_miss_triggers_fetch_and_writes_back(self, monkeypatch):
         """Cache miss → manager called, result written back to either cache, helper returns it."""
-        from stock_data.data_provider.persistence import board as pb
-        from zoneinfo import ZoneInfo
         import datetime as _dt
+        from zoneinfo import ZoneInfo
+
         import stock_data.api.cache as cache_mod
+        from stock_data.data_provider.persistence import board as pb
 
         cache_mod._stock_list_quote_cache.clear()
         cache_mod._stock_list_quote_slow.clear()
@@ -252,9 +253,10 @@ class TestGetCachedMarketQuotes:
     def test_slow_cache_hit_returns_unwrapped_quotes(self, monkeypatch):
         """Slow cache entry is (date, session, quotes, source) 4-tuple → unwrap to quotes.
         Force non-intraday (is_trade_day=False) to take the slow-cache read path."""
-        from stock_data.data_provider.persistence import board as pb
         from datetime import date
+
         import stock_data.api.cache as cache_mod
+        from stock_data.data_provider.persistence import board as pb
 
         cache_mod._stock_list_quote_cache.clear()
         cache_mod._stock_list_quote_slow.clear()
@@ -300,10 +302,11 @@ class TestEnrichSuffixWithMarketQuote:
         fields are projected onto the suffix row dict (upstream-style
         keys). THS top-50 rows are NOT touched (not in scope of this
         helper)."""
-        from stock_data.data_provider.persistence import board as pb
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
+        from stock_data.data_provider.persistence import board as pb
 
         suffix_rows = [
             {"stock_code": "600000", "stock_name": "浦发银行"},
@@ -349,10 +352,11 @@ class TestEnrichSuffixWithMarketQuote:
 
     def test_suffix_row_not_in_market_quote_kept_as_is(self):
         """A suffix code absent from market quote (停牌/新上市) is kept as-is."""
-        from stock_data.data_provider.persistence import board as pb
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
+        from stock_data.data_provider.persistence import board as pb
 
         suffix_rows = [{"stock_code": "688999", "stock_name": "新股A"}]
         market_quotes = [
@@ -379,10 +383,11 @@ class TestEnrichSuffixWithMarketQuote:
 
     def test_input_list_not_mutated(self):
         """Helper returns a new list; input suffix_rows is not mutated."""
-        from stock_data.data_provider.persistence import board as pb
         from stock_data.data_provider.core.types import (
-            RealtimeSource, UnifiedRealtimeQuote,
+            RealtimeSource,
+            UnifiedRealtimeQuote,
         )
+        from stock_data.data_provider.persistence import board as pb
 
         suffix_rows = [{"stock_code": "600000", "stock_name": "x"}]
         market_quotes = [
