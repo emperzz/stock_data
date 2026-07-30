@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
-    from ..core.types import UnifiedRealtimeQuote
+    pass
 from typing import Any
 
 from ..base import DataFetchError
@@ -22,55 +22,6 @@ from ._refresh import DailyRefreshTracker
 from .db import get_connection, get_db_path
 
 logger = logging.getLogger(__name__)
-
-
-def _project_unified_quote_to_dict(
-    code: str, name: str, q: "UnifiedRealtimeQuote",
-) -> dict:
-    """Project UnifiedRealtimeQuote onto an upstream-style dict for
-    suffix row enrichment. Returns 13 quote fields + stock_code/name
-    using fetcher-style keys (stock_code/stock_name/turnover_rate/
-    amplitude/open/high/low/prev_close) so the result is
-    interchangeable with THS/ZZSHARE fetcher output rows.
-
-    Reuses the same amplitude fallback logic as StockQuote.from_unified_quote
-    (schemas.py:156-192): when q.amplitude is None and high/low/pre_close
-    are all set, compute (high - low) / pre_close * 100.
-
-    THS-only fields (change_speed, free_float_shares, float_market_cap)
-    are not set here — they stay absent from the returned dict and
-    surface as None via the route layer's _build_board_stock_info.
-
-    Added 2026-07-30 alongside the cross-endpoint quote-cache fillup:
-    /boards/{code}/stocks?include_quote=true suffix rows (members
-    beyond THS's 50-cap) are enriched from the /api/v1/stocks
-    full-market quote cache via this helper.
-    """
-    amplitude = q.amplitude
-    if (
-        amplitude is None
-        and q.high is not None
-        and q.low is not None
-        and q.pre_close
-    ):
-        amplitude = (q.high - q.low) / q.pre_close * 100
-    return {
-        "stock_code": code,
-        "stock_name": name or q.name,
-        "price": q.price,
-        "open": q.open_price,
-        "high": q.high,
-        "low": q.low,
-        "prev_close": q.pre_close,
-        "change_amount": q.change_amount,
-        "change_pct": q.change_pct,
-        "volume": q.volume,
-        "amount": q.amount,
-        "turnover_rate": q.turnover_rate,
-        "amplitude": amplitude,
-        "volume_ratio": q.volume_ratio,
-        "pe_ratio": q.pe_ratio,
-    }
 
 
 def get_cached_market_quotes(manager) -> list | None:
@@ -1272,37 +1223,95 @@ def fetch_board_stocks_with_zzshare_fallback(
     raise ValueError(f"fetch_board_stocks_with_zzshare_fallback: unsupported source {source!r}")
 
 
-def _enrich_suffix_with_market_quote(
-    suffix_rows: list[dict], market_quotes: list,
+def _enrich_rows_with_market_quote(
+    rows: list[dict], market_quotes: list,
 ) -> list[dict]:
-    """Project 13 quote fields (via _project_unified_quote_to_dict) onto
-    each suffix row whose stock_code exists in the market-quote index.
-    Rows whose code is absent (停牌/新上市/北交所冷门) are kept as-is.
+    """Union semantics: for each row, fill in any quote-shaped field
+    whose value is None or missing by looking up the row's stock_code
+    in the market-quote index. Existing non-None values are preserved
+    (THS rows take priority for fields they have; /stocks cache fills
+    the gaps).
+
+    Applied to BOTH THS top-50 rows and suffix rows:
+
+    - **THS top-50 row**: has 11/13 quote fields (price/change_pct/
+      change_amount/amount/turnover_rate/amplitude/volume_ratio/
+      pe_ratio/change_speed/free_float_shares/float_market_cap) +
+      3 THS-only fields. Missing: open/high/low/prev_close/volume
+      (THS 14 columns don't include them). Enrichment fills these
+      5 fields from /stocks cache; existing fields untouched.
+    - **Suffix row**: has only stock_code/stock_name (ZZSHARE raw).
+      Missing all 13 fillable fields. Enrichment fills all of them.
 
     THS-only fields (change_speed, free_float_shares, float_market_cap)
-    are never set by _project_unified_quote_to_dict — they stay
-    absent from the returned dict and surface as None via the route
-    layer's _build_board_stock_info. ZT-pool join fields
-    (is_limit_up, lb_count) are also not set here.
+    are NEVER set by this helper. ZT-pool join fields (is_limit_up,
+    lb_count) are also not set here (set by route-layer ZT join).
 
-    Returns a new list; input is not mutated.
+    Fillable fields (13) and their UnifiedRealtimeQuote source:
+        price                ← q.price
+        change_pct           ← q.change_pct
+        change_amount        ← q.change_amount
+        volume               ← q.volume
+        amount               ← q.amount
+        turnover_rate        ← q.turnover_rate
+        volume_ratio         ← q.volume_ratio
+        pe_ratio             ← q.pe_ratio
+        open                 ← q.open_price
+        high                 ← q.high
+        low                  ← q.low
+        pre_close            ← q.pre_close
+        amplitude            ← q.amplitude, fallback (h-l)/pre_close*100
+
+    Returns a new list; input is not mutated. Rows whose code is
+    absent from market_quote are returned as-is (no fillup).
     """
-    if not suffix_rows or not market_quotes:
-        return list(suffix_rows)
+    if not rows or not market_quotes:
+        return list(rows)
+
+    # Map: dict key (upstream-style, used by route layer) →
+    #       UnifiedRealtimeQuote attribute name
+    fillable: list[tuple[str, str]] = [
+        ("price", "price"),
+        ("change_pct", "change_pct"),
+        ("change_amount", "change_amount"),
+        ("volume", "volume"),
+        ("amount", "amount"),
+        ("turnover_rate", "turnover_rate"),
+        ("volume_ratio", "volume_ratio"),
+        ("pe_ratio", "pe_ratio"),
+        ("open", "open_price"),
+        ("high", "high"),
+        ("low", "low"),
+        ("pre_close", "pre_close"),
+    ]
 
     q_index = {q.code: q for q in market_quotes}
     out: list[dict] = []
-    for row in suffix_rows:
+    for row in rows:
         sc = row.get("stock_code", "")
         q = q_index.get(sc)
         if q is None:
             out.append(row)
             continue
-        out.append(
-            _project_unified_quote_to_dict(
-                code=sc, name=row.get("stock_name", ""), q=q,
-            )
-        )
+
+        # Build a copy: existing non-None values preserved,
+        # None / missing fields filled from UnifiedRealtimeQuote.
+        new_row = dict(row)
+        for dict_key, quote_attr in fillable:
+            if new_row.get(dict_key) is None:
+                v = getattr(q, quote_attr, None)
+                if v is not None:
+                    new_row[dict_key] = v
+
+        # amplitude: fill from q.amplitude, else compute fallback
+        # (mirrors _project_unified_quote_to_dict and StockQuote.from_unified_quote)
+        if new_row.get("amplitude") is None:
+            if q.amplitude is not None:
+                new_row["amplitude"] = q.amplitude
+            elif q.high is not None and q.low is not None and q.pre_close:
+                new_row["amplitude"] = (q.high - q.low) / q.pre_close * 100
+
+        out.append(new_row)
     return out
 
 
@@ -1511,28 +1520,34 @@ def get_board_stocks(
         r for r in (zz_rows or []) if r.get("stock_code") and r["stock_code"] not in quote_codes
     ]
 
-    # === Cross-endpoint quote fillup (2026-07-30) ===
-    # Reuse the /api/v1/stocks full-market quote cache to enrich suffix
-    # rows whose stock_code exists upstream. THS top-50 rows in `stocks`
-    # are NOT modified — only the suffix (members beyond THS's 50-cap)
-    # is touched. On cache miss + fetch failure, suffix stays as-is
-    # and the quote_truncated / quote_total_in_board logic below
-    # preserves the prior behavior.
-    if suffix_no_quote:
-        cached_quotes = get_cached_market_quotes(manager)
-        if cached_quotes:
-            before = len(suffix_no_quote)
-            suffix_no_quote = _enrich_suffix_with_market_quote(
-                suffix_no_quote, cached_quotes,
-            )
-            n_filled = sum(
-                1 for r in suffix_no_quote if r.get("price") is not None
-            )
-            logger.info(
-                f"[BoardCache] suffix fill: {n_filled}/{before} "
-                f"rows enriched from /stocks quote cache for "
-                f"board {board_code}"
-            )
+    # === Cross-endpoint quote fillup (2026-07-30, union 2026-07-30+) ===
+    # Reuse the /api/v1/stocks full-market quote cache to fill in
+    # quote fields that are None on the response rows. Union semantics:
+    # existing non-None values on each row are preserved (THS top-50
+    # wins for fields it has; /stocks cache fills the gaps).
+    # THS top-50 rows gain 5 fields: open/high/low/prev_close/volume
+    # (THS 14 columns don't include them). Suffix rows gain all 13
+    # fillable fields (they have no quote data otherwise).
+    # On cache miss + fetch failure, nothing is filled and the
+    # quote_truncated / quote_total_in_board logic below preserves
+    # the prior behavior.
+    cached_quotes = get_cached_market_quotes(manager)
+    if cached_quotes:
+        before = len(stocks) + len(suffix_no_quote)
+        # Enrich THS top-50 rows first (preserve existing, fill gaps)
+        stocks = _enrich_rows_with_market_quote(stocks, cached_quotes)
+        # Then enrich suffix rows (all-None → all filled)
+        suffix_no_quote = _enrich_rows_with_market_quote(
+            suffix_no_quote, cached_quotes,
+        )
+        n_filled = sum(
+            1 for r in (stocks + suffix_no_quote) if r.get("price") is not None
+        )
+        logger.info(
+            f"[BoardCache] union fill: {n_filled}/{before} "
+            f"rows enriched from /stocks quote cache for "
+            f"board {board_code}"
+        )
 
     # quote_truncated: True iff suffix 非空 (真截断 observed) OR
     # ZZSHARE 失败/空 (无法验证, 保守 True). False iff suffix 空且

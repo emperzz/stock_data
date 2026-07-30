@@ -193,6 +193,11 @@ class TestBoardAPIRoutes:
             mock_quote.change_pct = 2.5
             mock_quote.volume = 1000000
             mock_mgr.get_realtime_quote.return_value = mock_quote
+            # 2026-07-30: include_quote=True now calls get_cached_market_quotes
+            # which reads /stocks cache (manager.get_realtime_quotes("csi")).
+            # Mock that to return empty (no enrichment) so this test's
+            # scenario stays focused on eastmoney board stocks.
+            mock_mgr.get_realtime_quotes.return_value = ([], "")
             mock_mgr.get_board_stocks.return_value = (
                 [{"stock_code": "600519", "stock_name": "贵州茅台"}],
                 "EastMoneyFetcher",
@@ -439,6 +444,11 @@ class TestBoardsSourceUnification:
             [{"stock_code": "300740", "stock_name": "x"}],
             "ths",
         )
+        # 2026-07-30: include_quote=True now also calls
+        # get_cached_market_quotes → manager.get_realtime_quotes("csi").
+        # Mock to return empty list (no enrichment) for this strict-routing
+        # test.
+        mgr.get_realtime_quotes.return_value = ([], "")
         with (
             patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
             patch.object(board_mod, "update_cached_board_stocks", return_value=0),

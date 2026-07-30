@@ -22,16 +22,17 @@
 - **零 upstream 浪费**:`/stocks` 已经维护的 60s / 7d 缓存直接 read,cache 命中时不发任何网络请求
 - **缓存共享**:不新建 namespace / TTL / cache slot
 - **保真**:THS top-50 已有 quote 完全不动(高保真,字段最丰富),只补 suffix
-- **失败安全**:cache miss + fetch 失败时,suffix 行保持 `None`,响应不 5xx
+- **失败安全**:cache miss + fetch 失败时,缺失字段保持 `None`,响应不 5xx
+- **Union 语义**(2026-07-30 修订):对所有 rows(THS top-50 + suffix)都尝试从 `/stocks` 缓存补缺失字段,已有值保留(THS 优先)。THS top-50 行的 5 个字段 `open`/`high`/`low`/`prev_close`/`volume` 因 THS 14 列不包含而为 null,union 补全后这些字段也会被填上。
 
 ## 3. Non-Goals
 
-- **不动 THS top-50 已有 quote**:避免跨源时间错位(THS quote 抓取后全市场 quote 可能更新 1-60s)
+- **不覆盖 THS top-50 已有 quote 字段**:Union 语义保留 THS 已有值(`/stocks` 缓存只补 None 字段),但**仍读取** THS top-50 行(2026-07-30 修订:v1 spec 说"不动 THS top-50",v2 改为"对所有 rows 做 union 补全")
 - **不动 ZZSHARE / EastMoney / Zhitu fetcher**:`persistence/board.py` 是唯一改动点
 - **不动 `/stocks` 路由**:我们只 read 它的 cache,不改它的逻辑
-- **不解决 THS top-50 行的 3 个字段缺口**:`change_speed` / `free_float_shares` / `float_market_cap` 是 THS upstream 14 列没有的,全市场 quote 也不暴露,因此 suffix 行的这 3 个字段保持 `None`,且 THS top-50 行的对应字段也不会被任何方式补全
-- **不解决 THS top-50 行 `volume` 字段缺口**:`ThsFetcher._parse_ths_board_stocks_row`(`ths_fetcher.py:3163`)硬编码 `volume: None`(14 列里 idx 10 是成交额不是成交量)。suffix 行的 `volume` 可以从全市场 quote 补上(`UnifiedRealtimeQuote.volume` 有);但 THS top-50 行的 `volume` 仍为 None,等后续如果有真正 THS 批量 quote API 再说
-- **不做字段级跨源合并**:不引入"已有字段是否被全市场 quote 覆盖"这种冲突规则,只补 suffix 全空行
+- **不解决 3 个 THS 专属字段缺口**:`change_speed` / `free_float_shares` / `float_market_cap` 是 THS upstream 14 列独有的,全市场 quote 也不暴露,**永远保留 THS 的值,union 也不会从 `/stocks` 覆盖**(union 只对 13 个共有字段生效)
+- **不解决 THS top-50 行 `volume` 字段的来源问题**:`ThsFetcher._parse_ths_board_stocks_row`(`ths_fetcher.py:3163`)硬编码 `volume: None`(14 列里 idx 10 是成交额不是成交量)。Union 补全**会**从 `/stocks` 缓存的 `UnifiedRealtimeQuote.volume` 把这个字段填上(THS None → /stocks 有值 → 补)
+- **不做字段级冲突解决**:union 是"非破坏性"补全(只填 None),不会覆盖 THS 已有值,因此不引入冲突规则
 
 ## 4. Design
 
@@ -65,65 +66,95 @@
 
 **不加 `quote_fill_source` 字段**:补全源信息落到 logger,client 关心的是字段值,不关心补全路径。
 
-#### 4.1.2 Quote 投影 helper(`persistence/board.py`)
+#### 4.1.2 Quote 补全 helper(`persistence/board.py`)— **union 语义(2026-07-30 修订)**
 
-**注意**:工厂方法**不**是 `BoardStockInfo` classmethod,改为 **module-level helper 在 `persistence/board.py`**,原因: suffix 投影后的 dict 必须沿用 fetcher upstream-style keys(`stock_code`/`stock_name`/`turnover_rate`/`amplitude`/`open`/`high`/`low`/`prev_close`),否则 `update_cached_board_stocks`(`board.py:2055-2070`)的 `s["stock_code"]` 会抛 `KeyError`,导致大 board 的 `include_quote=true` 请求 **500**。
+**注意**: helper 是 module-level 函数,不是 `BoardStockInfo` classmethod。设计语义是 **union**:对每个 row,只填 None 字段,已有值保留(THS 优先)。对所有 rows(THS top-50 + suffix)都调用。
 
-`BoardStockInfo` 字段名(`code`/`name`/`amplitude_pct`/`turnover_pct`/`open`/`high`/`low`/`prev_close`)只在最终 JSON 响应上由 `_build_board_stock_info`(`boards.py:69-100`)投影,不在内部 dict 上使用。
+补全的 dict 沿用 fetcher upstream-style keys(`stock_code`/`stock_name`/`turnover_rate`/`amplitude`/`open`/`high`/`low`/`prev_close`/`volume`/`pe_ratio` 等),这样 `update_cached_board_stocks`(`board.py:2055-2070`)的 `s["stock_code"]` 不会抛 `KeyError`。
 
 ```python
-def _project_unified_quote_to_dict(
-    code: str, name: str, q: "UnifiedRealtimeQuote",
-) -> dict:
-    """Project UnifiedRealtimeQuote onto an upstream-style dict for
-    suffix row enrichment. Returns 13 quote fields + stock_code/name
-    using fetcher-style keys (stock_code/stock_name/turnover_rate/
-    amplitude/open/high/low/prev_close) so the result is
-    interchangeable with THS/ZZSHARE fetcher output rows.
+def _enrich_rows_with_market_quote(
+    rows: list[dict], market_quotes: list,
+) -> list[dict]:
+    """Union semantics: for each row, fill in any quote-shaped field
+    whose value is None or missing by looking up the row's stock_code
+    in the market-quote index. Existing non-None values are preserved.
 
-    Reuses the same amplitude fallback logic as StockQuote.from_unified_quote
-    (schemas.py:156-192): when q.amplitude is None and high/low/pre_close
-    are all set, compute (high - low) / pre_close * 100.
+    Applied to BOTH THS top-50 rows and suffix rows.
 
     THS-only fields (change_speed, free_float_shares, float_market_cap)
-    are not set here — they stay absent from the returned dict and
-    surface as None via the route layer's _build_board_stock_info.
+    are NEVER set here. ZT-pool fields (is_limit_up, lb_count) are
+    NEVER set here.
 
-    Added 2026-07-30 alongside the cross-endpoint quote-cache fillup:
-    /boards/{code}/stocks?include_quote=true suffix rows (members
-    beyond THS's 50-cap) are enriched from the /api/v1/stocks
-    full-market quote cache via this helper.
+    Fillable fields (13) and their UnifiedRealtimeQuote source:
+        price            ← q.price
+        change_pct       ← q.change_pct
+        change_amount    ← q.change_amount
+        volume           ← q.volume
+        amount           ← q.amount
+        turnover_rate    ← q.turnover_rate
+        volume_ratio     ← q.volume_ratio
+        pe_ratio         ← q.pe_ratio
+        open             ← q.open_price
+        high             ← q.high
+        low              ← q.low
+        prev_close       ← q.pre_close
+        amplitude        ← q.amplitude, fallback (h-l)/pre_close*100
+
+    Returns a new list; input is not mutated. Rows whose code is
+    absent from market_quote are returned as-is.
     """
-    amplitude = q.amplitude
-    if (
-        amplitude is None
-        and q.high is not None
-        and q.low is not None
-        and q.pre_close
-    ):
-        amplitude = (q.high - q.low) / q.pre_close * 100
-    return {
-        "stock_code": code,
-        "stock_name": name or q.name,
-        "price": q.price,
-        "open": q.open_price,
-        "high": q.high,
-        "low": q.low,
-        "prev_close": q.pre_close,
-        "change_amount": q.change_amount,
-        "change_pct": q.change_pct,
-        "volume": q.volume,
-        "amount": q.amount,
-        "turnover_rate": q.turnover_rate,
-        "amplitude": amplitude,
-        "volume_ratio": q.volume_ratio,
-        "pe_ratio": q.pe_ratio,
-    }
+    if not rows or not market_quotes:
+        return list(rows)
+
+    fillable: list[tuple[str, str]] = [
+        ("price", "price"),
+        ("change_pct", "change_pct"),
+        ("change_amount", "change_amount"),
+        ("volume", "volume"),
+        ("amount", "amount"),
+        ("turnover_rate", "turnover_rate"),
+        ("volume_ratio", "volume_ratio"),
+        ("pe_ratio", "pe_ratio"),
+        ("open", "open_price"),
+        ("high", "high"),
+        ("low", "low"),
+        ("pre_close", "pre_close"),
+    ]
+
+    q_index = {q.code: q for q in market_quotes}
+    out: list[dict] = []
+    for row in rows:
+        sc = row.get("stock_code", "")
+        q = q_index.get(sc)
+        if q is None:
+            out.append(row)
+            continue
+
+        new_row = dict(row)
+        for dict_key, quote_attr in fillable:
+            if new_row.get(dict_key) is None:
+                v = getattr(q, quote_attr, None)
+                if v is not None:
+                    new_row[dict_key] = v
+
+        # amplitude: fill from q.amplitude, else compute fallback
+        if new_row.get("amplitude") is None:
+            if q.amplitude is not None:
+                new_row["amplitude"] = q.amplitude
+            elif q.high is not None and q.low is not None and q.pre_close:
+                new_row["amplitude"] = (q.high - q.low) / q.pre_close * 100
+
+        out.append(new_row)
+    return out
 ```
 
-补全字段:**13 个 quote 字段**,以 fetcher upstream-style keys 输出 —— `price / open / high / low / prev_close / change_amount / change_pct / volume / amount / turnover_rate / amplitude / volume_ratio / pe_ratio`(加 `stock_code` / `stock_name` 来自 ZZSHARE suffix row)。
+`BoardStockInfo` 字段名(`code`/`name`/`amplitude_pct`/`turnover_pct`/`open`/`high`/`low`/`prev_close`)在 route 层由 `_build_board_stock_info`(`boards.py:69-100`)做映射(见 §4.1.1 字段变更表)。
 
-`BoardStockInfo` 字段名(`code`/`name`/`amplitude_pct`/`turnover_pct`/`open`/`high`/`low`/`prev_close`)在 route 层由 `_build_board_stock_info` 做映射(见 §4.1.1 字段变更表)。
+**Union 行为示例**:
+- THS top-50 行(`stock_code="300469"`,有 `price=51.4` 但 `open/high/low/prev_close/volume=None`)+ `/stocks` 缓存 `q` 有全部字段 → 5 个 null 字段被填,其他 8 个字段保留 THS 值
+- Suffix 行(`stock_code="688999"`,只有 `code/name`)+ `/stocks` 缓存 `q` 有全部字段 → 13 个 fillable 字段全填
+- 3 个 THS 专属字段(`change_speed`/`free_float_shares`/`float_market_cap`)**永远**从 THS,union 也不会从 `/stocks` 覆盖
 
 ### 4.2 Helper + 调用端(`stock_data/data_provider/persistence/board.py`)
 
@@ -203,9 +234,9 @@ def get_cached_market_quotes(manager) -> list | None:
 - board_stocks 是消费方,即使拿到上一个 session 的 quote 顶多是 suffix 行 quote 滞后 30 分钟,不影响正确性(且 suffix 行本身是当天数据,字段滞后远好于 null)
 - 简化逻辑,避免 helper 内重复 `_latest_past_close` + `_is_intraday` 全部判断
 
-#### 4.2.2 `get_board_stocks` 调用点修改
+#### 4.2.2 `get_board_stocks` 调用点修改(union 语义 2026-07-30 修订)
 
-在 `persistence/board.py::get_board_stocks`(`board.py:1300-1382`)的 `include_quote=True` 分支,**最终拼接 `final_stocks` 之前**,插入 suffix 补全:
+在 `persistence/board.py::get_board_stocks`(`board.py:1300-1382`)的 `include_quote=True` 分支,**最终拼接 `final_stocks` 之前**,插入 union 补全(对所有 rows 都调,不只是 suffix):
 
 ```python
 # 现有代码(board.py:1319-1336)拿 zz_rows
@@ -225,31 +256,29 @@ suffix_no_quote = [
     if r.get("stock_code") and r["stock_code"] not in quote_codes
 ]
 
-# === 新增:suffix 补全 ===
-if suffix_no_quote:
-    cached_quotes = get_cached_market_quotes(manager)
-    if cached_quotes:
-        q_index = {q.code: q for q in cached_quotes}
-        n_filled = 0
-        enriched_suffix: list[dict] = []
-        for row in suffix_no_quote:
-            sc = row.get("stock_code")
-            q = q_index.get(sc)
-            if q is None:
-                # 该股票不在全市场 quote 里(如停牌 / 新上市 / 北交所冷门)
-                enriched_suffix.append(row)
-                continue
-            enriched_suffix.append(
-                _project_unified_quote_to_dict(
-                    code=sc, name=row.get("stock_name", ""), q=q,
-                )
-            )
-            n_filled += 1
-        suffix_no_quote = enriched_suffix
-        logger.info(
-            f"[BoardCache] suffix fill: {n_filled}/{len(suffix_no_quote)} "
-            f"rows enriched from /stocks quote cache"
-        )
+# === 新增:union 补全 (2026-07-30 修订) ===
+# 对所有 rows(THS top-50 + suffix)都调 _enrich_rows_with_market_quote。
+# 已有非 None 值保留(THS 优先),只补 None 字段。
+# THS top-50 行的 5 字段(open/high/low/prev_close/volume)因 THS 14 列不包含,
+# 会被 /stocks 缓存补全;其他 8 字段 THS 已有,保留。
+# Suffix 行的 13 字段全填(原本是 None)。
+cached_quotes = get_cached_market_quotes(manager)
+if cached_quotes:
+    before = len(stocks) + len(suffix_no_quote)
+    # THS top-50 rows: preserve existing, fill gaps
+    stocks = _enrich_rows_with_market_quote(stocks, cached_quotes)
+    # Suffix rows: all-None → all filled
+    suffix_no_quote = _enrich_rows_with_market_quote(
+        suffix_no_quote, cached_quotes,
+    )
+    n_filled = sum(
+        1 for r in (stocks + suffix_no_quote) if r.get("price") is not None
+    )
+    logger.info(
+        f"[BoardCache] union fill: {n_filled}/{before} "
+        f"rows enriched from /stocks quote cache for "
+        f"board {board_code}"
+    )
 
 # 之后照旧拼接 final_stocks
 ```
@@ -275,18 +304,20 @@ GET /boards/{code}/stocks?source=ths&include_quote=true
   │  - manager.get_board_stocks(source=ths, include_quote=True, sort_by, top_n)
   │  - returns 50 rows with quote
   │
-  ▼ ★ 新增:补全 suffix
+  ▼ ★ 新增:union 补全 (2026-07-30 修订:对所有 rows)
   │  zz_rows = manager.get_board_stocks(source=zzshare, include_quote=False)
   │  suffix_no_quote = [r for r in zz_rows if r.code not in THS top-50]
-  │  if suffix_no_quote:
-  │      cached_quotes = get_cached_market_quotes(manager)
-  │        ├── read _stock_list_quote_cache / _stock_list_quote_slow
-  │        ├── miss → manager.get_realtime_quotes("csi") → write back
-  │        └── return list[UnifiedRealtimeQuote] | None
-  │      q_index = {q.code: q for q in cached_quotes}
-  │      enriched = _project_unified_quote_to_dict(code, name, q) × N
+  │  cached_quotes = get_cached_market_quotes(manager)
+  │    ├── read _stock_list_quote_cache / _stock_list_quote_slow
+  │    ├── miss → manager.get_realtime_quotes("csi") → write back
+  │    └── return list[UnifiedRealtimeQuote] | None
+  │  if cached_quotes:
+  │      stocks = _enrich_rows_with_market_quote(stocks, cached_quotes)
+  │        (THS top-50: 已填 8 字段保留,5 字段 [open/high/low/prev_close/volume] 补)
+  │      suffix_no_quote = _enrich_rows_with_market_quote(suffix_no_quote, cached_quotes)
+  │        (suffix: 13 字段全填)
   │
-  ▼ final_stocks = THS top-50 (quote) + suffix enriched (13 字段)
+  ▼ final_stocks = THS top-50 (union 填后) + suffix enriched
   ▼
   ▼ update_cached_board_stocks(quote 字段投影丢弃)
   ▼
@@ -298,16 +329,16 @@ GET /boards/{code}/stocks?source=ths&include_quote=true
   )
 ```
 
-## 6. Error Handling
+## 6. Error Handling(union 2026-07-30 修订)
 
-| 场景 | suffix 字段 | 响应 | 日志 |
-|---|---|---|---|
-| cache 命中 | 13 字段已补 | 200 | `INFO: suffix fill: N/N rows enriched` |
-| cache miss, fetch 成功 | 13 字段已补 | 200 | `INFO: suffix fill: N/N rows enriched` + `/stocks` cache 被写回 |
-| cache miss, fetch 失败/空 | suffix 保持 `None` | 200(不 5xx) | `WARNING: get_cached_market_quotes returned None` |
-| suffix 为空(THS top-50 已覆盖全 board) | 不触发补全 | 200 | 无 |
-| `include_quote=False` 路径 | 不触发 | 200 | 无 |
-| 个别 code 在全市场 quote 中不存在(停牌/新上市/北交所冷门) | 该 row 保持 `None` | 200 | 无(数量级小,没必要 log) |
+| 场景 | THS top-50 行的 5 字段 | suffix 行的 13 字段 | 响应 | 日志 |
+|---|---|---|---|---|
+| cache 命中 | 已填 | 已填 | 200 | `INFO: union fill: N/N rows enriched` |
+| cache miss, fetch 成功 | 已填 | 已填 | 200 | `INFO: union fill: N/N rows enriched` + `/stocks` cache 被写回 |
+| cache miss, fetch 失败/空 | 保持 None(原 THS 状态) | 保持 None | 200(不 5xx) | `WARNING: get_cached_market_quotes returned None` |
+| suffix 为空(THS top-50 已覆盖全 board) | 仍 union 补 5 字段 | (空) | 200 | `INFO: union fill: N/N rows enriched` |
+| `include_quote=False` 路径 | 不触发 | 不触发 | 200 | 无 |
+| 个别 code 在全市场 quote 中不存在(停牌/新上市/北交所冷门) | 该行对应字段保持 None | 该行保持 None | 200 | 无(数量级小,没必要 log) |
 | `ZZSHARE fill-in` 失败(已有) | suffix 为空 | 200 | `WARNING` 已有 |
 | 字段级失败(任一 q.amplitude fallback 算不出) | 该字段 `None` | 200 | 无(fallback 是 best-effort) |
 
@@ -324,7 +355,8 @@ GET /boards/{code}/stocks?source=ths&include_quote=true
 ### Non-breaking
 
 - 新增 `open` / `high` / `low` / `prev_close` 字段 —— Pydantic 默认值 `None`,旧 client 忽略
-- 新增 helper `_project_unified_quote_to_dict` —— 服务端内部,不影响 client
+- 新增 helper `_enrich_rows_with_market_quote` —— 服务端内部,不影响 client
+- 删除原 v1 的 `_project_unified_quote_to_dict` helper(2026-07-30 union 修订后被 `_enrich_rows_with_market_quote` 内联吸收,变成 dead code)
 - `get_cached_market_quotes` helper —— 服务端内部
 - suffix 行字段填充 —— 旧 client 拿到的字段值更全,无负面
 
@@ -360,37 +392,35 @@ class TestSuffixQuoteFillup:
         ...
 ```
 
-### 8.2 Quote 投影 helper 单元测试(`tests/test_persistence_board.py`,作为 helper 单元)
+### 8.2 Quote 补全 helper 单元测试(`tests/test_persistence_board.py`,union 语义)
 
-注:投影 helper `_project_unified_quote_to_dict` 是 module-level 函数,在 `persistence/board.py`,**不**是 `BoardStockInfo` classmethod。测试在 `tests/test_persistence_board.py` 而非 `test_schemas.py`,与 §8.1 helper 单元测试同文件。
+注:union 补全 helper `_enrich_rows_with_market_quote` 是 module-level 函数,在 `persistence/board.py`,**不**是 `BoardStockInfo` classmethod。测试在 `tests/test_persistence_board.py` 而非 `test_schemas.py`,与 §8.1 helper 单元测试同文件。v1 spec 的 `_project_unified_quote_to_dict` 7 个单元测试在 2026-07-30 union 修订后被删除(helper 自身 dead code),替换为 union 行为的 6 个用例。
 
 ```python
-class TestProjectUnifiedQuoteToDict:
-    def test_amplitude_fallback_when_unified_amplitude_is_none(self):
-        """q.amplitude=None, high/low/pre_close 都齐 → dict["amplitude"] 算出 fallback。"""
+class TestEnrichRowsWithMarketQuote:
+    def test_rows_with_all_none_filled_with_13_fields(self):
+        """Suffix-like row (all None quote fields) gets all 13 fillable
+        fields from the market quote. 验证 union 对 suffix 行 = 全填语义。"""
         ...
 
-    def test_amplitude_passthrough_when_unified_amplitude_set(self):
-        """q.amplitude 已设,直接用 q.amplitude,不重新计算。"""
+    def test_ths_row_keeps_existing_values_only_fills_missing(self):
+        """Union 核心:THS top-50 行已有字段保留,None 字段被补。"""
         ...
 
-    def test_amplitude_none_when_no_fallback_inputs(self):
-        """q.amplitude=None 且 high/low/pre_close 缺任一,dict["amplitude"]=None。"""
+    def test_row_not_in_market_quote_kept_as_is(self):
+        """code 不在 market quote 中(停牌/新上市),该行保持原样。"""
         ...
 
-    def test_returns_upstream_style_keys(self):
-        """返回 dict 用 stock_code/stock_name/turnover_rate/amplitude 等
-        fetcher-style keys(不是 BoardStockInfo 字段名 code/name/
-        turnover_pct/amplitude_pct),保证与 THS/ZZSHARE fetcher
-        输出一致。"""
+    def test_empty_market_quote_returns_input_unchanged(self):
+        """market_quote 为空 → 返回 copy(rows) 不变。"""
         ...
 
-    def test_name_fallback_to_quote_name_when_param_empty(self):
-        """name 参数空字符串时,fallback 到 q.name。"""
+    def test_input_list_not_mutated(self):
+        """Helper 返回新 list;输入 list 不变。"""
         ...
 
-    def test_param_name_wins_over_quote_name(self):
-        """name 参数非空时,param name 优先,保留 upstream 板块成员名。"""
+    def test_amplitude_fallback_fills_when_unified_amplitude_is_none(self):
+        """q.amplitude=None 且 high/low/pre_close 都齐 → amplitude 用 fallback 公式。"""
         ...
 
     def test_ths_only_fields_not_in_dict(self):
@@ -403,21 +433,12 @@ class TestProjectUnifiedQuoteToDict:
 ### 8.3 集成测试(`tests/test_routes_boards.py` 新增 / 增强)
 
 ```python
-class TestBoardStocksSuffixQuoteFillupE2E:
-    def test_quote_field_amplitude_renamed_to_amplitude_pct_in_response(self):
-        """大 board 响应 JSON 中,字段名是 amplitude_pct 而非 amplitude。"""
-        ...
-
-    def test_suffix_rows_have_open_high_low_prev_close(self):
-        """suffix 行(>50 成员部分)有 4 个新字段。"""
-        ...
-
-    def test_ths_top50_has_all_ths_only_fields(self):
-        """THS top-50 行(若有 change_speed 等)保留,不被补全覆盖。"""
-        ...
-
-    def test_include_quote_false_path_unchanged(self):
-        """include_quote=False 时,响应字段与本次改动前一致(回归)。"""
+class TestGetBoardStocksUnionFillupE2E:
+    def test_ths_top50_row_gets_missing_fields_filled(self):
+        """端到端:THS top-50 行(11 字段已填)+ suffix 行(0 字段已填),
+        在 _enrich_rows_with_market_quote 后,THS 行 5 字段 [open/high/low/
+        prev_close/volume] 被 /stocks 缓存补全(其他 8 字段保留),
+        suffix 行 13 字段全填。验证 union 行为贯穿 get_board_stocks 整条路径。"""
         ...
 ```
 
@@ -457,12 +478,15 @@ class TestBoardStocksSuffixQuoteFillupE2E:
 
 ## 11. Open Questions
 
-无未决 trade-off。所有设计决策(字段范围、字段命名、TTL 复用、cache 命名空间、是否加 `quote_fill_source`、是否动 THS top-50、是否引入 Pydantic alias、是否新建 fetcher)在 brainstorming 阶段已与用户确认。
+无未决 trade-off(2026-07-30 union 修订后,所有原 trade-off 已收敛)。设计决策记录:字段范围(13 fillable + 3 THS 专属)、字段命名(`amplitude` → `amplitude_pct` + 4 个新字段对齐 `StockQuote`)、TTL 复用(`/stocks` 60s/7d)、cache 命名空间(`stock_list_quote:csi` 共享)、不加 `quote_fill_source`、union 语义(2026-07-30 修订后也对 THS top-50 行的 5 缺失字段补全)、不引入 Pydantic alias、不新建 fetcher。
 
 ## 12. References
 
-- `persistence/board.py:1300-1382` —— suffix 拼接现有逻辑
+- `persistence/board.py:1275+` —— `_enrich_rows_with_market_quote` (union helper)
+- `persistence/board.py:76+` —— `get_cached_market_quotes` 共享 `/stocks` cache
+- `persistence/board.py:1300-1382` —— `get_board_stocks` include_quote 集成点
 - `ths_fetcher.py:1237-1240` —— THS 50-cap 根因
+- `ths_fetcher.py:3163` —— THS top-50 `volume=None` 硬编码
 - `stocks.py:246-285` —— `/stocks` session-aware 缓存
 - `cache.py:31-37` —— `_stock_list_quote_cache` / `_stock_list_quote_slow` 定义
 - `core/types.py:55-91` —— `UnifiedRealtimeQuote` dataclass
@@ -471,13 +495,21 @@ class TestBoardStocksSuffixQuoteFillupE2E:
 
 ## 13. Implementation History
 
-- **2026-07-30**: Implemented via plan `docs/superpowers/plans/2026-07-30-board-stocks-quote-fillup.md` on branch `feat/board-stocks-quote-fillup`. Commits landed in order:
+- **2026-07-30 (v1, branch `feat/board-stocks-quote-fillup`, merged to master)**: Initial suffix-only implementation. Helper was `_project_unified_quote_to_dict` (always overwrites) + `_enrich_suffix_with_market_quote` (only called for suffix rows). THS top-50 rows left untouched on the 5 fields THS doesn't have (open/high/low/prev_close/volume). Merged to master as 7 commits.
 
-  1. `feat(persistence): add _project_unified_quote_to_dict helper for suffix fillup` (Task 1 — helper + 7 unit tests)
-  2. `feat(schemas): rename BoardStockInfo.amplitude → amplitude_pct + add open/high/low/prev_close` (Task 2 — schema rename + 4 new fields + `_build_board_stock_info` projection update + 2 E2E tests)
-  3. `feat(persistence): add get_cached_market_quotes helper for cross-endpoint fillup` (Task 3 — `get_cached_market_quotes` reads shared `/stocks` cache, intraday/slow branch + slow-cache write tag inlined rather than duplicated as helpers; 4 unit tests)
-  4. `feat(persistence): enrich /boards/{code}/stocks suffix from /stocks quote cache` (Task 4 — `_enrich_suffix_with_market_quote` + integration in `get_board_stocks`; 4 unit tests)
-  5. `test: stub get_cached_market_quotes in board tests that don't exercise fillup` (Task 5 — pre-existing `test_persistence_board_topn.py` + `test_boards.py::TestBoardsSourceUnification` fixed to stub the new helper)
+- **2026-07-30 (v2, branch `feat/board-stocks-quote-fillup-union`)**: User testing found that THS top-50 rows' 5 missing fields stayed null in real responses (e.g. `code=300469` had `open/high/low/prev_close/volume` all null). User requested "union 补全": fill None fields from `/stocks` cache, preserve existing non-None values. New design:
+
+  - Helper renamed: `_enrich_suffix_with_market_quote` → `_enrich_rows_with_market_quote` (generalized; takes any list of rows, not just suffix).
+  - Semantics changed: was "build new dict from scratch using UnifiedRealtimeQuote", now "for each field, if row value is None, fill from quote" (union). This means suffix rows still get all 13 fields (all None → all filled), AND THS top-50 rows now get the 5 missing fields filled (preserving their 8 existing ones).
+  - Applied to all rows in `get_board_stocks` include_quote=True branch (was: only suffix).
+  - Dead code removed: `_project_unified_quote_to_dict` was subsumed (its logic inlined into `_enrich_rows_with_market_quote`); deleted along with its 7 unit tests.
+  - 1 new E2E test (`TestGetBoardStocksUnionFillupE2E`) verifies the union path end-to-end through `get_board_stocks`.
+
+  Commits on `feat/board-stocks-quote-fillup-union`:
+  1. `refactor(persistence): rename _enrich_suffix_with_market_quote → _enrich_rows_with_market_quote + union semantics`
+  2. `feat(persistence): apply _enrich_rows_with_market_quote to all rows in include_quote=True branch`
+  3. `test: add union E2E + fix existing tests to mock get_realtime_quotes`
+  4. `docs(spec): update spec to record v2 union semantics`
 
   Pre-existing test failures (`test_providers.py::TestAkshareFetcher`, `test_persistence_zzshare_fallback_live.py`, `test_stock_boards_eastmoney_source.py::test_stocks_boards_eastmoney_source_live`) were verified pre-existing via `git stash` comparison — caused by missing network/SDK conditions, not by this spec.
 
@@ -485,3 +517,4 @@ class TestBoardStocksSuffixQuoteFillupE2E:
   - Spec's "factory classmethod" design (v1) was changed to "module-level helper returning dict" (v2) after code-review caught a critical `KeyError` risk: `BoardStockInfo.model_dump()` emits model field names (`code`/`name`/`turnover_pct`/`amplitude_pct`), but the rest of the system (persistence + route) reads upstream-style keys (`stock_code`/`stock_name`/`turnover_rate`/`amplitude`). The helper directly returns an upstream-style dict to keep `update_cached_board_stocks` working.
   - Spec's "extract `_is_intraday` and `_latest_past_close` as separate helpers" (v1) was changed to "inline the logic in `get_cached_market_quotes`" (v2) after user feedback in execution: YAGNI, single call site, avoids cross-module dependency.
   - E2E tests for the rename + new fields were moved from Task 5 to Task 2 (where the rename lands) per code-review feedback (strict TDD, no forward-deps in test ordering).
+  - **Suffix-only fillup (v1) was upgraded to union fillup (v2)** after real-server testing showed the v1 design left 5 fields null on THS top-50 rows. The "不要动 THS top-50" v1 non-goal was over-cautious: `/stocks` cache is fundamentally the same data as THS top-50 quote (both are real-time A-share quote), and the 4 fields open/high/low/prev_close have very low time-drift sensitivity (open/prev_close are static for the day; high/low drift ≤ 60s). The user explicitly requested "取并集" semantics; v2 is the new contract.

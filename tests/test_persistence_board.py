@@ -1,7 +1,7 @@
 """Unit + integration tests for stock_data.data_provider.persistence.board.
 
-Added 2026-07-30: _project_unified_quote_to_dict helper unit tests
-(spec 2026-07-30, plan task 1).
+Added 2026-07-30: union-semantic _enrich_rows_with_market_quote helper
+unit tests + E2E (spec 2026-07-30, plan task 4).
 """
 from zoneinfo import ZoneInfo
 
@@ -37,97 +37,196 @@ def _q(**overrides) -> UnifiedRealtimeQuote:
     return UnifiedRealtimeQuote(**defaults)
 
 
-class TestProjectUnifiedQuoteToDict:
-    """Tests for the suffix-quote projection helper (spec 2026-07-30)."""
+class TestEnrichRowsWithMarketQuote:
+    """Tests for _enrich_rows_with_market_quote (spec 2026-07-30, plan task 4).
 
-    def test_returns_upstream_style_keys(self):
-        """Result uses fetcher-style keys (stock_code/stock_name/turnover_rate/
-        amplitude), NOT BoardStockInfo model field names (code/name/
-        turnover_pct/amplitude_pct). This is the contract that keeps
-        update_cached_board_stocks happy."""
+    Union semantics: for each row, fill in any quote-shaped field whose
+    value is None or missing by looking up the row's stock_code in the
+    market-quote index. Existing non-None values are preserved (THS rows
+    take priority for fields they have; /stocks cache fills the gaps).
+
+    THS-only fields (change_speed, free_float_shares, float_market_cap)
+    are NEVER set here. ZT-pool fields (is_limit_up, lb_count) are
+    NEVER set here (set by route-layer ZT join).
+
+    Fillable fields (13):
+        price, change_pct, change_amount, volume, amount,
+        turnover_rate, volume_ratio, pe_ratio,
+        open, high, low, prev_close, amplitude
+    """
+
+    def test_rows_with_all_none_filled_with_13_fields(self):
+        """Suffix-like row (all None quote fields) gets all 13 fillable
+        fields from the market quote. This is the original suffix
+        enrichment behavior — the union semantics subsumes it because
+        all fields are None."""
         from stock_data.data_provider.persistence import board as pb
 
-        q = _q()
-        d = pb._project_unified_quote_to_dict("600519", "贵州茅台", q)
-        # stock_code/stock_name (NOT code/name)
-        assert d["stock_code"] == "600519"
-        assert d["stock_name"] == "贵州茅台"
-        assert "code" not in d
-        assert "name" not in d
-        # turnover_rate (NOT turnover_pct)
-        assert d["turnover_rate"] == 0.5
-        assert "turnover_pct" not in d
-        # amplitude (NOT amplitude_pct)
-        assert d["amplitude"] == 2.0
-        assert "amplitude_pct" not in d
-        # 4 new fields use their own names
-        assert d["open"] == 1680.0
-        assert d["high"] == 1710.0
-        assert d["low"] == 1675.0
-        assert d["prev_close"] == 1675.0
-        # 7 other quote fields
-        assert d["price"] == 1700.0
-        assert d["change_pct"] == 1.5
-        assert d["change_amount"] == 25.0
-        assert d["volume"] == 1000000
-        assert d["amount"] == 1.7e9
-        assert d["volume_ratio"] == 1.2
-        assert d["pe_ratio"] == 30.0
+        rows = [
+            {"stock_code": "600000", "stock_name": "浦发银行"},
+            {"stock_code": "601318", "stock_name": "中国平安"},
+        ]
+        market_quotes = [
+            _q(
+                code="600000", name="浦发银行", price=8.0, change_pct=0.0,
+                change_amount=0.0, volume=5000000, amount=4.0e7,
+                turnover_rate=0.3, volume_ratio=1.1, amplitude=1.5,
+                open_price=7.95, high=8.05, low=7.90, pre_close=8.0,
+                pe_ratio=5.0,
+            ),
+            _q(
+                code="601318", name="中国平安", price=50.0, change_pct=2.0,
+                change_amount=1.0, volume=10000000, amount=5.0e8,
+                turnover_rate=0.4, volume_ratio=1.2, amplitude=2.5,
+                open_price=49.5, high=50.5, low=49.0, pre_close=49.0,
+                pe_ratio=8.0,
+            ),
+        ]
 
-    def test_amplitude_fallback_when_unified_amplitude_is_none(self):
-        """q.amplitude=None, high/low/pre_close set → fallback computes amplitude."""
+        enriched = pb._enrich_rows_with_market_quote(rows, market_quotes)
+        assert len(enriched) == 2
+        # 600000 was enriched with upstream-style dict keys
+        row_600000 = next(r for r in enriched if r["stock_code"] == "600000")
+        assert row_600000["stock_code"] == "600000"
+        assert row_600000["stock_name"] == "浦发银行"
+        assert row_600000["price"] == 8.0
+        assert row_600000["open"] == 7.95
+        assert row_600000["amplitude"] == 1.5
+        assert row_600000["turnover_rate"] == 0.3
+        # 13 fillable fields populated
+        for f in ("price", "change_pct", "change_amount", "volume", "amount",
+                  "turnover_rate", "amplitude", "volume_ratio", "pe_ratio",
+                  "open", "high", "low", "pre_close"):
+            assert row_600000.get(f) is not None, f"{f} should be filled"
+        # THS-only fields stay absent
+        assert "change_speed" not in row_600000
+        assert "free_float_shares" not in row_600000
+        assert "float_market_cap" not in row_600000
+        # 601318 was enriched
+        row_601318 = next(r for r in enriched if r["stock_code"] == "601318")
+        assert row_601318["price"] == 50.0
+        assert row_601318["turnover_rate"] == 0.4
+
+    def test_ths_row_keeps_existing_values_only_fills_missing(self):
+        """Union semantics: THS top-50 row (has price/change_pct/etc
+        populated but open/high/low/prev_close/volume are None) only
+        gets the missing fields filled. Existing non-None values
+        are preserved (no overwrite)."""
         from stock_data.data_provider.persistence import board as pb
 
-        q = _q(amplitude=None)
-        d = pb._project_unified_quote_to_dict("600519", "贵州茅台", q)
-        # (1710 - 1675) / 1675 * 100 ≈ 2.0896
-        assert d["amplitude"] == pytest.approx(2.0896, rel=1e-3)
+        # Simulate a THS top-50 row: most fields set, but
+        # open/high/low/prev_close/volume/amplitude are None (THS 14
+        # columns don't include them).
+        ths_row = {
+            "stock_code": "300469", "stock_name": "信息发展",
+            "price": 51.4,
+            "change_pct": 6.71,
+            "change_amount": 3.23,
+            "amount": 425000000.0,
+            "turnover_rate": 3.57,
+            "amplitude": 11.31,  # THS column 9
+            "change_speed": -0.04,  # THS column 6
+            "volume_ratio": 0.95,  # THS column 8
+            "free_float_shares": 248000000,  # THS column 11
+            "float_market_cap": 12753000000.0,  # THS column 12
+            "pe_ratio": None,  # THS upstream `--`
+            # open / high / low / prev_close / volume are None (THS missing)
+        }
+        market_quote = _q(
+            code="300469", name="信息发展",
+            # /stocks has different values (cache could be 0-60s old)
+            price=99.9,  # DIFFERENT from THS
+            change_pct=99.9,  # DIFFERENT
+            change_amount=99.9,  # DIFFERENT
+            volume=1234567,  # /stocks has it, THS doesn't
+            amount=888e6,  # DIFFERENT
+            turnover_rate=99.9,  # DIFFERENT
+            amplitude=99.9,  # DIFFERENT
+            volume_ratio=99.9,  # DIFFERENT
+            pe_ratio=42.0,  # /stocks has it, THS was None
+            open_price=50.5,  # /stocks has it
+            high=52.0,
+            low=50.0,
+            pre_close=48.17,
+        )
 
-    def test_amplitude_none_when_no_fallback_inputs(self):
-        """q.amplitude=None and high/low/pre_close missing → dict["amplitude"]=None."""
+        enriched = pb._enrich_rows_with_market_quote([ths_row], [market_quote])
+        assert len(enriched) == 1
+        out = enriched[0]
+
+        # Existing THS values PRESERVED (no overwrite from /stocks)
+        assert out["price"] == 51.4  # not 99.9
+        assert out["change_pct"] == 6.71  # not 99.9
+        assert out["change_amount"] == 3.23  # not 99.9
+        assert out["amount"] == 425000000.0  # not 888e6
+        assert out["turnover_rate"] == 3.57  # not 99.9
+        assert out["amplitude"] == 11.31  # not 99.9
+        assert out["volume_ratio"] == 0.95  # not 99.9
+        # THS-only fields preserved
+        assert out["change_speed"] == -0.04
+        assert out["free_float_shares"] == 248000000
+        assert out["float_market_cap"] == 12753000000.0
+
+        # Missing fields FILLED from /stocks
+        assert out["volume"] == 1234567
+        assert out["open"] == 50.5
+        assert out["high"] == 52.0
+        assert out["low"] == 50.0
+        assert out["pre_close"] == 48.17
+        # pe_ratio was None in THS, filled from /stocks
+        assert out["pe_ratio"] == 42.0
+
+    def test_row_not_in_market_quote_kept_as_is(self):
+        """A code absent from market quote (停牌/新上市) is kept as-is."""
         from stock_data.data_provider.persistence import board as pb
 
-        q = _q(amplitude=None, high=None, low=None, pre_close=None)
-        d = pb._project_unified_quote_to_dict("600519", "贵州茅台", q)
-        assert d["amplitude"] is None
+        rows = [{"stock_code": "688999", "stock_name": "新股A"}]
+        market_quotes = [
+            _q(code="600000", name="浦发银行"),
+        ]
+        enriched = pb._enrich_rows_with_market_quote(rows, market_quotes)
+        # 688999 not in index → kept as-is
+        assert len(enriched) == 1
+        assert enriched[0]["stock_code"] == "688999"
+        assert enriched[0].get("price") is None
+        assert enriched[0].get("amplitude") is None
 
-    def test_amplitude_passthrough_when_unified_amplitude_set(self):
-        """q.amplitude already set → use it directly, do not recompute."""
+    def test_empty_market_quote_returns_input_unchanged(self):
+        """Empty market_quote → return copy of rows without enrichment."""
         from stock_data.data_provider.persistence import board as pb
 
-        q = _q(amplitude=3.5)
-        d = pb._project_unified_quote_to_dict("600519", "贵州茅台", q)
-        assert d["amplitude"] == 3.5
+        rows = [{"stock_code": "600000", "stock_name": "x"}]
+        enriched = pb._enrich_rows_with_market_quote(rows, [])
+        assert enriched == rows
+        assert enriched is not rows
 
-    def test_ths_only_fields_not_in_dict(self):
-        """change_speed / free_float_shares / float_market_cap must NOT appear
-        in the dict (they're absent, not None). The route layer's
-        _build_board_stock_info reads s.get('change_speed') → default None."""
+    def test_input_list_not_mutated(self):
+        """Helper returns a new list; input rows is not mutated."""
         from stock_data.data_provider.persistence import board as pb
 
-        q = _q()
-        d = pb._project_unified_quote_to_dict("600519", "贵州茅台", q)
-        for k in (
-            "change_speed", "free_float_shares", "float_market_cap",
-            "is_limit_up", "lb_count",
-        ):
-            assert k not in d
+        rows = [{"stock_code": "600000", "stock_name": "x"}]
+        market_quotes = [
+            _q(code="600000", name="x", price=10.0),
+        ]
+        pb._enrich_rows_with_market_quote(rows, market_quotes)
+        # Input dict not mutated
+        assert "price" not in rows[0]
+        assert "amplitude" not in rows[0]
 
-    def test_name_fallback_to_quote_name_when_param_empty(self):
-        """name param empty → fallback to q.name."""
+    def test_amplitude_fallback_fills_when_unified_amplitude_is_none(self):
+        """When q.amplitude is None but high/low/pre_close are set, the
+        (h-l)/pre_close*100 formula fills the amplitude field. Applies
+        to both suffix rows and THS top-50 rows missing amplitude."""
         from stock_data.data_provider.persistence import board as pb
 
-        q = _q(name="茅台")
-        d = pb._project_unified_quote_to_dict("600519", "", q)
-        assert d["stock_name"] == "茅台"
-
-    def test_param_name_wins_over_quote_name(self):
-        """name param set → use it (preserves upstream board member name)."""
-        from stock_data.data_provider.persistence import board as pb
-
-        q = _q(name="Moutai")
-        d = pb._project_unified_quote_to_dict("600519", "贵州茅台", q)
-        assert d["stock_name"] == "贵州茅台"
+        row = {"stock_code": "600000", "stock_name": "x", "amplitude": None}
+        q = _q(
+            code="600000", name="x", amplitude=None,
+            high=10.5, low=10.0, pre_close=10.0,
+        )
+        enriched = pb._enrich_rows_with_market_quote([row], [q])
+        # (10.5 - 10.0) / 10.0 * 100 = 5.0
+        assert enriched[0]["amplitude"] == pytest.approx(5.0, rel=1e-3)
 
 
 class TestGetCachedMarketQuotes:
@@ -210,7 +309,7 @@ class TestGetCachedMarketQuotes:
         cache_mod._stock_list_quote_cache.clear()
 
     def test_cache_miss_triggers_fetch_and_writes_back(self, monkeypatch):
-        """Cache miss → manager called, result written back to either cache, helper returns it."""
+        """Cache miss → manager called, result written back to cache, helper returns it."""
         import datetime as _dt
         from zoneinfo import ZoneInfo
 
@@ -243,7 +342,7 @@ class TestGetCachedMarketQuotes:
 
         result = pb.get_cached_market_quotes(_Mgr())
         assert result is fetched
-        # Write-back hit the fast cache (intraday forced).
+        # Cache was written back.
         assert cache_mod._stock_list_quote_cache.get("stock_list_quote:csi") == (
             fetched, "zzshare",
         )
@@ -265,10 +364,6 @@ class TestGetCachedMarketQuotes:
             "stock_data.data_provider.persistence.trade_calendar.is_trade_date",
             lambda d: False,
         )
-        # Override get_latest_trade_date_on_or_before to avoid calendar
-        # dependency in the (date, session) tag computation for the
-        # cache write in the other tests; not strictly needed here since
-        # we hit the slow cache read path before any write.
         cached = [object()]
         cache_mod._stock_list_quote_slow["stock_list_quote:csi"] = (
             date(2026, 7, 30), "afternoon", cached, "akshare",
@@ -289,114 +384,117 @@ class TestGetCachedMarketQuotes:
         cache_mod._stock_list_quote_slow.clear()
 
 
-class TestEnrichSuffixWithMarketQuote:
-    """Tests for _enrich_suffix_with_market_quote (spec 2026-07-30, plan task 4).
+class TestGetBoardStocksUnionFillupE2E:
+    """End-to-end test for /boards/{code}/stocks union fillup behavior.
 
-    This helper takes the suffix rows (members beyond THS's 50-cap) and
-    enriches each row whose stock_code exists in the market-quote
-    index. Rows whose code is absent (停牌/新上市) are kept as-is.
+    Verifies the new spec union semantics: include_quote=true returns
+    THS top-50 rows with the 5 fields THS upstream doesn't have
+    (open/high/low/prev_close/volume) filled from /stocks quote cache.
+    Suffix rows (members beyond THS 50-cap) get all 13 fillable
+    fields from /stocks cache.
+
+    Uses monkeypatch to mock all upstream calls; no real network.
     """
 
-    def test_suffix_rows_enriched_with_13_fields(self):
-        """When market quote has a code that suffix has, the 13 quote
-        fields are projected onto the suffix row dict (upstream-style
-        keys). THS top-50 rows are NOT touched (not in scope of this
-        helper)."""
-        from stock_data.data_provider.core.types import (
-            RealtimeSource,
-            UnifiedRealtimeQuote,
-        )
+    def test_ths_top50_row_gets_missing_fields_filled(self, monkeypatch, tmp_path):
+        """THS top-50 row: 11 quote fields from THS, 5 missing fields
+        (open/high/low/prev_close/volume) filled from /stocks cache.
+        THS existing values are NOT overwritten.
+        """
         from stock_data.data_provider.persistence import board as pb
 
-        suffix_rows = [
-            {"stock_code": "600000", "stock_name": "浦发银行"},
-            {"stock_code": "601318", "stock_name": "中国平安"},
-        ]
+        # Set up: 1 THS top-50 row (has price/change_pct/etc, missing
+        # open/high/low/prev_close/volume) + 1 suffix row (only code/name).
+        ths_top_row = {
+            "stock_code": "300469", "stock_name": "信息发展",
+            "price": 51.4, "change_pct": 6.71, "change_amount": 3.23,
+            "amount": 425000000.0, "turnover_rate": 3.57,
+            "amplitude": 11.31, "change_speed": -0.04, "volume_ratio": 0.95,
+            "free_float_shares": 248000000, "float_market_cap": 12753000000.0,
+            "pe_ratio": None,
+            # open / high / low / prev_close / volume all None
+        }
+        suffix_row = {"stock_code": "688999", "stock_name": "新股A"}
+
+        # THS upstream returns 1 row (the top-50 row).
+        # ZZSHARE returns the suffix row.
+        # /stocks cache has data for both codes.
         market_quotes = [
-            UnifiedRealtimeQuote(
-                code="600000", name="浦发银行", source=RealtimeSource.ZZSHARE,
-                price=8.0, change_pct=0.0, change_amount=0.0,
-                volume=5000000, amount=4.0e7,
-                turnover_rate=0.3, amplitude=1.5,
-                open_price=7.95, high=8.05, low=7.90, pre_close=8.0,
-                pe_ratio=5.0,
+            _q(
+                code="300469", name="信息发展",
+                volume=1234567,
+                open_price=50.5, high=52.0, low=50.0, pre_close=48.17,
+                pe_ratio=42.0,
             ),
-            UnifiedRealtimeQuote(
-                code="601318", name="中国平安", source=RealtimeSource.ZZSHARE,
-                price=50.0, change_pct=2.0, change_amount=1.0,
-                volume=10000000, amount=5.0e8,
-                turnover_rate=0.4, amplitude=2.5,
-                open_price=49.5, high=50.5, low=49.0, pre_close=49.0,
-                pe_ratio=8.0,
+            _q(
+                code="688999", name="新股A", price=10.0, change_pct=0.0,
+                change_amount=0.0, volume=500000, amount=5e6,
+                turnover_rate=0.5, volume_ratio=1.0,
+                open_price=9.9, high=10.1, low=9.8, pre_close=9.85,
+                pe_ratio=15.0, amplitude=2.5,
             ),
         ]
 
-        enriched = pb._enrich_suffix_with_market_quote(suffix_rows, market_quotes)
-        assert len(enriched) == 2
-        # 600000 was enriched with upstream-style dict keys
-        row_600000 = next(r for r in enriched if r["stock_code"] == "600000")
-        assert row_600000["stock_code"] == "600000"
-        assert row_600000["stock_name"] == "浦发银行"
-        assert row_600000["price"] == 8.0
-        assert row_600000["open"] == 7.95
-        assert row_600000["amplitude"] == 1.5      # upstream-style, NOT amplitude_pct
-        assert row_600000["turnover_rate"] == 0.3 # upstream-style, NOT turnover_pct
-        # THS-only fields stay absent (not None — they're not in the dict)
-        assert "change_speed" not in row_600000
-        assert "free_float_shares" not in row_600000
-        assert "float_market_cap" not in row_600000
-        # 601318 was enriched
-        row_601318 = next(r for r in enriched if r["stock_code"] == "601318")
-        assert row_601318["price"] == 50.0
-        assert row_601318["turnover_rate"] == 0.4
+        # Stub the DB to be empty so the cache branch is taken.
+        monkeypatch.setattr(pb, "_read_board_stocks_from_db", lambda *a, **kw: [])
+        monkeypatch.setattr(pb, "update_cached_board_stocks", lambda *a, **kw: 0)
+        # CID resolution returns a valid CID so THS branch proceeds.
+        monkeypatch.setattr(pb, "_resolve_ths_cid_from_platecode", lambda code: "301558")
 
-    def test_suffix_row_not_in_market_quote_kept_as_is(self):
-        """A suffix code absent from market quote (停牌/新上市) is kept as-is."""
-        from stock_data.data_provider.core.types import (
-            RealtimeSource,
-            UnifiedRealtimeQuote,
+        # Stub get_cached_market_quotes to return our market quotes.
+        monkeypatch.setattr(pb, "get_cached_market_quotes", lambda mgr: market_quotes)
+
+        # Stub the upstream fetcher calls.
+        class _Mgr:
+            def get_board_stocks(self, board_code, source, **kwargs):
+                if kwargs.get("include_quote"):
+                    return [ths_top_row], "ths"
+                return [suffix_row], "zzshare"
+            def get_realtime_quotes(self, market):
+                return market_quotes, "zzshare"
+
+        result = pb.get_board_stocks(
+            board_code="885406",
+            source="ths",
+            refresh=True,
+            include_quote=True,
+            manager=_Mgr(),
         )
-        from stock_data.data_provider.persistence import board as pb
+        # 6-tuple return
+        assert len(result) == 6
+        stocks, origin, es, reason, quote_truncated, total_in_board = result
+        # Order: THS top-50 first, suffix after
+        assert len(stocks) == 2
+        assert stocks[0]["stock_code"] == "300469"
+        assert stocks[1]["stock_code"] == "688999"
 
-        suffix_rows = [{"stock_code": "688999", "stock_name": "新股A"}]
-        market_quotes = [
-            UnifiedRealtimeQuote(
-                code="600000", name="浦发银行", source=RealtimeSource.ZZSHARE,
-            ),
-        ]
-        enriched = pb._enrich_suffix_with_market_quote(suffix_rows, market_quotes)
-        # 688999 not in index → kept as-is, no quote fields
-        assert len(enriched) == 1
-        assert enriched[0]["stock_code"] == "688999"
-        assert enriched[0].get("price") is None
-        assert enriched[0].get("amplitude") is None
+        # THS top-50 row: existing fields preserved, 5 missing filled
+        ths_row = stocks[0]
+        assert ths_row["price"] == 51.4  # THS preserved
+        assert ths_row["change_pct"] == 6.71  # THS preserved
+        assert ths_row["turnover_rate"] == 3.57  # THS preserved
+        assert ths_row["amplitude"] == 11.31  # THS preserved
+        assert ths_row["change_speed"] == -0.04  # THS-only preserved
+        assert ths_row["free_float_shares"] == 248000000  # THS-only preserved
+        # 5 missing fields filled from /stocks cache
+        assert ths_row["volume"] == 1234567
+        assert ths_row["open"] == 50.5
+        assert ths_row["high"] == 52.0
+        assert ths_row["low"] == 50.0
+        assert ths_row["pre_close"] == 48.17
+        # pe_ratio was None in THS, filled from /stocks
+        assert ths_row["pe_ratio"] == 42.0
 
-    def test_empty_market_quote_returns_input_unchanged(self):
-        """Empty market_quote → return copy of suffix_rows without enrichment."""
-        from stock_data.data_provider.persistence import board as pb
+        # Suffix row: all 13 fillable fields filled
+        suf_row = stocks[1]
+        assert suf_row["price"] == 10.0
+        assert suf_row["volume"] == 500000
+        assert suf_row["open"] == 9.9
+        assert suf_row["high"] == 10.1
+        assert suf_row["low"] == 9.8
+        assert suf_row["pre_close"] == 9.85
+        assert suf_row["amplitude"] == 2.5
+        assert suf_row["pe_ratio"] == 15.0
 
-        suffix_rows = [{"stock_code": "600000", "stock_name": "x"}]
-        enriched = pb._enrich_suffix_with_market_quote(suffix_rows, [])
-        assert enriched == suffix_rows
-        # Verify it's a copy (not the same list reference) for safety.
-        assert enriched is not suffix_rows
-
-    def test_input_list_not_mutated(self):
-        """Helper returns a new list; input suffix_rows is not mutated."""
-        from stock_data.data_provider.core.types import (
-            RealtimeSource,
-            UnifiedRealtimeQuote,
-        )
-        from stock_data.data_provider.persistence import board as pb
-
-        suffix_rows = [{"stock_code": "600000", "stock_name": "x"}]
-        market_quotes = [
-            UnifiedRealtimeQuote(
-                code="600000", name="x", source=RealtimeSource.ZZSHARE,
-                price=10.0,
-            ),
-        ]
-        pb._enrich_suffix_with_market_quote(suffix_rows, market_quotes)
-        # Input dict not mutated (the helper builds new dicts, not edits)
-        assert "price" not in suffix_rows[0]
-        assert "amplitude" not in suffix_rows[0]
+        # quote_truncated: suffix was non-empty → True
+        assert quote_truncated is True
