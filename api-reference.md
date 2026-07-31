@@ -1256,10 +1256,20 @@ via the `subject_id mismatch` warning before the article body.
 
 ## Agent Batch API
 
-All routes in this section are JSON-in / JSON-out `POST` endpoints under
-`/api/v1/agent/*` (`stock_data/api/routes/agent.py`). They are server-side
-aggregations: the typical AI-agent flow of "fetch N boards, pairwise
-compute intersection, summarize" is folded into one request.
+All routes in this section live under `/api/v1/agent/*`
+(`stock_data/api/routes/agent.py`). They are server-side aggregations:
+the typical AI-agent flow of "fetch N boards, pairwise compute
+intersection, summarize" is folded into one request. Six endpoints ship
+in v1:
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/agent/boards/stock-overlap` | POST | Pairwise stock-set intersection + Jaccard across 2-10 boards |
+| `/agent/stocks/board-overlap` | POST | Pairwise board-set intersection + Jaccard across 2-10 stocks |
+| `/agent/boards/filter-stocks` | POST | Server-side numeric filter on a board's constituents |
+| `/agent/indices/batch-profile` | GET | Per-index quote + 5m/d/w K-line (3 default CSI indices) |
+| `/agent/market-context` | GET | Morning briefing + market recap + flash + zt/dt + dragon-tiger |
+| `/agent/stocks/batch-profile` | POST | Per-stock fan-out across quote / kline / info / boards (1-5 codes) |
 
 **Common contract:**
 
@@ -1270,13 +1280,45 @@ compute intersection, summarize" is folded into one request.
 - **60s in-memory cache.** Cached under the existing `get_quote_cache`
   (reused as a generic 60s TTLCache slot for agent results). The
   `filter-stocks` cache key also includes `limit`, because `limit` is
-  forwarded to upstream `get_board_stocks(..., top_n=limit)`.
+  forwarded to upstream `get_board_stocks(..., top_n=limit)`. The
+  `market-context` cache key also includes `session`
+  (`pre-market` / `intraday` / `post-market` / `closed`) — without
+  it, a 09:00 pre-market cache hit would mask a 16:00 post-market
+  refresh.
 - **No LLM judgment.** These endpoints emit only numeric / set-arithmetic
   facts. "Which stock is the leader" / "Which board is the better pick"
   remains the agent's job via `skills/market-principles.md`.
 - **Capability-free.** Routes are decorated with
   `@endpoint_meta(capabilities=[])` — they don't map to a single
   `DataCapability` flag.
+
+**`?format=json|md` projection:**
+
+All 6 endpoints accept an optional `?format` query parameter:
+
+| Value | Content-Type | Use case |
+|---|---|---|
+| `json` (default) | `application/json` | Programmatic clients, JSON pipelines |
+| `md` | `text/markdown; charset=utf-8` | LLM agents (lower token cost; native in training data) |
+
+The MD projection renders the Pydantic response to a stable markdown
+layout (tables + headings + bullet lists). No data is dropped — every
+JSON field appears in the MD output (e.g. the `matched_stocks` table
+on `filter-stocks` carries all 16 fields; the `dragon_tiger.stocks`
+list on `market-context` shows the full table alongside the top-10
+summary). Pinned by
+`tests/test_agent_endpoints.py::TestFormatMdDataCompleteness` (7 tests).
+
+**Cache + format interaction:** the cache is **format-agnostic** — the
+same Pydantic model serves both `?format=json` and `?format=md`. A
+single body hashes to one cache entry; the dispatch happens at the
+response layer.
+
+**MD render failure → JSON fallback:** if a per-endpoint template
+raises (e.g. an unexpected field shape), the helper returns the
+original JSON payload as `application/json` plus an
+`X-MD-Render-Error: <ExceptionClassName>: <message>` header. The
+client always gets data, just not in their preferred format.
 
 ---
 
@@ -1512,3 +1554,232 @@ path applies `limit` on the way out. This is required for correctness
 when `limit` is forwarded as upstream `top_n` — do not collapse
 `filter-stocks` and `boards/stock-overlap` into a single cache key
 namespace.
+
+---
+
+### GET /api/v1/agent/indices/batch-profile
+
+Per-index fan-out: realtime quote + 5m / d / w K-line. Use case: "give
+me a one-call snapshot of the major CSI indices for the market-recap
+'指数全景' step".
+
+```bash
+GET /api/v1/agent/indices/batch-profile
+GET /api/v1/agent/indices/batch-profile?codes=000001,000300
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `codes` | string | `000001,399001,399006` | Comma-separated CSI index codes. Empty = the 3 core indices (上证 / 深证 / 创业板). |
+| `format` | string | `json` | `json` (default) or `md` — see [`?format=json|md` projection](#agent-batch-api). |
+
+**Response (200):**
+
+```json
+{
+  "indices": [
+    {
+      "code": "000001",
+      "name": "上证指数",
+      "quote": {
+        "code": "000001", "name": "上证指数", "source": "akshare",
+        "current_price": 3200.0, "change_amount": 5.5, "change_pct": 0.17,
+        "open": 3195.0, "high": 3210.0, "low": 3190.0, "prev_close": 3194.5,
+        "volume": 123456789, "amount": 234567890123.0
+      },
+      "klines": {
+        "5m": {"data": [...96 bars...], "error": null},
+        "d":  {"data": [...30 bars...],  "error": null},
+        "w":  {"data": [...48 bars...],  "error": null}
+      },
+      "errors": {"quote": null}
+    }
+  ],
+  "summary": {"requested": 3, "ok": 3, "failed": 0, "elapsed_ms": 1234}
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `indices[].code` | string | The index code (canonical 6-digit). |
+| `indices[].name` | string | The index name (from `index_symbols` map or upstream). |
+| `indices[].quote` | object \| null | The realtime `IndexQuote` dict, or `null` when no fetcher could serve. |
+| `indices[].klines` | object | Per-frequency K-line block (`5m` / `d` / `w`). Each block: `{data: KLineData[], error: string\|null}`. `error` is set when that specific frequency's upstream call failed. |
+| `indices[].errors` | object | `{quote: string\|null}` — per-frequency K-line errors live in `klines[f].error` instead (mirrors the per-aspect shape used by the stocks variant). |
+| `summary.requested` | int | `len(codes)`. |
+| `summary.ok` | int | Number of entries with both quote AND all 3 K-line frequencies served. |
+| `summary.failed` | int | `requested - ok`. |
+| `summary.elapsed_ms` | int | Wall-clock for the fan-out (per request, not per fetcher). |
+
+**Bar counts are pinned server-side** to keep the response shape
+stable: 5m = 2 trading days (~96 bars), d = 30 bars, w = 48 bars
+(~1 year). Clients that want different bar counts still go through
+`/indices/{code}/kline?frequency=...&days=...`.
+
+**K-line fan-out is sequential per index** (3 frequencies × N codes).
+For the default 3 codes that's 9 fetches; the route is not parallelized
+(individual fetcher calls are already I/O-bound under their own
+circuit breakers).
+
+**Errors:**
+
+- No upstream `DataFetchError` propagates out of the route — per-frequency
+  failures populate `klines[f].error` and the entry is marked failed
+  in the summary. The route returns 200 even when all 3 frequencies
+  of an index failed (the failure is in the body, not the status).
+
+**Cache:** `make_indices_batch_profile_cache_key(sorted(codes))` →
+`agent_indices_batch_profile:<sorted_codes>`. Codes are sorted for
+order-perturbation immunity; the response list is reordered to the
+caller's input order on cache hit.
+
+---
+
+### GET /api/v1/agent/market-context
+
+Daily market snapshot: morning briefing + market recap + flash news +
+zt/dt pools + dragon-tiger. Use case: "give me everything I need for
+one market-recap pass in a single call".
+
+```bash
+GET /api/v1/agent/market-context
+GET /api/v1/agent/market-context?flash_limit=50&trade_date=2026-07-14
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `flash_limit` | int | 20 | Flash news item count (1-200, matches `fetch_flash_news`'s `pageSize` hard cap). |
+| `trade_date` | string | latest trade date ≤ today | `YYYY-MM-DD`; affects morning-briefing / market-recap / dragon-tiger. zt and dt pools and flash news are not date-keyed (zt/dt default to today, flash is real-time). Malformed values → 400 `invalid_trade_date`. |
+| `format` | string | `json` | `json` (default) or `md` — see [`?format=json|md` projection](#agent-batch-api). |
+
+**Response (200):**
+
+```json
+{
+  "trade_date": "2026-07-14",
+  "is_trade_day": true,
+  "market_session": "post-market",
+  "messages": {
+    "morning_briefing": {"article_id": 1842356, "title": "财联社7月14日早报", "date": "2026-07-14", "body_text": "..."},
+    "market_recap":    {"article_id": 1842400, "title": "财联社7月14日复盘", "date": "2026-07-14", "body_text": "..."},
+    "flash_news": [{"title": "...", "publish_time": "2026-07-14 09:31:00", "url": "..."}]
+  },
+  "limit_pools": {
+    "zt": [{"code": "601001", "name": "晋控煤业", "change_pct": 10.02, "first_seal_time": "09:41", "lb_count": 2, "industry": "煤炭"}],
+    "dt": null
+  },
+  "dragon_tiger": {
+    "stocks": [{"code": "002475", "name": "立讯精密", "net_buy_wan": 15230.5, "buy_wan": 18000.0, "sell_wan": 2769.5, "total_amount_wan": 95000.0, "pct_chg": 10.0, "pct_chg_after": 10.5}],
+    "summary": {
+      "total_net_buy_wan": 12345.0,
+      "top_by_net_buy": [{"code": "002475", "name": "立讯精密", "net_buy_wan": 15230.5}],
+      "top_by_net_sell": [{"code": "300750", "name": "宁德时代", "net_buy_wan": -8500.0}]
+    }
+  },
+  "summary": {"requested": 6, "ok": 6, "failed": 0, "elapsed_ms": 567}
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `trade_date` | string | The trade date this snapshot represents (`YYYY-MM-DD`). |
+| `is_trade_day` | bool | Whether today (server local CST) is a trade day. |
+| `market_session` | enum | `pre-market` / `intraday` / `post-market` / `closed`. Anchored to Asia/Shanghai 09:15 / 15:00 per spec §3.2.3. |
+| `messages.morning_briefing` | object \| null | CLS morning briefing article dict; `null` when no article published / fetch failed. |
+| `messages.market_recap` | object \| null | CLS market recap article dict; same null semantics. |
+| `messages.flash_news` | object[] | Global flash news list (default 20 items, configurable via `flash_limit`). Empty list on upstream failure. |
+| `limit_pools.zt` / `dt` | object[] \| null | ZT / DT pool lists. `null` in pre-market (池子未成形) OR when the upstream call failed entirely. Empty list `[]` is distinct from `null` (means "fetch succeeded, 0 stocks"). |
+| `dragon_tiger.stocks` | object[] | Full daily 龙虎榜 list (not truncated to top 10). |
+| `dragon_tiger.summary` | object | Server-computed rollup: `total_net_buy_wan` (signed), `top_by_net_buy` (top 10 by net_buy DESC), `top_by_net_sell` (top 10 by net_buy ASC among rows with `net_buy_wan < 0` only — surfacing positive rows as "top sell" would be misleading on all-positive days). |
+| `summary` | object | `{requested, ok, failed, elapsed_ms}` — `requested` is the number of attempts made; in pre-market the zt + dt attempts are skipped, so `requested` drops to 4 (briefing + recap + flash + dtiger). |
+
+**Per-block isolation:** each upstream call is wrapped in its own
+try/except, so a failure in one block (e.g. CLS HTML parser crash on
+the briefing) does not abort the others. The failed block's value is
+its `null` (or `[]` for flash) and the failed count is incremented.
+
+**Cache:** `make_market_context_cache_key(flash_limit, trade_date, session)` →
+`agent_market_context:<flash_limit>:<trade_date>:<session>`. The
+`session` dimension is required because pre/intra/post-market produce
+materially different responses (pre-market forces zt/dt to null).
+
+**`trade_date` validation:** the route enforces a `^\d{4}-\d{2}-\d{2}$`
+regex. Non-date strings (e.g. `yesterday`) → 400 `invalid_trade_date`,
+not a silent 200 with empty results.
+
+---
+
+### POST /api/v1/agent/stocks/batch-profile
+
+Per-stock fan-out across 5 server-side aspects: `quote` (realtime),
+`kline` (daily, 60 bars), `kline_5m` (5-minute, 2 days), `info` (company
+profile), `boards` (THS-membership reverse lookup). Use case: "give
+me everything I need to evaluate 1-5 candidate stocks in a single call".
+
+```bash
+POST /api/v1/agent/stocks/batch-profile
+Content-Type: application/json
+
+{"codes": ["600519", "000858"], "aspects": ["quote", "kline", "info", "boards"]}
+```
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `codes` | string[] | yes | 1-5 stock codes (bare 6-digit A-share). The 5-code cap matches the stock-picking funnel. |
+| `aspects` | enum[] | no (default = all 5) | Subset of `["quote", "kline", "kline_5m", "info", "boards"]`. `fund_flow` is NOT supported (use `/stocks/{code}/fund-flow` directly). |
+
+**Response (200):**
+
+```json
+{
+  "results": [
+    {
+      "code": "600519",
+      "ok": true,
+      "data": {
+        "quote":     {"code": "600519", "name": "贵州茅台", "current_price": 1698.0, "change_pct": 1.52, "...": "..."},
+        "kline":     {"source": "akshare", "data": [{"date": "2026-07-14", "open": 1680.0, "high": 1700.0, "low": 1670.0, "close": 1698.0, "volume": 1234567, "amount": 2087654321.0, "change_pct": 1.52}]},
+        "kline_5m":  {"source": "akshare", "data": [...]},
+        "info":      {"source": "zhitu", "data": {"code": "600519", "name": "贵州茅台", "industry": "白酒"}},
+        "boards":    {"source": "persistence", "data": [{"code": "885595", "name": "白酒", "type": "industry", "subtype": "同花顺行业", "source": "ths"}]}
+      },
+      "errors": []
+    }
+  ],
+  "summary": {"requested": 2, "ok": 2, "failed": 0, "elapsed_ms": 890}
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `results[].code` | string | Stock code (echoes the request). |
+| `results[].ok` | bool | `false` only when **all** aspects raised (entry-level failure); partial aspect failures keep `ok=true` and surface in `errors[]`. |
+| `results[].data` | object | Per-aspect payload (key = aspect name). Each value's shape matches the corresponding non-agent endpoint: `quote` is the flat `StockQuote` dict (NOT wrapped in `{source, data}`); `kline` / `kline_5m` / `info` / `boards` are `{source, data}` envelopes. |
+| `results[].errors[]` | object[] | Per-aspect failure: `{"aspect": "<name>", "error": "<ExceptionClassName>", "message": "<str>"}`. |
+| `summary` | object | `{requested, ok, failed, elapsed_ms}`. |
+
+**Per-aspect error isolation:** each aspect is wrapped in its own
+try/except. The `boards` aspect routes through the persistence layer
+(`stock_board_cache.get_stock_memberships`), NOT `manager.get_stock_boards`,
+to inherit the ZZSHARE↔THS fallback chain and `effective_source` plumbing.
+
+**`kline` aspect pinning:** always passes `asset="stock"` to the
+manager so that codes like `000001` (which is also a CSI index) route
+to `STOCK_KLINE`, not `INDEX_KLINE`. Pinned by
+`test_stocks_batch_profile_kline_passes_asset_stock`.
+
+**Cache:** `make_stocks_batch_profile_cache_key(sorted(codes), sorted(aspects))` →
+`agent_stocks_batch_profile:<sorted_codes>|<sorted_aspects>`. Both
+axes are sorted so the same (set, set) pair collapses to one entry;
+the response is reordered to the caller's input order on hit.
+
+**Errors:**
+
+- `422 invalid_request` (Pydantic) — `codes` empty / > 5 / `aspects`
+  empty / unknown aspect name.

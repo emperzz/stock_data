@@ -98,13 +98,29 @@ curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
     },
     "limit": 10
   }'
+
+# Per-index fan-out: realtime quote + 5m/d/w K-line (3 default CSI indices)
+curl 'http://localhost:8888/api/v1/agent/indices/batch-profile'
+
+# Daily market snapshot: morning briefing + market recap + flash + zt/dt + dragon-tiger
+curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=50'
+
+# Per-stock fan-out across 5 aspects (quote / kline / kline_5m / info / boards)
+curl -X POST http://localhost:8888/api/v1/agent/stocks/batch-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"codes": ["600519", "000858"], "aspects": ["quote", "kline", "info", "boards"]}'
+
+# Any agent endpoint can be requested as markdown (?format=md) — no data loss,
+# lower token cost, native in LLM training data
+curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=20&format=md'
 ```
 
-All three live under `/api/v1/agent/*` and use a 60s in-memory cache
-(`limit` participates in the `filter-stocks` cache key — different
-limits trigger separate upstream `top_n` fetches and separate cache
-entries). Per-item upstream failures are reported in `errors[]` and
-do not abort the response. See **[api-reference.md](api-reference.md#agent-batch-api)** for full
+All six live under `/api/v1/agent/*` and use a 60s in-memory cache
+(`limit` participates in the `filter-stocks` cache key and `session`
+participates in the `market-context` key — different values trigger
+separate fetches and separate cache entries). Per-item upstream
+failures are reported in `errors[]` and do not abort the response. See
+**[api-reference.md](api-reference.md#agent-batch-api)** for full
 request/response shapes.
 
 ## API Endpoints
@@ -119,7 +135,9 @@ boards (list / stocks / stock→boards / quote / news / surges / history) · 涨
 margin · block trade · holder count · dividend · dragon-tiger · fund flow ·
 hot topics · north-bound flow · research reports · announcements ·
 news search / flash / content · 财联社早报 / 焦点复盘 · **agent batch**
-(boards/stock-overlap · stocks/board-overlap · boards/filter-stocks).
+(boards/stock-overlap · stocks/board-overlap · boards/filter-stocks ·
+indices/batch-profile · market-context · stocks/batch-profile · all accept
+`?format=json|md`).
 
 ## API Response Caching
 

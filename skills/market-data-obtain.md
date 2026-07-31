@@ -176,22 +176,26 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 > - ths 的 board 类接口覆盖更全、稳定性更好
 > - `?source=zzshare` 已不再作为独立选项——会归一到 ths；需要区分 `include_quote=True/False` 时的实际服务 fetcher 时读响应里的 `effective_source`
 
-### 9.1 Agent 批量端点（板块集合运算 / 数值过滤）
+### 9.1 Agent 批量端点（板块集合运算 / 数值过滤 / 批量画像 / 市场快照）
 
-> 本节端点位于 `/api/v1/agent/*`，面向 LLM agent 的高频组合查询——把"多板块两两交集 / 个股所属板块两两交集 / 板块成分股数值过滤"这些典型操作下沉到服务端，避免 agent 自己 N+1 调用 + 手算 set-op。
+> 本节端点位于 `/api/v1/agent/*`，面向 LLM agent 的高频组合查询——把"多板块两两交集 / 个股所属板块两两交集 / 板块成分股数值过滤 / 批量个股画像 / 市场全景快照"这些典型操作下沉到服务端，避免 agent 自己 N+1 调用 + 手算 set-op。
 
 | 端点 | 输入 | 用途 | 失败 fallback |
 |---|---|---|---|
 | `POST /api/v1/agent/boards/stock-overlap` | `{"codes": ["885xxx", "881xxx", ...]}` (2-10 板块) | 多板块成分股两两交集 + Jaccard；用于"判断哪些概念/行业同时覆盖了某批候选股" | 5xx → 网络搜索工具 `"板块 成分股 列表"`；422 → 检查 `codes` 是否在 board 缓存中（board list 未刷新） |
 | `POST /api/v1/agent/stocks/board-overlap` | `{"codes": ["600519", "000001", ...]}` (2-10 个股) | 多股票所属板块两两交集；用于"龙头/候选是否同板块系"判断 | 5xx → 网络搜索工具 `"{code} 所属概念"`；422 → 检查 stock_list 缓存 |
 | `POST /api/v1/agent/boards/filter-stocks` | `{"board_code", "source", "filters": {...}, "limit"?}` | 板块成分股服务端数值过滤（换手/涨跌幅/成交额/市值/最高涨幅） | 5xx / 503 `board_unavailable` → 网络搜索工具 `"板块成分股 换手 排名"`；422 `cid_unresolved` → 刷新 board 缓存 |
+| `GET /api/v1/agent/indices/batch-profile` | `?codes=000001,000300` (默认 000001/399001/399006) | 指数批量画像：每个指数实时报价 + 5m/d/w 三频率 K 线，单次 fan-out | 5xx 不外抛（per-frequency 失败写入 `klines[f].error`）；检查上游 fetcher 状态 |
+| `GET /api/v1/agent/market-context` | `?flash_limit=20&trade_date=YYYY-MM-DD` | 市场全景：早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜（含时段判断 + 龙虎榜 summary） | 5xx per-block 隔离（CLS / zt / dt / dtiger 任一失败不影响其他）；date 越界或格式错 → 400 |
+| `POST /api/v1/agent/stocks/batch-profile` | `{"codes": ["..."], "aspects": [...]}` (1-5 个股) | 股票批量画像：每个股 quote / kline / kline_5m / info / boards，单次 fan-out | 5xx per-aspect 隔离（失败写入 `results[i].errors[]`） |
 
 **通用行为**：
 
-- **逐项错误隔离**：单个 `code` 拉取失败**不会**中断整体响应；失败项进入响应 `errors[]`，成功的项仍正常出现在 `sets[]` / `matched_stocks`。
-- **缓存**：60s in-memory TTLCache（复用 `get_quote_cache`），TTL 内同 payload 直接命中。`filter-stocks` 的 `limit` 参与缓存键——不同 `limit` 会分别向上游 `top_n` 取数并各自缓存。
-- **不做判断**：本节端点只返回"事实型"算结果（集合运算 / 过滤后列表 / Jaccard 系数），不输出"龙头/候选"等结论——结论仍由 agent 用 `market-principles` 的工作流生成。
+- **逐项错误隔离**：单个 `code` 拉取失败**不会**中断整体响应；失败项进入响应 `errors[]`，成功的项仍正常出现在 `sets[]` / `matched_stocks`。Phase 2 端点更进一步：per-aspect / per-frequency 失败也互不影响。
+- **缓存**：60s in-memory TTLCache（复用 `get_quote_cache`），TTL 内同 payload 直接命中。`filter-stocks` 的 `limit` 参与缓存键；`market-context` 的 `session` (`pre-market` / `intraday` / `post-market` / `closed`) 参与缓存键（09:00 pre-market 命中不能遮蔽 16:00 post-market 刷新）。
+- **不做判断**：本节端点只返回"事实型"算结果（集合运算 / 过滤后列表 / Jaccard 系数 / 数值字段），不输出"龙头/候选"等结论——结论仍由 agent 用 `market-principles` 的工作流生成。
 - **板 K 线 / 板实时行情** 仍在第 9 节的主表（不走 agent）。
+- **`?format=json|md` 投影**：全部 6 个端点统一支持，默认 `json`；`?format=md` 返回 `text/markdown; charset=utf-8`（**无数据丢失** — 所有 JSON 字段都映射到 MD 表/列表项）。MD 渲染失败 → 自动回退 JSON + `X-MD-Render-Error` 响应头（保证 agent 总能拿到数据）。LLM 训练数据中 markdown 占比远高于 TSV/JSON，对异构内容（K 线表 + 段落 + 列表）解析更稳。
 
 **`filter-stocks` 关键参数**：
 
@@ -209,6 +213,23 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 
 - 响应 `sets[]` 每项 `{code, boards[]}` —— `boards[]` 是 `{code, name, type, subtype, source}`
 - 响应 `pairs[]` 每项 `{a, b, common_boards, intersection_count, jaccard}` —— `common_boards` 按 `code` 字母升序
+
+**`indices/batch-profile` 关键字段**：
+
+- 响应 `indices[].klines` 是 `{5m: {data, error}, d: {data, error}, w: {data, error}}` —— 频率级错误隔离写入 `klines[f].error`，不外抛 5xx
+- Bar 数固定：5m = 2 个交易日，d = 30 根，w = 48 根；如需自定义 → 走 `/indices/{code}/kline?frequency=...&days=...`
+
+**`market-context` 关键字段**：
+
+- `market_session` 由服务器本地 CST 时间 + `is_trade_date(today)` 推得：pre-market（09:15 前）/ intraday（09:15-15:00）/ post-market（15:00 后）/ closed（非交易日）。**pre-market 时涨跌停池强制 `null`**（池子可能未成形）
+- `dragon_tiger.summary` 服务端计算：`total_net_buy_wan` 符号位（正=净买入、负=净卖出）；`top_by_net_sell` 仅取 `net_buy_wan < 0` 的行（all-positive 日子里不会出现"伪卖出"）
+- `trade_date` 格式必须 `YYYY-MM-DD`，否则 400（防止"yesterday"这类非日期字符串静默 200 返回空结果）
+
+**`stocks/batch-profile` 关键字段**：
+
+- `aspects` 默认 5 项全开；可子集化（`["quote", "info"]`），不传 = 全开
+- `kline` aspect 永远传 `asset="stock"`（防止 `000001` 这种既是 A 股又是 CSI 指数的代码错走 INDEX_KLINE 分支）
+- `boards` aspect 走 `stock_board_cache.get_stock_memberships`（不是 `manager.get_stock_boards`）——继承 ZZSHARE↔THS fallback + `effective_source` 链路
 
 **典型调用模式**（`market-principles` 第 5 节"判断龙头股"步骤中可串入）：
 
@@ -235,6 +256,23 @@ curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
     },
     "limit": 10
   }'
+
+# 4. 指数全景（3 个核心 CSI 指数 + 5m/d/w 三频率 K 线）
+curl 'http://localhost:8888/api/v1/agent/indices/batch-profile'
+
+# 5. 市场全景（含早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜）
+curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=50'
+
+# 6. 候选股批量画像（最多 5 只；aspects 可子集化）
+curl -X POST http://localhost:8888/api/v1/agent/stocks/batch-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"codes": ["600519", "000858"], "aspects": ["quote", "kline", "info", "boards"]}'
+
+# 7. 任意 agent 端点加 ?format=md 拿 markdown（无数据丢失，token 更省）
+curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=20&format=md'
+curl -X POST 'http://localhost:8888/api/v1/agent/boards/filter-stocks?format=md' \
+  -H 'Content-Type: application/json' \
+  -d '{"board_code": "885595", "source": "ths", "filters": {"turnover_pct": {"min": 5.0}}, "limit": 10}'
 ```
 
 ---
@@ -281,10 +319,12 @@ curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
 | 步骤 | 端点 |
 |---|---|
 | 1. 拉指数行情 | `GET /indices/{code}/quote` |
+| 1.1 **指数全景（一次 fan-out）** | **`GET /agent/indices/batch-profile`**（替代步骤 1 的 N 次调用） |
 | 2. 拉涨跌停股池 | `GET /zt-pools?type=zt`、`GET /zt-pools?type=dt` |
 | 3. 拉全市场龙虎榜 | `GET /dragon-tiger` |
 | 4. 拉热点题材 | `GET /hot-topics` |
 | 5. 拉早报/复盘（如已发布） | `GET /news/morning-briefing`、`GET /news/market-recap` |
+| 5.1 **市场全景（一次拿全）** | **`GET /agent/market-context`**（替代步骤 1.1 + 2 + 3 + 5） |
 
 ### 场景 C：判断龙头股
 
@@ -298,6 +338,7 @@ curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
 | 5.1 **看候选股两两同板块** | `POST /agent/stocks/board-overlap`（取代手算 N×N 交集） |
 | 5.2 **看候选板块两两同成分股** | `POST /agent/boards/stock-overlap` |
 | 5.3 **板块成分股数值过滤** | `POST /agent/boards/filter-stocks`（取代手写 SQL/if 链） |
+| 5.4 **候选股批量画像（1-5 只）** | **`POST /agent/stocks/batch-profile`**（一次拿 quote + kline + info + boards，取代步骤 2 + 5 的 N 次调用） |
 
 ---
 
