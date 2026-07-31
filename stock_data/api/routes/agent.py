@@ -6,7 +6,8 @@ join / set-arithmetic that the agent would otherwise do by hand.
 
 Design contract (see ``docs/agent-batch-api-proposal-2026-07-27.md``):
 - Per-item error isolation: one failure never aborts the response.
-- JSON-only output (Phase 1); ``?format=md`` lands in Phase 2.4.
+- All 6 endpoints accept ``?format=json|md``; default ``json``,
+  ``md`` returns ``text/markdown; charset=utf-8`` (Phase 2.4).
 - No LLM judgment — only numeric filter, set-op, count statistics.
 - ``@endpoint_meta(capabilities=[])`` because the endpoints don't map
   to a single capability flag.
@@ -20,6 +21,10 @@ Routes added in Phase 2 (this file):
 - GET /agent/indices/batch-profile (renamed from indices/market-snapshot per user request)
 - GET /agent/market-context
 - POST /agent/stocks/batch-profile (renamed from stocks/batch/profile per user request)
+
+MD projection (Phase 2.4):
+- ``_render_markdown`` helper + 6 ``render_*_as_md`` template fns at the
+  bottom of this file. Single source of truth per endpoint.
 """
 
 import logging
@@ -32,6 +37,9 @@ from itertools import combinations
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.responses import Response
 
 from ...data_provider.base import DataFetchError
 from ...data_provider.persistence import board as stock_board_cache
@@ -156,7 +164,14 @@ def _reorder_by_code(cached, input_order: list[str], field: str):
     capabilities=[],
 )
 @map_errors
-def post_boards_stock_overlap(payload: BoardsOverlapRequest) -> BoardsOverlapResponse:
+def post_boards_stock_overlap(
+    payload: BoardsOverlapRequest,
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
     """Compute pairwise stock-set overlap across 2-10 boards.
 
     Each board is fetched via ``stock_board_cache.get_board_stocks`` with
@@ -167,7 +182,7 @@ def post_boards_stock_overlap(payload: BoardsOverlapRequest) -> BoardsOverlapRes
     cache_key = make_boards_overlap_cache_key(payload.codes)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_boards_stock_overlap")
     if hit is not None:
-        return hit
+        return _render_agent("boards/stock-overlap", hit, format)
 
     manager = get_manager()
     sets_out: list[BoardsOverlapSet] = []
@@ -216,7 +231,7 @@ def post_boards_stock_overlap(payload: BoardsOverlapRequest) -> BoardsOverlapRes
 
     result = BoardsOverlapResponse(sets=sets_out, pairs=pairs, errors=errors)
     cached_store(get_quote_cache, cache_key, result)
-    return result
+    return _render_agent("boards/stock-overlap", result, format)
 
 
 @router.post(
@@ -234,7 +249,14 @@ def post_boards_stock_overlap(payload: BoardsOverlapRequest) -> BoardsOverlapRes
     capabilities=[],
 )
 @map_errors
-def post_stocks_board_overlap(payload: StocksBoardOverlapRequest) -> StocksBoardOverlapResponse:
+def post_stocks_board_overlap(
+    payload: StocksBoardOverlapRequest,
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
     """Pairwise board-overlap across 2-10 stocks.
 
     Each stock is reverse-looked-up via
@@ -246,7 +268,7 @@ def post_stocks_board_overlap(payload: StocksBoardOverlapRequest) -> StocksBoard
     cache_key = make_stocks_board_overlap_cache_key(payload.codes)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_stocks_board_overlap")
     if hit is not None:
-        return hit
+        return _render_agent("stocks/board-overlap", hit, format)
 
     manager = get_manager()
     sets_out: list[StocksBoardOverlapStockSet] = []
@@ -299,7 +321,7 @@ def post_stocks_board_overlap(payload: StocksBoardOverlapRequest) -> StocksBoard
 
     result = StocksBoardOverlapResponse(sets=sets_out, pairs=pairs, errors=errors)
     cached_store(get_quote_cache, cache_key, result)
-    return result
+    return _render_agent("stocks/board-overlap", result, format)
 
 
 def _row_to_matched(s: dict) -> FilterStocksMatchedStock:
@@ -364,7 +386,14 @@ def _passes_range(value, range_):
     capabilities=[],
 )
 @map_errors
-def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
+def post_filter_stocks(
+    payload: FilterStocksRequest,
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
     """Apply numeric filters to a board's constituent stocks server-side.
 
     All filters are optional; an empty ``filters`` object returns every
@@ -388,7 +417,7 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
     )
     hit = cached_lookup(get_quote_cache, cache_key, "agent_filter_stocks")
     if hit is not None:
-        return hit
+        return _render_agent("boards/filter-stocks", hit, format)
 
     manager = get_manager()
     try:
@@ -456,7 +485,7 @@ def post_filter_stocks(payload: FilterStocksRequest) -> FilterStocksResponse:
         },
     )
     cached_store(get_quote_cache, cache_key, result)
-    return result
+    return _render_agent("boards/filter-stocks", result, format)
 
 
 # ============================================================================
@@ -544,7 +573,12 @@ def get_indices_batch_profile(
             "isolated into entry.errors[frequency]."
         ),
     ),
-) -> IndicesBatchProfileResponse:
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
     """Per-index fan-out: realtime quote + 5m/d/w K-line.
 
     Renamed from proposal §3.2.1 ``indices/market-snapshot`` per
@@ -560,7 +594,9 @@ def get_indices_batch_profile(
     if hit is not None:
         # Cache key is sorted; reorder cached list to the caller's order
         # so the "indices" list mirrors the input `codes` (response contract).
-        return _reorder_by_code(hit, code_list, "indices")
+        return _render_agent(
+            "indices/batch-profile", _reorder_by_code(hit, code_list, "indices"), format
+        )
 
     started = time.monotonic()
     manager = get_manager()
@@ -640,7 +676,7 @@ def get_indices_batch_profile(
         summary=_batch_summary(len(code_list), n_ok, started),
     )
     cached_store(get_quote_cache, cache_key, result)
-    return result
+    return _render_agent("indices/batch-profile", result, format)
 
 
 @router.get(
@@ -671,7 +707,12 @@ def get_market_context(
             "影响早报/复盘/龙虎榜的查询日期;涨跌停与快讯不受影响(涨跌停按 today,快讯按实时)。"
         ),
     ),
-) -> MarketContextResponse:
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
     """Aggregate morning-briefing + market-recap + flash + zt + dt + dragon-tiger.
 
     Per spec §3.2.3:
@@ -710,7 +751,7 @@ def get_market_context(
     cache_key = make_market_context_cache_key(flash_limit, target_date, session)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_market_context")
     if hit is not None:
-        return hit
+        return _render_agent("market-context", hit, format)
 
     started = time.monotonic()
     manager = get_manager()
@@ -789,7 +830,7 @@ def get_market_context(
         summary=_batch_summary(len(attempts), n_ok, started),
     )
     cached_store(get_quote_cache, cache_key, result)
-    return result
+    return _render_agent("market-context", result, format)
 
 
 def _serialize_stock_aspect_value(aspect: str, raw: object) -> object:
@@ -844,7 +885,12 @@ def _serialize_stock_aspect_value(aspect: str, raw: object) -> object:
 @map_errors
 def post_stocks_batch_profile(
     payload: StockBatchProfileRequest,
-) -> StockBatchProfileResponse:
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
     """Per-code fan-out across the requested aspects.
 
     Renamed from proposal §3.2.2 ``stocks/batch/profile`` per 2026-07-28
@@ -860,7 +906,11 @@ def post_stocks_batch_profile(
         # the same (set, set) from any order shares one entry. On hit
         # we reorder the cached list back to the caller's input order
         # (response contract: results mirror input codes).
-        return _reorder_by_code(hit, payload.codes, "results")
+        return _render_agent(
+            "stocks/batch-profile",
+            _reorder_by_code(hit, payload.codes, "results"),
+            format,
+        )
 
     started = time.monotonic()
     manager = get_manager()
@@ -928,4 +978,493 @@ def post_stocks_batch_profile(
         summary=_batch_summary(len(payload.codes), n_ok, started),
     )
     cached_store(get_quote_cache, cache_key, resp)
-    return resp
+    return _render_agent("stocks/batch-profile", resp, format)
+
+
+# ============================================================================
+# MD projection layer (Phase 2.4 — see agent-batch-api-proposal §2.2 / §8.2.4)
+# ============================================================================
+
+
+def _md_num(v, places: int = 2) -> str:
+    """Format a number for MD table cells. None → '—'."""
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, float):
+        return f"{v:,.{places}f}"
+    if isinstance(v, int):
+        return f"{v:,}"
+    return str(v)
+
+
+def _md_pct(v) -> str:
+    """Format a percentage value. None → '—'. Always shows sign."""
+    if v is None:
+        return "—"
+    return f"{v:+.2f}%"
+
+
+def _md_kline_rows(bars) -> list[str]:
+    """Render KLineData bars as MD table rows (no header).
+
+    Accepts either KLineData instances (used by /indices/batch-profile)
+    or plain dicts (used by /stocks/batch-profile, where the aspect
+    payload is already JSON-serialized via model_dump).
+    """
+    if not bars:
+        return ["（无数据）"]
+
+    def _get(bar, key, default=None):
+        if isinstance(bar, dict):
+            return bar.get(key, default)
+        return getattr(bar, key, default)
+
+    out = [
+        "| 日期 | 开 | 高 | 低 | 收 | 量(股) | 额 | 涨跌幅 |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for b in bars:
+        out.append(
+            f"| {_get(b, 'date', '')} | {_md_num(_get(b, 'open'), 3)} | "
+            f"{_md_num(_get(b, 'high'), 3)} | {_md_num(_get(b, 'low'), 3)} | "
+            f"{_md_num(_get(b, 'close'), 3)} | {_md_num(_get(b, 'volume'), 0)} | "
+            f"{_md_num(_get(b, 'amount'), 0)} | {_md_pct(_get(b, 'change_pct'))} |"
+        )
+    return out
+
+
+def _md_errors(errors: list[dict], *, key: str = "code", header: str = "代码") -> list[str]:
+    """Render the per-code errors[] block (or "(无)")."""
+    if not errors:
+        return ["（无）"]
+    out = [f"| {header} | 错误类型 | 消息 |", "|---|---|---|"]
+    for e in errors:
+        out.append(f"| {e.get(key, '?')} | {e.get('error', '?')} | {e.get('message', '')} |")
+    return out
+
+
+def _render_markdown(payload, template_fn: Callable) -> Response:
+    """Render a Pydantic payload to markdown text.
+
+    On template failure: returns ``JSONResponse`` with the original payload
+    + ``X-MD-Render-Error`` header (per proposal §9). Falling back means a
+    template bug never blocks the endpoint — the user always gets data, just
+    not in their preferred format.
+
+    Returns ``PlainTextResponse(media_type='text/markdown; charset=utf-8')``
+    on success. The route handlers always pre-compute / cache the Pydantic
+    model and call this only when ``?format=md`` is set, so:
+    - the cache stays format-agnostic (one entry serves both JSON and MD)
+    - MD failure does NOT bust the cache
+    """
+    try:
+        md = template_fn(payload)
+    except Exception as exc:
+        logger.warning(
+            f"[agent MD] {template_fn.__name__} failed: {exc}",
+            exc_info=True,
+        )
+        return JSONResponse(
+            content=jsonable_encoder(payload),
+            headers={"X-MD-Render-Error": f"{type(exc).__name__}: {str(exc)[:200]}"},
+        )
+    return PlainTextResponse(content=md, media_type="text/markdown; charset=utf-8")
+
+
+# ── per-endpoint MD templates ──────────────────────────────────────────────
+
+
+def render_boards_overlap_as_md(p: BoardsOverlapResponse) -> str:
+    out = ["# 板块成分股两两重叠度", ""]
+    out.append("## 板块成分股数")
+    out.append("| 板块 | 成分股数 | 来源 |")
+    out.append("|---|---|---|")
+    for s in p.sets:
+        out.append(f"| {s.code} | {s.count} | {s.source} |")
+    out.append("")
+    out.append("## 板块对重叠度")
+    if p.pairs:
+        out.append("| A | B | 交集数 | Jaccard | 交集代码 |")
+        out.append("|---|---|---|---|---|")
+        for pair in p.pairs:
+            codes = ", ".join(pair.intersection) if pair.intersection else "—"
+            out.append(
+                f"| {pair.a} | {pair.b} | {pair.intersection_count} | "
+                f"{_md_num(pair.jaccard, 4)} | {codes} |"
+            )
+    else:
+        out.append("（无）")
+    out.append("")
+    out.append("## 失败列表")
+    out.extend(_md_errors(p.errors))
+    out.append("")
+    s = p.summary if hasattr(p, "summary") and p.summary else {}
+    if s:
+        out.append(
+            f"## 汇总 — requested {s.get('requested', '?')}, "
+            f"ok {s.get('ok', '?')}, failed {s.get('failed', '?')}, "
+            f"elapsed {s.get('elapsed_ms', '?')}ms"
+        )
+    return "\n".join(out)
+
+
+def render_stocks_board_overlap_as_md(p: StocksBoardOverlapResponse) -> str:
+    out = ["# 股票所属板块两两重叠度", ""]
+    out.append("## 股票所属板块")
+    for s in p.sets:
+        out.append(f"### {s.code}")
+        if s.boards:
+            for b in s.boards:
+                t = b.get("type") or "-"
+                sub = b.get("subtype") or "-"
+                out.append(
+                    f"- {b.get('code', '?')} ({t}/{sub}) {b.get('name', '')}"
+                    f" — source: {b.get('source', '?')}"
+                )
+        else:
+            out.append("（无所属板块）")
+        out.append("")
+    out.append("## 股票对重叠度")
+    if p.pairs:
+        out.append("| A | B | 共同板块数 | Jaccard | 共同板块 |")
+        out.append("|---|---|---|---|---|")
+        for pair in p.pairs:
+            common_repr = (
+                "; ".join(f"{b.get('code', '?')}({b.get('name', '')})" for b in pair.common_boards)
+                if pair.common_boards
+                else "—"
+            )
+            out.append(
+                f"| {pair.a} | {pair.b} | {pair.intersection_count} | "
+                f"{_md_num(pair.jaccard, 4)} | {common_repr} |"
+            )
+    else:
+        out.append("（无）")
+    out.append("")
+    out.append("## 失败列表")
+    out.extend(_md_errors(p.errors))
+    out.append("")
+    return "\n".join(out)
+
+
+def render_filter_stocks_as_md(p: FilterStocksResponse) -> str:
+    out = [f"# 板块成分股过滤 — {p.code} {p.board_name or ''}", ""]
+    fa = p.filters_applied
+    filter_lines: list[str] = []
+    for fname, label in [
+        ("turnover_pct", "换手率(%)"),
+        ("change_pct", "涨跌幅(%)"),
+        ("amount_yi", "成交额(亿)"),
+        ("mcap_yi", "市值(亿)"),
+        ("max_gain_pct", "最高涨幅(%)"),
+    ]:
+        r = getattr(fa, fname, None)
+        if r is None:
+            continue
+        lo = _md_num(r.min) if r.min is not None else "-∞"
+        hi = _md_num(r.max) if r.max is not None else "+∞"
+        filter_lines.append(f"- {label}: {lo} ~ {hi}")
+    out.append("**过滤条件**:" + (" " + " / ".join(filter_lines) if filter_lines else " 无"))
+    out.append("")
+    s = p.summary or {}
+    out.append(
+        f"**汇总**: 总成分股 {s.get('total_in_board', 0)}, 匹配 {s.get('matched', 0)}"
+        + (" (已截断)" if s.get("limit_applied") else "")
+    )
+    out.append("")
+    if p.matched_stocks:
+        out.append("## 匹配股票")
+        out.append(
+            "| 代码 | 名称 | 现价 | 涨跌额 | 涨跌幅 | 最高涨幅 | 换手率(%) | "
+            "成交额(亿) | 市值(亿) | 量(股) | 量比 | PE | 振幅(%) | "
+            "开 | 高 | 低 | 昨收 |"
+        )
+        out.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        for r in p.matched_stocks:
+            out.append(
+                f"| {r.code} | {r.name} | {_md_num(r.price, 3)} | "
+                f"{_md_num(r.change_amount, 3)} | {_md_pct(r.change_pct)} | "
+                f"{_md_pct(r.max_gain_pct)} | {_md_num(r.turnover_pct)} | "
+                f"{_md_num(r.amount_yi)} | {_md_num(r.mcap_yi)} | "
+                f"{_md_num(r.volume, 0)} | {_md_num(r.volume_ratio, 2)} | "
+                f"{_md_num(r.pe_ratio, 2)} | {_md_num(r.amplitude_pct, 2)} | "
+                f"{_md_num(r.open, 3)} | {_md_num(r.high, 3)} | "
+                f"{_md_num(r.low, 3)} | {_md_num(r.prev_close, 3)} |"
+            )
+    else:
+        out.append("（无匹配股票）")
+    out.append("")
+    return "\n".join(out)
+
+
+def render_indices_batch_profile_as_md(p: IndicesBatchProfileResponse) -> str:
+    out = ["# 指数批量画像", ""]
+    for idx in p.indices:
+        ok_marker = "✓" if idx.quote else "✗"
+        out.append(f"## {idx.code} {idx.name} {ok_marker}")
+        if idx.quote:
+            q = idx.quote
+            out.append("### 实时行情")
+            out.append("| 字段 | 值 |")
+            out.append("|---|---|")
+            for k, v in q.items():
+                if isinstance(v, float):
+                    out.append(f"| {k} | {_md_num(v, 4)} |")
+                else:
+                    out.append(f"| {k} | {v if v is not None else '—'} |")
+        else:
+            err = (idx.errors or {}).get("quote") or "no quote"
+            out.append(f"### 实时行情 — 失败: {err}")
+        out.append("")
+        for freq in ("5m", "d", "w"):
+            block = idx.klines.get(freq)
+            if not block:
+                out.append(f"### {freq} K线 — 无数据")
+                out.append("")
+                continue
+            label = {"5m": "5 分钟", "d": "日", "w": "周"}.get(freq, freq)
+            if block.error:
+                out.append(f"### {label} K线 — 失败: {block.error}")
+            else:
+                out.append(f"### {label} K线 ({len(block.data)} 根)")
+                out.extend(_md_kline_rows(block.data))
+            out.append("")
+    s = p.summary or {}
+    out.append(
+        f"## 汇总 — requested {s.get('requested', '?')}, "
+        f"ok {s.get('ok', '?')}, failed {s.get('failed', '?')}, "
+        f"elapsed {s.get('elapsed_ms', '?')}ms"
+    )
+    return "\n".join(out)
+
+
+def _render_dict_block(out: list[str], title: str, d: dict) -> None:
+    """Render every key/value of a flat dict (no field is dropped)."""
+    out.append(f"### {title}")
+    out.append("| 字段 | 值 |")
+    out.append("|---|---|")
+    for k, v in d.items():
+        if isinstance(v, float):
+            out.append(f"| {k} | {_md_num(v, 4)} |")
+        elif isinstance(v, (list, dict)):
+            out.append(f"| {k} | `{v!r}` |")
+        else:
+            out.append(f"| {k} | {v if v is not None else '—'} |")
+    out.append("")
+
+
+def render_market_context_as_md(p: MarketContextResponse) -> str:
+    out = [
+        f"# 市场全景 — {p.trade_date} {p.market_session}",
+        f"**is_trade_day**: {p.is_trade_day}",
+        "",
+    ]
+    msg = p.messages
+    out.append("## 消息面")
+    if msg.morning_briefing:
+        _render_dict_block(out, "早报", msg.morning_briefing)
+    else:
+        out.append("### 早报 — （无）")
+        out.append("")
+    if msg.market_recap:
+        _render_dict_block(out, "复盘", msg.market_recap)
+    else:
+        out.append("### 复盘 — （无）")
+        out.append("")
+    out.append(f"### 快讯 ({len(msg.flash_news)} 条)")
+    if msg.flash_news:
+        for f in msg.flash_news:
+            title = f.get("title", "—")
+            t = f.get("publish_time", "")
+            src = f.get("source", "")
+            url = f.get("url", "")
+            content = f.get("content", "")
+            line = f"- [{t}] {title}"
+            if src:
+                line += f" _(source: {src})_"
+            if url:
+                line += f" [link]({url})"
+            out.append(line)
+            if content:
+                out.append(f"  {content}")
+    else:
+        out.append("（无）")
+    out.append("")
+    out.append("## 涨跌停")
+    pools = p.limit_pools
+    if pools.zt is None:
+        out.append("**涨停池**: null")
+    elif not pools.zt:
+        out.append("**涨停池**: （空）")
+    else:
+        out.append(f"**涨停池**: {len(pools.zt)} 只")
+        out.append("")
+        out.append("| 代码 | 名称 | 涨跌幅 | 涨停时间 | 连板数 | 所属行业 |")
+        out.append("|---|---|---|---|---|---|")
+        for s in pools.zt:
+            code = s.get("code", "")
+            name = s.get("name", "")
+            pct = s.get("pct_chg") or s.get("change_pct")
+            t = s.get("limit_time") or s.get("first_limit_time") or ""
+            lb = s.get("limit_count") or s.get("continuous_limit_count")
+            industry = s.get("industry", "")
+            out.append(
+                f"| {code} | {name} | {_md_pct(pct)} | {t} | "
+                f"{lb if lb is not None else '—'} | {industry} |"
+            )
+    out.append("")
+    if pools.dt is None:
+        out.append("**跌停池**: null")
+    elif not pools.dt:
+        out.append("**跌停池**: （空）")
+    else:
+        out.append(f"**跌停池**: {len(pools.dt)} 只")
+        out.append("")
+        out.append("| 代码 | 名称 | 涨跌幅 | 跌停时间 | 所属行业 |")
+        out.append("|---|---|---|---|---|")
+        for s in pools.dt:
+            code = s.get("code", "")
+            name = s.get("name", "")
+            pct = s.get("pct_chg") or s.get("change_pct")
+            t = s.get("limit_time") or s.get("first_limit_time") or ""
+            industry = s.get("industry", "")
+            out.append(f"| {code} | {name} | {_md_pct(pct)} | {t} | {industry} |")
+    out.append("")
+    out.append("## 龙虎榜")
+    if p.dragon_tiger and p.dragon_tiger.stocks:
+        s = p.dragon_tiger.summary
+        if s:
+            out.append(f"**全市场净买入合计**: {s.total_net_buy_wan:,.0f} 万元")
+            out.append("")
+            out.append("### 净买入 Top 10")
+            out.append("| 代码 | 名称 | 净买入(万元) |")
+            out.append("|---|---|---|")
+            for r in s.top_by_net_buy:
+                out.append(f"| {r.code} | {r.name} | {_md_num(r.net_buy_wan, 0)} |")
+            if s.top_by_net_sell:
+                out.append("")
+                out.append("### 净卖出 Top 10")
+                out.append("| 代码 | 名称 | 净买入(万元) |")
+                out.append("|---|---|---|")
+                for r in s.top_by_net_sell:
+                    out.append(f"| {r.code} | {r.name} | {_md_num(r.net_buy_wan, 0)} |")
+        out.append("")
+        out.append(f"### 龙虎榜全表 ({len(p.dragon_tiger.stocks)} 只)")
+        out.append(
+            "| 代码 | 名称 | 净买入(万元) | 买入金额(万元) | 卖出金额(万元) | "
+            "成交额(万元) | 涨跌幅 | 解读后涨幅 |"
+        )
+        out.append("|---|---|---|---|---|---|---|---|")
+        for r in p.dragon_tiger.stocks:
+            code = r.get("code", "")
+            name = r.get("name", "")
+            nb = r.get("net_buy_wan")
+            bamt = r.get("buy_wan") or r.get("buy_amount_wan")
+            samt = r.get("sell_wan") or r.get("sell_amount_wan")
+            tamt = r.get("total_amount_wan") or r.get("amount_wan")
+            pct = r.get("pct_chg") or r.get("change_pct")
+            pct_after = r.get("pct_chg_after") or r.get("change_pct_after")
+            out.append(
+                f"| {code} | {name} | {_md_num(nb, 0)} | "
+                f"{_md_num(bamt, 0)} | {_md_num(samt, 0)} | "
+                f"{_md_num(tamt, 0)} | {_md_pct(pct)} | {_md_pct(pct_after)} |"
+            )
+    else:
+        out.append("（无）")
+    out.append("")
+    s = p.summary or {}
+    out.append(
+        f"## 汇总 — requested {s.get('requested', '?')}, "
+        f"ok {s.get('ok', '?')}, failed {s.get('failed', '?')}, "
+        f"elapsed {s.get('elapsed_ms', '?')}ms"
+    )
+    return "\n".join(out)
+
+
+def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
+    out = ["# 股票批量画像", ""]
+    for entry in p.results:
+        marker = "✓" if entry.ok and not entry.errors else ("△" if entry.ok else "✗")
+        out.append(f"## {entry.code} {marker}")
+        if entry.errors:
+            failed_aspects = ", ".join(e.aspect for e in entry.errors)
+            out.append(f"**失败 aspects**: {failed_aspects}")
+        out.append("")
+        for aspect in ("quote", "kline", "kline_5m", "info", "boards"):
+            if aspect not in entry.data:
+                continue
+            block = entry.data[aspect] or {}
+            src = block.get("source", "?")
+            data = block.get("data")
+            if aspect == "quote":
+                # Quote is the only aspect whose payload is a FLAT dict
+                # (the StockQuote.model_dump() shape — no {source, data}
+                # wrapper, since source/code/name are inside). Render every
+                # field except source (already in the header).
+                out.append(f"### 实时行情 (source: {src})")
+                out.append("| 字段 | 值 |")
+                out.append("|---|---|")
+                for k, v in block.items():
+                    if k == "source":
+                        continue
+                    if isinstance(v, float):
+                        out.append(f"| {k} | {_md_num(v, 4)} |")
+                    else:
+                        out.append(f"| {k} | {v if v is not None else '—'} |")
+            elif aspect in ("kline", "kline_5m"):
+                label = "5 分钟 K 线" if aspect == "kline_5m" else "日 K 线"
+                if isinstance(data, list) and data:
+                    out.append(f"### {label} (source: {src}, {len(data)} 根)")
+                    out.extend(_md_kline_rows(data))
+                else:
+                    out.append(f"### {label} — 无数据")
+            elif aspect == "info":
+                out.append(f"### 公司画像 (source: {src})")
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        out.append(f"- **{k}**: {v if v is not None else '—'}")
+            elif aspect == "boards":
+                out.append(f"### 所属板块 (source: {src})")
+                if isinstance(data, list) and data:
+                    for b in data:
+                        t = b.get("type") or "-"
+                        out.append(f"- {b.get('code', '?')} ({t}) {b.get('name', '')}")
+                else:
+                    out.append("（无）")
+            out.append("")
+    s = p.summary or {}
+    out.append(
+        f"## 汇总 — requested {s.get('requested', '?')}, "
+        f"ok {s.get('ok', '?')}, failed {s.get('failed', '?')}, "
+        f"elapsed {s.get('elapsed_ms', '?')}ms"
+    )
+    return "\n".join(out)
+
+
+# Map route → MD template. Routes look this up in the handler.
+_MD_TEMPLATES: dict[str, Callable] = {
+    "boards/stock-overlap": render_boards_overlap_as_md,
+    "stocks/board-overlap": render_stocks_board_overlap_as_md,
+    "boards/filter-stocks": render_filter_stocks_as_md,
+    "indices/batch-profile": render_indices_batch_profile_as_md,
+    "market-context": render_market_context_as_md,
+    "stocks/batch-profile": render_stocks_batch_profile_as_md,
+}
+
+
+def _render_agent(route_key: str, payload, fmt: str):
+    """JSON-passthrough vs MD-dispatch for an agent endpoint.
+
+    ``fmt == "json"`` returns the Pydantic instance unchanged so FastAPI
+    applies the route's ``response_model``. ``fmt == "md"`` runs the
+    matching ``_MD_TEMPLATES`` entry through :func:`_render_markdown`
+    (with the JSON-fallback contract).
+
+    Returns a ``Response`` (MD branch) or the Pydantic instance (JSON branch).
+    The route annotates its return type as ``Response`` to express both.
+    """
+    if fmt != "md":
+        return payload
+    return _render_markdown(payload, _MD_TEMPLATES[route_key])

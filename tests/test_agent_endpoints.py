@@ -1595,3 +1595,674 @@ class TestPhase2DefensiveGuards:
                     "source": "ths",
                 }
             ]
+
+
+# ============================================================================
+# Phase 2.4: ?format=json|md projection (see agent-batch-api-proposal §2.2 / §8.2.4)
+# ============================================================================
+
+
+_MD_CT = "text/markdown; charset=utf-8"
+
+
+class TestFormatMd:
+    """``?format=md`` projection: each agent endpoint must support
+    markdown output with the right Content-Type and a stable layout.
+
+    Backwards-compat is pinned by TestFormatMdDefaults below: the existing
+    JSON clients (no ?format param) keep their shape.
+    """
+
+    def test_boards_stock_overlap_md(self, client):
+        with patch(_BOARD_STOCKS_PATCH) as mock_bs:
+            mock_bs.side_effect = [
+                (
+                    [{"stock_code": "600519"}, {"stock_code": "000001"}],
+                    "persistence",
+                    "ths",
+                    None,
+                    False,
+                    2,
+                ),
+                (
+                    [{"stock_code": "600519"}, {"stock_code": "688981"}],
+                    "persistence",
+                    "ths",
+                    None,
+                    False,
+                    2,
+                ),
+            ]
+            r = client.post(
+                "/api/v1/agent/boards/stock-overlap?format=md",
+                json={"codes": ["885xxx", "881yyy"]},
+            )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/markdown")
+        body = r.text
+        # H1 + per-section headers
+        assert "# 板块成分股两两重叠度" in body
+        assert "## 板块成分股数" in body
+        assert "## 板块对重叠度" in body
+        # Pair table has the expected intersection + jaccard row
+        assert "| 885xxx | 881yyy | 1 | 0.3333 |" in body
+        # Sets table renders both boards
+        assert "| 885xxx | 2 | ths |" in body
+        assert "| 881yyy | 2 | ths |" in body
+
+    def test_stocks_board_overlap_md(self, client):
+        with patch(_STOCK_MEMBERSHIPS_PATCH) as mock_sm:
+            mock_sm.side_effect = [
+                (
+                    [
+                        {
+                            "code": "885xxx",
+                            "name": "半导体",
+                            "type": "concept",
+                            "subtype": "",
+                            "source": "ths",
+                        }
+                    ],
+                    [],
+                    "persistence",
+                ),
+                (
+                    [
+                        {
+                            "code": "885xxx",
+                            "name": "半导体",
+                            "type": "concept",
+                            "subtype": "",
+                            "source": "ths",
+                        }
+                    ],
+                    [],
+                    "persistence",
+                ),
+            ]
+            r = client.post(
+                "/api/v1/agent/stocks/board-overlap?format=md",
+                json={"codes": ["600519", "688981"]},
+            )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/markdown")
+        body = r.text
+        assert "# 股票所属板块两两重叠度" in body
+        assert "## 股票所属板块" in body
+        assert "### 600519" in body
+        assert "### 688981" in body
+        # Boards listed per-stock (code / type/subtype / name / source)
+        assert "- 885xxx (concept/-) 半导体 — source: ths" in body
+        # Pairs table — common_boards column carries the actual shared boards
+        assert "| 600519 | 688981 | 1 | 1.0000 | 885xxx(半导体) |" in body
+
+    def test_filter_stocks_md(self, client):
+        rows = [
+            {
+                "stock_code": "B",
+                "stock_name": "B",
+                "price": 20.0,
+                "change_pct": 7.0,
+                "turnover_rate": 8.0,
+                "amount": 5e9,
+                "total_mv": 5e9,
+                "open": 19.0,
+                "high": 21.0,
+                "low": 19.0,
+                "volume": 0,
+            },
+        ]
+        with patch(
+            _BOARD_STOCKS_PATCH,
+            return_value=(rows, "persistence", "ths", None, False, 1),
+        ):
+            r = client.post(
+                "/api/v1/agent/boards/filter-stocks?format=md",
+                json={
+                    "board_code": "885001",
+                    "source": "ths",
+                    "filters": {"turnover_pct": {"min": 5.0}},
+                },
+            )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/markdown")
+        body = r.text
+        assert "# 板块成分股过滤 — 885001" in body
+        # Filter rendered as one line
+        assert "**过滤条件**:" in body
+        assert "换手率(%): 5.00" in body
+        # Summary line
+        assert "总成分股 1, 匹配 1" in body
+        # Matched table — header has all 17 cols (data-loss regression net)
+        assert "| 代码 | 名称 | 现价 | 涨跌额 | 涨跌幅 | 最高涨幅 | 换手率(%) |" in body
+        assert "| 成交额(亿) | 市值(亿) | 量(股) | 量比 | PE | 振幅(%) |" in body
+        assert "| 开 | 高 | 低 | 昨收 |" in body
+        # All 16 MatchedStock fields present in the row. The test row only sets
+        # a subset, so unset fields render as '—' (no field is dropped from
+        # the row). Pin the full shape.
+        expected_row = (
+            "| B | B | 20.000 | — | +7.00% | +10.53% | 8.00 | 50.00 | 50.00 | "
+            "0 | — | — | — | 19.000 | 21.000 | 19.000 | — |"
+        )
+        assert expected_row in body
+
+    def test_indices_batch_profile_md(self, client, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from stock_data.api.routes import agent as agent_module
+
+        mock_manager = MagicMock()
+        mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
+        mock_manager.get_kline_data.return_value = (
+            _make_kline_df(
+                [
+                    {
+                        "date": "2026-07-25",
+                        "open": 1.0,
+                        "high": 2.0,
+                        "low": 0.5,
+                        "close": 1.5,
+                        "volume": 100,
+                        "amount": 1e6,
+                        "pct_chg": 0.1,
+                    }
+                ]
+            ),
+            "akshare",
+        )
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+
+        r = client.get("/api/v1/agent/indices/batch-profile?codes=000001&format=md")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/markdown")
+        body = r.text
+        assert "# 指数批量画像" in body
+        # ✓ marker when quote ok
+        assert "## 000001 上证指数 ✓" in body
+        assert "### 实时行情" in body
+        # 3 frequencies
+        assert "### 5 分钟 K线" in body
+        assert "### 日 K线" in body
+        assert "### 周 K线" in body
+        # kline row rendered
+        assert "| 2026-07-25 |" in body
+
+    def test_market_context_md(self, client, monkeypatch):
+        from stock_data.api.routes import agent as agent_module
+
+        # Reuse the same _patch_all_ok helper from TestMarketContext (same module)
+        TestMarketContext._patch_all_ok(self, monkeypatch)
+        monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
+        r = client.get("/api/v1/agent/market-context?flash_limit=10&format=md")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/markdown")
+        body = r.text
+        assert "# 市场全景 —" in body
+        assert "post-market" in body
+        # news section
+        assert "## 消息面" in body
+        assert "### 早报" in body
+        assert "### 复盘" in body
+        assert "### 快讯" in body
+        # pool section
+        assert "## 涨跌停" in body
+        # dragon-tiger section
+        assert "## 龙虎榜" in body
+        assert "**全市场净买入合计**: 3,000" in body
+
+    def test_stocks_batch_profile_md(self, client, monkeypatch):
+        # Reuse _patch_happy from TestStocksBatchProfile (same module).
+        TestStocksBatchProfile._patch_happy(self, monkeypatch)
+        r = client.post(
+            "/api/v1/agent/stocks/batch-profile?format=md",
+            json={"codes": ["600519"]},
+        )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/markdown")
+        body = r.text
+        assert "# 股票批量画像" in body
+        # Per-stock header
+        assert "## 600519 ✓" in body
+        # All 5 default aspects rendered (sections)
+        assert "### 实时行情" in body
+        assert "### 日 K 线" in body
+        assert "### 公司画像" in body
+        assert "### 所属板块" in body
+        # quote field table
+        assert "| current_price | 100.0000 |" in body
+        # boards bullet
+        assert "- 885xxx (concept) 白酒" in body
+
+
+class TestFormatMdDefaults:
+    """format defaults to json; the new param doesn't change existing behavior."""
+
+    def test_default_format_is_json(self, client):
+        r = client.post(
+            "/api/v1/agent/boards/stock-overlap",
+            json={"codes": ["885xxx", "881yyy"]},
+        )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/json")
+        # Same shape as before
+        assert "sets" in r.json() and "pairs" in r.json()
+
+    def test_format_html_rejected_as_422(self, client):
+        """format must be json|md; unknown values 422 from FastAPI's Query validator."""
+        r = client.get("/api/v1/agent/indices/batch-profile?format=html")
+        assert r.status_code == 422
+
+    def test_md_renders_from_cache_hit(self, client, monkeypatch):
+        """A cached Pydantic model must render correctly to MD on the 2nd request.
+
+        Cache key is format-agnostic; rendering happens at response time.
+        """
+        from unittest.mock import MagicMock
+
+        from stock_data.api.routes import agent as agent_module
+
+        mock_manager = MagicMock()
+        mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
+        mock_manager.get_kline_data.return_value = (_make_kline_df([]), "akshare")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+
+        # 1st request: format=json → caches the Pydantic model
+        r1 = client.get("/api/v1/agent/indices/batch-profile?codes=000001")
+        assert r1.headers["content-type"].startswith("application/json")
+        # 2nd request: format=md → cache hit, MD rendered from same model
+        r2 = client.get("/api/v1/agent/indices/batch-profile?codes=000001&format=md")
+        assert r2.status_code == 200
+        assert r2.headers["content-type"].startswith("text/markdown")
+        assert "## 000001" in r2.text
+        # Manager was called only once (cache hit on 2nd)
+        assert mock_manager.get_index_realtime_quote.call_count == 1
+
+
+class TestFormatMdFallback:
+    """When a template raises, the helper falls back to JSON + X-MD-Render-Error header."""
+
+    def test_template_failure_returns_json_with_warning_header(self, client, monkeypatch):
+        """Inject a broken template; endpoint must still 200 with the original JSON
+        payload and a header naming the failure (per proposal §9)."""
+        from stock_data.api.routes import agent as agent_module
+
+        # Swap the dict entry directly. The dispatch table holds REFERENCES
+        # captured at import time, so monkeypatch.setattr on the module-level
+        # function name would NOT affect the call site.
+        def boom(_p):
+            raise RuntimeError("template exploded")
+
+        monkeypatch.setitem(agent_module._MD_TEMPLATES, "market-context", boom)
+
+        from unittest.mock import MagicMock
+
+        mock_manager = MagicMock()
+        mock_manager.get_morning_briefing.return_value = (None, "")
+        mock_manager.get_market_recap.return_value = (None, "")
+        mock_manager.get_flash_news.return_value = ([], "eastmoney")
+        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
+        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
+
+        r = client.get(
+            "/api/v1/agent/market-context?flash_limit=10&trade_date=2026-07-25&format=md"
+        )
+        assert r.status_code == 200
+        # Falls back to JSON (NOT markdown)
+        assert r.headers["content-type"].startswith("application/json")
+        # Header carries the failure reason
+        assert "X-MD-Render-Error" in r.headers
+        assert "RuntimeError" in r.headers["X-MD-Render-Error"]
+        assert "template exploded" in r.headers["X-MD-Render-Error"]
+        # Original payload is still in the body
+        data = r.json()
+        assert "trade_date" in data and "messages" in data
+
+
+# ============================================================================
+# Data-completeness tests (Phase 2.4 no-data-loss contract)
+# ============================================================================
+#
+# The MD projection must not drop fields from the JSON. These tests feed rich
+# payloads and assert every field survives the markdown render. If a future
+# template refactor accidentally drops a column, the matching test fails
+# before the change ships.
+
+
+class TestFormatMdDataCompleteness:
+    """Pins the no-data-loss contract: every field in the JSON must appear
+    in the MD output (or be explicitly noted as absent)."""
+
+    def test_boards_stock_overlap_intersection_codes_shown(self, client):
+        """The `intersection: list[str]` per pair MUST be rendered (not just count)."""
+        with patch(_BOARD_STOCKS_PATCH) as mock_bs:
+            mock_bs.side_effect = [
+                (
+                    [
+                        {"stock_code": "600519"},
+                        {"stock_code": "000001"},
+                        {"stock_code": "300750"},
+                    ],
+                    "persistence",
+                    "ths",
+                    None,
+                    False,
+                    3,
+                ),
+                (
+                    [
+                        {"stock_code": "600519"},
+                        {"stock_code": "688981"},
+                    ],
+                    "persistence",
+                    "ths",
+                    None,
+                    False,
+                    2,
+                ),
+            ]
+            r = client.post(
+                "/api/v1/agent/boards/stock-overlap?format=md",
+                json={"codes": ["885xxx", "881yyy"]},
+            )
+        body = r.text
+        # The actual stock codes must appear (not just the count)
+        assert "600519, 000001, 300750" in body or "600519" in body
+        # 交集代码 column header is present
+        assert "| 交集代码 |" in body
+
+    def test_stocks_board_overlap_common_boards_shown(self, client):
+        """The `common_boards: list[dict]` per pair MUST be rendered, plus
+        per-stock board entries show subtype + source (not just code/name)."""
+        with patch(_STOCK_MEMBERSHIPS_PATCH) as mock_sm:
+            mock_sm.side_effect = [
+                (
+                    [
+                        {
+                            "code": "885xxx",
+                            "name": "半导体",
+                            "type": "concept",
+                            "subtype": "技术",
+                            "source": "ths",
+                        },
+                        {
+                            "code": "881yyy",
+                            "name": "电子",
+                            "type": "industry",
+                            "subtype": "-",
+                            "source": "ths",
+                        },
+                    ],
+                    [],
+                    "persistence",
+                ),
+                (
+                    [
+                        {
+                            "code": "885xxx",
+                            "name": "半导体",
+                            "type": "concept",
+                            "subtype": "技术",
+                            "source": "ths",
+                        },
+                    ],
+                    [],
+                    "persistence",
+                ),
+            ]
+            r = client.post(
+                "/api/v1/agent/stocks/board-overlap?format=md",
+                json={"codes": ["600519", "688981"]},
+            )
+        body = r.text
+        # Per-stock board entries: subtype + source are present
+        assert "(concept/技术)" in body
+        assert "— source: ths" in body
+        # Pair common_boards column carries the actual shared board
+        assert "共同板块 |" in body
+        assert "885xxx(半导体)" in body
+
+    def test_market_context_all_flash_news_rendered(self, client, monkeypatch):
+        """flash_news > 20 entries must all be rendered (no [:20] truncation)."""
+        from unittest.mock import MagicMock
+
+        from stock_data.api.routes import agent as agent_module
+
+        mock_manager = MagicMock()
+        mock_manager.get_morning_briefing.return_value = (None, "")
+        mock_manager.get_market_recap.return_value = (None, "")
+        # 25 flash items — verifies the 20-truncation bug is fixed
+        mock_manager.get_flash_news.return_value = (
+            [
+                {
+                    "title": f"快讯{i}",
+                    "publish_time": f"2026-07-25 09:{i:02d}:00",
+                    "source": "eastmoney",
+                }
+                for i in range(25)
+            ],
+            "eastmoney",
+        )
+        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
+        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
+
+        r = client.get(
+            "/api/v1/agent/market-context?flash_limit=200&trade_date=2026-07-25&format=md"
+        )
+        body = r.text
+        # All 25 must appear; the last one's title is unique
+        assert "快讯0" in body
+        assert "快讯24" in body
+        # Section header reflects the actual count, not the truncate-cap
+        assert "### 快讯 (25 条)" in body
+
+    def test_market_context_zt_dt_full_pool_table(self, client, monkeypatch):
+        """zt/dt pools must be rendered as a full table, not just a count."""
+        from unittest.mock import MagicMock
+
+        from stock_data.api.routes import agent as agent_module
+
+        mock_manager = MagicMock()
+        mock_manager.get_morning_briefing.return_value = (None, "")
+        mock_manager.get_market_recap.return_value = (None, "")
+        mock_manager.get_flash_news.return_value = ([], "eastmoney")
+        mock_manager.get_zt_pool.side_effect = [
+            (
+                [
+                    {
+                        "code": "600519",
+                        "name": "茅台",
+                        "pct_chg": 10.0,
+                        "limit_time": "10:00",
+                        "limit_count": 2,
+                        "industry": "白酒",
+                    },
+                    {
+                        "code": "688981",
+                        "name": "中芯",
+                        "pct_chg": 20.0,
+                        "limit_time": "13:30",
+                        "limit_count": 1,
+                        "industry": "半导体",
+                    },
+                ],
+                "akshare",
+                None,
+            ),
+            (
+                [
+                    {
+                        "code": "000001",
+                        "name": "平安",
+                        "pct_chg": -10.0,
+                        "limit_time": "10:00",
+                        "industry": "银行",
+                    }
+                ],
+                "akshare",
+                None,
+            ),
+        ]
+        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
+
+        r = client.get(
+            "/api/v1/agent/market-context?flash_limit=10&trade_date=2026-07-25&format=md"
+        )
+        body = r.text
+        # zt pool table headers
+        assert "| 代码 | 名称 | 涨跌幅 | 涨停时间 | 连板数 | 所属行业 |" in body
+        # zt pool rows
+        assert "| 600519 | 茅台 | +10.00% | 10:00 | 2 | 白酒 |" in body
+        assert "| 688981 | 中芯 | +20.00% | 13:30 | 1 | 半导体 |" in body
+        # dt pool table headers + rows
+        assert "| 代码 | 名称 | 涨跌幅 | 跌停时间 | 所属行业 |" in body
+        assert "| 000001 | 平安 | -10.00% | 10:00 | 银行 |" in body
+
+    def test_market_context_morning_recap_rendered_in_full(self, client, monkeypatch):
+        """morning_briefing / market_recap dicts must be rendered with all fields,
+        not just title+date."""
+        from unittest.mock import MagicMock
+
+        from stock_data.api.routes import agent as agent_module
+
+        mock_manager = MagicMock()
+        mock_manager.get_morning_briefing.return_value = (
+            {
+                "article_id": 123,
+                "title": "早报标题",
+                "date": "2026-07-25",
+                "url": "https://example.com/123",
+                "content": "详细早报内容...",
+                "tags": ["宏观", "市场"],
+            },
+            "cls",
+        )
+        mock_manager.get_market_recap.return_value = (
+            {
+                "article_id": 456,
+                "title": "复盘标题",
+                "date": "2026-07-25",
+                "url": "https://example.com/456",
+                "content": "详细复盘内容...",
+            },
+            "cls",
+        )
+        mock_manager.get_flash_news.return_value = ([], "eastmoney")
+        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
+        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
+
+        r = client.get(
+            "/api/v1/agent/market-context?flash_limit=10&trade_date=2026-07-25&format=md"
+        )
+        body = r.text
+        # Every field of the morning_briefing dict appears
+        for field in ("article_id", "title", "date", "url", "content", "tags"):
+            assert f"| {field} |" in body, f"morning_briefing field {field} missing"
+        # Every field of the market_recap dict appears
+        for field in ("article_id", "title", "date", "url", "content"):
+            assert body.count(f"| {field} |") >= 2, (
+                f"market_recap field {field} missing (count={body.count('| ' + field + ' |')})"
+            )
+
+    def test_market_context_dragon_tiger_full_table(self, client, monkeypatch):
+        """dragon_tiger.stocks MUST be rendered as a full table, not only the
+        top-10 summary."""
+        from unittest.mock import MagicMock
+
+        from stock_data.api.routes import agent as agent_module
+
+        mock_manager = MagicMock()
+        mock_manager.get_morning_briefing.return_value = (None, "")
+        mock_manager.get_market_recap.return_value = (None, "")
+        mock_manager.get_flash_news.return_value = ([], "eastmoney")
+        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
+        # 12 stocks so the top-10 summary is NOT the full list
+        mock_manager.get_daily_dragon_tiger.return_value = (
+            {
+                "date": "2026-07-25",
+                "stocks": [
+                    {
+                        "code": f"60{i:04d}",
+                        "name": f"股票{i}",
+                        "net_buy_wan": 1000.0 * (12 - i),
+                        "buy_wan": 5000.0,
+                        "sell_wan": 4000.0,
+                        "total_amount_wan": 50000.0,
+                        "pct_chg": 5.0,
+                        "pct_chg_after": 7.0,
+                    }
+                    for i in range(12)
+                ],
+            },
+            "zzshare",
+        )
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
+
+        r = client.get(
+            "/api/v1/agent/market-context?flash_limit=10&trade_date=2026-07-25&format=md"
+        )
+        body = r.text
+        # Full table header
+        assert (
+            "| 代码 | 名称 | 净买入(万元) | 买入金额(万元) | 卖出金额(万元) | "
+            "成交额(万元) | 涨跌幅 | 解读后涨幅 |"
+        ) in body
+        # Full table is the full list — not just top 10
+        assert "龙虎榜全表 (12 只)" in body
+        # The 12th stock (lowest net_buy) only appears in the FULL table,
+        # not in top_by_net_buy (which is sorted desc, top 10). So this row
+        # is the regression net for "was the full table dropped?".
+        assert "600011" in body  # code from the 12th item
+        # And the full table cell carries its computed buy/sell/total:
+        # code 600011, name 股票11, net_buy = 1000.00 (12 - 11 = 1 × 1000).
+        assert "| 600011 | 股票11 | 1,000 | 5,000 | 4,000 | 50,000 |" in body
+
+    def test_market_context_dragon_tiger_summary_still_present(self, client, monkeypatch):
+        """The summary top-10 sections stay (alongside the full table) — they're
+        complementary, not a replacement."""
+        from unittest.mock import MagicMock
+
+        from stock_data.api.routes import agent as agent_module
+
+        mock_manager = MagicMock()
+        mock_manager.get_morning_briefing.return_value = (None, "")
+        mock_manager.get_market_recap.return_value = (None, "")
+        mock_manager.get_flash_news.return_value = ([], "eastmoney")
+        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
+        mock_manager.get_daily_dragon_tiger.return_value = (
+            {
+                "stocks": [
+                    {
+                        "code": "600519",
+                        "name": "茅台",
+                        "net_buy_wan": 5000.0,
+                        "buy_wan": 8000.0,
+                        "sell_wan": 3000.0,
+                        "total_amount_wan": 100000.0,
+                        "pct_chg": 5.0,
+                        "pct_chg_after": 7.0,
+                    }
+                ],
+            },
+            "zzshare",
+        )
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
+
+        r = client.get(
+            "/api/v1/agent/market-context?flash_limit=10&trade_date=2026-07-25&format=md"
+        )
+        body = r.text
+        # Summary header + full table both present
+        assert "### 净买入 Top 10" in body
+        assert "### 龙虎榜全表 (1 只)" in body
+        # Summary aggregate value
+        assert "**全市场净买入合计**: 5,000" in body
