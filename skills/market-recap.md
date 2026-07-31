@@ -133,19 +133,21 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 
 ### 步骤 3：拉取市场数据
 
+**取数策略**：跨股 / 跨板块 / 跨指数的"多对多"查询**优先走 `market-data-obtain §9.1` 的 `agent/*` 批量端点**（服务端聚合 + per-item 错误隔离，避免 per-X 重复调用 + 手算 set-op）；per-X 单次调用仅在批量端点不支持的粒度（如 单板 K 线、个股资金流）时使用。所有 `agent/*` 端点共享 60s in-memory cache——同 session 内相同请求（按 service-defined cache key）自动命中，无需重拉；**复盘 + 后续 skill 串联调用同一批量端点时**也直接命中（注意 `agent/market-context` 的 cache key 含 `market_session`，跨时段不污染）。
+
 通过 `market-data-obtain` 获取（具体端点见该 skill）：
 
-| 类别 | 查询内容 | 时段差异 |
-|---|---|---|
-| **指数全景** | 上证 / 深证成指 / 创业板指 —— 行情 + K 线（5m 近 2 日 + d 近 30 日 + w 近 48 周） | `pre`：昨日收盘 + 隔夜外盘；`intra`：当日分时 + 5m K 线；`post`：当日收盘 + 5m / d / w 三周期 K 线 |
-| **板块异动** | 涨幅 / 跌幅 Top、对应原因 | `pre`：昨日板块涨跌 + 今日预热板块；`intra`：当日实时异动；`post`：当日收盘涨跌 |
-| **板块 K 线** | 领涨板块 Top1-5（同类板块去重、取涨幅更高者）+ watchlist 中已记录的领跌板块 —— 各拉 5m / d / w 三周期 | `intra` / `post`：按领涨 / 领跌排名拉；`pre`：仅拉 watchlist 中已记录的板块 |
-| **涨跌停 / 龙头** | 涨停池 + 跌停池（`GET /zt-pools?type=zt\|dt`）+ 连板梯队 + 龙头候选 | `intra` / `post` 重点查；`pre` 关注昨日龙头是否延续 |
-| **资金流** | 北向资金、个股资金流、龙虎榜 | `intra` 实时；`post` 当日累计 |
-| **消息面** | 财联社早报 / 焦点复盘、个股新闻、公告 | `pre`：早报；`post`：复盘 |
+| 类别 | 数据形态 | 推荐取数路径 | 时段差异 |
+|---|---|---|---|
+| **指数全景** | 上证 / 深证成指 / 创业板指 —— 行情 + 三频率 K 线 | `§9.1` `agent/indices/batch-profile`（默认 3 指数；5m/d/w bar 数 与下方"K 线数量约定"一致） | `pre`：昨日收盘 + 隔夜外盘；`intra`：当日分时 + 5m K 线；`post`：当日收盘 + 5m / d / w 三周期 K 线 |
+| **市场全景（涨跌停 / 龙虎榜 / 消息面）** | 涨停 + 跌停 + 龙虎榜（含 server-computed `dragon_tiger.summary.total_net_buy_wan` + top-by-buy/sell） + 早报/复盘/快讯 + `market_session` 判定 | `§9.1` `agent/market-context`（session 进 cache 键，per-block 失败隔离） | `pre` / `intra` / `post` / `closed` 全时段（pre-market 涨跌停池服务端强制 null） |
+| **板块异动 + 成分股数值筛选** | 板块清单（带涨幅）+ 多板成分股按 涨幅 / 换手 / 成交额 / 市值 / 最高涨幅 过滤 | 板块清单走主表相关端点；批量数值筛走 `§9.1` `agent/boards/filter-stocks`（per-aspect 失败隔离；`max_gain_pct` 已服务端计算 `(high-open)/open*100`） | `pre`：昨日 + 今日预热；`intra`：实时异动；`post`：收盘涨跌 |
+| **板块 K 线** | 领涨 Top1-5（同类去重、取涨幅更高者）+ watchlist 已记录领跌板块 —— 各 5m / d / w 三周期 | **没有批量端点**——按主表 `boards/{code}/history` per-board 拉；调用前先按"K 线数量约定"去重 | `intra` / `post`：按领涨 / 领跌排名拉；`pre`：仅拉 watchlist 已记录板块 |
+| **跨板块 / 跨股 集合运算** | 多板块两两成分股交集 + Jaccard；多股两两所属板块交集 + Jaccard | `§9.1` `agent/boards/stock-overlap` / `agent/stocks/board-overlap`（2-10 hard cap；服务端算 Jaccard） | 与时段无关 |
+| **个股 / 资金流 / 消息面细节** | 北向资金、个股资金流、个股新闻、公告、研报（仅在归因需要"个股级"查询时） | 走主表 per-X 端点（不在 §9.1 批量范围内） | 任何时段 |
 
-**K 线数量约定**：
-- **大盘**：3 个指数（与"指数全景"一致），各拉 5m / d / w 三周期
+**K 线数量约定**（仅适用于上方"板块 K 线"行——大盘 3 指数 × 5m / d / w 三周期**已被 `agent/indices/batch-profile` 服务端覆盖**，无需手拉）：
+- **大盘**：3 个指数（与"指数全景"一致），各拉 5m / d / w 三周期 —— **已被 `agent/indices/batch-profile` 覆盖**，勿重复拉
 - **领涨板块**：同类板块（如同名"房地产" / "房地产概念"、相邻"半导体" / "第三代半导体"）取涨幅更高者；最终 1-5 个（市场大涨看 5 个，市场大跌看 1-2 个）
 - **领跌板块**：仅当板块已在 `market_tracking.md` 中被记录为持续关注对象时才拉 K 线；其他领跌板块**不拉**——避免对临时性下跌过度反应
 
@@ -166,7 +168,7 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 ### 步骤 5：chat 回复 + 写入文件
 
 - **chat 回复**：精简摘要 + 结论（**市场情绪方向**、主线 1-N、龙头候选、**领涨板块 K 线方向**、关键归因）
-- **`{date}.md`**：完整版（数据引用、源链接、时间戳、归因展开、板块 K 线方向）——**不列**涨跌停股原始明细，写入端点路径（`GET /zt-pools?type=zt\|dt`）供按需查询；文件保留"总结 + 重点关注的股票"
+- **`{date}.md`**：完整版（数据引用、源链接、时间戳、归因展开、板块 K 线方向）——**不列**涨跌停股原始明细，写入端点路径（`GET /zt-pools?type=zt\|dt`）供按需查询；文件保留"总结 + 重点关注的股票"。**`{date}.md` 嵌入**：本步骤要写入文件的取数（§9.1 `agent/market-context` / `agent/indices/batch-profile` / `agent/boards/filter-stocks` 等）通过 query 参数 `?format=md` 拿 markdown 投影直接 paste——服务端保证无信息丢失（每个 JSON 字段映射到 MD 表格 / 列表 / 段落），渲染失败自动回退 JSON + `X-MD-Render-Error` 响应头，agent 永远能拿到数据
 - **`market_tracking.md`**：本次复盘新识别的主线 / 龙头 / 待验证假设 + **强制追加**今日领涨板块至"持续关注的板块"区（**退出规则**：板块多日走弱 + 无龙头 → agent 临场判定淘汰，判定标准走 market-principles 第 10 节）
 
 ### 步骤 6：处理用户追问
@@ -253,6 +255,11 @@ agent 在执行步骤 4-5 时，按需跳读 `market-principles` 取判断方法
 - **不要**在盘中模式下硬要"找齐今天所有原因" —— 盘中数据不全，归因尽量但不强求
 - **不要**为同一天的多次调用保留多份独立文件（如 `2026-07-21-am.md` / `2026-07-21-pm.md`）—— 同日多模式合并到单文件 + 时间戳判断块
 - **不要**在 `{date}.md` 列出所有涨跌停股原始明细 —— 写入端点路径（`GET /zt-pools?type=zt\|dt`）供按需查询，文件保留"总结 + 重点关注的股票"即可
+- **不要**为指数全景 per-index × 3 频率 拉 12 次 —— 走 `agent/indices/batch-profile`（§4 步骤 3 取数策略）
+- **不要**为涨跌停 + 龙虎榜 + 早报 + 复盘 + 快讯 5-6 个 per-call 拉——走 `agent/market-context`（§4 步骤 3）
+- **不要**为 ≥2 个候选板块手算两两成分股交集——走 `agent/boards/stock-overlap`（§4 步骤 3）
+- **不要**为 ≥2 个候选股手算所属板块交集——走 `agent/stocks/board-overlap`（§4 步骤 3）
+- **不要**把 `agent/*` 响应拿 JSON 后再 client-side 转 markdown 嵌入 `{date}.md` —— 直接 `?format=md` 让服务端投影（§4 步骤 5）
 
 ---
 
