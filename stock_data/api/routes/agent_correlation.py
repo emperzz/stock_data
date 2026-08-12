@@ -9,6 +9,7 @@ from fastapi import APIRouter  # noqa: F401  (Task 6 will use it for the route d
 
 from stock_data.api.routes.helpers import get_manager
 from stock_data.data_provider.base import DataFetchError
+from stock_data.data_provider.constants import BOARD_KLINE_FREQ_BY_SOURCE
 from stock_data.data_provider.utils.normalize import normalize_stock_code
 
 from ._router import (
@@ -196,3 +197,108 @@ def _resolve_board_name(board_code: str, source: str) -> str | None:
         return meta.get("board_name") if isinstance(meta, dict) else None
     except Exception:
         return None
+
+
+# ----- validation -----
+
+_FREQ_DAYS_RANGE = {
+    "d":   (30, 365),
+    "w":   (4,  120),
+    "m":   (1,  36),
+    "1m":  (1,  30),
+    "5m":  (1,  30),
+    "15m": (1,  30),
+    "30m": (1,  30),
+    "60m": (1,  30),
+}
+
+
+def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
+    """Validate the raw request body and return parsed inputs.
+
+    Returns
+    -------
+    labels : list[CorrelationLabel-ready dicts], ordered
+    stocks : list[str], bare 6-digit codes
+    boards : list[dict{code, source}], source defaulted to "ths"
+
+    Raises
+    ------
+    HTTPException(422) on any validation failure (consistent with /agent/* peers).
+    HTTPException(400) when normalize_stock_code raises on the input.
+    """
+    from fastapi import HTTPException
+
+    if not isinstance(raw, dict):
+        raise HTTPException(400, detail={"error": "bad_request", "message": "body must be a JSON object"})
+
+    stocks_raw = raw.get("stocks", []) or []
+    boards_raw = raw.get("boards", []) or []
+    freq       = raw.get("frequency", "d")
+    days       = raw.get("days", 90)
+    methods    = raw.get("methods", ["pearson", "spearman"])
+
+    if not isinstance(stocks_raw, list) or not isinstance(boards_raw, list):
+        raise HTTPException(422, detail={"error": "bad_request", "message": "stocks/boards must be lists"})
+    if len(stocks_raw) + len(boards_raw) < 2:
+        raise HTTPException(422, detail={"error": "bad_request",
+            "message": "stocks + boards must contain at least 2 entries"})
+    if len(stocks_raw) > 10 or len(boards_raw) > 10:
+        raise HTTPException(422, detail={"error": "bad_request",
+            "message": "stocks/boards each capped at 10 entries"})
+    if len(stocks_raw) + len(boards_raw) > 10:
+        raise HTTPException(422, detail={"error": "bad_request",
+            "message": "total assets capped at 10"})
+
+    if freq not in _FREQ_DAYS_RANGE:
+        raise HTTPException(422, detail={"error": "bad_request",
+            "message": f"unsupported frequency: {freq}"})
+    lo, hi = _FREQ_DAYS_RANGE[freq]
+    if not isinstance(days, int) or not (lo <= days <= hi):
+        raise HTTPException(422, detail={"error": "bad_request",
+            "message": f"days must be an int in [{lo}, {hi}] for frequency={freq}"})
+
+    if not isinstance(methods, list) or not methods:
+        raise HTTPException(422, detail={"error": "bad_request", "message": "methods must be non-empty list"})
+    methods = list(dict.fromkeys(methods))   # de-dup, preserve order
+    if any(m not in ("pearson", "spearman") for m in methods):
+        raise HTTPException(422, detail={"error": "bad_request",
+            "message": 'methods must be subset of ["pearson","spearman"]'})
+
+    # Board source × frequency (early 422 to avoid manager explosion).
+    # Use the upstream allow-list from constants so this stays in lockstep
+    # with the manager-side check.
+    valid_sources = {src: set(freqs) for src, freqs in BOARD_KLINE_FREQ_BY_SOURCE.items()}
+    for b in boards_raw:
+        if not isinstance(b, dict) or "code" not in b:
+            raise HTTPException(422, detail={"error": "bad_request",
+                "message": 'each board must be an object with a "code"'})
+        src = b.get("source", "ths")
+        if src not in valid_sources:
+            raise HTTPException(422, detail={"error": "bad_request",
+                "message": f"unsupported board source: {src}"})
+        if freq not in valid_sources[src]:
+            raise HTTPException(422, detail={"error": "bad_request",
+                "message": f"frequency {freq} is not supported for board source {src}"})
+
+    # Normalize stock codes (raises on truly bad input)
+    labels: list[dict] = []
+    stocks_canonical: list[str] = []
+    for s in stocks_raw:
+        if not isinstance(s, str):
+            raise HTTPException(422, detail={"error": "bad_request", "message": "stock must be string"})
+        try:
+            canonical = normalize_stock_code(s)
+        except Exception as e:
+            raise HTTPException(400, detail={"error": "bad_request",
+                "message": f"invalid stock code {s}: {e}"}) from e
+        labels.append({"type": "stock", "code": canonical, "name": None, "source": None})
+        stocks_canonical.append(canonical)
+
+    boards_canonical: list[dict] = []
+    for b in boards_raw:
+        src = b.get("source", "ths")
+        labels.append({"type": "board", "code": b["code"], "name": None, "source": src})
+        boards_canonical.append({"code": b["code"], "source": src})
+
+    return labels, stocks_canonical, boards_canonical
