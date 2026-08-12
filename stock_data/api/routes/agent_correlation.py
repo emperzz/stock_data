@@ -7,6 +7,10 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter  # noqa: F401  (Task 6 will use it for the route decorator)
 
+from stock_data.api.routes.helpers import get_manager
+from stock_data.data_provider.base import DataFetchError
+from stock_data.data_provider.utils.normalize import normalize_stock_code
+
 from ._router import (
     router,  # noqa: F401  (Task 6 will register @router.post("/correlation/matrix"))
 )
@@ -117,3 +121,78 @@ def _pct_change(close_df: pd.DataFrame) -> pd.DataFrame:
     Move the call here so test #3 below pins it.
     """
     return close_df.pct_change(fill_method=None).dropna(how="any")
+
+
+# ----- fetcher wrappers (private) -----
+
+
+def _fetch_stock_series(
+    code: str, days: int, frequency: str
+) -> tuple[pd.Series | None, str | None]:
+    """Fetch a single stock's close-price series.
+
+    Returns (series, name). On any failure → (None, None).
+    """
+    try:
+        canonical = normalize_stock_code(code)
+        df, _source = get_manager().get_kline_data(
+            stock_code=canonical,
+            days=days,
+            frequency=frequency,
+            asset="stock",   # disambiguate from CSI index codes (000001, 000300, etc.)
+        )
+        if df is None or df.empty or "close" not in df.columns:
+            return None, None
+        if "trade_date" in df.columns:
+            s = df.set_index(pd.to_datetime(df["trade_date"]))["close"]
+        else:
+            s = df.set_index(pd.DatetimeIndex(df.index))["close"]
+        if s.isna().all():
+            return None, None
+        return s, _resolve_stock_name(canonical)
+    except (DataFetchError, ValueError, KeyError, AttributeError, TypeError):
+        return None, None
+
+
+def _fetch_board_series(
+    board_code: str, source: str, days: int, frequency: str
+) -> tuple[pd.Series | None, str | None]:
+    """Fetch a single board's close-price series.
+
+    Returns (series, name). On any failure → (None, None).
+    """
+    try:
+        rows, _src = get_manager().get_board_history(
+            board_code=board_code, source=source, frequency=frequency, days=days
+        )
+        if not rows:
+            return None, None
+        df = pd.DataFrame(rows)
+        if df.empty or "close" not in df.columns:
+            return None, None
+        date_col = "date" if "date" in df.columns else df.columns[0]
+        s = df.set_index(pd.to_datetime(df[date_col]))["close"]
+        if s.isna().all():
+            return None, None
+        return s, _resolve_board_name(board_code, source)
+    except (DataFetchError, ValueError, KeyError, AttributeError, TypeError):
+        return None, None
+
+
+def _resolve_stock_name(code: str) -> str | None:
+    """Best-effort name lookup. Returns None on failure."""
+    try:
+        from stock_data.data_provider.persistence.stock_list import get_stock_name
+        return get_stock_name(code)
+    except Exception:
+        return None
+
+
+def _resolve_board_name(board_code: str, source: str) -> str | None:
+    """Best-effort name lookup. Returns None on failure."""
+    try:
+        from stock_data.data_provider.persistence.board import get_board_metadata
+        meta = get_board_metadata(board_code, source)
+        return meta.get("board_name") if isinstance(meta, dict) else None
+    except Exception:
+        return None
