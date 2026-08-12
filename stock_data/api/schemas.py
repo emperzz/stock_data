@@ -2,6 +2,7 @@
 Pydantic schemas for API request/response models.
 """
 
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, PrivateAttr, model_serializer, model_validator
@@ -1829,3 +1830,88 @@ class StockBatchProfileResponse(BaseModel):
         default_factory=dict,
         description="{requested, ok, failed, elapsed_ms}",
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/agent/correlation/matrix
+# ---------------------------------------------------------------------------
+
+
+class CorrelationFrequency(str, Enum):
+    """K-line frequency for the correlation window."""
+
+    d = "d"
+    w = "w"
+    m = "m"
+    m1 = "1m"
+    m5 = "5m"
+    m15 = "15m"
+    m30 = "30m"
+    m60 = "60m"
+
+
+class CorrelationMethod(str, Enum):
+    pearson = "pearson"
+    spearman = "spearman"
+
+
+class CorrelationLabel(BaseModel):
+    """One asset in the correlation matrix (stock or board)."""
+
+    type: Literal["stock", "board"]
+    code: str
+    name: str | None = None
+    # only set when type == "board"
+    source: Literal["ths", "eastmoney"] | None = None
+
+
+class CorrelationErrorItem(BaseModel):
+    """Per-item fetch failure (does not abort the response)."""
+
+    type: Literal["stock", "board"]
+    code: str
+    source: Literal["ths", "eastmoney"] | None = None
+    reason: Literal["data_unavailable", "empty", "too_short"]
+
+
+class CorrelationAlignment(BaseModel):
+    """How many bars actually aligned after inner-join."""
+
+    requested_days: int
+    common_bars: int
+    missing_after_join: int
+
+
+class CorrelationMatrices(BaseModel):
+    """Pairwise correlation matrices; method-keyed; missing method → None."""
+
+    pearson: list[list[float]] | None = None
+    spearman: list[list[float]] | None = None
+
+
+class CorrelationMatrixRequest(BaseModel):
+    stocks: list[str] = Field(default_factory=list)  # 0..10 bare 6-digit
+    boards: list[dict] = Field(default_factory=list)  # 0..10 {code, source}
+    frequency: CorrelationFrequency = CorrelationFrequency.d
+    days: int = 90  # bounds-checked later
+    methods: list[CorrelationMethod] = Field(
+        default_factory=lambda: [
+            CorrelationMethod.pearson,
+            CorrelationMethod.spearman,
+        ]
+    )
+
+    @model_validator(mode="after")
+    def _require_at_least_one_asset(self) -> "CorrelationMatrixRequest":
+        if not self.stocks and not self.boards:
+            raise ValueError("at least one of 'stocks' / 'boards' must be non-empty")
+        return self
+
+
+class CorrelationMatrixResponse(BaseModel):
+    labels: list[CorrelationLabel]
+    frequency: CorrelationFrequency
+    days: int
+    alignment: CorrelationAlignment
+    matrices: CorrelationMatrices
+    errors: list[CorrelationErrorItem] = Field(default_factory=list)
