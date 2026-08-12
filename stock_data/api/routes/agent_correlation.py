@@ -302,3 +302,78 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
         boards_canonical.append({"code": b["code"], "source": src})
 
     return labels, stocks_canonical, boards_canonical
+
+
+# ----- markdown renderer (registered in agent._MD_TEMPLATES under
+#       "correlation/matrix" — see Task 6 register_template step) -----
+
+
+def render_correlation_matrix_as_md(resp: dict) -> str:
+    """Render a CorrelationMatrixResponse-shaped dict as markdown (spec §2.4)."""
+    freq       = resp["frequency"]
+    days       = resp["days"]
+    labels     = resp["labels"]
+    alignment  = resp["alignment"]
+    matrices   = resp["matrices"]
+    errors     = resp.get("errors", [])
+
+    n = len(labels)
+
+    def _short_label(label: dict) -> str:
+        if label["type"] == "stock":
+            return label["code"]
+        return f'{label["code"]} ({label.get("source", "?")})'
+
+    # Pre-compute sorted pair list per method that exists
+    sections: list[str] = []
+    for method, m in matrices.items():
+        if m is None:
+            continue
+        # Top pairs (skip diagonal)
+        pairs: list[tuple[float, str, str]] = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                pairs.append((float(m[i][j]),
+                              _short_label(labels[i]),
+                              _short_label(labels[j])))
+        pairs.sort(key=lambda x: -abs(x[0]))
+
+        method_zh = {"pearson": "pearson", "spearman": "spearman"}[method]
+        sec = []
+        sec.append(f"## 相关性矩阵 — {method_zh} ({freq} × {days}d)\n")
+        sec.append(
+            f"> 资产数: {n} · 对齐 {alignment['common_bars']}/"
+            f"{alignment['requested_days']} 个日历日 · "
+            f"缺失 {alignment['missing_after_join']} 个数据点\n"
+        )
+        # Top pairs
+        sec.append("### 所有 pair (按 |ρ| 降序)")
+        sec.append("| # | Pair | ρ |")
+        sec.append("|---|---|---|")
+        for idx, (rho, a, b) in enumerate(pairs, start=1):
+            sec.append(f"| {idx} | {a} ↔ {b} | {round(rho, 4)} |")
+        sec.append("")
+        # Full matrix
+        sec.append(f"### 完整矩阵 ({method_zh})")
+        header = "|          | " + " | ".join(_short_label(L) for L in labels) + " |"
+        sep    = "|----------|" + "|".join(["--------"] * n) + "|"
+        sec.append(header)
+        sec.append(sep)
+        for i, label_i in enumerate(labels):
+            row = [_short_label(label_i)]
+            for j, _label_j in enumerate(labels):
+                if i == j:
+                    row.append("—")
+                else:
+                    row.append(str(round(float(m[i][j]), 4)))
+            sec.append("| " + " | ".join(row) + " |")
+        sec.append("")
+        sections.append("\n".join(sec))
+
+    body = "\n".join(sections)
+    if errors:
+        body += "\n### 数据缺失\n"
+        for e in errors:
+            src = f" ({e.get('source')})" if e.get("source") else ""
+            body += f"- {e['type']} `{e['code']}`{src}: {e['reason']}\n"
+    return body
