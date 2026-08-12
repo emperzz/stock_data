@@ -1,4 +1,9 @@
-"""POST /api/v1/agent/correlation/matrix — server-side correlation aggregator."""
+"""POST /api/v1/agent/correlation/matrix — server-side correlation aggregator.
+
+Request: `stocks` and `boards` are independent optional lists; any combination
+with >= 2 assets in total works (stocks-only, boards-only, or mixed). `boards`
+entries may be bare code strings (source defaults to "ths") or {"code", "source"}.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -279,19 +284,25 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
 
     # Board source × frequency (early 422 to avoid manager explosion).
     # Use the upstream allow-list from constants so this stays in lockstep
-    # with the manager-side check.
+    # with the manager-side check. Boards accept either a bare code string
+    # (source defaults to "ths") or an object {"code", "source"}.
     valid_sources = {src: set(freqs) for src, freqs in BOARD_KLINE_FREQ_BY_SOURCE.items()}
+    board_pairs: list[tuple[str, str]] = []
     for b in boards_raw:
-        if not isinstance(b, dict) or "code" not in b:
+        if isinstance(b, str):
+            bcode, bsrc = b, "ths"
+        elif isinstance(b, dict) and "code" in b:
+            bcode, bsrc = b["code"], b.get("source", "ths")
+        else:
             raise HTTPException(422, detail={"error": "bad_request",
-                "message": 'each board must be an object with a "code"'})
-        src = b.get("source", "ths")
-        if src not in valid_sources:
+                "message": 'each board must be a code string or an object with a "code"'})
+        if bsrc not in valid_sources:
             raise HTTPException(422, detail={"error": "bad_request",
-                "message": f"unsupported board source: {src}"})
-        if freq not in valid_sources[src]:
+                "message": f"unsupported board source: {bsrc}"})
+        if freq not in valid_sources[bsrc]:
             raise HTTPException(422, detail={"error": "bad_request",
-                "message": f"frequency {freq} is not supported for board source {src}"})
+                "message": f"frequency {freq} is not supported for board source {bsrc}"})
+        board_pairs.append((bcode, bsrc))
 
     # Normalize stock codes (raises on truly bad input)
     labels: list[dict] = []
@@ -308,10 +319,9 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
         stocks_canonical.append(canonical)
 
     boards_canonical: list[dict] = []
-    for b in boards_raw:
-        src = b.get("source", "ths")
-        labels.append({"type": "board", "code": b["code"], "name": None, "source": src})
-        boards_canonical.append({"code": b["code"], "source": src})
+    for bcode, bsrc in board_pairs:
+        labels.append({"type": "board", "code": bcode, "name": None, "source": bsrc})
+        boards_canonical.append({"code": bcode, "source": bsrc})
 
     return labels, stocks_canonical, boards_canonical
 

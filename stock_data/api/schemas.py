@@ -1891,7 +1891,9 @@ class CorrelationMatrices(BaseModel):
 
 class CorrelationMatrixRequest(BaseModel):
     stocks: list[str] = Field(default_factory=list)  # 0..10 bare 6-digit
-    boards: list[dict] = Field(default_factory=list)  # 0..10 {code, source}
+    boards: list[str | dict] = Field(
+        default_factory=list
+    )  # 0..10 board codes as plain strings, or {"code", "source"}; source defaults to "ths"
     frequency: CorrelationFrequency = CorrelationFrequency.d
     days: int = 90  # bounds-checked later
     methods: list[CorrelationMethod] = Field(
@@ -1900,12 +1902,6 @@ class CorrelationMatrixRequest(BaseModel):
             CorrelationMethod.spearman,
         ]
     )
-
-    @model_validator(mode="after")
-    def _require_at_least_one_asset(self) -> "CorrelationMatrixRequest":
-        if not self.stocks and not self.boards:
-            raise ValueError("at least one of 'stocks' / 'boards' must be non-empty")
-        return self
 
 
 class CorrelationMatrixResponse(BaseModel):

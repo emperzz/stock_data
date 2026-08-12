@@ -68,6 +68,28 @@ def test_methods_subset_only_pearson_passes():
     assert ei.value.status_code == 422
 
 
+def test_boards_as_plain_strings_default_to_ths():
+    labels, stocks, boards = _parse_and_validate({
+        "stocks": ["600519", "000001"],
+        "boards": ["885595", "885584"],   # bare codes → source defaults to "ths"
+        "frequency": "d",
+        "days": 30,
+    })
+    assert [lbl["code"] for lbl in labels] == ["600519", "000001", "885595", "885584"]
+    assert stocks == ["600519", "000001"]
+    assert [b["source"] for b in boards] == ["ths", "ths"]
+    assert [lbl["source"] for lbl in labels[2:]] == ["ths", "ths"]
+
+
+def test_board_invalid_entry_rejected():
+    with pytest.raises(HTTPException) as ei:
+        _parse_and_validate({
+            "stocks": ["600519", "000001"], "boards": [12345], "frequency": "d", "days": 30,
+        })
+    assert ei.value.status_code == 422
+    assert "each board must be" in ei.value.detail["message"]
+
+
 def test_invalid_stock_code_raises_4xx():
     # normalize_stock_code("!!!badformat!!!") returns the input unchanged (no
     # exception raised), so the 400 path is hard to trigger. Use a non-string

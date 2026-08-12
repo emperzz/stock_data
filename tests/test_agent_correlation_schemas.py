@@ -1,6 +1,5 @@
 """Schema validation tests for POST /api/v1/agent/correlation/matrix."""
 import pytest
-from pydantic import ValidationError
 
 from stock_data.api.schemas import (
     CorrelationAlignment,
@@ -62,9 +61,12 @@ def test_request_defaults_are_pearson_spearman_both():
     assert CorrelationMethod.spearman in res.methods
 
 
-def test_request_rejects_both_empty():
-    with pytest.raises(ValidationError):
-        CorrelationMatrixRequest(stocks=[], boards=[])
+def test_request_accepts_both_empty_at_schema_level():
+    # stocks/boards are independent optional lists — the schema accepts an
+    # empty body; the min-2-asset rule is enforced later in
+    # `_parse_and_validate` (clean HTTPException 422), not here.
+    req = CorrelationMatrixRequest(stocks=[], boards=[])
+    assert req.stocks == [] and req.boards == []
 
 
 def test_response_serialization_omits_none_matrices():

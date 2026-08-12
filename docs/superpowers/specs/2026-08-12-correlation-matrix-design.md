@@ -236,7 +236,8 @@ class CorrelationMatrices(BaseModel):
 
 class CorrelationMatrixRequest(BaseModel):
     stocks:     list[str] = []
-    boards:     list[dict] = []                   # {code, source} at the wire; parsed
+    boards:     list[str | dict] = []            # bare code str (source defaults
+                                                #  to "ths") or {"code", "source"}
     frequency:  CorrelationFrequency = CorrelationFrequency.d
     days:       int = 90                          # bounds-checked against frequency
     methods:    list[CorrelationMethod] = [CorrelationMethod.pearson,

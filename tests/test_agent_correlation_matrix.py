@@ -211,6 +211,59 @@ def test_normalize_strip_suffix(monkeypatch):
     assert codes == ["600519", "000001"]
 
 
+def test_boards_only_mode(monkeypatch):
+    """No stocks at all — boards-only correlation. stocks/boards are
+    independent optional lists; any combination with >= 2 assets works."""
+    idx = pd.date_range("2026-04-01", periods=30, freq="D")
+    brow1 = [{"date": str(d.date()), "close": float(v)}
+             for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)]
+    brow2 = [{"date": str(d.date()), "close": float(v)}
+             for d, v in zip(idx, np.linspace(300, 340, 30), strict=False)]
+    mgr = _mgr_stub({}, {("885595", "ths"): brow1, ("885584", "ths"): brow2})
+    _patch_manager(monkeypatch, mgr)
+    r = client.post("/api/v1/agent/correlation/matrix", json={
+        "boards": ["885595", "885584"], "frequency": "d", "days": 30,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert [L["code"] for L in body["labels"]] == ["885595", "885584"]
+    assert all(L["source"] == "ths" for L in body["labels"])
+    assert body["matrices"]["pearson"] is not None
+
+
+def test_boards_as_strings_mixed_with_stocks(monkeypatch):
+    """Mixed mode: boards passed as bare codes alongside stocks."""
+    idx = pd.date_range("2026-04-01", periods=30, freq="D")
+    s1 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})
+    s2 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 30)})
+    brow = [{"date": str(d.date()), "close": float(v)}
+            for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)]
+    mgr = _mgr_stub({"600519": s1, "000001": s2}, {("885595", "ths"): brow})
+    _patch_manager(monkeypatch, mgr)
+    r = client.post("/api/v1/agent/correlation/matrix", json={
+        "stocks": ["600519", "000001"], "boards": ["885595"],
+        "frequency": "d", "days": 30,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["labels"]) == 3
+    assert body["labels"][2]["source"] == "ths"
+
+
+def test_empty_assets_returns_clean_422(monkeypatch):
+    """Both stocks and boards omitted → clean 422 body (no schema-validator
+    serialization crash on the server 422 handler)."""
+    mgr = MagicMock()
+    _patch_manager(monkeypatch, mgr)
+    r = client.post("/api/v1/agent/correlation/matrix", json={
+        "stocks": [], "boards": [], "frequency": "d", "days": 30,
+    })
+    assert r.status_code == 422
+    body = r.json()
+    assert body["detail"]["error"] == "bad_request"
+    assert "at least 2 entries" in body["detail"]["message"]
+
+
 def test_repeat_request_succeeds_without_state_corruption(monkeypatch):
     """Spec §6 #14 contract: handler has no agent-level cache; an identical
     second request must still return a 200 with a non-null matrix (proving
