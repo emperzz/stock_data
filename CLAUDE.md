@@ -151,6 +151,7 @@ The non-obvious behaviors worth memorizing here are:
 | 板块清单 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
 | 板块成分股 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
 | 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
+| `/agent/correlation/matrix` | fetcher 名 (per asset in `labels[].source`) | n/a (compute-only — `source: ""` because the response is a composite of multiple fetchers) |
 
 > `/stocks` 暴露 `source` 字段 (post-2026-07-29): 每个 list entry 的 source 是 metadata origin (akshare/zzshare/persistence) 或 quote fetcher (当 `?include_quote=true`)。`/calendar` 仍然不暴露 source (response model 无该字段)。
 
@@ -439,6 +440,7 @@ All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. 
 | `POST /agent/boards/stock-overlap` | Pairwise stock-set intersection + Jaccard across 2-10 boards. | per-code `stock_board_cache.get_board_stocks(source='ths', include_quote=False)` |
 | `POST /agent/stocks/board-overlap` | Pairwise board-set intersection + Jaccard across 2-10 stocks. | per-code `stock_board_cache.get_stock_memberships(sources=['ths'])` |
 | `POST /agent/boards/filter-stocks` | Server-side numeric filter (turnover / change_pct / amount / mcap / max_gain_pct) on a board's constituents. | `stock_board_cache.get_board_stocks(source=<user>, include_quote=True, top_n=payload.limit or 50)` |
+| `POST /agent/correlation/matrix` | Pairwise Pearson + Spearman matrix across stocks and boards; supports d/w/m/1-60m frequencies. | `manager.get_kline_data` + `manager.get_board_history` per asset, then inner-join + `pct_change(fill_method=None)` |
 
 ### Design contract (don't violate these without a spec change)
 
@@ -449,6 +451,7 @@ All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. 
 - **`filter-stocks` cache key MUST include `limit`.** `limit` is forwarded to the upstream `get_board_stocks(..., top_n=limit)`, so two requests with identical board/source/filters but different `limit` MUST use different cache entries. `make_filter_stocks_cache_key(board_code, source, filters, limit)` hashes `{filters, limit}` together. Do not remove `limit` from the signature; do not cache the *post-truncation* `matched_stocks` (upstream is already size-bounded, so a "cache full + truncate at response" optimization is not worth the cache-stale risk).
 - **Default `top_n` when `limit` is omitted is 50** — matches the historical `stock_board_cache.get_board_stocks` default and keeps the response within THS's hard cap (5 pages × 10 rows).
 - **422 on cid_unresolved.** `post_filter_stocks` calls the persistence helper which can return `reason='cid_unresolved'` when the THS platecode→cid index is cold; the route MUST translate that into a 422 (not a 200 with empty `matched_stocks`). Pinned by `tests/test_agent_endpoints.py::test_cid_unresolved_returns_422`. The shared `fetch_board_stocks_with_zzshare_fallback` helper handles this for `/boards/{code}/stocks` already; agent reuses the same path.
+- **No agent-level composite cache (`correlation/matrix`).** Unlike the other agent routes, this endpoint deliberately relies on inner fetcher-level TTLs (`CACHE_TTL_STOCK_KLINE`, `manager.get_board_history` caching, persistence board cache). The composite-cache contract in CLAUDE.md exists to hide N+1 fetch latency; for N=2..10 within the inner TTL window, the inner caches already solve the problem without an additional layer. Tracked as a deliberate deviation; revert by adding `cached_lookup` / `cached_store` around the handler if cold-path latency becomes a complaint.
 
 ### Anti-patterns
 
