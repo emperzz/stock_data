@@ -178,7 +178,7 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 
 ### 9.1 Agent 批量端点（板块集合运算 / 数值过滤 / 批量画像 / 市场快照）
 
-> 本节端点位于 `/api/v1/agent/*`，面向 LLM agent 的高频组合查询——把"多板块两两交集 / 个股所属板块两两交集 / 板块成分股数值过滤 / 批量个股画像 / 市场全景快照"这些典型操作下沉到服务端，避免 agent 自己 N+1 调用 + 手算 set-op。
+> 本节端点位于 `/api/v1/agent/*`，面向 LLM agent 的高频组合查询——把"多板块两两交集 / 个股所属板块两两交集 / 板块成分股数值过滤 / 批量个股画像 / 市场全景快照 / 跨资产相关性矩阵"这些典型操作下沉到服务端，避免 agent 自己 N+1 调用 + 手算 set-op。
 
 | 端点 | 输入 | 用途 | 失败 fallback |
 |---|---|---|---|
@@ -188,6 +188,16 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 | `GET /api/v1/agent/indices/batch-profile` | `?codes=000001,000300` (默认 000001/399001/399006) | 指数批量画像：每个指数实时报价 + 5m/d/w 三频率 K 线，单次 fan-out | 5xx 不外抛（per-frequency 失败写入 `klines[f].error`）；检查上游 fetcher 状态 |
 | `GET /api/v1/agent/market-context` | `?flash_limit=20&trade_date=YYYY-MM-DD` | 市场全景：早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜（含时段判断 + 龙虎榜 summary） | 5xx per-block 隔离（CLS / zt / dt / dtiger 任一失败不影响其他）；date 越界或格式错 → 400 |
 | `POST /api/v1/agent/stocks/batch-profile` | `{"codes": ["..."], "aspects": [...]}` (1-5 个股) | 股票批量画像：每个股 quote / kline / kline_5m / info / boards，单次 fan-out | 5xx per-aspect 隔离（失败写入 `results[i].errors[]`） |
+| `POST /api/v1/agent/correlation/matrix` | `{"stocks": [...], "boards": [...], "frequency"?, "days"?, "methods"?}` (2-10 资产) | 跨资产两两 Pearson + Spearman 相关性矩阵（A 股，d/w/m/1m/5m/15m/30m/60m）；支持 stock+board 混合 | 422 `insufficient_assets` → 失败资产数 ≥ N-1；422 `bad_request` → 检查 frequency×days×source 三维约束；1m+`eastmoney` 直接 422（eastmoney 不支持 1m 板 K 线） |
+
+**`correlation/matrix` 关键字段**：
+
+- `labels[i]` 对应 `matrices.<method>[i][:]`，顺序 = 请求顺序（股票块在前、板块块在后）；股票 `source: null`、板块 `source` = 请求时源（ths/eastmoney），**不是**实际服务的 fetcher
+- `alignment.common_bars` 是 inner-join 后实际样本量；`alignment.missing_after_join` 是 join 本身丢掉的天数（**先于** trailing-window trim 计算，反映真实日期 gap）
+- `matrices.<method>` 对称、对角线=1、NaN→0、4 位小数；未请求的方法返回 `null`（key 始终存在）
+- `frequency × days` 约束（超出 → 422）：`d` 30-365 / `w` 4-120 / `m` 1-36 / `1m|5m|15m|30m|60m` 1-30；服务端会**预先**校验 `frequency × source` 组合（`1m + eastmoney` 立即 422）
+- **不走 agent 层复合缓存**（**与另 6 个端点的故意偏离**）：内部 `get_kline_data` / `get_board_history` 各自有 fetcher 级 TTLCache（60s+）已经覆盖热路径；冷路径 sub-1s 不值得叠加一层
+- **MD 投影走的是 `PlainTextResponse`**，不走共享的 `_render_agent` 模板——`?format=md` 渲染失败 → 500（**无** JSON-fallback / `X-MD-Render-Error` 响应头；另 6 个端点都有）
 
 **通用行为**：
 
@@ -195,7 +205,7 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 - **缓存**：60s in-memory TTLCache（复用 `get_quote_cache`），TTL 内同 payload 直接命中。`filter-stocks` 的 `limit` 参与缓存键；`market-context` 的 `session` (`pre-market` / `intraday` / `post-market` / `closed`) 参与缓存键（09:00 pre-market 命中不能遮蔽 16:00 post-market 刷新）。
 - **不做判断**：本节端点只返回"事实型"算结果（集合运算 / 过滤后列表 / Jaccard 系数 / 数值字段），不输出"龙头/候选"等结论——结论仍由 agent 用 `market-principles` 的工作流生成。
 - **板 K 线 / 板实时行情** 仍在第 9 节的主表（不走 agent）。
-- **`?format=json|md` 投影**：全部 6 个端点统一支持，默认 `json`；`?format=md` 返回 `text/markdown; charset=utf-8`（**无数据丢失** — 所有 JSON 字段都映射到 MD 表/列表项）。MD 渲染失败 → 自动回退 JSON + `X-MD-Render-Error` 响应头（保证 agent 总能拿到数据）。LLM 训练数据中 markdown 占比远高于 TSV/JSON，对异构内容（K 线表 + 段落 + 列表）解析更稳。
+- **`?format=json|md` 投影**：全部 7 个端点统一支持，默认 `json`；`?format=md` 返回 `text/markdown; charset=utf-8`（**无数据丢失** — 所有 JSON 字段都映射到 MD 表/列表项）。**例外**：`correlation/matrix` 的 MD 渲染走 route 内 `PlainTextResponse`，渲染失败 → 500（**无**自动回退 JSON 响应头）；其余 6 个端点 MD 渲染失败 → 自动回退 JSON + `X-MD-Render-Error` 响应头（保证 agent 总能拿到数据）。LLM 训练数据中 markdown 占比远高于 TSV/JSON，对异构内容（K 线表 + 段落 + 列表）解析更稳。
 
 **`filter-stocks` 关键参数**：
 
@@ -273,6 +283,22 @@ curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=20&format=md
 curl -X POST 'http://localhost:8888/api/v1/agent/boards/filter-stocks?format=md' \
   -H 'Content-Type: application/json' \
   -d '{"board_code": "885595", "source": "ths", "filters": {"turnover_pct": {"min": 5.0}}, "limit": 10}'
+
+# 7. 跨资产相关性矩阵（股票 + 板块，2-10 个资产；d/w/m/1m/5m/15m/30m/60m）
+curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "stocks": ["600519", "000858"],
+    "boards": [{"code": "881270", "source": "ths"}],
+    "frequency": "d",
+    "days": 90,
+    "methods": ["pearson", "spearman"]
+  }'
+
+# 7.1 相关性矩阵拿 markdown（?format=md；走 PlainTextResponse，渲染失败 → 500）
+curl -X POST 'http://localhost:8888/api/v1/agent/correlation/matrix?format=md' \
+  -H 'Content-Type: application/json' \
+  -d '{"stocks": ["600519", "000858"], "boards": [{"code": "881270", "source": "ths"}], "days": 90}'
 ```
 
 ---
@@ -339,6 +365,7 @@ curl -X POST 'http://localhost:8888/api/v1/agent/boards/filter-stocks?format=md'
 | 5.2 **看候选板块两两同成分股** | `POST /agent/boards/stock-overlap` |
 | 5.3 **板块成分股数值过滤** | `POST /agent/boards/filter-stocks`（取代手写 SQL/if 链） |
 | 5.4 **候选股批量画像（1-5 只）** | **`POST /agent/stocks/batch-profile`**（一次拿 quote + kline + info + boards，取代步骤 2 + 5 的 N 次调用） |
+| 5.5 **候选股 / 板块两两相关性（"是否同涨同跌"）** | **`POST /agent/correlation/matrix`**（2-10 资产混合，d/w/m/1m/5m/15m/30m/60m；A 股 only；输出 Pearson + Spearman NxN 矩阵 + 对齐信息） |
 
 ---
 

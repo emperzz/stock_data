@@ -1257,10 +1257,10 @@ via the `subject_id mismatch` warning before the article body.
 ## Agent Batch API
 
 All routes in this section live under `/api/v1/agent/*`
-(`stock_data/api/routes/agent.py`). They are server-side aggregations:
-the typical AI-agent flow of "fetch N boards, pairwise compute
-intersection, summarize" is folded into one request. Six endpoints ship
-in v1:
+(`stock_data/api/routes/agent.py`, plus `agent_correlation.py` for the
+correlation matrix endpoint). They are server-side aggregations: the
+typical AI-agent flow of "fetch N boards, pairwise compute intersection,
+summarize" is folded into one request. Seven endpoints ship in v1:
 
 | Endpoint | Method | Purpose |
 |---|---|---|
@@ -1270,6 +1270,7 @@ in v1:
 | `/agent/indices/batch-profile` | GET | Per-index quote + 5m/d/w K-line (3 default CSI indices) |
 | `/agent/market-context` | GET | Morning briefing + market recap + flash + zt/dt + dragon-tiger |
 | `/agent/stocks/batch-profile` | POST | Per-stock fan-out across quote / kline / info / boards (1-5 codes) |
+| `/agent/correlation/matrix` | POST | Pairwise Pearson + Spearman correlation matrix across 2-10 stocks/boards (A-share only) |
 
 **Common contract:**
 
@@ -1294,7 +1295,7 @@ in v1:
 
 **`?format=json|md` projection:**
 
-All 6 endpoints accept an optional `?format` query parameter:
+All 7 endpoints accept an optional `?format` query parameter:
 
 | Value | Content-Type | Use case |
 |---|---|---|
@@ -1783,3 +1784,161 @@ the response is reordered to the caller's input order on hit.
 
 - `422 invalid_request` (Pydantic) — `codes` empty / > 5 / `aspects`
   empty / unknown aspect name.
+
+---
+
+### POST /api/v1/agent/correlation/matrix
+
+Cross-asset (stocks + boards, A-share only) pairwise correlation
+matrix. Returns symmetric NxN Pearson + Spearman matrices (N = 2..10,
+2 ≤ N ≤ 10) on the same inner-joined date alignment. Use case: "which
+boards track the same as my watchlist" or "how tightly does `885595`
+track `600519` over 90 d".
+
+```bash
+POST /api/v1/agent/correlation/matrix
+Content-Type: application/json
+```
+
+**Request body:**
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `stocks` | string[] | no | `[]` | 0-10 stock codes (bare 6-digit A-share; pre-normalized via `normalize_stock_code`). |
+| `boards` | array | no | `[]` | 0-10 entries; each is either a bare code string (`"885595"` → source defaults to `"ths"`) or `{"code": "885595", "source": "ths" \| "eastmoney"}`. |
+| `frequency` | enum | no | `"d"` | One of `d` / `w` / `m` / `1m` / `5m` / `15m` / `30m` / `60m`. |
+| `days` | int | no | `90` | Calendar-day window for the alignment; range is frequency-dependent (table below). The route fetches `days + 60` internally to compensate for non-trading days, then trims to the trailing `days` rows. |
+| `methods` | enum[] | no | `["pearson", "spearman"]` | One or both of `"pearson"` and `"spearman"`. De-duped, order preserved. |
+| `format` | query | no | `"json"` | `json` (default) or `md` — see [`?format=json\|md` projection](#agent-batch-api). |
+
+**Cross-field:** `len(stocks) + len(boards)` must be in `[2, 10]`. Each
+list independently capped at 10.
+
+**`frequency` × `days` validation table** (out-of-range → 422
+`bad_request`):
+
+| `frequency` | `days` range | Boards `ths` | Boards `eastmoney` |
+|---|---|---|---|
+| `d` | 30..365 | yes | yes |
+| `w` | 4..120 | yes | yes |
+| `m` | 1..36 | yes | yes |
+| `1m` | 1..30 | yes | **no** → 422 if any board has `source="eastmoney"` |
+| `5m` | 1..30 | yes | yes |
+| `15m` | 1..30 | yes | yes |
+| `30m` | 1..30 | yes | yes |
+| `60m` | 1..30 | yes | yes |
+
+The board-source/frequency table is **server-validated in advance** —
+the route refuses early with `422` rather than letting
+`manager.get_board_history(..., frequency="1m", source="eastmoney")`
+explode downstream. THS upstream caps 1m at ~800 most-recent bars, so
+`days ≤ 3` is safe; `days=30` returns ~3.3 trading sessions regardless
+of the window.
+
+**Response (200):**
+
+```json
+{
+  "labels": [
+    {"type": "stock", "code": "600519", "name": "贵州茅台", "source": null},
+    {"type": "stock", "code": "000858", "name": "五粮液",  "source": null},
+    {"type": "board", "code": "881270", "name": "白酒",    "source": "ths"}
+  ],
+  "frequency": "d",
+  "days": 90,
+  "alignment": {
+    "requested_days": 90,
+    "common_bars": 87,
+    "missing_after_join": 3
+  },
+  "matrices": {
+    "pearson":  [[1.0, 0.87, 0.41], [0.87, 1.0, 0.39], [0.41, 0.39, 1.0]],
+    "spearman": [[1.0, 0.79, 0.32], [0.79, 1.0, 0.34], [0.32, 0.34, 1.0]]
+  },
+  "errors": []
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `labels[i]` | object | `{type, code, name, source}`. Order = request order (stocks block first, then boards block). `labels[i]` corresponds to `matrices.<m>[i][:]`. For stock labels `source` is always `null`; for board labels `source` is the *requested* source (`"ths"` / `"eastmoney"`), **not** the actually-serving fetcher (no per-asset `effective_source` on this composite endpoint). |
+| `frequency` / `days` | enum / int | Echoed back so an agent can confirm what the matrix was computed over. |
+| `alignment.requested_days` | int | The `days` you asked for. |
+| `alignment.common_bars` | int | Number of rows in the inner-joined DataFrame (post-trim) — the actual sample size used to compute the matrix. |
+| `alignment.missing_after_join` | int | Dates dropped by the inner-join itself (longest source minus joined length, computed **before** the trailing-window trim so it reflects real date gaps, not calendar padding). |
+| `matrices.<method>` | `list[list[float]] \| null` | Symmetric NxN matrix, diagonal=1.0, NaN→0, rounded to 4 dp. `null` when the method wasn't requested. Key always exists for shape checks. |
+| `errors[]` | object[] | Per-asset failures. Each: `{type, code, source, reason}` where `reason ∈ {"data_unavailable", "empty", "too_short"}`. Empty on success. |
+
+**Errors:**
+
+- `400 bad_request` — malformed JSON or invalid stock code in `stocks`
+  (e.g. `normalize_stock_code` rejected the input).
+- `422 bad_request` — `frequency` not in enum, `days` outside
+  frequency-dependent range, `methods` empty / unknown, `len(stocks) +
+  len(boards)` outside `[2, 10]`, board `source` not in `{"ths",
+  "eastmoney"}`, or `frequency × source` pair not allowed (e.g.
+  `1m` + `eastmoney`).
+- `422 insufficient_assets` — fewer than 2 assets survived after per-item
+  failures (no matrix computable). The response body is omitted on this
+  hard 422.
+- **No 5xx.** Per-item `DataFetchError` is always reported in `errors[]`;
+  blanket upstream outages manifest as `len(errors) == N` plus a 422.
+
+**`?format=md` projection:** renders one section per requested method
+(`pearson` / `spearman`), each with a header summary, a top-pairs
+table sorted by `|ρ|` descending, and the full NxN matrix below:
+
+```markdown
+## 相关性矩阵 — pearson (d × 90d)
+
+> 资产数: 3 · 对齐 87/90 个交易日 · 缺失 3 个数据点
+
+### 所有 pair (按 |ρ| 降序)
+| # | Pair                                | ρ     |
+|---|-------------------------------------|-------|
+| 1 | 600519 ↔ 000858                   | 0.87  |
+| 2 | 000858 ↔ 881270 (ths)             | 0.39  |
+| 3 | 600519 ↔ 881270 (ths)             | 0.41  |
+
+### 完整矩阵 (pearson)
+|          | 600519 | 000858 | 881270 (ths) |
+|----------|--------|--------|--------------|
+| 600519   | —      | 0.87   | 0.41         |
+| 000858   | 0.87   | —      | 0.39         |
+| 881270   | 0.41   | 0.39   | —            |
+```
+
+When `errors[]` is non-empty, an extra `### 数据缺失` subsection
+appends one bullet per failed asset. Unlike the other 6 agent
+endpoints, this projection is rendered directly via `PlainTextResponse`
+inside the route — there is **no JSON-fallback / `X-MD-Render-Error`
+header contract**: a template failure surfaces as a 500. The MD body
+contains the same fields as the JSON response, no data is dropped.
+
+**No agent-level composite cache (deliberate deviation).** Unlike the
+other 6 endpoints, this one does **not** use the 60s `get_quote_cache`
+slot. Reasoning: each `manager.get_kline_data` / `manager.get_board_history`
+call is independently memoized by the fetcher-level TTLCache (60+ s for
+K-line per `CACHE_TTL_STOCK_KLINE`), and a 2-10 asset fan-out is sub-1 s
+on the warm path. Adding a composite cache would re-do work the inner
+TTLs already paid. If cold-path latency becomes a complaint, add
+`make_correlation_matrix_cache_key` to `api/cache.py` and wrap the
+handler with `cached_lookup` / `cached_store` — a 4-line patch with a
+60 s TTL choice.
+
+**Per-item error isolation:** each fetch is wrapped in
+`try/except (DataFetchError, ValueError, KeyError, AttributeError,
+TypeError)`. Failure → `errors[]` entry, asset dropped from analysis,
+remaining continue. The route never aborts the whole response on a
+single failure (unless fewer than 2 survive, which becomes the
+`insufficient_assets` 422 above).
+
+**Alignment internals** (for debugging): the route normalizes each
+series index (drop time-of-day, sort, dedupe duplicate dates — some
+upstream bar series can carry two rows on one date, e.g. suspend/resume
+or a merged today bar; `pd.concat` would otherwise raise on the
+re-index). Inner-join keeps only dates present in **every** series, then
+`pct_change(fill_method=None)` per column drops the first row. The
+final matrix uses `len(returns)` rows; `common_bars` reports the
+pre-pct-change size. `np.corrcoef` handles zero-variance columns (NaN
+→ 0 via `_finalize_matrix`'s `np.where(np.isnan, 0.0)` fallback).

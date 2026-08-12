@@ -200,6 +200,7 @@ agent 收到选股请求后先判断用户是否**指定了板块**。
 - **不要**对每只候选独立拉 4-5 个端点（quote + kline + 5m + info + boards）——候选 ≤5 时合到 `market-data-obtain §9.1` 的 `agent/stocks/batch-profile`（§4 取数策略）
 - **不要**≥2 候选板块时手算两两成分股交集——走 `agent/boards/stock-overlap`（§3 步骤 4 取数建议）
 - **不要**≥2 候选股时手算所属板块交集——走 `agent/stocks/board-overlap`（§4 步骤 9 取数建议）
+- **不要**为 ≥2 个候选资产手算两两相关性 —— 走 `market-data-obtain §9.1` 的 `agent/correlation/matrix`（A 股 only，2-10 资产混合，d/w/m/1m/5m/15m/30m/60m；服务端算 Pearson + Spearman + 对齐信息；不走 agent 层复合缓存，依赖内层 fetcher TTL）
 
 ---
 

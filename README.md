@@ -110,12 +110,24 @@ curl -X POST http://localhost:8888/api/v1/agent/stocks/batch-profile \
   -H 'Content-Type: application/json' \
   -d '{"codes": ["600519", "000858"], "aspects": ["quote", "kline", "info", "boards"]}'
 
+# Pairwise Pearson + Spearman correlation matrix across stocks + boards
+# (A-share only, 2-10 assets total, d/w/m/1m/5m/15m/30m/60m)
+curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "stocks": ["600519", "000858"],
+    "boards": [{"code": "881270", "source": "ths"}],
+    "frequency": "d",
+    "days": 90,
+    "methods": ["pearson", "spearman"]
+  }'
+
 # Any agent endpoint can be requested as markdown (?format=md) — no data loss,
 # lower token cost, native in LLM training data
 curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=20&format=md'
 ```
 
-All six live under `/api/v1/agent/*` and use a 60s in-memory cache
+All seven live under `/api/v1/agent/*` and use a 60s in-memory cache
 (`limit` participates in the `filter-stocks` cache key and `session`
 participates in the `market-context` key — different values trigger
 separate fetches and separate cache entries). Per-item upstream
@@ -136,8 +148,8 @@ margin · block trade · holder count · dividend · dragon-tiger · fund flow �
 hot topics · north-bound flow · research reports · announcements ·
 news search / flash / content · 财联社早报 / 焦点复盘 · **agent batch**
 (boards/stock-overlap · stocks/board-overlap · boards/filter-stocks ·
-indices/batch-profile · market-context · stocks/batch-profile · all accept
-`?format=json|md`).
+indices/batch-profile · market-context · stocks/batch-profile ·
+correlation/matrix · all accept `?format=json|md`).
 
 ## API Response Caching
 
