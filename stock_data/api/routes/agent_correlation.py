@@ -233,14 +233,16 @@ def _resolve_board_name(board_code: str, source: str) -> str | None:
 # ----- validation -----
 
 _FREQ_DAYS_RANGE = {
-    "d":   (30, 365),
-    "w":   (4,  120),
-    "m":   (1,  36),
-    "1m":  (1,  30),
-    "5m":  (1,  30),
-    "15m": (1,  30),
-    "30m": (1,  30),
-    "60m": (1,  30),
+    # days 是 calendar 日(查最近多少天的数据);范围按"等价 trading bar 数"
+    # 对齐——d/w/m 上限对应 ~250 交易日 / ~150 周 / ~60 月,分钟线受 800 bar cap 限制
+    "d":   (2,   365),
+    "w":   (14,  1095),
+    "m":   (60,  1825),
+    "1m":  (1,   3),
+    "5m":  (1,   3),
+    "15m": (1,   5),
+    "30m": (1,   10),
+    "60m": (1,   20),
 }
 
 
@@ -446,7 +448,7 @@ async def post_correlation_matrix(
     methods: list[str] = raw["methods"]
 
     # 2) Fetch + assemble per-asset close series
-    fetch_days = days + 60   # calendar padding for non-trading days (spec §3.3)
+    fetch_days = days + 1   # +1 buffer for pct_change 前置 bar
     stock_labels = {lbl["code"]: lbl for lbl in labels_raw if lbl["type"] == "stock"}
     board_labels = {(lbl["code"], lbl["source"]): lbl
                     for lbl in labels_raw if lbl["type"] == "board"}
@@ -495,7 +497,7 @@ async def post_correlation_matrix(
 
     # 3) Align + compute (trim to last `days` rows; spec §3.1)
     aligned_df, common_bars, missing = _align_series(
-        series_by_label, trailing_window=days,
+        series_by_label, trailing_window=days + 1,   # +1 buffer for pct_change;dropna 后剩 days 根
     )
     if aligned_df.empty or common_bars < 2:
         raise HTTPException(422, detail={

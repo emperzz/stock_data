@@ -388,8 +388,9 @@ class BaseFetcher(ABC):
         """Fill in a (start_date, end_date) window when either is omitted.
 
         ``end_date`` defaults to today; ``start_date`` defaults to
-        ``days * 2`` calendar days before ``end_date`` (the ×2 buffers
-        non-trading days so ~``days`` trading bars land in the window).
+        ``days`` calendar days before ``end_date``. ``days`` is the
+        calendar-day window — no implicit padding; callers wanting N
+        trading bars across holidays should pass a larger ``days``.
         Returns ``(start_date, end_date)`` — both guaranteed non-None.
 
         Single source of truth for the defaulting logic, reused by
@@ -402,7 +403,7 @@ class BaseFetcher(ABC):
         if end_date is None:
             end_date = datetime.now().strftime("%Y-%m-%d")
         if start_date is None:
-            start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days * 2)
+            start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days)
             start_date = start_dt.strftime("%Y-%m-%d")
         return start_date, end_date
 

@@ -43,7 +43,7 @@ def test_frequency_1m_eastmoney_rejected():
     with pytest.raises(HTTPException) as ei:
         _parse_and_validate({
             "stocks": ["600519"], "boards": [{"code": "885595", "source": "eastmoney"}],
-            "frequency": "1m", "days": 5,
+            "frequency": "1m", "days": 2,
         })
     assert ei.value.status_code == 422
     assert "not supported for board source" in ei.value.detail["message"]
@@ -52,7 +52,7 @@ def test_frequency_1m_eastmoney_rejected():
 def test_frequency_1m_ths_ok():
     labels, _, _ = _parse_and_validate({
         "stocks": ["600519", "000001"], "boards": [{"code": "885595", "source": "ths"}],
-        "frequency": "1m", "days": 5,
+        "frequency": "1m", "days": 2,
     })
     assert len(labels) == 3
 

@@ -333,9 +333,10 @@ def test_inner_cache_avoids_recomputation(monkeypatch):
 
 
 def test_calendar_padding_trims_to_days(monkeypatch):
-    """days=30 → fetcher called with days+60 (90), response alignment is trimmed."""
-    # Provide 120 days of history. days=30 → effective window should be the
-    # LAST 30 rows (trim spec §3.1); alignment.common_bars == 30.
+    """days=30 → fetcher called with days+1 (31), response alignment is trimmed to 31."""
+    # Provide 120 days of history. days=30 → fetcher pulled days+1=31 bars
+    # (1 buffer for pct_change 前置);alignment.common_bars == 31 (trailing_window).
+    # After pct_change dropna, returns = 30 (matches user's days).
     idx = pd.date_range("2026-01-01", periods=120, freq="D")
     s1 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 120)})
     s2 = pd.DataFrame({"trade_date": idx, "close": np.linspace(200, 260, 120)})
@@ -346,15 +347,15 @@ def test_calendar_padding_trims_to_days(monkeypatch):
         "stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30,
     })
     assert r.status_code == 200
-    # Fetcher was called with days + 60 (calendar padding)
+    # Fetcher was called with days + 1 (1 buffer for pct_change)
     called = mgr.get_kline_data.call_args.kwargs
-    assert called["days"] == 30 + 60
+    assert called["days"] == 30 + 1
     # Response alignment echoes back the user's days value
     body = r.json()
     assert body["alignment"]["requested_days"] == 30
-    # Trim: only the LAST `days` rows participate; common_bars must equal 30
-    assert body["alignment"]["common_bars"] == 30, (
-        f"expected 30 trimmed rows; got {body['alignment']['common_bars']}. "
+    # Trim: trailing_window=days+1=31; pct_change dropna 之后剩 30 个 return 观测
+    assert body["alignment"]["common_bars"] == 31, (
+        f"expected 31 trimmed rows (days+1 buffer); got {body['alignment']['common_bars']}. "
         "The trim-to-trailing-window step in _align_series is missing or wrong."
     )
     # 120 fully-aligned rows → the join drops nothing; missing_after_join must
