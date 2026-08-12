@@ -151,7 +151,7 @@ The non-obvious behaviors worth memorizing here are:
 | 板块清单 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
 | 板块成分股 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
 | 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
-| `/agent/correlation/matrix` | fetcher 名 (per asset in `labels[].source`) | n/a (compute-only — `source: ""` because the response is a composite of multiple fetchers) |
+| `/agent/correlation/matrix` | fetcher 名 (per asset, recorded on each `labels[].source`) | n/a (compute-only — no top-level `source` field on `CorrelationMatrixResponse` because the response is a composite of multiple fetchers) |
 
 > `/stocks` 暴露 `source` 字段 (post-2026-07-29): 每个 list entry 的 source 是 metadata origin (akshare/zzshare/persistence) 或 quote fetcher (当 `?include_quote=true`)。`/calendar` 仍然不暴露 source (response model 无该字段)。
 

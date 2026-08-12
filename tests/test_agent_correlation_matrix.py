@@ -192,8 +192,10 @@ def test_too_many_assets_rejected(monkeypatch):
         "stocks": [str(i).zfill(6) for i in range(11)], "boards": [],
         "frequency": "d", "days": 30,
     })
-    # Pydantic min/max validation may surface as 422 OR as 400; accept either
-    assert r.status_code in (400, 422)
+    # The schema caps each list at 10; this payload (11 stocks) hits the
+    # Pydantic max-length validator, which surfaces as 422. The 400 branch
+    # in `_parse_and_validate` is unreachable on this code path.
+    assert r.status_code == 422
 
 
 def test_normalize_strip_suffix(monkeypatch):
@@ -210,10 +212,13 @@ def test_normalize_strip_suffix(monkeypatch):
     assert codes == ["600519", "000001"]
 
 
-def test_inner_cache_avoids_recomputation(monkeypatch):
-    """Spec §6 #14 contract: handler has no agent-level cache; first request
-    makes N fetcher calls, second identical request still succeeds (proving
-    no state corruption).
+def test_repeat_request_succeeds_without_state_corruption(monkeypatch):
+    """Spec §6 #14 contract: handler has no agent-level cache; an identical
+    second request must still return a 200 with a non-null matrix (proving
+    no state corruption between calls). The MagicMock bypasses real TTL
+    behavior; per-call-count assertions are intentionally NOT made for
+    the second call because that would require a real fetcher-level cache
+    to be observable, which is out of scope for this route.
     """
     idx = pd.date_range("2026-04-01", periods=30, freq="D")
     df = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})

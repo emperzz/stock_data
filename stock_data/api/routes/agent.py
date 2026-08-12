@@ -84,7 +84,6 @@ from ..schemas import (
     StocksBoardOverlapResponse,
     StocksBoardOverlapStockSet,
 )
-from . import agent_correlation
 from ._router import router
 from .errors import map_errors
 from .helpers import (
@@ -1452,7 +1451,6 @@ _MD_TEMPLATES: dict[str, Callable] = {
     "indices/batch-profile": render_indices_batch_profile_as_md,
     "market-context": render_market_context_as_md,
     "stocks/batch-profile": render_stocks_batch_profile_as_md,
-    "correlation/matrix": agent_correlation.render_correlation_matrix_as_md,
 }
 
 

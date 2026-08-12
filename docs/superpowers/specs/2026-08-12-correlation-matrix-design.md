@@ -115,9 +115,12 @@ can confirm what the matrix was computed over.
 
 ### 2.4 `?format=md` projection
 
-`_render_agent` (the projection helper in `agent.py`) treats the response
-as markdown when the request carries `?format=md` (or when the route's
-default projection is set to markdown by an internal caller). The
+The route handler at `agent_correlation.py:529-537` builds a
+`PlainTextResponse` directly (returning `text/markdown; charset=utf-8`)
+when the request carries `?format=md`. This bypasses the shared
+`_render_agent` / `_render_markdown` path used by the other six agent
+endpoints, which means there is no JSON-fallback / `X-MD-Render-Error`
+header contract here — a template failure would surface as a 500. The
 projection lays out one **section per method** in `methods`, each with a
 header summary, a top-pairs table (sorted by |ρ| descending), and the full
 NxN matrix at the bottom:

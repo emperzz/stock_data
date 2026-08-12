@@ -1,15 +1,9 @@
 """POST /api/v1/agent/correlation/matrix — server-side correlation aggregator."""
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 import numpy as np
 import pandas as pd
-from fastapi import (
-    APIRouter,  # noqa: F401  (Task 6 will use it for the route decorator)
-    HTTPException,
-    Query,
-)
+from fastapi import HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response
 
 from stock_data.api.endpoint_meta import endpoint_meta
@@ -23,9 +17,7 @@ from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.constants import BOARD_KLINE_FREQ_BY_SOURCE
 from stock_data.data_provider.utils.normalize import normalize_stock_code
 
-from ._router import (
-    router,
-)
+from ._router import router
 
 # ----- pure-compute helpers (private) -----
 
@@ -81,7 +73,7 @@ def _align_series(
 
 def _compute_matrices(
     returns: pd.DataFrame,
-    methods: Iterable[str],
+    methods: list[str],
 ) -> dict[str, list[list[float]] | None]:
     """For each method, return NxN correlation matrix (4-dp, NaN→0, symmetric).
 
@@ -238,8 +230,6 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
     HTTPException(422) on any validation failure (consistent with /agent/* peers).
     HTTPException(400) when normalize_stock_code raises on the input.
     """
-    from fastapi import HTTPException
-
     if not isinstance(raw, dict):
         raise HTTPException(400, detail={"error": "bad_request", "message": "body must be a JSON object"})
 
