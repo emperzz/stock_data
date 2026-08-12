@@ -199,8 +199,9 @@ def _fetch_board_series(
         df = pd.DataFrame(rows)
         if df.empty or "close" not in df.columns:
             return None, None, "empty"
-        date_col = "date" if "date" in df.columns else df.columns[0]
-        s = df.set_index(pd.to_datetime(df[date_col]))["close"]
+        if "date" not in df.columns:
+            return None, None, "empty"
+        s = df.set_index(pd.to_datetime(df["date"]))["close"]
         if s.isna().all():
             return None, None, "empty"
         if len(s) < 2:

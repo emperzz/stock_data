@@ -104,6 +104,17 @@ def test_fetch_board_series_returns_close_series(monkeypatch, mock_manager):
     assert called["frequency"] == "d"
 
 
+def test_fetch_board_series_returns_empty_when_no_date_column(monkeypatch, mock_manager):
+    # Rows missing the date column must not fall back to df.columns[0]
+    # (e.g. "close" as index) — that would fabricate a garbage series.
+    rows = [{"close": 1000.0}, {"close": 1010.0}]
+    mock_manager.get_board_history.return_value = (rows, "ths")
+    _patch_manager(monkeypatch, mock_manager)
+    s, name, reason = ac._fetch_board_series("885595", "ths", days=3, frequency="d")
+    assert s is None and name is None
+    assert reason == "empty"
+
+
 def test_fetch_board_series_returns_none_on_data_fetch_error(monkeypatch, mock_manager):
     from stock_data.data_provider.base import DataFetchError
     mock_manager.get_board_history.side_effect = DataFetchError("ths timeout")
