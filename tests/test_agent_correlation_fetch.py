@@ -39,6 +39,23 @@ def test_fetch_stock_series_returns_close_series(monkeypatch, mock_manager):
     assert called["asset"] == "stock"
 
 
+def test_fetch_stock_series_reads_canonical_date_column(monkeypatch, mock_manager):
+    # Real manager output standardizes on `date` (STANDARD_COLUMNS — Baostock
+    # serves stock K-line here). A RangeIndex must never be misread as dates.
+    df = pd.DataFrame({
+        "code": ["600519"] * 3,
+        "date": ["2026-01-02", "2026-01-03", "2026-01-06"],
+        "close": [100.0, 101.5, 102.0],
+    })
+    mock_manager.get_kline_data.return_value = (df, "baostock")
+    _patch_manager(monkeypatch, mock_manager)
+    s, name, reason = ac._fetch_stock_series("600519", days=3, frequency="d")
+    assert reason is None
+    assert s is not None and len(s) == 3
+    assert s.index[0] == pd.Timestamp("2026-01-02")   # real dates, not 1970
+    assert s.index.is_unique
+
+
 def test_fetch_stock_series_returns_none_on_data_fetch_error(monkeypatch, mock_manager):
     from stock_data.data_provider.base import DataFetchError
     mock_manager.get_kline_data.side_effect = DataFetchError("upstream down")

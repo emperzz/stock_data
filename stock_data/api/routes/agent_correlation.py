@@ -163,10 +163,17 @@ def _fetch_stock_series(
         )
         if df is None or df.empty or "close" not in df.columns:
             return None, None, "empty"
+        # Manager K-line DataFrames standardize on the `date` column
+        # (STANDARD_COLUMNS); `trade_date` is a legacy variant. Do NOT fall
+        # back to df.index — that is a RangeIndex for SDK fetchers and would
+        # fabricate 1970 dates that normalize() collapses into duplicates.
         if "trade_date" in df.columns:
-            s = df.set_index(pd.to_datetime(df["trade_date"]))["close"]
+            date_col = "trade_date"
+        elif "date" in df.columns:
+            date_col = "date"
         else:
-            s = df.set_index(pd.DatetimeIndex(df.index))["close"]
+            return None, None, "empty"
+        s = df.set_index(pd.to_datetime(df[date_col]))["close"]
         if s.isna().all():
             return None, None, "empty"
         if len(s) < 2:
