@@ -61,6 +61,10 @@ def _align_series(
         s = s.copy()
         s.index = s.index.normalize()   # strip time-of-day (Vibe-Trading correlation.py:146)
         s = s.sort_index()
+        # Drop duplicate dates defensively — an upstream bar series can carry two
+        # rows on one date (e.g. suspend/resume, a merged today bar); pd.concat
+        # would raise "cannot reindex on an axis with duplicate labels".
+        s = s[~s.index.duplicated(keep="last")]
         normalized[label] = s
 
     # Inner-join: concat on columns, drop rows with any NaN (= not present in some series)

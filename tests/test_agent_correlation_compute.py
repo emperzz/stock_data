@@ -36,6 +36,21 @@ def test_align_strips_time_of_day():
     assert common == 3   # would be 0 if time-of-day weren't stripped
 
 
+def test_align_dedupes_duplicate_dates():
+    # A series with a duplicated date (upstream two bars on one date) must not
+    # crash concat; the duplicate is dropped (keep="last") before the join.
+    a = _make_series([100, 101, 102])
+    idx = pd.date_range("2026-01-01", periods=3, freq="D")
+    b = pd.Series(
+        [200.0, 201.0, 201.5, 202.0],
+        index=pd.DatetimeIndex([idx[0], idx[1], idx[1], idx[2]]),
+    )
+    df, common, missing = _align_series({"a": a, "b": b})
+    assert common == 3
+    assert missing == 0
+    assert abs(df["b"].iloc[1] - 201.5) < 1e-9  # keep="last" wins
+
+
 def test_align_empty_raises():
     with pytest.raises(ValueError):
         _align_series({})
