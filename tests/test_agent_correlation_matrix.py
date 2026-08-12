@@ -332,11 +332,14 @@ def test_inner_cache_avoids_recomputation(monkeypatch):
     )
 
 
-def test_calendar_padding_trims_to_days(monkeypatch):
-    """days=30 → fetcher called with days+1 (31), response alignment is trimmed to 31."""
-    # Provide 120 days of history. days=30 → fetcher pulled days+1=31 bars
-    # (1 buffer for pct_change 前置);alignment.common_bars == 31 (trailing_window).
-    # After pct_change dropna, returns = 30 (matches user's days).
+def test_trailing_trim_fires_when_fetch_over_returns(monkeypatch):
+    """Mechanism test: when the fetcher returns MORE bars than trailing_window
+    (=days+1), `_align_series` trims to the trailing window. This mock
+    deliberately over-returns (120 rows ignoring the `days` param) to prove the
+    trim step itself. In production the d/w/m fetchers resolve `days` as a
+    calendar window and return ~0.7×days trading bars — FEWER than the window —
+    so the trim is usually a no-op; see
+    test_calendar_window_yields_real_trading_bars for that behavior."""
     idx = pd.date_range("2026-01-01", periods=120, freq="D")
     s1 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 120)})
     s2 = pd.DataFrame({"trade_date": idx, "close": np.linspace(200, 260, 120)})
@@ -350,10 +353,9 @@ def test_calendar_padding_trims_to_days(monkeypatch):
     # Fetcher was called with days + 1 (1 buffer for pct_change)
     called = mgr.get_kline_data.call_args.kwargs
     assert called["days"] == 30 + 1
-    # Response alignment echoes back the user's days value
     body = r.json()
     assert body["alignment"]["requested_days"] == 30
-    # Trim: trailing_window=days+1=31; pct_change dropna 之后剩 30 个 return 观测
+    # Trim fired: trailing_window=days+1=31 → 120 rows collapsed to 31.
     assert body["alignment"]["common_bars"] == 31, (
         f"expected 31 trimmed rows (days+1 buffer); got {body['alignment']['common_bars']}. "
         "The trim-to-trailing-window step in _align_series is missing or wrong."
@@ -363,3 +365,40 @@ def test_calendar_padding_trims_to_days(monkeypatch):
     assert body["alignment"]["missing_after_join"] == 0, (
         f"expected 0 join-dropped dates; got {body['alignment']['missing_after_join']}"
     )
+
+
+def _kline_for_calendar_window(days: int) -> pd.DataFrame:
+    """Simulate the real fetcher: `days` calendar days → only weekday bars."""
+    end = pd.Timestamp("2026-08-12")
+    idx = pd.bdate_range(end - pd.Timedelta(days=days), end)
+    return pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, len(idx))})
+
+
+def test_calendar_window_yields_real_trading_bars(monkeypatch):
+    """days is a calendar-day window (spec §2.5): the fetcher gets days+1
+    calendar days and returns only trading (weekday) bars — FEWER than `days`
+    rows. trailing_window=days+1 is therefore a no-op and common_bars reflects
+    the real bar count, NOT days. The 'exactly N returns' invariant holds only
+    for dense minute bars; for d/w/m it does not (calendar > trading days)."""
+    def kline(**kw):
+        return (_kline_for_calendar_window(kw["days"]), "tushare")
+
+    mgr = MagicMock()
+    mgr.get_kline_data.side_effect = kline
+    _patch_manager(monkeypatch, mgr)
+
+    r = client.post("/api/v1/agent/correlation/matrix", json={
+        "stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30,
+    })
+    assert r.status_code == 200, r.text
+    called = mgr.get_kline_data.call_args.kwargs
+    assert called["days"] == 30 + 1                      # route passes days+1
+    body = r.json()
+    assert body["alignment"]["requested_days"] == 30
+    expected_bars = len(_kline_for_calendar_window(31))  # 31 calendar days ≈ 22 weekdays
+    assert expected_bars < 31                            # calendar days > trading days
+    assert body["alignment"]["common_bars"] == expected_bars, (
+        f"expected real trading-bar count {expected_bars}, got "
+        f"{body['alignment']['common_bars']}"
+    )
+    assert body["alignment"]["missing_after_join"] == 0  # identical calendars → no join drop

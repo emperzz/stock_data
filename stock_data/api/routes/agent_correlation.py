@@ -233,16 +233,19 @@ def _resolve_board_name(board_code: str, source: str) -> str | None:
 # ----- validation -----
 
 _FREQ_DAYS_RANGE = {
-    # days 是 calendar 日(查最近多少天的数据);范围按"等价 trading bar 数"
-    # 对齐——d/w/m 上限对应 ~250 交易日 / ~150 周 / ~60 月,分钟线受 800 bar cap 限制
+    # days 是 calendar 日(查最近多少天的数据)。下界必须保证 pct_change 后仍有
+    # >= 2 个 return 观测:分钟频段 days=1 会被 trailing_window=days+1 trim 到
+    # 只剩 2 行 -> 1 个 return -> 必 422,所以分钟下界取 2。d/w/m 下界同理按
+    # "等价 ~2 trading bars" 对齐;极端低值在周末/节假日对齐下仍可能 422
+    # (calendar 窗口内的实际交易日不足),属 calendar 语义的固有行为。
     "d":   (2,   365),
     "w":   (14,  1095),
     "m":   (60,  1825),
-    "1m":  (1,   3),
-    "5m":  (1,   3),
-    "15m": (1,   5),
-    "30m": (1,   10),
-    "60m": (1,   20),
+    "1m":  (2,   3),
+    "5m":  (2,   3),
+    "15m": (2,   5),
+    "30m": (2,   10),
+    "60m": (2,   20),
 }
 
 
@@ -495,9 +498,15 @@ async def post_correlation_matrix(
             ),
         })
 
-    # 3) Align + compute (trim to last `days` rows; spec §3.1)
+    # 3) Align + compute. trailing_window=days+1 is an UPPER CEILING, not a
+    # guarantee: d/w/m fetchers resolve days as a calendar window and return
+    # ~0.7×days trading bars (weekends/holidays), so the trim is usually a
+    # no-op and common_bars reflects the actual overlapping bars. Minute
+    # frequencies return dense bars, so the trim caps at days+1 rows there.
+    # common_bars is always reported truthfully; it will typically be
+    # < days+1 for d/w/m. (spec §2.5 calendar-days semantics)
     aligned_df, common_bars, missing = _align_series(
-        series_by_label, trailing_window=days + 1,   # +1 buffer for pct_change;dropna 后剩 days 根
+        series_by_label, trailing_window=days + 1,   # ceiling for minute freq; no-op for d/w/m
     )
     if aligned_df.empty or common_bars < 2:
         raise HTTPException(422, detail={

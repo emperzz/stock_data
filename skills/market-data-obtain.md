@@ -195,7 +195,7 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 - `labels[i]` 对应 `matrices.<method>[i][:]`，顺序 = 请求顺序（股票块在前、板块块在后）；股票 `source: null`、板块 `source` = 请求时源（ths/eastmoney），**不是**实际服务的 fetcher
 - `alignment.common_bars` 是 inner-join 后实际样本量；`alignment.missing_after_join` 是 join 本身丢掉的天数（**先于** trailing-window trim 计算，反映真实日期 gap）
 - `matrices.<method>` 对称、对角线=1、NaN→0、4 位小数；未请求的方法返回 `null`（key 始终存在）
-- `frequency × days` 约束（超出 → 422）：`d` 30-365 / `w` 4-120 / `m` 1-36 / `1m|5m|15m|30m|60m` 1-30；服务端会**预先**校验 `frequency × source` 组合（`1m + eastmoney` 立即 422）
+- `frequency × days` 约束（超出 → 422）：`d` 2-365 / `w` 14-1095 / `m` 60-1825 / `1m|5m` 2-3 / `15m` 2-5 / `30m` 2-10 / `60m` 2-20（`days` 是**日历日**，非 padding；d/w/m 实际对齐样本 ≈0.7×`days`，需保证 ≥2 根 return）；服务端会**预先**校验 `frequency × source` 组合（`1m + eastmoney` 立即 422）
 - **不走 agent 层复合缓存**（**与另 6 个端点的故意偏离**）：内部 `get_kline_data` / `get_board_history` 各自有 fetcher 级 TTLCache（60s+）已经覆盖热路径；冷路径 sub-1s 不值得叠加一层
 - **MD 投影走的是 `PlainTextResponse`**，不走共享的 `_render_agent` 模板——`?format=md` 渲染失败 → 500（**无** JSON-fallback / `X-MD-Render-Error` 响应头；另 6 个端点都有）
 

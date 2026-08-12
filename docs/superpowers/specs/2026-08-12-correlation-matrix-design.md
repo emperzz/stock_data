@@ -128,7 +128,7 @@ NxN matrix at the bottom:
 ```
 ## 相关性矩阵 — pearson (d × 90d)
 
-> 资产数: 3 · 对齐 87/90 个交易日 · 缺失 3 个数据点
+> 资产数: 3 · 对齐 63/90 个日历日 · 缺失 1 个数据点
 
 ### 所有 pair (按 |ρ| 降序)
 | # | Pair                                | ρ     |
@@ -162,39 +162,43 @@ across text tables. The full matrix is a fallback. Header summary
 ### 2.5 `frequency` × `days` validation table
 
 `days` is in **calendar days**; the route passes it through to the
-underlying K-line fetcher's existing `days` semantics, which interprets
-the value as a calendar-day window. The route validates against this
-table; out-of-range → `422 {error:"bad_request", message:"days must be in N..M for frequency=…"}`.
+underlying K-line fetcher's `days` semantics, which interprets the value
+as a calendar-day window. The route validates against this table;
+out-of-range → `422 {error:"bad_request", message:"days must be in N..M for frequency=…"}`.
 
 | `frequency` | `days` range | Stock fetcher | Boards `ths` | Boards `eastmoney` |
 |---|---|---|---|---|
-| `d`   | 30..365 | yes (zzshare P2)     | yes | yes |
-| `w`   | 4..120  | yes                  | yes | yes |
-| `m`   | 1..36   | yes                  | yes | yes |
-| `1m`  | 1..30   | yes (akshare P3)     | yes | **no**  → 422 if any board has `source="eastmoney"` |
-| `5m`  | 1..30   | yes (zzshare P2)     | yes | yes |
-| `15m` | 1..30   | yes                  | yes | yes |
-| `30m` | 1..30   | yes                  | yes | yes |
-| `60m` | 1..30   | yes                  | yes | yes |
+| `d`   | 2..365   | yes (zzshare P2) | yes | yes |
+| `w`   | 14..1095 | yes              | yes | yes |
+| `m`   | 60..1825 | yes              | yes | yes |
+| `1m`  | 2..3     | yes (akshare P3) | yes | **no**  → 422 if any board has `source="eastmoney"` |
+| `5m`  | 2..3     | yes (zzshare P2) | yes | yes |
+| `15m` | 2..5     | yes              | yes | yes |
+| `30m` | 2..10    | yes              | yes | yes |
+| `60m` | 2..20    | yes              | yes | yes |
+
+Ranges are **calendar days**, rescaled (2026-08-12 days-semantics refactor)
+so the equivalent trading-bar count is roughly uniform across frequencies:
+`d` 2..365 ≈ ~1.4..250 trading bars, `w` 14..1095 ≈ ~2..150 weekly bars,
+`m` 60..1825 ≈ ~2..60 monthly bars; minute bounds follow the per-source bar
+caps. The lower bound guarantees ≥ 2 return observations survive
+`pct_change`: minute `days=1` would be trimmed by `trailing_window=days+1`
+to a single return → hard 422, so the minute lower bound is 2. Low d/w/m
+values can still 422 on holiday/weekend alignment (a calendar window that
+yields too few bars to correlate) — inherent to calendar-day semantics.
 
 The board-source/frequency table is **server-validated in advance** —
 the route refuses early with `422` rather than letting
 `manager.get_board_history(..., frequency="1m", source="eastmoney")`
 explode downstream.
 
-For minute frequencies, the lower bound `days=1` means "today only"
-(single trading session). The upper bound `days=30` keeps the inner-join
-size bounded (≤ 30 × 240 = 7,200 1-minute bars per asset).
-
 **Note on THS 1m hard cap**: the THS board-history endpoint silently
-truncates 1m data to its upstream cap (≈ 800 most recent 1m bars).
-For `days ≤ 3` on `frequency="1m"` from `source="ths"`, no truncation
-occurs; for `days=30` the upstream will return roughly the last 800
-1m bars (≈ 3.3 trading sessions) regardless of the requested window.
-This is upstream behavior — the route honors whatever
-`manager.get_board_history` returns. If a future change tightens the
-v1 contract for 1m precision, the upper bound should drop to `days ≤ 3`
-and the bound-table update should ship alongside.
+truncates 1m data to its upstream cap (≈ 800 most recent 1m bars), so the
+`1m` bound is capped at `days ≤ 3` (≈ 3.3 trading sessions) — beyond that
+the upstream returns ~800 bars regardless of the requested window. This is
+upstream behavior; the route honors whatever `manager.get_board_history`
+returns. The `1m` upper bound was already tightened to 3 in the refactor; if
+future precision needs change, update the bound table alongside.
 
 ### 2.6 Pydantic models (`api/schemas.py`)
 
@@ -260,17 +264,19 @@ class CorrelationMatrixResponse(BaseModel):
 
 ```
 parse_and_validate(request) -> raises 400/422 on bad input
-for each stock  -> manager.get_kline_data(code, days=days+padding, frequency=freq)
-                     -> DataFrame[trade_date, close, ...]
+for each stock  -> manager.get_kline_data(code, days=days+1, frequency=freq)
+                     -> DataFrame[date, close, ...]   # +1 buffer for pct_change
 for each board  -> manager.get_board_history(code, source, frequency=freq,
-                                            days=days+padding)
+                                            days=days+1)
                      -> list[dict{date, close, ...}]  → DataFrame
 append per-item failures to errors[]; drop from analysis
 if surviving < 2 -> raise 422 (insufficient_assets)
-normalize each series.index as datetime, drop time-of-day, sort
+normalize each series.index as datetime, drop time-of-day, sort, dedupe
 inner-join on date → DataFrame of aligned closes (columns = labels)
+trim to trailing `days+1` bars — UPPER CEILING, not a guarantee: d/w/m
+  fetchers resolve `days` as calendar days and return ~0.7×(days+1) bars,
+  so the trim is a no-op and common_bars = the real overlapping bar count
 pct_change(fill_method=None) per column → aligned returns
-trim to trailing `days` bars
 dropna per-row (a single NaN poisons the inner-join — fail-fast per row)
 for m in methods:
     compute NxN matrix (4-dp round, NaN→0, symmetrize)
@@ -292,15 +298,22 @@ return {labels, frequency, days, alignment, matrices: {...}, errors}
 | Symbol suffix canonicalization (`.SH`, `.SZ`, `.BJ`) | `correlation.py:54-86` | **Skip** — we keep our canonical bare-6-digit format (see anti-pattern "Don't leak outbound suffixes to responses" in CLAUDE.md). |
 | HK-vs-A-share digit-length disambiguation | `correlation.py:38-50` | **N/A** — A-share only. |
 
-### 3.3 Calendar padding
+### 3.3 Fetch window: calendar days, no padding
 
-K-line endpoints take `days`. To compensate for non-trading days inside
-the requested calendar window, fetch `days + 60` (matches Vibe-Trading's
-`+60` calendar-day padding at `correlation.py:274-276`). After
-inner-join + trim to the last `days` rows, the **actual** sample size is
-reported as `alignment.common_bars`. Padding is conservative (60
-calendar days covers 2 Spring + 1 National + minor exchange holidays for
-any window ≤ 365 d).
+`days` is passed straight through as a **calendar-day** window. The
+2026-08-12 days-semantics refactor removed both the old `days + 60`
+padding here and the shared `_resolve_kline_window` ×2 buffer — stock
+K-line fetchers and `get_board_history` now resolve `days` as calendar
+days with no implicit padding. The route fetches `days + 1` (a single
++1 buffer so `pct_change(fill_method=None)` can emit a first return).
+
+Because the calendar window yields only ~0.7×days trading bars for d/w/m
+(weekends/holidays), the trailing trim to `days+1` rows is a **no-op** for
+those frequencies and `alignment.common_bars` reports the real overlapping
+bar count — typically **less than `days`**. Minute frequencies return dense
+bars, so the trim caps the sample at `days+1` rows there. Callers that need
+a guaranteed sample size should request a proportionally larger `days`
+(~1.43× for daily).
 
 ### 3.4 Per-item error isolation
 
@@ -397,7 +410,8 @@ plus a 422 with 0 survivors.
 | 12 | `test_normalize_strip_suffix` | stock input `SH600519` normalized to `600519`, label reflects normalized code |
 | 13 | `test_format_md_emits_top_pairs_sorted_by_abs_rho` | Project response with `?format=md`; assert markdown contains "按 |ρ| 降序" header AND the first data row has the largest |ρ| |
 | 14 | `test_inner_cache_avoids_recomputation` | Two identical requests back-to-back within the inner TTL window (e.g. 60 s for stock K-line per `CACHE_TTL_STOCK_KLINE`); assert `manager.get_kline_data.call_count == 0` for the second request (first request made N calls, second made 0 — proof that fetcher-level TTLs hide the cold-path on the second call without an agent-composite cache) |
-| 15 | `test_calendar_padding_trims_to_days` | `days=90` but actual market had 87 trading days; matrix uses 87 bars |
+| 15 | `test_calendar_window_yields_real_trading_bars` | mock fetcher returns only weekday bars for a `days+1` calendar window → `common_bars` = the real weekday count (< days+1), NOT days (calendar vs trading gap; trim is a no-op) |
+| 16 | `test_trailing_trim_fires_when_fetch_over_returns` | mock over-returns 120 rows → trailing trim to `days+1` rows fires; common_bars == days+1, missing_after_join == 0 |
 
 Fixture pattern follows `tests/test_agent_endpoints.py`: patch
 `stock_data.api.routes.agent_correlation.get_manager` (or whichever

@@ -127,13 +127,19 @@ the `days` you asked for. You don't need to pre-compute a larger
 `max(30, 87) = 87` bars, runs MACD over all 87, then slices the last
 30 rows for the response.
 
+> **`days` is a calendar-day window** (no ×2 padding): a request without
+> `?indicators=` returns whatever bars fall in the window (~0.7×`days` for
+> daily, since weekends/holidays carry no bars). With `?indicators=`, the
+> lookback expansion still gives enough bars to warm the indicator and the
+> response is truncated back to the last `days` rows.
+
 ---
 
 **Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `period` | string | `daily` | K-line period: `daily`, `weekly`, `monthly` |
-| `days` | int | 30 | Number of days to retrieve (1-365, ignored when `start_date` provided) |
+| `days` | int | 30 | Calendar-day window — number of days of history to fetch (1-365, ignored when `start_date` provided). Non-trading days are **not** padded: the response contains the bars that fall in the window (~0.7×`days` trading bars for daily). Ask for ~1.4× the bar count you want displayed. |
 | `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` parameter |
 | `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
 | `adjust` | string | `` | Adjustment type: empty=不复权, `qfq`=前复权, `hfq`=后复权 |
@@ -410,7 +416,7 @@ GET /api/v1/indices/{index_code}/kline?period=daily&days=30
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `period` | string | `daily` | K-line period: `daily`, `weekly`, `monthly` |
-| `days` | int | 30 | Number of days (1-365, ignored when `start_date` provided) |
+| `days` | int | 30 | Calendar-day window — number of days of history to fetch (1-365, ignored when `start_date` provided). Non-trading days are **not** padded (same semantics as `/stocks/{code}/kline`). |
 | `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` |
 | `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
 | `indicators` | string | null | Comma-separated list of technical indicators to attach (see [Technical Indicators](#technical-indicators)). Same semantics as `/stocks/{code}/kline`. |
@@ -1807,7 +1813,7 @@ Content-Type: application/json
 | `stocks` | string[] | no | `[]` | 0-10 stock codes (bare 6-digit A-share; pre-normalized via `normalize_stock_code`). |
 | `boards` | array | no | `[]` | 0-10 entries; each is either a bare code string (`"885595"` → source defaults to `"ths"`) or `{"code": "885595", "source": "ths" \| "eastmoney"}`. |
 | `frequency` | enum | no | `"d"` | One of `d` / `w` / `m` / `1m` / `5m` / `15m` / `30m` / `60m`. |
-| `days` | int | no | `90` | Calendar-day window for the alignment; range is frequency-dependent (table below). The route fetches `days + 60` internally to compensate for non-trading days, then trims to the trailing `days` rows. |
+| `days` | int | no | `90` | Calendar-day window for the alignment; range is frequency-dependent (table below). The route fetches `days + 1` (a +1 buffer for `pct_change`) and reports the actual overlapping bar count in `alignment.common_bars` — for d/w/m that is ~0.7×`days` (non-trading days carry no bars), so request ~1.4× the sample size you want. |
 | `methods` | enum[] | no | `["pearson", "spearman"]` | One or both of `"pearson"` and `"spearman"`. De-duped, order preserved. |
 | `format` | query | no | `"json"` | `json` (default) or `md` — see [`?format=json\|md` projection](#agent-batch-api). |
 
@@ -1819,21 +1825,23 @@ list independently capped at 10.
 
 | `frequency` | `days` range | Boards `ths` | Boards `eastmoney` |
 |---|---|---|---|
-| `d` | 30..365 | yes | yes |
-| `w` | 4..120 | yes | yes |
-| `m` | 1..36 | yes | yes |
-| `1m` | 1..30 | yes | **no** → 422 if any board has `source="eastmoney"` |
-| `5m` | 1..30 | yes | yes |
-| `15m` | 1..30 | yes | yes |
-| `30m` | 1..30 | yes | yes |
-| `60m` | 1..30 | yes | yes |
+| `d` | 2..365 | yes | yes |
+| `w` | 14..1095 | yes | yes |
+| `m` | 60..1825 | yes | yes |
+| `1m` | 2..3 | yes | **no** → 422 if any board has `source="eastmoney"` |
+| `5m` | 2..3 | yes | yes |
+| `15m` | 2..5 | yes | yes |
+| `30m` | 2..10 | yes | yes |
+| `60m` | 2..20 | yes | yes |
 
 The board-source/frequency table is **server-validated in advance** —
 the route refuses early with `422` rather than letting
 `manager.get_board_history(..., frequency="1m", source="eastmoney")`
-explode downstream. THS upstream caps 1m at ~800 most-recent bars, so
-`days ≤ 3` is safe; `days=30` returns ~3.3 trading sessions regardless
-of the window.
+explode downstream. Ranges are calendar days; the lower bound guarantees
+≥ 2 return observations (minute `days=1` would be trimmed to a single
+return → 422). Low d/w/m values can still 422 on holiday/weekend
+alignment. THS upstream caps 1m at ~800 most-recent bars, so the `1m`
+upper bound is `days ≤ 3` (~3.3 trading sessions).
 
 **Response (200):**
 
@@ -1848,8 +1856,8 @@ of the window.
   "days": 90,
   "alignment": {
     "requested_days": 90,
-    "common_bars": 87,
-    "missing_after_join": 3
+    "common_bars": 63,
+    "missing_after_join": 1
   },
   "matrices": {
     "pearson":  [[1.0, 0.87, 0.41], [0.87, 1.0, 0.39], [0.41, 0.39, 1.0]],
@@ -1864,7 +1872,7 @@ of the window.
 | `labels[i]` | object | `{type, code, name, source}`. Order = request order (stocks block first, then boards block). `labels[i]` corresponds to `matrices.<m>[i][:]`. For stock labels `source` is always `null`; for board labels `source` is the *requested* source (`"ths"` / `"eastmoney"`), **not** the actually-serving fetcher (no per-asset `effective_source` on this composite endpoint). |
 | `frequency` / `days` | enum / int | Echoed back so an agent can confirm what the matrix was computed over. |
 | `alignment.requested_days` | int | The `days` you asked for. |
-| `alignment.common_bars` | int | Number of rows in the inner-joined DataFrame (post-trim) — the actual sample size used to compute the matrix. |
+| `alignment.common_bars` | int | Number of rows in the inner-joined DataFrame — the actual sample size used to compute the matrix. For d/w/m this is typically **less than `days`** (~0.7× for daily): `days` is a calendar-day window and non-trading days carry no bars, so the trailing trim (ceiling `days+1`) is a no-op there. Minute frequencies return dense bars, so `common_bars` ≈ `days+1`. |
 | `alignment.missing_after_join` | int | Dates dropped by the inner-join itself (longest source minus joined length, computed **before** the trailing-window trim so it reflects real date gaps, not calendar padding). |
 | `matrices.<method>` | `list[list[float]] \| null` | Symmetric NxN matrix, diagonal=1.0, NaN→0, rounded to 4 dp. `null` when the method wasn't requested. Key always exists for shape checks. |
 | `errors[]` | object[] | Per-asset failures. Each: `{type, code, source, reason}` where `reason ∈ {"data_unavailable", "empty", "too_short"}`. Empty on success. |
@@ -1891,7 +1899,7 @@ table sorted by `|ρ|` descending, and the full NxN matrix below:
 ```markdown
 ## 相关性矩阵 — pearson (d × 90d)
 
-> 资产数: 3 · 对齐 87/90 个交易日 · 缺失 3 个数据点
+> 资产数: 3 · 对齐 63/90 个日历日 · 缺失 1 个数据点
 
 ### 所有 pair (按 |ρ| 降序)
 | # | Pair                                | ρ     |
