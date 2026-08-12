@@ -183,6 +183,16 @@ For minute frequencies, the lower bound `days=1` means "today only"
 (single trading session). The upper bound `days=30` keeps the inner-join
 size bounded (≤ 30 × 240 = 7,200 1-minute bars per asset).
 
+**Note on THS 1m hard cap**: the THS board-history endpoint silently
+truncates 1m data to its upstream cap (≈ 800 most recent 1m bars).
+For `days ≤ 3` on `frequency="1m"` from `source="ths"`, no truncation
+occurs; for `days=30` the upstream will return roughly the last 800
+1m bars (≈ 3.3 trading sessions) regardless of the requested window.
+This is upstream behavior — the route honors whatever
+`manager.get_board_history` returns. If a future change tightens the
+v1 contract for 1m precision, the upper bound should drop to `days ≤ 3`
+and the bound-table update should ship alongside.
+
 ### 2.6 Pydantic models (`api/schemas.py`)
 
 ```python
@@ -269,7 +279,7 @@ return {labels, frequency, days, alignment, matrices: {...}, errors}
 |---|---|---|
 | `infer_market`, `_normalize_symbol` | `correlation.py:19-86` | **Skip** — we know the inputs (`stocks` is bare 6-digit by `normalize_stock_code`; `boards` carries `source` explicitly). No market inference needed. |
 | `ts.index = ts.index.normalize()` (strip time-of-day) | `correlation.py:146`, `regime.py:114` | **Reuse** verbatim — same UTC-midnight / CST-midnight quirk applies when minute frequencies show up. |
-| `pct_change(fill_method=None)` regression guard | `correlation.py:150`, `regime.py:115` | **Reuse** verbatim — under `pandas>=2,<3` the default is `bfill`; explicit `None` is load-bearing. (Regression test in §6 below.) |
+| `pct_change(fill_method=None)` regression guard | `correlation.py:150`, `regime.py:115` | **Reuse** verbatim — passing `fill_method=None` explicitly is the current best practice. Pandas 3.x has already removed the legacy `bfill` default, but the `fill_method` kwarg itself may be removed in a future release; we still pass it to be safe across versions. (Regression test in §6 below pins the no-forward-fill behavior.) |
 | `np.corrcoef` (Pearson) | `correlation.py:175-180` | **Reuse** verbatim. |
 | `scipy.stats.spearmanr` (Spearman) | same | **Reuse** verbatim. |
 | Symmetry + diagonal=1, NaN→0, round-4dp | `correlation.py:185-188` | **Reuse** verbatim. |
@@ -346,12 +356,22 @@ as a v2 add-on if monitoring shows hot-spotting.
 | Status | When | Body |
 |---|---|---|
 | **400** | malformed JSON, invalid stock code in `stocks`, missing source | `{"error":"bad_request", "message":...}` |
-| **422** | pydantic validation (frequency, days range, methods, board-source × frequency table, len(stocks)+len(boards) ∉ [2,10], surviving < 2 after per-item errors) | `{"error":"bad_request"\|"insufficient_assets", "message":...}` |
-| **503** | upstream totally down for every asset (no inner responses, surviving=0 with all `DataFetchError`) | `{"error":"data_unavailable", "message":...}` |
-| **200** | ≥ 2 survived (regardless of `errors[]` length) | `CorrelationMatrixResponse` |
+| **422** | pydantic validation (frequency, days range, methods, board-source × frequency table, len(stocks)+len(boards) ∉ [2,10], surviving < 2 after per-item errors, all fetches failed) | `{"error":"bad_request"\|"insufficient_assets", "message":...}` |
+| **200** | ≥ 2 survived (regardless of `errors[]` length) | `CorrelationMatrixResponse` (JSON) or `text/markdown` (`?format=md`) |
 
-`map_errors` (in `api/routes/errors.py`) handles the 503. The handler
-itself decides between 422 (insufficient_assets / bad_request) and 200.
+Per-item `DataFetchError` is reported as a `CorrelationErrorItem` in
+the response `errors[]`; upstream partial outages never trigger a 5xx
+on this endpoint (consistent with the existing `/agent/*` 422-only error
+model — `map_errors` translates only known exceptions). The "all-fail"
+case becomes a 422 with `error: "insufficient_assets"` and a message
+that names the survivors count.
+
+Earlier drafts of this spec listed a 503 row ("upstream totally down
+for every asset → 503"). That row is **withdrawn**: this endpoint's
+error model mirrors `/agent/*` siblings, which uniformly use 422 for
+"cannot produce an answer" and never raise 503. A blanket downstream
+outage would still manifest as `errors[] == N` (all per-item failures)
+plus a 422 with 0 survivors.
 
 ---
 

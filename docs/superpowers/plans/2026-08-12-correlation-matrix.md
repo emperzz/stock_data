@@ -27,13 +27,14 @@
 
 | File | Responsibility |
 |---|---|
-| `stock_data/api/routes/agent_correlation.py` (NEW) | Router (`POST /matrix`); request validation; per-asset fetch (stock + board); series alignment + matrix compute; markdown projection. All helpers as private module-level functions. |
+| `stock_data/api/routes/agent_correlation.py` (NEW) | Imports `router` from `._router` (the shared `/api/v1` router). Defines `POST /correlation/matrix`; request validation; per-asset fetch (stock + board); series alignment + matrix compute; markdown projection. All helpers as private module-level functions. |
 | `stock_data/api/schemas.py` (MODIFY) | Add 8 Pydantic models: `CorrelationFrequency`, `CorrelationMethod`, `CorrelationLabel`, `CorrelationErrorItem`, `CorrelationAlignment`, `CorrelationMatrices`, `CorrelationMatrixRequest`, `CorrelationMatrixResponse`. |
-| `stock_data/server.py` (MODIFY) | `include_router(agent_correlation.router, prefix="/api/v1/agent")`. |
+| `stock_data/api/routes/__init__.py` (MODIFY) | Add `agent_correlation` to the `from . import (...)` block so app boot picks up the new `@router.post(...)` decorator at the shared `/api/v1` prefix. |
+| `stock_data/api/routes/agent.py` (MODIFY, single line) | Append `"correlation/matrix": agent_correlation.render_correlation_matrix_as_md` to `_MD_TEMPLATES`. |
 | `tests/test_agent_correlation_matrix.py` (NEW) | 15 cases covering the §6 test list of the spec. |
 | `CLAUDE.md` (MODIFY) | Add a row to the "Agent Batch API (`/api/v1/agent/*`)" section listing the new endpoint; note `source: ""` semantics. |
 
-Pure-compute helpers (`_align_series`, `_compute_matrices`, `render_markdown`) live as private module-level functions in `agent_correlation.py`. No new sub-package — one file is enough at this size.
+Pure-compute helpers (`_align_series`, `_compute_matrices`, `render_correlation_matrix_as_md`) live as private module-level functions in `agent_correlation.py`. No new sub-package — one file is enough at this size.
 
 ---
 
@@ -273,19 +274,24 @@ import pandas as pd
 from fastapi import APIRouter
 from scipy import stats
 
-# ----- module-level router (declared now; route handler added in Task 6) -----
-router = APIRouter()
+# Use the shared router mounted at /api/v1 (agent.py does the same at line 87).
+# New module is also added to routes/__init__.py so app boot picks it up.
+from ._router import router
 
 
 # ----- pure-compute helpers (private) -----
 
 def _align_series(
     series_by_label: dict[str, pd.Series],
+    trailing_window: int | None = None,
 ) -> tuple[pd.DataFrame, int, int]:
     """Inner-join on date index, return aligned close DataFrame + stats.
 
     Each input series's index is normalized (drop time-of-day). Sorted ascending.
-    Inner-join retains only dates present in EVERY series.
+    Inner-join retains only dates present in EVERY series. When
+    `trailing_window` is given, the joined result is trimmed to the LAST
+    `trailing_window` rows (matches Vibe-Trading
+    `correlation._rolling_correlation_matrix` at lines 168–169).
 
     Returns
     -------
@@ -293,10 +299,10 @@ def _align_series(
         Columns = labels (the dict keys); index = sorted DatetimeIndex of dates
         common to every series. Values are raw `close` prices (not returns).
     common_bars : int
-        Number of rows in `aligned`.
+        Number of rows in `aligned` (post-trim, when `trailing_window` set).
     missing_after_join : int
-        How many dates were dropped (max series length minus common_bars),
-        summed only for the contributing series (rough heuristic).
+        How many dates were dropped from the longest source minus common_bars
+        (rough heuristic — counts full-length delta only).
     """
     if not series_by_label:
         raise ValueError("series_by_label is empty")
@@ -314,6 +320,10 @@ def _align_series(
     # Inner-join: concat on columns, drop rows with any NaN (= not present in some series)
     df = pd.concat(normalized, axis=1)
     df = df.dropna(how="any")
+
+    # Trim trailing window (spec §3.1 "trim to trailing `days` bars")
+    if trailing_window is not None and len(df) > trailing_window:
+        df = df.iloc[-trailing_window:].copy()
 
     common_bars = len(df)
     max_len = max(len(s) for s in normalized.values())
@@ -431,16 +441,31 @@ def test_compute_pearson_diagonal_one():
     assert abs(m[0, 1] - 1.0) < 1e-4
 
 
-def test_compute_spearman_differs_from_pearson_on_nonlinear():
-    # x linear, y = x^2  → Pearson > Spearman
+def test_compute_spearman_is_robust_to_outliers():
+    """Spearman (rank-based) is robust to a single large outlier; Pearson drops.
+
+    This is the canonical Spearman-vs-Pearson asymmetry test. A linear
+    monotonic but non-linear relationship (e.g. x²) does NOT separate them
+    because rank order is preserved — Pearson and Spearman both ≈ 1.
+    """
+    # Build a perfectly linear pair, then add one extreme outlier to y
     x = np.arange(1, 11, dtype=float)
-    y = x ** 2
+    y = x.copy().astype(float)
+    y[-1] = 100.0  # outlier: 10 → 100
+
     df = pd.DataFrame({"a": x, "b": y})
     out = _compute_matrices(df, ["pearson", "spearman"])
     p = np.array(out["pearson"])[0, 1]
     s = np.array(out["spearman"])[0, 1]
-    assert p > s   # pearson overstates linear fit; spearman is by-rank
-    assert p > 0.9 and s > 0.9
+
+    # Pearson drops due to the outlier; Spearman barely moves (rank preserved)
+    assert s > p, (
+        f"expected Spearman={s} > Pearson={p} under one-rank outlier; "
+        "got the opposite"
+    )
+    # Magnitudes: Spearman ≈ 1, Pearson < 0.9
+    assert s > 0.9
+    assert p < 0.9
 
 
 def test_compute_methods_subset_returns_none():
@@ -471,15 +496,32 @@ def test_finalize_matrix_symmetrize():
 
 
 def test_pct_change_does_not_forward_fill():
-    # day-2 close is NaN; pct_change(fill_method=None) must NOT fabricate a 0% return
-    s = pd.Series([100.0, np.nan, 104.0], index=pd.date_range("2026-01-01", periods=3, freq="D"))
+    """NaN closes must propagate as NaN pct_change (NOT forward-fill to 0).
+
+    Two assertions pin the same invariant from different angles:
+      1) _pct_change on a 4-row series with NaN in position 2 → dropna
+         yields a single surviving row whose value matches the legitimate
+         101→100 jump.
+      2) The raw `df.pct_change(fill_method=None)` keeps position 2 as NaN
+         instead of fabricating 0.0 (the legacy pandas-2 default behavior).
+    """
+    # 4 closes; the 3rd is NaN. pct_change: [NaN, 0.0099, NaN, NaN].
+    s = pd.Series(
+        [100.0, 101.0, np.nan, 104.0],
+        index=pd.date_range("2026-01-01", periods=4, freq="D"),
+    )
     df = s.to_frame("a")
+
     out = _pct_change(df)
-    # output has 2 rows (dropna), but values are NaN where one input was NaN
-    assert len(out) == 2
-    # Specifically: day1->day2 had NaN close, so pct_change yields NaN; day3 should be (104-100)/100 = 0.04
-    assert np.isnan(out["a"].iloc[0])
-    assert abs(out["a"].iloc[1] - 0.04) < 1e-9
+    assert len(out) == 1
+    assert abs(out["a"].iloc[0] - 0.0099) < 1e-3
+
+    # Direct check on the raw pct_change before dropna
+    raw = df.pct_change(fill_method=None)
+    assert np.isnan(raw["a"].iloc[2]), (
+        "pct_change must NOT forward-fill NaN closes to 0; "
+        "got a numeric value, which means fill_method=None was dropped."
+    )
 ```
 
 - [ ] **Step 2.3: Run the tests; expect import failure**
@@ -552,9 +594,9 @@ Append to `stock_data/api/routes/agent_correlation.py`:
 ```python
 # ----- fetcher wrappers (private) -----
 
-from stock_data.data_provider.base import DataFetchError  # adjust import path if different
+from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.utils.normalize import normalize_stock_code
-from stock_data.api.routes.helpers import _get_manager_or_none  # adjust if name differs
+from stock_data.api.routes.helpers import get_manager   # shared symbol — agent.py uses this too
 
 
 def _fetch_stock_series(
@@ -566,15 +608,18 @@ def _fetch_stock_series(
     """
     try:
         canonical = normalize_stock_code(code)
-        df, _source = _get_manager_or_none().get_kline_data(
+        df, _source = get_manager().get_kline_data(
             stock_code=canonical,
             days=days,
             frequency=frequency,
+            asset="stock",   # disambiguate from CSI index codes (000001, 000300, etc.)
         )
         if df is None or df.empty or "close" not in df.columns:
             return None, None
-        s = df.set_index(pd.to_datetime(df["trade_date"]))["close"] if "trade_date" in df.columns \
-            else df.set_index(pd.DatetimeIndex(df.index))["close"]
+        if "trade_date" in df.columns:
+            s = df.set_index(pd.to_datetime(df["trade_date"]))["close"]
+        else:
+            s = df.set_index(pd.DatetimeIndex(df.index))["close"]
         if s.isna().all():
             return None, None
         return s, _resolve_stock_name(canonical)
@@ -590,12 +635,11 @@ def _fetch_board_series(
     Returns (series, name). On any failure → (None, None).
     """
     try:
-        rows, _src = _get_manager_or_none().get_board_history(
+        rows, _src = get_manager().get_board_history(
             board_code=board_code, source=source, frequency=frequency, days=days
         )
         if not rows:
             return None, None
-        # rows = list[dict{date, close, ...}]
         df = pd.DataFrame(rows)
         if df.empty or "close" not in df.columns:
             return None, None
@@ -661,7 +705,9 @@ def mock_manager():
 
 
 def _patch_manager(monkeypatch, mgr):
-    monkeypatch.setattr(ac, "_get_manager_or_none", lambda: mgr)
+    # Patch the route module's `get_manager` symbol — the fetcher helpers
+    # and the route handler both call it. Mirrors test_agent_endpoints.py:706-716.
+    monkeypatch.setattr(ac, "get_manager", lambda: mgr)
 
 
 def test_fetch_stock_series_returns_close_series(monkeypatch, mock_manager):
@@ -763,11 +809,10 @@ Append to `stock_data/api/routes/agent_correlation.py`:
 ```python
 # ----- validation -----
 
-# Source × frequency allow-list (validates §2.5)
-_BOARD_SOURCE_FREQ_ALLOWED = {
-    "ths":       {"d", "w", "m", "1m", "5m", "15m", "30m", "60m"},
-    "eastmoney": {"d", "w", "m",        "5m", "15m", "30m", "60m"},
-}
+# Reuse the manager-level constant rather than duplicating the source×freq
+# table. Defined at stock_data/data_provider/constants.py:19; manager.py
+# itself uses it for the upstream-side check (manager.py:1144-1162).
+from stock_data.data_provider.constants import BOARD_KLINE_FREQ_BY_SOURCE
 
 _FREQ_DAYS_RANGE = {
     "d":   (30, 365),
@@ -833,16 +878,19 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
         raise HTTPException(422, detail={"error": "bad_request",
             "message": 'methods must be subset of ["pearson","spearman"]'})
 
-    # Board source × frequency (early 422 to avoid manager explosion)
+    # Board source × frequency (early 422 to avoid manager explosion).
+    # Use the upstream allow-list from constants so this stays in lockstep
+    # with the manager-side check.
+    valid_sources = {src: set(freqs) for src, freqs in BOARD_KLINE_FREQ_BY_SOURCE.items()}
     for b in boards_raw:
         if not isinstance(b, dict) or "code" not in b:
             raise HTTPException(422, detail={"error": "bad_request",
                 "message": 'each board must be an object with a "code"'})
         src = b.get("source", "ths")
-        if src not in _BOARD_SOURCE_FREQ_ALLOWED:
+        if src not in valid_sources:
             raise HTTPException(422, detail={"error": "bad_request",
                 "message": f"unsupported board source: {src}"})
-        if freq not in _BOARD_SOURCE_FREQ_ALLOWED[src]:
+        if freq not in valid_sources[src]:
             raise HTTPException(422, detail={"error": "bad_request",
                 "message": f"frequency {freq} is not supported for board source {src}"})
 
@@ -982,11 +1030,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 ## Task 5: Markdown renderer
 
 **Files:**
-- Modify: `stock_data/api/routes/agent_correlation.py` (add `render_markdown`)
+- Modify: `stock_data/api/routes/agent_correlation.py` (add `render_correlation_matrix_as_md`)
 - Test: `tests/test_agent_correlation_markdown.py`
 
 **Interfaces:**
-- Produces (private): `render_markdown(response: dict) -> str`
+- Produces (private): `render_correlation_matrix_as_md(response: dict) -> str`
   - Takes a fully-formed `CorrelationMatrixResponse` dict (model_dump-style);
   - returns the markdown string per spec §2.4.
 
@@ -995,10 +1043,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 Append to `stock_data/api/routes/agent_correlation.py`:
 
 ```python
-# ----- markdown renderer -----
+# ----- markdown renderer (registered in agent._MD_TEMPLATES under
+#       "correlation/matrix" — see Task 6 register_template step) -----
 
 
-def render_markdown(resp: dict) -> str:
+def render_correlation_matrix_as_md(resp: dict) -> str:
     """Render a CorrelationMatrixResponse-shaped dict as markdown (spec §2.4)."""
     freq       = resp["frequency"]
     days       = resp["days"]
@@ -1077,7 +1126,7 @@ Create `tests/test_agent_correlation_markdown.py`:
 """Tests for the markdown renderer."""
 import pytest
 
-from stock_data.api.routes.agent_correlation import render_markdown
+from stock_data.api.routes.agent_correlation import render_correlation_matrix_as_md
 
 
 SAMPLE = {
@@ -1098,7 +1147,7 @@ SAMPLE = {
 
 
 def test_top_pairs_sorted_by_abs_rho():
-    md = render_markdown(SAMPLE)
+    md = render_correlation_matrix_as_md(SAMPLE)
     # First data row in top-pairs table is the strongest correlation
     first_pair_line = next(
         (l for l in md.splitlines() if l.startswith("| 1 |")),
@@ -1111,13 +1160,13 @@ def test_top_pairs_sorted_by_abs_rho():
 
 
 def test_pearson_section_present():
-    md = render_markdown(SAMPLE)
+    md = render_correlation_matrix_as_md(SAMPLE)
     assert "## 相关性矩阵 — pearson (d × 90d)" in md
     assert "## 相关性矩阵 — spearman (d × 90d)" in md
 
 
 def test_full_matrix_table_has_diag_dash():
-    md = render_markdown(SAMPLE)
+    md = render_correlation_matrix_as_md(SAMPLE)
     # Find the "完整矩阵 (pearson)" section
     idx = md.find("### 完整矩阵 (pearson)")
     assert idx > 0
@@ -1128,7 +1177,7 @@ def test_full_matrix_table_has_diag_dash():
 
 def test_methods_subset_omits_section():
     spec = {**SAMPLE, "matrices": {**SAMPLE["matrices"], "spearman": None}}
-    md = render_markdown(spec)
+    md = render_correlation_matrix_as_md(spec)
     assert "## 相关性矩阵 — spearman" not in md
     assert "## 相关性矩阵 — pearson" in md
 
@@ -1137,13 +1186,13 @@ def test_errors_section_only_when_present():
     spec = {**SAMPLE, "errors": [
         {"type": "stock", "code": "000001", "source": None, "reason": "empty"}
     ]}
-    md = render_markdown(spec)
+    md = render_correlation_matrix_as_md(spec)
     assert "### 数据缺失" in md
     assert "000001" in md
 
 
 def test_no_errors_section_when_empty():
-    md = render_markdown(SAMPLE)
+    md = render_correlation_matrix_as_md(SAMPLE)
     assert "### 数据缺失" not in md
 ```
 
@@ -1185,7 +1234,8 @@ Append to `stock_data/api/routes/agent_correlation.py`:
 ```python
 # ----- route + handler -----
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import HTTPException, Query
+from fastapi.responses import PlainTextResponse, Response
 from stock_data.api.endpoint_meta import endpoint_meta
 from stock_data.api.routes.errors import map_errors
 from stock_data.api.schemas import (
@@ -1207,8 +1257,12 @@ from stock_data.api.schemas import (
 @map_errors
 async def post_correlation_matrix(
     body: CorrelationMatrixRequest,
-    format: str | None = Query(default=None, description="Response projection: 'json' (default) or 'md'."),
-) -> CorrelationMatrixResponse | dict:
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Response projection: 'json' (default) or 'md'.",
+    ),
+) -> CorrelationMatrixResponse | Response:
     raw = body.model_dump()
 
     # 1) Validate
@@ -1261,8 +1315,8 @@ async def post_correlation_matrix(
             "message": f"after filtering failed fetches, only {len(series_by_label)} assets survived; need >= 2",
         })
 
-    # 3) Align + compute
-    aligned_df, common_bars, missing = _align_series(series_by_label)
+    # 3) Align + compute (trim to last `days` rows; spec §3.1)
+    aligned_df, common_bars, missing = _align_series(series_by_label, trailing_window=days)
     if aligned_df.empty or common_bars < 2:
         raise HTTPException(422, detail={
             "error": "insufficient_assets",
@@ -1307,9 +1361,39 @@ async def post_correlation_matrix(
     )
 
     if format == "md":
-        return {"format": "md", "markdown": render_markdown(response.model_dump())}
+        # PlainTextResponse bypasses response_model validation (matches agent.py
+        # _render_agent pattern at agent.py:1073). The text/markdown mime lets
+        # callers pipe the body to a markdown previewer without unwrapping.
+        return PlainTextResponse(
+            content=render_correlation_matrix_as_md(response.model_dump()),
+            media_type="text/markdown; charset=utf-8",
+        )
     return response
 ```
+
+### Step 6.1a: Register the markdown template with the shared `_MD_TEMPLATES`
+
+Open `stock_data/api/routes/agent.py`. Near the end of the file, find
+the `_MD_TEMPLATES: dict[str, Callable] = {…}` block (around line 1447).
+Append one entry inside the dict:
+
+```python
+    "correlation/matrix": stock_data.api.routes.agent_correlation.render_correlation_matrix_as_md,
+```
+
+(And ensure `agent_correlation` is imported in `agent.py` if it's not
+already — check `from . import …` block at top of `agent.py`.)
+
+This step is required: callers that hit any of the existing agent
+routes with `?format=md` go through `_render_agent`, which looks up the
+template by key. The convention is to register one entry per route.
+Cross-route discovery through `_MD_TEMPLATES` is what `agent.py`'s
+`?format=md` infrastructure already does. Note we don't actually use
+`_render_agent` directly in this handler (we `PlainTextResponse`
+inline to avoid the cross-module `get_manager` import surface area
+explosion noted in Finding #10); the registration is solely so a
+debug endpoint like `/control/api-manifest` or a future unified
+`?format=md` caller can locate the renderer by route key.
 
 - [ ] **Step 6.2: Append the integration tests (the §6 spec list)**
 
@@ -1333,10 +1417,23 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def _reset_state(monkeypatch):
-    """Reset manager mocks + clear any TTL caches between tests."""
-    from stock_data.api.cache import get_quote_cache   # noqa: F401  (verify import shape)
-    # Clear inner fetcher caches if accessible; safer to reset manager state if applicable
+def _reset_state():
+    """Clear TTL caches + reset the manager singleton between tests.
+
+    Mirrors `tests/test_agent_endpoints.py::reset_before_test`
+    (tests/conftest.py:13-40). Without this, mocks from prior tests can
+    leak into the inner fetcher cache and silently make later tests green.
+    """
+    from stock_data.api import cache as _cache
+    for name in ("get_quote_cache", "get_history_cache", "get_kline_cache"):
+        c = getattr(_cache, name, None)
+        if c is not None and hasattr(c, "clear"):
+            c.clear()
+    try:
+        from stock_data.data_provider.manager import reset_manager
+        reset_manager()
+    except Exception:
+        pass
     yield
 
 
@@ -1353,7 +1450,9 @@ def _mgr_stub(stock_dfs: dict[str, pd.DataFrame] | None = None,
 
 
 def _patch_manager(monkeypatch, mgr):
-    monkeypatch.setattr(ac, "_get_manager_or_none", lambda: mgr)
+    # Patch the route module's `get_manager` symbol — the fetcher helpers
+    # and the route handler both call it. Mirrors test_agent_endpoints.py:706-716.
+    monkeypatch.setattr(ac, "get_manager", lambda: mgr)
 
 
 def _stock_df(values, start="2026-04-01", freq="D"):
@@ -1401,17 +1500,19 @@ def test_methods_subset_returns_only_pearson(monkeypatch):
 
 
 def test_per_item_failure_isolation(monkeypatch):
-    """One stock fails; another succeeds; matrix still has surviving pair."""
+    """One stock fails; another stock + board succeed; matrix has 2 survivors."""
     from stock_data.data_provider.base import DataFetchError
     idx  = pd.date_range("2026-04-01", periods=30, freq="D")
-    good = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})
+    good_stock = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})
+    board_rows = [{"date": str(d.date()), "close": float(v)}
+                  for d, v in zip(idx, np.linspace(200, 240, 30))]
     mgr  = MagicMock()
     def kline_side_effect(**kw):
         if kw["stock_code"] == "000001":
             raise DataFetchError("upstream 503")
-        return (good, "tushare")
+        return (good_stock, "tushare")
     mgr.get_kline_data.side_effect = kline_side_effect
-    mgr.get_board_history.return_value = ([], "ths")
+    mgr.get_board_history.return_value = (board_rows, "ths")
     _patch_manager(monkeypatch, mgr)
 
     r = client.post("/api/v1/agent/correlation/matrix", json={
@@ -1498,7 +1599,11 @@ def test_normalize_strip_suffix(monkeypatch):
 
 
 def test_inner_cache_avoids_recomputation(monkeypatch):
-    """Two identical requests → second batch has 0 manager calls (TTL hit)."""
+    """Spec §6 #14 contract: handler has no agent-level cache; first request
+    makes N fetcher calls, second identical request still succeeds (proving
+    no state corruption). The "TTL hit" claim is mocked-away in this test;
+    a `live_network`-marked end-to-end test covers the real TTL behavior.
+    """
     idx = pd.date_range("2026-04-01", periods=30, freq="D")
     df  = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})
     mgr = MagicMock()
@@ -1510,18 +1615,18 @@ def test_inner_cache_avoids_recomputation(monkeypatch):
     r1 = client.post("/api/v1/agent/correlation/matrix", json=payload)
     assert r1.status_code == 200
     first_calls = mgr.get_kline_data.call_count
+    assert first_calls == 2, f"first request should call fetcher once per stock; got {first_calls}"
     r2 = client.post("/api/v1/agent/correlation/matrix", json=payload)
     assert r2.status_code == 200
-    second_calls = mgr.get_kline_data.call_count
-    # Same TTL window (within 1 s) → fetcher should be memoized
-    assert second_calls >= first_calls  # baseline: ≥ calls were made (test simulates cold path; inner TTL handling is mocked away)
-    # The stronger claim (second == first) only holds if the inner TTL mocks itself;
-    # for this test we accept the >= invariant — the spec test pins behavior end-to-end.
+    # The route MUST NOT have stateful cache that prevents the second call from succeeding
+    assert r2.json()["matrices"]["pearson"] is not None
 
 
 def test_calendar_padding_trims_to_days(monkeypatch):
-    """days=30 returns the last 30 trading days; fetcher is called with days+60 (90)."""
-    idx = pd.date_range("2026-01-01", periods=120, freq="D")     # enough history
+    """days=30 → fetcher called with days+60 (90), response alignment is trimmed."""
+    # Provide 120 days of history. days=30 → effective window should be the
+    # LAST 30 rows (trim spec §3.1); alignment.common_bars == 30.
+    idx = pd.date_range("2026-01-01", periods=120, freq="D")
     s1  = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 120)})
     s2  = pd.DataFrame({"trade_date": idx, "close": np.linspace(200, 260, 120)})
     mgr = _mgr_stub({"600519": s1, "000001": s2})
@@ -1531,12 +1636,17 @@ def test_calendar_padding_trims_to_days(monkeypatch):
         "stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30,
     })
     assert r.status_code == 200
-    # Fetcher was called with days + 60
+    # Fetcher was called with days + 60 (calendar padding)
     called = mgr.get_kline_data.call_args.kwargs
     assert called["days"] == 30 + 60
-    # Response alignment reflects the trimmed sample
+    # Response alignment echoes back the user's days value
     body = r.json()
     assert body["alignment"]["requested_days"] == 30
+    # Trim: only the LAST `days` rows participate; common_bars must equal 30
+    assert body["alignment"]["common_bars"] == 30, (
+        f"expected 30 trimmed rows; got {body['alignment']['common_bars']}. "
+        "The trim-to-trailing-window step in _align_series is missing or wrong."
+    )
 ```
 
 - [ ] **Step 6.3: Run tests; expect passes**
@@ -1557,34 +1667,46 @@ git -c user.name=claude -c user.email=noreply@anthropic.com commit -m "feat(api)
 
 Per-item error isolation, validation via _parse_and_validate, alignment
 + matrix compute via _align_series / _compute_matrices, markdown via
-render_markdown. Decorator order matches existing /agent/* peers.
+render_correlation_matrix_as_md. Decorator order matches existing /agent/* peers.
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 7: Server router inclusion + manifest verification
+## Task 7: Register route module + manifest verification
 
 **Files:**
-- Modify: `stock_data/server.py`
+- Modify: `stock_data/api/routes/__init__.py` (add `agent_correlation` to the import block)
+- (no `server.py` change needed — the shared `_router.py` already mounts `/api/v1`)
 
-- [ ] **Step 7.1: Locate the existing include_router block for `agent`**
+> The agent module reuses the canonical pattern: imports its router from
+> `stock_data.api.routes._router` (same as `agent.py:87`), and is added
+> to the `routes/__init__.py` import block so the FastAPI app's boot
+> eagerly imports this module and registers its `@router.post(...)` on
+> the shared router. **No** new `include_router` call is added to
+> `server.py` — the shared router is already mounted there at the
+> `/api/v1` prefix.
 
-Run: `grep -n "include_router\|agent" "D:/GitRepo/skills/stock_data/stock_data/server.py" | head -30`
+- [ ] **Step 7.1: Locate the `routes/__init__.py` import block**
 
-There should be a `include_router(agent.router, prefix="/api/v1/agent")` somewhere. Add a sibling line right after it.
+Run: `grep -n "from \. import\|import" "D:/GitRepo/skills/stock_data/stock_data/api/routes/__init__.py" | head -20`
 
-- [ ] **Step 7.2: Add the new router include**
+There will be a `from . import (...)` block listing all route modules
+(e.g. `stocks`, `indices`, `boards`, `data`, `news`, `calendar`,
+`health`, `agent`). Add `agent_correlation` to it.
 
-Open `stock_data/server.py`. Right after the existing `agent` router include, add:
+- [ ] **Step 7.2: Add `agent_correlation` to the import block**
+
+Open `stock_data/api/routes/__init__.py`. In the `from . import (...)`
+block, add:
 
 ```python
-from stock_data.api.routes import agent_correlation
-app.include_router(agent_correlation.router, prefix="/api/v1/agent")
+    agent_correlation,
 ```
 
-(The exact alias name may already be imported; if so, drop the `from …import` line and just use the existing alias.)
+(Use the same indentation and trailing comma convention as the
+surrounding entries.)
 
 - [ ] **Step 7.3: Boot the FastAPI app in-process and verify the manifest sees the route**
 
@@ -1611,11 +1733,12 @@ If not found, check that `@endpoint_meta(summary=...)` was applied (the explorer
 
 ```bash
 cd "D:/GitRepo/skills/stock_data"
-git add stock_data/server.py
-git -c user.name=claude -c user.email=noreply@anthropic.com commit -m "feat(api): include agent_correlation router in server.app
+git add stock_data/api/routes/__init__.py
+git -c user.name=claude -c user.email=noreply@anthropic.com commit -m "feat(api): register agent_correlation route module
 
 Mates with docs/superpowers/specs/2026-08-12-correlation-matrix-design.md
-section 7 (Files to change: stock_data/server.py).
+section 7 (Files to change: stock_data/api/routes/__init__.py). The
+shared /api/v1 router picks up the new POST endpoint on next boot.
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
@@ -1734,4 +1857,4 @@ After writing this plan, scan against the spec (`docs/superpowers/specs/2026-08-
 - [x] **§7 Files to change** — Tasks 1, 2-6, 7, 8 touch exactly those files. No fetcher, manager, or persistence changes.
 - [x] **§8 Anti-patterns** — verified in each task (decorator order, capabilities=[], no outbound suffix leak, no _with_failover for boards, no @cache_endpoint).
 
-No placeholders, no "TBD", no "implement later". Type names match across tasks (`CorrelationMatrices`, `_align_series`, `_compute_matrices`, `_pct_change`, `_finalize_matrix`, `render_markdown`, `_fetch_stock_series`, `_fetch_board_series`, `_parse_and_validate`).
+No placeholders, no "TBD", no "implement later". Type names match across tasks (`CorrelationMatrices`, `_align_series`, `_compute_matrices`, `_pct_change`, `_finalize_matrix`, `render_correlation_matrix_as_md`, `_fetch_stock_series`, `_fetch_board_series`, `_parse_and_validate`).
