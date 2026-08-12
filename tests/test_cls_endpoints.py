@@ -6,12 +6,20 @@ Manager + fetcher are mocked via monkeypatch of the `get_manager()` symbol
 imported into the cls routes module.
 """
 
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from stock_data.server import app
+
+# Use a date inside the 28-day window enforced by cls.py::_validate_date.
+# A hardcoded date silently drifts outside the window as wall-clock advances
+# (today - 28 days is the floor), so assertions that need to reach the
+# manager mock get a 400 instead. 1-day buffer also covers UTC-vs-Shanghai
+# TZ skew between the test process and the server's _CLS_TZ clock.
+VALID_DATE = (date.today() - timedelta(days=1)).isoformat()
 
 
 @pytest.fixture
@@ -50,12 +58,12 @@ def test_morning_briefing_success(client, sample_article, monkeypatch):
     from stock_data.api.cache import get_cls_feed_cache
 
     get_cls_feed_cache().clear()
-    r = client.get("/api/v1/news/morning-briefing?date=2026-07-14")
+    r = client.get(f"/api/v1/news/morning-briefing?date={VALID_DATE}")
     assert r.status_code == 200
     body = r.json()
     assert body["subject"] == "morning_briefing"
     assert body["subject_id"] == 1151
-    assert body["date"] == "2026-07-14"
+    assert body["date"] == VALID_DATE
     assert body["source"] == "cls"  # slug derived from "ClsFetcher"
     assert body["article"]["article_id"] == 2425210
 
@@ -94,7 +102,7 @@ def test_morning_briefing_not_found(client, monkeypatch):
     from stock_data.api.cache import get_cls_feed_cache
 
     get_cls_feed_cache().clear()
-    r = client.get("/api/v1/news/morning-briefing?date=2026-07-14")
+    r = client.get(f"/api/v1/news/morning-briefing?date={VALID_DATE}")
     assert r.status_code == 404
 
 
@@ -116,7 +124,7 @@ def test_morning_briefing_all_fetchers_raised(client, monkeypatch):
     from stock_data.api.cache import get_cls_feed_cache
 
     get_cls_feed_cache().clear()
-    r = client.get("/api/v1/news/morning-briefing?date=2026-07-14")
+    r = client.get(f"/api/v1/news/morning-briefing?date={VALID_DATE}")
     assert r.status_code == 503
 
 
@@ -130,7 +138,7 @@ def test_market_recap_success(client, sample_article, monkeypatch):
     from stock_data.api.cache import get_cls_feed_cache
 
     get_cls_feed_cache().clear()
-    r = client.get("/api/v1/news/market-recap?date=2026-07-14")
+    r = client.get(f"/api/v1/news/market-recap?date={VALID_DATE}")
     assert r.status_code == 200
     body = r.json()
     assert body["subject"] == "market_review"
