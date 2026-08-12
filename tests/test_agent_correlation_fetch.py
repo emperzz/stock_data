@@ -26,7 +26,8 @@ def test_fetch_stock_series_returns_close_series(monkeypatch, mock_manager):
     })
     mock_manager.get_kline_data.return_value = (df, "tushare")
     _patch_manager(monkeypatch, mock_manager)
-    s, name = ac._fetch_stock_series("SH600519", days=5, frequency="d")
+    s, name, reason = ac._fetch_stock_series("SH600519", days=5, frequency="d")
+    assert reason is None
     assert s is not None and len(s) == 5
     assert abs(s.iloc[0] - 100.0) < 1e-9
     # normalize_stock_code canonicalized to bare 6-digit
@@ -42,15 +43,30 @@ def test_fetch_stock_series_returns_none_on_data_fetch_error(monkeypatch, mock_m
     from stock_data.data_provider.base import DataFetchError
     mock_manager.get_kline_data.side_effect = DataFetchError("upstream down")
     _patch_manager(monkeypatch, mock_manager)
-    s, name = ac._fetch_stock_series("600519", days=5, frequency="d")
+    s, name, reason = ac._fetch_stock_series("600519", days=5, frequency="d")
     assert s is None and name is None
+    assert reason == "data_unavailable"
 
 
 def test_fetch_stock_series_returns_none_on_empty_df(monkeypatch, mock_manager):
     mock_manager.get_kline_data.return_value = (pd.DataFrame(), "tushare")
     _patch_manager(monkeypatch, mock_manager)
-    s, name = ac._fetch_stock_series("600519", days=5, frequency="d")
-    assert s is None
+    s, name, reason = ac._fetch_stock_series("600519", days=5, frequency="d")
+    assert s is None and name is None
+    assert reason == "empty"
+
+
+def test_fetch_stock_series_returns_none_on_too_short(monkeypatch, mock_manager):
+    # 1 bar → spec §3.4 "fewer than 2 rows" per-item failure
+    df = pd.DataFrame({
+        "trade_date": pd.date_range("2026-01-01", periods=1, freq="D"),
+        "close":      [100.0],
+    })
+    mock_manager.get_kline_data.return_value = (df, "tushare")
+    _patch_manager(monkeypatch, mock_manager)
+    s, name, reason = ac._fetch_stock_series("600519", days=5, frequency="d")
+    assert s is None and name is None
+    assert reason == "too_short"
 
 
 def test_fetch_board_series_returns_close_series(monkeypatch, mock_manager):
@@ -61,7 +77,8 @@ def test_fetch_board_series_returns_close_series(monkeypatch, mock_manager):
     ]
     mock_manager.get_board_history.return_value = (rows, "ths")
     _patch_manager(monkeypatch, mock_manager)
-    s, name = ac._fetch_board_series("885595", "ths", days=3, frequency="d")
+    s, name, reason = ac._fetch_board_series("885595", "ths", days=3, frequency="d")
+    assert reason is None
     assert s is not None and len(s) == 3
     called = mock_manager.get_board_history.call_args.kwargs
     assert called["board_code"] == "885595"
@@ -74,5 +91,6 @@ def test_fetch_board_series_returns_none_on_data_fetch_error(monkeypatch, mock_m
     from stock_data.data_provider.base import DataFetchError
     mock_manager.get_board_history.side_effect = DataFetchError("ths timeout")
     _patch_manager(monkeypatch, mock_manager)
-    s, name = ac._fetch_board_series("885595", "ths", days=3, frequency="d")
-    assert s is None
+    s, name, reason = ac._fetch_board_series("885595", "ths", days=3, frequency="d")
+    assert s is None and name is None
+    assert reason == "data_unavailable"

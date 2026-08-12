@@ -192,9 +192,8 @@ def test_too_many_assets_rejected(monkeypatch):
         "stocks": [str(i).zfill(6) for i in range(11)], "boards": [],
         "frequency": "d", "days": 30,
     })
-    # The schema caps each list at 10; this payload (11 stocks) hits the
-    # Pydantic max-length validator, which surfaces as 422. The 400 branch
-    # in `_parse_and_validate` is unreachable on this code path.
+    # CorrelationMatrixRequest.stocks has no Pydantic max_length — the 422
+    # fires in `_parse_and_validate`'s `len(stocks_raw) > 10` cap.
     assert r.status_code == 422
 
 
@@ -238,6 +237,48 @@ def test_repeat_request_succeeds_without_state_corruption(monkeypatch):
     assert r2.json()["matrices"]["pearson"] is not None
 
 
+def test_inner_cache_avoids_recomputation(monkeypatch):
+    """Spec §6 #14: identical repeat request makes 0 NEW fetcher calls.
+
+    Simulates the fetcher-level TTL cache (inner K-line cache) as a dict
+    inside the manager stub: the first request pays N cold fetches, the
+    second is fully served from the fake cache (delta == 0). Observable
+    proof that the endpoint needs no agent-composite cache.
+    """
+    idx = pd.date_range("2026-04-01", periods=30, freq="D")
+    df = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})
+    mgr = MagicMock()
+    cache = {}
+    fetch_calls = {"n": 0}
+
+    def cached_kline(**kw):
+        key = (kw["stock_code"], kw["days"], kw["frequency"])
+        if key in cache:
+            return cache[key]
+        fetch_calls["n"] += 1
+        result = (df, "tushare")
+        cache[key] = result
+        return result
+
+    mgr.get_kline_data.side_effect = cached_kline
+    _patch_manager(monkeypatch, mgr)
+
+    payload = {"stocks": ["600519", "000001"], "boards": [],
+               "frequency": "d", "days": 30}
+    r1 = client.post("/api/v1/agent/correlation/matrix", json=payload)
+    assert r1.status_code == 200
+    assert fetch_calls["n"] == 2, (
+        f"cold request should fetch once per stock; got {fetch_calls['n']}"
+    )
+
+    r2 = client.post("/api/v1/agent/correlation/matrix", json=payload)
+    assert r2.status_code == 200
+    assert fetch_calls["n"] == 2, (
+        f"repeat request within inner-TTL window must make 0 new fetches; "
+        f"got {fetch_calls['n'] - 2} new"
+    )
+
+
 def test_calendar_padding_trims_to_days(monkeypatch):
     """days=30 → fetcher called with days+60 (90), response alignment is trimmed."""
     # Provide 120 days of history. days=30 → effective window should be the
@@ -262,4 +303,9 @@ def test_calendar_padding_trims_to_days(monkeypatch):
     assert body["alignment"]["common_bars"] == 30, (
         f"expected 30 trimmed rows; got {body['alignment']['common_bars']}. "
         "The trim-to-trailing-window step in _align_series is missing or wrong."
+    )
+    # 120 fully-aligned rows → the join drops nothing; missing_after_join must
+    # be 0, NOT 120 - 30 = 90 (padding/trim is not missing data).
+    assert body["alignment"]["missing_after_join"] == 0, (
+        f"expected 0 join-dropped dates; got {body['alignment']['missing_after_join']}"
     )

@@ -41,8 +41,9 @@ def _align_series(
     common_bars : int
         Number of rows in `aligned` (post-trim, when `trailing_window` set).
     missing_after_join : int
-        How many dates were dropped from the longest source minus common_bars
-        (rough heuristic — counts full-length delta only).
+        Dates dropped by the inner-join itself (longest source minus joined
+        length, computed before any trailing-window trim). Not affected by
+        the `trailing_window` trim — reflects real date gaps, not padding.
     """
     if not series_by_label:
         raise ValueError("series_by_label is empty")
@@ -61,14 +62,17 @@ def _align_series(
     df = pd.concat(normalized, axis=1)
     df = df.dropna(how="any")
 
+    # Dates dropped by the join itself (longest source minus joined length) —
+    # computed BEFORE the trailing-window trim so `missing_after_join` reflects
+    # real date gaps, not calendar padding (spec §2.3).
+    missing_after_join = max(len(s) for s in normalized.values()) - len(df)
+
     # Trim trailing window (spec §3.1 "trim to trailing `days` bars")
     if trailing_window is not None and len(df) > trailing_window:
         df = df.iloc[-trailing_window:].copy()
 
     common_bars = len(df)
-    max_len = max(len(s) for s in normalized.values())
-    missing = max_len - common_bars
-    return df, common_bars, missing
+    return df, common_bars, missing_after_join
 
 
 def _compute_matrices(
@@ -132,10 +136,13 @@ def _pct_change(close_df: pd.DataFrame) -> pd.DataFrame:
 
 def _fetch_stock_series(
     code: str, days: int, frequency: str
-) -> tuple[pd.Series | None, str | None]:
+) -> tuple[pd.Series | None, str | None, str | None]:
     """Fetch a single stock's close-price series.
 
-    Returns (series, name). On any failure → (None, None).
+    Returns (series, name, reason). On success reason is None; on failure
+    series/name are None and reason is one of the spec §2.6 literals:
+    "data_unavailable" (fetch raised) / "empty" (no usable rows) /
+    "too_short" (fewer than 2 bars).
     """
     try:
         canonical = normalize_stock_code(code)
@@ -146,41 +153,45 @@ def _fetch_stock_series(
             asset="stock",   # disambiguate from CSI index codes (000001, 000300, etc.)
         )
         if df is None or df.empty or "close" not in df.columns:
-            return None, None
+            return None, None, "empty"
         if "trade_date" in df.columns:
             s = df.set_index(pd.to_datetime(df["trade_date"]))["close"]
         else:
             s = df.set_index(pd.DatetimeIndex(df.index))["close"]
         if s.isna().all():
-            return None, None
-        return s, _resolve_stock_name(canonical)
+            return None, None, "empty"
+        if len(s) < 2:
+            return None, None, "too_short"
+        return s, _resolve_stock_name(canonical), None
     except (DataFetchError, ValueError, KeyError, AttributeError, TypeError):
-        return None, None
+        return None, None, "data_unavailable"
 
 
 def _fetch_board_series(
     board_code: str, source: str, days: int, frequency: str
-) -> tuple[pd.Series | None, str | None]:
+) -> tuple[pd.Series | None, str | None, str | None]:
     """Fetch a single board's close-price series.
 
-    Returns (series, name). On any failure → (None, None).
+    Returns (series, name, reason); semantics match `_fetch_stock_series`.
     """
     try:
         rows, _src = get_manager().get_board_history(
             board_code=board_code, source=source, frequency=frequency, days=days
         )
         if not rows:
-            return None, None
+            return None, None, "empty"
         df = pd.DataFrame(rows)
         if df.empty or "close" not in df.columns:
-            return None, None
+            return None, None, "empty"
         date_col = "date" if "date" in df.columns else df.columns[0]
         s = df.set_index(pd.to_datetime(df[date_col]))["close"]
         if s.isna().all():
-            return None, None
-        return s, _resolve_board_name(board_code, source)
+            return None, None, "empty"
+        if len(s) < 2:
+            return None, None, "too_short"
+        return s, _resolve_board_name(board_code, source), None
     except (DataFetchError, ValueError, KeyError, AttributeError, TypeError):
-        return None, None
+        return None, None, "data_unavailable"
 
 
 def _resolve_stock_name(code: str) -> str | None:
@@ -305,8 +316,10 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
     return labels, stocks_canonical, boards_canonical
 
 
-# ----- markdown renderer (registered in agent._MD_TEMPLATES under
-#       "correlation/matrix" — see Task 6 register_template step) -----
+# ----- markdown renderer -----
+# Called directly from the route via PlainTextResponse (?format=md), bypassing
+# agent._MD_TEMPLATES — deliberate deviation, spec §2.4 (no JSON-fallback /
+# X-MD-Render-Error header contract on this projection).
 
 
 def render_correlation_matrix_as_md(resp: dict) -> str:
@@ -339,9 +352,8 @@ def render_correlation_matrix_as_md(resp: dict) -> str:
                               _short_label(labels[j])))
         pairs.sort(key=lambda x: -abs(x[0]))
 
-        method_zh = {"pearson": "pearson", "spearman": "spearman"}[method]
         sec = []
-        sec.append(f"## 相关性矩阵 — {method_zh} ({freq} × {days}d)\n")
+        sec.append(f"## 相关性矩阵 — {method} ({freq} × {days}d)\n")
         sec.append(
             f"> 资产数: {n} · 对齐 {alignment['common_bars']}/"
             f"{alignment['requested_days']} 个日历日 · "
@@ -355,7 +367,7 @@ def render_correlation_matrix_as_md(resp: dict) -> str:
             sec.append(f"| {idx} | {a} ↔ {b} | {round(rho, 4)} |")
         sec.append("")
         # Full matrix
-        sec.append(f"### 完整矩阵 ({method_zh})")
+        sec.append(f"### 完整矩阵 ({method})")
         header = "|          | " + " | ".join(_short_label(L) for L in labels) + " |"
         sep    = "|----------|" + "|".join(["--------"] * n) + "|"
         sec.append(header)
@@ -405,10 +417,7 @@ async def post_correlation_matrix(
     raw = body.model_dump()
 
     # 1) Validate
-    try:
-        labels_raw, stocks, boards = _parse_and_validate(raw)
-    except HTTPException:
-        raise
+    labels_raw, stocks, boards = _parse_and_validate(raw)
 
     frequency: str = raw["frequency"]
     days: int = raw["days"]
@@ -416,45 +425,42 @@ async def post_correlation_matrix(
 
     # 2) Fetch + assemble per-asset close series
     fetch_days = days + 60   # calendar padding for non-trading days (spec §3.3)
+    stock_labels = {lbl["code"]: lbl for lbl in labels_raw if lbl["type"] == "stock"}
+    board_labels = {(lbl["code"], lbl["source"]): lbl
+                    for lbl in labels_raw if lbl["type"] == "board"}
     series_by_label: dict[str, pd.Series] = {}
+    label_by_key: dict[str, dict] = {}   # series key (stock code / "code@src") → label
     errors_out: list[dict] = []
 
     # Stocks (with names)
     for code in stocks:
-        s, name = _fetch_stock_series(code, fetch_days, frequency)
+        s, name, reason = _fetch_stock_series(code, fetch_days, frequency)
         if s is None:
             errors_out.append({
                 "type": "stock", "code": code, "source": None,
-                "reason": "data_unavailable",
+                "reason": reason or "data_unavailable",
             })
             continue
-        # Update label name if we got one
-        for lbl in labels_raw:
-            if lbl["type"] == "stock" and lbl["code"] == code:
-                lbl["name"] = name or lbl["name"]
-                break
+        lbl = stock_labels[code]
+        lbl["name"] = name or lbl["name"]
+        label_by_key[code] = lbl
         series_by_label[code] = s
 
     # Boards (with names)
     for b in boards:
-        bcode = b["code"]
-        bsrc = b["source"]
-        s, name = _fetch_board_series(bcode, bsrc, fetch_days, frequency)
+        bcode, bsrc = b["code"], b["source"]
+        s, name, reason = _fetch_board_series(bcode, bsrc, fetch_days, frequency)
         if s is None:
             errors_out.append({
                 "type": "board", "code": bcode, "source": bsrc,
-                "reason": "data_unavailable",
+                "reason": reason or "data_unavailable",
             })
             continue
-        for lbl in labels_raw:
-            if (
-                lbl["type"] == "board"
-                and lbl["code"] == bcode
-                and lbl.get("source") == bsrc
-            ):
-                lbl["name"] = name or lbl["name"]
-                break
-        series_by_label[f"{bcode}@{bsrc}"] = s
+        lbl = board_labels[(bcode, bsrc)]
+        lbl["name"] = name or lbl["name"]
+        key = f"{bcode}@{bsrc}"
+        label_by_key[key] = lbl
+        series_by_label[key] = s
 
     if len(series_by_label) < 2:
         raise HTTPException(422, detail={
@@ -484,24 +490,11 @@ async def post_correlation_matrix(
 
     matrices = _compute_matrices(returns, methods)
 
-    # 4) Build response — labels must match column order
-    final_labels: list[dict] = []
-    for key in returns.columns:
-        if "@" in key:
-            bcode, bsrc = key.split("@", 1)
-            for lbl in labels_raw:
-                if (
-                    lbl["type"] == "board"
-                    and lbl["code"] == bcode
-                    and lbl.get("source") == bsrc
-                ):
-                    final_labels.append(lbl)
-                    break
-        else:
-            for lbl in labels_raw:
-                if lbl["type"] == "stock" and lbl["code"] == key:
-                    final_labels.append(lbl)
-                    break
+    # 4) Build response — labels must match matrix column order. Column order
+    # is series_by_label insertion order (concat preserves dict order through
+    # dropna/trim/pct_change), so a direct key→label lookup suffices — no
+    # re-parsing of "code@src" composite keys.
+    final_labels = [label_by_key[key] for key in returns.columns]
 
     response = CorrelationMatrixResponse(
         labels=final_labels,
