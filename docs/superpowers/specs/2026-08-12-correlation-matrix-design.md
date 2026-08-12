@@ -63,7 +63,7 @@ POST /api/v1/agent/correlation/matrix
   "stocks":  ["600519", "000001"],
   "boards":  [{"code": "885595", "source": "ths"}],
   "frequency": "d",                 // "d" | "w" | "m" | "1m" | "5m" | "15m" | "30m" | "60m"
-  "window":    90,                  // trading days; range depends on frequency (see §2.5)
+  "days":      90,                  // calendar days; range depends on frequency (see §2.5)
   "methods":  ["pearson", "spearman"]
 }
 ```
@@ -73,10 +73,17 @@ POST /api/v1/agent/correlation/matrix
 | `stocks` | `list[str]` | `[]` | length 0..10; each entry normalized via `normalize_stock_code` |
 | `boards` | `list[{code,source}]` | `[]` | length 0..10; `source ∈ {"ths","eastmoney"}`, default `"ths"` |
 | `frequency` | `Literal` | `"d"` | one of the eight values; see §2.5 |
-| `window` | `int` | `90` | range per frequency (table §2.5); unit = trading days |
+| `days` | `int` | `90` | range per frequency (table §2.5); unit = calendar days, passed straight through to `manager.get_kline_data(..., days=...)` |
 | `methods` | `list[Literal["pearson","spearman"]]` | both | one or both |
 
 Cross-field: `len(stocks) + len(boards) ∈ [2, 10]`. Otherwise → `422`.
+
+> **Note on `days` semantics**: the value passes through to the existing
+> K-line endpoints (which already use `days` as the calendar-day window
+> parameter; see `manager.get_kline_data(... days, frequency, ...)`). For
+> frequencies finer than `d`, the existing endpoints internally aggregate
+> daily bars into the chosen frequency within that calendar window. We
+> inherit that behavior verbatim — see §2.5 for the bound table.
 
 ### 2.3 Response body
 
@@ -87,11 +94,11 @@ Cross-field: `len(stocks) + len(boards) ∈ [2, 10]`. Otherwise → `422`.
     {"type": "board", "code": "885595",     "name": "白酒",     "source": "ths"}
   ],
   "frequency": "d",
-  "window":    90,
+  "days":      90,
   "alignment": {
-    "requested_window":  90,
-    "common_bars":       87,
-    "missing_after_join": 3
+    "requested_days":      90,
+    "common_bars":         87,
+    "missing_after_join":   3
   },
   "matrices": {
     "pearson":  [[1.0, 0.87, 0.23], [0.87, 1.0, 0.41], [0.23, 0.41, 1.0]],
@@ -103,7 +110,7 @@ Cross-field: `len(stocks) + len(boards) ∈ [2, 10]`. Otherwise → `422`.
 
 `labels[i]` corresponds to `matrices.method[i][:]`. Order = request order
 (stocks first as a block, then boards as a block); client sorts if it
-needs alphabetical. `frequency` / `window` are echoed back so an agent
+needs alphabetical. `frequency` / `days` are echoed back so an agent
 can confirm what the matrix was computed over.
 
 ### 2.4 `?format=md` projection
@@ -149,12 +156,14 @@ saves the agent from re-implementing sort-by-|ρ|, which is non-trivial
 across text tables. The full matrix is a fallback. Header summary
 (`资产数 / 对齐 / 缺失`) makes "do I trust this result?" a one-liner.
 
-### 2.5 `frequency` × `window` validation table
+### 2.5 `frequency` × `days` validation table
 
-`window` is in **trading days**. The route validates against this table;
-out-of-range → `422 {error:"bad_request", message:"window must be in N..M for frequency=…"}`.
+`days` is in **calendar days**; the route passes it through to the
+underlying K-line fetcher's existing `days` semantics, which interprets
+the value as a calendar-day window. The route validates against this
+table; out-of-range → `422 {error:"bad_request", message:"days must be in N..M for frequency=…"}`.
 
-| `frequency` | `window` range | Stock fetcher | Boards `ths` | Boards `eastmoney` |
+| `frequency` | `days` range | Stock fetcher | Boards `ths` | Boards `eastmoney` |
 |---|---|---|---|---|
 | `d`   | 30..365 | yes (zzshare P2)     | yes | yes |
 | `w`   | 4..120  | yes                  | yes | yes |
@@ -169,6 +178,10 @@ The board-source/frequency table is **server-validated in advance** —
 the route refuses early with `422` rather than letting
 `manager.get_board_history(..., frequency="1m", source="eastmoney")`
 explode downstream.
+
+For minute frequencies, the lower bound `days=1` means "today only"
+(single trading session). The upper bound `days=30` keeps the inner-join
+size bounded (≤ 30 × 240 = 7,200 1-minute bars per asset).
 
 ### 2.6 Pydantic models (`api/schemas.py`)
 
@@ -200,9 +213,9 @@ class CorrelationErrorItem(BaseModel):
     reason: Literal["data_unavailable","empty","too_short"]
 
 class CorrelationAlignment(BaseModel):
-    requested_window: int
-    common_bars: int
-    missing_after_join: int
+    requested_days:        int
+    common_bars:           int
+    missing_after_join:    int
 
 class CorrelationMatrices(BaseModel):
     pearson:  list[list[float]] | None = None     # None if not requested
@@ -212,14 +225,14 @@ class CorrelationMatrixRequest(BaseModel):
     stocks:     list[str] = []
     boards:     list[dict] = []                   # {code, source} at the wire; parsed
     frequency:  CorrelationFrequency = CorrelationFrequency.d
-    window:     int = 90                          # bounds-checked against frequency
+    days:       int = 90                          # bounds-checked against frequency
     methods:    list[CorrelationMethod] = [CorrelationMethod.pearson,
                                             CorrelationMethod.spearman]
 
 class CorrelationMatrixResponse(BaseModel):
     labels:     list[CorrelationLabel]
     frequency:  CorrelationFrequency
-    window:     int
+    days:       int
     alignment:  CorrelationAlignment
     matrices:   CorrelationMatrices
     errors:     list[CorrelationErrorItem]
@@ -233,21 +246,21 @@ class CorrelationMatrixResponse(BaseModel):
 
 ```
 parse_and_validate(request) -> raises 400/422 on bad input
-for each stock  -> manager.get_kline_data(code, days=window+padding, frequency=freq)
+for each stock  -> manager.get_kline_data(code, days=days+padding, frequency=freq)
                      -> DataFrame[trade_date, close, ...]
 for each board  -> manager.get_board_history(code, source, frequency=freq,
-                                            days=window+padding)
+                                            days=days+padding)
                      -> list[dict{date, close, ...}]  → DataFrame
 append per-item failures to errors[]; drop from analysis
 if surviving < 2 -> raise 422 (insufficient_assets)
 normalize each series.index as datetime, drop time-of-day, sort
 inner-join on date → DataFrame of aligned closes (columns = labels)
 pct_change(fill_method=None) per column → aligned returns
-trim to trailing `window` bars
+trim to trailing `days` bars
 dropna per-row (a single NaN poisons the inner-join — fail-fast per row)
 for m in methods:
     compute NxN matrix (4-dp round, NaN→0, symmetrize)
-return {labels, frequency, window, alignment, matrices: {...}, errors}
+return {labels, frequency, days, alignment, matrices: {...}, errors}
 ```
 
 ### 3.2 Reuse vs adaptation from Vibe-Trading
@@ -268,11 +281,12 @@ return {labels, frequency, window, alignment, matrices: {...}, errors}
 ### 3.3 Calendar padding
 
 K-line endpoints take `days`. To compensate for non-trading days inside
-`window`, fetch `days + 60` (matches Vibe-Trading's `+60` calendar-day
-padding at `correlation.py:274-276`). After inner-join + trim to last
-`window` rows, the **actual** sample size is reported as
-`alignment.common_bars`. Padding is conservative (60 calendar days covers
-2 Spring + 1 National + minor exchange holidays for any window ≤ 365 d).
+the requested calendar window, fetch `days + 60` (matches Vibe-Trading's
+`+60` calendar-day padding at `correlation.py:274-276`). After
+inner-join + trim to the last `days` rows, the **actual** sample size is
+reported as `alignment.common_bars`. Padding is conservative (60
+calendar days covers 2 Spring + 1 National + minor exchange holidays for
+any window ≤ 365 d).
 
 ### 3.4 Per-item error isolation
 
@@ -306,7 +320,7 @@ Reasoning:
   expected data sizes (≤ 10 assets × ≤ 365 bars).
 - We have no easy place to inject a `cache_endpoint` decorator since the
   cache key depends on the request payload (we have to hash
-  `{stocks_sorted, boards_canonical, frequency, window, methods}`), and
+  `{stocks_sorted, boards_canonical, frequency, days, methods}`), and
   the existing pattern of `cached_lookup(...)` + `cached_store(...)`
   around the handler body would re-do work the inner TTLs already paid.
 
@@ -332,7 +346,7 @@ as a v2 add-on if monitoring shows hot-spotting.
 | Status | When | Body |
 |---|---|---|
 | **400** | malformed JSON, invalid stock code in `stocks`, missing source | `{"error":"bad_request", "message":...}` |
-| **422** | pydantic validation (frequency, window range, methods, board-source × frequency table, len(stocks)+len(boards) ∉ [2,10], surviving < 2 after per-item errors) | `{"error":"bad_request"\|"insufficient_assets", "message":...}` |
+| **422** | pydantic validation (frequency, days range, methods, board-source × frequency table, len(stocks)+len(boards) ∉ [2,10], surviving < 2 after per-item errors) | `{"error":"bad_request"\|"insufficient_assets", "message":...}` |
 | **503** | upstream totally down for every asset (no inner responses, surviving=0 with all `DataFetchError`) | `{"error":"data_unavailable", "message":...}` |
 | **200** | ≥ 2 survived (regardless of `errors[]` length) | `CorrelationMatrixResponse` |
 
@@ -352,14 +366,14 @@ itself decides between 422 (insufficient_assets / bad_request) and 200.
 | 5 | `test_per_item_failure_isolation` | One stock fetch raises `DataFetchError`; others succeed; `errors[]` populated, matrix has surviving rows |
 | 6 | `test_all_fail_returns_422` | All fetchers fail → 422, `insufficient_assets` |
 | 7 | `test_only_one_survives_returns_422` | After errors, surviving=1 → 422 |
-| 8 | `test_window_range_per_frequency_validated` | `frequency="1m"` + `source="eastmoney"` board → 422; same with `source="ths"` → 200 |
-| 9 | `test_window_above_cap_rejected` | `frequency="d", window=500` → 422 |
+| 8 | `test_days_range_per_frequency_validated` | `frequency="1m"` + `source="eastmoney"` board → 422; same with `source="ths"` → 200 |
+| 9 | `test_days_above_cap_rejected` | `frequency="d", days=500` → 422 |
 | 10 | `test_methods_subset` | `methods=["pearson"]` → matrices.spearman is null, matrices.pearson populated |
 | 11 | `test_too_many_assets_rejected` | 11 entries → 422 |
 | 12 | `test_normalize_strip_suffix` | stock input `SH600519` normalized to `600519`, label reflects normalized code |
 | 13 | `test_format_md_emits_top_pairs_sorted_by_abs_rho` | Project response with `?format=md`; assert markdown contains "按 |ρ| 降序" header AND the first data row has the largest |ρ| |
 | 14 | `test_inner_cache_avoids_recomputation` | Two identical requests back-to-back within the inner TTL window (e.g. 60 s for stock K-line per `CACHE_TTL_STOCK_KLINE`); assert `manager.get_kline_data.call_count == 0` for the second request (first request made N calls, second made 0 — proof that fetcher-level TTLs hide the cold-path on the second call without an agent-composite cache) |
-| 15 | `test_calendar_padding_trims_to_window` | `window=90` but actual market had 87 trading days; matrix uses 87 bars |
+| 15 | `test_calendar_padding_trims_to_days` | `days=90` but actual market had 87 trading days; matrix uses 87 bars |
 
 Fixture pattern follows `tests/test_agent_endpoints.py`: patch
 `stock_data.api.routes.agent_correlation.get_manager` (or whichever
@@ -440,7 +454,9 @@ None for v1. All design decisions confirmed:
 - inputs separated into `stocks: []` + `boards: []` arrays
 - A-share only at v1 (HK/US later)
 - regime timeline deferred to v2
-- `frequency` and `window` are request params (windowing in trading days)
+- `frequency` and `days` are request params (`days` passed straight
+  through to existing K-line endpoint semantics — calendar-day window,
+  aggregated to the requested frequency internally)
 - both `pearson` and `spearman` returned per call
 - no composite cache (deliberate deviation from existing pattern,
   §4)
