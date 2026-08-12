@@ -39,6 +39,7 @@ registered.
 # decorators to register. The noqa comments suppress the unused-import warning.
 from . import (
     agent,  # noqa: F401
+    agent_correlation,  # noqa: F401  (registers POST /agent/correlation/matrix)
     boards,  # noqa: F401
     calendar,  # noqa: F401
     data,  # noqa: F401

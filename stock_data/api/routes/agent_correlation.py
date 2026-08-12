@@ -5,15 +5,26 @@ from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter  # noqa: F401  (Task 6 will use it for the route decorator)
+from fastapi import (
+    APIRouter,  # noqa: F401  (Task 6 will use it for the route decorator)
+    HTTPException,
+    Query,
+)
+from fastapi.responses import PlainTextResponse, Response
 
+from stock_data.api.endpoint_meta import endpoint_meta
+from stock_data.api.routes.errors import map_errors
 from stock_data.api.routes.helpers import get_manager
+from stock_data.api.schemas import (
+    CorrelationMatrixRequest,
+    CorrelationMatrixResponse,
+)
 from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.constants import BOARD_KLINE_FREQ_BY_SOURCE
 from stock_data.data_provider.utils.normalize import normalize_stock_code
 
 from ._router import (
-    router,  # noqa: F401  (Task 6 will register @router.post("/correlation/matrix"))
+    router,
 )
 
 # ----- pure-compute helpers (private) -----
@@ -377,3 +388,150 @@ def render_correlation_matrix_as_md(resp: dict) -> str:
             src = f" ({e.get('source')})" if e.get("source") else ""
             body += f"- {e['type']} `{e['code']}`{src}: {e['reason']}\n"
     return body
+
+
+# ----- route + handler -----
+
+
+@router.post(
+    "/agent/correlation/matrix",
+    response_model=CorrelationMatrixResponse,
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="Compute pairwise Pearson + Spearman correlation matrices across stocks and boards.",
+    markets=["csi"],
+    capabilities=[],
+)
+@map_errors
+async def post_correlation_matrix(
+    body: CorrelationMatrixRequest,
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Response projection: 'json' (default) or 'md'.",
+    ),
+) -> CorrelationMatrixResponse | Response:
+    raw = body.model_dump()
+
+    # 1) Validate
+    try:
+        labels_raw, stocks, boards = _parse_and_validate(raw)
+    except HTTPException:
+        raise
+
+    frequency: str = raw["frequency"]
+    days: int = raw["days"]
+    methods: list[str] = raw["methods"]
+
+    # 2) Fetch + assemble per-asset close series
+    fetch_days = days + 60   # calendar padding for non-trading days (spec §3.3)
+    series_by_label: dict[str, pd.Series] = {}
+    errors_out: list[dict] = []
+
+    # Stocks (with names)
+    for code in stocks:
+        s, name = _fetch_stock_series(code, fetch_days, frequency)
+        if s is None:
+            errors_out.append({
+                "type": "stock", "code": code, "source": None,
+                "reason": "data_unavailable",
+            })
+            continue
+        # Update label name if we got one
+        for lbl in labels_raw:
+            if lbl["type"] == "stock" and lbl["code"] == code:
+                lbl["name"] = name or lbl["name"]
+                break
+        series_by_label[code] = s
+
+    # Boards (with names)
+    for b in boards:
+        bcode = b["code"]
+        bsrc = b["source"]
+        s, name = _fetch_board_series(bcode, bsrc, fetch_days, frequency)
+        if s is None:
+            errors_out.append({
+                "type": "board", "code": bcode, "source": bsrc,
+                "reason": "data_unavailable",
+            })
+            continue
+        for lbl in labels_raw:
+            if (
+                lbl["type"] == "board"
+                and lbl["code"] == bcode
+                and lbl.get("source") == bsrc
+            ):
+                lbl["name"] = name or lbl["name"]
+                break
+        series_by_label[f"{bcode}@{bsrc}"] = s
+
+    if len(series_by_label) < 2:
+        raise HTTPException(422, detail={
+            "error": "insufficient_assets",
+            "message": (
+                f"after filtering failed fetches, only "
+                f"{len(series_by_label)} assets survived; need >= 2"
+            ),
+        })
+
+    # 3) Align + compute (trim to last `days` rows; spec §3.1)
+    aligned_df, common_bars, missing = _align_series(
+        series_by_label, trailing_window=days,
+    )
+    if aligned_df.empty or common_bars < 2:
+        raise HTTPException(422, detail={
+            "error": "insufficient_assets",
+            "message": f"no overlapping trading days after join; common_bars={common_bars}",
+        })
+
+    returns = _pct_change(aligned_df)
+    if returns.empty or len(returns) < 2:
+        raise HTTPException(422, detail={
+            "error": "insufficient_assets",
+            "message": "after pct_change + dropna, fewer than 2 return observations remain",
+        })
+
+    matrices = _compute_matrices(returns, methods)
+
+    # 4) Build response — labels must match column order
+    final_labels: list[dict] = []
+    for key in returns.columns:
+        if "@" in key:
+            bcode, bsrc = key.split("@", 1)
+            for lbl in labels_raw:
+                if (
+                    lbl["type"] == "board"
+                    and lbl["code"] == bcode
+                    and lbl.get("source") == bsrc
+                ):
+                    final_labels.append(lbl)
+                    break
+        else:
+            for lbl in labels_raw:
+                if lbl["type"] == "stock" and lbl["code"] == key:
+                    final_labels.append(lbl)
+                    break
+
+    response = CorrelationMatrixResponse(
+        labels=final_labels,
+        frequency=frequency,
+        days=days,
+        alignment={
+            "requested_days": days,
+            "common_bars": common_bars,
+            "missing_after_join": missing,
+        },
+        matrices=matrices,
+        errors=errors_out,
+    )
+
+    if format == "md":
+        # PlainTextResponse bypasses response_model validation (matches agent.py
+        # _render_agent pattern at agent.py:1073). The text/markdown mime lets
+        # callers pipe the body to a markdown previewer without unwrapping.
+        return PlainTextResponse(
+            content=render_correlation_matrix_as_md(response.model_dump()),
+            media_type="text/markdown; charset=utf-8",
+        )
+    return response
