@@ -138,8 +138,13 @@ def test_compute_aggregate_basic_distribution():
     assert agg.flat_count == 1         # 0.0
     assert agg.bin_width == 3.0
     # Bucket counts (by index in template):
+    # Left-open right-closed convention: v belongs to bucket whose
+    # `lower < v <= upper`. So -3.0 → (-6%, -3%] (index 3, right-closed
+    # at -3%); 0.0 → {0} flat bucket (index 5); 3.0 → (0, +3%]
+    # (index 6, right-closed at +3%).
     assert agg.buckets[0].count == 1   # (-∞,-12]   catches -12.0
-    assert agg.buckets[4].count == 1   # (-3,0)     catches -3.0
+    assert agg.buckets[3].count == 1   # (-6,-3]    catches -3.0
+    assert agg.buckets[4].count == 0   # (-3,0)     catches nothing in this test
     assert agg.buckets[5].count == 1   # {0}        catches 0.0
     assert agg.buckets[6].count == 1   # (0,+3]     catches 3.0
     assert agg.buckets[9].count == 1   # (+9,+12]   catches 12.0
@@ -148,18 +153,31 @@ def test_compute_aggregate_basic_distribution():
 
 def test_compute_aggregate_bucket_assignment_edges():
     """Boundary values must land in the correct bucket per the spec's
-    left-open right-closed convention with flat-first routing."""
-    # -12.0 belongs to (-∞,-12] (closed upper); -11.999 to (-12,-9]
+    left-open right-closed convention with flat-first routing.
+
+    Boundary math:
+      -12.0 → (-∞, -12%]   (right-closed at -12%, value <= upper)
+      -11.999 → (-12%, -9%] (left-open at -12%, right-closed at -9%)
+      -9.0 → (-12%, -9%]   (right-closed at -9%)
+      -3.0 → (-6%, -3%]    (right-closed at -3%)
+       0.0 → {0}           (flat bucket, checked first)
+       1e-10 → {0}          (within _EPS of zero)
+       0.001 → (0, +3%]    (right-closed at +3%)
+       3.0 → (0, +3%]      (right-closed at +3%)
+      12.0 → (+9%, +12%]   (right-closed at +12%)
+      12.001 → (+12%, +∞)  (left-open at +12%)
+    """
     values = [-12.0, -11.999, -9.0, -3.0, 0.0, 1e-10, 0.001, 3.0, 12.0, 12.001]
     agg = compute_aggregate(
         values, bin_width=STOCK_BUCKET_BIN_WIDTH, buckets_template=build_stock_buckets()
     )
     assert agg.buckets[0].count == 1   # (-∞,-12]    : -12.0
-    assert agg.buckets[1].count == 1   # (-12,-9]    : -11.999
-    assert agg.buckets[3].count == 1   # (-6,-3]     : -3.0 (closed upper)
+    assert agg.buckets[1].count == 2   # (-12,-9]    : -11.999 + -9.0 (right-closed)
+    assert agg.buckets[2].count == 0   # (-9,-6]     : nothing in this test
+    assert agg.buckets[3].count == 1   # (-6,-3]     : -3.0 (right-closed)
     assert agg.buckets[4].count == 0   # (-3,0)
     assert agg.buckets[5].count == 2   # {0}         : 0.0 + 1e-10
-    assert agg.buckets[6].count == 1   # (0,+3]      : 0.001
+    assert agg.buckets[6].count == 2   # (0,+3]      : 0.001 + 3.0 (right-closed)
     assert agg.buckets[9].count == 1   # (+9,+12]    : 12.0
     assert agg.buckets[10].count == 1  # (+12,+∞)    : 12.001
 
