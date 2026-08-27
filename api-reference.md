@@ -1276,6 +1276,7 @@ summarize" is folded into one request. Seven endpoints ship in v1:
 | `/agent/indices/batch-profile` | GET | Per-index minimal quote + trend/pivots/volume features (3 default CSI indices) |
 | `/agent/market-context` | GET | Morning briefing + market recap + flash + zt/dt + dragon-tiger |
 | `/agent/stocks/batch-profile` | POST | Per-stock fan-out across quote / features / info / boards (1-5 codes) |
+| `/agent/boards/batch-profile` | POST | Per-board fan-out: minimal realtime quote + trend/pivots/volume features (1-5 THS platecodes, single source THS) |
 | `/agent/correlation/matrix` | POST | Pairwise Pearson + Spearman correlation matrix across 2-10 stocks/boards (A-share only) |
 | `/agent/market-stats` | GET | Full-market stats (mean / median / max / min / up-down-flat + percentage buckets) for stocks + boards |
 
@@ -1910,6 +1911,97 @@ response is reordered to the caller's input order on hit.
 
 - `422 invalid_request` (Pydantic + route) — `codes` empty / > 5 / unknown
   `frequency` / `days` outside the per-frequency range.
+
+---
+
+### POST /api/v1/agent/boards/batch-profile
+
+Per-board fan-out: minimal realtime quote + computed
+`trend / pivots / volume` features at one frequency for 1-5 THS
+platecodes (885xxx concept / 881xxx industry). Mirrors the
+`/agent/indices/batch-profile` shape; `board_type` is auto-detected by
+`ThsFetcher` from the `stock_board` cache with an internal fallback
+(not exposed to the caller).
+
+**Request body:**
+
+```json
+{
+  "codes": ["885595", "881270"],
+  "frequency": "d",
+  "days": 60
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `codes` | `list[str]` (1-5) | yes | THS platecodes. Hard cap matches the stock-picking funnel. |
+| `frequency` | `d / w / m / 1m / 5m / 15m / 30m / 60m` | no (default `d`) | Same per-frequency set as indices / stocks batch-profile. |
+| `days` | `int ≥ 2` | no | Per-frequency default + range applied server-side. |
+| `format` (query) | `json / md` | no (default `json`) | Same convention as every other agent route. |
+
+**Response (JSON):**
+
+```json
+{
+  "frequency": "d",
+  "days": 60,
+  "boards": [
+    {
+      "code": "885595",
+      "name": "人形机器人",
+      "quote": { "price": 1234.5, "change_pct": 1.23 },
+      "features": {
+        "trend":  { "ma": {...}, "ma_change": {...}, "adx": ..., "rsi": {...}, "boll": {...} },
+        "pivots": { "window_high": {...}, "swings": [...], "pending": {...}, "params": {...} },
+        "volume": { "latest_volume": ..., "vol_ratio_5": ..., "z_anomalies": [...] }
+      },
+      "errors": { "quote": null, "features": null }
+    }
+  ],
+  "summary": { "requested": 2, "ok": 2, "failed": 0, "elapsed_ms": 187 }
+}
+```
+
+`ok` here means "at least one of `quote` / `features` succeeded"; entry-level
+health is encoded by which `errors{}` keys are null.
+
+**Source:** fixed to `ths` (only fetcher implementing `get_board_realtime`;
+board codes are source-specific so cross-source fan-out would force callers
+to send one platecode per source anyway). `board_type` is auto-detected;
+`ThsFetcher` resolves it from the `stock_board` cache with an internal
+fallback.
+
+**Frequency translation note:** the public `frequency` string (`"5m"`) is
+passed verbatim to `manager.get_board_history` — the board K-line path
+validates against `BOARD_KLINE_FREQ_BY_SOURCE["ths"]`, which contains the
+**public** strings. `_FEATURE_FREQS[frequency].mgr_frequency` (`"5"`) is
+for the stock / index path (`manager.get_kline_data`) only; using it here
+would raise `ValueError` → 400 on every minute-frequency request. This is
+the inverse of `?adjust=qfq` on `/stocks/{code}/kline`, where the public
+string is also passed through.
+
+**Caching: NO composite cache layer** (deliberate deviation from stocks /
+indices batch-profile). The fetcher-level `get_quote_cache` +
+`get_history_cache` already cover N+1 fan-out; a composite cache here
+would only add a stale-risk window on intraday board data. Removal of
+the composite cache on stocks / indices is tracked as a separate
+follow-up.
+
+**Errors:**
+
+- `422 invalid_request` (Pydantic + route) — `codes` empty / > 5 /
+  unknown `frequency` / `days` outside the per-frequency range.
+- Per-board upstream failure → entry-level `errors{}` set; **other boards
+  unaffected**. Even an all-failed batch returns `200` with
+  `summary.failed = len(codes)`.
+
+**MD projection:** adds a `# 板块批量画像 — {frequency} {days}d` heading
+per board entry, the trend / pivots / volume feature blocks
+(reused via `_md_feature_block`; identical to indices / stocks batch),
+plus a `## 汇总 — requested N, ok N, failed N, elapsed Nms` footer.
+Empty feature blocks render `（无数据）` / `（无确认摆动点）` /
+`（无 z>2 放量异动）` markers — never a bare `| 字段 |` skeleton.
 
 ---
 

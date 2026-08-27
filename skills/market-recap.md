@@ -143,11 +143,11 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 | **市场全景（涨跌停 / 龙虎榜 / 消息面）** | 涨停 + 跌停 + 龙虎榜（含 server-computed `dragon_tiger.summary.total_net_buy_wan` + top-by-buy/sell） + 早报/复盘/快讯 + `market_session` 判定 | `§9.1` `agent/market-context`（session 进 cache 键，per-block 失败隔离） | `pre` / `intra` / `post` / `closed` 全时段（pre-market 涨跌停池服务端强制 null） |
 | **板块异动 + 成分股数值筛选** | 板块清单（带涨幅）+ 多板成分股按 涨幅 / 换手 / 成交额 / 市值 / 最高涨幅 过滤 | 板块清单走主表相关端点；批量数值筛走 `§9.1` `agent/boards/filter-stocks`（per-aspect 失败隔离；`max_gain_pct` 已服务端计算 `(high-open)/open*100`） | `pre`：昨日 + 今日预热；`intra`：实时异动；`post`：收盘涨跌 |
 | **全市场情绪（涨跌家数 + 涨幅分布桶）** | 全市场涨幅统计：均值 / 中位 / 最高 / 最低 / 上涨下跌平盘家数 + 11/9 个百分比桶（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶） | `§9.1` `agent/market-stats`（per-block 错误隔离，单块失败不影响另一块；`?include_boards=false` 可只取个股块） | `pre`：昨日收盘快照；`intra`：实时分布变化；`post`：当日全量收尾分布 |
-| **板块 K 线** | 领涨 Top1-5（同类去重、取涨幅更高者）+ watchlist 已记录领跌板块 —— 各 5m / d / w 三周期 | **没有批量端点**——按主表 `boards/{code}/history` per-board 拉；调用前先按"K 线数量约定"去重 | `intra` / `post`：按领涨 / 领跌排名拉；`pre`：仅拉 watchlist 已记录板块 |
+| **板块 K 线** | 领涨 Top1-5（同类去重、取涨幅更高者）+ watchlist 已记录领跌板块 —— 各 5m / d / w 三周期 | `§9.1` `agent/boards/batch-profile`（THS 单源，1-5 platecodes，单 `frequency` + `days`；返回 minimal realtime quote + trend/pivots/volume 计算特征，**无 composite cache**，依赖 fetcher 层 TTL） | `intra` / `post`：按领涨 / 领跌排名拉；`pre`：仅拉 watchlist 已记录板块 |
 | **跨板块 / 跨股 集合运算** | 多板块两两成分股交集 + Jaccard；多股两两所属板块交集 + Jaccard | `§9.1` `agent/boards/stock-overlap` / `agent/stocks/board-overlap`（2-10 hard cap；服务端算 Jaccard） | 与时段无关 |
 | **个股 / 资金流 / 消息面细节** | 北向资金、个股资金流、个股新闻、公告、研报（仅在归因需要"个股级"查询时） | 走主表 per-X 端点（不在 §9.1 批量范围内） | 任何时段 |
 
-**K 线数量约定**（仅适用于上方"板块 K 线"行——大盘指数**已被 `agent/indices/batch-profile` 覆盖**（单 `frequency` + 计算指标，非 raw K 线），无需手拉）：
+**K 线数量约定**（仅适用于上方"板块 K 线"行——大盘指数**已被 `agent/indices/batch-profile` 覆盖**（单 `frequency` + 计算指标，非 raw K 线）；板块**已被 `agent/boards/batch-profile` 覆盖**，无需手拉）：
 - **大盘**：3 个指数（与"指数全景"一致），走 `agent/indices/batch-profile` 单 `frequency`（要长短期趋势分 `frequency` 调）——**已被服务端覆盖**，勿重复拉
 - **领涨板块**：同类板块（如同名"房地产" / "房地产概念"、相邻"半导体" / "第三代半导体"）取涨幅更高者；最终 1-5 个（市场大涨看 5 个，市场大跌看 1-2 个）
 - **领跌板块**：仅当板块已在 `market_tracking.md` 中被记录为持续关注对象时才拉 K 线；其他领跌板块**不拉**——避免对临时性下跌过度反应
@@ -257,6 +257,7 @@ agent 在执行步骤 4-5 时，按需跳读 `market-principles` 取判断方法
 - **不要**为同一天的多次调用保留多份独立文件（如 `2026-07-21-am.md` / `2026-07-21-pm.md`）—— 同日多模式合并到单文件 + 时间戳判断块
 - **不要**在 `{date}.md` 列出所有涨跌停股原始明细 —— 写入端点路径（`GET /zt-pools?type=zt\|dt`）供按需查询，文件保留"总结 + 重点关注的股票"即可
 - **不要**为指数全景 per-index × 多频率 手拉 raw K 线 —— 走 `agent/indices/batch-profile`（单 `frequency`；要长短期各调一次）（§4 步骤 3 取数策略）
+- **不要**为领涨/领跌板块 per-board × 多频率 手拉 raw K 线 —— 走 `agent/boards/batch-profile`（THS 单源，1-5 platecodes，单 `frequency`；要长短期各调一次）（§4 步骤 3 取数策略）
 - **不要**为涨跌停 + 龙虎榜 + 早报 + 复盘 + 快讯 5-6 个 per-call 拉——走 `agent/market-context`（§4 步骤 3）
 - **不要**为 ≥2 个候选板块手算两两成分股交集——走 `agent/boards/stock-overlap`（§4 步骤 3）
 - **不要**为 ≥2 个候选股手算所属板块交集——走 `agent/stocks/board-overlap`（§4 步骤 3）

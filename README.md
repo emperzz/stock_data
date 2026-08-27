@@ -112,6 +112,12 @@ curl -X POST http://localhost:8888/api/v1/agent/stocks/batch-profile \
   -H 'Content-Type: application/json' \
   -d '{"codes": ["600519", "000858"], "frequency": "d", "days": 60}'
 
+# Per-board fan-out (THS platecodes; minimal realtime quote + computed
+# features at one frequency; 1-5 codes)
+curl -X POST http://localhost:8888/api/v1/agent/boards/batch-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"codes": ["885595", "881270"], "frequency": "d", "days": 60}'
+
 # Pairwise Pearson + Spearman correlation matrix across stocks + boards
 # (A-share only, 2-10 assets total, d/w/m/1m/5m/15m/30m/60m)
 curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
@@ -157,7 +163,8 @@ hot topics · north-bound flow · research reports · announcements ·
 news search / flash / content · 财联社早报 / 焦点复盘 · **agent batch**
 (boards/stock-overlap · stocks/board-overlap · boards/filter-stocks ·
 indices/batch-profile · market-context · stocks/batch-profile ·
-correlation/matrix · all accept `?format=json|md`).
+boards/batch-profile · correlation/matrix · all accept
+`?format=json|md`).
 
 ## API Response Caching
 

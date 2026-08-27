@@ -188,6 +188,7 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 | `GET /api/v1/agent/indices/batch-profile` | `?codes=` (1-5, 默认 3 核心) + `?frequency=` + `?days=` | 指数批量画像：每个指数极简 quote（最新价/涨跌幅）+ trend/pivots/volume 计算指标（替代原 5m/d/w 三频率 raw K 线） | 5xx 不外抛（quote/features 失败写入 `errors[]`） |
 | `GET /api/v1/agent/market-context` | `?flash_limit=20&trade_date=YYYY-MM-DD` | 市场全景：早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜（含时段判断 + 龙虎榜 summary） | 5xx per-block 隔离（CLS / zt / dt / dtiger 任一失败不影响其他）；date 越界或格式错 → 400 |
 | `POST /api/v1/agent/stocks/batch-profile` | `{"codes": [...], "frequency": "d", "days": 60}` (1-5) | 股票批量画像：quote + features（trend/pivots/volume）+ info + boards；raw K 线已移除，需明细走 `/stocks/{code}/kline` | 5xx per-aspect 隔离（quote/features/info/boards） |
+| `POST /api/v1/agent/boards/batch-profile` | `{"codes": [...], "frequency"?, "days"?}` (1-5 THS platecodes) | 板块批量画像：每个板块 minimal realtime quote + trend/pivots/volume 计算特征（替代 per-board raw K 线）；THS 单源（其他 fetcher 不实现 `get_board_realtime`，且 board codes 跨源不兼容）；`board_type` 由 `ThsFetcher` 自动从 `stock_board` cache + 内部 fallback 推断 | 5xx per-aspect 隔离（quote/features）；**无 composite cache**，依赖 fetcher 层 `get_quote_cache` + `get_history_cache` TTL；422 → 检查 `codes` 是否为 THS platecode（885xxx concept / 881xxx industry） |
 | `POST /api/v1/agent/correlation/matrix` | `{"stocks": [...], "boards": [...], "frequency"?, "days"?, "methods"?}` (2-10 资产) | 跨资产两两 Pearson + Spearman 相关性矩阵（A 股，d/w/m/1m/5m/15m/30m/60m）；支持 stock+board 混合 | 422 `insufficient_assets` → 失败资产数 ≥ N-1；422 `bad_request` → 检查 frequency×days×source 三维约束；1m+`eastmoney` 直接 422（eastmoney 不支持 1m 板 K 线） |
 | `GET /api/v1/agent/market-stats` | `?include_boards=true` (默认), `?format=json\|md` | 全市场涨幅统计：个股 + 板块 各 1 块，含均值/中位/最高/最低/上涨下跌平盘家数 + 11/9 个百分比桶（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶）；A 股 only；per-block 错误隔离（单块失败不影响另一块） | 5xx 不外抛（个股/板块块失败均写入 `errors[]`，相应块置 `null`）；`?include_boards=false` 时板块上游根本不被调用 |
 
@@ -243,6 +244,14 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 - `codes` 1-5；`aspects` 入参已移除——每次返回 quote + features + info + boards
 - 顶底为显著性过滤，默认 `pivot_window=2, reversal_atr_mult=1.0, ATR14`；`pivots.params` 回显这组参数，**JSON 与 `?format=md` 两种投影都输出**（摆动点脱离参数无法校准，故不可省）
 
+**`boards/batch-profile` 关键字段**：
+
+- `codes` 1-5，**必须**是 THS platecode（885xxx concept / 881xxx industry）——board codes 跨源不兼容（THS platecode vs EastMoney BKxxxx），且 `get_board_realtime` 只有 THS 实现，故 endpoint 固定 `source='ths'`
+- `board_type`（concept/industry）**未暴露**——`ThsFetcher` 自动从 `stock_board` cache 推断 + 内部 `get_board_metadata` fallback；agent 不需要关心
+- 与 stocks/indices batch-profile **频率翻译陷阱不同**——`manager.get_board_history` 验证 `BOARD_KLINE_FREQ_BY_SOURCE["ths"]`（公开字符串 `"5m"`，不是裸 `"5"`）；必须传 `payload.frequency` 公开字符串，**不可**用 `_FEATURE_FREQS[frequency].mgr_frequency`，否则分钟级请求 400
+- 形态与 `indices/batch-profile` 完全对称：`{frequency, days, boards[i].{code,name,quote,features,errors{}}, summary}`；boards[i] 无 `info` / boards 子字段（板块没有"公司画像"）
+- **无 composite cache 层**（与 stocks/indices batch-profile 的有意偏离）——依赖 fetcher 层 `get_quote_cache` + `get_history_cache` TTL；board 数据 intraday 时效敏感，composite cache 会引入 stale 风险。stocks/indices composite cache 撤除跟踪在 spec §8.1 Future Work，**不**在此 endpoint 范围内
+
 **典型调用模式**（`market-principles` 第 5 节"判断龙头股"步骤中可串入）：
 
 ```bash
@@ -286,7 +295,12 @@ curl -X POST 'http://localhost:8888/api/v1/agent/boards/filter-stocks?format=md'
   -H 'Content-Type: application/json' \
   -d '{"board_code": "885595", "source": "ths", "filters": {"turnover_pct": {"min": 5.0}}, "limit": 10}'
 
-# 7. 跨资产相关性矩阵（股票 + 板块，2-10 个资产；d/w/m/1m/5m/15m/30m/60m）
+# 7a. 候选板块批量画像（THS platecode 1-5 个；单 frequency 单 days）
+curl -X POST http://localhost:8888/api/v1/agent/boards/batch-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"codes": ["885595", "881270"], "frequency": "d", "days": 60}'
+
+# 8. 跨资产相关性矩阵（股票 + 板块，2-10 个资产；d/w/m/1m/5m/15m/30m/60m）
 curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
   -H 'Content-Type: application/json' \
   -d '{
@@ -371,6 +385,7 @@ curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'
 | 2. 看板块归属 | `GET /stocks/{code}/boards` |
 | 3. 看板块行情 | `GET /boards/{board_code}/quote` 或 `GET /boards?type=concept&include_quote=true` |
 | 4. 看板块 K 线 | `GET /boards/{board_code}/history` |
+| 4.1 **候选板块批量画像（1-5 个 THS platecode）** | **`POST /agent/boards/batch-profile`**（一次拿 minimal realtime quote + trend/pivots/volume 计算特征，取代步骤 4 的 N 次调用；THS 单源，board_type 自动推断） |
 | 5. 看个股 K 线 + 量价 | `GET /stocks/{code}/kline?period=daily&days=30` |
 | 5.1 **看候选股两两同板块** | `POST /agent/stocks/board-overlap`（取代手算 N×N 交集） |
 | 5.2 **看候选板块两两同成分股** | `POST /agent/boards/stock-overlap` |
