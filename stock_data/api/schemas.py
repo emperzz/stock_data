@@ -2002,3 +2002,62 @@ class MarketStatsResponse(BaseModel):
     summary: dict
 
 
+# ---------------------------------------------------------------------------
+# POST /api/v1/agent/boards/batch-profile
+# ---------------------------------------------------------------------------
+
+
+class BoardProfile(BaseModel):
+    """One board in /agent/boards/batch-profile.
+
+    Mirrors ``IndexProfile`` (same shape — ``quote`` + ``features`` +
+    ``errors{}`` dict). No ``info`` / ``boards`` sub-aspects (boards have no
+    company-profile equivalent).
+    """
+
+    code: str
+    name: str = Field(
+        default="",
+        description="Board name (resolved via stock_board_cache.get_board_name_with_fallback; '' on cache miss).",
+    )
+    quote: MinimalQuote | None = Field(
+        default=None,
+        description="Realtime anchor from manager.get_board_realtime; null when upstream failed.",
+    )
+    features: BatchFeatures | None = Field(
+        default=None,
+        description="Computed trend/pivots/volume; null when K-line fetch failed.",
+    )
+    errors: dict[str, str | None] = Field(
+        default_factory=dict,
+        description="Quote/features error map; null = ok.",
+    )
+
+
+class BoardsBatchProfileRequest(BaseModel):
+    """POST body for /agent/boards/batch-profile.
+
+    THS platecodes (885xxx concept / 881xxx industry). No ``source`` param —
+    the route is fixed to ``source='ths'`` because THS is the only fetcher
+    implementing ``get_board_realtime``.
+    """
+
+    codes: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=5,
+        description="THS board platecodes (1-5). Hard cap matches the stock-picking funnel.",
+    )
+    frequency: Literal["d", "w", "m", "1m", "5m", "15m", "30m", "60m"] = "d"
+    days: int | None = Field(default=None, ge=2, description="Calendar days; per-frequency max validated in the route.")
+
+
+class BoardsBatchProfileResponse(BaseModel):
+    """POST response for /agent/boards/batch-profile."""
+
+    frequency: str = "d"
+    days: int = 0
+    boards: list[BoardProfile] = Field(default_factory=list)
+    summary: dict = Field(default_factory=dict)
+
+
