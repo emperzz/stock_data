@@ -35,41 +35,23 @@ Top-level (full layout — see `ls -R stock_data/` for the complete file list):
 
 ## Core Components
 
+Per-file layout is in [Directory Structure](#directory-structure); read the
+module docstring for any file's own API. Only the non-obvious contracts are
+repeated here.
+
 ### `data_provider/base.py`
-- `BaseFetcher`: Abstract base defining `_normalize_data()` (`@abstractmethod`), `_fetch_raw_data()` (default raises `DataFetchError`; K-line fetchers override), `get_kline_data()`, `get_realtime_quote()`. Also provides `SDKFetcherMixin` for Tushare/Baostock/Myquant SDK init.
-- `DataCapability`: Flag enum for fetcher capability declarations (see below)
-- `DataFetchError`: Exception class
-- `STANDARD_COLUMNS`: Standardized K-line column names
+- `BaseFetcher`: `_normalize_data()` is `@abstractmethod`; `_fetch_raw_data()` defaults to raising `DataFetchError` (K-line fetchers override it). `SDKFetcherMixin` handles Tushare/Baostock/Myquant SDK init.
+- `DataCapability` (Flag enum) is how fetchers declare capabilities; `STANDARD_COLUMNS` is the K-line column contract.
 
 ### `data_provider/manager.py`
-- `DataFetcherManager`: Orchestrates fetchers with priority-based failover, circuit breakers, and capability-based routing
-- All data access methods route through `_filter_by_capability(market, capability)`
-- **Board methods** (`get_all_boards`, `get_board_stocks`, `get_stock_boards`, `get_board_history`) use `_with_source()` routing (source-routed, no failover) instead of `_with_failover()`, because different sources have incompatible board classification systems
-
-### `data_provider/fetchers/`
-- Each source has its own fetcher: `baostock_fetcher.py`, `akshare/` (package), `yfinance_fetcher.py`, `tushare_fetcher.py`, `zhitu_fetcher.py`, `tencent_fetcher.py`, `eastmoney_fetcher.py`, `ths_fetcher.py`, `cninfo_fetcher.py`
-- Each fetcher handles:
-  - Source-specific API calls
-  - Rate limiting (random jitter, User-Agent rotation)
-  - Data normalization to standard format
-  - Retry with exponential backoff (using `tenacity`)
-
-### `data_provider/core/types.py`
-- `UnifiedRealtimeQuote`: Dataclass for normalized realtime quotes
-- `CircuitBreaker`: Thread-safe circuit breaker implementation
-- `safe_float()`, `safe_int()`: Type-safe conversion utilities (rejects NaN, inf, -inf)
+- All data access methods route through `_filter_by_capability(market, capability)`.
+- **Board methods** (`get_all_boards`, `get_board_stocks`, `get_stock_boards`, `get_board_history`) use `_with_source()` (source-routed, no failover) instead of `_with_failover()`, because different sources have incompatible board classification systems.
 
 ### `data_provider/persistence/`
-- `db.py`: Shared `get_db_path()` and `get_connection()` used by all persistence submodules
-- `stock_list.py`: Persistent stock list with auto-refresh (first call of day)
-- `board.py`: Board metadata (concept/industry/index/special), source-keyed persistence
-- `pool_daily.py`: Unified ZT/DT/ZBGC pool table (single `pool_daily` table, `pool_type` column discriminator)
-- `trade_calendar.py`: A-share trade calendar + `is_trade_date()` / `get_latest_trade_date_on_or_before()` helpers
+- `stock_list.py` auto-refreshes on the first call of the day; `pool_daily.py` is ONE table for ZT/DT/ZBGC discriminated by a `pool_type` column; `trade_calendar.py` provides `is_trade_date()` / `get_latest_trade_date_on_or_before()`.
 
-### `data_provider/utils/normalize.py`
-- `normalize_stock_code()`: Handles various input formats (SH600519 → 600519, etc.)
-- `market_tag()`: Returns market tag (csi/us/hk)
-- `is_us_market()`, `is_hk_market()`: Market detection utilities
+### `data_provider/core/types.py`
+- `safe_float()` / `safe_int()` reject NaN / inf / -inf (not just non-numerics) — use them rather than bare `float()`.
 
 ### `api/endpoint_meta.py`
 Per-route metadata used by the explorer manifest. Each route in `api/routes/`
@@ -86,28 +68,13 @@ in a module-level `REGISTRY: dict[Callable, EndpointMeta]`.
   the manifest now carries only fields actually consumed by the HTML.
 
 ### `explorer/`
-Subpackage owning the `/explorer/` HTML UI and `/control/*` management
-endpoints. Mounted by `stock_data.server` via `explorer.mount(app)`.
-
-- **`explorer/__init__.py`** — `mount(app)` is the single entry point. It mounts
-  the static HTML, includes the `/control/*` router, and runs a startup sanity
-  check (`_validate_manifest_invariants`) that warns about (a) routes missing
-  `@endpoint_meta` and (b) route tags not present in `TAG_TO_TITLE`.
-- **`explorer/manifest.py`** — `build_manifest(app)` reflects `app.routes`,
-  merges each route's `route.endpoint` lookup into `REGISTRY`, and returns a
-  JSON tree (`{meta, sections[]}` where each endpoint node has a `fetchers[]`
-  field describing the fetcher backends; see "Stage 1/2 Fetcher Drill-down"
-  below). Rebuilt on every request to `/control/api-manifest` (no caching —
-  ~5 KB payload, sub-millisecond build).
-- **`explorer/routes.py`** — `/control/*` APIRouter. Endpoints: `/config`,
-  `/server/status`, `/api-manifest`, `/fetcher-test`. All tagged `control`
-  → excluded from the manifest.
-- **`explorer/tags.py`** — `TAG_TO_TITLE` (route tag → sidebar section title). The section id is the tag name itself (just a stable DOM anchor / URL hash; no business meaning).
-  and `CAPABILITY_LABELS` (DataCapability flag → `{label, icon}`).
-- **`explorer/static/index.html`** — Single-page interactive docs. Fetches
-  `/control/api-manifest` on load and renders a sidebar with search, market
-  filter, fetcher filter, and a right-side response panel. Includes a
-  manifest-fetch-failure error banner (in `.main`, not the top bar).
+Owns the `/explorer/` HTML UI and `/control/*` endpoints. `explorer.mount(app)`
+is the single entry point (mounts static HTML, includes the router, and runs
+`_validate_manifest_invariants` at startup — warns about routes missing
+`@endpoint_meta` and tags missing from `TAG_TO_TITLE`). `build_manifest(app)`
+reflects `app.routes` and is rebuilt on every `/control/api-manifest` request
+(no caching — ~5 KB, sub-ms). All `/control/*` routes are tagged `control`
+→ excluded from the manifest.
 
 ### `data_provider/indicators/`
 Pure-compute technical-indicator layer. Sits **on top of** `DataFetcherManager`
@@ -133,54 +100,25 @@ The non-obvious behaviors worth memorizing here are:
   - `False` (typo / delisted / unsupported market tag): `"Stock code {code} was not found in the stock list."` — genuine not-found; no redirect.
   Both branches live in the same helper; tests in `tests/test_routes.py::TestKline` (`test_kline_invalid_stock`, `test_kline_index_coded_input_redirects_message`, `test_kline_unknown_code_gets_not_found_message`) pin the exact wording.
 
-## Source Tracking (new)
+## Source Tracking
 
-所有响应都包含 `source: str` 字段, 取值:
-- **fetcher 名** (e.g. `tushare`, `akshare`, `eastmoney`): 实时从上游拉取
-- **fetcher 名**: API TTLCache 命中时, 保留写入时的 fetcher (Pydantic 字段自然带过去, 无需额外代码)
-- **`"persistence"`**: 从 SQLite 持久化层读取 (历史数据 / 板块列表 / 交易日历等)
+响应的 `source: str` 字段 (optional, `default=""`) 取值三类: **fetcher 名**
+(实时拉取 / TTLCache 命中时保留写入时的 fetcher)、**`"persistence"`**
+(SQLite 持久化层读取)、**缺失** (composite 聚合端点如
+`/agent/correlation/matrix` · `/agent/*/batch-profile` · `/agent/market-context`
+—— 由多 fetcher 拼装,无单一 serving fetcher 可署名)。
 
-`source` 为可选字段, `default=""`. 旧 client 可忽略.
-
-**覆盖矩阵**:
-
-| Endpoint 类型 | 实时拉取 / 缓存命中 | SQLite persistence |
-|---|---|---|
-| K线 / 分时 / 实时行情 / 指数 | fetcher 名 (e.g. `tushare`, `akshare`) | n/a |
-| 龙虎榜 / 融资融券 / 大宗交易 / 资金流 / 研报 / 公告 等 | fetcher 名 (e.g. `eastmoney`, `cninfo`, `ths`) | n/a (每次 fetch) |
-| 板块清单 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
-| 板块成分股 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
-| 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
-| `/agent/correlation/matrix` | 不跟踪 serving fetcher — stock label 恒为 `source: null`;board label 记录*请求的* source (`ths`/`eastmoney`, spec §2.3),非实际服务的 fetcher | n/a (compute-only — no top-level `source` field on `CorrelationMatrixResponse` because the response is a composite of multiple fetchers) |
-
-> `/stocks` 暴露 `source` 字段 (post-2026-07-29): 每个 list entry 的 source 是 metadata origin (akshare/zzshare/persistence) 或 quote fetcher (当 `?include_quote=true`)。`/calendar` 仍然不暴露 source (response model 无该字段)。
+Per-endpoint 覆盖矩阵: `docs/source-tracking.md`。
 
 ## Stage 1/2 Fetcher Drill-down (Explorer)
 
-The `/explorer/` UI shows, under each endpoint card, a collapsible
-"Fetcher backends" section listing every fetcher that can serve the
-endpoint along with its internal method signature. Each row has a
-`Test` button that opens an inline form posting to `POST /control/fetcher-test`
-to invoke the fetcher method directly (bypassing manager failover).
+`/explorer/` lists, per endpoint, every fetcher that can serve it plus a
+`Test` button posting to `POST /control/fetcher-test` (invokes the fetcher
+method directly, bypassing manager failover). Manifest `fetchers[]` field,
+request/response shape, error classification, and the ZhituFetcher
+per-fetcher method override: `docs/explorer-fetcher-drilldown.md`.
 
-### Data flow
-
-1. `GET /control/api-manifest` returns endpoints with a new `fetchers[]`
-   field. Each entry is `{name, method, priority, capabilities, signature, available, reason}`
-   where `name` is the fetcher class name (e.g. `BaostockFetcher`),
-   `available` indicates whether the fetcher is currently usable (config/token present),
-   and `reason` explains why it's unavailable (null when available).
-2. The manifest builder uses `data_provider.base.CAPABILITY_TO_METHOD`
-   (and `EndpointMeta.fetcher_method` override) to figure out the right
-   method per fetcher.
-3. HTML renders the rows under a `<details>`-based collapse.
-4. Clicking Test → POST `/control/fetcher-test` body
-   `{fetcher, method, kwargs}` → **always HTTP 200**; success/failure in
-   the body's `ok` field. Errors classified as
-   `UnknownFetcher / UnknownMethod / FetcherUnavailable / TypeError / <ExceptionName>`,
-   each with optional traceback.
-
-### `fetcher_method` overrides (6 known + 1 per-fetcher)
+### `fetcher_method` overrides
 
 `@endpoint_meta(fetcher_method=...)` pins the method when the capability's
 default isn't right:
@@ -194,16 +132,9 @@ default isn't right:
 | `/dragon-tiger` | `DRAGON_TIGER` | `get_daily_dragon_tiger` |
 | `/stocks/{stock_code}/fund-flow/daily` | `FUND_FLOW` | `get_fund_flow_120d` |
 
-Additionally, the manifest builder has a per-fetcher override:
-`_ZHITU_STOCK_KLINE_METHOD = "get_intraday_data"` — when the capability is
-`STOCK_KLINE` and the fetcher is `ZhituFetcher`, the manifest uses
-`get_intraday_data` instead of the default `get_kline_data`.
-
-**Board endpoints are source-routed**: the `?source=` query parameter selects
-the fetcher (e.g. `eastmoney`, `zhitu`). Different sources use incompatible
-board classification systems, so failover between sources is intentionally
-not supported. The Manager uses `_with_source()` (not `_with_failover()`)
-for all board methods.
+**Board endpoints are source-routed**: `?source=` selects the fetcher;
+different sources use incompatible board classification systems, so the
+Manager uses `_with_source()` (not `_with_failover()`) — no failover.
 
 ### Anti-patterns
 
@@ -299,19 +230,15 @@ Each fetcher that declares an INDEX_* capability must implement the correspondin
 
 ## Dragon-Tiger empty-fall-through
 
-Both `/api/v1/dragon-tiger` (全市场) and `/stocks/{code}/dragon-tiger` (个股) opt into `empty_is_failure=True` on their `DataFetcherManager._with_failover` call. The contract:
+`/api/v1/dragon-tiger` + `/stocks/{code}/dragon-tiger` pass
+`empty_is_failure=True` to `_with_failover`: a *structurally empty* Zzshare
+(P2) result is a soft failure that falls through to EastMoney (P6), and
+both-empty raises `DataFetchError` rather than returning a misleading 200.
+This flag is enabled ONLY for these two methods.
 
-- A non-empty result from Zzshare (P2 primary) → short-circuit with `source="zzshare"`.
-- A *structurally empty* result from Zzshare (i.e. ``{"stocks": []}`` for daily, ``{"records": [], "seats": {"buy": [], "sell": []}, "institution": {}}`` for per-stock) → treat as soft failure, fall through to EastMoney (P6).
-- If EastMoney also returns structurally empty, raise `DataFetchError` (caller sees an explicit failure rather than a misleading "all candidates returned empty" 200).
-
-**Why**: Zzshare's `lhb_list` / `lhb_detail` return the official CSRC 龙虎榜 list. An empty result is "this day had no events for the requested scope" — but EastMoney has different coverage and field shape (it ships `close` / `buy_wan` / `sell_wan` that Zzshare omits), so when Zzshare says "empty", EastMoney often has the real data the caller wants. Falling through preserves coverage.
-
-**Opt-in mechanism**: `DataFetcherManager._with_failover(empty_is_failure=True)`. Internally this routes through `_is_empty_dict()` (with recursive `_is_empty_collection()`), which classifies a dict as empty when:
-- it has at least one list/dict value, AND
-- all list/dict values are recursively empty (no inner non-empty list/dict survives)
-
-A dict of only scalars (e.g. `{"date": "X", "url": "Y"}`) is **not** classified as empty (no collection to evaluate). The flag is currently enabled only for `get_dragon_tiger` + `get_daily_dragon_tiger`; other endpoints use the default "non-None dict is meaningful" behavior. See `tests/test_dragon_tiger_zzshare_short_circuit.py` for the contract tests (6 cases: empty fall-through, populated short-circuit, both-empty raises, exception cascade, per-stock variant).
+Rationale, the `_is_empty_dict()` emptiness rules, and the exact empty
+shapes: `docs/dragon-tiger-fallthrough.md`. Pinned by
+`tests/test_dragon_tiger_zzshare_short_circuit.py`.
 
 ## Symbol Conventions
 
@@ -330,7 +257,7 @@ A dict of only scalars (e.g. `{"date": "X", "url": "Y"}`) is **not** classified 
 Cross-cutting behaviors implemented in `data_provider/manager.py` / `data_provider/core/types.py` (one-liners, see source for details):
 
 - **Circuit breaker** — per-source state machine: `CLOSED → OPEN (after N failures) → HALF_OPEN (probe) → CLOSED (recover)`. Threshold and cooldown configurable.
-- **Rate limiting / anti-banning** — **partial implementation** (2026-07-16 audit): EastMoney uses `curl_cffi` browser fingerprint + ~1-2s page delay on the board clist path; `utils/http.py::json_get` (used by Zhitu / Baidu / Cninfo / part of THS) rotates a 4-UA pool per request; SDK-driven fetchers (Tushare / Baostock / Myquant / Akshare) inherit the SDK's own rate-limiting and have no UA control; **THS uses raw `requests.get` with a single static `THS_UA` and no per-request jitter** — this is the weakest link under high-frequency single-IP use. A unified 1.5-3.0s jitter + UA pool across all fetchers is the aspirational target (see [[optimization-plan-2026-07-16]] P2-4 / P3-a). `tenacity`-backed exponential backoff on retry is used inside each fetcher's `_http_get` / `json_get` call.
+- **Rate limiting / anti-banning** — **partial, not uniform.** `utils/http.py::json_get` (Zhitu / Baidu / Cninfo / part of THS) rotates a 4-UA pool; EastMoney uses `curl_cffi` fingerprinting + 1-2s delay on the board clist path; SDK-driven fetchers (Tushare / Baostock / Myquant / Akshare) inherit the SDK's limiter and expose no UA control; **THS uses raw `requests.get` with one static UA and no jitter — the weakest link under high-frequency single-IP use.** A unified jitter + UA pool is the target, not the state (see [[optimization-plan-2026-07-16]] P2-4 / P3-a). `tenacity` backoff wraps each fetcher's `_http_get` / `json_get`.
 - **Market-aware routing** — request market is inferred from the stock code; A-share → Baostock → Akshare failover; US → Yfinance; HK → Akshare / Tencent / Yfinance. See [Fetcher & Capability Routing](#fetcher--capability-routing) for the capability side.
 - **Code normalization** — `normalize_stock_code()` accepts `SH600519` / `sz000001` / `HK00700` and returns the canonical 6-digit or `HK`-prefixed form (see `data_provider/utils/normalize.py`).
 
@@ -342,62 +269,28 @@ The fetcher API surface (`manager.*`) has exactly two consumers:
 1. `persistence/board.py` lazy fill (cold-path single upstream call → upsert)
 2. `tools/build_membership_index.py` (full-source bootstrap, per-source worker threads)
 
-**Bidirectional coupling (clarified 2026-07-16, audit §M3).** The above lists the *manager → persistence* direction only — the *persistence → manager* direction also exists:
-- `manager.py:692, 772` lazy-imports `persistence.trade_calendar` (`get_cached_calendar` / `update_cached_calendar`) and `persistence.pool_daily` (`get_pool`) inside method bodies, to break what would otherwise be a load-time circular import.
-- Five fetchers also reach down into persistence for table lookup helpers: `baostock_fetcher.py:219` (cached calendar), `zzshare_fetcher.py:74-75` (`THS_CONCEPT_SUBTYPE` constants + `get_latest_trade_date_on_or_before`), `ths_fetcher.py:63, 849, 907, 1332, 1351` (`THS_CONCEPT_SUBTYPE` + `get_board_metadata` + `_resolve_ths_cid_from_platecode`), `zhitu_fetcher.py:218, 970` (`get_latest_cached_trade_date`), `eastmoney/_boards_mixin.py:674` (`resolve_board_types`).
-
-If a future change swaps SQLite for another backend (Postgres / Redis), all six of those import sites need to move with it — they're not abstracted behind a port interface today. Track as future tech debt; not blocking under the local-personal-project premise (SQLite + `backfill.py` rebuild keeps the risk low).
+The reverse direction (persistence ← manager lazy-imports, five fetchers
+reaching into persistence for lookup helpers) also exists and matters only
+when swapping the SQLite backend — sites listed in `docs/board-source-semantics.md`.
 
 Anti-pattern: `manager.get_board_stocks(...)` in `api/routes/boards.py`. Add a new method to `stock_board_cache` instead.
 
-### Board Cache Source-Normalization (post-unification)
+### Board response source fields — read `effective_source`
 
-`/boards/{code}/stocks` advertises "strict source routing" on the route layer (the user's `?source=` is plumbed through to the fetcher), **but the underlying SQLite cache (`stock_board_membership`) is keyed on `source='ths'` regardless of which fetcher served the response.** This is the post-2026-07-08 unification policy:
+`/boards/{code}/stocks` carries three source fields: `query_source` (the
+user's `?source=`), `data_source` (`'persistence'` on cache hit, else the
+requested slug), and **`effective_source`** (the fetcher that actually
+served). **`data_source` is NOT the user's fetcher choice** — the cache is
+keyed on `source='ths'` regardless of who served, and `source='ths'` +
+`include_quote=false` runs an internal ZZSHARE-primary/THS-fallback chain.
+Compare `effective_source` vs `query_source` to detect fallback.
 
-- **Why**: different sources normalize to the same THS platecode (e.g. eastmoney and ths both store `885595` for the same concept board). Per-source cache keys would force each source to cold-start its own cache row for the same board, doubling cold-path latency for no data-fidelity gain.
-- **What it means in practice**: a user passing `?source=eastmoney` who hits a ths cache row will get ths data with `data_source='persistence'`. The user's `?source=` is only honored on the cache-miss / refresh path (where `update_cached_board_stocks` always writes under `source='ths'`).
-- **User-visible contract**: `data_source='persistence'` does NOT mean the user's `?source=` was used — it means *some* fetcher served the request and the result was cached. The actual fetcher that served the most recent refresh is in the log, not the response.
+Board endpoints route through `_with_source`, which is **not**
+CircuitBreaker-integrated — THS board outages surface as 5xx rate, never as
+CB state changes.
 
-If a future change requires per-source cache isolation (e.g. eastmoney-specific data fidelity concerns), change `update_cached_board_stocks(board_code, "ths", ...)` (board.py:900) to use the real origin label. Track this as a breaking change.
-
-### `effective_source` (post-2026-07-10) — disambiguating fallback from primary
-
-On `/boards/{code}/stocks`, the response carries **both** of:
-  * `query_source` — the user's `?source=` (verbatim, after Literal validation).
-  * `data_source` — `'persistence'` (cache hit) or the requested fetcher slug.
-  * **`effective_source`** — the fetcher that *actually served* the upstream call (always populated, per P4 contract).
-
-**Cache-hit caveat (clarified 2026-07-16, audit §B).** On a cache hit no upstream call runs, so `effective_source` returns the cache-key label (`'ths'` for the post-2026-07-08 unified-cache scheme) rather than a real upstream serving fetcher. Compare against `data_source=='persistence'` to distinguish cache hits from real upstream serving; comparing `effective_source` to `query_source` only meaningfully detects the ZZSHARE ↔ THS fallback chain described below (which fires on cache-miss / refresh).
-
-For `source='ths'` + `include_quote=False` requests, the helper at
-`persistence/board.py::fetch_board_stocks_with_zzshare_fallback` runs an
-internal **ZZSHARE primary + THS fallback** chain. `effective_source` makes
-the difference observable: `query_source='ths'` + `effective_source='zzshare'`
-means ZZSHARE primary served, the THS leg was not needed; `effective_source='ths'`
-means ZZSHARE failed or returned empty and THS fallback served.
-
-Pre-2026-07-10 this distinction was *implicit* (silent cross-source
-fallback). Clients should compare `effective_source` vs `query_source` to
-detect fallback and avoid parsing `data_source` ambiguously.
-
-**Side effect**: when ZZSHARE serves the fallback path, the cached rows
-lack quote fields (ZZSHARE emits only `stock_code / stock_name / exchange`).
-A subsequent `?include_quote=true` request with the same date will skip the
-cache (`needs_refresh` is forced by `include_quote`) and re-fetch via THS,
-so clients don't see "apparent None quotes" — but if you want to force a
-fresh THS fetch on already-cached data, pass `?refresh=true`.
-
-### Board endpoint failure observability
-
-Board endpoints route through `DataFetcherManager._with_source`, which
-does **not** integrate with the per-source `CircuitBreaker`. THS
-outages on a board path therefore do **not** show up as CB state
-changes — they surface as 5xx error rate. If you need CB-protected
-failover, use a non-board endpoint (K-line, realtime quote) that
-routes through `_with_failover` instead. (Documented 2026-07-10; the
-previously-stated claim that "real THS board failures can trip the
-circuit breaker" was incorrect — board methods have never been
-CB-integrated.)
+Full semantics (cache-key normalization, cache-hit caveat, fallback side
+effects, persistence↔manager coupling sites): `docs/board-source-semantics.md`.
 
 ### Indicator Computation
 Pure DataFrame transformer at the orchestration boundary:
@@ -471,16 +364,13 @@ All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. 
 
 ## Common Commands
 
-> **Use `.venv` when present; fall back to system Python otherwise.** The
-> `akshare` / `yfinance` / `gm` packages are installed in `.venv/`, not the
-> system Python. If `.venv/Scripts/python.exe` exists, use it directly (or
-> `source .venv/Scripts/activate` first) — running `python` (system) will
-> hit `ModuleNotFoundError` for those modules and `AkshareFetcher.is_available()`
-> will return `False`, breaking every endpoint that routes through akshare
-> (STOCK_BOARD, STOCK_LIST, INDEX_*, ZT_POOL, STOCK_REALTIME_QUOTE, …). If
-> `.venv/` is absent (fresh clone / new machine), fall back to the system
-> `python` — the project still boots, but upstream-specific fetchers are
-> unavailable until you `python -m venv .venv && .venv/Scripts/python.exe -m pip install -e ".[dev]"`.
+> **Use `.venv/Scripts/python.exe` when it exists; fall back to system
+> `python` otherwise.** `akshare` / `yfinance` / `gm` live only in `.venv/`.
+> Running system `python` when `.venv/` exists makes
+> `AkshareFetcher.is_available()` return `False`, silently breaking every
+> akshare-routed endpoint (STOCK_BOARD, STOCK_LIST, INDEX_*, ZT_POOL,
+> STOCK_REALTIME_QUOTE, …). Without `.venv/` the project still boots; those
+> fetchers stay unavailable until you create it and `pip install -e ".[dev]"`.
 
 ```bash
 # Install dependencies (into the venv)
@@ -527,20 +417,12 @@ ruff format .
 
 ## API Documentation
 
-Interactive web docs live at `stock_data/explorer/static/index.html` (the
-`stock_data/explorer/` subpackage) and are mounted at `/explorer/` when the
-server runs. After `python -m stock_data.server`, open
-`http://localhost:8888/explorer/`. The page supports Try-it, search,
-market/fetcher filtering, and dark theme.
+Interactive docs at `http://localhost:8888/explorer/` once the server runs.
 
-**Source of truth is server-side**, not the HTML. The page fetches
-`GET /control/api-manifest` on load, which is generated by
-`explorer/manifest.build_manifest(app)` reflecting `app.routes` + the
-`@endpoint_meta` decorator on each route. To add or change an endpoint's
-explorer metadata, edit the `@endpoint_meta(...)` call in `api/routes/` —
-the manifest rebuilds on the next request.
-
-The `/control/*` management endpoints live alongside at the same prefix.
+**Source of truth is server-side, not the HTML.** The page renders
+`GET /control/api-manifest`, generated by reflecting `app.routes` +
+`@endpoint_meta`. To change an endpoint's explorer metadata, edit the
+`@endpoint_meta(...)` call in `api/routes/` — never the HTML.
 
 ## Configuration
 
@@ -568,7 +450,7 @@ The non-obvious knobs worth memorizing here:
 - **Don't** put indicator math inside a `BaseFetcher` or anywhere in the fetcher layer. The fetcher's job is to deliver a clean standardized K-line DataFrame; the indicator service's job is to enrich it.
 - **Don't** write `options.get(key) or default` for numeric/float option keys — when `key=0` is a valid value, the `or` treats it as missing. Use `options.get(key, default)` so `0` flows through.
 - **Don't** re-introduce inline MA/EMA/WMA calculations in the fetcher path. If you need a moving average on K-line data, ask the indicator service via `?indicators=ma` (or compute it downstream of the API).
-- **Don't** reorder decorators on a route so `@endpoint_meta` sits OUTSIDE `@router.get` (i.e. `@endpoint_meta(...) @router.get(...) def f`). The contract requires `@endpoint_meta` to be the OUTER decorator (above `@map_errors` / `@cache_endpoint`) — the actual order used by every route file is `@router.get → @endpoint_meta → @map_errors → @cache_endpoint → def` (see `api/routes/news.py:135` for a representative example). The previous "INNER" wording in this section (and the matching Usage examples in `api/routes/errors.py` / `api/cache.py`) was the inverse of reality; both have been corrected 2026-07-16. The contract holds because `endpoint_meta.deco` is required to return the original `func` (not a wrapper) — see the *Decorator contract* note above — so `route.endpoint` resolves directly to the `REGISTRY` key and the sanity check at `explorer/__init__.py:100` matches without any `__wrapped__` walk. The manifest builder (`explorer/manifest.py::_lookup_registry`) does walk `__wrapped__` defensively, in case a future decorator between `@endpoint_meta` and `@router.get` is added — but today that walk is unused on the OUTER-order route files.
+- **Don't** reorder decorators on a route. The required order is `@router.get → @endpoint_meta → @map_errors → @cache_endpoint → def` (`@endpoint_meta` OUTER relative to `@map_errors`/`@cache_endpoint`, INNER relative to `@router.get`; see `api/routes/news.py:135`). This works only because `endpoint_meta.deco` returns the original `func`, so `route.endpoint` IS the `REGISTRY` key. Break either and the route silently vanishes from the explorer manifest — no error. (`explorer/manifest.py::_lookup_registry` walks `__wrapped__` defensively, but that path is unused today.)
 - **Don't** add a `DataCapability` flag without declaring intent — every flag must be in `CAPABILITY_TO_METHOD` (maps to a fetcher method). `tests/test_capability_method_map.py` enforces this (test-only — startup sanity walk removed in b85ed88; `_validate_manifest_invariants` still warns about fetcher_method overrides, missing `@endpoint_meta`, and missing tag titles).
 - **Don't** override `@endpoint_meta(fetcher_method=...)` with a method name that doesn't exist on any fetcher class — startup sanity check warns but the manifest will silently produce a misleading Stage 2 entry.
 - **Don't** leak the outbound `ts_code` / `_to_xxx_ts_code` suffix into an inbound API response. The server's canonical stock_code format is **bare 6-digit** (e.g. `000034`, `600519`), enforced by `normalize_stock_code()`. Per-upstream protocol formats (Tushare `000034.SZ`, Baostock `sh.600519`, Yfinance `600519.SS`, Zhitu `600519.SH`) are an **outbound-only** concern — they live in helpers like `_to_zzshare_ts_code` / `to_tushare_format` / `to_baostock_code` that are called RIGHT BEFORE the SDK call. On the response side, always return the bare 6-digit (e.g. `ts_code.split(".")[0]`). Forgetting the inbound/outbound boundary is exactly how `ZzshareFetcher.get_board_stocks` / `get_daily_dragon_tiger` / `get_hot_topics` ended up returning `000034.SZ` instead of `000034` (fixed 2026-06-25). Same rule applies to HK (`HK00700`) and US (`AAPL`) codes — they keep their canonical form, never get re-suffixed.
