@@ -1314,8 +1314,15 @@ layout (tables + headings + bullet lists). No data is dropped — every
 JSON field appears in the MD output (e.g. the `matched_stocks` table
 on `filter-stocks` carries all 16 fields; the `dragon_tiger.stocks`
 list on `market-context` shows the full table alongside the top-10
-summary). Pinned by
-`tests/test_agent_endpoints.py::TestFormatMdDataCompleteness` (7 tests).
+summary; the batch-profile feature blocks carry `pivots.params` and
+the full OHLC of each `z_anomalies` bar). Pinned by
+`tests/test_agent_endpoints.py::TestFormatMdDataCompleteness` (7 tests,
+covering boards/stock-overlap + stocks/board-overlap + market-context)
+and `tests/test_agent_batch_features.py::TestFormatMdFeatureCompleteness`
+(3 tests, covering the batch-profile feature blocks). A block computed
+from an empty DataFrame renders `（无数据）` rather than an empty table
+skeleton — `build_features` returns `{}` without raising, so `errors`
+stays None and the marker is the only signal that no bars were available.
 
 **Cache + format interaction:** the cache is **format-agnostic** — the
 same Pydantic model serves both `?format=json` and `?format=md`. A

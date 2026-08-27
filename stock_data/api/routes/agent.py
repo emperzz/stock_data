@@ -31,7 +31,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from datetime import time as dt_time
 from itertools import combinations
@@ -124,34 +124,53 @@ _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # "指数全景" default set: 上证 + 深证 + 创业板.
 _DEFAULT_CORE_CSI_INDICES: tuple[str, ...] = ("000001", "399001", "399006")
 
-# Per-frequency (frequency -> (min, max)) calendar-day range for the
-# batch-profile feature endpoints. Mirrors correlation/matrix with the
-# minute caps enlarged per user decision (5m 3->5, 15m 5->8, 30m 10->15,
-# 60m 20->30).
-_FEATURE_FREQ_DAYS_RANGE: dict[str, tuple[int, int]] = {
-    "d": (2, 365), "w": (14, 1095), "m": (60, 1825),
-    "1m": (2, 3), "5m": (2, 5), "15m": (2, 8), "30m": (2, 15), "60m": (2, 30),
-}
-_FEATURE_FREQ_DEFAULT_DAYS: dict[str, int] = {
-    "d": 60, "w": 156, "m": 365, "1m": 3, "5m": 5, "15m": 8, "30m": 15, "60m": 30,
-}
-# Calendar days needed to warm MA60 (60 bars) for d/w/m. Minute frames are
-# already warm inside their bounded day windows (240+ bars), so no bump.
-_FEATURE_MA60_WARMUP_DAYS: dict[str, int] = {"d": 90, "w": 420, "m": 1825}
+@dataclass(frozen=True)
+class FreqProfile:
+    """Everything the batch-profile feature endpoints need per frequency.
 
-# Public frequency string -> manager/fetcher-internal frequency code.
-# Fetchers only accept bare minute codes ("5", not "5m") — this is the
-# same mapping the /kline route applies via helpers._period_to_freq.
-_FREQ_TO_MGR: dict[str, str] = {
-    "d": "d", "w": "w", "m": "m",
-    "1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60",
+    Kept as ONE dataclass rather than four parallel frequency-keyed dicts:
+    adding a frequency is a single structured edit, and omitting a field is
+    a construction-time TypeError instead of a silent runtime degradation
+    (a missing MA60 warm-up used to fall back to `days` via `.get`, leaving
+    every MA60 value None with no error anywhere).
+
+    mgr_frequency
+        Manager/fetcher-internal frequency code. Fetchers only accept bare
+        minute codes ("5", not "5m") — same mapping the /kline route applies
+        via helpers._period_to_freq.
+    days_range / default_days
+        Calendar-day (min, max) and default. Mirrors correlation/matrix with
+        the minute caps enlarged per user decision (5m 3->5, 15m 5->8,
+        30m 10->15, 60m 20->30).
+    ma60_warmup_days
+        Calendar days needed to warm MA60 (60 bars). Minute frames are
+        already warm inside their bounded day windows (240+ bars), so they
+        set this equal to their max range (i.e. no bump).
+    """
+
+    mgr_frequency: str
+    days_range: tuple[int, int]
+    default_days: int
+    ma60_warmup_days: int
+
+
+_FEATURE_FREQS: dict[str, FreqProfile] = {
+    "d":   FreqProfile(mgr_frequency="d",  days_range=(2, 365),   default_days=60,  ma60_warmup_days=90),
+    "w":   FreqProfile(mgr_frequency="w",  days_range=(14, 1095), default_days=156, ma60_warmup_days=420),
+    "m":   FreqProfile(mgr_frequency="m",  days_range=(60, 1825), default_days=365, ma60_warmup_days=1825),
+    "1m":  FreqProfile(mgr_frequency="1",  days_range=(2, 3),     default_days=3,   ma60_warmup_days=0),
+    "5m":  FreqProfile(mgr_frequency="5",  days_range=(2, 5),     default_days=5,   ma60_warmup_days=0),
+    "15m": FreqProfile(mgr_frequency="15", days_range=(2, 8),     default_days=8,   ma60_warmup_days=0),
+    "30m": FreqProfile(mgr_frequency="30", days_range=(2, 15),    default_days=15,  ma60_warmup_days=0),
+    "60m": FreqProfile(mgr_frequency="60", days_range=(2, 30),    default_days=30,  ma60_warmup_days=0),
 }
 
 
 def _resolve_and_validate_days(frequency: str, days: int | None) -> int:
     """Apply the per-frequency default then 422 if outside the range."""
-    lo, hi = _FEATURE_FREQ_DAYS_RANGE[frequency]
-    resolved = days if days is not None else _FEATURE_FREQ_DEFAULT_DAYS[frequency]
+    profile = _FEATURE_FREQS[frequency]
+    lo, hi = profile.days_range
+    resolved = days if days is not None else profile.default_days
     if not (lo <= resolved <= hi):
         raise HTTPException(
             status_code=422,
@@ -605,7 +624,7 @@ def get_indices_batch_profile(
     ),
 ) -> Response:
     """Per-index fan-out: minimal quote + computed features at one frequency."""
-    if frequency not in _FEATURE_FREQ_DAYS_RANGE:
+    if frequency not in _FEATURE_FREQS:
         raise HTTPException(
             status_code=422,
             detail={"error": "invalid_request", "message": f"unsupported frequency: {frequency}"},
@@ -626,7 +645,8 @@ def get_indices_batch_profile(
 
     started = time.monotonic()
     manager = get_manager()
-    fetch_days = max(days, _FEATURE_MA60_WARMUP_DAYS.get(frequency, days))
+    profile = _FEATURE_FREQS[frequency]
+    fetch_days = max(days, profile.ma60_warmup_days)
     profiles: list[IndexProfile] = []
     n_ok = 0
 
@@ -649,7 +669,7 @@ def get_indices_batch_profile(
             df, _src = manager.get_kline_data(
                 code,
                 days=fetch_days,
-                frequency=_FREQ_TO_MGR[frequency],
+                frequency=profile.mgr_frequency,
                 adjust=None,
                 asset="index",
             )
@@ -881,7 +901,8 @@ def post_stocks_batch_profile(
 
     started = time.monotonic()
     manager = get_manager()
-    fetch_days = max(days, _FEATURE_MA60_WARMUP_DAYS.get(payload.frequency, days))
+    profile = _FEATURE_FREQS[payload.frequency]
+    fetch_days = max(days, profile.ma60_warmup_days)
     results: list[StockBatchProfileEntry] = []
     n_ok = 0
 
@@ -906,7 +927,7 @@ def post_stocks_batch_profile(
             df, _src = manager.get_kline_data(
                 code,
                 days=fetch_days,
-                frequency=_FREQ_TO_MGR[payload.frequency],
+                frequency=profile.mgr_frequency,
                 adjust="qfq",
                 asset="stock",
             )
@@ -1299,21 +1320,36 @@ def _md_feature_block(out: list[str], f) -> None:
         out.append(f"- 区间最低: {_md_num(f.pivots.window_low.get('price'))} @ {f.pivots.window_low.get('date')}")
     if f.pivots.max_vol_bar:
         out.append(f"- 最大量价: {_md_num(f.pivots.max_vol_bar.get('price'))} @ {f.pivots.max_vol_bar.get('date')} (量 {_md_num(f.pivots.max_vol_bar.get('volume'))})")
-    out.append("| 日期 | 类型 | 价格 | 确认 |")
-    out.append("|---|---|---|---|")
-    for s in f.pivots.swings:
-        out.append(f"| {s.date} | {s.type} | {_md_num(s.price)} | {'✓' if s.confirmed else '✗'} |")
+    # Same empty-table rule as _render_dict_block: no bare header + separator
+    # with zero rows (reads as "computed, but blank"). swings is [] both for an
+    # empty DataFrame and for a frame with no confirmed reversal yet.
+    if f.pivots.swings:
+        out.append("| 日期 | 类型 | 价格 | 确认 |")
+        out.append("|---|---|---|---|")
+        for s in f.pivots.swings:
+            out.append(f"| {s.date} | {s.type} | {_md_num(s.price)} | {'✓' if s.confirmed else '✗'} |")
+    else:
+        out.append("（无确认摆动点）")
     if f.pivots.pending:
         p = f.pivots.pending
         out.append(f"- 在途({p.side}): {_md_num(p.price)} @ {p.date} (bars_since {p.bars})")
+    # `params` pins which ZigZag settings produced the swings above — without
+    # it the顶底 points are uncalibratable, so it MUST appear in the MD too
+    # (api-reference.md "No data is dropped" contract).
+    if f.pivots.params:
+        out.append("- 参数: " + " / ".join(f"{k}={v}" for k, v in f.pivots.params.items()))
     out.append("")
     out.append("**量价**")
     out.append(f"- 最新成交量: {_md_num(f.volume.latest_volume)} / 量比(5): {_md_num(f.volume.vol_ratio_5)}")
     if f.volume.z_anomalies:
-        out.append("| 日期 | 收盘 | 成交量 | z | 方向 | 涨跌幅 |")
-        out.append("|---|---|---|---|---|---|")
+        out.append("| 日期 | 开 | 高 | 低 | 收盘 | 成交量 | z | 方向 | 涨跌幅 |")
+        out.append("|---|---|---|---|---|---|---|---|---|")
         for a in f.volume.z_anomalies:
-            out.append(f"| {a.date} | {_md_num(a.close)} | {_md_num(a.volume)} | {_md_num(a.z_score)} | {a.direction} | {_md_pct(a.change_pct)} |")
+            out.append(
+                f"| {a.date} | {_md_num(a.open)} | {_md_num(a.high)} | {_md_num(a.low)} "
+                f"| {_md_num(a.close)} | {_md_num(a.volume)} | {_md_num(a.z_score)} "
+                f"| {a.direction} | {_md_pct(a.change_pct)} |"
+            )
     else:
         out.append("（无 z>2 放量异动）")
     out.append("")
@@ -1344,8 +1380,18 @@ def render_indices_batch_profile_as_md(p: IndicesBatchProfileResponse) -> str:
 
 
 def _render_dict_block(out: list[str], title: str, d: dict) -> None:
-    """Render every key/value of a flat dict (no field is dropped)."""
+    """Render every key/value of a flat dict (no field is dropped).
+
+    An empty dict means "no bars to compute from" (``build_features`` /
+    ``compute_trend`` return ``{}`` for an empty DataFrame without raising,
+    so ``errors`` stays None). Emit an explicit marker rather than a bare
+    heading + empty table skeleton, which reads as "computed, but blank".
+    """
     out.append(f"### {title}")
+    if not d:
+        out.append("（无数据）")
+        out.append("")
+        return
     out.append("| 字段 | 值 |")
     out.append("|---|---|")
     for k, v in d.items():

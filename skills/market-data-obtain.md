@@ -228,7 +228,8 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 **`indices/batch-profile` 关键字段**：
 
 - `frequency`（单值 `d/w/m/1m/5m/15m/30m/60m`）+ `days` 顶层回显；`days` 上限：`d≤365, w≤1095, m≤1825, 1m≤3, 5m≤5, 15m≤8, 30m≤15, 60m≤30`
-- `indices[].features` = `{trend, pivots, volume}`；`trend`（MA 5/10/15/20/30/60 最新值 + 环比昨日 % + ADX/PDI/MDI/RSI/BOLL）、`pivots`（区间最高/最低/最大量价 + ZigZag 摆动点 + 在途未确认）、`volume`（最新量 + 5 日量比 + Z>2 放量异动）
+- `indices[].features` = `{trend, pivots, volume}`；`trend`（MA 5/10/15/20/30/60 最新值 + 环比昨日 % + ADX/PDI/MDI/RSI/BOLL）、`pivots`（区间最高/最低/最大量价 + ZigZag 摆动点 + 在途未确认 + `params` 算法参数）、`volume`（最新量 + 5 日量比 + Z>2 放量异动，每根异动 bar 带完整 OHLC —— 只看收盘无法区分放量长上影与光头阳线）
+- 某个 feature 子块在 K 线取回 0 根 bar 时为空 dict（**不报错**，`errors` 仍为 `null`）；MD 投影下渲染为 `（无数据）` / `（无确认摆动点）`，这是唯一的缺数据信号
 - stocks 端固定 `adjust=qfq`；indices 无复权
 
 **`market-context` 关键字段**：
@@ -240,7 +241,7 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 **`stocks/batch-profile` 关键字段**：
 
 - `codes` 1-5；`aspects` 入参已移除——每次返回 quote + features + info + boards
-- 顶底为显著性过滤（`pivot_window=2, reversal_atr_mult=1.0, ATR14`），`pivots.params` 回显算法参数，不对外暴露
+- 顶底为显著性过滤，默认 `pivot_window=2, reversal_atr_mult=1.0, ATR14`；`pivots.params` 回显这组参数，**JSON 与 `?format=md` 两种投影都输出**（摆动点脱离参数无法校准，故不可省）
 
 **典型调用模式**（`market-principles` 第 5 节"判断龙头股"步骤中可串入）：
 

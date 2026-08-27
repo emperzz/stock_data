@@ -559,3 +559,66 @@ class TestFormatMdFeatures:
         # The three feature blocks render under their Chinese labels — pin the
         # content-type so a JSON fallback cannot slip past this assertion.
         assert "趋势" in resp.text and "顶底" in resp.text and "量价" in resp.text
+
+
+class TestFormatMdFeatureCompleteness:
+    """Pins the api-reference.md "No data is dropped" contract for the
+    batch-profile feature blocks specifically.
+
+    ``TestFormatMdDataCompleteness`` in test_agent_endpoints.py pins the same
+    general contract, but only for boards/stock-overlap, stocks/board-overlap
+    and market-context — the feature blocks fell in its coverage gap, which is
+    how ``pivots.params`` and the z_anomalies OHLC columns went missing from
+    the MD projection while the JSON carried them.
+    """
+
+    def _render(self):
+        from stock_data.api.routes.agent import _md_feature_block
+
+        out: list[str] = []
+        _md_feature_block(out, TestFormatMdFeatures()._stub_features_response())
+        return "\n".join(out)
+
+    def test_pivots_params_rendered(self):
+        """`pivots.params` pins the ZigZag settings the swings came from —
+        without it the顶底 points in MD are uncalibratable."""
+        body = self._render()
+        assert "pivot_window=2" in body
+        assert "reversal_atr_mult=1.0" in body
+        assert "atr_period=14" in body
+
+    def test_z_anomaly_ohlc_rendered(self):
+        """open/high/low are computed and present in JSON, so the MD table
+        must carry them: close alone cannot distinguish a 放量长上影 from a
+        光头阳线, and `direction` is itself derived from open."""
+        body = self._render()
+        header = next(line for line in body.splitlines() if line.startswith("| 日期 | 开"))
+        assert header.count("|") == 10  # 9 columns => 10 pipes
+        for label in ("开", "高", "低", "收盘", "成交量", "方向", "涨跌幅"):
+            assert label in header
+        # The stub's OHLC values must actually appear in the data row.
+        row = next(line for line in body.splitlines() if line.startswith("| 2026-08-10 |"))
+        for value in ("1.00", "2.00", "0.50", "1.50"):
+            assert value in row
+
+    def test_empty_dict_block_marks_no_data(self):
+        """`build_features` returns {} (not an error) for an empty DataFrame,
+        so `errors` stays None. The MD must say so explicitly rather than
+        emit a bare heading + empty table skeleton reading as "computed,
+        but blank"."""
+        from stock_data.api.routes.agent import _md_feature_block
+
+        out: list[str] = []
+        empty = build_features(pd.DataFrame(), frequency="d", days=60)
+        _md_feature_block(out, BatchFeatures(**empty))
+        body = "\n".join(out)
+        assert "（无数据）" in body
+        assert "（无确认摆动点）" in body
+        # No empty table skeleton ANYWHERE: scan every markdown separator row
+        # (`|---|...`) and require a data row after it. Scanning only the
+        # `| 字段 |` dict tables would miss the hand-written swings table.
+        lines = body.splitlines()
+        for i, line in enumerate(lines):
+            if set(line.replace("|", "").replace("-", "")) <= {" "} and "---" in line:
+                nxt = lines[i + 1] if i + 1 < len(lines) else ""
+                assert nxt.startswith("| "), f"empty table skeleton at line {i + 1}"
