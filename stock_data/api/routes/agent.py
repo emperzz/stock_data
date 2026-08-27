@@ -127,6 +127,7 @@ _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # "指数全景" default set: 上证 + 深证 + 创业板.
 _DEFAULT_CORE_CSI_INDICES: tuple[str, ...] = ("000001", "399001", "399006")
 
+
 @dataclass(frozen=True)
 class FreqProfile:
     """Everything the batch-profile feature endpoints need per frequency.
@@ -158,14 +159,18 @@ class FreqProfile:
 
 
 _FEATURE_FREQS: dict[str, FreqProfile] = {
-    "d":   FreqProfile(mgr_frequency="d",  days_range=(2, 365),   default_days=60,  ma60_warmup_days=90),
-    "w":   FreqProfile(mgr_frequency="w",  days_range=(14, 1095), default_days=156, ma60_warmup_days=420),
-    "m":   FreqProfile(mgr_frequency="m",  days_range=(60, 1825), default_days=365, ma60_warmup_days=1825),
-    "1m":  FreqProfile(mgr_frequency="1",  days_range=(2, 3),     default_days=3,   ma60_warmup_days=0),
-    "5m":  FreqProfile(mgr_frequency="5",  days_range=(2, 5),     default_days=5,   ma60_warmup_days=0),
-    "15m": FreqProfile(mgr_frequency="15", days_range=(2, 8),     default_days=8,   ma60_warmup_days=0),
-    "30m": FreqProfile(mgr_frequency="30", days_range=(2, 15),    default_days=15,  ma60_warmup_days=0),
-    "60m": FreqProfile(mgr_frequency="60", days_range=(2, 30),    default_days=30,  ma60_warmup_days=0),
+    "d": FreqProfile(mgr_frequency="d", days_range=(2, 365), default_days=60, ma60_warmup_days=90),
+    "w": FreqProfile(
+        mgr_frequency="w", days_range=(14, 1095), default_days=156, ma60_warmup_days=420
+    ),
+    "m": FreqProfile(
+        mgr_frequency="m", days_range=(60, 1825), default_days=365, ma60_warmup_days=1825
+    ),
+    "1m": FreqProfile(mgr_frequency="1", days_range=(2, 3), default_days=3, ma60_warmup_days=0),
+    "5m": FreqProfile(mgr_frequency="5", days_range=(2, 5), default_days=5, ma60_warmup_days=0),
+    "15m": FreqProfile(mgr_frequency="15", days_range=(2, 8), default_days=8, ma60_warmup_days=0),
+    "30m": FreqProfile(mgr_frequency="30", days_range=(2, 15), default_days=15, ma60_warmup_days=0),
+    "60m": FreqProfile(mgr_frequency="60", days_range=(2, 30), default_days=30, ma60_warmup_days=0),
 }
 
 
@@ -177,7 +182,10 @@ def _resolve_and_validate_days(frequency: str, days: int | None) -> int:
     if not (lo <= resolved <= hi):
         raise HTTPException(
             status_code=422,
-            detail={"error": "invalid_request", "message": f"days must be an int in [{lo}, {hi}] for frequency={frequency}"},
+            detail={
+                "error": "invalid_request",
+                "message": f"days must be an int in [{lo}, {hi}] for frequency={frequency}",
+            },
         )
     return resolved
 
@@ -619,7 +627,9 @@ def get_indices_batch_profile(
         ),
     ),
     frequency: str = Query("d", description="One of d/w/m/1m/5m/15m/30m/60m"),
-    days: int | None = Query(default=None, ge=2, description="Calendar days; per-frequency max validated server-side."),
+    days: int | None = Query(
+        default=None, ge=2, description="Calendar days; per-frequency max validated server-side."
+    ),
     format: str = Query(
         "json",
         pattern="^(json|md)$",
@@ -637,7 +647,9 @@ def get_indices_batch_profile(
         c.strip() for c in (codes.split(",") if codes else _DEFAULT_CORE_CSI_INDICES) if c.strip()
     ] or list(_DEFAULT_CORE_CSI_INDICES)
     if len(code_list) > 5:
-        raise HTTPException(status_code=422, detail={"error": "invalid_request", "message": "codes must be 1-5"})
+        raise HTTPException(
+            status_code=422, detail={"error": "invalid_request", "message": "codes must be 1-5"}
+        )
 
     cache_key = make_indices_batch_profile_cache_key(code_list, frequency, days)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_indices_batch_profile")
@@ -924,7 +936,9 @@ def post_stocks_batch_profile(
                 name = getattr(q, "name", "") or ""
         except Exception as exc:
             logger.warning(f"[agent/stocks/batch-profile] {code} quote failed: {exc}")
-            errors.append(StockBatchAspectError(aspect="quote", error=type(exc).__name__, message=str(exc)))
+            errors.append(
+                StockBatchAspectError(aspect="quote", error=type(exc).__name__, message=str(exc))
+            )
 
         try:
             df, _src = manager.get_kline_data(
@@ -936,15 +950,21 @@ def post_stocks_batch_profile(
             )
             features = BatchFeatures(**build_features(df, frequency=payload.frequency, days=days))
         except Exception as exc:
-            logger.warning(f"[agent/stocks/batch-profile] {code} features failed: {exc}", exc_info=True)
-            errors.append(StockBatchAspectError(aspect="features", error=type(exc).__name__, message=str(exc)))
+            logger.warning(
+                f"[agent/stocks/batch-profile] {code} features failed: {exc}", exc_info=True
+            )
+            errors.append(
+                StockBatchAspectError(aspect="features", error=type(exc).__name__, message=str(exc))
+            )
 
         try:
             info_dict, info_src = manager.get_stock_info(code)
             info = {"source": info_src, "data": info_dict}
         except Exception as exc:
             logger.warning(f"[agent/stocks/batch-profile] {code} info failed: {exc}")
-            errors.append(StockBatchAspectError(aspect="info", error=type(exc).__name__, message=str(exc)))
+            errors.append(
+                StockBatchAspectError(aspect="info", error=type(exc).__name__, message=str(exc))
+            )
 
         try:
             entries, _cold, _origin = stock_board_cache.get_stock_memberships(
@@ -953,7 +973,9 @@ def post_stocks_batch_profile(
             boards = {"source": "persistence", "data": entries}
         except Exception as exc:
             logger.warning(f"[agent/stocks/batch-profile] {code} boards failed: {exc}")
-            errors.append(StockBatchAspectError(aspect="boards", error=type(exc).__name__, message=str(exc)))
+            errors.append(
+                StockBatchAspectError(aspect="boards", error=type(exc).__name__, message=str(exc))
+            )
 
         ok = any(v is not None for v in (quote, features, info, boards))
         if ok:
@@ -1118,7 +1140,7 @@ def _board_stats_from_aggregate(agg: AggregateStats, source: str) -> "BoardStats
 @endpoint_meta(
     summary="市场全量统计（个股+板块涨幅分布 + 桶形数据）",
     markets=["csi"],
-    capabilities=[],                          # agent aggregation, no single capability
+    capabilities=[],  # agent aggregation, no single capability
 )
 @map_errors
 def get_market_stats(
@@ -1159,8 +1181,7 @@ def get_market_stats(
     try:
         quotes, _src = manager.get_realtime_quotes("csi")
         values = [
-            q.change_pct for q in (quotes or [])
-            if getattr(q, "change_pct", None) is not None
+            q.change_pct for q in (quotes or []) if getattr(q, "change_pct", None) is not None
         ]
         agg = compute_aggregate(
             values,
@@ -1170,9 +1191,7 @@ def get_market_stats(
         stocks_stats = _stock_stats_from_aggregate(agg)
         ok += 1
     except Exception as exc:
-        logger.warning(
-            f"[agent/market-stats] stocks failed: {exc}", exc_info=True
-        )
+        logger.warning(f"[agent/market-stats] stocks failed: {exc}", exc_info=True)
         errors.append(
             MarketStatsErrorEntry(
                 block="stocks",
@@ -1191,7 +1210,8 @@ def get_market_stats(
                 manager=manager,
             )
             values = [
-                b.get("change_pct") for b in (boards or [])
+                b.get("change_pct")
+                for b in (boards or [])
                 if isinstance(b.get("change_pct"), (int, float))
                 and not isinstance(b.get("change_pct"), bool)
             ]
@@ -1203,9 +1223,7 @@ def get_market_stats(
             boards_stats = _board_stats_from_aggregate(agg, src or "ths")
             ok += 1
         except Exception as exc:
-            logger.warning(
-                f"[agent/market-stats] boards failed: {exc}", exc_info=True
-            )
+            logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
             errors.append(
                 MarketStatsErrorEntry(
                     block="boards",
@@ -1419,17 +1437,25 @@ def _md_feature_block(out: list[str], f) -> None:
     out.append("**趋势**")
     _render_dict_block(out, "MA", f.trend.ma)
     _render_dict_block(out, "MA 环比变化 (%)", f.trend.ma_change)
-    out.append(f"- ADX: {_md_num(f.trend.adx)} / PDI: {_md_num(f.trend.pdi)} / MDI: {_md_num(f.trend.mdi)}")
+    out.append(
+        f"- ADX: {_md_num(f.trend.adx)} / PDI: {_md_num(f.trend.pdi)} / MDI: {_md_num(f.trend.mdi)}"
+    )
     out.append("")
     _render_dict_block(out, "RSI", f.trend.rsi)
     _render_dict_block(out, "BOLL", f.trend.boll)
     out.append("**顶底**")
     if f.pivots.window_high:
-        out.append(f"- 区间最高: {_md_num(f.pivots.window_high.get('price'))} @ {f.pivots.window_high.get('date')}")
+        out.append(
+            f"- 区间最高: {_md_num(f.pivots.window_high.get('price'))} @ {f.pivots.window_high.get('date')}"
+        )
     if f.pivots.window_low:
-        out.append(f"- 区间最低: {_md_num(f.pivots.window_low.get('price'))} @ {f.pivots.window_low.get('date')}")
+        out.append(
+            f"- 区间最低: {_md_num(f.pivots.window_low.get('price'))} @ {f.pivots.window_low.get('date')}"
+        )
     if f.pivots.max_vol_bar:
-        out.append(f"- 最大量价: {_md_num(f.pivots.max_vol_bar.get('price'))} @ {f.pivots.max_vol_bar.get('date')} (量 {_md_num(f.pivots.max_vol_bar.get('volume'))})")
+        out.append(
+            f"- 最大量价: {_md_num(f.pivots.max_vol_bar.get('price'))} @ {f.pivots.max_vol_bar.get('date')} (量 {_md_num(f.pivots.max_vol_bar.get('volume'))})"
+        )
     # Same empty-table rule as _render_dict_block: no bare header + separator
     # with zero rows (reads as "computed, but blank"). swings is [] both for an
     # empty DataFrame and for a frame with no confirmed reversal yet.
@@ -1437,7 +1463,9 @@ def _md_feature_block(out: list[str], f) -> None:
         out.append("| 日期 | 类型 | 价格 | 确认 |")
         out.append("|---|---|---|---|")
         for s in f.pivots.swings:
-            out.append(f"| {s.date} | {s.type} | {_md_num(s.price)} | {'✓' if s.confirmed else '✗'} |")
+            out.append(
+                f"| {s.date} | {s.type} | {_md_num(s.price)} | {'✓' if s.confirmed else '✗'} |"
+            )
     else:
         out.append("（无确认摆动点）")
     if f.pivots.pending:
@@ -1450,7 +1478,9 @@ def _md_feature_block(out: list[str], f) -> None:
         out.append("- 参数: " + " / ".join(f"{k}={v}" for k, v in f.pivots.params.items()))
     out.append("")
     out.append("**量价**")
-    out.append(f"- 最新成交量: {_md_num(f.volume.latest_volume)} / 量比(5): {_md_num(f.volume.vol_ratio_5)}")
+    out.append(
+        f"- 最新成交量: {_md_num(f.volume.latest_volume)} / 量比(5): {_md_num(f.volume.vol_ratio_5)}"
+    )
     if f.volume.z_anomalies:
         out.append("| 日期 | 开 | 高 | 低 | 收盘 | 成交量 | z | 方向 | 涨跌幅 |")
         out.append("|---|---|---|---|---|---|---|---|---|")
@@ -1463,6 +1493,32 @@ def _md_feature_block(out: list[str], f) -> None:
     else:
         out.append("（无 z>2 放量异动）")
     out.append("")
+
+
+def render_boards_batch_profile_as_md(p: BoardsBatchProfileResponse) -> str:
+    out = [f"# 板块批量画像 — {p.frequency} {p.days}d", ""]
+    for board in p.boards:
+        ok_marker = "✓" if (board.quote or board.features) else "✗"
+        out.append(f"## {board.code} {board.name} {ok_marker}")
+        if board.quote:
+            out.append(f"- 最新: {_md_num(board.quote.price)} ({_md_pct(board.quote.change_pct)})")
+        else:
+            err = (board.errors or {}).get("quote") or "no quote"
+            out.append(f"- 行情失败: {err}")
+        out.append("")
+        if board.features:
+            _md_feature_block(out, board.features)
+        else:
+            err = (board.errors or {}).get("features") or "no features"
+            out.append(f"### 指标 — 失败: {err}")
+            out.append("")
+    s = p.summary or {}
+    out.append(
+        f"## 汇总 — requested {s.get('requested', '?')}, "
+        f"ok {s.get('ok', '?')}, failed {s.get('failed', '?')}, "
+        f"elapsed {s.get('elapsed_ms', '?')}ms"
+    )
+    return "\n".join(out)
 
 
 def render_indices_batch_profile_as_md(p: IndicesBatchProfileResponse) -> str:
@@ -1676,9 +1732,7 @@ def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
     return "\n".join(out)
 
 
-def _md_stats_block(
-    title: str, stats, *, total_universe_label: str
-) -> list[str]:
+def _md_stats_block(title: str, stats, *, total_universe_label: str) -> list[str]:
     """Render one stats block (个股 or 板块) to MD table rows."""
     out: list[str] = [f"## {title}"]
     if stats is None:
@@ -1690,8 +1744,7 @@ def _md_stats_block(
         f"最高 {_md_pct(stats.max_pct)}, 最低 {_md_pct(stats.min_pct)}"
     )
     out.append(
-        f"上涨: **{stats.up_count}** / 下跌: **{stats.down_count}** / "
-        f"平盘: **{stats.flat_count}**"
+        f"上涨: **{stats.up_count}** / 下跌: **{stats.down_count}** / 平盘: **{stats.flat_count}**"
     )
     out.append("")
     out.append("| 区间 | 计数 | 占比 |")
@@ -1713,11 +1766,7 @@ def render_market_stats_as_md(p: MarketStatsResponse) -> str:
     out.extend(_md_stats_block("板块", p.boards, total_universe_label="ths 板块清单"))
     out.append("")
     out.append("## 失败列表")
-    out.extend(
-        _md_errors(
-            [e.model_dump() for e in p.errors], key="block", header="块"
-        )
-    )
+    out.extend(_md_errors([e.model_dump() for e in p.errors], key="block", header="块"))
     out.append("")
     s = p.summary or {}
     out.append(
@@ -1737,6 +1786,7 @@ _MD_TEMPLATES: dict[str, Callable] = {
     "market-context": render_market_context_as_md,
     "stocks/batch-profile": render_stocks_batch_profile_as_md,
     "market-stats": render_market_stats_as_md,
+    "boards/batch-profile": render_boards_batch_profile_as_md,
 }
 
 

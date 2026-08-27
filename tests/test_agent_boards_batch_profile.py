@@ -233,7 +233,7 @@ class TestHandler:
     def test_response_preserves_input_order(self, client, monkeypatch):
         df = _make_kline_df(90, seed=2)
         realtime = {c: {"price": 1.0, "change_pct": 0.1} for c in ("881270", "885595", "883957")}
-        history = {c: df for c in ("881270", "885595", "883957")}
+        history = dict.fromkeys(("881270", "885595", "883957"), df)
         manager = _mock_manager(realtime_results=realtime, history_results=history)
         monkeypatch.setattr(agent_module, "get_manager", lambda: manager)
         monkeypatch.setattr(
@@ -280,7 +280,16 @@ class TestHandler:
         """Empty DataFrame → build_features returns {} for all 3 blocks,
         handler wraps in BatchFeatures(...) which expands default_factory."""
         empty_df = pd.DataFrame(
-            {"date": [], "open": [], "high": [], "low": [], "close": [], "volume": [], "amount": [], "pct_chg": []}
+            {
+                "date": [],
+                "open": [],
+                "high": [],
+                "low": [],
+                "close": [],
+                "volume": [],
+                "amount": [],
+                "pct_chg": [],
+            }
         )
         realtime = {"885595": {"price": 1.0, "change_pct": 0.0}}
         history = {"885595": empty_df}
@@ -344,3 +353,149 @@ class TestHandler:
         assert store_spy.call_count == 0, (
             "cached_store was called; boards/batch-profile must NOT add a composite cache"
         )
+
+
+class TestMarkdown:
+    def test_md_renders_full_payload(self):
+        from stock_data.api.routes.agent import render_boards_batch_profile_as_md
+        from stock_data.api.schemas import BoardProfile, BoardsBatchProfileResponse, MinimalQuote
+        from stock_data.data_provider.features.build import build_features
+
+        df = _make_kline_df(90)
+        resp = BoardsBatchProfileResponse(
+            frequency="d",
+            days=60,
+            boards=[
+                BoardProfile(
+                    code="885595",
+                    name="人形机器人",
+                    quote=MinimalQuote(price=1234.5, change_pct=1.23),
+                    features=BatchFeatures(**build_features(df, frequency="d", days=60)),
+                    errors={"quote": None, "features": None},
+                ),
+            ],
+            summary={"requested": 1, "ok": 1, "failed": 0, "elapsed_ms": 100},
+        )
+        md = render_boards_batch_profile_as_md(resp)
+        assert "# 板块批量画像 — d 60d" in md
+        assert "## 885595 人形机器人 ✓" in md
+        assert "1,234.50" in md
+        assert "+1.23%" in md
+        assert "### 指标" in md
+        # Summary block
+        assert "## 汇总" in md
+
+    def test_md_empty_features_render_explicit_marker(self):
+        """Empty feature block → '（无数据）' marker (NOT a bare | 字段 | skeleton)."""
+        from stock_data.api.routes.agent import render_boards_batch_profile_as_md
+        from stock_data.api.schemas import BoardProfile, BoardsBatchProfileResponse, MinimalQuote
+        from stock_data.data_provider.features.build import build_features
+
+        empty_df = pd.DataFrame(
+            {
+                "date": [],
+                "open": [],
+                "high": [],
+                "low": [],
+                "close": [],
+                "volume": [],
+                "amount": [],
+                "pct_chg": [],
+            }
+        )
+        resp = BoardsBatchProfileResponse(
+            frequency="d",
+            days=60,
+            boards=[
+                BoardProfile(
+                    code="885595",
+                    name="",
+                    quote=MinimalQuote(price=1.0, change_pct=0.0),
+                    features=BatchFeatures(**build_features(empty_df, frequency="d", days=60)),
+                    errors={"quote": None, "features": None},
+                ),
+            ],
+            summary={"requested": 1, "ok": 1, "failed": 0, "elapsed_ms": 1},
+        )
+        md = render_boards_batch_profile_as_md(resp)
+        # Each empty block renders the dedicated marker
+        assert "（无数据）" in md
+        # Defensive: NO bare |---| separator with zero data rows under it
+        # (a separator with only whitespace / nothing after it is the
+        # exact regression we are guarding against — see CLAUDE.md MD contract)
+        lines = md.splitlines()
+        for i, line in enumerate(lines):
+            if line.strip().startswith("|---"):
+                # The NEXT non-blank line must contain either data OR a
+                # known no-data marker.
+                next_nonblank = next(
+                    (ln for ln in lines[i + 1 :] if ln.strip()),
+                    "",
+                )
+                assert (
+                    next_nonblank.startswith("|")
+                    or "（无" in next_nonblank
+                    or next_nonblank.startswith("#")
+                ), f"Bare header+separator with no data row: {line!r} → {next_nonblank!r}"
+
+    def test_md_no_swings_marker(self):
+        """No confirmed pivots → '（无确认摆动点）' marker (NOT bare header)."""
+        from stock_data.api.routes.agent import render_boards_batch_profile_as_md
+        from stock_data.api.schemas import BoardProfile, BoardsBatchProfileResponse, MinimalQuote
+        from stock_data.data_provider.features.build import build_features
+
+        empty_df = pd.DataFrame(
+            {
+                "date": [],
+                "open": [],
+                "high": [],
+                "low": [],
+                "close": [],
+                "volume": [],
+                "amount": [],
+                "pct_chg": [],
+            }
+        )
+        resp = BoardsBatchProfileResponse(
+            frequency="d",
+            days=60,
+            boards=[
+                BoardProfile(
+                    code="881270",
+                    name="半导体",
+                    quote=MinimalQuote(price=2.0, change_pct=0.5),
+                    features=BatchFeatures(**build_features(empty_df, frequency="d", days=60)),
+                    errors={"quote": None, "features": None},
+                ),
+            ],
+            summary={"requested": 1, "ok": 1, "failed": 0, "elapsed_ms": 1},
+        )
+        md = render_boards_batch_profile_as_md(resp)
+        assert "（无确认摆动点）" in md
+
+    def test_md_per_entry_failure_marker(self):
+        """Entry whose features failed renders the failure reason in the heading."""
+        from stock_data.api.routes.agent import render_boards_batch_profile_as_md
+        from stock_data.api.schemas import BoardProfile, BoardsBatchProfileResponse
+
+        resp = BoardsBatchProfileResponse(
+            frequency="d",
+            days=60,
+            boards=[
+                BoardProfile(
+                    code="885595",
+                    name="人形机器人",
+                    quote=None,
+                    features=None,
+                    errors={
+                        "quote": "DataFetchError: network timeout",
+                        "features": "DataFetchError: no K-line",
+                    },
+                ),
+            ],
+            summary={"requested": 1, "ok": 0, "failed": 1, "elapsed_ms": 100},
+        )
+        md = render_boards_batch_profile_as_md(resp)
+        assert "## 885595 人形机器人 ✗" in md  # ✗ because both aspects failed
+        assert "DataFetchError: network timeout" in md
+        assert "DataFetchError: no K-line" in md

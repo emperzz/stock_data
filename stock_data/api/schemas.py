@@ -1578,7 +1578,9 @@ class FilterStocksMatchedStock(BaseModel):
     high: float | None = Field(default=None, description="Today's high (yuan).")
     low: float | None = Field(default=None, description="Today's low (yuan).")
     prev_close: float | None = Field(default=None, description="Previous close (yuan).")
-    amplitude_pct: float | None = Field(default=None, description="振幅(%) — THS upstream column 9, fallback (h-l)/prev_close*100.")
+    amplitude_pct: float | None = Field(
+        default=None, description="振幅(%) — THS upstream column 9, fallback (h-l)/prev_close*100."
+    )
 
 
 class FilterStocksResponse(BaseModel):
@@ -1678,13 +1680,18 @@ class BatchFeatures(BaseModel):
 
 # --- indices /batch-profile ------------------------------------------------
 
+
 class IndexProfile(BaseModel):
     """One index in /agent/indices/batch-profile."""
 
     code: str
     name: str = Field(default="", description="Index name (from index_symbols map or upstream)")
-    quote: MinimalQuote | None = Field(default=None, description="极简实时价锚点; null when upstream failed.")
-    features: BatchFeatures | None = Field(default=None, description="Computed trend/pivots/volume.")
+    quote: MinimalQuote | None = Field(
+        default=None, description="极简实时价锚点; null when upstream failed."
+    )
+    features: BatchFeatures | None = Field(
+        default=None, description="Computed trend/pivots/volume."
+    )
     errors: dict[str, str | None] = Field(
         default_factory=dict,
         description="Quote / features error map; null = ok.",
@@ -1805,6 +1812,7 @@ class MarketContextResponse(BaseModel):
 
 # --- stocks /batch-profile -------------------------------------------------
 
+
 class StockBatchAspectError(BaseModel):
     """Per-aspect failure in /agent/stocks/batch-profile."""
 
@@ -1836,7 +1844,9 @@ class StockBatchProfileRequest(BaseModel):
         description="Stock codes (1-5). Hard cap matches the stock-picking funnel.",
     )
     frequency: Literal["d", "w", "m", "1m", "5m", "15m", "30m", "60m"] = "d"
-    days: int | None = Field(default=None, ge=2, description="Calendar days; per-frequency max validated in the route.")
+    days: int | None = Field(
+        default=None, ge=2, description="Calendar days; per-frequency max validated in the route."
+    )
 
 
 class StockBatchProfileResponse(BaseModel):
@@ -2049,7 +2059,9 @@ class BoardsBatchProfileRequest(BaseModel):
         description="THS board platecodes (1-5). Hard cap matches the stock-picking funnel.",
     )
     frequency: Literal["d", "w", "m", "1m", "5m", "15m", "30m", "60m"] = "d"
-    days: int | None = Field(default=None, ge=2, description="Calendar days; per-frequency max validated in the route.")
+    days: int | None = Field(
+        default=None, ge=2, description="Calendar days; per-frequency max validated in the route."
+    )
 
 
 class BoardsBatchProfileResponse(BaseModel):
@@ -2059,5 +2071,3 @@ class BoardsBatchProfileResponse(BaseModel):
     days: int = 0
     boards: list[BoardProfile] = Field(default_factory=list)
     summary: dict = Field(default_factory=dict)
-
-
