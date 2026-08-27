@@ -69,6 +69,9 @@ from ..cache import (
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
     BatchFeatures,
+    BoardProfile,
+    BoardsBatchProfileRequest,
+    BoardsBatchProfileResponse,
     BoardsOverlapPair,
     BoardsOverlapRequest,
     BoardsOverlapResponse,
@@ -976,6 +979,113 @@ def post_stocks_batch_profile(
     )
     cached_store(get_quote_cache, cache_key, resp)
     return _render_agent("stocks/batch-profile", resp, format)
+
+
+@router.post(
+    "/agent/boards/batch-profile",
+    response_model=BoardsBatchProfileResponse,
+    responses={
+        422: {"model": ErrorResponse, "description": "days out of range / unsupported frequency"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="板块批量画像（trend/pivots/volume 计算指标 + 极简 realtime，THS 单源，单 frequency）",
+    markets=["csi"],
+    capabilities=[],
+)
+@map_errors
+def post_boards_batch_profile(
+    payload: BoardsBatchProfileRequest,
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
+    """Per-board fan-out: minimal realtime quote + computed features at one frequency.
+
+    Source is fixed to THS (only fetcher implementing ``get_board_realtime``;
+    board codes are source-specific so cross-source fan-out would force
+    callers to send one platecode per source anyway). ``board_type`` is
+    NOT exposed to the caller — ``ThsFetcher.get_board_realtime`` resolves
+    it from the stock_board cache with an internal fallback. Per-board
+    failures land in ``boards[i].errors{}``; the rest of the response is
+    still emitted. **No composite cache layer** (spec §5) — fetcher-level
+    TTLs already cover N+1; this layer would only add a stale-risk window.
+    """
+    days = _resolve_and_validate_days(payload.frequency, payload.days)
+    started = time.monotonic()
+    manager = get_manager()
+    profile = _FEATURE_FREQS[payload.frequency]
+    fetch_days = max(days, profile.ma60_warmup_days)
+    boards: list[BoardProfile] = []
+    n_ok = 0
+
+    for code in payload.codes:
+        errors: dict[str, str | None] = {"quote": None, "features": None}
+        quote = None
+        features = None
+        name = ""
+
+        # --- realtime quote ---
+        try:
+            q, _src = manager.get_board_realtime(code, source="ths")
+            if q is not None:
+                quote = MinimalQuote(
+                    price=q.get("price"),
+                    change_pct=q.get("change_pct"),
+                )
+        except Exception as exc:
+            logger.warning(
+                f"[agent/boards/batch-profile] quote {code} failed: {exc}",
+                exc_info=True,
+            )
+            errors["quote"] = f"{type(exc).__name__}: {exc}"
+
+        # --- computed features ---
+        try:
+            df, _src = manager.get_board_history(
+                code,
+                source="ths",
+                # NOTE: pass the PUBLIC frequency string ("5m"), NOT profile.mgr_frequency ("5").
+                # `manager.get_board_history` validates against BOARD_KLINE_FREQ_BY_SOURCE["ths"]
+                # which contains public strings ("5m" etc.); mgr_frequency is for the stock/index
+                # path (manager.get_kline_data) only. See spec §3.1 "Frequency translation note".
+                frequency=payload.frequency,
+                days=fetch_days,
+            )
+            features = BatchFeatures(**build_features(df, frequency=payload.frequency, days=days))
+        except Exception as exc:
+            logger.warning(
+                f"[agent/boards/batch-profile] features {code} {payload.frequency} failed: {exc}",
+                exc_info=True,
+            )
+            errors["features"] = f"{type(exc).__name__}: {exc}"
+
+        # --- name resolution (best-effort; helper swallows its own errors) ---
+        name = stock_board_cache.get_board_name_with_fallback(code, "ths", manager=manager) or ""
+
+        if quote is not None or features is not None:
+            n_ok += 1
+        boards.append(
+            BoardProfile(
+                code=code,
+                name=name,
+                quote=quote,
+                features=features,
+                errors=errors,
+            )
+        )
+
+    result = BoardsBatchProfileResponse(
+        frequency=payload.frequency,
+        days=days,
+        boards=boards,
+        summary=_batch_summary(len(payload.codes), n_ok, started),
+    )
+    return _render_agent("boards/batch-profile", result, format)
 
 
 def _stats_payload(agg: AggregateStats) -> dict:
