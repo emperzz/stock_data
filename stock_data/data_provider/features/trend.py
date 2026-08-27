@@ -50,7 +50,14 @@ def compute_trend(df: pd.DataFrame) -> dict:
     def _at(offset: int) -> dict:
         if len(rows) == 0:
             return {}
-        row = rows.iloc[min(offset, len(rows) - 1)]
+        if offset < 0:
+            idx = len(rows) + offset
+            if idx < 0:
+                # e.g. _at(-2) on a 1-row frame — no previous bar to look at.
+                return {}
+        else:
+            idx = min(offset, len(rows) - 1)
+        row = rows.iloc[idx]
         return row if isinstance(row, dict) else {}
 
     last_row = _at(-1)

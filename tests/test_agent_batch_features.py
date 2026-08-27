@@ -165,6 +165,22 @@ class TestTrendFeatures:
         assert out["ma"] == {}
         assert out["ma_change"] == {}
 
+    def test_single_row_df_no_raise_ma_change_none(self):
+        # 1-row frame: _at(-2) (previous bar) must not IndexError; there is
+        # no previous bar, so ma_change is all None (never fabricated 0.0).
+        df = pd.DataFrame(
+            {
+                "date": ["2026-01-05"],
+                "open": [10.0],
+                "high": [10.5],
+                "low": [9.5],
+                "close": [10.0],
+                "volume": [1_000_000],
+            }
+        )
+        out = compute_trend(df)
+        assert out["ma_change"]["ma5"] is None
+
 
 def _make_pivot_df(prices):
     """Explicit-price K-line for deterministic swing tests."""
@@ -199,6 +215,15 @@ class TestPivotFeatures:
         assert out["window_low"]["date"]
         # max_vol_bar is the max-volume bar's close (volumes increase over time)
         assert out["max_vol_bar"]["volume"] == float(df["volume"].iloc[-1])
+        # ...and its price is that bar's close (fixture: max volume = last row).
+        assert out["max_vol_bar"]["price"] == float(df["close"].iloc[-1])
+
+    def test_params_echo_defaults(self):
+        # Default compute_pivots call echoes its effective params.
+        df = _make_pivot_df([10, 12, 15, 14, 11, 9, 12, 16])
+        window = _window_by_last_days(df, 30)
+        out = compute_pivots(df, window)
+        assert out["params"] == {"pivot_window": 2, "reversal_atr_mult": 1.0, "atr_period": 14}
 
     def test_swings_alternate_with_loose_threshold(self):
         # 10→15→9→16→10 : majors high@15, low@9, high@16, pending low@10
@@ -530,4 +555,7 @@ class TestFormatMdFeatures:
                 json=_stock_request(["600519"]),
             )
         assert resp.status_code == 200
-        assert "趋势" in resp.text or "trend" in resp.text
+        assert resp.headers["content-type"].startswith("text/markdown")
+        # The three feature blocks render under their Chinese labels — pin the
+        # content-type so a JSON fallback cannot slip past this assertion.
+        assert "趋势" in resp.text and "顶底" in resp.text and "量价" in resp.text
