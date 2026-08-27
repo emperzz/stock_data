@@ -1911,3 +1911,76 @@ class CorrelationMatrixResponse(BaseModel):
     alignment: CorrelationAlignment
     matrices: CorrelationMatrices
     errors: list[CorrelationErrorItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/agent/market-stats
+# ---------------------------------------------------------------------------
+
+
+class DistributionBucket(BaseModel):
+    """One percentage bucket in the distribution (see stats.py).
+
+    Convention: left-open right-closed `[lower, upper]` for interior
+    buckets. ±∞ boundary buckets have one of {lower, upper} = None.
+    Flat bucket has lower == upper == 0.
+    """
+
+    label: str
+    lower: float | None
+    upper: float | None
+    count: int = Field(ge=0)
+
+
+class StockStats(BaseModel):
+    """Full-market A-share statistics."""
+
+    sample_size: int = Field(ge=0)
+    mean_pct: float | None
+    median_pct: float | None
+    max_pct: float | None
+    min_pct: float | None
+    up_count: int = Field(ge=0)
+    down_count: int = Field(ge=0)
+    flat_count: int = Field(ge=0)
+    bin_width: float = 3.0
+    buckets: list[DistributionBucket]
+
+
+class BoardStats(BaseModel):
+    """Full-market board statistics (THS source)."""
+
+    sample_size: int = Field(ge=0)
+    mean_pct: float | None
+    median_pct: float | None
+    max_pct: float | None
+    min_pct: float | None
+    up_count: int = Field(ge=0)
+    down_count: int = Field(ge=0)
+    flat_count: int = Field(ge=0)
+    bin_width: float = 1.0
+    source: str = ""
+    buckets: list[DistributionBucket]
+
+
+class MarketStatsErrorEntry(BaseModel):
+    """One per-block failure surfaced in errors[]."""
+
+    block: Literal["stocks", "boards"]
+    error: str
+    message: str
+
+
+class MarketStatsResponse(BaseModel):
+    """Top-level response for /agent/market-stats.
+
+    Either block may be `null` (the upstream call failed); the failure
+    is captured in `errors[]`. `summary` mirrors the contract used by
+    IndicesBatchProfileResponse / MarketContextResponse:
+    `{requested, ok, failed, elapsed_ms}`.
+    """
+
+    stocks: StockStats | None
+    boards: BoardStats | None
+    errors: list[MarketStatsErrorEntry]
+    summary: dict
