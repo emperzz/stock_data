@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from stock_data.api.routes import reset_manager
+from stock_data.data_provider.features.pivots import compute_pivots
 from stock_data.data_provider.features.trend import compute_trend
 from stock_data.data_provider.features.volume import compute_volume
 
@@ -153,3 +154,57 @@ class TestTrendFeatures:
         out = compute_trend(pd.DataFrame())
         assert out["ma"] == {}
         assert out["ma_change"] == {}
+
+
+def _make_pivot_df(prices):
+    """Explicit-price K-line for deterministic swing tests."""
+    n = len(prices)
+    dates = pd.date_range("2026-01-01", periods=n, freq="B")
+    return pd.DataFrame(
+        {
+            "date": [d.strftime("%Y-%m-%d") for d in dates],
+            "open": [p * 0.995 for p in prices],
+            "high": [p * 1.05 for p in prices],
+            "low": [p * 0.95 for p in prices],
+            "close": [float(p) for p in prices],
+            "volume": [1_000_000 + i * 100_000 for i in range(n)],
+            "amount": [0.0] * n,
+            "pct_chg": [0.0] * n,
+        }
+    )
+
+
+class TestPivotFeatures:
+    def test_window_stats(self):
+        df = _make_pivot_df([10, 12, 15, 14, 11, 9, 12, 16])
+        window = _window_by_last_days(df, 30)
+        out = compute_pivots(df, window)
+        assert out["window_high"]["price"] == 16.0
+        assert out["window_low"]["price"] == 9.0
+        assert out["window_high"]["date"]
+        # max_vol_bar is the max-volume bar's close (volumes increase over time)
+        assert out["max_vol_bar"]["volume"] == float(df["volume"].iloc[-1])
+
+    def test_swings_alternate_with_loose_threshold(self):
+        # 10→15→9→16→10 : majors high@15, low@9, high@16, pending low@10
+        df = _make_pivot_df([10, 11, 12, 15, 13, 11, 9, 11, 13, 16, 14, 12, 10])
+        window = _window_by_last_days(df, 30)
+        out = compute_pivots(df, window, pivot_window=1, atr_mult=0.2)
+        types = [s["type"] for s in out["swings"]]
+        assert types and all(a != b for a, b in zip(types, types[1:], strict=False))  # alternates
+        assert types[0] == "high"
+        assert out["pending"] is not None
+        assert out["pending"]["side"] in ("high", "low")
+
+    def test_pending_is_last_unconfirmed(self):
+        df = _make_pivot_df([10, 12, 15, 13, 11, 9, 10, 11])
+        window = _window_by_last_days(df, 30)
+        out = compute_pivots(df, window, pivot_window=1, atr_mult=0.2)
+        assert out["pending"] is not None
+        assert out["pending"]["bars"] >= 0
+
+    def test_empty_df_returns_empty(self):
+        out = compute_pivots(pd.DataFrame(), pd.DataFrame())
+        assert out["window_high"] is None
+        assert out["swings"] == []
+        assert out["pending"] is None
