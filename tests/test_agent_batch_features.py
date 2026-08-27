@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from stock_data.api.routes import reset_manager
+from stock_data.data_provider.features.trend import compute_trend
 from stock_data.data_provider.features.volume import compute_volume
 
 
@@ -119,3 +120,36 @@ class TestVolumeFeatures:
         ):
             assert key in a
         assert a["direction"] in ("up", "down")
+
+
+class TestTrendFeatures:
+    def test_ma_values_match_sma(self):
+        df = _make_kline_df(80)
+        out = compute_trend(df)
+        closes = df["close"].tolist()
+        expected_ma5 = sum(closes[-5:]) / 5
+        # indicator layer rounds MA to 2 decimals (calcSMA → round2)
+        assert out["ma"]["ma5"] == pytest.approx(round(expected_ma5, 2))
+        assert set(out["ma"].keys()) == {"ma5", "ma10", "ma15", "ma20", "ma30", "ma60"}
+        assert out["ma"]["ma60"] is not None  # warm (80 rows)
+
+    def test_ma_change_is_vs_previous_bar(self):
+        df = _make_kline_df(80)
+        out = compute_trend(df)
+        closes = df["close"].tolist()
+        ma5_cur = round(sum(closes[-5:]) / 5, 2)
+        ma5_prev = round(sum(closes[-6:-1]) / 5, 2)
+        assert out["ma_change"]["ma5"] == pytest.approx((ma5_cur - ma5_prev) / ma5_prev * 100, rel=1e-6)
+
+    def test_adx_rsi_boll_present(self):
+        out = compute_trend(_make_kline_df(120))
+        assert out["adx"] is not None
+        assert {"pdi", "mdi"} <= set(out)
+        assert set(out["rsi"].keys()) == {"rsi_6", "rsi_12", "rsi_24"}
+        assert set(out["boll"].keys()) == {"mid", "upper", "lower", "bandwidth"}
+
+    def test_empty_df_returns_empty_blocks(self):
+        import pandas as pd
+        out = compute_trend(pd.DataFrame())
+        assert out["ma"] == {}
+        assert out["ma_change"] == {}
