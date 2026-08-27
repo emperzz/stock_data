@@ -6,6 +6,10 @@ import random
 import pandas as pd
 import pytest
 
+from stock_data.api.cache import (
+    make_indices_batch_profile_cache_key,
+    make_stocks_batch_profile_cache_key,
+)
 from stock_data.api.routes import reset_manager
 from stock_data.api.schemas import BatchFeatures, MinimalQuote
 from stock_data.data_provider.features.build import build_features
@@ -281,3 +285,18 @@ class TestSchemas:
     def test_minimal_quote(self):
         q = MinimalQuote(price=1721.0, change_pct=1.2)
         assert q.model_dump() == {"price": 1721.0, "change_pct": 1.2}
+
+
+class TestCacheKeys:
+    def test_indices_key_includes_freq_and_days(self):
+        a = make_indices_batch_profile_cache_key(["000001", "399001"], "d", 60)
+        b = make_indices_batch_profile_cache_key(["399001", "000001"], "d", 60)  # order-immune
+        c = make_indices_batch_profile_cache_key(["000001", "399001"], "d", 120)  # different days
+        assert a == b
+        assert a != c
+        assert "d:60" in a
+
+    def test_stocks_key_includes_freq_and_days(self):
+        a = make_stocks_batch_profile_cache_key(["600519", "000858"], "5m", 5)
+        assert "5m:5" in a
+        assert "600519" in a and "000858" in a

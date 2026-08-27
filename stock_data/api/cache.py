@@ -505,14 +505,15 @@ def make_filter_stocks_cache_key(
     )
 
 
-def make_indices_batch_profile_cache_key(codes: list[str]) -> str:
+def make_indices_batch_profile_cache_key(codes: list[str], frequency: str, days: int) -> str:
     """Cache key for GET /agent/indices/batch-profile.
 
     Codes are SORTED so the same set in different input order collapses
-    to one cache entry (the response is then reordered to the input
-    order on hit — see agent.get_indices_batch_profile).
+    to one cache entry (the response is reordered to the input order on
+    hit). `frequency` + `days` are part of the key because the features
+    differ per (frequency, days) pair.
     """
-    return _make_code_set_cache_key("indices_batch_profile", codes)
+    return f"agent_indices_batch_profile:{frequency}:{days}:" + ",".join(sorted(codes))
 
 
 def make_market_context_cache_key(flash_limit: int, trade_date: str, session: str) -> str:
@@ -526,19 +527,13 @@ def make_market_context_cache_key(flash_limit: int, trade_date: str, session: st
     return f"agent_market_context:{flash_limit}:{trade_date}:{session}"
 
 
-def make_stocks_batch_profile_cache_key(codes: list[str], aspects: list[str]) -> str:
+def make_stocks_batch_profile_cache_key(codes: list[str], frequency: str, days: int) -> str:
     """Cache key for POST /agent/stocks/batch-profile.
 
-    Both args are SORTED so the same (set, set) pair collapses to one
-    cache entry; the response is reordered to input order on hit.
-    Aspects are deduped (Pydantic Literal) so set-equality is well-defined.
+    Same sorting + (frequency, days) inclusion contract as the indices
+    variant.
     """
-    return (
-        "agent_stocks_batch_profile:"
-        + ",".join(sorted(codes))
-        + "|"
-        + ",".join(sorted(set(aspects)))
-    )
+    return f"agent_stocks_batch_profile:{frequency}:{days}:" + ",".join(sorted(codes))
 
 
 def make_market_stats_cache_key(include_boards: bool) -> str:
