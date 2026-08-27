@@ -7,9 +7,9 @@ imports — easy to unit-test with synthetic value lists.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import statistics
-from typing import Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

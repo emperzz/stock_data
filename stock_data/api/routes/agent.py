@@ -44,6 +44,14 @@ from starlette.responses import Response
 from ...data_provider.base import DataFetchError
 from ...data_provider.persistence import board as stock_board_cache
 from ...data_provider.persistence import trade_calendar
+from ...data_provider.utils.stats import (
+    BOARD_BUCKET_BIN_WIDTH,
+    STOCK_BUCKET_BIN_WIDTH,
+    AggregateStats,
+    build_board_buckets,
+    build_stock_buckets,
+    compute_aggregate,
+)
 from ..cache import (
     cached_lookup,
     cached_store,
@@ -58,11 +66,11 @@ from ..cache import (
 )
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
-    BoardStats,
     BoardsOverlapPair,
     BoardsOverlapRequest,
     BoardsOverlapResponse,
     BoardsOverlapSet,
+    BoardStats,
     DistributionBucket,
     ErrorResponse,
     FilterStocksMatchedStock,
@@ -84,11 +92,11 @@ from ..schemas import (
     StockBatchProfileRequest,
     StockBatchProfileResponse,
     StockQuote,
-    StockStats,
     StocksBoardOverlapPair,
     StocksBoardOverlapRequest,
     StocksBoardOverlapResponse,
     StocksBoardOverlapStockSet,
+    StockStats,
 )
 from ._router import router
 from .errors import map_errors
@@ -98,13 +106,6 @@ from .helpers import (
     _index_quote_from,
     _resolve_index_name,
     get_manager,
-)
-from ...data_provider.utils.stats import (
-    BOARD_BUCKET_BIN_WIDTH,
-    STOCK_BUCKET_BIN_WIDTH,
-    build_board_buckets,
-    build_stock_buckets,
-    compute_aggregate,
 )
 
 logger = logging.getLogger(__name__)
@@ -995,7 +996,7 @@ def post_stocks_batch_profile(
 
 
 def _stats_block_from_aggregate(
-    agg: "AggregateStats", *, kind: str, source: str = ""
+    agg: AggregateStats, *, kind: str, source: str = ""
 ) -> "StockStats | BoardStats":
     """Convert an AggregateStats dataclass into the StockStats / BoardStats
     Pydantic model that matches `kind`.

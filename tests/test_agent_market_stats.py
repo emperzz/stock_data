@@ -13,7 +13,6 @@ from stock_data.api.routes import agent as agent_module
 from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.core.types import UnifiedRealtimeQuote
 
-
 # ----- fixtures -----
 
 
@@ -21,11 +20,11 @@ from stock_data.data_provider.core.types import UnifiedRealtimeQuote
 def client():
     """Fresh FastAPI TestClient per test; cache cleared by
     ENABLE_API_CACHE off + key isolation in each test."""
-    from stock_data.server import app
-
     # Disable cache for the duration of these tests so each one starts
     # cold. Set the env var BEFORE importing app — see test_setup below.
     import os
+
+    from stock_data.server import app
     os.environ["ENABLE_API_CACHE"] = "false"
     return TestClient(app)
 
@@ -242,11 +241,11 @@ def test_market_stats_cache_hit_skips_upstream(monkeypatch):
     the route's `cached_lookup` actually finds an entry on the second
     call.
     """
-    import os
     # Override the cache-disabled default just for THIS test.
     monkeypatch.setenv("ENABLE_API_CACHE", "true")
     # Force a fresh app import so the env var takes effect.
     import importlib
+
     import stock_data.server as server_module
     importlib.reload(server_module)
     fresh_client = TestClient(server_module.app)

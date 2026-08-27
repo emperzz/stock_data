@@ -4,15 +4,9 @@ No I/O, no fetcher. The whole file is fast (< 100ms total).
 """
 import math
 
-import pytest
-
 from stock_data.data_provider.utils.stats import (
-    AggregateStats,
     BOARD_BUCKET_BIN_WIDTH,
-    BOARD_BUCKET_EDGES,
-    DistributionBucket,
     STOCK_BUCKET_BIN_WIDTH,
-    STOCK_BUCKET_EDGES,
     build_board_buckets,
     build_stock_buckets,
     compute_aggregate,
