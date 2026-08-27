@@ -25,9 +25,11 @@ this is:
   bucket, and count client-side.
 - `/api/v1/boards/{code}/quote` only returns ONE board's quote — no
   batched all-boards quote endpoint.
-- `manager.get_all_boards(source='ths', include_quote=True)` returns
-  the full board list WITH quotes, but the agent still has to bucket /
-  count client-side.
+- `manager.get_all_boards(source='ths', include_quote=True)` (and its
+  persistence-layer wrapper `stock_board_cache.get_board_list(board_type=None,
+  source='ths', include_quote=True, manager=manager)`) returns the full
+  board list WITH quotes, but the agent still has to bucket / count
+  client-side.
 
 This endpoint closes that loop: **fetch once, aggregate server-side,
 return summary + bucket distribution** for both stocks and boards in
@@ -310,7 +312,8 @@ def get_market_stats(
     ),
 ) -> Response:
     """Per-block fan-out: stocks via get_realtime_quotes('csi');
-    boards via stock_board_cache.get_all_boards(source='ths', include_quote=True).
+    boards via stock_board_cache.get_board_list(board_type=None,
+    source='ths', include_quote=True, manager=manager).
     Per-block error isolation: a single upstream failure sets that
     block to null and surfaces the exception in errors[]; the other
     block continues normally. Cached 60s via get_quote_cache."""
@@ -370,8 +373,11 @@ def get_market_stats(
     # --- boards block (skipped when include_boards=false) ---
     if include_boards:
         try:
-            boards, src = stock_board_cache.get_all_boards(
-                source="ths", include_quote=True, manager=manager
+            boards, src = stock_board_cache.get_board_list(
+                board_type=None,
+                source="ths",
+                include_quote=True,
+                manager=manager,
             )
             values = [
                 b.get("change_pct") for b in (boards or [])
@@ -518,8 +524,10 @@ loop.
 - **Don't** reuse `manager.get_realtime_quote(code)` per stock. Use
   `manager.get_realtime_quotes('csi')` — single upstream call.
 - **Don't** call `manager.get_board_realtime` per board. Use
-  `stock_board_cache.get_all_boards(source='ths', include_quote=True)`
-  — single upstream call.
+  `stock_board_cache.get_board_list(board_type=None, source='ths',
+  include_quote=True, manager=manager)` — single upstream call routed
+  through the persistence layer (cache + ZZSHARE↔THS merge +
+  effective_source plumbing).
 - **Don't** add `?bin_width=` / `?max_abs_pct=` query params in v1.
   Hard-code per spec §3.1. YAGNI — add later if a client actually needs
   them.

@@ -6,7 +6,7 @@
 
 **Architecture:** Pure-compute helper module `stock_data/data_provider/utils/stats.py` (no I/O, easy to unit-test). New Pydantic response models in `stock_data/api/schemas.py`. New cache key in `stock_data/api/cache.py`. New route handler in `stock_data/api/routes/agent.py` (extends existing module, same file as the other 6 agent endpoints). New MD template function in the same file. New pytest file `tests/test_agent_market_stats.py`. Two additional small test files (pure-compute unit tests + cache-key tests). No new fetcher, no new manager method, no new `DataCapability` flag.
 
-**Tech Stack:** FastAPI, Pydantic v2, stdlib `statistics.median`, stdlib `dataclasses`. The server already has `manager.get_realtime_quotes("csi")` (single upstream call for full-market stock quotes) and `stock_board_cache.get_all_boards(source="ths", include_quote=True)` (single upstream call for full THS board list + quotes).
+**Tech Stack:** FastAPI, Pydantic v2, stdlib `statistics.median`, stdlib `dataclasses`. The server already has `manager.get_realtime_quotes("csi")` (single upstream call for full-market stock quotes) and `stock_board_cache.get_board_list(board_type=None, source="ths", include_quote=True, manager=manager)` (single upstream call routed through the persistence layer for full THS board list + quotes).
 
 ## Global Constraints
 
@@ -15,7 +15,7 @@
 - **Decorator order on new routes:** `@router.get → @endpoint_meta → @map_errors → def` (per CLAUDE.md "Anti-Patterns: Don't reorder decorators"). The route MUST be `@map_errors`-decorated (NOT `@cache_endpoint`-decorated); per-block error isolation is implemented via manual `try/except` inside the handler body.
 - **`@endpoint_meta(capabilities=[])`:** Empty list — same as the 6 existing agent endpoints. NO new `DataCapability` flag.
 - **Per-block error isolation:** A single upstream failure sets that block to `null` and surfaces the exception in `errors[]`; do NOT abort the whole response.
-- **No hardcoded fetcher classes** in route — always go through `manager.get_realtime_quotes` and `stock_board_cache.get_all_boards`.
+- **No hardcoded fetcher classes** in route — always go through `manager.get_realtime_quotes` and `stock_board_cache.get_board_list`.
 - **Stock code canonical form:** `normalize_stock_code()` returns bare 6-digit; never leak outbound suffixes (`.SH` / `.SZ`) into response labels.
 - **Frequent commits:** Commit after each task. Use `feat:` / `test:` / `docs:` / `chore:` prefixes.
 
@@ -70,7 +70,6 @@ from stock_data.data_provider.utils.stats import (
     AggregateStats,
     BOARD_BUCKET_BIN_WIDTH,
     BOARD_BUCKET_EDGES,
-    BOARD_BUCKET_BIN_WIDTH as _DUP,  # noqa: F401 — silence re-export check
     DistributionBucket,
     STOCK_BUCKET_BIN_WIDTH,
     STOCK_BUCKET_EDGES,
@@ -320,10 +319,27 @@ _EPS = 1e-9
 
 
 def _label(left: float | None, right: float | None) -> str:
-    """Render a bucket label matching the JSON example in the spec."""
+    """Render a bucket label matching the JSON example in the spec.
+
+    Convention:
+      - interior buckets → "(lo, hi]" (left-open right-closed)
+      - upper = 0 buckets → "(lo%, 0)" (right-open, no '+' sign on 0)
+        because flat-bucket {0} is checked first; right-open prevents
+        the visual confusion of "value=0 in (-3%, 0]" plus flat bucket
+      - upper = None → "+∞" (right-closed, +infinity)
+      - lower = None → "-∞" (left-open, -infinity)
+    """
     lo = "-∞" if left is None else f"{left:+.0f}%"
-    hi = "+∞" if right is None else f"{right:+.0f}%"
-    return f"({lo}, {hi}]"
+    if right is None:
+        hi = "+∞"
+        bracket = "]"
+    elif right == 0.0:
+        hi = "0"     # no '+' sign; spec example shows "(-3%, 0)"
+        bracket = ")" # right-open (flat bucket absorbs 0)
+    else:
+        hi = f"{right:+.0f}%"
+        bracket = "]"
+    return f"({lo}, {hi}{bracket}"
 
 
 def build_stock_buckets() -> list[DistributionBucket]:
@@ -872,9 +888,16 @@ def _patch_manager(monkeypatch, *, quotes, get_all_boards_return):
 
 
 def _patch_board_cache(monkeypatch, *, all_boards_payload):
-    """Patch stock_board_cache.get_all_boards used inside the route."""
+    """Patch stock_board_cache.get_board_list used inside the route.
+
+    NOTE: the route calls ``stock_board_cache.get_board_list(...)`` — not
+    ``manager.get_all_boards(...)``. Patching the wrong attribute would
+    silently pass tests while the route crashes at runtime, so we patch
+    the right one and (in test_format_md_returns_markdown) also assert
+    via the patched fake_cache.get_board_list call count.
+    """
     fake_cache = MagicMock()
-    fake_cache.get_all_boards.return_value = all_boards_payload
+    fake_cache.get_board_list.return_value = all_boards_payload
     monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
     return fake_cache
 
@@ -930,7 +953,7 @@ def test_boards_upstream_failure_does_not_affect_stocks(client, monkeypatch):
     quotes = [_make_quote("600000", 1.0)]
     _patch_manager(monkeypatch, quotes=quotes, get_all_boards_return=([], ""))
     fake_cache = MagicMock()
-    fake_cache.get_all_boards.side_effect = ValueError("cid_unresolved")
+    fake_cache.get_board_list.side_effect = ValueError("cid_unresolved")
     monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
 
     resp = client.get("/api/v1/agent/market-stats")
@@ -948,7 +971,7 @@ def test_both_blocks_fail(client, monkeypatch):
     fake_manager.get_realtime_quotes.side_effect = DataFetchError("stocks down")
     monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
     fake_cache = MagicMock()
-    fake_cache.get_all_boards.side_effect = RuntimeError("boards down")
+    fake_cache.get_board_list.side_effect = RuntimeError("boards down")
     monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
 
     resp = client.get("/api/v1/agent/market-stats")
@@ -981,8 +1004,8 @@ def test_include_boards_false_skips_boards_upstream(client, monkeypatch):
     assert body["errors"] == []
     assert body["summary"]["requested"] == 1
     assert body["summary"]["ok"] == 1
-    # Boards upstream NEVER called — fake_cache.get_all_boards.assert_not_called()
-    fake_cache.get_all_boards.assert_not_called()
+    # Boards upstream NEVER called — fake_cache.get_board_list.assert_not_called()
+    fake_cache.get_board_list.assert_not_called()
 
 
 # ----- format dispatch -----
@@ -1019,6 +1042,55 @@ def test_cache_key_includes_include_boards():
     assert make_market_stats_cache_key(True) == "agent_market_stats:True"
     assert make_market_stats_cache_key(False) == "agent_market_stats:False"
     assert make_market_stats_cache_key(True) != make_market_stats_cache_key(False)
+
+
+def test_market_stats_cache_hit_skips_upstream(monkeypatch):
+    """Second call within 60s does NOT re-invoke upstream methods.
+
+    Pins the cache wiring in `cached_lookup` / `cached_store`. Without
+    this test, a regression that bypasses the cache layer would pass
+    every other test in this file.
+
+    Uses a fresh client built without the cache-disabled override so
+    the route's `cached_lookup` actually finds an entry on the second
+    call.
+    """
+    import os
+    # Override the cache-disabled default just for THIS test.
+    monkeypatch.setenv("ENABLE_API_CACHE", "true")
+    # Force a fresh app import so the env var takes effect.
+    import importlib
+    import stock_data.server as server_module
+    importlib.reload(server_module)
+    fresh_client = TestClient(server_module.app)
+
+    quotes = [_make_quote("600000", 1.0)]
+    boards = [{"code": "BK0001", "name": "X", "change_pct": 0.5}]
+    fake_manager = MagicMock()
+    fake_manager.get_realtime_quotes.return_value = (quotes, "akshare")
+    monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
+    fake_cache = MagicMock()
+    fake_cache.get_board_list.return_value = (boards, "ths")
+    monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
+
+    from stock_data.api.cache import get_quote_cache
+    get_quote_cache().clear()
+
+    # First call → upstream invoked
+    resp1 = fresh_client.get("/api/v1/agent/market-stats")
+    assert resp1.status_code == 200
+    assert fake_manager.get_realtime_quotes.call_count == 1
+    assert fake_cache.get_board_list.call_count == 1
+
+    # Second call within 60s → cache hit, NO upstream calls
+    resp2 = fresh_client.get("/api/v1/agent/market-stats")
+    assert resp2.status_code == 200
+    assert resp2.json() == resp1.json()  # bit-for-bit identical payload
+    assert fake_manager.get_realtime_quotes.call_count == 1  # still 1
+    assert fake_cache.get_board_list.call_count == 1        # still 1
+
+    # Restore cache-disabled state so other tests don't see TTL leaks.
+    monkeypatch.setenv("ENABLE_API_CACHE", "false")
 ```
 
 > **Note on fixture:** `client` fixture sets `ENABLE_API_CACHE=false` so each test starts cold. The `_clear_quote_cache` autouse fixture is a belt-and-suspenders defense against cross-test TTL leaks.
@@ -1087,15 +1159,45 @@ Find the last route handler (the `def post_stocks_batch_profile(...)` block) and
 
 ```python
 def _stats_block_from_aggregate(
-    agg, *, bin_width_default: float, source: str = ""
-) -> dict:
-    """Convert an AggregateStats dataclass into the dict shape the
-    StockStats / BoardStats Pydantic models expect.
+    agg: "AggregateStats", *, kind: str, source: str = ""
+) -> "StockStats | BoardStats":
+    """Convert an AggregateStats dataclass into the StockStats / BoardStats
+    Pydantic model that matches `kind`.
 
-    Splits on `bin_width_default` to pick the right model:
-      3.0 → StockStats (no source field)
-      1.0 → BoardStats (carries source)
+    Dispatches on a literal discriminator (``"stocks"`` / ``"boards"``) rather
+    than a numeric constant — easier to read at the call site and not fragile
+    to future bin-width changes.
+
+    Args:
+        agg: the AggregateStats dataclass from compute_aggregate().
+        kind: ``"stocks"`` → StockStats (no source field);
+              ``"boards"`` → BoardStats (carries source).
+        source: the source label forwarded to BoardStats.source
+                (ignored when kind == "stocks").
     """
+    common = {
+        "sample_size": agg.sample_size,
+        "mean_pct": agg.mean_pct,
+        "median_pct": agg.median_pct,
+        "max_pct": agg.max_pct,
+        "min_pct": agg.min_pct,
+        "up_count": agg.up_count,
+        "down_count": agg.down_count,
+        "flat_count": agg.flat_count,
+        "bin_width": agg.bin_width,
+        "buckets": [
+            DistributionBucket(
+                label=b.label,
+                lower=b.lower,
+                upper=b.upper,
+                count=b.count,
+            )
+            for b in agg.buckets
+        ],
+    }
+    if kind == "boards":
+        return BoardStats(**common, source=source)
+    return StockStats(**common)
     common = {
         "sample_size": agg.sample_size,
         "mean_pct": agg.mean_pct,
@@ -1147,7 +1249,7 @@ def get_market_stats(
     """Per-block fan-out with per-block error isolation.
 
     stocks block:  manager.get_realtime_quotes('csi') (single upstream call)
-    boards block:  stock_board_cache.get_all_boards(source='ths', include_quote=True)
+    boards block:  stock_board_cache.get_board_list(board_type=None, source='ths', include_quote=True, manager=manager)
                    (single upstream call, persistence-routed)
 
     A single upstream failure sets that block to ``null`` and surfaces
@@ -1179,7 +1281,7 @@ def get_market_stats(
             bin_width=STOCK_BUCKET_BIN_WIDTH,
             buckets_template=build_stock_buckets(),
         )
-        stocks_stats = _stats_block_from_aggregate(agg, bin_width_default=STOCK_BUCKET_BIN_WIDTH)
+        stocks_stats = _stats_block_from_aggregate(agg, kind="stocks")
         ok += 1
     except Exception as exc:
         logger.warning(
@@ -1196,12 +1298,16 @@ def get_market_stats(
     # --- boards block (skipped when include_boards=false) ---
     if include_boards:
         try:
-            boards, src = stock_board_cache.get_all_boards(
-                source="ths", include_quote=True, manager=manager
+            boards, src = stock_board_cache.get_board_list(
+                board_type=None,
+                source="ths",
+                include_quote=True,
+                manager=manager,
             )
             values = [
                 b.get("change_pct") for b in (boards or [])
                 if isinstance(b.get("change_pct"), (int, float))
+                and not isinstance(b.get("change_pct"), bool)
             ]
             agg = compute_aggregate(
                 values,
@@ -1209,7 +1315,7 @@ def get_market_stats(
                 buckets_template=build_board_buckets(),
             )
             boards_stats = _stats_block_from_aggregate(
-                agg, bin_width_default=BOARD_BUCKET_BIN_WIDTH, source=src or "ths"
+                agg, kind="boards", source=src or "ths"
             )
             ok += 1
         except Exception as exc:
@@ -1238,7 +1344,7 @@ def get_market_stats(
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_agent_market_stats.py -v -k "not format_md"`
 
-Expected: 9 tests pass (happy path + 3 error-isolation + include_boards false + 2 cache-key tests + invalid format → 422).
+Expected: 10 tests pass (happy path + 3 error-isolation + include_boards false + 4 cache tests including cache-hit + invalid format → 422).
 
 The `test_format_md_returns_markdown` test will FAIL because `render_market_stats_as_md` doesn't exist yet in `_MD_TEMPLATES`. That's expected; it's the gate for Task 5.
 
@@ -1254,7 +1360,7 @@ the other). 60s TTL via get_quote_cache. ?format=md dispatch through
 _render_agent (template added in next commit).
 
 - stocks block: manager.get_realtime_quotes('csi')
-- boards block: stock_board_cache.get_all_boards(source='ths', include_quote=True)
+- boards block: stock_board_cache.get_board_list(board_type=None, source='ths', include_quote=True, manager=manager)
 - ?include_boards=false skips the boards upstream entirely
 - summary uses _batch_summary helper (requested/ok/failed/elapsed_ms)
 - failures cached for 60s too (avoid hammering a broken upstream)
@@ -1354,7 +1460,7 @@ _MD_TEMPLATES: dict[str, Callable] = {
 - [ ] **Step 5.3: Run all integration tests; expect all PASS**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_agent_market_stats.py -v`
-Expected: all tests pass (10 tests: 9 from Task 4 + 1 MD test).
+Expected: all tests pass (11 tests: 10 from Task 4 + 1 MD test).
 
 - [ ] **Step 4 (sanity): also re-run the existing agent test suite to confirm no regressions**
 
@@ -1392,7 +1498,7 @@ Search for `### Agent Batch API (`/api/v1/agent/*`)` and read the surrounding ta
 Add a new row to the table inside that section:
 
 ```
-| `GET /agent/market-stats` | 全市场涨幅统计（个股 + 板块；均值/中位/最高/最低/上涨下跌家数 + 桶形数据）。 | `manager.get_realtime_quotes('csi')` + `stock_board_cache.get_all_boards(source='ths', include_quote=True)`; 60s TTLCache via `get_quote_cache`. |
+| `GET /agent/market-stats` | 全市场涨幅统计（个股 + 板块；均值/中位/最高/最低/上涨下跌家数 + 桶形数据）。 | `manager.get_realtime_quotes('csi')` + `stock_board_cache.get_board_list(board_type=None, source='ths', include_quote=True, manager=manager)`; 60s TTLCache via `get_quote_cache`; per-block 错误隔离。 |
 ```
 
 - [ ] **Step 6.3: Verify with grep**
