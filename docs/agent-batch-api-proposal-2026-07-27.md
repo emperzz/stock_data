@@ -95,7 +95,7 @@ lb_count: int | None = None           # 连板数（涨停时才有）
 
 **节省**：stock-picking §4 步骤 6 当前 = 1 次 board/stocks + 1 次 zt-pools；改为 = 1 次。
 
-### 3.2 agent 端点（6 个）
+### 3.2 agent 端点（7 个）
 
 > **所有 6 个 agent 端点统一支持 `?format=json|md`**（详见 §2.2）。默认 JSON，`?format=md` 触发 markdown 文本输出（`Content-Type: text/markdown; charset=utf-8`）。MD 模板函数与端点同文件，详见 §4。
 
@@ -405,6 +405,76 @@ lb_count: int | None = None           # 连板数（涨停时才有）
 - 复用 `stock_board_cache` 既有缓存层
 
 **节省**：stock-picking §4 步骤 6 从 "**N 次 /quote + 手工阈值比对 + 手工 max_gain**" → 1 call（N = 板块内候选数）。
+
+#### 3.2.7 `POST /api/v1/agent/boards/batch-profile` — 板块画像（added 2026-08-27）
+
+**为什么**:stock-picking §4 步骤 5 候选板块 funnel 后,agent 需要看每个候选板块的"近期趋势/量价/顶底"画像,而不是成分股。当前 agent 必须 N 次 hit `/boards/{code}/history?source=ths&frequency=d` 再手算——既慢又费 token。`market-recap` §4 步骤 4 也有同样的需求。本节把 boards 拉进 batch-profile 家族(stocks / indices → boards),补齐"标的画像"维度。
+
+**端点**:`POST /api/v1/agent/boards/batch-profile`
+
+**请求体**:
+
+```json
+{
+  "codes": ["885595", "881270"],
+  "frequency": "d",
+  "days": 60
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `codes` | `list[str]` (1-5) | 是 | THS platecode (885xxx concept / 881xxx industry) |
+| `frequency` | `Literal[d/w/m/1m/5m/15m/30m/60m]` | 否 (默认 `d`) | 同 `_FEATURE_FREQS` |
+| `days` | `int ≥ 2` | 否 | per-frequency 默认 + 范围 422 校验,沿用 `_resolve_and_validate_days` |
+| `format` (query) | `json`/`md` | 否 (默认 `json`) | 同其他 agent 端点 |
+
+**响应**(JSON):
+
+```json
+{
+  "frequency": "d",
+  "days": 60,
+  "boards": [
+    {
+      "code": "885595",
+      "name": "人形机器人",
+      "quote": {"price": 1234.5, "change_pct": 1.23},
+      "features": {
+        "trend":  {"ma": {...}, "ma_change": {...}, "adx": ..., "rsi": {...}, "boll": {...}},
+        "pivots": {"window_high": {...}, "swings": [...], "pending": {...}, "params": {...}},
+        "volume": {"latest_volume": ..., "vol_ratio_5": ..., "z_anomalies": [...]}
+      },
+      "errors": {"quote": null, "features": null}
+    }
+  ],
+  "summary": {"requested": 2, "ok": 2, "failed": 0, "elapsed_ms": 187}
+}
+```
+
+形态完全镜像 `/agent/indices/batch-profile`(`{frequency, days, boards[i].{code,name,quote,features,errors{}}, summary}`),只是 `boards[i].code` 是 THS platecode 而非 index code。
+
+**Source 维度**:固定 `ths` 单源。理由:
+1. 只有 `ThsFetcher` 实现了 `get_board_realtime`(其他 fetcher 会 raise ValueError → 422)
+2. board codes 跨源不兼容(THS platecode 885xxx / 881xxx vs EastMoney BKxxxx)
+3. THS 拥有 8 个频率全集合(`d/w/m/1m/5m/15m/30m/60m`)
+
+**Board type 处理**:不暴露给 caller。`ThsFetcher.get_board_realtime(board_code, board_type=None)` 内部从 `stock_board` cache 推断,cache miss 时调用 `get_board_metadata` 备用。失败 → `errors["quote"] = "DataFetchError: ..."`。
+
+**缓存**:**没有 composite cache 层**——这是与 stocks/indices batch-profile 的有意偏离:
+- 底层 `manager.get_board_realtime` 走 `get_quote_cache`(短期 TTL);`manager.get_board_history` 走 `get_history_cache`(per-frequency 多日 TTL)
+- board 数据 intraday 时效性敏感,加 composite cache 反而引入 60s stale 风险
+- `build_features` 是纯计算,sub-ms,在 N+1 网络往返面前不构成瓶颈
+
+Stocks / indices batch-profile 的 composite cache 撤除跟踪在 spec §8.1 Future Work,**不**在此 PR 范围内。
+
+**Manager 频率转换陷阱**:`manager.get_board_history` 验证 `BOARD_KLINE_FREQ_BY_SOURCE["ths"]`,其中包含**公开字符串**(`"5m"` 而非 `"5"`)。`_FEATURE_FREQS[frequency].mgr_frequency` 是为 stock/index 路径(`manager.get_kline_data`)设计的——**board 路径必须直接传 `frequency` 公开字符串**,否则每个分钟级请求 raise ValueError → 400。详见 `docs/superpowers/specs/2026-08-27-boards-batch-profile-design.md` §3.1 "Frequency translation note"。
+
+**响应形态**:沿用 `IndexProfile`(无 `info` / `boards` 子 aspect——boards 没有"公司画像")。entry-level 健康通过 `errors{}` 中哪些 key 为 null 来表达。
+
+**未抽新 helper**:handler 直接镜像 `get_indices_batch_profile` 循环骨架(2-aspect, errors-dict),仅替换数据源。考虑过 `_aspect_try` 风格 helper 但因 stocks 用 `list[StockBatchAspectError]` 而 indices 用 `dict` 形态不兼容而放弃。
+
+**节省**:stock-picking §4 步骤 5 从 "**N 次 /boards/{code}/history + 手工 features**" → 1 call(N = 候选板块数)。
 
 ---
 
