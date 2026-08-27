@@ -441,6 +441,7 @@ All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. 
 | `POST /agent/stocks/board-overlap` | Pairwise board-set intersection + Jaccard across 2-10 stocks. | per-code `stock_board_cache.get_stock_memberships(sources=['ths'])` |
 | `POST /agent/boards/filter-stocks` | Server-side numeric filter (turnover / change_pct / amount / mcap / max_gain_pct) on a board's constituents. | `stock_board_cache.get_board_stocks(source=<user>, include_quote=True, top_n=payload.limit or 50)` |
 | `POST /agent/correlation/matrix` | Pairwise Pearson + Spearman matrix across stocks and boards; supports d/w/m/1-60m frequencies. | `manager.get_kline_data` + `manager.get_board_history` per asset, then inner-join + `pct_change(fill_method=None)` |
+| `GET /agent/market-stats` | 全市场涨幅统计（个股 + 板块；均值/中位/最高/最低/上涨下跌家数 + 桶形数据）。 | `manager.get_realtime_quotes('csi')` + `stock_board_cache.get_board_list(board_type=None, source='ths', include_quote=True, manager=manager)`; 60s TTLCache via `get_quote_cache`; per-block 错误隔离。 |
 
 ### Design contract (don't violate these without a spec change)
 
