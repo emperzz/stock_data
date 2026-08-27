@@ -15,6 +15,7 @@ Covers: stock_data/api/cache.py
 - make_reports_cache_key
 - make_announcements_cache_key
 - make_pools_cache_key
+- make_market_stats_cache_key
 """
 
 from stock_data.api.cache import (
@@ -28,6 +29,7 @@ from stock_data.api.cache import (
     make_holder_num_cache_key,
     make_hot_topics_cache_key,
     make_margin_cache_key,
+    make_market_stats_cache_key,
     make_north_flow_cache_key,
     make_pools_cache_key,
     make_reports_cache_key,
@@ -205,6 +207,16 @@ class TestCacheKeyBuilders:
         assert make_pools_cache_key("zt", "2024-01-15") == "pool:zt:2024-01-15"
         assert make_pools_cache_key("dt", "2024-01-15") == "pool:dt:2024-01-15"
         assert make_pools_cache_key("zbgc", "2024-01-15") == "pool:zbgc:2024-01-15"
+
+    def test_market_stats_cache_key_includes_include_boards(self):
+        assert make_market_stats_cache_key(True) == "agent_market_stats:True"
+        assert make_market_stats_cache_key(False) == "agent_market_stats:False"
+
+    def test_market_stats_cache_keys_are_distinct(self):
+        """Two calls with different include_boards produce different entries —
+        critical so the boards-skipped response doesn't pollute the
+        boards-included cache."""
+        assert make_market_stats_cache_key(True) != make_market_stats_cache_key(False)
 
 
 class TestCacheKeyUniqueness:

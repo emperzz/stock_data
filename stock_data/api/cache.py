@@ -539,3 +539,13 @@ def make_stocks_batch_profile_cache_key(codes: list[str], aspects: list[str]) ->
         + "|"
         + ",".join(sorted(set(aspects)))
     )
+
+
+def make_market_stats_cache_key(include_boards: bool) -> str:
+    """Cache key for GET /api/v1/agent/market-stats.
+
+    Independent of ``format`` (json/md share one cache entry, same
+    convention as every other agent endpoint). 60s TTL via
+    ``get_quote_cache``.
+    """
+    return f"agent_market_stats:{include_boards}"
