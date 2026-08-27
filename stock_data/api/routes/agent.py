@@ -52,15 +52,18 @@ from ..cache import (
     make_filter_stocks_cache_key,
     make_indices_batch_profile_cache_key,
     make_market_context_cache_key,
+    make_market_stats_cache_key,
     make_stocks_batch_profile_cache_key,
     make_stocks_board_overlap_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
+    BoardStats,
     BoardsOverlapPair,
     BoardsOverlapRequest,
     BoardsOverlapResponse,
     BoardsOverlapSet,
+    DistributionBucket,
     ErrorResponse,
     FilterStocksMatchedStock,
     FilterStocksRequest,
@@ -74,11 +77,14 @@ from ..schemas import (
     MarketContextLimitPools,
     MarketContextMessages,
     MarketContextResponse,
+    MarketStatsErrorEntry,
+    MarketStatsResponse,
     StockBatchAspectError,
     StockBatchProfileEntry,
     StockBatchProfileRequest,
     StockBatchProfileResponse,
     StockQuote,
+    StockStats,
     StocksBoardOverlapPair,
     StocksBoardOverlapRequest,
     StocksBoardOverlapResponse,
@@ -92,6 +98,13 @@ from .helpers import (
     _index_quote_from,
     _resolve_index_name,
     get_manager,
+)
+from ...data_provider.utils.stats import (
+    BOARD_BUCKET_BIN_WIDTH,
+    STOCK_BUCKET_BIN_WIDTH,
+    build_board_buckets,
+    build_stock_buckets,
+    compute_aggregate,
 )
 
 logger = logging.getLogger(__name__)
@@ -979,6 +992,165 @@ def post_stocks_batch_profile(
     )
     cached_store(get_quote_cache, cache_key, resp)
     return _render_agent("stocks/batch-profile", resp, format)
+
+
+def _stats_block_from_aggregate(
+    agg: "AggregateStats", *, kind: str, source: str = ""
+) -> "StockStats | BoardStats":
+    """Convert an AggregateStats dataclass into the StockStats / BoardStats
+    Pydantic model that matches `kind`.
+
+    Dispatches on a literal discriminator (``"stocks"`` / ``"boards"``) rather
+    than a numeric constant — easier to read at the call site and not fragile
+    to future bin-width changes.
+
+    Args:
+        agg: the AggregateStats dataclass from compute_aggregate().
+        kind: ``"stocks"`` → StockStats (no source field);
+              ``"boards"`` → BoardStats (carries source).
+        source: the source label forwarded to BoardStats.source
+                (ignored when kind == "stocks").
+    """
+    common = {
+        "sample_size": agg.sample_size,
+        "mean_pct": agg.mean_pct,
+        "median_pct": agg.median_pct,
+        "max_pct": agg.max_pct,
+        "min_pct": agg.min_pct,
+        "up_count": agg.up_count,
+        "down_count": agg.down_count,
+        "flat_count": agg.flat_count,
+        "bin_width": agg.bin_width,
+        "buckets": [
+            DistributionBucket(
+                label=b.label,
+                lower=b.lower,
+                upper=b.upper,
+                count=b.count,
+            )
+            for b in agg.buckets
+        ],
+    }
+    if kind == "boards":
+        return BoardStats(**common, source=source)
+    return StockStats(**common)
+
+
+@router.get(
+    "/agent/market-stats",
+    response_model=MarketStatsResponse,
+    responses={500: {"model": ErrorResponse, "description": "Server error"}},
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="市场全量统计（个股+板块涨幅分布 + 桶形数据）",
+    markets=["csi"],
+    capabilities=[],                          # agent aggregation, no single capability
+)
+@map_errors
+def get_market_stats(
+    include_boards: bool = Query(
+        default=True,
+        description="是否包含板块块;false 时只返回个股块 (无板块上游调用)",
+    ),
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
+    """Per-block fan-out with per-block error isolation.
+
+    stocks block:  manager.get_realtime_quotes('csi') (single upstream call)
+    boards block:  stock_board_cache.get_board_list(board_type=None, source='ths', include_quote=True, manager=manager)
+                   (single upstream call, persistence-routed)
+
+    A single upstream failure sets that block to ``null`` and surfaces
+    the exception in ``errors[]``; the other block continues normally.
+    Cached 60s via ``get_quote_cache`` (one entry shared between json/md).
+    """
+    cache_key = make_market_stats_cache_key(include_boards)
+    hit = cached_lookup(get_quote_cache, cache_key, "agent_market_stats")
+    if hit is not None:
+        return _render_agent("market-stats", hit, format)
+
+    started = time.monotonic()
+    manager = get_manager()
+    errors: list[MarketStatsErrorEntry] = []
+    stocks_stats: StockStats | None = None
+    boards_stats: BoardStats | None = None
+    requested = 1 + (1 if include_boards else 0)
+    ok = 0
+
+    # --- stocks block (always attempted) ---
+    try:
+        quotes, _src = manager.get_realtime_quotes("csi")
+        values = [
+            q.change_pct for q in (quotes or [])
+            if getattr(q, "change_pct", None) is not None
+        ]
+        agg = compute_aggregate(
+            values,
+            bin_width=STOCK_BUCKET_BIN_WIDTH,
+            buckets_template=build_stock_buckets(),
+        )
+        stocks_stats = _stats_block_from_aggregate(agg, kind="stocks")
+        ok += 1
+    except Exception as exc:
+        logger.warning(
+            f"[agent/market-stats] stocks failed: {exc}", exc_info=True
+        )
+        errors.append(
+            MarketStatsErrorEntry(
+                block="stocks",
+                error=type(exc).__name__,
+                message=str(exc),
+            )
+        )
+
+    # --- boards block (skipped when include_boards=false) ---
+    if include_boards:
+        try:
+            boards, src = stock_board_cache.get_board_list(
+                board_type=None,
+                source="ths",
+                include_quote=True,
+                manager=manager,
+            )
+            values = [
+                b.get("change_pct") for b in (boards or [])
+                if isinstance(b.get("change_pct"), (int, float))
+                and not isinstance(b.get("change_pct"), bool)
+            ]
+            agg = compute_aggregate(
+                values,
+                bin_width=BOARD_BUCKET_BIN_WIDTH,
+                buckets_template=build_board_buckets(),
+            )
+            boards_stats = _stats_block_from_aggregate(
+                agg, kind="boards", source=src or "ths"
+            )
+            ok += 1
+        except Exception as exc:
+            logger.warning(
+                f"[agent/market-stats] boards failed: {exc}", exc_info=True
+            )
+            errors.append(
+                MarketStatsErrorEntry(
+                    block="boards",
+                    error=type(exc).__name__,
+                    message=str(exc),
+                )
+            )
+
+    result = MarketStatsResponse(
+        stocks=stocks_stats,
+        boards=boards_stats,
+        errors=errors,
+        summary=_batch_summary(requested, ok, started),
+    )
+    cached_store(get_quote_cache, cache_key, result)
+    return _render_agent("market-stats", result, format)
 
 
 # ============================================================================
