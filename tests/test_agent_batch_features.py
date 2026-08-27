@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from stock_data.api.routes import reset_manager
+from stock_data.data_provider.features.build import build_features
 from stock_data.data_provider.features.pivots import compute_pivots
 from stock_data.data_provider.features.trend import compute_trend
 from stock_data.data_provider.features.volume import compute_volume
@@ -213,3 +214,20 @@ class TestPivotFeatures:
         assert out["window_high"] is None
         assert out["swings"] == []
         assert out["pending"] is None
+
+
+class TestBuildFeatures:
+    def test_assembles_three_blocks(self):
+        df = _make_kline_df(120, spike_idx=(80,), spike_mult=5.0)
+        out = build_features(df, frequency="d", days=60)
+        assert set(out.keys()) == {"trend", "pivots", "volume"}
+        assert out["trend"]["ma"]["ma60"] is not None
+        assert out["pivots"]["swings"] is not None
+        assert out["volume"]["latest_volume"] is not None
+        assert len(out["volume"]["z_anomalies"]) >= 1
+
+    def test_window_respects_days(self):
+        df = _make_kline_df(120)
+        out_60 = build_features(df, frequency="d", days=60)
+        # window_high computed on last ~60 calendar days of bars only
+        assert out_60["pivots"]["window_high"]["price"] == float(df["high"].iloc[-42:].max())
