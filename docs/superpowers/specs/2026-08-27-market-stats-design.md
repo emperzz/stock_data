@@ -161,13 +161,25 @@ _EPS = 1e-9
 
 
 def build_stock_buckets() -> list[DistributionBucket]:
-    """11 buckets: (-∞,-12], (-12,-9], (-9,-6], (-6,-3], (-3,0),
-    {0}, (0,+3], (+3,+6], (+6,+9], (+9,+12], (+12,+∞)."""
+    """11 buckets. Format convention: left-open right-closed `[lower, upper]`
+    except for the ±∞ boundary buckets and the standalone flat bucket
+    `{0}`. The flat bucket is checked first in `_assign` so a value of
+    exactly 0 lands there rather than in either adjacent open bucket.
+
+    Order:
+      (-∞, -12%], (-12%, -9%], (-9%, -6%], (-6%, -3%], (-3%, 0),
+      {0},
+      (0, +3%], (+3%, +6%], (+6%, +9%], (+9%, +12%], (+12%, +∞).
+    """
     ...
 
 def build_board_buckets() -> list[DistributionBucket]:
-    """9 buckets: (-∞,-3], (-3,-2], (-2,-1], (-1,0), {0},
-    (0,+1], (+1,+2], (+2,+3], (+3,+∞)."""
+    """9 buckets (same left-open right-closed convention as stocks):
+
+      (-∞, -3%], (-3%, -2%], (-2%, -1%], (-1%, 0),
+      {0},
+      (0, +1%], (+1%, +2%], (+2%, +3%], (+3%, +∞).
+    """
     ...
 
 def compute_aggregate(
