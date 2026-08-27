@@ -43,6 +43,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.responses import Response
 
 from ...data_provider.base import DataFetchError
+from ...data_provider.features.build import build_features
 from ...data_provider.persistence import board as stock_board_cache
 from ...data_provider.persistence import trade_calendar
 from ...data_provider.utils.stats import (
@@ -67,6 +68,7 @@ from ..cache import (
 )
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
+    BatchFeatures,
     BoardsOverlapPair,
     BoardsOverlapRequest,
     BoardsOverlapResponse,
@@ -87,11 +89,11 @@ from ..schemas import (
     MarketContextResponse,
     MarketStatsErrorEntry,
     MarketStatsResponse,
+    MinimalQuote,
     StockBatchAspectError,
     StockBatchProfileEntry,
     StockBatchProfileRequest,
     StockBatchProfileResponse,
-    StockQuote,
     StocksBoardOverlapPair,
     StocksBoardOverlapRequest,
     StocksBoardOverlapResponse,
@@ -135,20 +137,40 @@ _INDICES_KLINE_DAYS: dict[str, tuple[str, int]] = {
     "w": ("w", 48),  # 48 weekly bars (~1 year)
 }
 
-# Per-stock aspects supported by /agent/stocks/batch-profile. The dict
-# value is (manager method name, kwargs). Adding an aspect requires a
-# new entry here AND extending the StockBatchAspect Literal in schemas.py.
-# `boards` is persistence-routed (NOT manager.get_stock_boards) so the
-# call goes through stock_board_membership and inherits the ZZSHARE↔THS
-# fallback chain + effective_source plumbing used by /stocks/{code}/boards.
-# See CLAUDE.md "Persistence-Only Routing".
-_STOCK_ASPECT_DISPATCH: dict[str, tuple[str, dict]] = {
-    "quote": ("get_realtime_quote", {}),
-    "kline": ("get_kline_data", {"frequency": "d", "days": 60, "asset": "stock"}),
-    "kline_5m": ("get_kline_data", {"frequency": "5", "days": 2, "asset": "stock"}),
-    "info": ("get_stock_info", {}),
+# Per-frequency (frequency -> (min, max)) calendar-day range for the
+# batch-profile feature endpoints. Mirrors correlation/matrix with the
+# minute caps enlarged per user decision (5m 3->5, 15m 5->8, 30m 10->15,
+# 60m 20->30).
+_FEATURE_FREQ_DAYS_RANGE: dict[str, tuple[int, int]] = {
+    "d": (2, 365), "w": (14, 1095), "m": (60, 1825),
+    "1m": (2, 3), "5m": (2, 5), "15m": (2, 8), "30m": (2, 15), "60m": (2, 30),
 }
-_PERSISTENCE_ROUTED_ASPECTS = frozenset({"boards"})
+_FEATURE_FREQ_DEFAULT_DAYS: dict[str, int] = {
+    "d": 60, "w": 156, "m": 365, "1m": 3, "5m": 5, "15m": 8, "30m": 15, "60m": 30,
+}
+# Calendar days needed to warm MA60 (60 bars) for d/w/m. Minute frames are
+# already warm inside their bounded day windows (240+ bars), so no bump.
+_FEATURE_MA60_WARMUP_DAYS: dict[str, int] = {"d": 90, "w": 420, "m": 1825}
+
+# Public frequency string -> manager/fetcher-internal frequency code.
+# Fetchers only accept bare minute codes ("5", not "5m") — this is the
+# same mapping the /kline route applies via helpers._period_to_freq.
+_FREQ_TO_MGR: dict[str, str] = {
+    "d": "d", "w": "w", "m": "m",
+    "1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60",
+}
+
+
+def _resolve_and_validate_days(frequency: str, days: int | None) -> int:
+    """Apply the per-frequency default then 422 if outside the range."""
+    lo, hi = _FEATURE_FREQ_DAYS_RANGE[frequency]
+    resolved = days if days is not None else _FEATURE_FREQ_DEFAULT_DAYS[frequency]
+    if not (lo <= resolved <= hi):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_request", "message": f"days must be an int in [{lo}, {hi}] for frequency={frequency}"},
+        )
+    return resolved
 
 
 def _reorder_by_code(cached, input_order: list[str], field: str):
@@ -847,52 +869,18 @@ def get_market_context(
     return _render_agent("market-context", result, format)
 
 
-def _serialize_stock_aspect_value(aspect: str, raw: object) -> object:
-    """Coerce a manager-returned value into a JSON-serializable shape.
-
-    UnifiedRealtimeQuote is a dataclass; K-line is a DataFrame (turn
-    into records); info is already a dict; boards is already a dict list.
-    On any failure, return the raw object (Pydantic will surface the
-    error in the test, but production code should not raise here).
-    """
-    if raw is None:
-        return None
-    if aspect == "quote":
-        # UnifiedRealtimeQuote dataclass — delegate to StockQuote.from_unified_quote
-        # so the batch-profile quote shape is bit-for-bit identical to
-        # /stocks/{code}/quote. Unit conversion (元→亿元) and field-name
-        # mapping live in one place (schemas.py).
-        return StockQuote.from_unified_quote(raw).model_dump()
-    if aspect in ("kline", "kline_5m"):
-        # (df, source) tuple
-        df, source = raw  # type: ignore[misc]
-        records = df.to_dict("records") if df is not None else []
-        return {
-            "source": source,
-            "data": [_build_kline_data(r, _format_date).model_dump() for r in records],
-        }
-    if aspect == "info":
-        # (info_dict, source) tuple
-        info, source = raw  # type: ignore[misc]
-        return {"source": source, "data": info}
-    if aspect == "boards":
-        # (boards_list, source) tuple — boards_list may be None per manager contract
-        boards, source = raw  # type: ignore[misc]
-        return {"source": source, "data": boards or []}
-    return raw  # pragma: no cover — exhaustive above
-
-
 @router.post(
     "/agent/stocks/batch-profile",
     response_model=StockBatchProfileResponse,
     responses={
         400: {"model": ErrorResponse, "description": "Invalid request (codes out of range)"},
+        422: {"model": ErrorResponse, "description": "days out of range / unsupported frequency"},
         500: {"model": ErrorResponse, "description": "Server error"},
     },
     tags=["agent"],
 )
 @endpoint_meta(
-    summary="股票批量画像（quote + kline + kline_5m + info + boards，per-aspect 错误隔离）",
+    summary="股票批量画像（trend/pivots/volume 计算指标 + 极简 quote + info + boards）",
     markets=["csi"],
     capabilities=[],
 )
@@ -905,21 +893,18 @@ def post_stocks_batch_profile(
         description="Output format. json=application/json (default); md=text/markdown.",
     ),
 ) -> Response:
-    """Per-code fan-out across the requested aspects.
+    """Per-code fan-out across quote / features / info / boards.
 
-    Renamed from proposal §3.2.2 ``stocks/batch/profile`` per 2026-07-28
-    user request. Codes are 1-5 (hard cap matches the stock-picking
-    funnel); per-aspect failures live in ``results[i].errors[]``; the
-    whole entry is only marked ``ok=False`` when the code itself is
-    unrecoverable (e.g. all 5 aspects raised).
+    ``features`` replaces the old raw kline / kline_5m aspects: the
+    server computes trend / pivots / volume at the requested
+    (frequency, days) instead of returning raw bars. Per-aspect failures
+    live in ``results[i].errors[]``; the entry is only ``ok=False`` when
+    every aspect failed.
     """
-    cache_key = make_stocks_batch_profile_cache_key(payload.codes, payload.aspects)
+    days = _resolve_and_validate_days(payload.frequency, payload.days)
+    cache_key = make_stocks_batch_profile_cache_key(payload.codes, payload.frequency, days)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_stocks_batch_profile")
     if hit is not None:
-        # Cache key collapses (sorted codes, sorted deduped aspects) so
-        # the same (set, set) from any order shares one entry. On hit
-        # we reorder the cached list back to the caller's input order
-        # (response contract: results mirror input codes).
         return _render_agent(
             "stocks/batch-profile",
             _reorder_by_code(hit, payload.codes, "results"),
@@ -928,66 +913,75 @@ def post_stocks_batch_profile(
 
     started = time.monotonic()
     manager = get_manager()
+    fetch_days = max(days, _FEATURE_MA60_WARMUP_DAYS.get(payload.frequency, days))
     results: list[StockBatchProfileEntry] = []
     n_ok = 0
 
     for code in payload.codes:
-        data: dict = {}
         errors: list[StockBatchAspectError] = []
-        any_aspect_ok = False
+        quote = None
+        features = None
+        info = None
+        boards = None
+        name = ""
 
-        for aspect in payload.aspects:
-            try:
-                if aspect in _PERSISTENCE_ROUTED_ASPECTS:
-                    entries, _cold, _origin = stock_board_cache.get_stock_memberships(
-                        stock_code=code,
-                        sources=["ths"],
-                        manager=manager,
-                    )
-                    # Match the (list, source) tuple shape
-                    # _serialize_stock_aspect_value expects for the boards aspect.
-                    raw = (entries, "persistence")
-                else:
-                    method_name, kwargs = _STOCK_ASPECT_DISPATCH[aspect]
-                    raw = getattr(manager, method_name)(code, **kwargs)
-            except Exception as exc:
-                logger.warning(
-                    f"[agent/stocks/batch-profile] {code} {aspect} failed: {exc}",
-                    exc_info=True,
-                )
-                errors.append(
-                    StockBatchAspectError(
-                        aspect=aspect,
-                        error=type(exc).__name__,
-                        message=str(exc),
-                    )
-                )
-                continue
-            try:
-                data[aspect] = _serialize_stock_aspect_value(aspect, raw)
-                any_aspect_ok = True
-            except Exception as exc:
-                errors.append(
-                    StockBatchAspectError(
-                        aspect=aspect,
-                        error="SerializationError",
-                        message=str(exc),
-                    )
-                )
+        try:
+            q = manager.get_realtime_quote(code)
+            if q is not None:
+                quote = MinimalQuote(price=q.price, change_pct=q.change_pct)
+                name = getattr(q, "name", "") or ""
+        except Exception as exc:
+            logger.warning(f"[agent/stocks/batch-profile] {code} quote failed: {exc}")
+            errors.append(StockBatchAspectError(aspect="quote", error=type(exc).__name__, message=str(exc)))
 
-        entry_ok = any_aspect_ok
-        if entry_ok:
+        try:
+            df, _src = manager.get_kline_data(
+                code,
+                days=fetch_days,
+                frequency=_FREQ_TO_MGR[payload.frequency],
+                adjust="qfq",
+                asset="stock",
+            )
+            features = BatchFeatures(**build_features(df, frequency=payload.frequency, days=days))
+        except Exception as exc:
+            logger.warning(f"[agent/stocks/batch-profile] {code} features failed: {exc}", exc_info=True)
+            errors.append(StockBatchAspectError(aspect="features", error=type(exc).__name__, message=str(exc)))
+
+        try:
+            info_dict, info_src = manager.get_stock_info(code)
+            info = {"source": info_src, "data": info_dict}
+        except Exception as exc:
+            logger.warning(f"[agent/stocks/batch-profile] {code} info failed: {exc}")
+            errors.append(StockBatchAspectError(aspect="info", error=type(exc).__name__, message=str(exc)))
+
+        try:
+            entries, _cold, _origin = stock_board_cache.get_stock_memberships(
+                stock_code=code, sources=["ths"], manager=manager
+            )
+            boards = {"source": "persistence", "data": entries}
+        except Exception as exc:
+            logger.warning(f"[agent/stocks/batch-profile] {code} boards failed: {exc}")
+            errors.append(StockBatchAspectError(aspect="boards", error=type(exc).__name__, message=str(exc)))
+
+        ok = any(v is not None for v in (quote, features, info, boards))
+        if ok:
             n_ok += 1
         results.append(
             StockBatchProfileEntry(
                 code=code,
-                ok=entry_ok,
-                data=data,
+                name=name,
+                ok=ok,
+                quote=quote,
+                features=features,
+                info=info,
+                boards=boards,
                 errors=errors,
             )
         )
 
     resp = StockBatchProfileResponse(
+        frequency=payload.frequency,
+        days=days,
         results=results,
         summary=_batch_summary(len(payload.codes), n_ok, started),
     )

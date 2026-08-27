@@ -2,6 +2,7 @@
 
 import contextlib
 import random
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -10,8 +11,11 @@ from stock_data.api.cache import (
     make_indices_batch_profile_cache_key,
     make_stocks_batch_profile_cache_key,
 )
+from stock_data.api.routes import agent as agent_module
 from stock_data.api.routes import reset_manager
 from stock_data.api.schemas import BatchFeatures, MinimalQuote
+from stock_data.data_provider.base import DataFetchError
+from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
 from stock_data.data_provider.features.build import build_features
 from stock_data.data_provider.features.pivots import compute_pivots
 from stock_data.data_provider.features.trend import compute_trend
@@ -300,3 +304,103 @@ class TestCacheKeys:
         a = make_stocks_batch_profile_cache_key(["600519", "000858"], "5m", 5)
         assert "5m:5" in a
         assert "600519" in a and "000858" in a
+
+
+_BOARD_STOCKS_PATCH = "stock_data.data_provider.persistence.board.get_stock_memberships"
+
+
+def _make_unified_quote(code, price=100.0):
+    return UnifiedRealtimeQuote(
+        code=code, name=code, source=RealtimeSource.AKSHARE, price=price,
+        change_pct=1.5, change_amount=1.5, open_price=99.0, high=101.0,
+        low=98.5, pre_close=98.5, volume=1_000_000, amount=1e8,
+    )
+
+
+def _bind_manager(monkeypatch, mock_manager):
+    monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+    return mock_manager
+
+
+def _stock_request(codes, frequency="d", days=None):
+    body = {"codes": codes, "frequency": frequency}
+    if days is not None:
+        body["days"] = days
+    return body
+
+
+class TestStocksBatchProfile:
+    def test_all_aspects_populated(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120, spike_idx=(80,)), "zzshare")
+        mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+        _bind_manager(monkeypatch, mock_manager)
+        with patch(_BOARD_STOCKS_PATCH, return_value=([{"code": "885595", "name": "白酒"}], False, "persistence")):
+            resp = client.post(
+                "/api/v1/agent/stocks/batch-profile",
+                json=_stock_request(["600519"], frequency="d", days=60),
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["frequency"] == "d" and data["days"] == 60
+        e = data["results"][0]
+        assert e["quote"] == {"price": 100.0, "change_pct": 1.5}
+        assert e["features"]["trend"]["ma"]["ma60"] is not None
+        assert e["features"]["pivots"]["window_high"] is not None
+        assert e["features"]["volume"]["latest_volume"] is not None
+        assert e["info"]["data"]["industry"] == "白酒"
+        assert e["boards"]["data"][0]["code"] == "885595"
+        assert e["ok"] is True
+        assert e["errors"] == []
+
+    def test_kline_failure_isolated(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+        mock_manager.get_kline_data.side_effect = DataFetchError("kline upstream down")
+        mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+        _bind_manager(monkeypatch, mock_manager)
+        with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
+            resp = client.post(
+                "/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"])
+            )
+        data = resp.json()
+        e = data["results"][0]
+        assert e["features"] is None
+        assert e["quote"] is not None
+        assert any(err["aspect"] == "features" for err in e["errors"])
+
+    def test_passes_adjust_qfq_and_converts_minute_freq_for_manager(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
+        mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+        _bind_manager(monkeypatch, mock_manager)
+        with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
+            client.post(
+                "/api/v1/agent/stocks/batch-profile",
+                json=_stock_request(["600519"], frequency="5m", days=3),
+            )
+        kwargs = mock_manager.get_kline_data.call_args.kwargs
+        assert kwargs["adjust"] == "qfq"
+        assert kwargs["asset"] == "stock"
+        assert kwargs["frequency"] == "5"  # public "5m" -> manager "5"
+
+    def test_days_out_of_range_422(self, client, monkeypatch):
+        _bind_manager(monkeypatch, MagicMock())
+        resp = client.post(
+            "/api/v1/agent/stocks/batch-profile",
+            json=_stock_request(["600519"], frequency="5m", days=99),
+        )
+        assert resp.status_code == 422
+
+    def test_cache_second_call_skips_manager(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
+        mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+        _bind_manager(monkeypatch, mock_manager)
+        with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
+            client.post("/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"], days=60))
+            client.post("/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"], days=60))
+        assert mock_manager.get_kline_data.call_count == 1
