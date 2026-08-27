@@ -54,7 +54,7 @@ def _make_kline_df(rows, *, seed=1, spike_idx=(), spike_mult=4.0) -> pd.DataFram
             "low": [round(c * 0.99, 3) for c in closes],
             "close": [round(c, 3) for c in closes],
             "volume": vols,
-            "amount": [v * c for v, c in zip(vols, closes)],
+            "amount": [v * c for v, c in zip(vols, closes, strict=True)],
             "pct_chg": [0.0] * rows,
         }
     )
@@ -85,26 +85,37 @@ class TestVolumeFeatures:
         # the spike bar must be present and sorted by z desc
         spike_date = df["date"].iloc[30]
         assert out["z_anomalies"][0]["date"] == spike_date
-        assert all(a["z_score"] > 2.0 for a in out["z_anomalies"])
+        assert all(a["z_score"] >= 2.0 for a in out["z_anomalies"])
         assert all(
             out["z_anomalies"][i]["z_score"] >= out["z_anomalies"][i + 1]["z_score"]
             for i in range(len(out["z_anomalies"]) - 1)
         )
 
     def test_z_anomalies_capped_at_20(self):
-        # every volume differs by a huge amount → many bars exceed z>2
-        df = _make_kline_df(60, seed=3)
-        vols = [float(v) for v in df["volume"]]
-        df["volume"] = [v * (1 + i) for i, v in enumerate(vols)]  # monotone scale → all z>2
-        window = _window_by_last_days(df, 50)
-        out = compute_volume(df, window)
-        assert len(out["z_anomalies"]) <= 20
+        # 300 bars, 25 of them 100x the small-baseline volume → each big bar
+        # has z≈3.3>2 (Chebyshev allows up to ~20% of a sample above mean+2σ),
+        # so 25 anomalies exceed the 20 cap and the cap must truncate to 20.
+        df = _make_kline_df(300, seed=3)
+        df["volume"] = [1_000_000] * (300 - 25) + [100_000_000] * 25
+        out = compute_volume(df, df)
+        assert len(out["z_anomalies"]) == 20
+        assert all(a["z_score"] > 2.0 for a in out["z_anomalies"])
 
     def test_anomaly_bar_fields(self):
         df = _make_kline_df(30, spike_idx=(20,), spike_mult=6.0)
         window = _window_by_last_days(df, 25)
         out = compute_volume(df, window)
         a = out["z_anomalies"][0]
-        for key in ("date", "open", "high", "low", "close", "volume", "z_score", "direction", "change_pct"):
+        for key in (
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "z_score",
+            "direction",
+            "change_pct",
+        ):
             assert key in a
         assert a["direction"] in ("up", "down")

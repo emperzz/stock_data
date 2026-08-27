@@ -21,7 +21,11 @@ def _float(v) -> float | None:
 
 
 def compute_volume(df: pd.DataFrame, window_df: pd.DataFrame) -> dict:
-    """Compute the volume block. Returns a dict ready for Pydantic."""
+    """Compute the volume block. Returns a dict ready for Pydantic.
+
+    window_df MUST share df's index (e.g. a boolean-mask slice of df) — the
+    prev-close lookup uses df.index.get_loc.
+    """
     if df is None or df.empty:
         return {"latest_volume": None, "vol_ratio_5": None, "z_anomalies": []}
 
@@ -47,9 +51,7 @@ def compute_volume(df: pd.DataFrame, window_df: pd.DataFrame) -> dict:
                 close_v = _float(row["close"])
                 open_v = _float(row["open"])
                 change_pct = (
-                    (close_v - pc) / pc * 100
-                    if (close_v is not None and pc and pc != 0)
-                    else None
+                    (close_v - pc) / pc * 100 if (close_v is not None and pc and pc != 0) else None
                 )
                 anomalies.append(
                     {
@@ -60,7 +62,9 @@ def compute_volume(df: pd.DataFrame, window_df: pd.DataFrame) -> dict:
                         "close": close_v,
                         "volume": _float(row["volume"]),
                         "z_score": round(float(zs.loc[idx]), 2),
-                        "direction": "up" if close_v is not None and open_v is not None and close_v >= open_v else "down",
+                        "direction": "up"
+                        if close_v is not None and open_v is not None and close_v >= open_v
+                        else "down",
                         "change_pct": change_pct,
                     }
                 )
