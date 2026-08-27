@@ -483,3 +483,51 @@ class TestIndicesBatchProfile:
         client.get("/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3")
         client.get("/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3")
         assert mock_manager.get_kline_data.call_count == 1
+
+
+class TestFormatMdFeatures:
+    def _stub_features_response(self):
+        from stock_data.api.schemas import BatchFeatures
+
+        features = BatchFeatures(
+            trend={"ma": {"ma5": 1.0}, "ma_change": {"ma5": 0.1}, "adx": 20.0, "pdi": 10.0,
+                   "mdi": 8.0, "rsi": {"rsi_6": 50.0}, "boll": {"mid": 1.0, "upper": 2.0, "lower": 0.0, "bandwidth": 1.0}},
+            pivots={"window_high": {"price": 2.0, "date": "2026-08-10"}, "window_low": {"price": 1.0, "date": "2026-07-15"},
+                    "max_vol_bar": None,
+                    "swings": [{"date": "2026-07-15", "type": "low", "price": 1.0, "confirmed": True}],
+                    "pending": {"side": "high", "bars": 2, "price": 2.0, "date": "2026-08-10"},
+                    "params": {"pivot_window": 2, "reversal_atr_mult": 1.0, "atr_period": 14}},
+            volume={"latest_volume": 100.0, "vol_ratio_5": 1.5,
+                    "z_anomalies": [{"date": "2026-08-10", "open": 1.0, "high": 2.0, "low": 0.5,
+                                     "close": 1.5, "volume": 100.0, "z_score": 3.0,
+                                     "direction": "up", "change_pct": 5.0}]},
+        )
+        return features
+
+    def test_indices_batch_profile_md(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "akshare")
+        _bind_manager(monkeypatch, mock_manager)
+        resp = client.get("/api/v1/agent/indices/batch-profile?format=md")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/markdown")
+        body = resp.text
+        assert "# 指数批量画像" in body
+        # The three feature blocks render under their Chinese labels (the
+        # verbatim renderer emits 趋势/顶底/量价, not the English words).
+        assert "趋势" in body and "顶底" in body and "量价" in body
+
+    def test_stocks_batch_profile_md(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
+        mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+        _bind_manager(monkeypatch, mock_manager)
+        with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
+            resp = client.post(
+                "/api/v1/agent/stocks/batch-profile?format=md",
+                json=_stock_request(["600519"]),
+            )
+        assert resp.status_code == 200
+        assert "趋势" in resp.text or "trend" in resp.text

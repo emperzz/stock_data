@@ -1118,35 +1118,6 @@ def _md_pct(v) -> str:
     return f"{v:+.2f}%"
 
 
-def _md_kline_rows(bars) -> list[str]:
-    """Render KLineData bars as MD table rows (no header).
-
-    Accepts either KLineData instances (used by /indices/batch-profile)
-    or plain dicts (used by /stocks/batch-profile, where the aspect
-    payload is already JSON-serialized via model_dump).
-    """
-    if not bars:
-        return ["（无数据）"]
-
-    def _get(bar, key, default=None):
-        if isinstance(bar, dict):
-            return bar.get(key, default)
-        return getattr(bar, key, default)
-
-    out = [
-        "| 日期 | 开 | 高 | 低 | 收 | 量(股) | 额 | 涨跌幅 |",
-        "|---|---|---|---|---|---|---|---|",
-    ]
-    for b in bars:
-        out.append(
-            f"| {_get(b, 'date', '')} | {_md_num(_get(b, 'open'), 3)} | "
-            f"{_md_num(_get(b, 'high'), 3)} | {_md_num(_get(b, 'low'), 3)} | "
-            f"{_md_num(_get(b, 'close'), 3)} | {_md_num(_get(b, 'volume'), 0)} | "
-            f"{_md_num(_get(b, 'amount'), 0)} | {_md_pct(_get(b, 'change_pct'))} |"
-        )
-    return out
-
-
 def _md_errors(errors: list[dict], *, key: str = "code", header: str = "代码") -> list[str]:
     """Render the per-code errors[] block (or "(无)")."""
     if not errors:
@@ -1311,37 +1282,57 @@ def render_filter_stocks_as_md(p: FilterStocksResponse) -> str:
     return "\n".join(out)
 
 
+def _md_feature_block(out: list[str], f) -> None:
+    """Render the three feature blocks of a BatchFeatures instance."""
+    out.append("### 指标")
+    out.append("**趋势**")
+    _render_dict_block(out, "MA", f.trend.ma)
+    _render_dict_block(out, "MA 环比变化 (%)", f.trend.ma_change)
+    out.append(f"- ADX: {_md_num(f.trend.adx)} / PDI: {_md_num(f.trend.pdi)} / MDI: {_md_num(f.trend.mdi)}")
+    out.append("")
+    _render_dict_block(out, "RSI", f.trend.rsi)
+    _render_dict_block(out, "BOLL", f.trend.boll)
+    out.append("**顶底**")
+    if f.pivots.window_high:
+        out.append(f"- 区间最高: {_md_num(f.pivots.window_high.get('price'))} @ {f.pivots.window_high.get('date')}")
+    if f.pivots.window_low:
+        out.append(f"- 区间最低: {_md_num(f.pivots.window_low.get('price'))} @ {f.pivots.window_low.get('date')}")
+    if f.pivots.max_vol_bar:
+        out.append(f"- 最大量价: {_md_num(f.pivots.max_vol_bar.get('price'))} @ {f.pivots.max_vol_bar.get('date')} (量 {_md_num(f.pivots.max_vol_bar.get('volume'))})")
+    out.append("| 日期 | 类型 | 价格 | 确认 |")
+    out.append("|---|---|---|---|")
+    for s in f.pivots.swings:
+        out.append(f"| {s.date} | {s.type} | {_md_num(s.price)} | {'✓' if s.confirmed else '✗'} |")
+    if f.pivots.pending:
+        p = f.pivots.pending
+        out.append(f"- 在途({p.side}): {_md_num(p.price)} @ {p.date} (bars_since {p.bars})")
+    out.append("")
+    out.append("**量价**")
+    out.append(f"- 最新成交量: {_md_num(f.volume.latest_volume)} / 量比(5): {_md_num(f.volume.vol_ratio_5)}")
+    if f.volume.z_anomalies:
+        out.append("| 日期 | 收盘 | 成交量 | z | 方向 | 涨跌幅 |")
+        out.append("|---|---|---|---|---|---|")
+        for a in f.volume.z_anomalies:
+            out.append(f"| {a.date} | {_md_num(a.close)} | {_md_num(a.volume)} | {_md_num(a.z_score)} | {a.direction} | {_md_pct(a.change_pct)} |")
+    else:
+        out.append("（无 z>2 放量异动）")
+    out.append("")
+
+
 def render_indices_batch_profile_as_md(p: IndicesBatchProfileResponse) -> str:
-    out = ["# 指数批量画像", ""]
+    out = [f"# 指数批量画像 — {p.frequency} {p.days}d", ""]
     for idx in p.indices:
-        ok_marker = "✓" if idx.quote else "✗"
+        ok_marker = "✓" if idx.quote or idx.features else "✗"
         out.append(f"## {idx.code} {idx.name} {ok_marker}")
         if idx.quote:
-            q = idx.quote
-            out.append("### 实时行情")
-            out.append("| 字段 | 值 |")
-            out.append("|---|---|")
-            for k, v in q.items():
-                if isinstance(v, float):
-                    out.append(f"| {k} | {_md_num(v, 4)} |")
-                else:
-                    out.append(f"| {k} | {v if v is not None else '—'} |")
+            out.append(f"- 最新: {_md_num(idx.quote.price)} ({_md_pct(idx.quote.change_pct)})")
         else:
-            err = (idx.errors or {}).get("quote") or "no quote"
-            out.append(f"### 实时行情 — 失败: {err}")
+            out.append(f"- 行情失败: {(idx.errors or {}).get('quote') or 'no quote'}")
         out.append("")
-        for freq in ("5m", "d", "w"):
-            block = idx.klines.get(freq)
-            if not block:
-                out.append(f"### {freq} K线 — 无数据")
-                out.append("")
-                continue
-            label = {"5m": "5 分钟", "d": "日", "w": "周"}.get(freq, freq)
-            if block.error:
-                out.append(f"### {label} K线 — 失败: {block.error}")
-            else:
-                out.append(f"### {label} K线 ({len(block.data)} 根)")
-                out.extend(_md_kline_rows(block.data))
+        if idx.features:
+            _md_feature_block(out, idx.features)
+        else:
+            out.append(f"### 指标 — 失败: {(idx.errors or {}).get('features') or 'no features'}")
             out.append("")
     s = p.summary or {}
     out.append(
@@ -1496,55 +1487,29 @@ def render_market_context_as_md(p: MarketContextResponse) -> str:
 
 
 def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
-    out = ["# 股票批量画像", ""]
+    out = [f"# 股票批量画像 — {p.frequency} {p.days}d", ""]
     for entry in p.results:
         marker = "✓" if entry.ok and not entry.errors else ("△" if entry.ok else "✗")
-        out.append(f"## {entry.code} {marker}")
+        out.append(f"## {entry.code} {entry.name} {marker}")
         if entry.errors:
-            failed_aspects = ", ".join(e.aspect for e in entry.errors)
-            out.append(f"**失败 aspects**: {failed_aspects}")
+            failed = ", ".join(e.aspect for e in entry.errors)
+            out.append(f"**失败 aspects**: {failed}")
         out.append("")
-        for aspect in ("quote", "kline", "kline_5m", "info", "boards"):
-            if aspect not in entry.data:
-                continue
-            block = entry.data[aspect] or {}
-            src = block.get("source", "?")
-            data = block.get("data")
-            if aspect == "quote":
-                # Quote is the only aspect whose payload is a FLAT dict
-                # (the StockQuote.model_dump() shape — no {source, data}
-                # wrapper, since source/code/name are inside). Render every
-                # field except source (already in the header).
-                out.append(f"### 实时行情 (source: {src})")
-                out.append("| 字段 | 值 |")
-                out.append("|---|---|")
-                for k, v in block.items():
-                    if k == "source":
-                        continue
-                    if isinstance(v, float):
-                        out.append(f"| {k} | {_md_num(v, 4)} |")
-                    else:
-                        out.append(f"| {k} | {v if v is not None else '—'} |")
-            elif aspect in ("kline", "kline_5m"):
-                label = "5 分钟 K 线" if aspect == "kline_5m" else "日 K 线"
-                if isinstance(data, list) and data:
-                    out.append(f"### {label} (source: {src}, {len(data)} 根)")
-                    out.extend(_md_kline_rows(data))
-                else:
-                    out.append(f"### {label} — 无数据")
-            elif aspect == "info":
-                out.append(f"### 公司画像 (source: {src})")
-                if isinstance(data, dict):
-                    for k, v in data.items():
-                        out.append(f"- **{k}**: {v if v is not None else '—'}")
-            elif aspect == "boards":
-                out.append(f"### 所属板块 (source: {src})")
-                if isinstance(data, list) and data:
-                    for b in data:
-                        t = b.get("type") or "-"
-                        out.append(f"- {b.get('code', '?')} ({t}) {b.get('name', '')}")
-                else:
-                    out.append("（无）")
+        if entry.quote:
+            out.append(f"- 最新: {_md_num(entry.quote.price)} ({_md_pct(entry.quote.change_pct)})")
+        out.append("")
+        if entry.features:
+            _md_feature_block(out, entry.features)
+        if entry.info and entry.info.get("data"):
+            out.append("### 公司画像")
+            for k, v in entry.info["data"].items():
+                out.append(f"- **{k}**: {v if v is not None else '—'}")
+            out.append("")
+        if entry.boards and entry.boards.get("data"):
+            out.append("### 所属板块")
+            for b in entry.boards["data"]:
+                t = b.get("type") or "-"
+                out.append(f"- {b.get('code', '?')} ({t}) {b.get('name', '')}")
             out.append("")
     s = p.summary or {}
     out.append(
