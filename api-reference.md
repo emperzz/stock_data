@@ -1273,9 +1273,9 @@ summarize" is folded into one request. Seven endpoints ship in v1:
 | `/agent/boards/stock-overlap` | POST | Pairwise stock-set intersection + Jaccard across 2-10 boards |
 | `/agent/stocks/board-overlap` | POST | Pairwise board-set intersection + Jaccard across 2-10 stocks |
 | `/agent/boards/filter-stocks` | POST | Server-side numeric filter on a board's constituents |
-| `/agent/indices/batch-profile` | GET | Per-index quote + 5m/d/w K-line (3 default CSI indices) |
+| `/agent/indices/batch-profile` | GET | Per-index minimal quote + trend/pivots/volume features (3 default CSI indices) |
 | `/agent/market-context` | GET | Morning briefing + market recap + flash + zt/dt + dragon-tiger |
-| `/agent/stocks/batch-profile` | POST | Per-stock fan-out across quote / kline / info / boards (1-5 codes) |
+| `/agent/stocks/batch-profile` | POST | Per-stock fan-out across quote / features / info / boards (1-5 codes) |
 | `/agent/correlation/matrix` | POST | Pairwise Pearson + Spearman correlation matrix across 2-10 stocks/boards (A-share only) |
 | `/agent/market-stats` | GET | Full-market stats (mean / median / max / min / up-down-flat + percentage buckets) for stocks + boards |
 
@@ -1567,81 +1567,128 @@ namespace.
 
 ### GET /api/v1/agent/indices/batch-profile
 
-Per-index fan-out: realtime quote + 5m / d / w K-line. Use case: "give
+Per-index fan-out: minimal realtime quote + computed
+trend / pivots / volume features at one `frequency`. Use case: "give
 me a one-call snapshot of the major CSI indices for the market-recap
 '指数全景' step".
 
 ```bash
 GET /api/v1/agent/indices/batch-profile
-GET /api/v1/agent/indices/batch-profile?codes=000001,000300
+GET /api/v1/agent/indices/batch-profile?codes=000001,000300&frequency=d&days=120
 ```
 
 **Parameters:**
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `codes` | string | `000001,399001,399006` | Comma-separated CSI index codes. Empty = the 3 core indices (上证 / 深证 / 创业板). |
+| `codes` | string | `000001,399001,399006` | Comma-separated CSI index codes (1-5). Empty = the 3 core indices (上证 / 深证 / 创业板). > 5 → 422. |
+| `frequency` | string | `d` | One of `d/w/m/1m/5m/15m/30m/60m`. Single-valued per call — long + short frames = two calls (cheap under the 60s shared cache). |
+| `days` | int | per-frequency default | Calendar days. Per-frequency min/max enforced server-side (table below); out-of-range → 422. |
 | `format` | string | `json` | `json` (default) or `md` — see [`?format=json|md` projection](#agent-batch-api). |
+
+**`days` range** (per-frequency min / max / default when omitted):
+
+| frequency | min | max | default |
+|---|---|---|---|
+| `d`  | 2  | 365  | 60  |
+| `w`  | 14 | 1095 | 156 |
+| `m`  | 60 | 1825 | 365 |
+| `1m` | 2  | 3    | 3   |
+| `5m` | 2  | 5    | 5   |
+| `15m`| 2  | 8    | 8   |
+| `30m`| 2  | 15   | 15  |
+| `60m`| 2  | 30   | 30  |
 
 **Response (200):**
 
 ```json
 {
+  "frequency": "d",
+  "days": 120,
   "indices": [
     {
       "code": "000001",
       "name": "上证指数",
-      "quote": {
-        "code": "000001", "name": "上证指数", "source": "akshare",
-        "current_price": 3200.0, "change_amount": 5.5, "change_pct": 0.17,
-        "open": 3195.0, "high": 3210.0, "low": 3190.0, "prev_close": 3194.5,
-        "volume": 123456789, "amount": 234567890123.0
+      "quote": {"price": 3540.2, "change_pct": 0.8},
+      "features": {
+        "trend": {
+          "ma": {"ma5": 12.30, "ma10": 12.10, "ma15": 12.00, "ma20": 11.80, "ma30": 11.40, "ma60": 10.90},
+          "ma_change": {"ma5": 0.82, "ma10": 0.61, "ma15": 0.55, "ma20": 0.40, "ma30": 0.25, "ma60": 0.10},
+          "adx": 28.3, "pdi": 24.1, "mdi": 18.6,
+          "rsi": {"rsi_6": 72.1, "rsi_12": 65.4, "rsi_24": 58.2},
+          "boll": {"mid": 11.80, "upper": 13.10, "lower": 10.50, "bandwidth": 22.0}
+        },
+        "pivots": {
+          "window_high": {"price": 13.20, "date": "2026-08-10"},
+          "window_low": {"price": 10.10, "date": "2026-07-15"},
+          "max_vol_bar": {"price": 12.80, "volume": 5.2e7, "date": "2026-08-08"},
+          "swings": [
+            {"date": "2026-07-15", "type": "low", "price": 10.10, "confirmed": true},
+            {"date": "2026-08-03", "type": "high", "price": 12.60, "confirmed": true},
+            {"date": "2026-08-18", "type": "low", "price": 11.40, "confirmed": true}
+          ],
+          "pending": {"side": "topping", "bars": 2, "price": 13.10, "date": "2026-08-26"},
+          "params": {"pivot_window": 2, "reversal_atr_mult": 1.0, "atr_period": 14}
+        },
+        "volume": {
+          "latest_volume": 3.1e7,
+          "vol_ratio_5": 1.45,
+          "z_anomalies": [
+            {"date": "2026-08-25", "open": 12.10, "high": 13.00, "low": 12.05,
+             "close": 12.90, "volume": 8.4e7, "z_score": 3.1,
+             "direction": "up", "change_pct": 6.6}
+          ]
+        }
       },
-      "klines": {
-        "5m": {"data": [...96 bars...], "error": null},
-        "d":  {"data": [...30 bars...],  "error": null},
-        "w":  {"data": [...48 bars...],  "error": null}
-      },
-      "errors": {"quote": null}
+      "errors": {"quote": null, "features": null}
     }
   ],
-  "summary": {"requested": 3, "ok": 3, "failed": 0, "elapsed_ms": 1234}
+  "summary": {"requested": 3, "ok": 3, "failed": 0, "elapsed_ms": 95}
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
+| `frequency` / `days` | string / int | The request's single frequency + resolved days, echoed at top level. |
 | `indices[].code` | string | The index code (canonical 6-digit). |
 | `indices[].name` | string | The index name (from `index_symbols` map or upstream). |
-| `indices[].quote` | object \| null | The realtime `IndexQuote` dict, or `null` when no fetcher could serve. |
-| `indices[].klines` | object | Per-frequency K-line block (`5m` / `d` / `w`). Each block: `{data: KLineData[], error: string\|null}`. `error` is set when that specific frequency's upstream call failed. |
-| `indices[].errors` | object | `{quote: string\|null}` — per-frequency K-line errors live in `klines[f].error` instead (mirrors the per-aspect shape used by the stocks variant). |
+| `indices[].quote` | object \| null | Minimal realtime anchor `{price, change_pct}`, or `null` when no fetcher could serve. |
+| `indices[].features` | object \| null | Server-computed `{trend, pivots, volume}` at the requested `(frequency, days)`, or `null` when the K-line fetch / feature computation failed. |
+| `indices[].errors` | object | `{quote: string\|null, features: string\|null}` — `null` means that block served OK. |
 | `summary.requested` | int | `len(codes)`. |
-| `summary.ok` | int | Number of entries with both quote AND all 3 K-line frequencies served. |
+| `summary.ok` | int | Number of entries with **both** quote AND features served. |
 | `summary.failed` | int | `requested - ok`. |
 | `summary.elapsed_ms` | int | Wall-clock for the fan-out (per request, not per fetcher). |
 
-**Bar counts are pinned server-side** to keep the response shape
-stable: 5m = 2 trading days (~96 bars), d = 30 bars, w = 48 bars
-(~1 year). Clients that want different bar counts still go through
-`/indices/{code}/kline?frequency=...&days=...`.
+**No raw bars.** The response ships computed features instead of K-line
+bars (token-light, judgment-ready). Clients that need raw bars go through
+`/indices/{code}/kline?frequency=...&days=...&indicators=...`.
 
-**K-line fan-out is sequential per index** (3 frequencies × N codes).
-For the default 3 codes that's 9 fetches; the route is not parallelized
-(individual fetcher calls are already I/O-bound under their own
-circuit breakers).
+**Feature block** (`indices[].features`) is the same shape as the stocks
+variant — see [POST /api/v1/agent/stocks/batch-profile](#post-apiv1agentstocksbatch-profile)
+for per-block field semantics. Indices use `adjust=none`; stocks fix
+`adjust=qfq`.
+
+**K-line fan-out is sequential per index** (1 frequency × N codes). For
+the default 3 codes that's 3 fetches; the route is not parallelized
+(individual fetcher calls are already I/O-bound under their own circuit
+breakers). Lookback is warmed server-side to `max(days, MA60 warm-up)`;
+window-scoped stats (`window_high/low`, `max_vol_bar`, `z_anomalies`)
+use the requested `days` window.
 
 **Errors:**
 
-- No upstream `DataFetchError` propagates out of the route — per-frequency
-  failures populate `klines[f].error` and the entry is marked failed
-  in the summary. The route returns 200 even when all 3 frequencies
-  of an index failed (the failure is in the body, not the status).
+- No upstream `DataFetchError` propagates out of the route — per-block
+  quote / features failures populate `errors[]` and the entry is marked
+  failed in the summary. The route returns 200 even when every block of
+  every index failed (the failure is in the body, not the status).
+- `422 invalid_request` — unknown `frequency`; `codes` > 5; `days`
+  outside the per-frequency range.
 
-**Cache:** `make_indices_batch_profile_cache_key(sorted(codes))` →
-`agent_indices_batch_profile:<sorted_codes>`. Codes are sorted for
-order-perturbation immunity; the response list is reordered to the
-caller's input order on cache hit.
+**Cache:** `make_indices_batch_profile_cache_key(sorted(codes), frequency, days)` →
+`agent_indices_batch_profile:{frequency}:{days}:<sorted_codes>`. Codes are
+sorted for order-perturbation immunity; the response list is reordered to
+the caller's input order on cache hit.
 
 ---
 
@@ -1723,16 +1770,17 @@ not a silent 200 with empty results.
 
 ### POST /api/v1/agent/stocks/batch-profile
 
-Per-stock fan-out across 5 server-side aspects: `quote` (realtime),
-`kline` (daily, 60 bars), `kline_5m` (5-minute, 2 days), `info` (company
-profile), `boards` (THS-membership reverse lookup). Use case: "give
-me everything I need to evaluate 1-5 candidate stocks in a single call".
+Per-stock fan-out across 4 server-side aspects: `quote` (minimal realtime),
+`features` (computed trend / pivots / volume at one frequency — replaces
+the old raw `kline` / `kline_5m`), `info` (company profile), `boards`
+(THS-membership reverse lookup). Use case: "give me everything I need to
+evaluate 1-5 candidate stocks in a single call".
 
 ```bash
 POST /api/v1/agent/stocks/batch-profile
 Content-Type: application/json
 
-{"codes": ["600519", "000858"], "aspects": ["quote", "kline", "info", "boards"]}
+{"codes": ["600519", "000858"], "frequency": "d", "days": 60}
 ```
 
 **Request body:**
@@ -1740,57 +1788,121 @@ Content-Type: application/json
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `codes` | string[] | yes | 1-5 stock codes (bare 6-digit A-share). The 5-code cap matches the stock-picking funnel. |
-| `aspects` | enum[] | no (default = all 5) | Subset of `["quote", "kline", "kline_5m", "info", "boards"]`. `fund_flow` is NOT supported (use `/stocks/{code}/fund-flow` directly). |
+| `frequency` | string | no (default `d`) | One of `d/w/m/1m/5m/15m/30m/60m`. Single-valued per call — long + short frames = two calls (cheap under the 60s shared cache). |
+| `days` | int | no (per-frequency default) | Calendar days. Per-frequency min/max enforced server-side (same table as the indices variant above); out-of-range → 422. |
 
 **Response (200):**
 
 ```json
 {
+  "frequency": "d",
+  "days": 60,
   "results": [
     {
       "code": "600519",
+      "name": "贵州茅台",
       "ok": true,
-      "data": {
-        "quote":     {"code": "600519", "name": "贵州茅台", "current_price": 1698.0, "change_pct": 1.52, "...": "..."},
-        "kline":     {"source": "akshare", "data": [{"date": "2026-07-14", "open": 1680.0, "high": 1700.0, "low": 1670.0, "close": 1698.0, "volume": 1234567, "amount": 2087654321.0, "change_pct": 1.52}]},
-        "kline_5m":  {"source": "akshare", "data": [...]},
-        "info":      {"source": "zhitu", "data": {"code": "600519", "name": "贵州茅台", "industry": "白酒"}},
-        "boards":    {"source": "persistence", "data": [{"code": "885595", "name": "白酒", "type": "industry", "subtype": "同花顺行业", "source": "ths"}]}
+      "quote": {"price": 1721.0, "change_pct": 1.2},
+      "features": {
+        "trend": {
+          "ma": {"ma5": 12.30, "ma10": 12.10, "ma15": 12.00, "ma20": 11.80, "ma30": 11.40, "ma60": 10.90},
+          "ma_change": {"ma5": 0.82, "ma10": 0.61, "ma15": 0.55, "ma20": 0.40, "ma30": 0.25, "ma60": 0.10},
+          "adx": 28.3, "pdi": 24.1, "mdi": 18.6,
+          "rsi": {"rsi_6": 72.1, "rsi_12": 65.4, "rsi_24": 58.2},
+          "boll": {"mid": 11.80, "upper": 13.10, "lower": 10.50, "bandwidth": 22.0}
+        },
+        "pivots": {
+          "window_high": {"price": 13.20, "date": "2026-08-10"},
+          "window_low": {"price": 10.10, "date": "2026-07-15"},
+          "max_vol_bar": {"price": 12.80, "volume": 5.2e7, "date": "2026-08-08"},
+          "swings": [
+            {"date": "2026-07-15", "type": "low", "price": 10.10, "confirmed": true},
+            {"date": "2026-08-03", "type": "high", "price": 12.60, "confirmed": true},
+            {"date": "2026-08-18", "type": "low", "price": 11.40, "confirmed": true}
+          ],
+          "pending": {"side": "topping", "bars": 2, "price": 13.10, "date": "2026-08-26"},
+          "params": {"pivot_window": 2, "reversal_atr_mult": 1.0, "atr_period": 14}
+        },
+        "volume": {
+          "latest_volume": 3.1e7,
+          "vol_ratio_5": 1.45,
+          "z_anomalies": [
+            {"date": "2026-08-25", "open": 12.10, "high": 13.00, "low": 12.05,
+             "close": 12.90, "volume": 8.4e7, "z_score": 3.1,
+             "direction": "up", "change_pct": 6.6}
+          ]
+        }
       },
+      "info":   {"source": "zhitu", "data": {"code": "600519", "name": "贵州茅台", "industry": "白酒"}},
+      "boards": {"source": "persistence", "data": [{"code": "885595", "name": "白酒", "type": "industry", "subtype": "同花顺行业", "source": "ths"}]},
       "errors": []
     }
   ],
-  "summary": {"requested": 2, "ok": 2, "failed": 0, "elapsed_ms": 890}
+  "summary": {"requested": 2, "ok": 2, "failed": 0, "elapsed_ms": 85}
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
+| `frequency` / `days` | string / int | The request's single frequency + resolved days, echoed at top level. |
 | `results[].code` | string | Stock code (echoes the request). |
+| `results[].name` | string | Stock name (from the quote when available). |
 | `results[].ok` | bool | `false` only when **all** aspects raised (entry-level failure); partial aspect failures keep `ok=true` and surface in `errors[]`. |
-| `results[].data` | object | Per-aspect payload (key = aspect name). Each value's shape matches the corresponding non-agent endpoint: `quote` is the flat `StockQuote` dict (NOT wrapped in `{source, data}`); `kline` / `kline_5m` / `info` / `boards` are `{source, data}` envelopes. |
+| `results[].quote` | object \| null | Minimal realtime anchor `{price, change_pct}` (NOT the full `StockQuote`). |
+| `results[].features` | object \| null | Server-computed `{trend, pivots, volume}` at the requested `(frequency, days)`. |
+| `results[].info` | object \| null | `{source, data}` company-profile envelope. |
+| `results[].boards` | object \| null | `{source, data}` board-membership envelope. |
 | `results[].errors[]` | object[] | Per-aspect failure: `{"aspect": "<name>", "error": "<ExceptionClassName>", "message": "<str>"}`. |
 | `summary` | object | `{requested, ok, failed, elapsed_ms}`. |
 
-**Per-aspect error isolation:** each aspect is wrapped in its own
-try/except. The `boards` aspect routes through the persistence layer
-(`stock_board_cache.get_stock_memberships`), NOT `manager.get_stock_boards`,
-to inherit the ZZSHARE↔THS fallback chain and `effective_source` plumbing.
+**`features` block** — `{trend, pivots, volume}` field semantics:
 
-**`kline` aspect pinning:** always passes `asset="stock"` to the
-manager so that codes like `000001` (which is also a CSI index) route
-to `STOCK_KLINE`, not `INDEX_KLINE`. Pinned by
-`test_stocks_batch_profile_kline_passes_asset_stock`.
+- `trend`: latest SMA at periods [5,10,15,20,30,60] + per-period 1-bar
+  slope (`ma_change`, % vs the previous bar) + latest DMI (`adx` / `pdi` /
+  `mdi`, period 14) + RSI latest (`rsi_6` / `rsi_12` / `rsi_24`) + BOLL
+  latest (`mid` / `upper` / `lower` / `bandwidth`, period 20). A
+  cross-sectional + 1-bar-slope snapshot — direction is read from `pivots`
+  / the agent's methodology.
+- `pivots`: significance-filtered swing points (ZigZag).
+  `window_high` / `window_low` / `max_vol_bar` are the max-high / min-low /
+  max-volume bar within the requested `days` window (with dates);
+  `swings` = last ≤ 6 confirmed pivots
+  `{date, type: high|low, price, confirmed: true}`; `pending` = the
+  in-flight (not yet confirmed) extreme; `params` echoes the fixed algorithm
+  settings (`pivot_window=2, reversal_atr_mult=1.0, atr_period=14`) — not
+  request-tunable.
+- `volume`: `latest_volume` + `vol_ratio_5` (latest / mean of the previous
+  5 bars) + `z_anomalies` (bars whose volume Z-score > 2.0 within the
+  window, sorted by `z_score` desc, capped at 20; each carries
+  `{date, open, high, low, close, volume, z_score, direction: up|down,
+  change_pct}`).
 
-**Cache:** `make_stocks_batch_profile_cache_key(sorted(codes), sorted(aspects))` →
-`agent_stocks_batch_profile:<sorted_codes>|<sorted_aspects>`. Both
-axes are sorted so the same (set, set) pair collapses to one entry;
-the response is reordered to the caller's input order on hit.
+**No raw bars.** The old `kline` / `kline_5m` aspects are replaced by
+`features`. Clients that need raw bars go through
+`/stocks/{code}/kline?frequency=...&days=...&indicators=...`. Stocks fix
+`adjust=qfq` server-side (no `adjust` request param); indices use no
+adjust.
+
+**Per-aspect error isolation:** each aspect (`quote` / `features` / `info`
+/ `boards`) is wrapped in its own try/except. The `boards` aspect routes
+through the persistence layer (`stock_board_cache.get_stock_memberships`),
+NOT `manager.get_stock_boards`, to inherit the ZZSHARE↔THS fallback chain
+and `effective_source` plumbing.
+
+**`features` pinning:** the K-line fetch always passes `asset="stock"` to
+the manager so that codes like `000001` (which is also a CSI index) route
+to `STOCK_KLINE`, not `INDEX_KLINE`, and `adjust="qfq"`. Pinned by
+`test_passes_adjust_qfq_and_converts_minute_freq_for_manager`.
+
+**Cache:** `make_stocks_batch_profile_cache_key(sorted(codes), frequency, days)` →
+`agent_stocks_batch_profile:{frequency}:{days}:<sorted_codes>`. Codes are
+sorted so the same set in a different order collapses to one entry; the
+response is reordered to the caller's input order on hit.
 
 **Errors:**
 
-- `422 invalid_request` (Pydantic) — `codes` empty / > 5 / `aspects`
-  empty / unknown aspect name.
+- `422 invalid_request` (Pydantic + route) — `codes` empty / > 5 / unknown
+  `frequency` / `days` outside the per-frequency range.
 
 ---
 

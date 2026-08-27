@@ -185,9 +185,9 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 | `POST /api/v1/agent/boards/stock-overlap` | `{"codes": ["885xxx", "881xxx", ...]}` (2-10 板块) | 多板块成分股两两交集 + Jaccard；用于"判断哪些概念/行业同时覆盖了某批候选股" | 5xx → 网络搜索工具 `"板块 成分股 列表"`；422 → 检查 `codes` 是否在 board 缓存中（board list 未刷新） |
 | `POST /api/v1/agent/stocks/board-overlap` | `{"codes": ["600519", "000001", ...]}` (2-10 个股) | 多股票所属板块两两交集；用于"龙头/候选是否同板块系"判断 | 5xx → 网络搜索工具 `"{code} 所属概念"`；422 → 检查 stock_list 缓存 |
 | `POST /api/v1/agent/boards/filter-stocks` | `{"board_code", "source", "filters": {...}, "limit"?}` | 板块成分股服务端数值过滤（换手/涨跌幅/成交额/市值/最高涨幅） | 5xx / 503 `board_unavailable` → 网络搜索工具 `"板块成分股 换手 排名"`；422 `cid_unresolved` → 刷新 board 缓存 |
-| `GET /api/v1/agent/indices/batch-profile` | `?codes=000001,000300` (默认 000001/399001/399006) | 指数批量画像：每个指数实时报价 + 5m/d/w 三频率 K 线，单次 fan-out | 5xx 不外抛（per-frequency 失败写入 `klines[f].error`）；检查上游 fetcher 状态 |
+| `GET /api/v1/agent/indices/batch-profile` | `?codes=` (1-5, 默认 3 核心) + `?frequency=` + `?days=` | 指数批量画像：每个指数极简 quote（最新价/涨跌幅）+ trend/pivots/volume 计算指标（替代原 5m/d/w 三频率 raw K 线） | 5xx 不外抛（quote/features 失败写入 `errors[]`） |
 | `GET /api/v1/agent/market-context` | `?flash_limit=20&trade_date=YYYY-MM-DD` | 市场全景：早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜（含时段判断 + 龙虎榜 summary） | 5xx per-block 隔离（CLS / zt / dt / dtiger 任一失败不影响其他）；date 越界或格式错 → 400 |
-| `POST /api/v1/agent/stocks/batch-profile` | `{"codes": ["..."], "aspects": [...]}` (1-5 个股) | 股票批量画像：每个股 quote / kline / kline_5m / info / boards，单次 fan-out | 5xx per-aspect 隔离（失败写入 `results[i].errors[]`） |
+| `POST /api/v1/agent/stocks/batch-profile` | `{"codes": [...], "frequency": "d", "days": 60}` (1-5) | 股票批量画像：quote + features（trend/pivots/volume）+ info + boards；raw K 线已移除，需明细走 `/stocks/{code}/kline` | 5xx per-aspect 隔离（quote/features/info/boards） |
 | `POST /api/v1/agent/correlation/matrix` | `{"stocks": [...], "boards": [...], "frequency"?, "days"?, "methods"?}` (2-10 资产) | 跨资产两两 Pearson + Spearman 相关性矩阵（A 股，d/w/m/1m/5m/15m/30m/60m）；支持 stock+board 混合 | 422 `insufficient_assets` → 失败资产数 ≥ N-1；422 `bad_request` → 检查 frequency×days×source 三维约束；1m+`eastmoney` 直接 422（eastmoney 不支持 1m 板 K 线） |
 | `GET /api/v1/agent/market-stats` | `?include_boards=true` (默认), `?format=json\|md` | 全市场涨幅统计：个股 + 板块 各 1 块，含均值/中位/最高/最低/上涨下跌平盘家数 + 11/9 个百分比桶（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶）；A 股 only；per-block 错误隔离（单块失败不影响另一块） | 5xx 不外抛（个股/板块块失败均写入 `errors[]`，相应块置 `null`）；`?include_boards=false` 时板块上游根本不被调用 |
 
@@ -227,8 +227,9 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 
 **`indices/batch-profile` 关键字段**：
 
-- 响应 `indices[].klines` 是 `{5m: {data, error}, d: {data, error}, w: {data, error}}` —— 频率级错误隔离写入 `klines[f].error`，不外抛 5xx
-- Bar 数固定：5m = 2 个交易日，d = 30 根，w = 48 根；如需自定义 → 走 `/indices/{code}/kline?frequency=...&days=...`
+- `frequency`（单值 `d/w/m/1m/5m/15m/30m/60m`）+ `days` 顶层回显；`days` 上限：`d≤365, w≤1095, m≤1825, 1m≤3, 5m≤5, 15m≤8, 30m≤15, 60m≤30`
+- `indices[].features` = `{trend, pivots, volume}`；`trend`（MA 5/10/15/20/30/60 最新值 + 环比昨日 % + ADX/PDI/MDI/RSI/BOLL）、`pivots`（区间最高/最低/最大量价 + ZigZag 摆动点 + 在途未确认）、`volume`（最新量 + 5 日量比 + Z>2 放量异动）
+- stocks 端固定 `adjust=qfq`；indices 无复权
 
 **`market-context` 关键字段**：
 
@@ -238,9 +239,8 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 
 **`stocks/batch-profile` 关键字段**：
 
-- `aspects` 默认 5 项全开；可子集化（`["quote", "info"]`），不传 = 全开
-- `kline` aspect 永远传 `asset="stock"`（防止 `000001` 这种既是 A 股又是 CSI 指数的代码错走 INDEX_KLINE 分支）
-- `boards` aspect 走 `stock_board_cache.get_stock_memberships`（不是 `manager.get_stock_boards`）——继承 ZZSHARE↔THS fallback + `effective_source` 链路
+- `codes` 1-5；`aspects` 入参已移除——每次返回 quote + features + info + boards
+- 顶底为显著性过滤（`pivot_window=2, reversal_atr_mult=1.0, ATR14`），`pivots.params` 回显算法参数，不对外暴露
 
 **典型调用模式**（`market-principles` 第 5 节"判断龙头股"步骤中可串入）：
 
@@ -268,16 +268,16 @@ curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
     "limit": 10
   }'
 
-# 4. 指数全景（3 个核心 CSI 指数 + 5m/d/w 三频率 K 线）
+# 4. 指数全景（3 个核心 CSI 指数 + trend/pivots/volume features；可 ?frequency= ?days=）
 curl 'http://localhost:8888/api/v1/agent/indices/batch-profile'
 
 # 5. 市场全景（含早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜）
 curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=50'
 
-# 6. 候选股批量画像（最多 5 只；aspects 可子集化）
+# 6. 候选股批量画像（最多 5 只；单 frequency 单 days）
 curl -X POST http://localhost:8888/api/v1/agent/stocks/batch-profile \
   -H 'Content-Type: application/json' \
-  -d '{"codes": ["600519", "000858"], "aspects": ["quote", "kline", "info", "boards"]}'
+  -d '{"codes": ["600519", "000858"], "frequency": "d", "days": 60}'
 
 # 7. 任意 agent 端点加 ?format=md 拿 markdown（无数据丢失，token 更省）
 curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=20&format=md'
@@ -374,7 +374,7 @@ curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'
 | 5.1 **看候选股两两同板块** | `POST /agent/stocks/board-overlap`（取代手算 N×N 交集） |
 | 5.2 **看候选板块两两同成分股** | `POST /agent/boards/stock-overlap` |
 | 5.3 **板块成分股数值过滤** | `POST /agent/boards/filter-stocks`（取代手写 SQL/if 链） |
-| 5.4 **候选股批量画像（1-5 只）** | **`POST /agent/stocks/batch-profile`**（一次拿 quote + kline + info + boards，取代步骤 2 + 5 的 N 次调用） |
+| 5.4 **候选股批量画像（1-5 只）** | **`POST /agent/stocks/batch-profile`**（一次拿 quote + features + info + boards，取代步骤 2 + 5 的 N 次调用） |
 | 5.5 **候选股 / 板块两两相关性（"是否同涨同跌"）** | **`POST /agent/correlation/matrix`**（2-10 资产混合，d/w/m/1m/5m/15m/30m/60m；A 股 only；输出 Pearson + Spearman NxN 矩阵 + 对齐信息） |
 | 5.6 **看全市场情绪（涨跌家数 + 涨幅分布桶）** | **`GET /agent/market-stats`**（个股 + 板块 各 1 块；11/9 桶形数据；`?include_boards=false` 可只取个股块；`?format=md` 拿表格化 markdown） |
 

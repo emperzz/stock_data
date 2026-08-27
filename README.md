@@ -99,16 +99,18 @@ curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
     "limit": 10
   }'
 
-# Per-index fan-out: realtime quote + 5m/d/w K-line (3 default CSI indices)
+# Per-index fan-out: minimal quote + trend/pivots/volume features
+# (3 default CSI indices; optional ?frequency= ?days=)
 curl 'http://localhost:8888/api/v1/agent/indices/batch-profile'
 
 # Daily market snapshot: morning briefing + market recap + flash + zt/dt + dragon-tiger
 curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=50'
 
-# Per-stock fan-out across 5 aspects (quote / kline / kline_5m / info / boards)
+# Per-stock fan-out across quote / features / info / boards (1-5 codes;
+# single frequency + days)
 curl -X POST http://localhost:8888/api/v1/agent/stocks/batch-profile \
   -H 'Content-Type: application/json' \
-  -d '{"codes": ["600519", "000858"], "aspects": ["quote", "kline", "info", "boards"]}'
+  -d '{"codes": ["600519", "000858"], "frequency": "d", "days": 60}'
 
 # Pairwise Pearson + Spearman correlation matrix across stocks + boards
 # (A-share only, 2-10 assets total, d/w/m/1m/5m/15m/30m/60m)
