@@ -179,9 +179,14 @@ class TestPivotFeatures:
         df = _make_pivot_df([10, 12, 15, 14, 11, 9, 12, 16])
         window = _window_by_last_days(df, 30)
         out = compute_pivots(df, window)
-        assert out["window_high"]["price"] == 16.0
-        assert out["window_low"]["price"] == 9.0
+        # spec §3.2: prices are the actual max high / min low in the window
+        # (fixture: high = close*1.05, low = close*0.95; max close 16 → 16.8,
+        # min close 9 → 8.55), not the extreme bar's close.
+        # approx: fixture math (9 * 0.95) is not exactly representable as 8.55
+        assert out["window_high"]["price"] == pytest.approx(16.8)
+        assert out["window_low"]["price"] == pytest.approx(8.55)
         assert out["window_high"]["date"]
+        assert out["window_low"]["date"]
         # max_vol_bar is the max-volume bar's close (volumes increase over time)
         assert out["max_vol_bar"]["volume"] == float(df["volume"].iloc[-1])
 

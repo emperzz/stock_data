@@ -118,8 +118,11 @@ def _window_stats(window_df: pd.DataFrame) -> dict:
     lo = window_df.loc[window_df["low"].idxmin()]
     mv = window_df.loc[window_df["volume"].idxmax()]
     return {
-        "window_high": {"price": float(hi["close"]), "date": str(hi["date"])},
-        "window_low": {"price": float(lo["close"]), "date": str(lo["date"])},
+        # spec §3.2: window_high / window_low report the actual extreme price
+        # (max high / min low) within the window, not the extreme bar's close.
+        "window_high": {"price": float(hi["high"]), "date": str(hi["date"])},
+        "window_low": {"price": float(lo["low"]), "date": str(lo["date"])},
+        # max_vol_bar.price is the max-volume bar's close (spec §3.2).
         "max_vol_bar": {"price": float(mv["close"]), "volume": float(mv["volume"]), "date": str(mv["date"])},
     }
 
