@@ -230,4 +230,6 @@ class TestBuildFeatures:
         df = _make_kline_df(120)
         out_60 = build_features(df, frequency="d", days=60)
         # window_high computed on last ~60 calendar days of bars only
-        assert out_60["pivots"]["window_high"]["price"] == float(df["high"].iloc[-42:].max())
+        cutoff = pd.Timestamp(df["date"].iloc[-1]) - pd.Timedelta(days=60)
+        mask = pd.to_datetime(df["date"]) >= cutoff
+        assert out_60["pivots"]["window_high"]["price"] == float(df.loc[mask, "high"].max())
