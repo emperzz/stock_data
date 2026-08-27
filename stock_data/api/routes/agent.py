@@ -1615,6 +1615,58 @@ def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
     return "\n".join(out)
 
 
+def _md_stats_block(
+    title: str, stats, *, total_universe_label: str
+) -> list[str]:
+    """Render one stats block (个股 or 板块) to MD table rows."""
+    out: list[str] = [f"## {title}"]
+    if stats is None:
+        out.append("（失败 — 详见 errors）")
+        return out
+    out.append(
+        f"样本数: **{stats.sample_size}** ({total_universe_label}); "
+        f"均值 {_md_pct(stats.mean_pct)}, 中位 {_md_pct(stats.median_pct)}, "
+        f"最高 {_md_pct(stats.max_pct)}, 最低 {_md_pct(stats.min_pct)}"
+    )
+    out.append(
+        f"上涨: **{stats.up_count}** / 下跌: **{stats.down_count}** / "
+        f"平盘: **{stats.flat_count}**"
+    )
+    out.append("")
+    out.append("| 区间 | 计数 | 占比 |")
+    out.append("|---|---|---|")
+    if stats.sample_size:
+        for b in stats.buckets:
+            pct = b.count / stats.sample_size * 100
+            out.append(f"| {b.label} | {b.count} | {_md_num(pct, 2)}% |")
+    else:
+        for b in stats.buckets:
+            out.append(f"| {b.label} | 0 | — |")
+    return out
+
+
+def render_market_stats_as_md(p: MarketStatsResponse) -> str:
+    out: list[str] = ["# 市场全量统计", ""]
+    out.extend(_md_stats_block("个股", p.stocks, total_universe_label="A 股全市场"))
+    out.append("")
+    out.extend(_md_stats_block("板块", p.boards, total_universe_label="ths 板块清单"))
+    out.append("")
+    out.append("## 失败列表")
+    out.extend(
+        _md_errors(
+            [e.model_dump() for e in p.errors], key="block", header="块"
+        )
+    )
+    out.append("")
+    s = p.summary or {}
+    out.append(
+        f"## 汇总 — requested {s.get('requested', '?')}, "
+        f"ok {s.get('ok', '?')}, failed {s.get('failed', '?')}, "
+        f"elapsed {s.get('elapsed_ms', '?')}ms"
+    )
+    return "\n".join(out)
+
+
 # Map route → MD template. Routes look this up in the handler.
 _MD_TEMPLATES: dict[str, Callable] = {
     "boards/stock-overlap": render_boards_overlap_as_md,
@@ -1623,6 +1675,7 @@ _MD_TEMPLATES: dict[str, Callable] = {
     "indices/batch-profile": render_indices_batch_profile_as_md,
     "market-context": render_market_context_as_md,
     "stocks/batch-profile": render_stocks_batch_profile_as_md,
+    "market-stats": render_market_stats_as_md,
 }
 
 
