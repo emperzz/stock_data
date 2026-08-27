@@ -116,7 +116,7 @@ agent 收到选股请求后先判断用户是否**指定了板块**。
 
 在每个强势板块内，按以下顺序逐票过滤（前置阶段淘汰的不进入后续）。每步"要哪类数据"如下，**取数端点去 `market-data-obtain` 查**。
 
-**取数策略**：步骤 6-10 是 "per-stock × 多 aspect" fan-out；本 skill 已自限候选 ≤5（§4 步骤 9 双重门控 + 临场人工节流），**优先合并为 `market-data-obtain §9.1` 的 `agent/stocks/batch-profile` 一次调用**（`aspects=["quote","kline","kline_5m","info"]`；步骤 9 触发时加 `"boards"`；hard cap 1-5 codes 与 skill 的 ≤5 自限契合）。**所有 `agent/*` 端点共享 60s cache**——步骤 6 / 7 / 8 顺序调用同一批候选时，cache miss 才下发新请求；同 session 内不同板块间的同一候选比较也直接命中。
+**取数策略**：步骤 6-10 是 "per-stock × 多 aspect" fan-out；本 skill 已自限候选 ≤5（§4 步骤 9 双重门控 + 临场人工节流），**优先合并为 `market-data-obtain §9.1` 的 `agent/stocks/batch-profile` 一次调用**（`aspects` 入参已移除——一次调用即返回 quote + features（trend/pivots/volume）+ info + boards，无需按 aspect 分别请求；hard cap 1-5 codes 与 skill 的 ≤5 自限契合）。**features 是服务端计算指标、无 raw K 线**——需要原始日 K 走 `/stocks/{code}/kline`；要日线趋势 **和** 5 分钟分时需**调两次**（`frequency="d"` 一次 + `frequency="5m"` 一次）。**所有 `agent/*` 端点共享 60s cache**——第二次调用直接命中；步骤 6 / 7 / 8 顺序调用同一批候选时，cache miss 才下发新请求；同 session 内不同板块间的同一候选比较也直接命中。
 
 > **本阶段顺序**：量价换手（首道硬门槛）→ K 线 → 5 分钟分时软排序 → 业务相似（双重门控）→ 财务 tiebreaker。**量价换手提前**——流动性数据最便宜，先粗筛可省掉对死票的 K 线/分时调用
 
@@ -197,7 +197,7 @@ agent 收到选股请求后先判断用户是否**指定了板块**。
 - **不要**用 1 分钟 K 线 —— 已统一改为 **5 分钟 K 线最近 2 日**作为分时软排序；不要把 5 分钟量价当作硬门槛（它是软排序因子）
 - **不要**把 §4 步骤 9 当成无条件执行 —— 业务相似是**双重门控**（有龙头 且 ≥2 候选），任一不满足跳过本步
 - **不要**用收盘涨幅替代 §4 步骤 6 的"最高涨幅"硬门槛 —— 必须用**(最高价 - 开盘价) / 开盘价**，捕捉盘中拉升后回落的票
-- **不要**对每只候选独立拉 4-5 个端点（quote + kline + 5m + info + boards）——候选 ≤5 时合到 `market-data-obtain §9.1` 的 `agent/stocks/batch-profile`（§4 取数策略）
+- **不要**对每只候选独立拉 4-5 个端点（quote + features + info + boards）——候选 ≤5 时合到 `market-data-obtain §9.1` 的 `agent/stocks/batch-profile`（§4 取数策略）
 - **不要**≥2 候选板块时手算两两成分股交集——走 `agent/boards/stock-overlap`（§3 步骤 4 取数建议）
 - **不要**≥2 候选股时手算所属板块交集——走 `agent/stocks/board-overlap`（§4 步骤 9 取数建议）
 - **不要**为 ≥2 个候选资产手算两两相关性 —— 走 `market-data-obtain §9.1` 的 `agent/correlation/matrix`（A 股 only，2-10 资产混合，d/w/m/1m/5m/15m/30m/60m；服务端算 Pearson + Spearman + 对齐信息；不走 agent 层复合缓存，依赖内层 fetcher TTL）
