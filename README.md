@@ -122,12 +122,18 @@ curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
     "methods": ["pearson", "spearman"]
   }'
 
+# Full-market stats: mean / median / max / min / up-down-flat + percentage
+# buckets, for stocks AND boards in one response. Per-block error isolation:
+# a single upstream failure sets that block to null, not the whole response.
+# ?include_boards=false skips the boards upstream call entirely.
+curl 'http://localhost:8888/api/v1/agent/market-stats'
+
 # Any agent endpoint can be requested as markdown (?format=md) — no data loss,
 # lower token cost, native in LLM training data
 curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=20&format=md'
 ```
 
-All seven live under `/api/v1/agent/*` and use a 60s in-memory cache
+All eight live under `/api/v1/agent/*` and use a 60s in-memory cache
 (`limit` participates in the `filter-stocks` cache key and `session`
 participates in the `market-context` key — different values trigger
 separate fetches and separate cache entries). Per-item upstream

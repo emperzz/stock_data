@@ -1277,6 +1277,7 @@ summarize" is folded into one request. Seven endpoints ship in v1:
 | `/agent/market-context` | GET | Morning briefing + market recap + flash + zt/dt + dragon-tiger |
 | `/agent/stocks/batch-profile` | POST | Per-stock fan-out across quote / kline / info / boards (1-5 codes) |
 | `/agent/correlation/matrix` | POST | Pairwise Pearson + Spearman correlation matrix across 2-10 stocks/boards (A-share only) |
+| `/agent/market-stats` | GET | Full-market stats (mean / median / max / min / up-down-flat + percentage buckets) for stocks + boards |
 
 **Common contract:**
 
@@ -1950,3 +1951,144 @@ re-index). Inner-join keeps only dates present in **every** series, then
 final matrix uses `len(returns)` rows; `common_bars` reports the
 pre-pct-change size. `np.corrcoef` handles zero-variance columns (NaN
 → 0 via `_finalize_matrix`'s `np.where(np.isnan, 0.0)` fallback).
+
+---
+
+### GET /api/v1/agent/market-stats
+
+Full-market A-share stats aggregator: returns distribution statistics
+(mean / median / max / min of `change_pct`, up / down / flat counts,
+and a fixed-bucket histogram) for **both** the full stock universe and
+the full board universe in one response. Per-block error isolation:
+one upstream failure sets that block to `null` and surfaces the
+exception in `errors[]`; the other block continues normally. Use case:
+"how is the market doing right now" without an N+1 fetch + client-side
+bucket loop.
+
+```bash
+GET /api/v1/agent/market-stats
+GET /api/v1/agent/market-stats?include_boards=false
+GET /api/v1/agent/market-stats?format=md
+```
+
+**Query parameters:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `include_boards` | bool | `true` | When `false`, the boards block is skipped — no boards upstream call is made. Useful when the caller only wants stock stats (saves the THS board-list-with-quotes fetch). |
+| `format` | enum | `"json"` | `json` (default) or `md` — see [`?format=json\|md` projection](#agent-batch-api). |
+
+**Response (200):**
+
+```json
+{
+  "stocks": {
+    "sample_size": 5123,
+    "mean_pct":   0.32,
+    "median_pct": 0.18,
+    "max_pct":   11.20,
+    "min_pct":   -9.85,
+    "up_count":   2840,
+    "down_count": 2150,
+    "flat_count":   133,
+    "bin_width":   3.0,
+    "buckets": [
+      {"label":"(-∞, -12%]", "lower":null, "upper":-12.0, "count":   8},
+      {"label":"(-12%, -9%]", "lower":-12.0, "upper": -9.0, "count":  42},
+      {"label":"(-9%, -6%]",  "lower": -9.0, "upper": -6.0, "count": 185},
+      {"label":"(-6%, -3%]",  "lower": -6.0, "upper": -3.0, "count": 712},
+      {"label":"(-3%, 0)",    "lower": -3.0, "upper":  0.0, "count":1100},
+      {"label":"0% (平盘)",   "lower":  0.0, "upper":  0.0, "count": 133},
+      {"label":"(0, +3%]",    "lower":  0.0, "upper":  3.0, "count":1650},
+      {"label":"(+3%, +6%]",  "lower":  3.0, "upper":  6.0, "count": 920},
+      {"label":"(+6%, +9%]",  "lower":  6.0, "upper":  9.0, "count": 310},
+      {"label":"(+9%, +12%]", "lower":  9.0, "upper": 12.0, "count":  55},
+      {"label":"(+12%, +∞)",  "lower": 12.0, "upper":null,  "count":   8}
+    ]
+  },
+  "boards": {
+    "sample_size": 320,
+    "mean_pct":   0.15,
+    "median_pct": 0.10,
+    "max_pct":    5.40,
+    "min_pct":   -3.20,
+    "up_count":   168,
+    "down_count": 138,
+    "flat_count":  14,
+    "bin_width":   1.0,
+    "source":     "ths",
+    "buckets": [
+      {"label":"(-∞, -3%]", "lower":null, "upper":-3.0, "count":  6},
+      {"label":"(-3%, -2%]", "lower":-3.0, "upper":-2.0, "count": 11},
+      {"label":"(-2%, -1%]", "lower":-2.0, "upper":-1.0, "count": 38},
+      {"label":"(-1%, 0)",   "lower":-1.0, "upper": 0.0, "count": 78},
+      {"label":"0% (平盘)",  "lower": 0.0, "upper": 0.0, "count": 14},
+      {"label":"(0, +1%]",   "lower": 0.0, "upper": 1.0, "count": 89},
+      {"label":"(+1%, +2%]", "lower": 1.0, "upper": 2.0, "count": 56},
+      {"label":"(+2%, +3%]", "lower": 2.0, "upper": 3.0, "count": 22},
+      {"label":"(+3%, +∞)",  "lower": 3.0, "upper":null, "count":  6}
+    ]
+  },
+  "errors": [],
+  "summary": {"requested": 2, "ok": 2, "failed": 0, "elapsed_ms": 184}
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `stocks` | object \| null | Stock universe statistics, or `null` if `manager.get_realtime_quotes("csi")` failed. |
+| `boards` | object \| null | Board universe statistics, or `null` if `stock_board_cache.get_board_list(source="ths", include_quote=True)` failed. `null` also when `include_boards=false` (no upstream attempt). |
+| `stocks.sample_size` / `boards.sample_size` | int | Number of non-None `change_pct` values used. May be smaller than the full universe when upstream returns rows without `change_pct`. |
+| `stocks.{mean,median,max,min}_pct` | float \| null | Aggregates over the sample. `null` if `sample_size == 0`. |
+| `stocks.up_count` / `down_count` / `flat_count` | int | `up` = `change_pct > 1e-9`; `down` = `< -1e-9`; `flat` = `\|change_pct\| ≤ 1e-9` (covers upstream-reported "exactly 0" and float-near-zero). |
+| `stocks.buckets` / `boards.buckets` | object[] | **Fixed template** — always the full 11 (stocks) / 9 (boards) buckets in the same order, even when `sample_size == 0` (all counts then `0`). Clients can render a stable table shape regardless of how thin the data is. |
+| `stocks.buckets[i].{label,lower,upper}` | str / float \| null | Bucket label and edges. `lower == upper == 0` for the flat bucket; one of `{lower, upper}` is `null` for ±∞ boundary buckets; otherwise left-open right-closed `[lower, upper]` (e.g. `(-3%, 0)` for the right-open bucket adjacent to the flat bucket — see bucket convention note below). |
+| `stocks.buckets[i].count` | int | Number of values falling in this bucket. |
+| `boards.source` | str | `"ths"` (or `"persistence"` if served from cache without a refresh). Mirrors the `effective_source` semantics of `/boards/{code}/stocks`. |
+| `errors[]` | object[] | Per-block failures: `{block: "stocks"\|"boards", error, message}`. Empty on success. See error isolation matrix below. |
+| `summary` | object | `{requested, ok, failed, elapsed_ms}` — same contract as `IndicesBatchProfileResponse` / `MarketContextResponse`. |
+
+**Bucket convention** (left-open right-closed with flat-first routing):
+
+- Interior buckets use `(lower, upper]` — i.e. `lower < v ≤ upper`. So
+  `-3.0` lands in `(-6%, -3%]` (the right-closed upper), and `-9.0` lands
+  in `(-12%, -9%]` for the same reason.
+- The 0-adjacent buckets (`(-3%, 0)` / `(-1%, 0)`) are **right-open** —
+  the label uses `)` not `]` — because the `{0}` flat bucket absorbs all
+  near-zero values first (`|v| ≤ 1e-9` → flat bucket, NOT the adjacent
+  bucket).
+- The flat bucket `{0}` is `{lower=0, upper=0, label="0% (平盘)"}` and
+  is checked FIRST in the assignment logic.
+- ±∞ boundary buckets (`(-∞, -12%]` / `(+12%, +∞)` for stocks;
+  `(-∞, -3%]` / `(+3%, +∞)` for boards) use `None` for the unbounded side.
+
+**Cache:** `make_market_stats_cache_key(include_boards)` →
+`"agent_market_stats:{True|False}"`. Shared 60s TTL via `get_quote_cache`
+(JSON and MD share one entry — `_render_agent` only formats on the way
+out). Failures are cached too, so a downed upstream doesn't get hammered
+within the 60s window.
+
+**Error isolation matrix** (all return `200`; partial data is signaled by `null` blocks + `errors[]`):
+
+| Failure | `stocks` | `boards` | `errors[]` | HTTP |
+|---|---|---|---|---|
+| Both upstream OK | populated | populated | `[]` | 200 |
+| Only stocks fails | `null` | populated | `[{"block":"stocks",...}]` | 200 |
+| Only boards fails | populated | `null` | `[{"block":"boards",...}]` | 200 |
+| Both fail | `null` | `null` | 2 entries | 200 |
+| `include_boards=false` | populated | `null` (not attempted) | `[]` | 200 |
+
+**Errors:**
+
+- `422 invalid_request` (Pydantic) — `format` value other than `json` / `md`.
+- **No 5xx.** Upstream failures always surface in `errors[]` with the
+  block name, exception class, and message. The endpoint never aborts
+  the whole response on a single failure.
+
+**`?format=md` projection:** renders each block (个股 + 板块) as a markdown
+table with the same fields as JSON (sample size, six summary stats,
+up/down/flat counts, bucket distribution with 占比 column), plus the
+errors list and the standard summary line. The same `_render_agent` JSON-
+fallback contract applies: a template failure returns JSON with an
+`X-MD-Render-Error` header (data is never dropped on the way out).
+

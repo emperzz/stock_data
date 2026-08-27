@@ -178,7 +178,7 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 
 ### 9.1 Agent 批量端点（板块集合运算 / 数值过滤 / 批量画像 / 市场快照）
 
-> 本节端点位于 `/api/v1/agent/*`，面向 LLM agent 的高频组合查询——把"多板块两两交集 / 个股所属板块两两交集 / 板块成分股数值过滤 / 批量个股画像 / 市场全景快照 / 跨资产相关性矩阵"这些典型操作下沉到服务端，避免 agent 自己 N+1 调用 + 手算 set-op。
+> 本节端点位于 `/api/v1/agent/*`，面向 LLM agent 的高频组合查询——把"多板块两两交集 / 个股所属板块两两交集 / 板块成分股数值过滤 / 批量个股画像 / 市场全景快照 / 跨资产相关性矩阵 / 全市场涨幅统计"这些典型操作下沉到服务端，避免 agent 自己 N+1 调用 + 手算 set-op。
 
 | 端点 | 输入 | 用途 | 失败 fallback |
 |---|---|---|---|
@@ -189,6 +189,7 @@ A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列�
 | `GET /api/v1/agent/market-context` | `?flash_limit=20&trade_date=YYYY-MM-DD` | 市场全景：早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜（含时段判断 + 龙虎榜 summary） | 5xx per-block 隔离（CLS / zt / dt / dtiger 任一失败不影响其他）；date 越界或格式错 → 400 |
 | `POST /api/v1/agent/stocks/batch-profile` | `{"codes": ["..."], "aspects": [...]}` (1-5 个股) | 股票批量画像：每个股 quote / kline / kline_5m / info / boards，单次 fan-out | 5xx per-aspect 隔离（失败写入 `results[i].errors[]`） |
 | `POST /api/v1/agent/correlation/matrix` | `{"stocks": [...], "boards": [...], "frequency"?, "days"?, "methods"?}` (2-10 资产) | 跨资产两两 Pearson + Spearman 相关性矩阵（A 股，d/w/m/1m/5m/15m/30m/60m）；支持 stock+board 混合 | 422 `insufficient_assets` → 失败资产数 ≥ N-1；422 `bad_request` → 检查 frequency×days×source 三维约束；1m+`eastmoney` 直接 422（eastmoney 不支持 1m 板 K 线） |
+| `GET /api/v1/agent/market-stats` | `?include_boards=true` (默认), `?format=json\|md` | 全市场涨幅统计：个股 + 板块 各 1 块，含均值/中位/最高/最低/上涨下跌平盘家数 + 11/9 个百分比桶（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶）；A 股 only；per-block 错误隔离（单块失败不影响另一块） | 5xx 不外抛（个股/板块块失败均写入 `errors[]`，相应块置 `null`）；`?include_boards=false` 时板块上游根本不被调用 |
 
 **`correlation/matrix` 关键字段**：
 
@@ -299,6 +300,15 @@ curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
 curl -X POST 'http://localhost:8888/api/v1/agent/correlation/matrix?format=md' \
   -H 'Content-Type: application/json' \
   -d '{"stocks": ["600519", "000858"], "boards": [{"code": "881270", "source": "ths"}], "days": 90}'
+
+# 8. 全市场涨幅统计（个股 + 板块，含桶形数据；per-block 错误隔离）
+curl 'http://localhost:8888/api/v1/agent/market-stats'
+
+# 8.1 只看个股（跳过板块上游调用）
+curl 'http://localhost:8888/api/v1/agent/market-stats?include_boards=false'
+
+# 8.2 拿 markdown（表格化桶形数据，便于 LLM 阅读）
+curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'
 ```
 
 ---
@@ -366,6 +376,7 @@ curl -X POST 'http://localhost:8888/api/v1/agent/correlation/matrix?format=md' \
 | 5.3 **板块成分股数值过滤** | `POST /agent/boards/filter-stocks`（取代手写 SQL/if 链） |
 | 5.4 **候选股批量画像（1-5 只）** | **`POST /agent/stocks/batch-profile`**（一次拿 quote + kline + info + boards，取代步骤 2 + 5 的 N 次调用） |
 | 5.5 **候选股 / 板块两两相关性（"是否同涨同跌"）** | **`POST /agent/correlation/matrix`**（2-10 资产混合，d/w/m/1m/5m/15m/30m/60m；A 股 only；输出 Pearson + Spearman NxN 矩阵 + 对齐信息） |
+| 5.6 **看全市场情绪（涨跌家数 + 涨幅分布桶）** | **`GET /agent/market-stats`**（个股 + 板块 各 1 块；11/9 桶形数据；`?include_boards=false` 可只取个股块；`?format=md` 拿表格化 markdown） |
 
 ---
 
