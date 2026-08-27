@@ -162,19 +162,27 @@ For each `code` in `payload.codes`:
    ```
    `board_type=None` lets `ThsFetcher` look it up from the `stock_board`
    cache and fall back to `get_board_metadata` if absent.
-   - On success → `MinimalQuote(price=q.price, change_pct=q.change_pct)`.
+   - On success → `MinimalQuote(price=q.get("price"), change_pct=q.get("change_pct"))`.
    - On `Exception` (mirrors the catch used by stocks/indices batch-profile) →
      `errors["quote"] = "<exception class>: <message>"`, `quote = None`.
 2. **features** (best-effort):
    ```python
+   profile = _FEATURE_FREQS[frequency]
    df, _src = manager.get_board_history(
        board_code,
        source="ths",
-       frequency=_FEATURE_FREQS[frequency].mgr_frequency,
+       frequency=frequency,             # PUBLIC string ("5m"), NOT profile.mgr_frequency
        days=max(days, profile.ma60_warmup_days),
    )
    features = BatchFeatures(**build_features(df, frequency=frequency, days=days))
    ```
+   **Frequency translation note**: `_FEATURE_FREQS[frequency].mgr_frequency`
+   exists for the stock/index paths (`manager.get_kline_data` accepts bare
+   minute codes like `"5"`). The board path's `manager.get_board_history`
+   validates against `BOARD_KLINE_FREQ_BY_SOURCE["ths"]`, which contains
+   the **public** strings (`"5m"`, not `"5"`). Passing `mgr_frequency` here
+   would raise `ValueError` → 400 on every minute-frequency request. The
+   manager boundary for boards MUST receive `frequency` verbatim.
    - On `Exception` →
      `errors["features"] = "<exception class>: <message>"`, `features = None`.
    - **Empty DataFrame is not an error** — `build_features` returns

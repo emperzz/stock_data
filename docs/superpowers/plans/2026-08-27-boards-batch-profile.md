@@ -13,13 +13,16 @@
 - Spec: `docs/superpowers/specs/2026-08-27-boards-batch-profile-design.md`.
 - Source is **fixed to `ths`** (single source). Do NOT add a `source` request param.
 - `board_type` is **NOT** exposed to the caller; passed as `board_type=None` and resolved by `ThsFetcher.get_board_realtime` via the `stock_board` cache (with internal fallback) and by `ThsFetcher.get_board_history` likewise.
-- Public `frequency` strings (`d / w / m / 1m / 5m / 15m / 30m / 60m`) validated against `_FEATURE_FREQS` (defined in `api/routes/agent.py`). The manager-facing frequency is `_FEATURE_FREQS[frequency].mgr_frequency` — `5m`→`5`, `15m`→`15`, …; `d/w/m` unchanged. **Never pass `5m` verbatim to `manager.get_board_history`** (fetchers only accept bare minute codes `1/5/15/30/60`).
+- Public `frequency` strings (`d / w / m / 1m / 5m / 15m / 30m / 60m`) validated against `_FEATURE_FREQS` (defined in `api/routes/agent.py`).
+- **Frequency translation to manager is asymmetric**:
+  - `manager.get_kline_data(asset="stock"|"index")` (used by the stocks/indices batch-profile handlers) accepts bare minute codes — `_FEATURE_FREQS[frequency].mgr_frequency` ("5m"→"5", …).
+  - `manager.get_board_history(...)` (used by THIS handler) validates against `BOARD_KLINE_FREQ_BY_SOURCE["ths"]`, which contains the **public strings** ("5m", not "5"). **Pass `frequency` verbatim, NOT `profile.mgr_frequency`**, otherwise every minute-frequency board request raises `ValueError` → 400. See spec §3.1 "Frequency translation note".
 - Per-frequency `days` (calendar) ranges — route must 422 outside these (min is inclusive, max is inclusive):
   `d:(2,365) w:(14,1095) m:(60,1825) 1m:(2,3) 5m:(2,5) 15m:(2,8) 30m:(2,15) 60m:(2,30)`
 - Default `days` when omitted: `d:60 w:156 m:365 1m:3 5m:5 15m:8 30m:15 60m:30`.
 - `codes` length: `min_length=1, max_length=5` (Pydantic validation, enforced).
 - Boards are THS platecodes (885xxx concept / 881xxx industry). The route **does not** validate the prefix or shape; the manager's `_with_source` raises `ValueError` on bad code which surfaces in `errors["features"]`.
-- `build_features(df, frequency=frequency, days=days)` is the single entry point. Pass `frequency` (not `mgr_frequency`) and `days` (not `fetch_days`). An empty DataFrame returns `{trend:{}, pivots:{}, volume:{}}` without raising — `BatchFeatures(**...)` accepts that via `default_factory`.
+- `build_features(df, frequency=frequency, days=days)` is the single entry point. Pass `frequency` (the public string, NOT `mgr_frequency` — the board path requires it; see the frequency-translation rule above). An empty DataFrame returns `{trend:{}, pivots:{}, volume:{}}` without raising — `BatchFeatures(**...)` accepts that via `default_factory` and serializes with each sub-model's `default_factory` fields populated.
 - `fetch_days = max(days, _FEATURE_FREQS[frequency].ma60_warmup_days)` — keep the MA60 warmup logic identical to indices/stocks.
 - `name` resolution: call `stock_board_cache.get_board_name_with_fallback(board_code, "ths", manager=manager)`. The helper swallows `DataFetchError / ValueError / AttributeError` internally — handler MUST NOT wrap in try/except. On None → `name=""`.
 - Quote dict keys: `manager.get_board_realtime` returns `(dict, source_name)`; extract `dict.get("price")` and `dict.get("change_pct")`. Both may be None — let `MinimalQuote` carry them through.
@@ -255,19 +258,17 @@ git commit -m "feat(schemas): add BoardProfile + BoardsBatchProfileRequest/Respo
 
 - [ ] **Step 1: Write the failing handler test**
 
-Append to `tests/test_agent_boards_batch_profile.py` (below the `TestSchemas` class). Tests use mocked `manager` via `patch`; they verify behavior WITHOUT hitting the network (default `pytest` skips `live_network`).
+Append to `tests/test_agent_boards_batch_profile.py` (below the `TestSchemas` class). Tests use the session-scoped `client` fixture from `tests/conftest.py` (matches `tests/test_agent_batch_features.py` — the closest reference pattern) and `monkeypatch` for swapping the manager. They verify behavior WITHOUT hitting the network (default `pytest` skips `live_network`).
 
 ```python
 import contextlib
 import random
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pandas as pd
-from fastapi.testclient import TestClient
 
 from stock_data.api.routes import agent as agent_module
 from stock_data.api.routes import reset_manager
-from stock_data.api.schemas import BoardsBatchProfileRequest
 from stock_data.data_provider.base import DataFetchError
 
 
@@ -316,21 +317,19 @@ def _make_kline_df(rows: int = 90, *, seed: int = 1) -> pd.DataFrame:
             "low": [round(c * 0.99, 3) for c in closes],
             "close": [round(c, 3) for c in closes],
             "volume": vols,
-            "amount": [v * c for v, c in zip(vols, closes)],
+            "amount": [v * c for v, c in zip(vols, closes, strict=True)],
             "pct_chg": [0.0] * rows,
         }
     )
 
 
-def _mock_manager(*, realtime_results: dict, history_results: dict, names: dict | None = None):
+def _mock_manager(*, realtime_results: dict, history_results: dict):
     """Build a MagicMock manager matching the manager interface used by handler.
 
-    realtime_results: {code: dict} — what get_board_realtime(code, source='ths') returns as its 1st tuple item.
-    history_results:  {code: pd.DataFrame} — what get_board_history(code, source='ths', ...) returns as its 1st tuple item.
-    names:            {code: str|None} — what get_board_name_with_fallback returns.
-
-    Raises DataFetchError for codes that map to DataFetchError instances;
-    raises ValueError for codes that map to ValueError instances.
+    realtime_results: {code: dict | Exception} — what get_board_realtime(code, source='ths')
+        returns as its 1st tuple item. Exception instances are raised (not returned).
+    history_results:  {code: pd.DataFrame | Exception} — what get_board_history(code, source='ths', ...)
+        returns as its 1st tuple item. Exception instances are raised.
     """
     manager = MagicMock()
     manager.get_board_realtime.side_effect = lambda code, source: (
@@ -346,28 +345,21 @@ def _mock_manager(*, realtime_results: dict, history_results: dict, names: dict 
     return manager
 
 
-def _patch_manager(manager):
-    """Patch get_manager() to return the supplied manager mock + patch
-    stock_board_cache.get_board_name_with_fallback to use the mock's name table."""
-    return patch.object(agent_module, "get_manager", return_value=manager)
-
-
 class TestHandler:
-    def test_happy_path_returns_features_and_quote(self):
+    def test_happy_path_returns_features_and_quote(self, client, monkeypatch):
         df = _make_kline_df(90)
         realtime = {"885595": {"price": 1234.5, "change_pct": 1.23}}
         history = {"885595": df}
         manager = _mock_manager(realtime_results=realtime, history_results=history)
-
-        with _patch_manager(manager), patch(
+        monkeypatch.setattr(agent_module, "get_manager", lambda: manager)
+        monkeypatch.setattr(
             "stock_data.data_provider.persistence.board.get_board_name_with_fallback",
-            return_value="人形机器人",
-        ):
-            client = TestClient(_build_app())
-            r = client.post(
-                "/api/v1/agent/boards/batch-profile",
-                json={"codes": ["885595"], "frequency": "d", "days": 60},
-            )
+            lambda code, source, manager=None: "人形机器人",
+        )
+        r = client.post(
+            "/api/v1/agent/boards/batch-profile",
+            json={"codes": ["885595"], "frequency": "d", "days": 60},
+        )
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["frequency"] == "d"
@@ -382,7 +374,7 @@ class TestHandler:
         assert body["summary"]["requested"] == 1
         assert body["summary"]["ok"] == 1
 
-    def test_per_code_error_isolation(self):
+    def test_per_code_error_isolation(self, client, monkeypatch):
         """One board fails on both quote + features; the other succeeds."""
         df_ok = _make_kline_df(90, seed=1)
         realtime = {
@@ -394,16 +386,15 @@ class TestHandler:
             "885595": DataFetchError("no K-line for this code"),
         }
         manager = _mock_manager(realtime_results=realtime, history_results=history)
-
-        with _patch_manager(manager), patch(
+        monkeypatch.setattr(agent_module, "get_manager", lambda: manager)
+        monkeypatch.setattr(
             "stock_data.data_provider.persistence.board.get_board_name_with_fallback",
-            side_effect=lambda code, source, manager=None: {"881270": "半导体", "885595": None}[code],
-        ):
-            client = TestClient(_build_app())
-            r = client.post(
-                "/api/v1/agent/boards/batch-profile",
-                json={"codes": ["881270", "885595"], "frequency": "d"},
-            )
+            lambda code, source, manager=None: {"881270": "半导体", "885595": None}[code],
+        )
+        r = client.post(
+            "/api/v1/agent/boards/batch-profile",
+            json={"codes": ["881270", "885595"], "frequency": "d"},
+        )
         assert r.status_code == 200, r.text
         body = r.json()
         assert len(body["boards"]) == 2
@@ -419,37 +410,35 @@ class TestHandler:
         assert bad_board["features"] is None
         assert "DataFetchError" in bad_board["errors"]["quote"]
         assert "DataFetchError" in bad_board["errors"]["features"]
-        # summary: requested=2, ok=1 (the 881270 has at least one aspect)
-        assert body["summary"] == {"requested": 2, "ok": 1, "failed": 1, "elapsed_ms": body["summary"]["elapsed_ms"]}
+        assert body["summary"]["requested"] == 2
+        assert body["summary"]["ok"] == 1
+        assert body["summary"]["failed"] == 1
 
-    def test_response_preserves_input_order(self):
+    def test_response_preserves_input_order(self, client, monkeypatch):
         df = _make_kline_df(90, seed=2)
         realtime = {c: {"price": 1.0, "change_pct": 0.1} for c in ("881270", "885595", "883957")}
         history = {c: df for c in ("881270", "885595", "883957")}
         manager = _mock_manager(realtime_results=realtime, history_results=history)
-
-        with _patch_manager(manager), patch(
+        monkeypatch.setattr(agent_module, "get_manager", lambda: manager)
+        monkeypatch.setattr(
             "stock_data.data_provider.persistence.board.get_board_name_with_fallback",
-            side_effect=lambda code, source, manager=None: code,
-        ):
-            client = TestClient(_build_app())
-            r = client.post(
-                "/api/v1/agent/boards/batch-profile",
-                json={"codes": ["883957", "881270", "885595"], "frequency": "d"},
-            )
+            lambda code, source, manager=None: code,
+        )
+        r = client.post(
+            "/api/v1/agent/boards/batch-profile",
+            json={"codes": ["883957", "881270", "885595"], "frequency": "d"},
+        )
         body = r.json()
         assert [b["code"] for b in body["boards"]] == ["883957", "881270", "885595"]
 
-    def test_unsupported_frequency_returns_422(self):
-        client = TestClient(_build_app())
+    def test_unsupported_frequency_returns_422(self, client):
         r = client.post(
             "/api/v1/agent/boards/batch-profile",
             json={"codes": ["885595"], "frequency": "2h"},
         )
         assert r.status_code == 422  # Pydantic Literal catches it before the route
 
-    def test_days_out_of_range_returns_422(self):
-        client = TestClient(_build_app())
+    def test_days_out_of_range_returns_422(self, client):
         r = client.post(
             "/api/v1/agent/boards/batch-profile",
             json={"codes": ["885595"], "frequency": "1m", "days": 10},  # 1m max=3
@@ -457,89 +446,88 @@ class TestHandler:
         assert r.status_code == 422
         assert "days" in str(r.json()).lower()
 
-    def test_empty_codes_returns_422(self):
-        client = TestClient(_build_app())
+    def test_empty_codes_returns_422(self, client):
         r = client.post(
             "/api/v1/agent/boards/batch-profile",
             json={"codes": []},
         )
         assert r.status_code == 422
 
-    def test_too_many_codes_returns_422(self):
-        client = TestClient(_build_app())
+    def test_too_many_codes_returns_422(self, client):
         r = client.post(
             "/api/v1/agent/boards/batch-profile",
             json={"codes": [f"88{i:04d}" for i in range(6)]},
         )
         assert r.status_code == 422
 
-    def test_empty_kline_dataframe_yields_empty_features(self):
+    def test_empty_kline_dataframe_yields_empty_features(self, client, monkeypatch):
         """Empty DataFrame → build_features returns {} for all 3 blocks,
-        handler wraps in BatchFeatures(...)."""
+        handler wraps in BatchFeatures(...) which expands default_factory."""
         empty_df = pd.DataFrame(
             {"date": [], "open": [], "high": [], "low": [], "close": [], "volume": [], "amount": [], "pct_chg": []}
         )
         realtime = {"885595": {"price": 1.0, "change_pct": 0.0}}
         history = {"885595": empty_df}
         manager = _mock_manager(realtime_results=realtime, history_results=history)
-
-        with _patch_manager(manager), patch(
+        monkeypatch.setattr(agent_module, "get_manager", lambda: manager)
+        monkeypatch.setattr(
             "stock_data.data_provider.persistence.board.get_board_name_with_fallback",
-            return_value=None,
-        ):
-            client = TestClient(_build_app())
-            r = client.post(
-                "/api/v1/agent/boards/batch-profile",
-                json={"codes": ["885595"], "frequency": "d"},
-            )
+            lambda code, source, manager=None: None,
+        )
+        r = client.post(
+            "/api/v1/agent/boards/batch-profile",
+            json={"codes": ["885595"], "frequency": "d"},
+        )
         assert r.status_code == 200, r.text
         body = r.json()
         board = body["boards"][0]
-        # Empty DataFrame → trend/pivots/volume all default-empty.
-        # ``quote`` succeeded, ``features`` succeeded (no exception raised),
-        # so errors{} stays all-null and summary counts it as ok.
-        assert board["features"] == {"trend": {}, "pivots": {}, "volume": {}}
+        # Empty DataFrame → BatchFeatures sub-models serialized with default_factory values.
+        # Quote succeeded, features succeeded (no exception raised), errors{} stays all-null,
+        # summary counts it as ok. Compare specific empty markers — NOT the full dict.
+        f = board["features"]
+        assert f["trend"]["ma"] == {} and f["trend"]["ma_change"] == {}
+        assert f["trend"]["adx"] is None and f["trend"]["pdi"] is None and f["trend"]["mdi"] is None
+        assert f["pivots"]["swings"] == [] and f["pivots"]["params"] == {}
+        assert f["pivots"]["window_high"] is None and f["pivots"]["window_low"] is None
+        assert f["volume"]["z_anomalies"] == [] and f["volume"]["latest_volume"] is None
         assert board["errors"] == {"quote": None, "features": None}
         assert body["summary"]["ok"] == 1
 
-    def test_handler_does_not_touch_quote_cache(self):
+    def test_handler_does_not_touch_quote_cache(self, client, monkeypatch):
         """Regression guard: the handler MUST NOT call cached_lookup / cached_store.
-        Verifies the no-composite-cache decision from spec §5."""
-        from stock_data.api import cache as api_cache
+        Verifies the no-composite-cache decision from spec §5.
 
+        Implementation note: ``agent.py`` does ``from ..cache import cached_lookup,
+        cached_store`` — this creates LOCAL bindings in agent_module's namespace.
+        ``patch.object(api_cache, "cached_lookup", ...)`` would NOT be seen by the
+        handler because Python looks up the name in agent's globals, not in
+        api_cache. Patch the handler's namespace instead.
+        """
         df = _make_kline_df(90)
         realtime = {"885595": {"price": 1.0, "change_pct": 0.0}}
         history = {"885595": df}
         manager = _mock_manager(realtime_results=realtime, history_results=history)
-
-        with _patch_manager(manager), patch(
+        monkeypatch.setattr(agent_module, "get_manager", lambda: manager)
+        monkeypatch.setattr(
             "stock_data.data_provider.persistence.board.get_board_name_with_fallback",
-            return_value=None,
-        ), patch.object(api_cache, "cached_lookup", wraps=api_cache.cached_lookup) as lookup_spy, patch.object(
-            api_cache, "cached_store", wraps=api_cache.cached_store
-        ) as store_spy:
-            client = TestClient(_build_app())
-            r = client.post(
-                "/api/v1/agent/boards/batch-profile",
-                json={"codes": ["885595"], "frequency": "d"},
-            )
+            lambda code, source, manager=None: None,
+        )
+        lookup_spy = MagicMock(wraps=agent_module.cached_lookup)
+        store_spy = MagicMock(wraps=agent_module.cached_store)
+        monkeypatch.setattr(agent_module, "cached_lookup", lookup_spy)
+        monkeypatch.setattr(agent_module, "cached_store", store_spy)
+        r = client.post(
+            "/api/v1/agent/boards/batch-profile",
+            json={"codes": ["885595"], "frequency": "d"},
+        )
         assert r.status_code == 200
         # The handler MUST NOT use the composite agent cache layer.
-        assert lookup_spy.call_count == 0, "cached_lookup was called; boards/batch-profile must NOT add a composite cache"
-        assert store_spy.call_count == 0, "cached_store was called; boards/batch-profile must NOT add a composite cache"
-```
-
-Append a helper at the bottom of the test module:
-
-```python
-def _build_app():
-    """Build the FastAPI app under test. Mirrors the pattern used by
-    tests/test_agent_batch_features.py — direct construction to avoid the
-    server-side lifespan side effects.
-    """
-    from stock_data.server import create_app
-
-    return create_app()
+        assert lookup_spy.call_count == 0, (
+            "cached_lookup was called; boards/batch-profile must NOT add a composite cache"
+        )
+        assert store_spy.call_count == 0, (
+            "cached_store was called; boards/batch-profile must NOT add a composite cache"
+        )
 ```
 
 - [ ] **Step 2: Run the handler tests to verify they fail**
@@ -639,7 +627,11 @@ def post_boards_batch_profile(
             df, _src = manager.get_board_history(
                 code,
                 source="ths",
-                frequency=profile.mgr_frequency,
+                # NOTE: pass the PUBLIC frequency string ("5m"), NOT profile.mgr_frequency ("5").
+                # `manager.get_board_history` validates against BOARD_KLINE_FREQ_BY_SOURCE["ths"]
+                # which contains public strings ("5m" etc.); mgr_frequency is for the stock/index
+                # path (manager.get_kline_data) only. See spec §3.1 "Frequency translation note".
+                frequency=payload.frequency,
                 days=fetch_days,
             )
             features = BatchFeatures(**build_features(df, frequency=payload.frequency, days=days))
@@ -714,15 +706,8 @@ Append to `tests/test_agent_boards_batch_profile.py`:
 class TestMarkdown:
     def test_md_renders_full_payload(self):
         from stock_data.api.routes.agent import render_boards_batch_profile_as_md
-        from stock_data.api.schemas import (
-            BoardsBatchProfileResponse,
-            BoardProfile,
-            MinimalQuote,
-        )
+        from stock_data.api.schemas import BoardsBatchProfileResponse, BoardProfile, MinimalQuote
         from stock_data.data_provider.features.build import build_features
-        from stock_data.data_provider.features.pivots import PivotFeatures
-        from stock_data.data_provider.features.trend import TrendFeatures
-        from stock_data.data_provider.features.volume import VolumeFeatures
 
         df = _make_kline_df(90)
         resp = BoardsBatchProfileResponse(
@@ -922,7 +907,7 @@ git commit -m "feat(agent): add MD projection for /agent/boards/batch-profile"
 
 ---
 
-### Task 4: Docs — `CLAUDE.md` table + proposal §3.2.4
+### Task 4: Docs — `CLAUDE.md` table + proposal §3.2.7
 
 **Files:**
 - Modify: `CLAUDE.md` (add 1 row to Agent Batch API table + 1 design-contract bullet)
@@ -949,7 +934,7 @@ Then find the bullet list under `### Design contract (don't violate these withou
 In `docs/agent-batch-api-proposal-2026-07-27.md`, append a new section at the end (or under the §3.2 series):
 
 ```markdown
-### §3.2.4 `boards/batch-profile` (added 2026-08-27)
+### §3.2.7 `boards/batch-profile` (added 2026-08-27)
 
 Per-board fan-out endpoint added to complete the asset-class coverage
 of the batch-profile family (stocks / indices → boards). Source is fixed
@@ -1026,7 +1011,7 @@ git commit -m "docs: document POST /agent/boards/batch-profile in CLAUDE.md + pr
    - `manager.get_board_history(code, source="ths", frequency=..., days=...)` returns `tuple[list[dict], str]`; handler unpacks as `(df, _src)` and feeds to `build_features`. ✓
    - `stock_board_cache.get_board_name_with_fallback(code, "ths", manager=manager)` returns `str | None`; handler does `or ""`. ✓
    - `BatchFeatures(**build_features(df, frequency=..., days=...))` matches `build_features` return shape. ✓
-   - `_FEATURE_FREQS[frequency].mgr_frequency` used at the manager boundary (not `frequency` raw). ✓
+   - `frequency=payload.frequency` passed at the `manager.get_board_history` boundary (NOT `profile.mgr_frequency` — that would 400 every minute request; see Global Constraints). ✓
    - `fetch_days = max(days, profile.ma60_warmup_days)` matches indices/stocks. ✓
 4. **No new helper introduced** — confirmed (handler mirrors `get_indices_batch_profile`).
 5. **No new cache key factory** — confirmed (`api/cache.py` not in any task).
