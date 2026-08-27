@@ -78,7 +78,6 @@ from ..schemas import (
     FilterStocksMatchedStock,
     FilterStocksRequest,
     FilterStocksResponse,
-    IndexKlineBlock,
     IndexProfile,
     IndicesBatchProfileResponse,
     MarketContextDragonTiger,
@@ -103,9 +102,6 @@ from ..schemas import (
 from ._router import router
 from .errors import map_errors
 from .helpers import (
-    _build_kline_data,
-    _format_date,
-    _index_quote_from,
     _resolve_index_name,
     get_manager,
 )
@@ -127,15 +123,6 @@ _TRADE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # /agent/indices/batch-profile. Aligned with market-recap §4 step 3
 # "指数全景" default set: 上证 + 深证 + 创业板.
 _DEFAULT_CORE_CSI_INDICES: tuple[str, ...] = ("000001", "399001", "399006")
-
-# K-line frequency → bar count for /agent/indices/batch-profile. Pinning
-# here (not from the request) keeps the response shape stable; clients
-# that want a different bar count still go through /indices/{code}/kline.
-_INDICES_KLINE_DAYS: dict[str, tuple[str, int]] = {
-    "5m": ("5", 2),  # 2 trading days → 2 × 48 = 96 5-min bars
-    "d": ("d", 30),  # 30 daily bars
-    "w": ("w", 48),  # 48 weekly bars (~1 year)
-}
 
 # Per-frequency (frequency -> (min, max)) calendar-day range for the
 # batch-profile feature endpoints. Mirrors correlation/matrix with the
@@ -589,12 +576,13 @@ def _summarize_dragon_tiger(stocks: list[dict]) -> MarketContextDragonTigerSumma
     "/agent/indices/batch-profile",
     response_model=IndicesBatchProfileResponse,
     responses={
+        422: {"model": ErrorResponse, "description": "days out of range / unsupported frequency"},
         500: {"model": ErrorResponse, "description": "Server error"},
     },
     tags=["agent"],
 )
 @endpoint_meta(
-    summary="指数批量画像（实时报价 + 5m/d/w 三频率 K 线，单次 fan-out）",
+    summary="指数批量画像（trend/pivots/volume 计算指标 + 极简 quote，单 frequency）",
     markets=["csi"],
     capabilities=[],
 )
@@ -603,111 +591,91 @@ def get_indices_batch_profile(
     codes: str | None = Query(
         default=None,
         description=(
-            "Comma-separated index codes. Empty = 3 core CSI indices "
-            "(上证/深证/创业板). Each code is fanned out to "
-            "1 quote + 3 K-line frequencies; per-frequency failure is "
-            "isolated into entry.errors[frequency]."
+            "Comma-separated index codes (1-5). Empty = 3 core CSI indices "
+            "(上证/深证/创业板). Each code is fanned out to a minimal quote "
+            "+ computed features at the requested (frequency, days)."
         ),
     ),
+    frequency: str = Query("d", description="One of d/w/m/1m/5m/15m/30m/60m"),
+    days: int | None = Query(default=None, ge=2, description="Calendar days; per-frequency max validated server-side."),
     format: str = Query(
         "json",
         pattern="^(json|md)$",
         description="Output format. json=application/json (default); md=text/markdown.",
     ),
 ) -> Response:
-    """Per-index fan-out: realtime quote + 5m/d/w K-line.
-
-    Renamed from proposal §3.2.1 ``indices/market-snapshot`` per
-    2026-07-28 user request; the route now matches the stocks variant's
-    ``/batch-profile`` naming.
-    """
+    """Per-index fan-out: minimal quote + computed features at one frequency."""
+    if frequency not in _FEATURE_FREQ_DAYS_RANGE:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_request", "message": f"unsupported frequency: {frequency}"},
+        )
+    days = _resolve_and_validate_days(frequency, days)
     code_list = [
         c.strip() for c in (codes.split(",") if codes else _DEFAULT_CORE_CSI_INDICES) if c.strip()
     ] or list(_DEFAULT_CORE_CSI_INDICES)
+    if len(code_list) > 5:
+        raise HTTPException(status_code=422, detail={"error": "invalid_request", "message": "codes must be 1-5"})
 
-    cache_key = make_indices_batch_profile_cache_key(code_list)
+    cache_key = make_indices_batch_profile_cache_key(code_list, frequency, days)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_indices_batch_profile")
     if hit is not None:
-        # Cache key is sorted; reorder cached list to the caller's order
-        # so the "indices" list mirrors the input `codes` (response contract).
         return _render_agent(
             "indices/batch-profile", _reorder_by_code(hit, code_list, "indices"), format
         )
 
     started = time.monotonic()
     manager = get_manager()
+    fetch_days = max(days, _FEATURE_MA60_WARMUP_DAYS.get(frequency, days))
     profiles: list[IndexProfile] = []
     n_ok = 0
 
     for code in code_list:
-        errors: dict[str, str | None] = {}
-        klines: dict[str, IndexKlineBlock] = {}
-        quote_dict: dict | None = None
-        entry_ok = True
+        errors: dict[str, str | None] = {"quote": None, "features": None}
+        quote = None
+        features = None
 
-        # 1) realtime quote. get_index_realtime_quote returns None when
-        # no fetcher could serve (vs DataFetchError when ALL fetchers
-        # raised). We treat None as a soft failure (errors["quote"] set,
-        # entry marked failed) — returning a "successful but empty" quote
-        # would mask a real upstream outage.
         try:
             q = manager.get_index_realtime_quote(code)
+            if q is None:
+                errors["quote"] = "no fetcher could serve realtime quote"
+            else:
+                quote = MinimalQuote(price=q.price, change_pct=q.change_pct)
         except (DataFetchError, ValueError) as exc:
             logger.warning(f"[agent/indices/batch-profile] quote {code} failed: {exc}")
             errors["quote"] = str(exc)
-            entry_ok = False
-            q = None
-        if q is None:
-            errors.setdefault("quote", "no fetcher could serve realtime quote")
-            entry_ok = False
-        else:
-            errors["quote"] = None
-            quote_dict = _index_quote_from(q, code).model_dump()
 
-        # 2) per-frequency K-line. 5m/d/w ordered most-recent-first so
-        # the user reads the small frame first.
-        # The dict value is (manager-internal freq, days); the public
-        # label (`user_freq`) keeps "5m" so the response contract is
-        # stable while the manager gets the canonical "5".
-        for user_freq, (mgr_freq, days) in _INDICES_KLINE_DAYS.items():
-            # Per-frequency block. The broad except here is on purpose:
-            # the spec requires per-frequency isolation, so a RuntimeError
-            # from upstream serialization (e.g. _build_kline_data choking
-            # on a malformed bar) must NOT abort the whole request — it
-            # should surface as an error on that frequency and let the
-            # other frequencies continue.
-            try:
-                df, _src = manager.get_kline_data(
-                    code,
-                    days=days,
-                    frequency=mgr_freq,
-                    asset="index",
-                )
-                records = df.to_dict("records") if df is not None else []
-                bars = [_build_kline_data(r, _format_date) for r in records]
-            except Exception as exc:
-                logger.warning(
-                    f"[agent/indices/batch-profile] kline {code} {mgr_freq} failed: {exc}",
-                    exc_info=True,
-                )
-                entry_ok = False
-                klines[user_freq] = IndexKlineBlock(data=[], error=f"{type(exc).__name__}: {exc}")
-                continue
-            klines[user_freq] = IndexKlineBlock(data=bars, error=None)
+        try:
+            df, _src = manager.get_kline_data(
+                code,
+                days=fetch_days,
+                frequency=_FREQ_TO_MGR[frequency],
+                adjust=None,
+                asset="index",
+            )
+            features = BatchFeatures(**build_features(df, frequency=frequency, days=days))
+        except Exception as exc:
+            logger.warning(
+                f"[agent/indices/batch-profile] kline {code} {frequency} failed: {exc}",
+                exc_info=True,
+            )
+            errors["features"] = f"{type(exc).__name__}: {exc}"
 
-        if entry_ok:
+        if quote is not None and features is not None:
             n_ok += 1
         profiles.append(
             IndexProfile(
                 code=code,
                 name=_resolve_index_name(code),
-                quote=quote_dict,
-                klines=klines,
+                quote=quote,
+                features=features,
                 errors=errors,
             )
         )
 
     result = IndicesBatchProfileResponse(
+        frequency=frequency,
+        days=days,
         indices=profiles,
         summary=_batch_summary(len(code_list), n_ok, started),
     )

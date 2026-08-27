@@ -2002,30 +2002,3 @@ class MarketStatsResponse(BaseModel):
     summary: dict
 
 
-# ---------------------------------------------------------------------------
-# LEGACY COMPAT (Task 8 removes): IndexKlineBlock was part of the old
-# /agent/indices/batch-profile schema (raw K-line blocks keyed by
-# frequency). Task 5 replaced it with the shared feature models above,
-# but agent.py's pre-Task-8 indices route still imports it to build the
-# old response. Keeping this alias lets the module tree import cleanly
-# (and ruff stay green) during the transition; drop it when the legacy
-# route is rewritten in Task 8 and the import is removed in Task 9.
-# ---------------------------------------------------------------------------
-
-
-class IndexKlineBlock(BaseModel):
-    """Per-frequency K-line block for /agent/indices/batch-profile.
-
-    Each block holds the bars for one frequency (5m / d / w). On
-    per-frequency upstream failure ``error`` is set and ``data`` is
-    empty; on success ``data`` carries the bars.
-    """
-
-    data: list[KLineData] = Field(
-        default_factory=list,
-        description="Bar list (newest last). Empty when the upstream failed.",
-    )
-    error: str | None = Field(
-        default=None,
-        description="Per-frequency upstream failure message; null on success.",
-    )

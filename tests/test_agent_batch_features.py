@@ -404,3 +404,82 @@ class TestStocksBatchProfile:
             client.post("/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"], days=60))
             client.post("/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"], days=60))
         assert mock_manager.get_kline_data.call_count == 1
+
+
+class TestIndicesBatchProfile:
+    def test_default_3_indices_features(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120, spike_idx=(80,)), "akshare")
+        _bind_manager(monkeypatch, mock_manager)
+
+        resp = client.get("/api/v1/agent/indices/batch-profile")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["frequency"] == "d"
+        assert data["summary"]["requested"] == 3 and data["summary"]["ok"] == 3
+        first = data["indices"][0]
+        assert first["quote"]["price"] == 100.0
+        assert set(first["features"].keys()) == {"trend", "pivots", "volume"}
+        assert first["features"]["trend"]["ma"]["ma60"] is not None
+
+    def test_frequency_and_days_echoed(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "akshare")
+        _bind_manager(monkeypatch, mock_manager)
+        resp = client.get(
+            "/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3"
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["frequency"] == "5m" and data["days"] == 3
+
+    def test_index_fetch_no_adjust_and_converts_minute_freq(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "akshare")
+        _bind_manager(monkeypatch, mock_manager)
+        client.get("/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3")
+        kwargs = mock_manager.get_kline_data.call_args.kwargs
+        assert kwargs["adjust"] is None
+        assert kwargs["asset"] == "index"
+        assert kwargs["frequency"] == "5"  # public "5m" -> manager "5"
+
+    def test_out_of_range_days_422(self, client, monkeypatch):
+        _bind_manager(monkeypatch, MagicMock())
+        resp = client.get("/api/v1/agent/indices/batch-profile?frequency=d&days=9999")
+        assert resp.status_code == 422
+
+    def test_unsupported_frequency_422(self, client, monkeypatch):
+        _bind_manager(monkeypatch, MagicMock())
+        resp = client.get("/api/v1/agent/indices/batch-profile?frequency=xy&days=30")
+        assert resp.status_code == 422
+
+    def test_quote_failure_isolated_features_still_served(self, client, monkeypatch):
+        mock_manager = MagicMock()
+
+        def quote_side(code):
+            if code == "000001":
+                raise DataFetchError("quote upstream down")
+            return _make_unified_quote(code)
+
+        mock_manager.get_index_realtime_quote.side_effect = quote_side
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "akshare")
+        _bind_manager(monkeypatch, mock_manager)
+        resp = client.get("/api/v1/agent/indices/batch-profile?codes=000001,399001")
+        data = resp.json()
+        assert data["summary"]["ok"] == 1
+        failed = next(p for p in data["indices"] if p["code"] == "000001")
+        assert failed["quote"] is None
+        assert failed["features"] is not None
+        assert failed["errors"]["quote"] is not None
+
+    def test_cache_second_call_skips_manager(self, client, monkeypatch):
+        mock_manager = MagicMock()
+        mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "akshare")
+        _bind_manager(monkeypatch, mock_manager)
+        client.get("/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3")
+        client.get("/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3")
+        assert mock_manager.get_kline_data.call_count == 1
