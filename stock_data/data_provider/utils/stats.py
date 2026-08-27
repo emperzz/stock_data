@@ -63,10 +63,12 @@ def _label(left: float | None, right: float | None) -> str:
       - upper = 0 buckets → "(lo%, 0)" (right-open, no '+' sign on 0)
         because flat-bucket {0} is checked first; right-open prevents
         the visual confusion of "value=0 in (-3%, 0]" plus flat bucket
+      - lower = 0 buckets → "(0, hi%]" (left-open, no '+' sign on 0)
+        mirroring the spec §2.3 example label "(0, +3%]"
       - upper = None → "+∞" (right-closed, +infinity)
       - lower = None → "-∞" (left-open, -infinity)
     """
-    lo = "-∞" if left is None else f"{left:+.0f}%"
+    lo = "0" if left == 0.0 else "-∞" if left is None else f"{left:+.0f}%"
     if right is None:
         hi = "+∞"
         bracket = "]"
@@ -120,27 +122,27 @@ def build_board_buckets() -> list[DistributionBucket]:
     ]
 
 
-def _assign(value: float, buckets: list[DistributionBucket]) -> DistributionBucket:
-    """Route a single non-None value to its bucket.
+def _assign(value: float, buckets: list[DistributionBucket]) -> int:
+    """Route a single non-None value to its bucket, returning its index.
 
     Flat bucket is checked FIRST; interior buckets are left-open
-    right-closed `[lower, upper]`. Returns the matching bucket, or
-    raises AssertionError if no bucket matches (should be unreachable
-    given the ±∞ boundaries; signals a buggy template).
+    right-closed `[lower, upper]`. Raises AssertionError if no bucket
+    matches (should be unreachable given the ±∞ boundaries; signals a
+    buggy template).
     """
     if abs(value) <= _EPS:
-        for b in buckets:
+        for i, b in enumerate(buckets):
             if b.lower == 0.0 and b.upper == 0.0:
-                return b
+                return i
         raise AssertionError("flat bucket missing from template")
 
-    for b in buckets:
+    for i, b in enumerate(buckets):
         if b.lower == 0.0 and b.upper == 0.0:
             continue  # already routed above
         lo_ok = (b.lower is None) or value > b.lower
         hi_ok = (b.upper is None) or value <= b.upper
         if lo_ok and hi_ok:
-            return b
+            return i
     raise AssertionError(f"value {value} did not fall in any bucket")
 
 
@@ -198,13 +200,13 @@ def compute_aggregate(
     ]
     if sample_size:
         for v in cleaned:
-            matched = _assign(v, buckets)
-            idx = buckets.index(matched)
+            idx = _assign(v, buckets)
+            b = buckets[idx]
             buckets[idx] = DistributionBucket(
-                label=matched.label,
-                lower=matched.lower,
-                upper=matched.upper,
-                count=matched.count + 1,
+                label=b.label,
+                lower=b.lower,
+                upper=b.upper,
+                count=b.count + 1,
             )
 
     return AggregateStats(

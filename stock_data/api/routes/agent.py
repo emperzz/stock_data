@@ -31,6 +31,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import datetime
 from datetime import time as dt_time
 from itertools import combinations
@@ -71,7 +72,6 @@ from ..schemas import (
     BoardsOverlapResponse,
     BoardsOverlapSet,
     BoardStats,
-    DistributionBucket,
     ErrorResponse,
     FilterStocksMatchedStock,
     FilterStocksRequest,
@@ -995,46 +995,25 @@ def post_stocks_batch_profile(
     return _render_agent("stocks/batch-profile", resp, format)
 
 
-def _stats_block_from_aggregate(
-    agg: AggregateStats, *, kind: str, source: str = ""
-) -> "StockStats | BoardStats":
-    """Convert an AggregateStats dataclass into the StockStats / BoardStats
-    Pydantic model that matches `kind`.
+def _stats_payload(agg: AggregateStats) -> dict:
+    """Flatten an AggregateStats dataclass into a plain dict.
 
-    Dispatches on a literal discriminator (``"stocks"`` / ``"boards"``) rather
-    than a numeric constant — easier to read at the call site and not fragile
-    to future bin-width changes.
-
-    Args:
-        agg: the AggregateStats dataclass from compute_aggregate().
-        kind: ``"stocks"`` → StockStats (no source field);
-              ``"boards"`` → BoardStats (carries source).
-        source: the source label forwarded to BoardStats.source
-                (ignored when kind == "stocks").
+    ``asdict`` recursively converts the dataclass (including the nested
+    bucket list) into plain dicts, so the field mapping is driven by the
+    schema itself — adding a field only touches stats.py + schemas.py,
+    not this helper.
     """
-    common = {
-        "sample_size": agg.sample_size,
-        "mean_pct": agg.mean_pct,
-        "median_pct": agg.median_pct,
-        "max_pct": agg.max_pct,
-        "min_pct": agg.min_pct,
-        "up_count": agg.up_count,
-        "down_count": agg.down_count,
-        "flat_count": agg.flat_count,
-        "bin_width": agg.bin_width,
-        "buckets": [
-            DistributionBucket(
-                label=b.label,
-                lower=b.lower,
-                upper=b.upper,
-                count=b.count,
-            )
-            for b in agg.buckets
-        ],
-    }
-    if kind == "boards":
-        return BoardStats(**common, source=source)
-    return StockStats(**common)
+    return asdict(agg)
+
+
+def _stock_stats_from_aggregate(agg: AggregateStats) -> "StockStats":
+    """AggregateStats → StockStats (no source field)."""
+    return StockStats(**_stats_payload(agg))
+
+
+def _board_stats_from_aggregate(agg: AggregateStats, source: str) -> "BoardStats":
+    """AggregateStats → BoardStats, carrying the serving source label."""
+    return BoardStats(**_stats_payload(agg), source=source)
 
 
 @router.get(
@@ -1095,7 +1074,7 @@ def get_market_stats(
             bin_width=STOCK_BUCKET_BIN_WIDTH,
             buckets_template=build_stock_buckets(),
         )
-        stocks_stats = _stats_block_from_aggregate(agg, kind="stocks")
+        stocks_stats = _stock_stats_from_aggregate(agg)
         ok += 1
     except Exception as exc:
         logger.warning(
@@ -1128,9 +1107,7 @@ def get_market_stats(
                 bin_width=BOARD_BUCKET_BIN_WIDTH,
                 buckets_template=build_board_buckets(),
             )
-            boards_stats = _stats_block_from_aggregate(
-                agg, kind="boards", source=src or "ths"
-            )
+            boards_stats = _board_stats_from_aggregate(agg, src or "ths")
             ok += 1
         except Exception as exc:
             logger.warning(

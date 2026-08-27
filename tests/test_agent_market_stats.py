@@ -18,14 +18,15 @@ from stock_data.data_provider.core.types import UnifiedRealtimeQuote
 
 @pytest.fixture
 def client():
-    """Fresh FastAPI TestClient per test; cache cleared by
-    ENABLE_API_CACHE off + key isolation in each test."""
-    # Disable cache for the duration of these tests so each one starts
-    # cold. Set the env var BEFORE importing app — see test_setup below.
-    import os
+    """Fresh FastAPI TestClient per test.
 
+    Per-test cache isolation is provided by the autouse ``_clear_quote_cache``
+    fixture below — the app module's ``_ENABLE_CACHE`` is read once at import
+    time, so toggling ``ENABLE_API_CACHE`` inside this fixture would be a
+    no-op (the import already happened) and is deliberately not done.
+    """
     from stock_data.server import app
-    os.environ["ENABLE_API_CACHE"] = "false"
+
     return TestClient(app)
 
 
@@ -64,11 +65,15 @@ def _make_quote(code: str, change_pct, name: str = "—"):
     )
 
 
-def _patch_manager(monkeypatch, *, quotes, get_all_boards_return):
-    """Patch both the manager methods the route uses."""
+def _patch_manager(monkeypatch, *, quotes):
+    """Patch the manager method the stocks block uses.
+
+    NOTE: the route only calls ``manager.get_realtime_quotes`` here; the
+    boards block goes through ``stock_board_cache.get_board_list`` (see
+    ``_patch_board_cache``), so no ``get_all_boards`` stub is needed.
+    """
     fake_manager = MagicMock()
     fake_manager.get_realtime_quotes.return_value = (quotes, "akshare")
-    fake_manager.get_all_boards.return_value = get_all_boards_return
     monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
     return fake_manager
 
@@ -95,7 +100,7 @@ def test_market_stats_returns_200(client, monkeypatch):
     """Happy path — both blocks populated, summary reports 2/2 ok."""
     quotes = [_make_quote("600000", 1.0), _make_quote("600001", -1.0), _make_quote("600002", 0.0)]
     boards = [{"code": "BK0001", "name": "X", "change_pct": 0.5}]
-    _patch_manager(monkeypatch, quotes=quotes, get_all_boards_return=(boards, "ths"))
+    _patch_manager(monkeypatch, quotes=quotes)
     _patch_board_cache(monkeypatch, all_boards_payload=(boards, "ths"))
 
     resp = client.get("/api/v1/agent/market-stats")
@@ -137,7 +142,7 @@ def test_stocks_upstream_failure_does_not_affect_boards(client, monkeypatch):
 def test_boards_upstream_failure_does_not_affect_stocks(client, monkeypatch):
     """Symmetric — boards=null but stocks still populated."""
     quotes = [_make_quote("600000", 1.0)]
-    _patch_manager(monkeypatch, quotes=quotes, get_all_boards_return=([], ""))
+    _patch_manager(monkeypatch, quotes=quotes)
     fake_cache = MagicMock()
     fake_cache.get_board_list.side_effect = ValueError("cid_unresolved")
     monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
@@ -201,7 +206,7 @@ def test_format_md_returns_markdown(client, monkeypatch):
     """?format=md → text/markdown; body contains expected section headers."""
     quotes = [_make_quote("600000", 1.0)]
     boards = [{"code": "BK0001", "name": "白酒", "change_pct": 0.5}]
-    _patch_manager(monkeypatch, quotes=quotes, get_all_boards_return=(boards, "ths"))
+    _patch_manager(monkeypatch, quotes=quotes)
     _patch_board_cache(monkeypatch, all_boards_payload=(boards, "ths"))
 
     resp = client.get("/api/v1/agent/market-stats?format=md")

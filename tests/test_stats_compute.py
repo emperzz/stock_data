@@ -201,3 +201,36 @@ def test_compute_aggregate_constant_input():
     assert agg.min_pct == 2.0
     # 2.0 falls in (0, +3] (index 6)
     assert agg.buckets[6].count == 5
+
+
+def test_bucket_labels_match_spec_example():
+    """Pin the spec §2.3 label strings verbatim.
+
+    The zero-lower bucket must render "(0, +3%]" — NOT "(+0%, +3%]".
+    The upper==0.0 case was normalized to "0" (no '+') in the b6a1fe5
+    review pass; the lower==0.0 case was missed until 2026-08-27.
+    """
+    assert [b.label for b in build_stock_buckets()] == [
+        "(-∞, -12%]",
+        "(-12%, -9%]",
+        "(-9%, -6%]",
+        "(-6%, -3%]",
+        "(-3%, 0)",
+        "0% (平盘)",
+        "(0, +3%]",
+        "(+3%, +6%]",
+        "(+6%, +9%]",
+        "(+9%, +12%]",
+        "(+12%, +∞]",
+    ]
+    assert [b.label for b in build_board_buckets()] == [
+        "(-∞, -3%]",
+        "(-3%, -2%]",
+        "(-2%, -1%]",
+        "(-1%, 0)",
+        "0% (平盘)",
+        "(0, +1%]",
+        "(+1%, +2%]",
+        "(+2%, +3%]",
+        "(+3%, +∞]",
+    ]
