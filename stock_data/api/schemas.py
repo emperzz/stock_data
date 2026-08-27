@@ -1592,66 +1592,112 @@ class FilterStocksResponse(BaseModel):
     )
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Agent indices batch-profile (Phase 2 §3.2.1 — multi-frequency K-line
-# fan-out for one batch of indices). Renamed from "market-snapshot" in
-# the original proposal because the agent-side route table uses
-# /batch-profile consistently.
-# ────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Agent batch-profile computed features (replaces raw K-line bars).
+# Spec: docs/superpowers/specs/2026-08-27-agent-batch-profile-features-design.md
+# ---------------------------------------------------------------------------
 
 
-class IndexKlineBlock(BaseModel):
-    """Per-frequency K-line block for /agent/indices/batch-profile.
+class MinimalQuote(BaseModel):
+    """极简当前价锚点 (price + change_pct)."""
 
-    Each block holds the bars for one frequency (5m / d / w). On
-    per-frequency upstream failure ``error`` is set and ``data`` is
-    empty; on success ``data`` carries the bars.
-    """
+    price: float | None = None
+    change_pct: float | None = None
 
-    data: list[KLineData] = Field(
-        default_factory=list,
-        description="Bar list (newest last). Empty when the upstream failed.",
-    )
-    error: str | None = Field(
-        default=None,
-        description="Per-frequency upstream failure message; null on success.",
-    )
 
+class TrendFeatures(BaseModel):
+    """Trend block — MA latest + 1-bar change + DMI/RSI/BOLL latest."""
+
+    ma: dict[str, float | None] = Field(default_factory=dict)
+    ma_change: dict[str, float | None] = Field(default_factory=dict)
+    adx: float | None = None
+    pdi: float | None = None
+    mdi: float | None = None
+    rsi: dict[str, float | None] = Field(default_factory=dict)
+    boll: dict[str, float | None] = Field(default_factory=dict)
+
+
+class SwingPoint(BaseModel):
+    """One confirmed pivot (a chart-visible top or bottom)."""
+
+    date: str
+    type: Literal["high", "low"]
+    price: float
+    confirmed: bool = True
+
+
+class PendingSwing(BaseModel):
+    """The in-flight (not yet confirmed) extreme."""
+
+    side: Literal["high", "low"]
+    bars: int
+    price: float
+    date: str
+
+
+class PivotFeatures(BaseModel):
+    """Top/bottom block — window stats + ZigZag swings + pending."""
+
+    window_high: dict | None = None
+    window_low: dict | None = None
+    max_vol_bar: dict | None = None
+    swings: list[SwingPoint] = Field(default_factory=list)
+    pending: PendingSwing | None = None
+    params: dict = Field(default_factory=dict)
+
+
+class ZAnomalyBar(BaseModel):
+    """One volume Z-score anomaly bar (z > 2 in the requested window)."""
+
+    date: str
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: float | None = None
+    z_score: float
+    direction: Literal["up", "down"]
+    change_pct: float | None = None
+
+
+class VolumeFeatures(BaseModel):
+    """Volume block — latest volume + 5-bar ratio + Z anomalies."""
+
+    latest_volume: float | None = None
+    vol_ratio_5: float | None = None
+    z_anomalies: list[ZAnomalyBar] = Field(default_factory=list)
+
+
+class BatchFeatures(BaseModel):
+    """The three feature blocks for one code at one frequency."""
+
+    trend: TrendFeatures = Field(default_factory=TrendFeatures)
+    pivots: PivotFeatures = Field(default_factory=PivotFeatures)
+    volume: VolumeFeatures = Field(default_factory=VolumeFeatures)
+
+
+# --- indices /batch-profile ------------------------------------------------
 
 class IndexProfile(BaseModel):
-    """One index in /agent/indices/batch-profile.
-
-    ``errors`` is a per-frequency dict (mirrors the per-aspect dict
-    in the stocks variant): ``{"5m": "...", "d": null, "w": null}``.
-    """
+    """One index in /agent/indices/batch-profile."""
 
     code: str
     name: str = Field(default="", description="Index name (from index_symbols map or upstream)")
-    quote: dict | None = Field(
-        default=None,
-        description="Realtime quote dict (forwarded from IndexQuote fields). null when upstream failed.",
-    )
-    klines: dict[str, IndexKlineBlock] = Field(
-        default_factory=dict,
-        description="K-line blocks keyed by frequency (5m / d / w).",
-    )
+    quote: MinimalQuote | None = Field(default=None, description="极简实时价锚点; null when upstream failed.")
+    features: BatchFeatures | None = Field(default=None, description="Computed trend/pivots/volume.")
     errors: dict[str, str | None] = Field(
         default_factory=dict,
-        description="Quote error map; null = ok. Per-frequency K-line errors live in klines[f].error.",
+        description="Quote / features error map; null = ok.",
     )
 
 
 class IndicesBatchProfileResponse(BaseModel):
     """GET response for /agent/indices/batch-profile."""
 
-    indices: list[IndexProfile] = Field(
-        default_factory=list,
-        description="Per-index profile (quote + 3-frequency K-line).",
-    )
-    summary: dict = Field(
-        default_factory=dict,
-        description="{requested, ok, failed, elapsed_ms}",
-    )
+    frequency: str = "d"
+    days: int = 0
+    indices: list[IndexProfile] = Field(default_factory=list)
+    summary: dict = Field(default_factory=dict)
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -1757,46 +1803,27 @@ class MarketContextResponse(BaseModel):
     )
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Agent stocks batch-profile (Phase 2 §3.2.2 — per-aspect fan-out
-# for one batch of stocks). Renamed from "batch/profile" in the
-# original proposal to match the /batch-profile naming convention.
-# ────────────────────────────────────────────────────────────────────────
-
-
-# Stable aspect enum. Order is the route's default iteration order;
-# both request and response use this set. Adding a new aspect requires
-# updating ASPECT_TO_CALLER in routes/agent.py.
-StockBatchAspect = Literal["quote", "kline", "kline_5m", "info", "boards"]
-
+# --- stocks /batch-profile -------------------------------------------------
 
 class StockBatchAspectError(BaseModel):
     """Per-aspect failure in /agent/stocks/batch-profile."""
 
-    aspect: str = Field(description="Aspect name (quote/kline/kline_5m/info/boards)")
+    aspect: str = Field(description="Aspect name (quote/features/info/boards)")
     error: str = Field(description="Error class name (e.g. DataFetchError)")
     message: str = Field(default="", description="Underlying error message")
 
 
 class StockBatchProfileEntry(BaseModel):
-    """One stock in /agent/stocks/batch-profile.
-
-    Per-aspect results live in ``data`` keyed by aspect name; per-aspect
-    failures live in ``errors``. ``ok=False`` when the whole entry is
-    irrecoverable (e.g. code not found AND no aspect could be served);
-    otherwise individual aspect errors are reported in ``errors[]``.
-    """
+    """One stock in /agent/stocks/batch-profile."""
 
     code: str
+    name: str = Field(default="", description="Stock name (from quote when available).")
     ok: bool = Field(default=True, description="True unless the whole entry is irrecoverable.")
-    data: dict = Field(
-        default_factory=dict,
-        description="Per-aspect result dict: {quote, kline, kline_5m, info, boards} (subset of requested).",
-    )
-    errors: list[StockBatchAspectError] = Field(
-        default_factory=list,
-        description="Per-aspect failure list; does not abort other aspects.",
-    )
+    quote: MinimalQuote | None = Field(default=None)
+    features: BatchFeatures | None = Field(default=None)
+    info: dict | None = Field(default=None, description="{source, data} company profile.")
+    boards: dict | None = Field(default=None, description="{source, data} board memberships.")
+    errors: list[StockBatchAspectError] = Field(default_factory=list)
 
 
 class StockBatchProfileRequest(BaseModel):
@@ -1808,28 +1835,17 @@ class StockBatchProfileRequest(BaseModel):
         max_length=5,
         description="Stock codes (1-5). Hard cap matches the stock-picking funnel.",
     )
-    aspects: list[StockBatchAspect] = Field(
-        default_factory=lambda: ["quote", "kline", "kline_5m", "info", "boards"],
-        min_length=1,
-        description=(
-            "Aspects to fetch per code. Default = all 5. Must contain at "
-            "least one aspect (an empty ``aspects`` list would yield an "
-            "empty response with no per-aspect error isolation possible)."
-        ),
-    )
+    frequency: Literal["d", "w", "m", "1m", "5m", "15m", "30m", "60m"] = "d"
+    days: int | None = Field(default=None, ge=2, description="Calendar days; per-frequency max validated in the route.")
 
 
 class StockBatchProfileResponse(BaseModel):
     """POST response for /agent/stocks/batch-profile."""
 
-    results: list[StockBatchProfileEntry] = Field(
-        default_factory=list,
-        description="Per-code results (same order as input codes).",
-    )
-    summary: dict = Field(
-        default_factory=dict,
-        description="{requested, ok, failed, elapsed_ms}",
-    )
+    frequency: str = "d"
+    days: int = 0
+    results: list[StockBatchProfileEntry] = Field(default_factory=list)
+    summary: dict = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1984,3 +2000,32 @@ class MarketStatsResponse(BaseModel):
     boards: BoardStats | None
     errors: list[MarketStatsErrorEntry]
     summary: dict
+
+
+# ---------------------------------------------------------------------------
+# LEGACY COMPAT (Task 8 removes): IndexKlineBlock was part of the old
+# /agent/indices/batch-profile schema (raw K-line blocks keyed by
+# frequency). Task 5 replaced it with the shared feature models above,
+# but agent.py's pre-Task-8 indices route still imports it to build the
+# old response. Keeping this alias lets the module tree import cleanly
+# (and ruff stay green) during the transition; drop it when the legacy
+# route is rewritten in Task 8 and the import is removed in Task 9.
+# ---------------------------------------------------------------------------
+
+
+class IndexKlineBlock(BaseModel):
+    """Per-frequency K-line block for /agent/indices/batch-profile.
+
+    Each block holds the bars for one frequency (5m / d / w). On
+    per-frequency upstream failure ``error`` is set and ``data`` is
+    empty; on success ``data`` carries the bars.
+    """
+
+    data: list[KLineData] = Field(
+        default_factory=list,
+        description="Bar list (newest last). Empty when the upstream failed.",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Per-frequency upstream failure message; null on success.",
+    )

@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from stock_data.api.routes import reset_manager
+from stock_data.api.schemas import BatchFeatures, MinimalQuote
 from stock_data.data_provider.features.build import build_features
 from stock_data.data_provider.features.pivots import compute_pivots
 from stock_data.data_provider.features.trend import compute_trend
@@ -233,3 +234,50 @@ class TestBuildFeatures:
         cutoff = pd.Timestamp(df["date"].iloc[-1]) - pd.Timedelta(days=60)
         mask = pd.to_datetime(df["date"]) >= cutoff
         assert out_60["pivots"]["window_high"]["price"] == float(df.loc[mask, "high"].max())
+
+
+class TestSchemas:
+    def test_batch_features_roundtrip(self):
+        m = BatchFeatures(
+            trend={
+                "ma": {"ma5": 1.0},
+                "ma_change": {"ma5": 0.5},
+                "adx": 20.0,
+                "pdi": 10.0,
+                "mdi": 8.0,
+                "rsi": {"rsi_6": 50.0},
+                "boll": {"mid": 1.0, "upper": 2.0, "lower": 0.0, "bandwidth": 1.0},
+            },
+            pivots={
+                "window_high": {"price": 2.0, "date": "2026-08-10"},
+                "window_low": {"price": 1.0, "date": "2026-07-15"},
+                "max_vol_bar": None,
+                "swings": [{"date": "2026-07-15", "type": "low", "price": 1.0, "confirmed": True}],
+                "pending": {"side": "high", "bars": 2, "price": 2.0, "date": "2026-08-10"},
+                "params": {"pivot_window": 2},
+            },
+            volume={
+                "latest_volume": 100.0,
+                "vol_ratio_5": 1.5,
+                "z_anomalies": [
+                    {
+                        "date": "2026-08-10",
+                        "open": 1.0,
+                        "high": 2.0,
+                        "low": 0.5,
+                        "close": 1.5,
+                        "volume": 100.0,
+                        "z_score": 3.0,
+                        "direction": "up",
+                        "change_pct": 5.0,
+                    }
+                ],
+            },
+        )
+        d = m.model_dump()
+        assert d["pivots"]["swings"][0]["type"] == "low"
+        assert d["volume"]["z_anomalies"][0]["direction"] == "up"
+
+    def test_minimal_quote(self):
+        q = MinimalQuote(price=1721.0, change_pct=1.2)
+        assert q.model_dump() == {"price": 1721.0, "change_pct": 1.2}
