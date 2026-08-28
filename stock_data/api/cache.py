@@ -505,17 +505,6 @@ def make_filter_stocks_cache_key(
     )
 
 
-def make_indices_batch_profile_cache_key(codes: list[str], frequency: str, days: int) -> str:
-    """Cache key for GET /agent/indices/batch-profile.
-
-    Codes are SORTED so the same set in different input order collapses
-    to one cache entry (the response is reordered to the input order on
-    hit). `frequency` + `days` are part of the key because the features
-    differ per (frequency, days) pair.
-    """
-    return f"agent_indices_batch_profile:{frequency}:{days}:" + ",".join(sorted(codes))
-
-
 def make_market_context_cache_key(flash_limit: int, trade_date: str, session: str) -> str:
     """Cache key for GET /agent/market-context.
 
@@ -525,15 +514,6 @@ def make_market_context_cache_key(flash_limit: int, trade_date: str, session: st
     Without it a 09:00 cache hit would mask a 16:00 post-market refresh.
     """
     return f"agent_market_context:{flash_limit}:{trade_date}:{session}"
-
-
-def make_stocks_batch_profile_cache_key(codes: list[str], frequency: str, days: int) -> str:
-    """Cache key for POST /agent/stocks/batch-profile.
-
-    Same sorting + (frequency, days) inclusion contract as the indices
-    variant.
-    """
-    return f"agent_stocks_batch_profile:{frequency}:{days}:" + ",".join(sorted(codes))
 
 
 def make_market_stats_cache_key(include_boards: bool) -> str:

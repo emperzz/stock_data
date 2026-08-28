@@ -7,10 +7,6 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from stock_data.api.cache import (
-    make_indices_batch_profile_cache_key,
-    make_stocks_batch_profile_cache_key,
-)
 from stock_data.api.routes import agent as agent_module
 from stock_data.api.routes import reset_manager
 from stock_data.api.schemas import BatchFeatures, MinimalQuote
@@ -316,20 +312,10 @@ class TestSchemas:
         assert q.model_dump() == {"price": 1721.0, "change_pct": 1.2}
 
 
-class TestCacheKeys:
-    def test_indices_key_includes_freq_and_days(self):
-        a = make_indices_batch_profile_cache_key(["000001", "399001"], "d", 60)
-        b = make_indices_batch_profile_cache_key(["399001", "000001"], "d", 60)  # order-immune
-        c = make_indices_batch_profile_cache_key(["000001", "399001"], "d", 120)  # different days
-        assert a == b
-        assert a != c
-        assert "d:60" in a
-
-    def test_stocks_key_includes_freq_and_days(self):
-        a = make_stocks_batch_profile_cache_key(["600519", "000858"], "5m", 5)
-        assert "5m:5" in a
-        assert "600519" in a and "000858" in a
-
+# The composite cache for batch-profile was removed 2026-08-28; the
+# old TestCacheKeys + two test_cache_second_call_skips_manager tests were
+# deleted alongside it (see CLAUDE.md "Design contract" + boards/batch-profile
+# spec §5).
 
 _BOARD_STOCKS_PATCH = "stock_data.data_provider.persistence.board.get_stock_memberships"
 
@@ -419,16 +405,9 @@ class TestStocksBatchProfile:
         )
         assert resp.status_code == 422
 
-    def test_cache_second_call_skips_manager(self, client, monkeypatch):
-        mock_manager = MagicMock()
-        mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
-        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
-        mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
-        _bind_manager(monkeypatch, mock_manager)
-        with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
-            client.post("/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"], days=60))
-            client.post("/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"], days=60))
-        assert mock_manager.get_kline_data.call_count == 1
+    # ``test_cache_second_call_skips_manager`` removed 2026-08-28 alongside the
+    # composite cache (see CLAUDE.md "Design contract" + boards/batch-profile
+    # spec §5). The handler now invokes the manager on every call.
 
 
 class TestIndicesBatchProfile:
@@ -500,14 +479,8 @@ class TestIndicesBatchProfile:
         assert failed["features"] is not None
         assert failed["errors"]["quote"] is not None
 
-    def test_cache_second_call_skips_manager(self, client, monkeypatch):
-        mock_manager = MagicMock()
-        mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
-        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "akshare")
-        _bind_manager(monkeypatch, mock_manager)
-        client.get("/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3")
-        client.get("/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3")
-        assert mock_manager.get_kline_data.call_count == 1
+    # ``test_cache_second_call_skips_manager`` removed 2026-08-28 alongside the
+    # composite cache. The handler now invokes the manager on every call.
 
 
 class TestFormatMdFeatures:

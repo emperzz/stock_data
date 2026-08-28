@@ -1208,10 +1208,14 @@ class TestFormatMdDefaults:
         r = client.get("/api/v1/agent/indices/batch-profile?format=html")
         assert r.status_code == 422
 
-    def test_md_renders_from_cache_hit(self, client, monkeypatch):
-        """A cached Pydantic model must render correctly to MD on the 2nd request.
+    def test_md_renders_consistently_across_calls(self, client, monkeypatch):
+        """Two consecutive requests (json then md) both render correctly.
 
-        Cache key is format-agnostic; rendering happens at response time.
+        Post-2026-08-28: no composite cache layer on batch-profile, so the
+        manager runs on every call. The assertion that previously pinned
+        "manager called only once" is intentionally gone — the regression
+        this test guards against is "format switching breaks MD rendering",
+        not "second call hits cache".
         """
         from unittest.mock import MagicMock
 
@@ -1222,16 +1226,14 @@ class TestFormatMdDefaults:
         mock_manager.get_kline_data.return_value = (_make_kline_df([]), "akshare")
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
 
-        # 1st request: format=json → caches the Pydantic model
         r1 = client.get("/api/v1/agent/indices/batch-profile?codes=000001")
         assert r1.headers["content-type"].startswith("application/json")
-        # 2nd request: format=md → cache hit, MD rendered from same model
         r2 = client.get("/api/v1/agent/indices/batch-profile?codes=000001&format=md")
         assert r2.status_code == 200
         assert r2.headers["content-type"].startswith("text/markdown")
         assert "## 000001" in r2.text
-        # Manager was called only once (cache hit on 2nd)
-        assert mock_manager.get_index_realtime_quote.call_count == 1
+        # No composite cache → manager invoked once per request.
+        assert mock_manager.get_index_realtime_quote.call_count == 2
 
 
 class TestFormatMdFallback:

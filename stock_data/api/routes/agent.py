@@ -60,10 +60,8 @@ from ..cache import (
     get_quote_cache,  # reused as generic in-memory slot for agent results
     make_boards_overlap_cache_key,
     make_filter_stocks_cache_key,
-    make_indices_batch_profile_cache_key,
     make_market_context_cache_key,
     make_market_stats_cache_key,
-    make_stocks_batch_profile_cache_key,
     make_stocks_board_overlap_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
@@ -188,18 +186,6 @@ def _resolve_and_validate_days(frequency: str, days: int | None) -> int:
             },
         )
     return resolved
-
-
-def _reorder_by_code(cached, input_order: list[str], field: str):
-    """Reorder ``cached.<field>`` (a list of items with .code) to match ``input_order``.
-
-    The cache key is sorted (so two requests with the same set in
-    different order share one entry), but the response contract is
-    "items in input order". Codes missing from the cache (shouldn't
-    happen but be defensive) are silently skipped.
-    """
-    by_code = {item.code: item for item in getattr(cached, field)}
-    return cached.model_copy(update={field: [by_code[c] for c in input_order if c in by_code]})
 
 
 @router.post(
@@ -651,13 +637,6 @@ def get_indices_batch_profile(
             status_code=422, detail={"error": "invalid_request", "message": "codes must be 1-5"}
         )
 
-    cache_key = make_indices_batch_profile_cache_key(code_list, frequency, days)
-    hit = cached_lookup(get_quote_cache, cache_key, "agent_indices_batch_profile")
-    if hit is not None:
-        return _render_agent(
-            "indices/batch-profile", _reorder_by_code(hit, code_list, "indices"), format
-        )
-
     started = time.monotonic()
     manager = get_manager()
     profile = _FEATURE_FREQS[frequency]
@@ -714,7 +693,6 @@ def get_indices_batch_profile(
         indices=profiles,
         summary=_batch_summary(len(code_list), n_ok, started),
     )
-    cached_store(get_quote_cache, cache_key, result)
     return _render_agent("indices/batch-profile", result, format)
 
 
@@ -905,15 +883,6 @@ def post_stocks_batch_profile(
     every aspect failed.
     """
     days = _resolve_and_validate_days(payload.frequency, payload.days)
-    cache_key = make_stocks_batch_profile_cache_key(payload.codes, payload.frequency, days)
-    hit = cached_lookup(get_quote_cache, cache_key, "agent_stocks_batch_profile")
-    if hit is not None:
-        return _render_agent(
-            "stocks/batch-profile",
-            _reorder_by_code(hit, payload.codes, "results"),
-            format,
-        )
-
     started = time.monotonic()
     manager = get_manager()
     profile = _FEATURE_FREQS[payload.frequency]
@@ -999,7 +968,6 @@ def post_stocks_batch_profile(
         results=results,
         summary=_batch_summary(len(payload.codes), n_ok, started),
     )
-    cached_store(get_quote_cache, cache_key, resp)
     return _render_agent("stocks/batch-profile", resp, format)
 
 
