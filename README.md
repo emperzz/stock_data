@@ -99,21 +99,23 @@ curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
     "limit": 10
   }'
 
-# Per-index fan-out: minimal quote + trend/pivots/volume features
+# Per-index fan-out: extended MinimalQuote (23 fields: OHLV + 量价 + valuation/limit
+# nulls for index path) + trend/pivots/volume features
 # (3 default CSI indices; optional ?frequency= ?days=)
 curl 'http://localhost:8888/api/v1/agent/indices/batch-profile'
 
 # Daily market snapshot: morning briefing + market recap + flash + zt/dt + dragon-tiger
 curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=50'
 
-# Per-stock fan-out across quote / features / info / boards (1-5 codes;
-# single frequency + days)
+# Per-stock fan-out across extended MinimalQuote (23 fields, full valuation
+# on stock path) / features / info / boards (1-5 codes; single frequency + days)
 curl -X POST http://localhost:8888/api/v1/agent/stocks/batch-profile \
   -H 'Content-Type: application/json' \
   -d '{"codes": ["600519", "000858"], "frequency": "d", "days": 60}'
 
-# Per-board fan-out (THS platecodes; minimal realtime quote + computed
-# features at one frequency; 1-5 codes)
+# Per-board fan-out (THS platecodes; extended MinimalQuote with board-only
+# up_count/down_count/net_inflow/rank + volume_unit="wan_shou" + amount ×1e8;
+# computed features at one frequency; 1-5 codes)
 curl -X POST http://localhost:8888/api/v1/agent/boards/batch-profile \
   -H 'Content-Type: application/json' \
   -d '{"codes": ["885595", "881270"], "frequency": "d", "days": 60}'

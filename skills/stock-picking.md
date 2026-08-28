@@ -97,7 +97,7 @@ agent 收到选股请求后先判断用户是否**指定了板块**。
 
 本步统一处理两个问题：**为什么涨**（归因）+ **延续什么主线**（富化）。两者本质都指向"板块上涨的动量源头是龙头"。
 
-- **取数建议**：定龙头前需要"候选板块近期趋势 + 量价 + 顶底"的画像——避免把龙头定在**已走弱板块**。≤5 个过闸板块走 `market-data-obtain §9.1` 的 `agent/boards/batch-profile`（THS 单源，1-5 codes，单 `frequency` + `days`；返回 minimal realtime quote + trend/pivots/volume 计算特征，无 composite cache，依赖 fetcher 层 TTL）；要长短期各调一次（`frequency="d"` + `frequency="5m"`），同 session 第二次调用命中底层 `get_history_cache`
+- **取数建议**：定龙头前需要"候选板块近期趋势 + 量价 + 顶底"的画像——避免把龙头定在**已走弱板块**。≤5 个过闸板块走 `market-data-obtain §9.1` 的 `agent/boards/batch-profile`（THS 单源，1-5 codes，单 `frequency` + `days`；返回 extended `MinimalQuote`（23 字段，board-only `up_count`/`down_count`/`net_inflow`/`rank` + `volume_unit="wan_shou"` + `amount` ×1e8 转元）+ trend/pivots/volume 计算特征，无 composite cache，依赖 fetcher 层 TTL）；要长短期各调一次（`frequency="d"` + `frequency="5m"`），同 session 第二次调用命中底层 `get_history_cache`
 
 - **主线归因（兼富化）流程**：
 

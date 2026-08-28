@@ -1273,10 +1273,10 @@ summarize" is folded into one request. Seven endpoints ship in v1:
 | `/agent/boards/stock-overlap` | POST | Pairwise stock-set intersection + Jaccard across 2-10 boards |
 | `/agent/stocks/board-overlap` | POST | Pairwise board-set intersection + Jaccard across 2-10 stocks |
 | `/agent/boards/filter-stocks` | POST | Server-side numeric filter on a board's constituents |
-| `/agent/indices/batch-profile` | GET | Per-index minimal quote + trend/pivots/volume features (3 default CSI indices) |
+| `/agent/indices/batch-profile` | GET | Per-index extended `MinimalQuote` (23 fields, see [inventory](#minimalquote-field-inventory)) + trend/pivots/volume features (3 default CSI indices) |
 | `/agent/market-context` | GET | Morning briefing + market recap + flash + zt/dt + dragon-tiger |
-| `/agent/stocks/batch-profile` | POST | Per-stock fan-out across quote / features / info / boards (1-5 codes) |
-| `/agent/boards/batch-profile` | POST | Per-board fan-out: minimal realtime quote + trend/pivots/volume features (1-5 THS platecodes, single source THS) |
+| `/agent/stocks/batch-profile` | POST | Per-stock fan-out across extended `MinimalQuote` (23 fields) / features / info / boards (1-5 codes) |
+| `/agent/boards/batch-profile` | POST | Per-board fan-out: extended `MinimalQuote` (23 fields, board-only `volume_unit="wan_shou"`) + trend/pivots/volume features (1-5 THS platecodes, single source THS) |
 | `/agent/correlation/matrix` | POST | Pairwise Pearson + Spearman correlation matrix across 2-10 stocks/boards (A-share only) |
 | `/agent/market-stats` | GET | Full-market stats (mean / median / max / min / up-down-flat + percentage buckets) for stocks + boards |
 
@@ -1575,7 +1575,7 @@ namespace.
 
 ### GET /api/v1/agent/indices/batch-profile
 
-Per-index fan-out: minimal realtime quote + computed
+Per-index fan-out: extended `MinimalQuote` (23 fields — OHLV + 量价; valuation / limit / board fields are `null` for indices) + computed
 trend / pivots / volume features at one `frequency`. Use case: "give
 me a one-call snapshot of the major CSI indices for the market-recap
 '指数全景' step".
@@ -1617,7 +1617,16 @@ GET /api/v1/agent/indices/batch-profile?codes=000001,000300&frequency=d&days=120
     {
       "code": "000001",
       "name": "上证指数",
-      "quote": {"price": 3540.2, "change_pct": 0.8},
+      "quote": {
+        "price": 3540.2, "change_pct": 0.8, "change_amount": 28.1,
+        "open": 3515.0, "high": 3555.0, "low": 3512.0, "prev_close": 3512.1,
+        "volume": 312000000, "volume_unit": "share", "amount": 4.52e11,
+        "turnover_pct": 0.85, "amplitude_pct": 1.22, "volume_ratio": 1.10,
+        "pe_ratio": null, "pb_ratio": null,
+        "mcap_yi": null, "float_mcap_yi": null,
+        "limit_up": null, "limit_down": null,
+        "up_count": null, "down_count": null, "net_inflow": null, "rank": null
+      },
       "features": {
         "trend": {
           "ma": {"ma5": 12.30, "ma10": 12.10, "ma15": 12.00, "ma20": 11.80, "ma30": 11.40, "ma60": 10.90},
@@ -1660,7 +1669,7 @@ GET /api/v1/agent/indices/batch-profile?codes=000001,000300&frequency=d&days=120
 | `frequency` / `days` | string / int | The request's single frequency + resolved days, echoed at top level. |
 | `indices[].code` | string | The index code (canonical 6-digit). |
 | `indices[].name` | string | The index name (from `index_symbols` map or upstream). |
-| `indices[].quote` | object \| null | Minimal realtime anchor `{price, change_pct}`, or `null` when no fetcher could serve. |
+| `indices[].quote` | object \| null | Extended `MinimalQuote` (post-2026-08-28, see [MinimalQuote field inventory](#minimalquote-field-inventory)): OHLV + 量价 + valuation/limit (typically `null` for indices — index realtime doesn't carry these) + board-only fields (`null` for indices). `null` only when no fetcher could serve. |
 | `indices[].features` | object \| null | Server-computed `{trend, pivots, volume}` at the requested `(frequency, days)`, or `null` when the K-line fetch / feature computation failed. |
 | `indices[].errors` | object | `{quote: string\|null, features: string\|null}` — `null` means that block served OK. |
 | `summary.requested` | int | `len(codes)`. |
@@ -1810,7 +1819,16 @@ Content-Type: application/json
       "code": "600519",
       "name": "贵州茅台",
       "ok": true,
-      "quote": {"price": 1721.0, "change_pct": 1.2},
+      "quote": {
+        "price": 1721.0, "change_pct": 1.2, "change_amount": 20.4,
+        "open": 1700.6, "high": 1725.0, "low": 1698.0, "prev_close": 1700.6,
+        "volume": 12345678, "volume_unit": "share", "amount": 2.13e10,
+        "turnover_pct": 0.45, "amplitude_pct": 1.55, "volume_ratio": 1.20,
+        "pe_ratio": 25.3, "pb_ratio": 8.7,
+        "mcap_yi": 21628.5, "float_mcap_yi": 21000.1,
+        "limit_up": 1870.66, "limit_down": 1530.54,
+        "up_count": null, "down_count": null, "net_inflow": null, "rank": null
+      },
       "features": {
         "trend": {
           "ma": {"ma5": 12.30, "ma10": 12.10, "ma15": 12.00, "ma20": 11.80, "ma30": 11.40, "ma60": 10.90},
@@ -1856,7 +1874,7 @@ Content-Type: application/json
 | `results[].code` | string | Stock code (echoes the request). |
 | `results[].name` | string | Stock name (from the quote when available). |
 | `results[].ok` | bool | `false` only when **all** aspects raised (entry-level failure); partial aspect failures keep `ok=true` and surface in `errors[]`. |
-| `results[].quote` | object \| null | Minimal realtime anchor `{price, change_pct}` (NOT the full `StockQuote`). |
+| `results[].quote` | object \| null | Extended `MinimalQuote` (post-2026-08-28, see [MinimalQuote field inventory](#minimalquote-field-inventory)): full OHLV + 量价 + valuation (PE/PB/mcap_yi/float_mcap_yi) + 涨跌停价. This is **not** the full `StockQuote` (`/stocks/{code}/quote` returns more — extra `pe_static`, `pb`, plus a `code/name/source` envelope); `MinimalQuote` is the trimmed 23-field form used by batch-profile. |
 | `results[].features` | object \| null | Server-computed `{trend, pivots, volume}` at the requested `(frequency, days)`. |
 | `results[].info` | object \| null | `{source, data}` company-profile envelope. |
 | `results[].boards` | object \| null | `{source, data}` board-membership envelope. |
@@ -1916,7 +1934,7 @@ called for every aspect of every code on every request.
 
 ### POST /api/v1/agent/boards/batch-profile
 
-Per-board fan-out: minimal realtime quote + computed
+Per-board fan-out: extended `MinimalQuote` (23 fields — board-only `up_count` / `down_count` / `net_inflow` / `rank` + `volume_unit="wan_shou"` + `amount` ×1e8 转元; stock-only valuation/turnover/limit are `null`) + computed
 `trend / pivots / volume` features at one frequency for 1-5 THS
 platecodes (885xxx concept / 881xxx industry). Mirrors the
 `/agent/indices/batch-profile` shape; `board_type` is auto-detected by
@@ -1950,7 +1968,17 @@ platecodes (885xxx concept / 881xxx industry). Mirrors the
     {
       "code": "885595",
       "name": "人形机器人",
-      "quote": { "price": 1234.5, "change_pct": 1.23 },
+      "quote": {
+        "price": 1234.5, "change_pct": 1.23, "change_amount": 15.0,
+        "open": 1230.0, "high": 1240.0, "low": 1225.0, "prev_close": 1219.5,
+        "volume": 15343, "volume_unit": "wan_shou", "amount": 1.25e9,
+        "turnover_pct": null, "amplitude_pct": null, "volume_ratio": null,
+        "pe_ratio": null, "pb_ratio": null,
+        "mcap_yi": null, "float_mcap_yi": null,
+        "limit_up": null, "limit_down": null,
+        "up_count": 12, "down_count": 5,
+        "net_inflow": 1.23, "rank": "229/389"
+      },
       "features": {
         "trend":  { "ma": {...}, "ma_change": {...}, "adx": ..., "rsi": {...}, "boll": {...} },
         "pivots": { "window_high": {...}, "swings": [...], "pending": {...}, "params": {...} },
@@ -2001,6 +2029,66 @@ per board entry, the trend / pivots / volume feature blocks
 plus a `## 汇总 — requested N, ok N, failed N, elapsed Nms` footer.
 Empty feature blocks render `（无数据）` / `（无确认摆动点）` /
 `（无 z>2 放量异动）` markers — never a bare `| 字段 |` skeleton.
+The `quote` block renders as four sub-tables (价格 / 量价 / 估值 /
+板块统计) per [MinimalQuote field inventory](#minimalquote-field-inventory)
+— empty subgroups are skipped (per the "no data is dropped" contract).
+
+---
+
+### MinimalQuote field inventory
+
+The `quote` block on `/agent/{stocks,indices,boards}/batch-profile`
+uses one trimmed 23-field `MinimalQuote` schema (post-2026-08-28)
+across all three endpoints. Fields not exposed by the serving
+fetcher serialize as `null` (NOT omitted). This matches the
+existing `StockQuote` / `BoardQuoteResponse` precedent where
+"field present in schema, None upstream" is the documented
+contract.
+
+**Field inventory:**
+
+| Field | Type | Stock | Index | Board | Source / note |
+|---|---|:---:|:---:|:---:|---|
+| `price` | float \| null | ✓ | ✓ | ✓ | UnifiedRealtimeQuote / board dict |
+| `change_pct` | float \| null | ✓ | ✓ | ✓ | same |
+| `change_amount` | float \| null | ✓ | ✓ | ✓ | same |
+| `open` / `high` / `low` / `prev_close` | float \| null | ✓ | ✓ | ✓ | OHLC (board upstream `prev_close`) |
+| `volume` | int \| null | ✓ | ✓ | ✓ | Raw value; see `volume_unit` |
+| `volume_unit` | string | `"share"` | `"share"` | `"wan_shou"` | Disambiguates raw `volume` (matching `KLineData.volume_unit`) |
+| `amount` | float \| null | ✓ | ✓ | ✓ | Unified to 元 (CNY); board upstream is 亿元 × 1e8 — same conversion `/boards/{code}/quote` applies at `routes/boards.py:857` |
+| `turnover_pct` | float \| null | ✓ | ✓ | — | stock/index only (board realtime doesn't carry it) |
+| `amplitude_pct` | float \| null | ✓ | ✓ | — | Fallback `(high - low) / prev_close * 100` when upstream omitted |
+| `volume_ratio` | float \| null | ✓ | ✓ | — | 量比 |
+| `pe_ratio` / `pb_ratio` | float \| null | ✓ | — | — | index / board upstream don't expose |
+| `mcap_yi` / `float_mcap_yi` | float \| null | ✓ | — | — | Total / float mcap in 亿元 (`/1e8` from `total_mv` / `circ_mv`) |
+| `limit_up` / `limit_down` | float \| null | ✓ | — | — | 涨跌停价; Zzshare / Tencent only |
+| `up_count` / `down_count` | int \| null | — | — | ✓ | THS board realtime only |
+| `net_inflow` | float \| null | — | — | ✓ | 资金净流入 亿元 |
+| `rank` | string \| null | — | — | ✓ | e.g. `"229/389"` |
+
+**Unit conventions:**
+
+- `volume` is raw; disambiguate via `volume_unit` (`"share"` for
+  stock/index, `"wan_shou"` for board). The two differ by 1e6;
+  normalizing into a single integer field would require either
+  precision loss (round 万手 → 手) or range overflow (multiply
+  万手 by 10000 → 股 into the int64 max-out zone for high-volume
+  indices). Disambiguating by `volume_unit` follows the
+  `KLineData.volume_unit` precedent.
+- `amount` is unified to 元. The board helper multiplies the
+  upstream value by 1e8 (board upstream is 亿元); stock/index
+  passes through. This matches the rest of the server's public
+  API surface (`StockQuote.amount` and `BoardQuoteResponse.amount`
+  are both 元).
+
+**MD projection:** Renders as four sub-tables under a `### 行情`
+heading — 价格 / 量价 / 估值 / 板块统计. Empty subgroups are
+skipped (per-endpoint field presence rules above); partial
+subgroups render None cells as `—` (never omitted). Pinned by
+`tests/test_agent_batch_features.py::TestFormatMdFeatureCompleteness`.
+
+See `docs/superpowers/specs/2026-08-28-agent-batch-profile-quote-fields-design.md`
+for the full design rationale and unit policy.
 
 ---
 

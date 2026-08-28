@@ -313,7 +313,7 @@ POST /agent/correlation/matrix
 **输入**：
 - `stocks/batch-profile (d, days=365)` 的 `features.trend/pivots/volume`
 - `stocks/batch-profile (5m, days=5)` 的 `features.pivots.swings + features.volume.z_anomalies`
-- `stocks/batch-profile.quote` 的 `price/change_pct`
+- `stocks/batch-profile.quote` 的 `price/change_pct`（post-2026-08-28 已扩为 extended `MinimalQuote` 23 字段，可读 `open/high/low/volume/turnover_pct/amplitude_pct` 等）
 - `stocks/batch-profile.info` 的主营业务
 - `stocks/batch-profile.boards` 的所属板块（用于和 portfolio.json 对照）
 
@@ -380,7 +380,7 @@ POST /agent/correlation/matrix
 
 ### 板块环境
 **板块趋势**：{boards/batch-profile features 翻译}
-**板块当日涨幅**：{boards.quote.change_pct:+.2f}%，落在 market-stats 桶 {bucket_label}（板块整体均值 {boards.mean_pct:+.2f}%）
+**板块当日涨幅**：{boards.quote.change_pct:+.2f}%，落在 market-stats 桶 {bucket_label}（板块整体均值 {boards.mean_pct:+.2f}%）。`boards.quote` 已是 extended `MinimalQuote`（23 字段，board-only `volume_unit="wan_shou"` + `up_count`/`down_count`/`net_inflow`/`rank`），不必再单拉 `/boards/{code}/quote`
 **龙头/前 3**：
 - 龙头 A (X 板): 价格 Y，涨幅 Z%
 - 前 3 B: 价格 Y，涨幅 Z%

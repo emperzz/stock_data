@@ -1,7 +1,10 @@
 # Agent 端点提案（市场复盘 / 选股工作流优化）
 
-**状态**：设计提案（未实现）  ·  **作者**：Claude Code  ·  **日期**：2026-07-27
+**状态**：✅ 已实现（2026-07-27 提出 → 2026-08-12 correlation/matrix 上线 + 2026-08-27 三个 batch-profile + market-stats 上线）。本文保留为设计意图与决策记录。**后续规范以 `docs/superpowers/specs/2026-08-27-*-design.md` 系列为准。**
+**作者**：Claude Code  ·  **日期**：2026-07-27
 **目标读者**：项目维护者、skill 作者
+
+> **2026-08-28 更新**：`MinimalQuote` 块已从 2 字段（`price` + `change_pct`）扩展为 ~23 字段（OHLV + 量价 + 估值 + 涨跌停 + 板块统计），三个 batch-profile 端点共享同一 schema。详细字段清单见 `docs/superpowers/specs/2026-08-28-agent-batch-profile-quote-fields-design.md` 与 `api-reference.md` 的 "MinimalQuote field inventory" 节。本文中的 `{price, change_pct}` JSON 片段仍为简化示例，已不代表当前响应形态。
 
 ---
 
