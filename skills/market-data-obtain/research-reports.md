@@ -1,7 +1,6 @@
 # 研报 — 端点明细
 
-> 本文件是 `market-data-obtain` 主文件 [§8 研报](../market-data-obtain.md) 的端点明细。  
-> 主文件只列端点路径 + capability + 一句话用途；**字段、单位、调用约束、示例见本文**。
+> 主文件已列端点路径与 capability；本文给出字段、单位、入参约束与示例。
 
 ---
 
@@ -9,22 +8,18 @@
 
 ### 功能
 
-获取个股券商研报列表，含机构名、评级、当年/次年/后年 EPS 预测。
-
-- 主要 fetcher: EastMoney（P6 唯一实现）
-- `info_code` 字段是研报的唯一 ID，**用于下一步 `/reports/{report_id}/pdf` 下载 PDF**
+获取个股券商研报列表，含机构名、评级、当年/次年/后年 EPS 预测。`info_code` 是研报的唯一 ID，**用于下一步 `/reports/{report_id}/pdf` 下载 PDF**。
 
 ### 入参
 
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
 | `stock_code`（路径） | string | ✅ | — | 6 位 A 股代码（如 `600519`） |
-| `page`（query） | int | ❌ | `1` | 页码，从 1 开始 |
-| `page_size`（query） | int | ❌ | `20` | 单页条数 |
+| `max_pages`（query） | int | ❌ | `3` | 最多抓取的页数（`1 ≤ max_pages ≤ 10`） |
 
 ### 返回参数
 
-顶层结构含 `reports[]`（完整 Pydantic schema 见 `stock_data/api/schemas.py`）。`reports[]` 每条：
+顶层 `{code, name, total, reports[], source}`。`reports[]` 每条：
 
 | 字段 | 类型 | 单位 | 说明 |
 |---|---|---|---|
@@ -51,8 +46,7 @@ curl 'http://localhost:8888/api/v1/stocks/600519/reports'
 
 下载指定研报的 PDF 文件。**返回的是本地路径**（服务器把上游 PDF 缓存到磁盘），不是直接的文件流——agent 需要再次 `Read` 该路径才能拿到 PDF 字节。
 
-- 主要 fetcher: EastMoney
-- 上游 URL 在响应 `url` 字段，便于溯源
+上游 URL 在响应 `url` 字段，便于溯源。
 
 ### 入参
 

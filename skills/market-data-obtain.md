@@ -17,7 +17,7 @@ scope:
 
 A 股市场数据获取 skill。本 skill **不绑定任何特定数据 API**——agent 通过服务器 HTTP 端点（详见各 fetcher 实现）获取数据，agent 自行决定调用方式（HTTP / Python SDK / explorer UI）。
 
-> **核心约束（来自 market-principles）**：所有市场数据获取都应通过本 skill 描述的服务器能力；服务器失败或返回空时，**fallback 到 agent 自带的网络搜索 / 抓取工具**（具体工具名因 agent 平台而异，agent 应调用自己平台对应的搜索 / 抓取工具）总结再回复。详见第 3 节。
+> **核心约束（来自 market-principles）**：所有市场数据获取都应通过本 skill 描述的服务器能力；服务器失败或返回空时，**fallback 到 agent 自带的网络搜索 / 抓取工具**总结再回复。详见第 3 节。
 
 ---
 
@@ -80,7 +80,7 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 
 ### 3.1 何时触发 fallback
 
-满足以下**任一**条件时，从服务器能力切换到 agent 自带的网络搜索 / 抓取工具（具体工具名因 agent 平台而异）：
+满足以下**任一**条件时，从服务器能力切换到 agent 自带的网络搜索 / 抓取工具：
 
 1. **HTTP 5xx 错误**：服务器内部错误、上游 API 不可用（503 / 502 / 500）
 2. **HTTP 422 / 404**：端点存在但请求的资源不存在（如未知股票代码、未知板块）
@@ -92,17 +92,10 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 
 ### 3.2 Fallback 优先级
 
-按以下顺序选择 fallback 工具（**具体工具名因 agent 平台而异**——agent 应调用自己平台对应的搜索 / 抓取工具；本 skill 只规定"做什么"，不绑定"叫什么都工具"）：
+1. **网络搜索工具** — 关键词搜索（新闻、公告、政策解读、市场观点）
+2. **网页抓取工具** — 指定 URL 抓取详情（如已知新闻链接）
 
-| 优先级 | 工具类别 | 适用 |
-|---|---|---|
-| 1 | **网络搜索工具**（agent 自带） | 关键词搜索（新闻、公告、政策解读、市场观点） |
-| 2 | **网页抓取工具**（agent 自带） | 指定 URL 抓取详情（如已知新闻链接） |
-
-> **常见平台对应**（仅作参考）：
-> - Claude Code：`WebSearch` / `WebFetch`
-> - Codex / 其他 agent：调用各自平台对应的搜索 / 抓取工具
-> - agent 应根据自己的实际能力调用，不要假设平台
+具体工具名因平台而异（Claude Code 为 `WebSearch` / `WebFetch`），agent 调用自己平台对应的工具即可。
 
 **禁止**直接编造数据或凭模型先验知识生成"原因"——必须搜索后**总结**再回复。
 
@@ -208,7 +201,7 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | `POST /api/v1/agent/boards/filter-stocks` | 板块成分股服务端数值过滤（换手 / 涨跌幅 / 成交额 / 市值） |
 | `GET /api/v1/agent/indices/batch-profile` | 指数批量画像（1-5 指数；单 frequency） |
 | `GET /api/v1/agent/market-context` | 每日市场全景快照（早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜） |
-| `POST /api/v1/stocks/batch-profile` | 股票批量画像（1-5 股票；quote + features + info + boards） |
+| `POST /api/v1/agent/stocks/batch-profile` | 股票批量画像（1-5 股票；quote + features + info + boards） |
 | `POST /api/v1/agent/boards/batch-profile` | 板块批量画像（1-5 THS platecode；单 frequency） |
 | `POST /api/v1/agent/correlation/matrix` | 跨资产 Pearson + Spearman 相关性矩阵（2-10 资产） |
 | `GET /api/v1/agent/market-stats` | 全市场涨幅统计（个股 + 板块 + 桶形数据） |

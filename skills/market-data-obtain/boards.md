@@ -19,9 +19,30 @@
 
 **关键约束**：
 - `source=ths` **只覆盖 `concept` + `industry` 两类**；要查 `index` / `special` 必须 `?source=zhitu`
-- 不传 `?type=` = 默认查该 source 支持的所有类型
+- 不传 `?type=` = 默认查该 source 支持所有类型
 - **跨 source 含义不同**：同名"互联网服务"概念，ths 与 eastmoney 的成分股集合**不保证一致**，默认 `source=ths` 可避免跨源语义混淆
 - **错误示例**：`?source=ths&type=index` → 400；`?source=eastmoney&type=index` → 400
+
+---
+
+## 板块端点通用入参
+
+下面这些参数在多个板块端点上语义一致，**详见各端点入参表的 `约束` 列**：
+
+| 参数 | 端点 | 说明 |
+|---|---|---|
+| `source` | `/boards`、`/boards/{code}/stocks`、`/stocks/{code}/boards` | `ths` / `eastmoney` / `zhitu`；`zzshare` 已下线（部分端点仍以别名兼容） |
+| `type` | `/boards`、`/stocks/{code}/boards` | 板块类型过滤 |
+| `subtype` | `/boards`、`/stocks/{code}/boards` | source 专属 subtype（ths=`同花顺概念` 等）；需配合 `type` 才有意义 |
+| `include_quote` | `/boards`、`/boards/{code}/stocks` | `true` 时每条带报价字段；不传 = `false` |
+| `sort_by` | `/boards`、`/boards/{code}/stocks` | 排序键；**两个端点都强制要求 `include_quote=true`**（否则 400） |
+| `sort_order` | `/boards`、`/boards/{code}/stocks` | `asc` / `desc`；默认 `desc` |
+| `top_n` | `/boards/{code}/stocks` | 限制返回条数；默认 50（THS 上游硬上限） |
+| `refresh` | `/boards`、`/boards/{code}/stocks`、`/zt-pools` | 强制从上游刷新；默认 `false` |
+
+**`/boards/{code}/stocks` `source='ths'&include_quote=false` 的兜底**：`effective_source` 字段暴露实际服务的 fetcher（`ths` / `zzshare`）——读它判断是否走了兜底，不要读 `data_source`（缓存命中时固定为 `persistence`）。
+
+**`/quote`、`/news`、`/surges` 三端点为 THS 单源**：`source` 路由层不开放（其他 fetcher 不实现 `get_board_realtime` / `get_board_news` / `get_board_surges`），其他 source 传入会 422。
 
 ---
 
@@ -40,10 +61,12 @@
 |---|---|---|---|---|
 | `source`（query） | string | ✅ | — | `ths` / `eastmoney` / `zhitu` |
 | `type`（query） | string | ❌ | 全部（受 source 支持范围限制） | `concept` / `industry` / `index` / `special` |
+| `subtype`（query） | string | ❌ | — | source 专属 subtype（ths=`同花顺概念` 等）；**必须配合 `type`**，否则 400 |
 | `include_quote`（query） | bool | ❌ | `false` | `true` 时每条带报价字段 |
 | `sort_by`（query） | string | ❌ | — | `change_pct` / `volume` / `amount` / `price`；**必须配合 `include_quote=true`**（否则 400） |
 | `sort_order`（query） | string | ❌ | `desc` | `asc` / `desc` |
-| `top_n`（query） | int | ❌ | 全部 | 限制返回条数 |
+| `limit`（query） | int | ❌ | 全部 | 1-500；限制返回条数 |
+| `refresh`（query） | bool | ❌ | `false` | 强制从上游刷新 |
 
 ### 返回参数
 
@@ -54,13 +77,12 @@
 | `code` | string | — | 始终 | 板块代码（ths=`885xxx`/`881xxx`；eastmoney=`BKxxxx`；zhitu=`sw_xxx`） |
 | `name` | string | — | 始终 | 板块名 |
 | `type` | string | — | 始终 | `concept` / `industry` / `index` / `special` |
-| `subtype` | string | — | ths 必有 | 子类型（ths=`同花顺概念` / `同花顺行业` 等） |
 | `price` | number | 指数点位 | `include_quote=true` | 板块指数点位 |
 | `change_pct` | number | % | `include_quote=true` | 涨跌幅 |
 | `change_amount` | number | 指数点位 | `include_quote=true` | 涨跌额 |
 | `volume` | number | 股 | `include_quote=true` | 板块成交量 |
 | `amount` | number | 元 | `include_quote=true` | 板块成交额 |
-| `turnover_rate` | number | % | `include_quote=true` | 换手率 |
+| `turnover_pct` | number | % | `include_quote=true` | 换手率 |
 | `total_mv` | number | 元 | `include_quote=true` | 总市值 |
 | `up_count` | number | — | `include_quote=true` | 板块内上涨家数 |
 | `down_count` | number | — | `include_quote=true` | 板块内下跌家数 |
@@ -76,7 +98,7 @@
 curl 'http://localhost:8888/api/v1/boards?source=ths&type=concept'
 
 # 行业板块带报价，按涨幅倒序前 10
-curl 'http://localhost:8888/api/v1/boards?source=ths&type=industry&include_quote=true&sort_by=change_pct&top_n=10'
+curl 'http://localhost:8888/api/v1/boards?source=ths&type=industry&include_quote=true&sort_by=change_pct&limit=10'
 ```
 
 ---
@@ -88,8 +110,7 @@ curl 'http://localhost:8888/api/v1/boards?source=ths&type=industry&include_quote
 获取板块成分股。**`?source=` 必填**。THS 上游额外暴露 6 字段（涨速/量比/振幅/流通股/流通市值/市盈率）。
 
 - 主要 fetcher: ths（默认）/ eastmoney / zhitu
-- `?source=ths&include_quote=false` 走 **ZZSHARE 优先 + THS 兜底** 内部链；用响应 `effective_source` 字段判断实际服务者
-- THS 上游 50 股登录墙：超过 `top_n` 截断后用 ZZSHARE 补全无报价成员；看 `quote_truncated` + `quote_total_in_board` 判断是否截断
+- THS 上游 50 股登录墙：`include_quote=true` 时服务器额外调一次 ZZSHARE membership 补全无报价成员；看 `quote_truncated` + `quote_total_in_board` 判断是否截断
 
 ### 入参
 
@@ -98,8 +119,11 @@ curl 'http://localhost:8888/api/v1/boards?source=ths&type=industry&include_quote
 | `board_code`（路径） | string | ✅ | — | 板块代码（ths=`885xxx` / `881xxx`；eastmoney=`BKxxxx`） |
 | `source`（query） | string | ✅ | — | `ths` / `eastmoney` / `zhitu` |
 | `include_quote`（query） | bool | ❌ | `false` | `true` 时每条带报价字段 |
-| `sort_by`（query） | string | ❌ | — | 排序键（`include_quote=true` 时才有意义） |
-| `top_n`（query） | int | ❌ | 全部 | 限制返回条数 |
+| `refresh`（query） | bool | ❌ | `false` | 强制从上游刷新（绕开持久化缓存） |
+| `sort_by`（query） | string | ❌ | — | 排序键（**仅 `source='ths'` + `include_quote=true` 时生效**；否则 400） |
+| `sort_order`（query） | string | ❌ | `desc` | `asc` / `desc`；同上约束 |
+| `top_n`（query） | int | ❌ | `50` | 1-50；THS 上游硬上限 |
+| `with_zt_flags`（query） | bool | ❌ | `false` | `true` 时额外拉涨停池并打标（每条 `is_limit_up` + `lb_count`） |
 
 ### 返回参数
 
@@ -113,24 +137,28 @@ curl 'http://localhost:8888/api/v1/boards?source=ths&type=industry&include_quote
 | `stocks[].change_amount` | number | 元 | 涨跌额（同上） |
 | `stocks[].volume` | number | 股 | 成交量（同上） |
 | `stocks[].amount` | number | 元 | 成交额（同上） |
-| `stocks[].turnover_rate` | number | % | 换手率（同上） |
+| `stocks[].turnover_pct` | number | % | 换手率（同上） |
 | `stocks[].change_speed` | number | % | 涨速（**仅 THS**） |
 | `stocks[].volume_ratio` | number | — | 量比（**仅 THS**） |
-| `stocks[].amplitude` | number | % | 振幅（**仅 THS**） |
+| `stocks[].amplitude_pct` | number | % | 振幅（**仅 THS**） |
 | `stocks[].free_float_shares` | number | 股 | 流通股（**仅 THS**） |
 | `stocks[].float_market_cap` | number | 元 | 流通市值（**仅 THS**） |
 | `stocks[].pe_ratio` | number | — | 市盈率（**仅 THS**） |
 | `query_source` | string | — | 用户传入的 `?source=` |
 | `data_source` | string | — | 缓存来源；`'persistence'` = 缓存命中，**不是**用户选择 |
 | `effective_source` | string | — | **实际服务 fetcher**（`ths` / `zzshare` / `eastmoney` / `zhitu`）；用于判断是否走了 ZZSHARE 兜底 |
-| `quote_truncated` | bool | — | 报价是否被 `top_n` 截断后用 ZZSHARE 补全（仅 `?include_quote=true` + 排序/限额时） |
-| `quote_top_n` | int | — | 截断点 |
-| `quote_total_in_board` | int | — | 板块总成分股数 |
+| `quote_source` | string / null | — | 板块级实时报价的 fetcher（仅 `include_quote=true` 时尝试填充） |
+| `quote_error` | string / null | — | `null` 或 `unsupported` / `board_type_unresolved` / `upstream_failed: ...` |
+| `quote_truncated` | bool | — | 报价是否被 `top_n` 截断后用 ZZSHARE 补全 |
+| `quote_top_n` | int | — | 截断点（仅 `sort_by` / `top_n` 显式传时回显） |
+| `quote_total_in_board` | int | — | 板块总成分股数（仅 `sort_by` / `top_n` 显式传时回显） |
+| `quote_sort_by` | string / null | — | 排序键回显（同上） |
+| `quote_sort_order` | string / null | — | 排序方向回显（同上） |
 
 ### 示例
 
 ```bash
-# THS 概念板块成分股（不带报价，走 ZZSHARE 兜底可能）
+# THS 概念板块成分股（不带报价，可能走 ZZSHARE 兜底）
 curl 'http://localhost:8888/api/v1/boards/885595/stocks?source=ths'
 
 # THS 行业板块成分股（带报价，按涨幅排序前 10）
@@ -143,10 +171,11 @@ curl 'http://localhost:8888/api/v1/boards/881270/stocks?source=ths&include_quote
 
 ### 功能
 
-获取板块实时行情。**THS 唯一实现**（其他 fetcher 不支持板块实时行情）。
+获取板块实时行情。**THS 唯一实现**（其他 fetcher 不支持板块实时行情）。`source` 路由层不开放。
 
 - `volume` 上游返回**万手**，已由 fetcher 用 `safe_int` 截断为整数（精度损失约 0.005%）
-- `amount` 单位是**亿元**
+- `amount` 单位是**元**（route 层 ×1e8 转换自上游的亿元）
+- `net_inflow` 单位是**亿元**（route 层不转换）
 - `rank` 形如 `"229/389"`（涨幅排名字符串）
 
 ### 入参
@@ -160,13 +189,14 @@ curl 'http://localhost:8888/api/v1/boards/881270/stocks?source=ths&include_quote
 | 字段 | 类型 | 单位 | 说明 |
 |---|---|---|---|
 | `code` | string | — | 板块代码 |
-| `name` | string | — | 板块名 |
+| `board_name` | string | — | 板块名（**注意字段名是 `board_name`，不是 `name`**） |
+| `source` | string | — | 实际数据来源 fetcher（当前固定 `ths`） |
 | `price` | number | 指数点位 | 板块当前点位 |
 | `change_pct` | number | % | 涨跌幅 |
 | `change_amount` | number | 指数点位 | 涨跌额 |
 | `open` / `high` / `low` / `prev_close` | number | 指数点位 | 今开 / 高 / 低 / 昨收 |
 | `volume` | number | **万手（整数）** | 成交量（**注意单位是万手**） |
-| `amount` | number | **亿元** | 成交额 |
+| `amount` | number | **元** | 成交额（route 层 ×1e8 转自上游亿元） |
 | `net_inflow` | number | 亿元 | 资金净流入 |
 | `up_count` | number | — | 上涨家数 |
 | `down_count` | number | — | 下跌家数 |
@@ -184,7 +214,7 @@ curl 'http://localhost:8888/api/v1/boards/885595/quote'
 
 ### 功能
 
-获取板块新闻（THS 唯一实现，走 `news.10jqka.com.cn` timeline）。
+获取板块新闻（THS 唯一实现，走 `news.10jqka.com.cn` timeline）。`source` 路由层不开放。
 
 - `summary` THS 上游可能为空字符串
 - 分页 `?limit=1-50`；游标分页**无** 14 条硬上限
@@ -195,7 +225,6 @@ curl 'http://localhost:8888/api/v1/boards/885595/quote'
 |---|---|---|---|---|
 | `board_code`（路径） | string | ✅ | — | THS 板块代码 |
 | `limit`（query） | int | ❌ | `20` | 1-50 |
-| `cursor`（query） | string | ❌ | — | 游标（分页用） |
 
 ### 返回参数
 
@@ -222,7 +251,7 @@ curl 'http://localhost:8888/api/v1/boards/885595/news?limit=20'
 
 ### 功能
 
-获取板块炒作周期数据（F10 峰值周期，THS 唯一实现）。含板块涨幅 / 上证对比 / 涨停家数 / 涨停股列表。
+获取板块炒作周期数据（F10 峰值周期，THS 唯一实现）。含板块涨幅 / 上证对比 / 涨停家数 / 涨停股列表。`source` 路由层不开放。
 
 - `sh_change_pct` **用上证做基准对比**
 - `up_count` / `down_count` **F10 未暴露，固定 `null`**
@@ -232,6 +261,8 @@ curl 'http://localhost:8888/api/v1/boards/885595/news?limit=20'
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
 | `board_code`（路径） | string | ✅ | — | THS 板块代码 |
+| `limit`（query） | int | ❌ | `5` | 1-12 |
+| `source`（query） | string | ❌ | `ths` | 路由 Literal 锁死，传非 `ths` → 422 |
 
 ### 返回参数
 
@@ -263,17 +294,20 @@ curl 'http://localhost:8888/api/v1/boards/885595/surges'
 
 - 主要 fetcher: ths / eastmoney / zhitu
 - `name` 形如 `"A股-申万行业-银行"`（含层级前缀）
-- `cold_sources[]` 列出没拉到的 source（cold cache 提示，可选重试）
+- `cold_sources[]` 顶层字段：列出没拉到的 source（cold cache 提示，可选重试）
 
 ### 入参
 
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
 | `stock_code`（路径） | string | ✅ | — | 6 位 A 股代码 |
+| `source`（query） | string | ❌ | 全部（ths/eastmoney/zhitu） | 逗号分隔 CSV，如 `ths,eastmoney`；`zzshare` 视为 `ths` 别名 |
+| `type`（query） | string | ❌ | — | `concept` / `industry` / `index` / `special` |
+| `subtype`（query） | string | ❌ | — | source 专属 subtype；需配合 `type` 才有意义 |
 
 ### 返回参数
 
-顶层结构含 `data[]`。`data[]` 每条：
+顶层结构含 `code` / `source` / `data[]` / `cold_sources[]`。`data[]` 每条：
 
 | 字段 | 类型 | 单位 | 说明 |
 |---|---|---|---|
@@ -282,7 +316,7 @@ curl 'http://localhost:8888/api/v1/boards/885595/surges'
 | `type` | string | — | `concept` / `industry` / `index` / `special` |
 | `subtype` | string | — | 子类型（ths=`同花顺概念` / zhitu=`申万行业` 等） |
 | `source` | string | — | 来自哪个 fetcher（`ths` / `eastmoney` / `zhitu`） |
-| `cold_sources[]` | array | — | 拉取失败的 source 列表（可选重试） |
+| `cold_sources`（顶层） | array | — | **顶层字段**，不在 `data[]` 内：拉取失败的 source 列表 |
 
 ### 示例
 
@@ -296,7 +330,7 @@ curl 'http://localhost:8888/api/v1/stocks/600519/boards'
 
 ### 功能
 
-获取板块 K 线。**`data[]` 每根 K 线 shape 与 `/stocks/{code}/kline` 完全一致**（OHLCV + frequency + amount + change_percent）。
+获取板块 K 线。**`data[]` 每根 K 线 shape 与 `/stocks/{code}/kline` 完全一致**（OHLCV + frequency + amount + change_pct）。
 
 - 主要 fetcher: ths（d/w/m + 1m/5m/15m/30m/60m 全 8 频率） / eastmoney（d/w/m + 5/15/30/60m，**不支持 1m**）
 - `board_type` 由 ThsFetcher 自动从 `stock_board` cache + 内部 fallback 推断，agent 无需关心
@@ -307,13 +341,16 @@ curl 'http://localhost:8888/api/v1/stocks/600519/boards'
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
 | `board_code`（路径） | string | ✅ | — | 板块代码 |
-| `source`（query） | string | ❌ | 自动推断 | `ths` / `eastmoney`（**1m 仅 THS 支持**——`source=eastmoney&frequency=1m` 会 5xx） |
-| `frequency`（query） | string | ✅ | — | `d` / `w` / `m` / `1m` / `5m` / `15m` / `30m` / `60m` |
-| `days`（query） | int | ✅ | — | 拉取天数（上限 800） |
+| `source`（query） | string | ✅ | — | `ths` / `eastmoney`（`source=eastmoney&frequency=1m` 直接 422）；`zzshare` 视为 `ths` 别名 |
+| `frequency`（query） | string | ❌ | **`d`** | `d` / `w` / `m` / `1m` / `5m` / `15m` / `30m` / `60m` |
+| `days`（query） | int | ❌ | **按 frequency 取默认**（d/w/m=30、1m=800、5m/15m/30m/60m=30） | 1-800；不传时按 frequency 取默认 |
+| `start_date`（query） | string | ❌ | — | `YYYY-MM-DD`；与 `end_date` 跨度 ≤ 800 天 |
+| `end_date`（query） | string | ❌ | — | `YYYY-MM-DD` |
+| `board_type`（query） | string | ❌ | — | `concept` / `industry`；省略时从 cache 自动推断（ths） |
 
 ### 返回参数
 
-顶层 `{board_code, board_name, period, data[], source}`。`data[]` shape **与 `/stocks/{code}/kline` 完全一致**（OHLCV + `volume_unit="share"` + `amount` / `change_percent` 可为 `null`）。
+顶层 `{code, board_name, period, data[], source}`。`data[]` shape **与 `/stocks/{code}/kline` 完全一致**（OHLCV + `volume_unit="share"` + `amount` / `change_pct` 可为 `null`）。**注意顶层字段名是 `code`（不是 `board_code`）**。
 
 ### 示例
 
@@ -336,6 +373,7 @@ curl 'http://localhost:8888/api/v1/boards/885595/history?frequency=1m&days=2'
 - 主要 fetcher: Zzshare
 - `date` 默认取今日或最近一个交易日
 - `zt` = 涨停；`dt` = 跌停；`zbgc` = 炸板（**曾涨停但未封住**）
+- 交易日内早于 16:00 时 `warning` 非空（盘中提示，池子仍在变化）
 
 ### 入参
 
@@ -343,10 +381,11 @@ curl 'http://localhost:8888/api/v1/boards/885595/history?frequency=1m&days=2'
 |---|---|---|---|---|
 | `type`（query） | string | ✅ | — | `zt` / `dt` / `zbgc` |
 | `date`（query） | string | ❌ | 今日或最近交易日 | `YYYY-MM-DD` |
+| `refresh`（query） | bool | ❌ | `false` | 强制从上游刷新（**当日盘中仍不写持久化**，避免持久化部分成形的数据） |
 
 ### 返回参数
 
-顶层结构含 `stocks[]`。`stocks[]` 每条：
+顶层结构含 `stocks[]`、`warning`。`stocks[]` 每条：
 
 | 字段 | 类型 | 单位 | 说明 |
 |---|---|---|---|
@@ -356,13 +395,14 @@ curl 'http://localhost:8888/api/v1/boards/885595/history?frequency=1m&days=2'
 | `amount` | number | 元 | 成交额 |
 | `circ_mv` | number | 元 | 流通市值 |
 | `total_mv` | number | 元 | 总市值 |
-| `turnover_rate` | number | % | 换手率 |
+| `turnover_pct` | number | % | 换手率 |
 | `lb_count` | number | — | **连板数**（N 连板） |
 | `first_seal_time` | string | — | 首次封板时间 `HH:mm` |
 | `last_seal_time` | string | — | 最后封板时间 `HH:mm` |
 | `seal_amount` | number | 元 | 封单金额 |
 | `seal_count` | number | — | 封单次数（涨停后开板又封回去的次数） |
 | `zt_count` | number | — | 涨停次数 |
+| `warning`（顶层） | string / null | — | **顶层字段**：非空 = 涉及交易时段（今天 + 是交易日 + 早于 16:00），池子可能未成形；历史日期或收盘后为 `null` |
 
 ### 示例
 
@@ -378,7 +418,7 @@ curl 'http://localhost:8888/api/v1/zt-pools?type=zbgc'
 
 ### 功能
 
-获取全市场龙虎榜（按日）。**`?trade_date=` 必传**。`?min_net_buy=` 筛显著净买入。
+获取全市场龙虎榜（按日）。**`?trade_date=` 可选**，不传时由 fetcher 自行决定（多数 fetcher 取最近一个交易日）。`?min_net_buy=` 筛显著净买入。
 
 - 主要 fetcher: Zzshare（P2 主力） → EastMoney（P6 兜底）
 - **空结果 = 软失败**（fall through 到 EastMoney），不要凭空结果判断"无上榜"
@@ -389,12 +429,12 @@ curl 'http://localhost:8888/api/v1/zt-pools?type=zbgc'
 
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
-| `trade_date`（query） | string | ✅ | — | `YYYY-MM-DD`（**必传**） |
+| `trade_date`（query） | string | ❌ | 空串（上游自行决定） | `YYYY-MM-DD` |
 | `min_net_buy`（query） | number | ❌ | — | 净买入下限（**万元**），筛显著净买入 |
 
 ### 返回参数
 
-顶层 `{date, total, stocks[]}`。`stocks[]` 每条：
+顶层 `{date, total, stocks[], source}`。`stocks[]` 每条：
 
 | 字段 | 类型 | 单位 | 说明 |
 |---|---|---|---|
@@ -483,11 +523,11 @@ curl 'http://localhost:8888/api/v1/stocks/600519/dragon-tiger?trade_date=2026-05
 
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
-| `limit`（query） | int | ❌ | `30` | 返回条数 |
+| `date`（query） | string | ❌ | 空串（上游自行决定，多为今日） | `YYYY-MM-DD` |
 
 ### 返回参数
 
-顶层结构含 `topics[]`。`topics[]` 每条：
+顶层结构含 `date` / `total` / `topics[]` / `source`。`topics[]` 每条：
 
 | 字段 | 类型 | 单位 | 说明 |
 |---|---|---|---|
@@ -495,7 +535,7 @@ curl 'http://localhost:8888/api/v1/stocks/600519/dragon-tiger?trade_date=2026-05
 | `name` | string | — | 题材名 |
 | `reason` | string | — | **题材归因**（如 `"人形机器人+减速器+特斯拉"`） |
 | `change_pct` | number | % | 涨跌幅 |
-| `turnover_rate` | number | % | 换手率 |
+| `turnover_pct` | number | % | 换手率 |
 | `volume` | number | 股 | 成交量 |
 | `amount` | number | 元 | 成交额 |
 | `dde_net` | number | — | 大单净量（DDX 风格） |
@@ -503,5 +543,5 @@ curl 'http://localhost:8888/api/v1/stocks/600519/dragon-tiger?trade_date=2026-05
 ### 示例
 
 ```bash
-curl 'http://localhost:8888/api/v1/hot-topics?limit=20'
+curl 'http://localhost:8888/api/v1/hot-topics'
 ```
