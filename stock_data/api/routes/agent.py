@@ -1475,6 +1475,78 @@ def render_filter_stocks_as_md(p: FilterStocksResponse) -> str:
     return "\n".join(out)
 
 
+def _md_quote_block(out: list[str], q) -> None:
+    """Render the MinimalQuote block as four subgroup tables.
+
+    Skips empty subgroups entirely (see spec §6.2 rationale). Renders
+    None cells as "—" via the existing _md_num helper.
+    """
+    out.append("### 行情")
+    out.append("")
+
+    # ── 价格 ──
+    price_rows = [
+        ("当前", _md_num(q.price, 3)),
+        ("涨跌额", _md_num(q.change_amount, 3)),
+        ("涨跌幅", _md_pct(q.change_pct)),
+        ("今开", _md_num(q.open, 3)),
+        ("最高", _md_num(q.high, 3)),
+        ("最低", _md_num(q.low, 3)),
+        ("昨收", _md_num(q.prev_close, 3)),
+    ]
+    if q.limit_up is not None or q.limit_down is not None:
+        price_rows.append(
+            ("涨跌停价", f"{_md_num(q.limit_up, 3)} / {_md_num(q.limit_down, 3)}")
+        )
+    if any(v and v != "—" for _, v in price_rows):
+        _render_dict_block(out, "价格", dict(price_rows))
+
+    # ── 量价 ──
+    volume_str = (
+        _md_num(q.volume, 0) + (" 股" if q.volume_unit == "share" else " 万手")
+        if q.volume is not None
+        else "—"
+    )
+    vol_rows = [
+        ("成交量", volume_str),
+        ("成交额(元)", _md_num(q.amount, 0)),
+    ]
+    if q.turnover_pct is not None:
+        vol_rows.append(("换手率", _md_pct(q.turnover_pct)))
+    if q.amplitude_pct is not None:
+        vol_rows.append(("振幅", _md_num(q.amplitude_pct, 2) + "%"))
+    if q.volume_ratio is not None:
+        vol_rows.append(("量比", _md_num(q.volume_ratio, 2)))
+    if any(v and v != "—" for _, v in vol_rows):
+        _render_dict_block(out, "量价", dict(vol_rows))
+
+    # ── 估值 (stock only) ──
+    val_rows = []
+    if q.pe_ratio is not None:
+        val_rows.append(("PE", _md_num(q.pe_ratio, 2)))
+    if q.pb_ratio is not None:
+        val_rows.append(("PB", _md_num(q.pb_ratio, 2)))
+    if q.mcap_yi is not None:
+        val_rows.append(("总市值(亿)", _md_num(q.mcap_yi)))
+    if q.float_mcap_yi is not None:
+        val_rows.append(("流通市值(亿)", _md_num(q.float_mcap_yi)))
+    if val_rows:
+        _render_dict_block(out, "估值", dict(val_rows))
+
+    # ── 板块统计 (board only) ──
+    board_rows = []
+    if q.up_count is not None:
+        board_rows.append(("上涨家数", _md_num(q.up_count, 0)))
+    if q.down_count is not None:
+        board_rows.append(("下跌家数", _md_num(q.down_count, 0)))
+    if q.net_inflow is not None:
+        board_rows.append(("资金净流入(亿)", _md_num(q.net_inflow)))
+    if q.rank is not None:
+        board_rows.append(("涨幅排名", q.rank))
+    if board_rows:
+        _render_dict_block(out, "板块统计", dict(board_rows))
+
+
 def _md_feature_block(out: list[str], f) -> None:
     """Render the three feature blocks of a BatchFeatures instance."""
     out.append("### 指标")

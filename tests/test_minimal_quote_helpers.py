@@ -265,3 +265,104 @@ class TestBuildMinimalQuoteFromBoardDict:
         assert q.volume_unit == "wan_shou"  # always set on board
         assert q.amount is None
         assert q.up_count is None
+
+
+class TestMdQuoteBlock:
+    """Pin the 4-subgroup MD projection: 价格 / 量价 / 估值 / 板块统计.
+
+    Pinned per api-reference.md 'No data is dropped' contract and the
+    TestFormatMdFeatureCompleteness pattern.
+    """
+
+    def _render(self, q):
+        from stock_data.api.routes.agent import _md_quote_block
+
+        out: list[str] = []
+        _md_quote_block(out, q)
+        return "\n".join(out)
+
+    def test_stock_quote_renders_all_four_subgroups(self):
+        q = MinimalQuote(
+            price=12.34, change_pct=1.23, change_amount=0.15,
+            open=12.20, high=12.40, low=12.10, prev_close=12.19,
+            volume=1_234_567, volume_unit="share",
+            amount=2_050_000_000.0,
+            turnover_pct=0.45, amplitude_pct=2.11, volume_ratio=1.20,
+            pe_ratio=25.3, pb_ratio=8.7,
+            mcap_yi=21_123.5, float_mcap_yi=21_000.1,
+            limit_up=13.41, limit_down=11.10,
+        )
+        body = self._render(q)
+        assert "### 行情" in body
+        assert "### 价格" in body
+        assert "### 量价" in body
+        assert "### 估值" in body
+        assert "### 板块统计" not in body  # no board-only fields populated
+        # unit-aware volume
+        assert "股" in body
+        # 涨跌停价 is the 价格 subgroup's last row when present
+        assert "涨跌停价" in body
+
+    def test_index_quote_omits_valuation_subgroup(self):
+        """Index realtime doesn't carry PE/PB/mcap; the 估值 subgroup must
+        be skipped (not rendered with all-`—` cells — that's the
+        'computed but blank' anti-pattern)."""
+        q = MinimalQuote(
+            price=3000.0, change_pct=0.5,
+            volume=5_000_000, volume_unit="share",
+            amount=1e10,
+            turnover_pct=0.3,
+        )
+        body = self._render(q)
+        assert "### 价格" in body
+        assert "### 量价" in body
+        assert "### 估值" not in body  # all stock-only valuation is None
+        assert "### 板块统计" not in body
+
+    def test_board_quote_uses_wan_shou_and_omits_valuation(self):
+        q = MinimalQuote(
+            price=1234.5, change_pct=1.23,
+            volume=15343, volume_unit="wan_shou",
+            amount=1_250_000_000.0,
+            up_count=12, down_count=5,
+            net_inflow=1.23, rank="229/389",
+        )
+        body = self._render(q)
+        assert "### 行情" in body
+        assert "### 价格" in body
+        assert "### 量价" in body
+        assert "### 估值" not in body
+        assert "### 板块统计" in body
+        assert "万手" in body
+        assert "上涨家数" in body
+        assert "229/389" in body
+
+    def test_empty_quote_renders_only_header_with_no_subgroups(self):
+        """A fully-None MinimalQuote (cold-path failure) renders just the
+        heading with no subgroup table — the agent can detect via
+        `errors.quote` and via the absent subgroups."""
+        body = self._render(MinimalQuote())
+        assert "### 行情" in body
+        assert "### 价格" not in body  # all values None → subgroup skipped
+        assert "### 量价" not in body
+        assert "### 估值" not in body
+        assert "### 板块统计" not in body
+
+    def test_partial_quote_renders_em_dash_for_none_cells(self):
+        """When SOME fields in a subgroup are populated and others None,
+        render the subgroup with None cells as '—' (NOT omit the
+        subgroup, NOT 'omit the cell')."""
+        q = MinimalQuote(
+            price=12.34, change_pct=1.23,
+            # all other 价格 fields None
+            volume=1_000_000, volume_unit="share",
+            amount=2_000_000_000.0,
+            # turnover / amplitude / volume_ratio all None
+        )
+        body = self._render(q)
+        # 价格 subgroup is rendered (has price+change_pct+change_amount)
+        assert "### 价格" in body
+        # 量价 subgroup is rendered (has volume+amount)
+        assert "### 量价" in body
+        # None cells in 价格 show as '—'
+        assert "—" in body
