@@ -1617,7 +1617,7 @@ def render_boards_batch_profile_as_md(p: BoardsBatchProfileResponse) -> str:
         ok_marker = "✓" if (board.quote or board.features) else "✗"
         out.append(f"## {board.code} {board.name} {ok_marker}")
         if board.quote:
-            out.append(f"- 最新: {_md_num(board.quote.price)} ({_md_pct(board.quote.change_pct)})")
+            _md_quote_block(out, board.quote)
         else:
             err = (board.errors or {}).get("quote") or "no quote"
             out.append(f"- 行情失败: {err}")
@@ -1643,7 +1643,7 @@ def render_indices_batch_profile_as_md(p: IndicesBatchProfileResponse) -> str:
         ok_marker = "✓" if idx.quote or idx.features else "✗"
         out.append(f"## {idx.code} {idx.name} {ok_marker}")
         if idx.quote:
-            out.append(f"- 最新: {_md_num(idx.quote.price)} ({_md_pct(idx.quote.change_pct)})")
+            _md_quote_block(out, idx.quote)
         else:
             out.append(f"- 行情失败: {(idx.errors or {}).get('quote') or 'no quote'}")
         out.append("")
@@ -1824,7 +1824,7 @@ def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
             out.append(f"**失败 aspects**: {failed}")
         out.append("")
         if entry.quote:
-            out.append(f"- 最新: {_md_num(entry.quote.price)} ({_md_pct(entry.quote.change_pct)})")
+            _md_quote_block(out, entry.quote)
         out.append("")
         if entry.features:
             _md_feature_block(out, entry.features)
