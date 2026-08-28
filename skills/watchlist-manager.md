@@ -71,7 +71,7 @@ scope:
       "关注": {
         "reason": "高端消费复苏",
         "added_at": "2026-08-27",
-        "board": { "code": "BK0438", "name": "白酒" }
+        "board": { "code": "881xxx", "name": "白酒" }
       },
       "持仓": {
         "shares": 200,
@@ -88,7 +88,7 @@ scope:
 **关键字段说明**：
 
 - `codes[]` 按 code 索引（一个 code 一条记录），关注与持仓是该 code 的子状态字段
-- `关注.board` **必填**——加关注时若用户未提供，反馈用户要求提供 code + name
+- `关注.board` **必填**，且 `code` **必须是 THS platecode**（`885xxx` 概念 / `881xxx` 行业）——下游 `trade-timing-advisor` 的板块取数走 THS 单源，东财 `BKxxxx` 等异源代码会在判断时 422。加关注时若用户未提供，反馈用户要求提供 code + name
 - `关注.reason` 可选——用户没给就留空字符串，**agent 不自动生成**
 - `持仓` 可为 `null`（仅关注未买入）；非空时 `shares > 0`
 - `last_event_action` 记录该 code 最近一次操作方向，供判断 skill 快速读取
@@ -165,7 +165,7 @@ agent 根据用户输入识别命令 → 映射到 schema 操作。
 |---|---|
 | `code` | 用户提供（优先 code，可由 name 反查但需确认） |
 | `name` | 用户提供，或由 code 反查 |
-| `关注.board.code` | **必须用户提供**，无默认 |
+| `关注.board.code` | **必须用户提供**，无默认（THS platecode 885xxx/881xxx） |
 | `关注.board.name` | 必须用户提供，或由 board code 反查 |
 
 **选填字段**：
@@ -259,7 +259,7 @@ agent 写之前必须验证用户输入是否齐全。决策表：
 | **结构化齐全** | "买入 600519，100 股 @1820，时间 2026-08-27 10:30，原因是 X" | **直接写** |
 | **缺关键字段**（code/shares/price/time 任一缺失） | "我买了 600519 100 股"（没价格） | **追问**到字段齐全才写 |
 | **缺识别字段**（code/name 任一缺失） | "我买了一些茅台"（没 code） | **追问** |
-| **缺 board**（仅加关注时） | "关注茅台"（没 board） | **追问** board code + name |
+| **缺 board**（仅加关注时） | "关注茅台"（没 board） | **追问** board（THS platecode code + name） |
 | **模糊语义** | "好像"、"估计"、"可能"、"应该买了点" | **拒绝写入**，要求用户重新确认 |
 
 **特别注意**：

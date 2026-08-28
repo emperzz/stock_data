@@ -84,7 +84,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 | 2 | 市场环境 | 大盘短期趋势（重点，日 K） | `agent/indices/batch-profile` | `000300`，`d`，`days=30` |
 | 3 | 市场环境 | 大盘当日分时 | `agent/indices/batch-profile` | `000300`，`5m`，`days=2` |
 | 4 | 市场环境 | 全市场个股 + 板块涨幅统计 | `agent/market-stats` | 默认（含板块块） |
-| 5 | 市场环境 | 涨跌停 + 连板结构 + 龙虎榜 + 消息面 | `agent/market-context` | 默认（`limit_pools`/`dragon_tiger`） |
+| 5 | 市场环境 | 涨跌停 + 连板结构 + 龙虎榜 + 消息面 | `agent/market-context` | 默认 |
 | 6 | 板块 | 相关板块短期趋势（日 K） | `agent/boards/batch-profile` | THS platecodes，`d`，`days=30` |
 | 7 | 板块 | 相关板块当日分时 | `agent/boards/batch-profile` | 同上 codes，`5m`，`days=2` |
 | 8 | 板块 | 成分股龙头/前3 + 当日触板标记 | `GET /boards/{code}/stocks` | `source=ths&include_quote=true&with_zt_flags=true`（龙头/前3 = 列表按涨幅倒序的前几行；触板 = `is_limit_up`） |
@@ -232,7 +232,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 **输入**：
 - `boards/batch-profile` 的 `features.trend/pivots/volume`（长期 + 短期 + 当日分时）
 - `market-stats.boards.buckets[]` 看该 code 所在板块涨幅落在哪个桶
-- `boards/{code}/stocks?include_quote=true` 取龙头/前 3 + 触板状态
+- `boards/{code}/stocks` 取龙头/前 3 + 触板状态（必带参数见 §3.1 #8）
 
 **每只 code 的板块层论据**：
 
@@ -430,6 +430,6 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 ### 9.3 用户："判断下 000001（不在 watchlist）"
 
 ```
-1. 路径 B：反馈用户"请提供该股票所属板块 code + name"
+1. 路径 B：反馈用户"请提供该股票所属板块 code + name（THS platecode 885xxx/881xxx）"
 2. 用户提供后，启动判断（路径 A）
 ```

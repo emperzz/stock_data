@@ -89,7 +89,7 @@ agent 收到选股请求后先判断用户是否**指定了板块**。
 
 ### 步骤 4：重叠板块去重
 - 对成分股**重叠率高**（临场，参考交集/并集 >50%）的板块，**只取涨幅靠前的那一个**
-  - **取数建议**：2-10 个候选板块的**两两成分股交集 + Jaccard**走 `market-data-obtain §9.1` 的 `agent/boards/stock-overlap`（服务端聚合 + per-item 错误隔离，替代手算 N×N set-op + 客户端算 Jaccard）；判定"重叠率 >50%"直接读响应里 `pairs[].jaccard` 字段过滤，对 `intersection` 取并集即可
+  - **取数建议**：候选板块的**两两成分股交集 + Jaccard**走 `market-data-obtain §9.1` 的 `agent/boards/stock-overlap`（替代手算 N×N set-op）；判定"重叠率 >50%"直接读响应里 `pairs[].jaccard` 字段过滤，对 `intersection` 取并集即可
 
 ### 步骤 5：主线归因（兼富化）+ 定龙头
 
@@ -156,7 +156,7 @@ agent 收到选股请求后先判断用户是否**指定了板块**。
 - **方法**：取候选的**主营业务**（公司画像的 `business_scope` 经营范围 + `concepts` 概念标签），与**龙头的主营业务**精确比对
   - **不再做细分赛道粗筛**——A 股板块分类本身多套（同花顺 / 东方财富 / 申万），细分赛道识别依赖券商内部体系外部无法独立验证
 - **辅助**：可用**龙头所在板块清单与候选所在板块清单的重叠度**作为加权（重叠高 → 受龙头带动作用预期更强，回引 `market-principles §6.6`）
-  - **取数建议**："龙头 + 候选"（2-10 只股）所属板块**两两交集 + Jaccard**走 `market-data-obtain §9.1` 的 `agent/stocks/board-overlap`（服务端聚合，替代手算 N 次 `stocks/{code}/boards` + 客户端 set intersection）；`pairs[].jaccard` 直接作"加权"输入，无需回传每只股的完整 board 列表
+  - **取数建议**："龙头 + 候选"所属板块**两两交集 + Jaccard**走 `market-data-obtain §9.1` 的 `agent/stocks/board-overlap`（替代逐票手算交集）；`pairs[].jaccard` 直接作"加权"输入
 - **不强制筛选**同板块不同赛道的伪相似——"半导体板块里的设备 vs 材料 vs 设计"作为有效候选保留。最终取舍看候选数量是否超出承受范围
 
 ### 步骤 10：财务（末位 tiebreaker）

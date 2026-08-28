@@ -140,7 +140,7 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 | 类别 | 数据形态 | 推荐取数路径 | 时段差异 |
 |---|---|---|---|
 | **指数全景** | 上证 / 深证成指 / 创业板指 —— extended `MinimalQuote` + 计算指标（trend/pivots/volume），单 frequency（字段与单位见 agent-batch.md） | `§9.1` `agent/indices/batch-profile`（默认 3 指数；单 `frequency`，要长短期各调一次） | `pre`：昨日收盘 + 隔夜外盘；`intra`：当日分时 + 5m features；`post`：当日收盘 + features（要长短期趋势则分 `frequency` 调） |
-| **市场全景（涨跌停 / 龙虎榜 / 消息面）** | 涨停 + 跌停 + 龙虎榜（含 server-computed `dragon_tiger.summary.total_net_buy_wan` + top-by-buy/sell） + 早报/复盘/快讯 + `market_session` 判定 | `§9.1` `agent/market-context`（per-block 失败隔离） | `pre` / `intra` / `post` / `closed` 全时段（pre-market 涨跌停池服务端强制 null） |
+| **市场全景（涨跌停 / 龙虎榜 / 消息面）** | 涨停 + 跌停 + 龙虎榜（含服务端净买入汇总 + Top 买卖榜） + 早报/复盘/快讯 + `market_session` 判定 | `§9.1` `agent/market-context`（per-block 失败隔离） | `pre` / `intra` / `post` / `closed` 全时段（pre-market 涨跌停池服务端强制 null） |
 | **板块异动 + 成分股数值筛选** | 板块清单（带涨幅）+ 多板成分股按 涨幅 / 换手 / 成交额 / 市值 / 最高涨幅 过滤 | 板块清单走主表相关端点；批量数值筛走 `§9.1` `agent/boards/filter-stocks`（`max_gain_pct` = 盘中最高涨幅 vs 开盘价，服务端计算） | `pre`：昨日 + 今日预热；`intra`：实时异动；`post`：收盘涨跌 |
 | **全市场情绪（涨跌家数 + 涨幅分布桶）** | 全市场涨幅统计：均值 / 中位 / 最高 / 最低 / 上涨下跌平盘家数 + 11/9 个百分比桶（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶） | `§9.1` `agent/market-stats`（`include_boards=false` 可只取个股块） | `pre`：昨日收盘快照；`intra`：实时分布变化；`post`：当日全量收尾分布 |
 | **板块 K 线** | 领涨 Top1-5（同类去重、取涨幅更高者）+ watchlist 已记录领跌板块 —— 各 5m / d / w 三周期 | `§9.1` `agent/boards/batch-profile`（THS 单源；字段与单位见 agent-batch.md） | `intra` / `post`：按领涨 / 领跌排名拉；`pre`：仅拉 watchlist 已记录板块 |
@@ -168,7 +168,7 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 ### 步骤 5：chat 回复 + 写入文件
 
 - **chat 回复**：精简摘要 + 结论（**市场情绪方向**、主线 1-N、龙头候选、**领涨板块 K 线方向**、关键归因）
-- **`{date}.md`**：完整版（数据引用、源链接、时间戳、归因展开、板块 K 线方向）——**不列**涨跌停股原始明细，写入端点路径（`GET /zt-pools?type=zt\|dt`）供按需查询；文件保留"总结 + 重点关注的股票"。**`{date}.md` 嵌入**：本步骤要写入文件的取数（§9.1 `agent/market-context` / `agent/indices/batch-profile` / `agent/boards/filter-stocks` 等）通过 query 参数 `?format=md` 拿 markdown 投影直接 paste——服务端保证无信息丢失（每个 JSON 字段映射到 MD 表格 / 列表 / 段落），渲染失败自动回退 JSON + `X-MD-Render-Error` 响应头，agent 永远能拿到数据
+- **`{date}.md`**：完整版（数据引用、源链接、时间戳、归因展开、板块 K 线方向）——**不列**涨跌停股原始明细，写入端点路径（`GET /zt-pools?type=zt\|dt`）供按需查询；文件保留"总结 + 重点关注的股票"。**`{date}.md` 嵌入**：本步骤要写入文件的取数（§9.1 `agent/market-context` / `agent/indices/batch-profile` / `agent/boards/filter-stocks` 等）通过 query 参数 `?format=md` 拿 markdown 投影直接 paste——服务端保证无信息丢失（每个 JSON 字段映射到 MD 表格 / 列表 / 段落），渲染失败自动回退 JSON，agent 永远能拿到数据
 - **`market_tracking.md`**：本次复盘新识别的主线 / 龙头 / 待验证假设 + **强制追加**今日领涨板块至"持续关注的板块"区（**退出规则**：板块多日走弱 + 无龙头 → agent 临场判定淘汰，判定标准走 market-principles 第 10 节）
 
 ### 步骤 6：处理用户追问
