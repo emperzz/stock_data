@@ -67,7 +67,7 @@ curl 'http://localhost:8888/healthz?details=true'
 | `indicators[].key` | string | — | 指标标识符（`ma` / `macd` / `kdj` / `boll` / ...） |
 | `indicators[].input_shape` | string | — | 输入需求：`"closes"`（仅收盘价）或 `"ohlcv"`（OHLCV 全量） |
 | `indicators[].default_options` | object | — | 默认参数（如 `ma: {periods: [5,10,20,30,60], type: "sma"}`） |
-| `indicators[].output_columns[]` | array | — | 输出列名（如 `["ma5","ma10",...]`） |
+| `indicators[].output_columns[]` | array | — | 输出列名（MA 默认 `["ma5","ma10","ma20","ma30","ma60","ma120","ma250"]`；MACD `["macd_dif","macd_dea","macd_hist"]`；其他指标详见各文件） |
 | `indicators[].default_lookback` | int | — | 预热所需最少 K 线根数（路由层自动 `max(days, lookback)` 拉更多再截断） |
 
 ### 示例

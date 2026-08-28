@@ -10,7 +10,7 @@
 
 按关键词 / 股票代码 / 主题搜索财经新闻。返回标题、URL、发布日期、来源子域、摘要。
 
-- `source_domain` 限定白名单：`finance.eastmoney.com` / `www.cls.cn` / `news.10jqka.com.cn`（canonical 子域）
+- `source_domain` 由各 fetcher 从 URL 解析（`urlparse(url).netloc`，无白名单过滤）；常见值：`finance.eastmoney.com`（EastMoney）/ `www.cls.cn`（财联社）/ `news.10jqka.com.cn`（THS）
 - `snippet` 部分上游不提供，可能为空字符串
 
 ### 入参
@@ -170,7 +170,7 @@ curl 'http://localhost:8888/api/v1/stocks/600519/news?limit=20'
 
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
-| `date`（query） | string | ✅ | — | `YYYY-MM-DD`；**缺失 / 格式错 / 超出 28 天窗口 / 未来日期全部 → 400**；窗口内但当日未发 → 404 |
+| `date`（query） | string | ✅ | — | `YYYY-MM-DD`；**缺失 → 422（FastAPI 必填校验）；格式错 / 超出 28 天窗口 / 未来日期 → 400**；窗口内但当日未发 → 404 |
 
 ### 返回参数
 
@@ -213,7 +213,7 @@ curl 'http://localhost:8888/api/v1/news/morning-briefing?date=2026-05-20'
 
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
-| `date`（query） | string | ✅ | — | `YYYY-MM-DD`；**缺失 / 格式错 / 超出 28 天窗口 / 未来日期全部 → 400**；窗口内但当日未发 → 404 |
+| `date`（query） | string | ✅ | — | `YYYY-MM-DD`；**缺失 → 422（FastAPI 必填校验）；格式错 / 超出 28 天窗口 / 未来日期 → 400**；窗口内但当日未发 → 404 |
 
 ### 返回参数
 

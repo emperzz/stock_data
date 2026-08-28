@@ -44,9 +44,9 @@
 | `float_mcap_yi` | number | **亿元** | 流通市值 |
 | `turnover_pct` | number | % | 换手率 |
 | `amplitude_pct` | number | % | 振幅（`(high-low)/prev_close*100`） |
-| `volume_ratio` | number | — | 量比（现量 / 过去 5 日同时段均量） |
 | `limit_up` | number | 元 | 涨停价（部分 fetcher 返回真实值） |
 | `limit_down` | number | 元 | 跌停价（同上） |
+| `volume_ratio` | number | — | 量比（现量 / 过去 5 日同时段均量） |
 | `source` | string | — | 数据来源 fetcher 名（`zzshare` / `tencent` / `akshare` / ...） |
 
 ### 示例
@@ -76,18 +76,17 @@ curl 'http://localhost:8888/api/v1/stocks/HK00700/quote'
 | `period`（query） | string | ❌ | `daily` | `daily` / `weekly` / `monthly` / `1m` / `5m` / `15m` / `30m` / `60m` |
 | `days`（query） | int | ❌ | `30` | 拉取天数；统一约束 `1 ≤ days ≤ 365`（所有频率一致） |
 | `start_date`（query） | string | ❌ | `null` | `YYYY-MM-DD`；与 `end_date` / `days` 配合使用 |
-| `end_date`（query） | string | ❌ | 今日 | `YYYY-MM-DD`；含今日时若今天为 A 股交易日，可能合并今日 partial bar（d/w/m 频率；分钟级不触发） |
+| `end_date`（query） | string | ❌ | `null`（route 层解析时回退到今日） | `YYYY-MM-DD`；含今日时若今天为 A 股交易日，可能合并今日 partial bar（d/w/m 频率；分钟级不触发） |
 | `adjust`（query） | string | ❌ | `""`（空串） | 仅接受 `qfq` 前复权 / `hfq` 后复权 / 空串不复权；**传 `none` 等其它值会 422**。**分钟级频段路由层不拒绝 `adjust`**，但上游大多不支持复权，结果可能为空或报错 |
 | `indicators`（query） | string | ❌ | — | 逗号分隔多个指标 key（先 `GET /indicators` 查可用 key） |
 
 ### 返回参数
 
-顶层 `{code, name, period, data[], source}`。`data[]` 每根 K 线：
+顶层 `{code, name, period, data[], source}`。`data[]` 每根 K 线（OHLCV + `amount` / `change_pct` 可为 `null`；`indicators` 仅在 `?indicators=` 时存在）：
 
 | 字段 | 类型 | 单位 | 说明 |
 |---|---|---|---|
 | `date` | string | — | `YYYY-MM-DD`（d/w/m）或 `YYYY-MM-DD HH:MM:SS`（分钟级） |
-| `frequency` | string | — | `d` / `w` / `m` / `1m` / `5m` / `15m` / `30m` / `60m`（**每根 K 线自带频率标签**，校验用） |
 | `open` / `high` / `low` / `close` | number | 元 | OHLC |
 | `volume` | number | **股** | 成交量（**单位固定股**，1 手 = 100 股） |
 | `volume_unit` | string | — | 固定 `"share"`（不变式） |

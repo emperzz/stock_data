@@ -67,7 +67,7 @@ curl 'http://localhost:8888/api/v1/stocks/600519/reports'
 
 ```bash
 # 先取 report_id
-curl 'http://localhost:8888/api/v1/stocks/600519/reports' | jq '.[0].info_code'
+curl 'http://localhost:8888/api/v1/stocks/600519/reports' | jq '.reports[0].info_code'
 # 假设返回 "abc123"
 
 # 下载 PDF

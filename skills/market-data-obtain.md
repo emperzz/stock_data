@@ -123,6 +123,8 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 
 > ⚠️ 字段、单位、调用约束、示例：[detail/market-data.md](market-data-obtain/market-data.md)
 
+> **命名说明**：个股/指数 K 线统一用 `period=daily|weekly|monthly|1m|5m|15m|30m|60m`；**板块 K 线 `/boards/{code}/history` 仍用旧名 `frequency=d|w|m|...`（内部 mgr 频率码 `1`/`5`/`15`/`30`/`60` 别映射）**——两块端点参数名不同是当前代码现实，不要混用。
+
 ---
 
 ## 5. 资金面（Capital Flow & Sentiment）

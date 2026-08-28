@@ -35,14 +35,16 @@
 | `type` | `/boards`、`/stocks/{code}/boards` | 板块类型过滤 |
 | `subtype` | `/boards`、`/stocks/{code}/boards` | source 专属 subtype（ths=`同花顺概念` 等）；需配合 `type` 才有意义 |
 | `include_quote` | `/boards`、`/boards/{code}/stocks` | `true` 时每条带报价字段；不传 = `false` |
-| `sort_by` | `/boards`、`/boards/{code}/stocks` | 排序键；**两个端点都强制要求 `include_quote=true`**（否则 400） |
+| `sort_by` | `/boards`、`/boards/{code}/stocks` | 排序键；**两个端点都强制要求 `include_quote=true` 且 `source='ths'`**（任一不满足 → 400 `invalid_combination`） |
 | `sort_order` | `/boards`、`/boards/{code}/stocks` | `asc` / `desc`；默认 `desc` |
 | `top_n` | `/boards/{code}/stocks` | 限制返回条数；默认 50（THS 上游硬上限） |
 | `refresh` | `/boards`、`/boards/{code}/stocks`、`/zt-pools` | 强制从上游刷新；默认 `false` |
 
 **`/boards/{code}/stocks` `source='ths'&include_quote=false` 的兜底**：`effective_source` 字段暴露实际服务的 fetcher（`ths` / `zzshare`）——读它判断是否走了兜底，不要读 `data_source`（缓存命中时固定为 `persistence`）。
 
-**`/quote`、`/news`、`/surges` 三端点为 THS 单源**：`source` 路由层不开放（其他 fetcher 不实现 `get_board_realtime` / `get_board_news` / `get_board_surges`），其他 source 传入会 422。
+**`/quote`、`/news`、`/surges` 三端点为 THS 单源**：
+- `/quote`：**无 `source` 入参**——`get_board_realtime` 仅 ThsFetcher 实现；其他 fetcher 拼接 `?source=zzshare` 会被 FastAPI 静默忽略但也不会换源
+- `/news` / `/surges`：有 `source: Literal["ths"]` 入参（默认 `ths`），传非 ths → 422
 
 ---
 
@@ -214,7 +216,7 @@ curl 'http://localhost:8888/api/v1/boards/885595/quote'
 
 ### 功能
 
-获取板块新闻（THS 唯一实现，走 `news.10jqka.com.cn` timeline）。`source` 路由层不开放。
+获取板块新闻（THS 唯一实现，走 `news.10jqka.com.cn` timeline）。
 
 - `summary` THS 上游可能为空字符串
 - 分页 `?limit=1-50`；游标分页**无** 14 条硬上限
@@ -225,10 +227,11 @@ curl 'http://localhost:8888/api/v1/boards/885595/quote'
 |---|---|---|---|---|
 | `board_code`（路径） | string | ✅ | — | THS 板块代码 |
 | `limit`（query） | int | ❌ | `20` | 1-50 |
+| `source`（query） | string | ❌ | `ths` | 路由 Literal 锁死，传非 `ths` → 422 |
 
 ### 返回参数
 
-顶层结构含 `data[]`。`data[]` 每条：
+顶层 `{code, source, total, data[]}`。`data[]` 每条：
 
 | 字段 | 类型 | 单位 | 说明 |
 |---|---|---|---|
@@ -251,7 +254,7 @@ curl 'http://localhost:8888/api/v1/boards/885595/news?limit=20'
 
 ### 功能
 
-获取板块炒作周期数据（F10 峰值周期，THS 唯一实现）。含板块涨幅 / 上证对比 / 涨停家数 / 涨停股列表。`source` 路由层不开放。
+获取板块炒作周期数据（F10 峰值周期，THS 唯一实现）。含板块涨幅 / 上证对比 / 涨停家数 / 涨停股列表。
 
 - `sh_change_pct` **用上证做基准对比**
 - `up_count` / `down_count` **F10 未暴露，固定 `null`**
@@ -266,7 +269,7 @@ curl 'http://localhost:8888/api/v1/boards/885595/news?limit=20'
 
 ### 返回参数
 
-顶层结构含 `data[]`。`data[]` 每条：
+顶层 `{code, source, total, data[]}`。`data[]` 每条：
 
 | 字段 | 类型 | 单位 | 说明 |
 |---|---|---|---|
@@ -341,7 +344,7 @@ curl 'http://localhost:8888/api/v1/stocks/600519/boards'
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
 | `board_code`（路径） | string | ✅ | — | 板块代码 |
-| `source`（query） | string | ✅ | — | `ths` / `eastmoney`（`source=eastmoney&frequency=1m` 直接 422）；`zzshare` 视为 `ths` 别名 |
+| `source`（query） | string | ✅ | — | `ths` / `eastmoney`（`source=eastmoney&frequency=1m` 走 `@map_errors` 翻 **400**，因 EastMoney 不支持 1m）；`zzshare` 视为 `ths` 别名 |
 | `frequency`（query） | string | ❌ | **`d`** | `d` / `w` / `m` / `1m` / `5m` / `15m` / `30m` / `60m` |
 | `days`（query） | int | ❌ | **按 frequency 取默认**（d/w/m=30、1m=800、5m/15m/30m/60m=30） | 1-800；不传时按 frequency 取默认 |
 | `start_date`（query） | string | ❌ | — | `YYYY-MM-DD`；与 `end_date` 跨度 ≤ 800 天 |

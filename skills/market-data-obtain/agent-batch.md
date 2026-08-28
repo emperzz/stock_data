@@ -7,7 +7,7 @@
 ## 通用行为
 
 - **逐项错误隔离**：单 `code` / 单 aspect 拉取失败**不**中断整体响应；失败项进入 `errors[]`（或 `errors{}`，按端点形态不同），成功的项仍正常出现
-- **`?format=md`**：6 个端点统一支持，默认 `json`；返回 `text/markdown; charset=utf-8`（**无数据丢失**——所有 JSON 字段都映射到 MD 表 / 列表项）。**例外**：`correlation/matrix` 走 `PlainTextResponse`，渲染失败 → 500（**无**自动回退 JSON + `X-MD-Render-Error` 响应头；其余 6 个端点 MD 渲染失败 → 自动回退 JSON + 响应头）
+- **`?format=md`**：8 个端点统一支持，默认 `json`；返回 `text/markdown; charset=utf-8`（**无数据丢失**——所有 JSON 字段都映射到 MD 表 / 列表项）。**例外**：`correlation/matrix` 走 `PlainTextResponse`，渲染失败 → 500（**无**自动回退 JSON + `X-MD-Render-Error` 响应头；其余 7 个端点 MD 渲染失败 → 自动回退 JSON + 响应头）
 - **不做判断**：本节端点只返回"事实型"算结果（集合运算 / 过滤后列表 / Jaccard 系数 / 数值字段），不输出"龙头 / 候选"等结论
 
 ## MinimalQuote 字段约定（post-2026-08-28）
