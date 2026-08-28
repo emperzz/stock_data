@@ -340,6 +340,20 @@ All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. 
 | `POST /agent/boards/batch-profile` | Per-board fan-out: 极简 realtime quote + 单 frequency 计算特征 (`trend`/`pivots`/`volume`)。1-5 THS platecodes, 单 frequency, 单源 THS。 | per-code `manager.get_board_realtime` + `manager.get_board_history` (THS 单源, fetcher 自动推断 board_type), then `features.build_features()` |
 | `GET /agent/market-context` | 每日快照：早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜。 | 多 fetcher 组合；`market_session` 由本地 CST + `is_trade_date()` 推得 |
 
+- **Extended `MinimalQuote` (post-2026-08-28).** The `quote` block on
+  `/agent/{stocks,indices,boards}/batch-profile` is no longer a 2-field
+  anchor (`price` + `change_pct`). It's now a ~23-field `MinimalQuote`
+  covering OHLV + 量价 (turnover/amplitude/volume_ratio) + 估值
+  (PE/PB/mcap_yi/float_mcap_yi, stock-only) + 涨跌停价 (stock-only) +
+  板块统计 (up_count/down_count/net_inflow/rank, board-only). Unit
+  conventions match the rest of the server's public API surface:
+  `volume` raw + `volume_unit` (`"share"` for stock/index, `"wan_shou"`
+  for board, matching `KLineData.volume_unit`); `amount` unified to
+  元 (board upstream 亿元 ×1e8 — same conversion `/boards/{code}/quote`
+  applies at `routes/boards.py:857`). See
+  `docs/superpowers/specs/2026-08-28-agent-batch-profile-quote-fields-design.md`
+  for the full field inventory and unit policy.
+
 ### Design contract (don't violate these without a spec change)
 
 - **Per-item error isolation.** A single upstream failure is reported in `errors[]`; the rest of the response is still emitted. Do not abort the whole response on first failure.
