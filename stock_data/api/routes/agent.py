@@ -972,6 +972,47 @@ def post_stocks_batch_profile(
     return _render_agent("stocks/batch-profile", resp, format)
 
 
+def _build_minimal_quote_from_unified(q) -> MinimalQuote:
+    """Map a UnifiedRealtimeQuote to the expanded MinimalQuote.
+
+    Mirrors the field-mapping logic in StockQuote.from_unified_quote
+    (schemas.py:126) — same fallback rules for amplitude, same 1e8
+    division for mcap_yi / float_mcap_yi. Kept here (rather than
+    reusing StockQuote.from_unified_quote) to keep the nested-flag /
+    current_price-rename / _serialize semantics out of the agent
+    path: MinimalQuote is always top-level, never embedded, and the
+    helper returns the Pydantic instance directly.
+    """
+    amplitude = q.amplitude
+    if amplitude is None and q.high is not None and q.low is not None and q.pre_close:
+        amplitude = (q.high - q.low) / q.pre_close * 100
+
+    def _yi(v):
+        return None if v is None else v / 1e8
+
+    return MinimalQuote(
+        price=q.price,
+        change_pct=q.change_pct,
+        change_amount=q.change_amount,
+        open=q.open_price,
+        high=q.high,
+        low=q.low,
+        prev_close=q.pre_close,
+        volume=q.volume,
+        volume_unit=q.volume_unit or "share",
+        amount=q.amount,  # UnifiedRealtimeQuote.amount is 元; pass-through
+        turnover_pct=q.turnover_rate,
+        amplitude_pct=amplitude,
+        volume_ratio=q.volume_ratio,
+        pe_ratio=q.pe_ratio,
+        pb_ratio=q.pb_ratio,
+        mcap_yi=_yi(q.total_mv),
+        float_mcap_yi=_yi(q.circ_mv),
+        limit_up=q.limit_up,
+        limit_down=q.limit_down,
+    )
+
+
 @router.post(
     "/agent/boards/batch-profile",
     response_model=BoardsBatchProfileResponse,
