@@ -1013,6 +1013,36 @@ def _build_minimal_quote_from_unified(q) -> MinimalQuote:
     )
 
 
+def _build_minimal_quote_from_board_dict(q: dict) -> MinimalQuote:
+    """Map a ThsFetcher.get_board_realtime dict to MinimalQuote.
+
+    THS upstream returns volume in 万手 (matches ``volume_unit``) and
+    amount in 亿元 — multiplied by 1e8 here to align with the rest
+    of the server's API surface (see `routes/boards.py:857`, the
+    /boards/{code}/quote route does the same conversion). The 8
+    stock-only fields (turnover / amplitude / valuation / 涨跌停)
+    stay None; the 4 board-only fields (up_count / down_count /
+    net_inflow / rank) are populated.
+    """
+    raw_amount = q.get("amount")
+    return MinimalQuote(
+        price=q.get("price"),
+        change_pct=q.get("change_pct"),
+        change_amount=q.get("change_amount"),
+        open=q.get("open"),
+        high=q.get("high"),
+        low=q.get("low"),
+        prev_close=q.get("prev_close"),
+        volume=q.get("volume"),  # THS upstream uses safe_int → int | None; pass-through
+        volume_unit="wan_shou",
+        amount=(raw_amount * 1e8) if raw_amount is not None else None,
+        up_count=q.get("up_count"),
+        down_count=q.get("down_count"),
+        net_inflow=q.get("net_inflow"),  # board upstream already 亿元; pass-through
+        rank=q.get("rank"),
+    )
+
+
 @router.post(
     "/agent/boards/batch-profile",
     response_model=BoardsBatchProfileResponse,

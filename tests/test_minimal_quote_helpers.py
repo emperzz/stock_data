@@ -179,3 +179,89 @@ class TestBuildMinimalQuoteFromUnified:
 
         q = _build_minimal_quote_from_unified(_mk_unified(volume_unit=""))
         assert q.volume_unit == "share"
+
+
+class TestBuildMinimalQuoteFromBoardDict:
+    def test_populated_fields(self):
+        from stock_data.api.routes.agent import _build_minimal_quote_from_board_dict
+
+        raw = {
+            "price": 1234.5,
+            "change_pct": 1.23,
+            "change_amount": 15.0,
+            "open": 1230.0,
+            "high": 1240.0,
+            "low": 1225.0,
+            "prev_close": 1219.5,
+            "volume": 15343,  # 万手 (int-truncated upstream)
+            "amount": 12.5,  # 亿元 upstream
+            "up_count": 12,
+            "down_count": 5,
+            "net_inflow": 1.23,  # 亿元
+            "rank": "229/389",
+        }
+        q = _build_minimal_quote_from_board_dict(raw)
+        assert q.price == 1234.5
+        assert q.change_pct == 1.23
+        assert q.change_amount == 15.0
+        assert q.open == 1230.0
+        assert q.high == 1240.0
+        assert q.low == 1225.0
+        assert q.prev_close == 1219.5
+        assert q.volume == 15343
+        assert q.volume_unit == "wan_shou"
+        assert q.amount == pytest.approx(12.5 * 1e8)  # 1.25e9
+        assert q.up_count == 12
+        assert q.down_count == 5
+        assert q.net_inflow == 1.23
+        assert q.rank == "229/389"
+        # stock-only fields stay None on board
+        assert q.turnover_pct is None
+        assert q.amplitude_pct is None
+        assert q.volume_ratio is None
+        assert q.pe_ratio is None
+        assert q.pb_ratio is None
+        assert q.mcap_yi is None
+        assert q.float_mcap_yi is None
+        assert q.limit_up is None
+        assert q.limit_down is None
+
+    def test_volume_unit_is_wan_shou(self):
+        from stock_data.api.routes.agent import _build_minimal_quote_from_board_dict
+
+        q = _build_minimal_quote_from_board_dict({"price": 100.0})
+        assert q.volume_unit == "wan_shou"
+
+    def test_amount_multiplied_by_1e8_from_yi(self):
+        """Round-trip: upstream 亿元 → response 元 = ×1e8."""
+        from stock_data.api.routes.agent import _build_minimal_quote_from_board_dict
+
+        q = _build_minimal_quote_from_board_dict({"amount": 1.23})
+        assert q.amount == pytest.approx(123_000_000.0)
+
+    def test_amount_none_when_upstream_missing(self):
+        """The None branch must NOT call ×1e8."""
+        from stock_data.api.routes.agent import _build_minimal_quote_from_board_dict
+
+        q = _build_minimal_quote_from_board_dict({})
+        assert q.amount is None
+
+    def test_net_inflow_pass_through_no_division(self):
+        """net_inflow is in 亿元 upstream AND stays in 亿元 in the response
+        (server convention for fund flow; no conversion)."""
+        from stock_data.api.routes.agent import _build_minimal_quote_from_board_dict
+
+        q = _build_minimal_quote_from_board_dict({"net_inflow": -2.5})
+        assert q.net_inflow == -2.5
+
+    def test_empty_dict_returns_default_instance(self):
+        from stock_data.api.routes.agent import _build_minimal_quote_from_board_dict
+
+        q = _build_minimal_quote_from_board_dict({})
+        assert q.price is None
+        assert q.change_pct is None
+        assert q.open is None
+        assert q.volume is None
+        assert q.volume_unit == "wan_shou"  # always set on board
+        assert q.amount is None
+        assert q.up_count is None
