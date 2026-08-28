@@ -133,24 +133,23 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 
 ### 步骤 3：拉取市场数据
 
-**取数策略**：跨股 / 跨板块 / 跨指数的"多对多"查询**优先走 `market-data-obtain §9.1` 的 `agent/*` 批量端点**（服务端聚合 + per-item 错误隔离，避免 per-X 重复调用 + 手算 set-op）；per-X 单次调用仅在批量端点不支持的粒度（如 单板 K 线、个股资金流）时使用。所有 `agent/*` 端点共享 60s in-memory cache——同 session 内相同请求（按 service-defined cache key）自动命中，无需重拉；**复盘 + 后续 skill 串联调用同一批量端点时**也直接命中（注意 `agent/market-context` 的 cache key 含 `market_session`，跨时段不污染）。
+**取数策略**：跨股 / 跨板块 / 跨指数的"多对多"查询**优先走 `market-data-obtain §9.1` 的 `agent/*` 批量端点**（服务端聚合 + per-item 错误隔离，避免 per-X 重复调用 + 手算 set-op）；per-X 单次调用仅在批量端点不支持的粒度（如 单板 K 线、个股资金流）时使用。重复请求由服务端消化，无需客户端去重。
 
 通过 `market-data-obtain` 获取（具体端点见该 skill）：
 
 | 类别 | 数据形态 | 推荐取数路径 | 时段差异 |
 |---|---|---|---|
-| **指数全景** | 上证 / 深证成指 / 创业板指 —— extended `MinimalQuote`（23 字段，index 路径 valuation/limit 为 `null`）+ 计算指标（trend/pivots/volume），单 frequency | `§9.1` `agent/indices/batch-profile`（默认 3 指数；单 `frequency`，要长短期各调一次） | `pre`：昨日收盘 + 隔夜外盘；`intra`：当日分时 + 5m features；`post`：当日收盘 + features（要长短期趋势则分 `frequency` 调） |
-| **市场全景（涨跌停 / 龙虎榜 / 消息面）** | 涨停 + 跌停 + 龙虎榜（含 server-computed `dragon_tiger.summary.total_net_buy_wan` + top-by-buy/sell） + 早报/复盘/快讯 + `market_session` 判定 | `§9.1` `agent/market-context`（session 进 cache 键，per-block 失败隔离） | `pre` / `intra` / `post` / `closed` 全时段（pre-market 涨跌停池服务端强制 null） |
-| **板块异动 + 成分股数值筛选** | 板块清单（带涨幅）+ 多板成分股按 涨幅 / 换手 / 成交额 / 市值 / 最高涨幅 过滤 | 板块清单走主表相关端点；批量数值筛走 `§9.1` `agent/boards/filter-stocks`（per-aspect 失败隔离；`max_gain_pct` 已服务端计算 `(high-open)/open*100`） | `pre`：昨日 + 今日预热；`intra`：实时异动；`post`：收盘涨跌 |
-| **全市场情绪（涨跌家数 + 涨幅分布桶）** | 全市场涨幅统计：均值 / 中位 / 最高 / 最低 / 上涨下跌平盘家数 + 11/9 个百分比桶（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶） | `§9.1` `agent/market-stats`（per-block 错误隔离，单块失败不影响另一块；`?include_boards=false` 可只取个股块） | `pre`：昨日收盘快照；`intra`：实时分布变化；`post`：当日全量收尾分布 |
-| **板块 K 线** | 领涨 Top1-5（同类去重、取涨幅更高者）+ watchlist 已记录领跌板块 —— 各 5m / d / w 三周期 | `§9.1` `agent/boards/batch-profile`（THS 单源，1-5 platecodes，单 `frequency` + `days`；返回 extended `MinimalQuote`（23 字段，board-only `up_count`/`down_count`/`net_inflow`/`rank` + `volume_unit="wan_shou"` + `amount` ×1e8 转元）+ trend/pivots/volume 计算特征，**无 composite cache**，依赖 fetcher 层 TTL） | `intra` / `post`：按领涨 / 领跌排名拉；`pre`：仅拉 watchlist 已记录板块 |
-| **跨板块 / 跨股 集合运算** | 多板块两两成分股交集 + Jaccard；多股两两所属板块交集 + Jaccard | `§9.1` `agent/boards/stock-overlap` / `agent/stocks/board-overlap`（2-10 hard cap；服务端算 Jaccard） | 与时段无关 |
+| **指数全景** | 上证 / 深证成指 / 创业板指 —— extended `MinimalQuote` + 计算指标（trend/pivots/volume），单 frequency（字段与单位见 agent-batch.md） | `§9.1` `agent/indices/batch-profile`（默认 3 指数；单 `frequency`，要长短期各调一次） | `pre`：昨日收盘 + 隔夜外盘；`intra`：当日分时 + 5m features；`post`：当日收盘 + features（要长短期趋势则分 `frequency` 调） |
+| **市场全景（涨跌停 / 龙虎榜 / 消息面）** | 涨停 + 跌停 + 龙虎榜（含 server-computed `dragon_tiger.summary.total_net_buy_wan` + top-by-buy/sell） + 早报/复盘/快讯 + `market_session` 判定 | `§9.1` `agent/market-context`（per-block 失败隔离） | `pre` / `intra` / `post` / `closed` 全时段（pre-market 涨跌停池服务端强制 null） |
+| **板块异动 + 成分股数值筛选** | 板块清单（带涨幅）+ 多板成分股按 涨幅 / 换手 / 成交额 / 市值 / 最高涨幅 过滤 | 板块清单走主表相关端点；批量数值筛走 `§9.1` `agent/boards/filter-stocks`（`max_gain_pct` = 盘中最高涨幅 vs 开盘价，服务端计算） | `pre`：昨日 + 今日预热；`intra`：实时异动；`post`：收盘涨跌 |
+| **全市场情绪（涨跌家数 + 涨幅分布桶）** | 全市场涨幅统计：均值 / 中位 / 最高 / 最低 / 上涨下跌平盘家数 + 11/9 个百分比桶（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶） | `§9.1` `agent/market-stats`（`include_boards=false` 可只取个股块） | `pre`：昨日收盘快照；`intra`：实时分布变化；`post`：当日全量收尾分布 |
+| **板块 K 线** | 领涨 Top1-5（同类去重、取涨幅更高者）+ watchlist 已记录领跌板块 —— 各 5m / d / w 三周期 | `§9.1` `agent/boards/batch-profile`（THS 单源；字段与单位见 agent-batch.md） | `intra` / `post`：按领涨 / 领跌排名拉；`pre`：仅拉 watchlist 已记录板块 |
+| **跨板块 / 跨股 集合运算** | 多板块两两成分股交集 + Jaccard；多股两两所属板块交集 + Jaccard | `§9.1` `agent/boards/stock-overlap` / `agent/stocks/board-overlap`（服务端算 Jaccard） | 与时段无关 |
 | **个股 / 资金流 / 消息面细节** | 北向资金、个股资金流、个股新闻、公告、研报（仅在归因需要"个股级"查询时） | 走主表 per-X 端点（不在 §9.1 批量范围内） | 任何时段 |
 
-**K 线数量约定**（仅适用于上方"板块 K 线"行——大盘指数**已被 `agent/indices/batch-profile` 覆盖**（单 `frequency` + 计算指标，非 raw K 线）；板块**已被 `agent/boards/batch-profile` 覆盖**，无需手拉）：
-- **大盘**：3 个指数（与"指数全景"一致），走 `agent/indices/batch-profile` 单 `frequency`（要长短期趋势分 `frequency` 调）——**已被服务端覆盖**，勿重复拉
+**板块 K 线选取约定**（大盘与板块的量能已由 batch-profile 覆盖，勿手拉 raw K 线）：
 - **领涨板块**：同类板块（如同名"房地产" / "房地产概念"、相邻"半导体" / "第三代半导体"）取涨幅更高者；最终 1-5 个（市场大涨看 5 个，市场大跌看 1-2 个）
-- **领跌板块**：仅当板块已在 `market_tracking.md` 中被记录为持续关注对象时才拉 K 线；其他领跌板块**不拉**——避免对临时性下跌过度反应
+- **领跌板块**：仅拉 `market_tracking.md` 已记录的持续关注板块；其他领跌**不拉**——避免对临时性下跌过度反应
 
 ### 步骤 4：归因（核心判断任务）
 
@@ -216,7 +215,7 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 
 **market-recap 是数据消费者，`market-data-obtain` 是数据提供者。** 本 skill **不重复定义**：
 
-- 端点目录（行情 / 资金面 / 基础数据 / 公告 / 研报 / 特殊池 / 新闻 → market-data-obtain 第 4-12 节）
+- 端点目录（行情 / 资金面 / 基础数据 / 公告 / 研报 / 特殊池 / 新闻 → market-data-obtain 第 4-11 节）
 - 服务器失败时的 fallback 策略（market-data-obtain 第 3 节）
 - 信源优先级（market-data-obtain 第 3.2 节）
 
@@ -233,14 +232,9 @@ agent 在执行步骤 2-3 时，按需跳读 `market-data-obtain` 取端点。
 
 agent 在执行步骤 4-5 时，按需跳读 `market-principles` 取判断方法。
 
-### 6.3 与 `morning-briefing` 的关系
+### 6.3 早报模式说明
 
-早报（盘前 briefing）和复盘（盘后 recap）都是"对最近一段时间变化的总结"——
-
-- 早报总结**隔夜变化**（外盘 + 政策 + 公告预披露）
-- 复盘总结**日内变化**（涨跌 + 板块轮动 + 龙头归因）
-
-**统一在 market-recap skill 内**：盘前模式输出早报内容、盘后输出复盘内容，写入**同一个**每日文件（按时间戳判断块自然区分）。
+本 skill 没有独立的 morning-briefing skill——早报与复盘统一由本 skill 承担：盘前模式输出早报内容（总结**隔夜变化**：外盘 + 政策 + 公告预披露），盘后模式输出复盘内容（总结**日内变化**：涨跌 + 板块轮动 + 龙头归因），写入**同一个**每日文件（按时间戳判断块自然区分）。
 
 ---
 

@@ -53,7 +53,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 
 | 来源 | 用法 |
 |---|---|
-| `portfolio.json`（`watchlist-manager` 维护） | 读 `关注.board.code`、`持仓.shares/avg_cost/last_event_at` |
+| `portfolio.json`（`watchlist-manager` 维护） | 读 `关注.board.code`（**须为 THS platecode 885xxx/881xxx**——本 skill 板块取数全部走 THS 单源）、`持仓.shares/avg_cost/last_event_at` |
 | `events.jsonl`（`watchlist-manager` 维护） | 读近期操作节奏（最近 5 条事件的 ts 间隔） |
 | `market_tracking.md`（`market-recap` 维护） | 读活跃主线、龙头股、板块轮动状态 |
 | stock_data server agent API | 实时行情 + 服务端计算的 features（trend/pivots/volume） |
@@ -67,107 +67,38 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 
 **路径 B**：code ∉ portfolio（用户外部询问）
 
-- 反馈用户先提供 board（code + name），等用户提供
+- 反馈用户先提供 board（code + name，**code 须为 THS platecode 885xxx/881xxx**），等用户提供
 - 用户提供后再启动判断（避免选错板块导致判断失真）
 
 ---
 
 ## 3. 数据获取策略
 
-### 3.1 路由清单（按调用顺序）
+### 3.1 取数路由（按调用顺序）
 
-#### 第一层——市场环境（大盘）
+> 请求格式、参数取值范围、字段与单位以 `market-data-obtain §9.1` + [agent-batch.md](market-data-obtain/agent-batch.md) 为准（调用前必读）；下表只列本 skill 的**取数需求 + 判断性参数选择**。
 
-```bash
-# 1. 大盘长期趋势（周线）
-GET /agent/indices/batch-profile?codes=000300&frequency=w&days=156&format=json
-
-# 2. 大盘短期趋势（重点，日线）
-GET /agent/indices/batch-profile?codes=000300&frequency=d&days=30&format=json
-
-# 3. 大盘当日分时（5分钟）
-GET /agent/indices/batch-profile?codes=000300&frequency=5m&days=2&format=json
-
-# 4. 全市场个股统计 + 板块统计
-GET /agent/market-stats?include_boards=true&format=json
-
-# 5. 涨跌停 + 连板分布
-GET /agent/market-context?format=json
-```
-
-#### 第二层——个股所在板块
-
-```bash
-# 6. 所有相关板块的长期 + 短期趋势（日线）
-POST /agent/boards/batch-profile
-{ "codes": [board_codes...], "frequency": "d", "days": 30 }
-# 自动按 5 切片分批串行调用，合并结果
-
-# 7. 所有相关板块的当日分时（5分钟）
-POST /agent/boards/batch-profile
-{ "codes": [board_codes...], "frequency": "5m", "days": 2 }
-
-# 8. 每板块的成分股（取龙头/前3 + 当日触板状态）
-GET /boards/{board_code}/stocks?include_quote=true
-# 每个板块 1 次 call
-```
-
-#### 第三层——个股自身
-
-```bash
-# 9. 所有 watchlist + 各自板块龙头的日线 features
-POST /agent/stocks/batch-profile
-{ "codes": [...], "frequency": "d", "days": 365 }
-# 自动按 5 切片分批
-
-# 10. 所有 watchlist + 龙头的近5日 5分钟 K线 features
-POST /agent/stocks/batch-profile
-{ "codes": [...], "frequency": "5m", "days": 5 }
-```
-
-#### 重合度判断
-
-```bash
-# 11. watchlist 内票两两板块重合（≤10 个 stock 一次）
-POST /agent/stocks/board-overlap
-{ "codes": [watchlist_codes] }
-
-# 12. 对每只 watchlist 票 X：labels = [X, 龙头1, 龙头2, 龙头3, X所在板块]
-POST /agent/correlation/matrix
-{
-  "labels": [
-    {"type": "stock", "code": "X"},
-    {"type": "stock", "code": "leader_1"},
-    {"type": "stock", "code": "leader_2"},
-    {"type": "stock", "code": "leader_3"},
-    {"type": "board", "code": "X_board_code", "source": "ths"}
-  ],
-  "frequency": "d",
-  "days": 90,
-  "methods": ["pearson"]
-}
-# 每只 watchlist 票 1 次 call
-```
+| # | 层 | 取数需求 | 端点 | 本 skill 的参数选择 |
+|---|---|---|---|---|
+| 1 | 市场环境 | 大盘长期趋势（周 K） | `agent/indices/batch-profile` | `codes=000300`，`w`，`days=156` |
+| 2 | 市场环境 | 大盘短期趋势（重点，日 K） | `agent/indices/batch-profile` | `000300`，`d`，`days=30` |
+| 3 | 市场环境 | 大盘当日分时 | `agent/indices/batch-profile` | `000300`，`5m`，`days=2` |
+| 4 | 市场环境 | 全市场个股 + 板块涨幅统计 | `agent/market-stats` | 默认（含板块块） |
+| 5 | 市场环境 | 涨跌停 + 连板结构 + 龙虎榜 + 消息面 | `agent/market-context` | 默认（`limit_pools`/`dragon_tiger`） |
+| 6 | 板块 | 相关板块短期趋势（日 K） | `agent/boards/batch-profile` | THS platecodes，`d`，`days=30` |
+| 7 | 板块 | 相关板块当日分时 | `agent/boards/batch-profile` | 同上 codes，`5m`，`days=2` |
+| 8 | 板块 | 成分股龙头/前3 + 当日触板标记 | `GET /boards/{code}/stocks` | `source=ths&include_quote=true&with_zt_flags=true`（龙头/前3 = 列表按涨幅倒序的前几行；触板 = `is_limit_up`） |
+| 9 | 个股 | watchlist + 各板块龙头日线 features | `agent/stocks/batch-profile` | `d`，`days=365` |
+| 10 | 个股 | 同上的 5 分钟分时 features | `agent/stocks/batch-profile` | `5m`，`days=5` |
+| 11 | 重合度 | watchlist 内两两板块重合 | `agent/stocks/board-overlap` | 一次调用 |
+| 12 | 重合度 | 每只 X vs 前三龙头 + 所在板块的相关性 | `agent/correlation/matrix` | stocks=[X, 3 龙头] + boards=[X 所在板块]，`d`，`days=90`，pearson |
 
 ### 3.2 自动分批规则
 
 - `stocks/batch-profile` 与 `boards/batch-profile` 的 codes 按 5 切片串行调用（保留输入顺序，合并结果）
 - `stocks/board-overlap` codes 按 10 切片
-- `correlation/matrix` 每次 ≤5 个 label（已固定）
-- 分批调用之间不必等缓存——60s TTL 内重复 code 会命中缓存
-
-### 3.3 缓存命中预期
-
-| 路由 | TTL | 二次调用是否命中 |
-|---|---|---|
-| `/agent/indices/batch-profile` | 60s | ✅ 命中（同一 indices codes） |
-| `/agent/market-stats` | 60s | ✅ 命中 |
-| `/agent/market-context` | 60s（按 session 切） | ✅ 命中 |
-| `/agent/boards/batch-profile` | 60s | ✅ 命中（同一 board codes + freq + days） |
-| `/agent/stocks/batch-profile` | 60s | ✅ 命中 |
-| `/agent/stocks/board-overlap` | 60s | ✅ 命中 |
-| `/agent/correlation/matrix` | **无 composite 缓存** | 每次都实拉（fetcher-level TTL 覆盖） |
-| `/boards/{code}/stocks` | 60s | ✅ 命中 |
+- `correlation/matrix` 每次固定 5 个资产（X + 前三龙头 + 所在板块）
+- 分批调用之间无需限流等待——重复请求由服务端消化
 
 ---
 
@@ -179,28 +110,28 @@ POST /agent/correlation/matrix
 
 | 字段组合 | 论据 |
 |---|---|
-| `ma.MA5 > MA20 > MA60` | "均线多头排列" |
-| `ma.MA5 < MA20 < MA60` | "均线空头排列" |
-| `ma.MA5 > MA20` 但 `MA20 < MA60` | "短期反弹中期仍弱" |
+| `ma.ma5 > ma.ma20 > ma.ma60` | "均线多头排列" |
+| `ma.ma5 < ma.ma20 < ma.ma60` | "均线空头排列" |
+| `ma.ma5 > ma.ma20` 但 `ma.ma20 < ma.ma60` | "短期反弹中期仍弱" |
 | `adx > 25` 且 `pdi > mdi` | "上升趋势确立（ADX=X）" |
 | `adx > 25` 且 `mdi > pdi` | "下降趋势确立（ADX=X）" |
 | `adx < 20` | "趋势不明（ADX=X，震荡市）" |
-| `rsi.RSI6 > 70` | "短期超买（RSI6=X）" |
-| `rsi.RSI6 < 30` | "短期超卖（RSI6=X）" |
-| `rsi.RSI6 介于 40-60` | "短期动能中性（RSI6=X）" |
-| `boll.upp` 与当前价距离 > 5% | "价处布林下轨附近" |
-| 当前价突破 `boll.upp` | "价处布林上轨之上，追高风险" |
+| `rsi.rsi_6 > 70` | "短期超买（RSI6=X）" |
+| `rsi.rsi_6 < 30` | "短期超卖（RSI6=X）" |
+| `rsi.rsi_6` 介于 40-60 | "短期动能中性（RSI6=X）" |
+| 当前价距 `boll.lower` < 5% | "价处布林下轨附近" |
+| 当前价突破 `boll.upper` | "价处布林上轨之上，追高风险" |
 
 ### 4.2 顶底（features.pivots）
 
 | 字段组合 | 论据 |
 |---|---|
-| `window_high.price - quote.price` < 5%（按主板/创板区分涨停空间） | "距 365 日阶段高点 X%，空间被压缩" |
-| `quote.price - window_low.price` < 5% | "距 365 日阶段低点 X%，支撑近" |
-| `pending.side=high` 且 `bars >= 3` | "正在构造高点（已 N 根未确认）" |
-| `pending.side=low` 且 `bars >= 3` | "正在构造低点（已 N 根未确认）" |
-| `swings` 最近一项 `type=high` 后无新 `type=low` | "前高后未确认新低，趋势上沿" |
-| `swings` 最近 3 项 `type=low, high, low` | "高低点抬高，趋势向上" |
+| `(window_high.price - quote.price) / quote.price < 5%` | "距 365 日阶段高点 X%，空间被压缩" |
+| `(quote.price - window_low.price) / window_low.price < 5%` | "距 365 日阶段低点 X%，支撑近" |
+| `pending.side=high` 且 `pending.bars >= 3` | "正在构造高点（已 N 根未确认）" |
+| `pending.side=low` 且 `pending.bars >= 3` | "正在构造低点（已 N 根未确认）" |
+| `swings` 最近一项 `type=high` | "前高已确认、尚无新确认低点——可能处于自高点回落段" |
+| `swings` ≥4 项且相邻同类点抬高（`high_n > high_{n-1}` 且 `low_n > low_{n-1}`） | "高低点抬高，趋势向上" |
 
 ### 4.3 量异常（features.volume）
 
@@ -223,14 +154,17 @@ POST /agent/correlation/matrix
 ### 4.5 连续上涨后空间评估
 
 ```
-近 5 日累计涨幅 = (current.close - 5d_ago.close) / 5d_ago.close × 100%
-距前期高点 = (window_high.price - current.price) / current.price × 100%
+距前期高点 = (window_high.price - quote.price) / quote.price × 100%
 ```
+
+加速上行用 `trend.ma_change.ma5`（MA5 最新一根环比 %）近似。
 
 | 组合 | 论据 |
 |---|---|
-| 近 5 日涨幅 > 10% 且 距前期高点 < 5% | "5 日累计 +X%，距前期高点仅 +Y%——上涨空间被压缩" |
-| 近 5 日涨幅 > 10% 且 距前期高点 > 10% | "5 日累计 +X%，距前期高点还有 +Y%——仍有空间" |
+| `ma_change.ma5 > 2%` 且 距前期高点 < 5% | "短期加速且距前期高点仅 +Y%——上涨空间被压缩" |
+| `ma_change.ma5 > 2%` 且 距前期高点 > 10% | "短期加速且距前期高点还有 +Y%——仍有空间" |
+
+> batch-profile 响应不含 5 日前收盘价，"近 N 日累计涨幅"无法由 features 推出——需要精确值时另调 `GET /stocks/{code}/kline?period=daily&days=10`。
 
 ### 4.6 当日涨幅 vs 涨停空间
 
@@ -252,7 +186,7 @@ POST /agent/correlation/matrix
 
 ### 4.7 板块涨幅相对性（market-stats.boards）
 
-读取 `/agent/market-stats` 的 `boards.buckets[]`（9 桶：[-3%~-2%], [-2%~-1%], [-1%~0], [0], [0~+1%], [+1%~+2%], [+2%~+3%], [+3%~+∞]）。
+读取 `/agent/market-stats` 的 `boards.buckets[]`（9 桶，左开右闭、0% 单独成桶：`(-∞,-3%]`、`(-3%,-2%]`、`(-2%,-1%]`、`(-1%,0)`、`{0%}`、`(0,+1%]`、`(+1%,+2%]`、`(+2%,+3%]`、`(+3%,+∞)`）。
 
 | 组合 | 论据 |
 |---|---|
@@ -265,7 +199,7 @@ POST /agent/correlation/matrix
 
 | 数据 | 论据 |
 |---|---|
-| `info.data.主营业务` 双方对比 | "业务重合度高 / 中 / 低" |
+| `info.data.business_scope`（经营范围）+ `info.data.concepts` 双方对比 | "业务重合度高 / 中 / 低" |
 | `board-overlap.pairs[X↔leader].jaccard > 0.5` | "共同板块占比高（Jaccard X）" |
 | `correlation/matrix` Pearson `ρ > 0.7` | "走势强相关（ρ=X）" |
 | `0.4 < ρ < 0.7` | "走势中度相关（ρ=X）" |
@@ -313,8 +247,8 @@ POST /agent/correlation/matrix
 **输入**：
 - `stocks/batch-profile (d, days=365)` 的 `features.trend/pivots/volume`
 - `stocks/batch-profile (5m, days=5)` 的 `features.pivots.swings + features.volume.z_anomalies`
-- `stocks/batch-profile.quote` 的 `price/change_pct`（post-2026-08-28 已扩为 extended `MinimalQuote` 23 字段，可读 `open/high/low/volume/turnover_pct/amplitude_pct` 等）
-- `stocks/batch-profile.info` 的主营业务
+- `stocks/batch-profile.quote` 的 extended `MinimalQuote`（`price/change_pct/open/high/low/volume/turnover_pct/amplitude_pct` 等，字段与单位见 agent-batch.md）
+- `stocks/batch-profile.info` 的主营近似（`business_scope` + `concepts`）
 - `stocks/batch-profile.boards` 的所属板块（用于和 portfolio.json 对照）
 
 **每只 code 的个股层论据**：
@@ -325,14 +259,14 @@ POST /agent/correlation/matrix
 - 当前价 vs 顶底（pivots.window_high/low vs quote.price）
 - 连续上涨后空间评估
 - 当日涨幅 vs 涨停空间
-- 主营（info.data.主营业务）
+- 主营近似（`info.data.business_scope` / `concepts`）
 
 ### 5.4 重合度（针对 watchlist 内票）
 
 **输入**：
 - `correlation/matrix`（每只 watchlist 票一次）
 - `stocks/board-overlap`（watchlist 内两两板块重合）
-- 双方 `info.data.主营业务`
+- 双方 `info.data.business_scope` + `concepts`
 
 **每只 code 的重合度论据**：
 
@@ -376,11 +310,11 @@ POST /agent/correlation/matrix
 ## 600519 贵州茅台
 
 **当前状态**（来自 portfolio.json）：关注+持仓 200 股 @1807.50
-**所属板块**（来自 portfolio.json）：白酒 (BK0438)
+**所属板块**（来自 portfolio.json）：白酒 (881xxx，THS platecode)
 
 ### 板块环境
 **板块趋势**：{boards/batch-profile features 翻译}
-**板块当日涨幅**：{boards.quote.change_pct:+.2f}%，落在 market-stats 桶 {bucket_label}（板块整体均值 {boards.mean_pct:+.2f}%）。`boards.quote` 已是 extended `MinimalQuote`（23 字段，board-only `volume_unit="wan_shou"` + `up_count`/`down_count`/`net_inflow`/`rank`），不必再单拉 `/boards/{code}/quote`
+**板块当日涨幅**：{boards.quote.change_pct:+.2f}%，落在 market-stats 桶 {bucket_label}（板块整体均值 {boards.mean_pct:+.2f}%）。`boards.quote` 已是 extended `MinimalQuote`（字段与单位见 agent-batch.md），不必再单拉 `/boards/{code}/quote`
 **龙头/前 3**：
 - 龙头 A (X 板): 价格 Y，涨幅 Z%
 - 前 3 B: 价格 Y，涨幅 Z%
@@ -393,7 +327,7 @@ POST /agent/correlation/matrix
 **当日分时**：{5m features 翻译}
 **当前价 vs 顶底**：距 365 日高点 {X%}，距 365 日低点 {Y%}
 **当日涨幅 vs 涨停空间**：主板 +10%（距涨停 {Z%}）
-**主营**：{info.data.主营业务}
+**主营**：{info.data.business_scope}
 
 ### 重合度（vs 龙头 A）
 **业务重合**：{主营对比}
@@ -436,7 +370,7 @@ POST /agent/correlation/matrix
 - ❌ 不要对所有 watchlist 票算两两相关系数——只算每只 vs 各自龙头/前 3
 - ❌ 不要让判断 skill 写 portfolio.json / events.jsonl——只读不写
 - ❌ 不要在判断输出里给"目标价"——本 skill 不预测价格
-- ❌ 不要把"硬门槛"塞进判断逻辑——你已明确"股票没有绝对标准，是所有条件总体的判断"
+- ❌ 不要把"硬门槛"塞进判断逻辑——股票判断是所有条件的总体权衡，没有绝对标准
 
 ---
 
@@ -475,7 +409,7 @@ POST /agent/correlation/matrix
    - 600519 所属板块 boards/batch-profile (d + 5m)
    - 600519 + 龙头 stocks/batch-profile (d=365 + 5m=5)
    - boards/{code}/stocks 取龙头/前 3
-   - correlation/matrix (labels: [600519, 龙头, top2, top3, board])
+   - correlation/matrix (stocks: [600519, 龙头, top2, top3], boards: [board])
 3. 论据翻译 → 输出 600519 一段
 ```
 
