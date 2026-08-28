@@ -267,7 +267,7 @@ curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=50&trade_dat
 股票批量画像：每只股票**扩展 `MinimalQuote` + `trend` / `pivots` / `volume` features + info + boards**。1-5 codes，单 frequency 单 days。
 
 - 固定 `adjust=qfq`（前复权）
-- `info.data` 字段丰富度取决于服务源（用 `info.source` 判别）：`zhitu`（主）输出 `business_scope`（经营范围）+ `concepts`（概念标签）+ 注册信息等；`myquant`（备）仅 `code` / `name` / `listed_date` 非空，`business_scope` / `concepts` 恒为 `""` / `[]`——**业务比对仅在 zhitu 服务时有意义**
+- `info.data` 的 `business_scope`（经营范围）/ `concepts`（概念标签）**可能为空**（`""` / `[]`，可用 `info.source` 区分数据完整度）——空即按缺失数据对待：基于它的业务比对不可用，需要时走网络搜索 fallback
 - per-aspect 错误隔离：quote / features / info / boards 任一失败不影响其他；失败记录在 `results[i].errors[]` 数组里
 - 摆动点默认 `pivot_window=2, reversal_atr_mult=1.0, ATR14`；`pivots.params` 回显这组参数，**JSON 与 MD 两种投影都输出**（脱离参数无法校准）
 
