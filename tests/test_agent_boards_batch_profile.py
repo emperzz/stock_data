@@ -184,7 +184,15 @@ class TestHandler:
         board = body["boards"][0]
         assert board["code"] == "885595"
         assert board["name"] == "人形机器人"
-        assert board["quote"] == {"price": 1234.5, "change_pct": 1.23}
+        # MinimalQuote now carries 23 fields; verify the legacy 2-field
+        # anchor still serializes + board-specific fields surface correctly.
+        assert board["quote"]["price"] == 1234.5
+        assert board["quote"]["change_pct"] == 1.23
+        assert board["quote"]["volume_unit"] == "wan_shou"
+        # board-only fields populated; stock-only valuation stays None.
+        assert board["quote"]["pe_ratio"] is None
+        assert board["quote"]["mcap_yi"] is None
+        assert board["quote"]["turnover_pct"] is None
         assert board["features"]["trend"]  # non-empty (90 bars → MA values)
         assert board["errors"] == {"quote": None, "features": None}
         assert body["summary"]["requested"] == 1
@@ -217,7 +225,11 @@ class TestHandler:
         ok_board, bad_board = body["boards"]
         assert ok_board["code"] == "881270"
         assert ok_board["name"] == "半导体"
-        assert ok_board["quote"] == {"price": 567.8, "change_pct": -0.45}
+        # MinimalQuote now carries 23 fields; verify the 2-field anchor
+        # + unit hint survive the schema extension.
+        assert ok_board["quote"]["price"] == 567.8
+        assert ok_board["quote"]["change_pct"] == -0.45
+        assert ok_board["quote"]["volume_unit"] == "wan_shou"
         assert ok_board["features"]["trend"]
         assert ok_board["errors"] == {"quote": None, "features": None}
         assert bad_board["code"] == "885595"

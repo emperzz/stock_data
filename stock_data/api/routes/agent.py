@@ -655,7 +655,7 @@ def get_indices_batch_profile(
             if q is None:
                 errors["quote"] = "no fetcher could serve realtime quote"
             else:
-                quote = MinimalQuote(price=q.price, change_pct=q.change_pct)
+                quote = _build_minimal_quote_from_unified(q)
         except (DataFetchError, ValueError) as exc:
             logger.warning(f"[agent/indices/batch-profile] quote {code} failed: {exc}")
             errors["quote"] = str(exc)
@@ -902,8 +902,8 @@ def post_stocks_batch_profile(
         try:
             q = manager.get_realtime_quote(code)
             if q is not None:
-                quote = MinimalQuote(price=q.price, change_pct=q.change_pct)
-                name = getattr(q, "name", "") or ""
+                quote = _build_minimal_quote_from_unified(q)
+                name = q.name or ""
         except Exception as exc:
             logger.warning(f"[agent/stocks/batch-profile] {code} quote failed: {exc}")
             errors.append(
@@ -1095,10 +1095,7 @@ def post_boards_batch_profile(
         try:
             q, _src = manager.get_board_realtime(code, source="ths")
             if q is not None:
-                quote = MinimalQuote(
-                    price=q.get("price"),
-                    change_pct=q.get("change_pct"),
-                )
+                quote = _build_minimal_quote_from_board_dict(q)
         except Exception as exc:
             logger.warning(
                 f"[agent/boards/batch-profile] quote {code} failed: {exc}",

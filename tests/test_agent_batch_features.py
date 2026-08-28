@@ -366,7 +366,27 @@ class TestStocksBatchProfile:
         data = resp.json()
         assert data["frequency"] == "d" and data["days"] == 60
         e = data["results"][0]
-        assert e["quote"] == {"price": 100.0, "change_pct": 1.5}
+        # MinimalQuote now carries 23 fields; verify the legacy 2-field
+        # anchor still serializes correctly + new fields surface upstream data.
+        # _make_unified_quote fills OHLCV + volume + amount; valuation /
+        # turnover / amplitude / 涨跌停 stay None on the stub.
+        assert e["quote"]["price"] == 100.0
+        assert e["quote"]["change_pct"] == 1.5
+        assert e["quote"]["volume_unit"] == "share"
+        assert e["quote"]["open"] == 99.0
+        assert e["quote"]["high"] == 101.0
+        assert e["quote"]["low"] == 98.5
+        assert e["quote"]["prev_close"] == 98.5
+        assert e["quote"]["volume"] == 1_000_000
+        assert e["quote"]["amount"] == 1e8
+        # valuation + turnover + 涨跌停 are None on the stub UnifiedRealtimeQuote.
+        assert e["quote"]["pe_ratio"] is None
+        assert e["quote"]["mcap_yi"] is None
+        assert e["quote"]["turnover_pct"] is None
+        assert e["quote"]["limit_up"] is None
+        # board-only fields are None on stock path.
+        assert e["quote"]["up_count"] is None
+        assert e["quote"]["rank"] is None
         assert e["features"]["trend"]["ma"]["ma60"] is not None
         assert e["features"]["pivots"]["window_high"] is not None
         assert e["features"]["volume"]["latest_volume"] is not None
