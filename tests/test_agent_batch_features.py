@@ -309,7 +309,17 @@ class TestSchemas:
 
     def test_minimal_quote(self):
         q = MinimalQuote(price=1721.0, change_pct=1.2)
-        assert q.model_dump() == {"price": 1721.0, "change_pct": 1.2}
+        dumped = q.model_dump()
+        # Backward-compatible: the 2-field anchor still serializes
+        # the original price/change_pct values; the rest are None defaults.
+        assert dumped["price"] == 1721.0
+        assert dumped["change_pct"] == 1.2
+        assert dumped["volume_unit"] == "share"
+        # New fields are present-but-None.
+        assert dumped["open"] is None
+        assert dumped["amount"] is None
+        assert dumped["mcap_yi"] is None
+        assert dumped["rank"] is None
 
 
 # The composite cache for batch-profile was removed 2026-08-28; the

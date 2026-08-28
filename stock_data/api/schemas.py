@@ -1601,10 +1601,62 @@ class FilterStocksResponse(BaseModel):
 
 
 class MinimalQuote(BaseModel):
-    """极简当前价锚点 (price + change_pct)."""
+    """Extended realtime quote block for the three batch-profile endpoints.
 
+    One schema across stock / index / board. Fields not exposed by the
+    serving fetcher are None — this matches the existing StockQuote /
+    BoardQuoteResponse precedent where "field present in schema, None
+    upstream" is the documented contract.
+
+    Units:
+    - ``volume`` raw; disambiguate via ``volume_unit``
+      (``"share"`` for stock/index, ``"wan_shou"`` for board).
+    - ``amount`` unified to 元 (CNY); stock/index upstream passes
+      through; board upstream (亿元) is multiplied by 1e8 — same
+      conversion `/boards/{code}/quote` already applies at
+      `routes/boards.py:857`.
+    """
+
+    # ── core ──
     price: float | None = None
     change_pct: float | None = None
+    change_amount: float | None = None
+
+    # ── OHLC ──
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    prev_close: float | None = None
+
+    # ── 量价 ──
+    volume: int | None = None
+    volume_unit: str = Field(
+        default="share",
+        description='"share" (股) for stock/index; "wan_shou" (万手) for board.',
+    )
+    amount: float | None = Field(
+        default=None,
+        description="成交额 元. Unified to 元 across all three endpoints; board upstream (亿元) is ×1e8.",
+    )
+    turnover_pct: float | None = None
+    amplitude_pct: float | None = None
+    volume_ratio: float | None = None
+
+    # ── 估值 (stock only) ──
+    pe_ratio: float | None = None
+    pb_ratio: float | None = None
+    mcap_yi: float | None = None
+    float_mcap_yi: float | None = None
+
+    # ── 涨跌停 (stock only) ──
+    limit_up: float | None = None
+    limit_down: float | None = None
+
+    # ── 板块统计 (board only) ──
+    up_count: int | None = None
+    down_count: int | None = None
+    net_inflow: float | None = None
+    rank: str | None = None
 
 
 class TrendFeatures(BaseModel):
