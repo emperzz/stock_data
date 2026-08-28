@@ -1,6 +1,6 @@
 ---
 name: market-data-obtain
-description: A 股市场数据获取 skill。配套 `market-principles` 使用——告诉 agent 在做市场判断时，**所有数据获取都先走本 skill 描述的服务器端点**；服务器失败或返回空时，fallback 到 agent 自带的网络搜索 / 抓取工具（具体工具名因 agent 平台而异）总结再回复。本 skill 是服务器能力的完整参考手册，按 capability 域（行情 / 资金面 / 基础数据 / 公告 / 研报 / 特殊池 / 新闻）组织。
+description: A 股市场数据获取 skill。配套 `market-principles` 使用——告诉 agent 在做市场判断时，**所有数据获取都先走本 skill 描述的服务器端点**；服务器失败或返回空时，fallback 到 agent 自带的网络搜索 / 抓取工具（具体工具名因 agent 平台而异）总结再回复。本 skill 是服务器能力的完整参考手册：主文件只列端点清单（端点 / capability / 一句话用途），**每个端点的字段、单位、调用约束、示例见 `market-data-obtain/` 目录下的 detail 文件**——调用任何 API 前**必须**先 Read 对应 detail 文件。
 triggers:
   - "需要数据" / "查询数据" / "获取行情"
   - "搜索新闻" / "查新闻" / "查公告" / "查研报"
@@ -18,6 +18,26 @@ scope:
 A 股市场数据获取 skill。本 skill **不绑定任何特定数据 API**——agent 通过服务器 HTTP 端点（详见各 fetcher 实现）获取数据，agent 自行决定调用方式（HTTP / Python SDK / explorer UI）。
 
 > **核心约束（来自 market-principles）**：所有市场数据获取都应通过本 skill 描述的服务器能力；服务器失败或返回空时，**fallback 到 agent 自带的网络搜索 / 抓取工具**（具体工具名因 agent 平台而异，agent 应调用自己平台对应的搜索 / 抓取工具）总结再回复。详见第 3 节。
+
+---
+
+## 0. 使用守则
+
+**调用本 skill 中任何 API 前，必须先 Read 对应 detail 文件**（路径见下方目录），获取字段、单位、调用约束、示例。主表只列端点路径 + capability + 一句话用途，**不读 detail 直接调用**会因单位 / 约束不熟导致 422 / 解析错误。
+
+### detail 目录
+
+| 文件 | 覆盖范围 | 端点数 |
+|---|---|---|
+| [market-data.md](market-data-obtain/market-data.md) | §4 行情类 | 8 |
+| [capital-flow.md](market-data-obtain/capital-flow.md) | §5 资金面 | 6 |
+| [fundamentals.md](market-data-obtain/fundamentals.md) | §6 基础数据 | 1 |
+| [announcements.md](market-data-obtain/announcements.md) | §7 公告 | 1 |
+| [research-reports.md](market-data-obtain/research-reports.md) | §8 研报 | 2 |
+| [boards.md](market-data-obtain/boards.md) | §9 特殊池 & 板块（不含 agent 批量） | 11 |
+| [agent-batch.md](market-data-obtain/agent-batch.md) | §9.1 Agent 批量端点 | 9 |
+| [news.md](market-data-obtain/news.md) | §10 新闻 / 消息 | 6 |
+| [meta.md](market-data-obtain/meta.md) | §11 其他 | 2 |
 
 ---
 
@@ -97,237 +117,103 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 
 ## 4. 行情类（Market Data）
 
-A 股 / 港股 / 美股 实时行情、历史 K 线、公司画像、股票列表、交易日历。
+| 端点 | Capability | 一句话用途 |
+|---|---|---|
+| `GET /api/v1/stocks/{code}/quote` | `STOCK_REALTIME_QUOTE` | 获取个股实时行情（OHLV + 估值 + 涨跌停价） |
+| `GET /api/v1/stocks/{code}/kline` | `STOCK_KLINE` | 获取个股 K 线（d/w/m + 1-60 分钟；支持复权与技术指标） |
+| `GET /api/v1/stocks/{code}/info` | `STOCK_INFO` | 获取个股公司画像（基础信息） |
+| `GET /api/v1/stocks` | `STOCK_LIST` | 获取股票列表（csi / hk / us；分页） |
+| `GET /api/v1/indices` | — | 获取指数列表（csi / hk / us） |
+| `GET /api/v1/indices/{code}/quote` | `INDEX_REALTIME_QUOTE` | 获取指数实时行情 |
+| `GET /api/v1/indices/{code}/kline` | `INDEX_KLINE` | 获取指数 K 线（不支持复权） |
+| `GET /api/v1/calendar` | `TRADE_CALENDAR` | 获取 A 股交易日历 |
 
-| 端点 | Capability | Markets | 主要 fetcher | 用途 |
-|---|---|---|---|---|
-| `GET /api/v1/stocks/{code}/quote` | STOCK_REALTIME_QUOTE | csi / hk / us | Zzshare / Tencent | 个股实时行情（PE/PB/市值/换手率/涨跌停价） |
-| `GET /api/v1/stocks/{code}/kline` | STOCK_KLINE | csi / hk / us | Zzshare / Baostock / Yfinance | 个股 K 线（d/w/m + 1m/5m/15m/30m/60m；支持前复权/后复权/技术指标） |
-| `GET /api/v1/stocks/{code}/info` | STOCK_INFO | csi | Zhitu → Myquant | 公司画像 |
-| `GET /api/v1/stocks` | STOCK_LIST | csi / hk / us | Zzshare / Akshare | 股票列表（分页） |
-| `GET /api/v1/indices` | — | csi / hk / us | 本地映射 | 指数列表（代码 + 名称 + 市场） |
-| `GET /api/v1/indices/{code}/quote` | INDEX_REALTIME_QUOTE | csi / hk / us | Akshare / Yfinance / Zhitu | 指数实时行情 |
-| `GET /api/v1/indices/{code}/kline` | INDEX_KLINE | csi / hk / us | Baostock / Akshare / Yfinance / Zhitu | 指数 K 线（不支持复权） |
-| `GET /api/v1/calendar` | TRADE_CALENDAR | csi | Zzshare / Akshare / Myquant | A 股交易日历 |
+> ⚠️ 字段、单位、调用约束、示例：[detail/market-data.md](market-data-obtain/market-data.md)
 
 ---
 
 ## 5. 资金面（Capital Flow & Sentiment）
 
-资金流向、北向资金、融资融券、大宗交易、股东户数。
+| 端点 | Capability | 一句话用途 |
+|---|---|---|
+| `GET /api/v1/stocks/{stock_code}/fund-flow` | `FUND_FLOW` | 获取个股分钟级资金流 |
+| `GET /api/v1/stocks/{stock_code}/fund-flow/daily` | `FUND_FLOW` | 获取个股 120 日资金流 |
+| `GET /api/v1/north-flow/realtime` | `NORTH_FLOW` | 获取北向资金实时累计净买入 |
+| `GET /api/v1/stocks/{stock_code}/margin` | `MARGIN_TRADING` | 获取个股融资融券数据 |
+| `GET /api/v1/stocks/{stock_code}/block-trade` | `BLOCK_TRADE` | 获取个股大宗交易 |
+| `GET /api/v1/stocks/{stock_code}/holder-num` | `HOLDER_NUM` | 获取个股股东户数变化 |
 
-| 端点 | Capability | Markets | 主要 fetcher | 用途 |
-|---|---|---|---|---|
-| `GET /api/v1/stocks/{stock_code}/fund-flow` | FUND_FLOW | csi | Zhitu | 个股分钟级资金流 |
-| `GET /api/v1/stocks/{stock_code}/fund-flow/daily` | FUND_FLOW | csi | Zhitu | 个股 120 日资金流 |
-| `GET /api/v1/north-flow/realtime` | NORTH_FLOW | csi | Ths | 北向资金（实时） |
-| `GET /api/v1/stocks/{stock_code}/margin` | MARGIN_TRADING | csi | EastMoney | 个股融资融券 |
-| `GET /api/v1/stocks/{stock_code}/block-trade` | BLOCK_TRADE | csi | EastMoney | 个股大宗交易 |
-| `GET /api/v1/stocks/{stock_code}/holder-num` | HOLDER_NUM | csi | EastMoney / Zhitu | 股东户数变化 |
+> ⚠️ 字段、单位、调用约束、示例：[detail/capital-flow.md](market-data-obtain/capital-flow.md)
 
 ---
 
 ## 6. 基础数据（Fundamental）
 
-| 端点 | Capability | Markets | 主要 fetcher | 用途 |
-|---|---|---|---|---|
-| `GET /api/v1/stocks/{stock_code}/dividend` | DIVIDEND | csi | EastMoney / Baostock / Zhitu | 分红送转 |
+| 端点 | Capability | 一句话用途 |
+|---|---|---|
+| `GET /api/v1/stocks/{stock_code}/dividend` | `DIVIDEND` | 获取个股分红送转记录 |
+
+> ⚠️ 字段、单位、调用约束、示例：[detail/fundamentals.md](market-data-obtain/fundamentals.md)
 
 ---
 
 ## 7. 公告（Announcements）
 
-| 端点 | Capability | Markets | 主要 fetcher | 用途 |
-|---|---|---|---|---|
-| `GET /api/v1/stocks/{stock_code}/announcements` | ANNOUNCEMENT | csi | EastMoney / Cninfo / Ths | 公司公告（分页） |
+| 端点 | Capability | 一句话用途 |
+|---|---|---|
+| `GET /api/v1/stocks/{stock_code}/announcements` | `ANNOUNCEMENT` | 获取个股公司公告（分页） |
+
+> ⚠️ 字段、单位、调用约束、示例：[detail/announcements.md](market-data-obtain/announcements.md)
 
 ---
 
 ## 8. 研报（Research Reports）
 
-| 端点 | Capability | Markets | 主要 fetcher | 用途 |
-|---|---|---|---|---|
-| `GET /api/v1/stocks/{stock_code}/reports` | RESEARCH_REPORT | csi | EastMoney | 个股研报列表 |
-| `GET /api/v1/stocks/{stock_code}/reports/{report_id}/pdf` | RESEARCH_REPORT | csi | EastMoney | 研报 PDF 下载（返回本地路径） |
+| 端点 | Capability | 一句话用途 |
+|---|---|---|
+| `GET /api/v1/stocks/{stock_code}/reports` | `RESEARCH_REPORT` | 获取个股研报列表 |
+| `GET /api/v1/stocks/{stock_code}/reports/{report_id}/pdf` | `RESEARCH_REPORT` | 下载研报 PDF（返回本地路径） |
+
+> ⚠️ 字段、单位、调用约束、示例：[detail/research-reports.md](market-data-obtain/research-reports.md)
 
 ---
 
 ## 9. 特殊池 & 板块（Special Pools & Boards）
 
-板块分类、涨跌停股池、龙虎榜、热点题材。
+| 端点 | Capability | 一句话用途 |
+|---|---|---|
+| `GET /api/v1/boards` | `STOCK_BOARD` | 获取板块清单（概念 / 行业 / 指数 / 特殊） |
+| `GET /api/v1/boards/{board_code}/stocks` | `STOCK_BOARD` | 获取板块成分股 |
+| `GET /api/v1/boards/{board_code}/quote` | `STOCK_BOARD` | 获取板块实时行情 |
+| `GET /api/v1/boards/{board_code}/news` | `BOARD_NEWS` | 获取板块新闻 |
+| `GET /api/v1/boards/{board_code}/surges` | `BOARD_SURGES` | 获取板块炒作周期 |
+| `GET /api/v1/stocks/{stock_code}/boards` | `STOCK_BOARD` | 获取个股所属板块 |
+| `GET /api/v1/boards/{board_code}/history` | `STOCK_BOARD` | 获取板块 K 线 |
+| `GET /api/v1/zt-pools` | `STOCK_ZT_POOL` | 获取涨跌停股池（zt / dt / zbgc） |
+| `GET /api/v1/dragon-tiger` | `DRAGON_TIGER` | 获取全市场龙虎榜 |
+| `GET /api/v1/stocks/{stock_code}/dragon-tiger` | `DRAGON_TIGER` | 获取个股龙虎榜 |
+| `GET /api/v1/hot-topics` | `HOT_TOPICS` | 获取热点题材（带归因标签） |
 
-| 端点 | Capability | Markets | 主要 fetcher | 用途 |
-|---|---|---|---|---|
-| `GET /api/v1/boards` | STOCK_BOARD | csi | Ths / EastMoney / Zhitu | 板块清单（概念/行业/指数/特殊，`?source=` 必填） |
-| `GET /api/v1/boards/{board_code}/stocks` | STOCK_BOARD | csi | Ths / EastMoney / Zhitu | 板块成分股（`?source=` 必填；ths 内部可能走 ZZSHARE 兜底） |
-| `GET /api/v1/boards/{board_code}/quote` | STOCK_BOARD | csi | Ths | 板块实时行情（ths 唯一实现） |
-| `GET /api/v1/boards/{board_code}/news` | BOARD_NEWS | csi | Ths | 板块新闻（ths 唯一实现，news.10jqka timeline） |
-| `GET /api/v1/boards/{board_code}/surges` | BOARD_SURGES | csi | Ths | 板块炒作周期（ths 唯一实现，F10 峰值周期） |
-| `GET /api/v1/stocks/{stock_code}/boards` | STOCK_BOARD | csi | Ths / EastMoney / Zhitu | 个股所属板块 |
-| `GET /api/v1/boards/{board_code}/history` | STOCK_BOARD | csi | Ths / EastMoney | 板块 K 线（d/w/m + 5m/15m/30m/60m；ths 额外支持 1m） |
-| `GET /api/v1/zt-pools` | STOCK_ZT_POOL | csi | Zzshare | 涨跌停股池（type=zt/dt/zbgc） |
-| `GET /api/v1/dragon-tiger` | DRAGON_TIGER | csi | Zzshare / EastMoney | 全市场龙虎榜 |
-| `GET /api/v1/stocks/{stock_code}/dragon-tiger` | DRAGON_TIGER | csi | Zzshare / EastMoney | 个股龙虎榜 |
-| `GET /api/v1/hot-topics` | HOT_TOPICS | csi | Zzshare / Ths | 热点题材（带原因标签） |
+> ⚠️ 字段、单位、调用约束、示例：[detail/boards.md](market-data-obtain/boards.md)  
+> 推荐显式 `?source=ths`（覆盖全、稳定性最好）；不同 source 的板块定义**不保证互通**。
 
-> **Board 数据源选择建议**：board 类端点推荐显式传 `?source=ths`。
->
-> - 不同 source 的板块定义不可互换（ths、eastmoney、zhitu 对同名板块的成分股集合存在差异），统一使用 ths 可避免跨 source 数据语义不一致
-> - ths 的 board 类接口覆盖更全、稳定性更好
-> - `?source=zzshare` 已不再作为独立选项——会归一到 ths；需要区分 `include_quote=True/False` 时的实际服务 fetcher 时读响应里的 `effective_source`
+### 9.1 Agent 批量端点
 
-### 9.1 Agent 批量端点（板块集合运算 / 数值过滤 / 批量画像 / 市场快照）
+把 N+1 集合运算 / 数值过滤 / 批量画像下沉到服务端——典型场景见 §12。
 
-> 本节端点位于 `/api/v1/agent/*`，面向 LLM agent 的高频组合查询——把"多板块两两交集 / 个股所属板块两两交集 / 板块成分股数值过滤 / 批量个股画像 / 市场全景快照 / 跨资产相关性矩阵 / 全市场涨幅统计"这些典型操作下沉到服务端，避免 agent 自己 N+1 调用 + 手算 set-op。
+| 端点 | 一句话用途 |
+|---|---|
+| `POST /api/v1/agent/boards/stock-overlap` | 多板块成分股两两交集 + Jaccard（2-10 板块） |
+| `POST /api/v1/agent/stocks/board-overlap` | 多股票所属板块两两交集 + Jaccard（2-10 股票） |
+| `POST /api/v1/agent/boards/filter-stocks` | 板块成分股服务端数值过滤（换手 / 涨跌幅 / 成交额 / 市值） |
+| `GET /api/v1/agent/indices/batch-profile` | 指数批量画像（1-5 指数；单 frequency） |
+| `GET /api/v1/agent/market-context` | 每日市场全景快照（早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜） |
+| `POST /api/v1/stocks/batch-profile` | 股票批量画像（1-5 股票；quote + features + info + boards） |
+| `POST /api/v1/agent/boards/batch-profile` | 板块批量画像（1-5 THS platecode；单 frequency） |
+| `POST /api/v1/agent/correlation/matrix` | 跨资产 Pearson + Spearman 相关性矩阵（2-10 资产） |
+| `GET /api/v1/agent/market-stats` | 全市场涨幅统计（个股 + 板块 + 桶形数据） |
 
-| 端点 | 输入 | 用途 | 失败 fallback |
-|---|---|---|---|
-| `POST /api/v1/agent/boards/stock-overlap` | `{"codes": ["885xxx", "881xxx", ...]}` (2-10 板块) | 多板块成分股两两交集 + Jaccard；用于"判断哪些概念/行业同时覆盖了某批候选股" | 5xx → 网络搜索工具 `"板块 成分股 列表"`；422 → 检查 `codes` 是否在 board 缓存中（board list 未刷新） |
-| `POST /api/v1/agent/stocks/board-overlap` | `{"codes": ["600519", "000001", ...]}` (2-10 个股) | 多股票所属板块两两交集；用于"龙头/候选是否同板块系"判断 | 5xx → 网络搜索工具 `"{code} 所属概念"`；422 → 检查 stock_list 缓存 |
-| `POST /api/v1/agent/boards/filter-stocks` | `{"board_code", "source", "filters": {...}, "limit"?}` | 板块成分股服务端数值过滤（换手/涨跌幅/成交额/市值/最高涨幅） | 5xx / 503 `board_unavailable` → 网络搜索工具 `"板块成分股 换手 排名"`；422 `cid_unresolved` → 刷新 board 缓存 |
-| `GET /api/v1/agent/indices/batch-profile` | `?codes=` (1-5, 默认 3 核心) + `?frequency=` + `?days=` | 指数批量画像：每个指数 extended `MinimalQuote`（23 字段：OHLV + 量价；index 路径 valuation/limit/board 字段为 `null`）+ trend/pivots/volume 计算指标（替代原 5m/d/w 三频率 raw K 线） | 5xx 不外抛（quote/features 失败写入 `errors[]`）；**无 composite cache**（2026-08-28 起），依赖 fetcher 层 `get_quote_cache` + `get_history_cache` TTL |
-| `GET /api/v1/agent/market-context` | `?flash_limit=20&trade_date=YYYY-MM-DD` | 市场全景：早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜（含时段判断 + 龙虎榜 summary） | 5xx per-block 隔离（CLS / zt / dt / dtiger 任一失败不影响其他）；date 越界或格式错 → 400 |
-| `POST /api/v1/agent/stocks/batch-profile` | `{"codes": [...], "frequency": "d", "days": 60}` (1-5) | 股票批量画像：extended `MinimalQuote`（23 字段：OHLV + 量价 + 估值 PE/PB/mcap_yi/float_mcap_yi + 涨跌停价）+ features（trend/pivots/volume）+ info + boards；raw K 线已移除，需明细走 `/stocks/{code}/kline` | 5xx per-aspect 隔离（quote/features/info/boards）；**无 composite cache**（2026-08-28 起），依赖 fetcher 层 `get_quote_cache` + `get_history_cache` + `get_stock_info_cache` TTL |
-| `POST /api/v1/agent/boards/batch-profile` | `{"codes": [...], "frequency"?, "days"?}` (1-5 THS platecodes) | 板块批量画像：每个板块 extended `MinimalQuote`（23 字段，board-only：`volume_unit="wan_shou"` + `amount`×1e8 转元 + `up_count`/`down_count`/`net_inflow`/`rank`；stock-only 估值/涨跌停为 `null`）+ trend/pivots/volume 计算特征（替代 per-board raw K 线）；THS 单源（其他 fetcher 不实现 `get_board_realtime`，且 board codes 跨源不兼容）；`board_type` 由 `ThsFetcher` 自动从 `stock_board` cache + 内部 fallback 推断 | 5xx per-aspect 隔离（quote/features）；**无 composite cache**，依赖 fetcher 层 `get_quote_cache` + `get_history_cache` TTL；422 → 检查 `codes` 是否为 THS platecode（885xxx concept / 881xxx industry） |
-| `POST /api/v1/agent/correlation/matrix` | `{"stocks": [...], "boards": [...], "frequency"?, "days"?, "methods"?}` (2-10 资产) | 跨资产两两 Pearson + Spearman 相关性矩阵（A 股，d/w/m/1m/5m/15m/30m/60m）；支持 stock+board 混合 | 422 `insufficient_assets` → 失败资产数 ≥ N-1；422 `bad_request` → 检查 frequency×days×source 三维约束；1m+`eastmoney` 直接 422（eastmoney 不支持 1m 板 K 线） |
-| `GET /api/v1/agent/market-stats` | `?include_boards=true` (默认), `?format=json\|md` | 全市场涨幅统计：个股 + 板块 各 1 块，含均值/中位/最高/最低/上涨下跌平盘家数 + 11/9 个百分比桶（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶）；A 股 only；per-block 错误隔离（单块失败不影响另一块） | 5xx 不外抛（个股/板块块失败均写入 `errors[]`，相应块置 `null`）；`?include_boards=false` 时板块上游根本不被调用 |
-
-**`correlation/matrix` 关键字段**：
-
-- `labels[i]` 对应 `matrices.<method>[i][:]`，顺序 = 请求顺序（股票块在前、板块块在后）；股票 `source: null`、板块 `source` = 请求时源（ths/eastmoney），**不是**实际服务的 fetcher
-- `alignment.common_bars` 是 inner-join 后实际样本量；`alignment.missing_after_join` 是 join 本身丢掉的天数（**先于** trailing-window trim 计算，反映真实日期 gap）
-- `matrices.<method>` 对称、对角线=1、NaN→0、4 位小数；未请求的方法返回 `null`（key 始终存在）
-- `frequency × days` 约束（超出 → 422）：`d` 2-365 / `w` 14-1095 / `m` 60-1825 / `1m|5m` 2-3 / `15m` 2-5 / `30m` 2-10 / `60m` 2-20（`days` 是**日历日**，非 padding；d/w/m 实际对齐样本 ≈0.7×`days`，需保证 ≥2 根 return）；服务端会**预先**校验 `frequency × source` 组合（`1m + eastmoney` 立即 422）
-- **不走 agent 层复合缓存**（**与另 6 个端点的故意偏离**）：内部 `get_kline_data` / `get_board_history` 各自有 fetcher 级 TTLCache（60s+）已经覆盖热路径；冷路径 sub-1s 不值得叠加一层
-- **MD 投影走的是 `PlainTextResponse`**，不走共享的 `_render_agent` 模板——`?format=md` 渲染失败 → 500（**无** JSON-fallback / `X-MD-Render-Error` 响应头；另 6 个端点都有）
-
-**通用行为**：
-
-- **逐项错误隔离**：单个 `code` 拉取失败**不会**中断整体响应；失败项进入响应 `errors[]`，成功的项仍正常出现在 `sets[]` / `matched_stocks`。Phase 2 端点更进一步：per-aspect / per-frequency 失败也互不影响。
-- **缓存**：60s in-memory TTLCache（复用 `get_quote_cache`），TTL 内同 payload 直接命中。`filter-stocks` 的 `limit` 参与缓存键；`market-context` 的 `session` (`pre-market` / `intraday` / `post-market` / `closed`) 参与缓存键（09:00 pre-market 命中不能遮蔽 16:00 post-market 刷新）。
-- **不做判断**：本节端点只返回"事实型"算结果（集合运算 / 过滤后列表 / Jaccard 系数 / 数值字段），不输出"龙头/候选"等结论——结论仍由 agent 用 `market-principles` 的工作流生成。
-- **板 K 线 / 板实时行情** 仍在第 9 节的主表（不走 agent）。
-- **`?format=json|md` 投影**：全部 7 个端点统一支持，默认 `json`；`?format=md` 返回 `text/markdown; charset=utf-8`（**无数据丢失** — 所有 JSON 字段都映射到 MD 表/列表项）。**例外**：`correlation/matrix` 的 MD 渲染走 route 内 `PlainTextResponse`，渲染失败 → 500（**无**自动回退 JSON 响应头）；其余 6 个端点 MD 渲染失败 → 自动回退 JSON + `X-MD-Render-Error` 响应头（保证 agent 总能拿到数据）。LLM 训练数据中 markdown 占比远高于 TSV/JSON，对异构内容（K 线表 + 段落 + 列表）解析更稳。
-
-**`filter-stocks` 关键参数**：
-
-- `filters.turnover_pct` / `change_pct` / `amount_yi` / `mcap_yi` / `max_gain_pct` —— 每个字段独立 `{min?, max?}`；`value=None` 的成分股在该字段有 filter 时直接剔除
-- `limit` 缺省时上游按 `top_n=50` 拉取，缓存键再额外包含 `limit`；**不同 `limit` 不会复用同一缓存**（避免"先 limit=1 再 limit=3"得到错误结果）
-- 排序：先按 `max_gain_pct desc`，再按 `turnover_pct desc`
-- 字段单位：`amount_yi` / `mcap_yi` 单位为**亿元**（agent 不要与原始 `amount` / `total_mv` 混用）
-
-**`boards/stock-overlap` 关键字段**：
-
-- 响应 `sets[]` 每项 `{code, count, source}` —— `source` 即 `effective_source`（`include_quote=False` 时若走 ZZSHARE 兜底会是 `"zzshare"`）
-- 响应 `pairs[]` 每项 `{a, b, intersection, intersection_count, jaccard}` —— `intersection` 是按字母升序的成分股代码数组
-
-**`stocks/board-overlap` 关键字段**：
-
-- 响应 `sets[]` 每项 `{code, boards[]}` —— `boards[]` 是 `{code, name, type, subtype, source}`
-- 响应 `pairs[]` 每项 `{a, b, common_boards, intersection_count, jaccard}` —— `common_boards` 按 `code` 字母升序
-
-**`indices/batch-profile` 关键字段**：
-
-- `frequency`（单值 `d/w/m/1m/5m/15m/30m/60m`）+ `days` 顶层回显；`days` 上限：`d≤365, w≤1095, m≤1825, 1m≤3, 5m≤5, 15m≤8, 30m≤15, 60m≤30`
-- `indices[].quote` = extended `MinimalQuote`（post-2026-08-28，23 字段）。**index 路径下**：`volume` / `amount` / `turnover_pct` / `amplitude_pct` / `volume_ratio` 由 `ZhituFetcher` / `AkshareFetcher` 等指数 fetcher 按上游能力填充；`volume_unit="share"`；`pe_ratio` / `pb_ratio` / `mcap_yi` / `float_mcap_yi` / `limit_up` / `limit_down` / board 独有字段均为 `null`（指数实时行情不带这些）；`null` 字段在 MD 投影里渲染为 `—` 而非省略
-- `indices[].features` = `{trend, pivots, volume}`；`trend`（MA 5/10/15/20/30/60 最新值 + 环比昨日 % + ADX/PDI/MDI/RSI/BOLL）、`pivots`（区间最高/最低/最大量价 + ZigZag 摆动点 + 在途未确认 + `params` 算法参数）、`volume`（最新量 + 5 日量比 + Z>2 放量异动，每根异动 bar 带完整 OHLC —— 只看收盘无法区分放量长上影与光头阳线）
-- 某个 feature 子块在 K 线取回 0 根 bar 时为空 dict（**不报错**，`errors` 仍为 `null`）；MD 投影下渲染为 `（无数据）` / `（无确认摆动点）`，这是唯一的缺数据信号
-- stocks 端固定 `adjust=qfq`；indices 无复权
-
-**`market-context` 关键字段**：
-
-- `market_session` 由服务器本地 CST 时间 + `is_trade_date(today)` 推得：pre-market（09:15 前）/ intraday（09:15-15:00）/ post-market（15:00 后）/ closed（非交易日）。**pre-market 时涨跌停池强制 `null`**（池子可能未成形）
-- `dragon_tiger.summary` 服务端计算：`total_net_buy_wan` 符号位（正=净买入、负=净卖出）；`top_by_net_sell` 仅取 `net_buy_wan < 0` 的行（all-positive 日子里不会出现"伪卖出"）
-- `trade_date` 格式必须 `YYYY-MM-DD`，否则 400（防止"yesterday"这类非日期字符串静默 200 返回空结果）
-
-**`stocks/batch-profile` 关键字段**：
-
-- `codes` 1-5；`aspects` 入参已移除——每次返回 quote + features + info + boards
-- `results[].quote` = extended `MinimalQuote`（23 字段）。**stock 路径下**：OHLCV（volume 股 / amount 元 / `volume_unit="share"`）+ 量价（turnover_pct / amplitude_pct / volume_ratio） + 估值（PE / PB / mcap_yi / float_mcap_yi）+ 涨跌停价（limit_up / limit_down，来自 ZzshareFetcher / TencentFetcher；其他 fetcher 填 `null`）；board 独有字段为 `null`
-- 顶底为显著性过滤，默认 `pivot_window=2, reversal_atr_mult=1.0, ATR14`；`pivots.params` 回显这组参数，**JSON 与 `?format=md` 两种投影都输出**（摆动点脱离参数无法校准，故不可省）
-
-**`boards/batch-profile` 关键字段**：
-
-- `codes` 1-5，**必须**是 THS platecode（885xxx concept / 881xxx industry）——board codes 跨源不兼容（THS platecode vs EastMoney BKxxxx），且 `get_board_realtime` 只有 THS 实现，故 endpoint 固定 `source='ths'`
-- `board_type`（concept/industry）**未暴露**——`ThsFetcher` 自动从 `stock_board` cache 推断 + 内部 `get_board_metadata` fallback；agent 不需要关心
-- 与 stocks/indices batch-profile **频率翻译陷阱不同**——`manager.get_board_history` 验证 `BOARD_KLINE_FREQ_BY_SOURCE["ths"]`（公开字符串 `"5m"`，不是裸 `"5"`）；必须传 `payload.frequency` 公开字符串，**不可**用 `_FEATURE_FREQS[frequency].mgr_frequency`，否则分钟级请求 400
-- 形态与 `indices/batch-profile` 完全对称：`{frequency, days, boards[i].{code,name,quote,features,errors{}}, summary}`；boards[i] 无 `info` / boards 子字段（板块没有"公司画像"）
-- `boards[].quote` = extended `MinimalQuote`（23 字段）。**board 路径下**：`volume_unit="wan_shou"`（THS 上游返回万手）；`amount` 上游是亿元，helper ×1e8 转元（与 `/boards/{code}/quote` 路由 `routes/boards.py:857` 的转换对齐）；board 独有字段填充 `up_count` / `down_count` / `net_inflow`（亿元）/ `rank`；stock-only 字段（turnover_pct / amplitude_pct / volume_ratio / pe_ratio / pb_ratio / mcap_yi / float_mcap_yi / limit_up / limit_down）均为 `null`
-- **无 composite cache 层**（2026-08-28 起与 stocks/indices batch-profile 统一）——依赖 fetcher 层 `get_quote_cache` + `get_history_cache` TTL；board 数据 intraday 时效敏感，composite cache 会引入 stale 风险
-
-**典型调用模式**（`market-principles` 第 5 节"判断龙头股"步骤中可串入）：
-
-```bash
-# 1. 圈定候选池后，看这些候选股两两是否同板块
-curl -X POST http://localhost:8888/api/v1/agent/stocks/board-overlap \
-  -H 'Content-Type: application/json' \
-  -d '{"codes": ["600519", "000858", "000568"]}'
-
-# 2. 拿到热点板块后，做板块间成分股重叠（判断是否同源炒作）
-curl -X POST http://localhost:8888/api/v1/agent/boards/stock-overlap \
-  -H 'Content-Type: application/json' \
-  -d '{"codes": ["885595", "885914", "881270"]}'
-
-# 3. 在单个板块上做数值过滤（候选股筛选）
-curl -X POST http://localhost:8888/api/v1/agent/boards/filter-stocks \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "board_code": "885595",
-    "source": "ths",
-    "filters": {
-      "turnover_pct": {"min": 5.0, "max": 20.0},
-      "change_pct": {"min": 0.0}
-    },
-    "limit": 10
-  }'
-
-# 4. 指数全景（3 个核心 CSI 指数 + trend/pivots/volume features；可 ?frequency= ?days=）
-curl 'http://localhost:8888/api/v1/agent/indices/batch-profile'
-
-# 5. 市场全景（含早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜）
-curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=50'
-
-# 6. 候选股批量画像（最多 5 只；单 frequency 单 days）
-curl -X POST http://localhost:8888/api/v1/agent/stocks/batch-profile \
-  -H 'Content-Type: application/json' \
-  -d '{"codes": ["600519", "000858"], "frequency": "d", "days": 60}'
-
-# 7. 任意 agent 端点加 ?format=md 拿 markdown（无数据丢失，token 更省）
-curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=20&format=md'
-curl -X POST 'http://localhost:8888/api/v1/agent/boards/filter-stocks?format=md' \
-  -H 'Content-Type: application/json' \
-  -d '{"board_code": "885595", "source": "ths", "filters": {"turnover_pct": {"min": 5.0}}, "limit": 10}'
-
-# 7a. 候选板块批量画像（THS platecode 1-5 个；单 frequency 单 days）
-curl -X POST http://localhost:8888/api/v1/agent/boards/batch-profile \
-  -H 'Content-Type: application/json' \
-  -d '{"codes": ["885595", "881270"], "frequency": "d", "days": 60}'
-
-# 8. 跨资产相关性矩阵（股票 + 板块，2-10 个资产；d/w/m/1m/5m/15m/30m/60m）
-curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "stocks": ["600519", "000858"],
-    "boards": [{"code": "881270", "source": "ths"}],
-    "frequency": "d",
-    "days": 90,
-    "methods": ["pearson", "spearman"]
-  }'
-
-# 7.1 相关性矩阵拿 markdown（?format=md；走 PlainTextResponse，渲染失败 → 500）
-curl -X POST 'http://localhost:8888/api/v1/agent/correlation/matrix?format=md' \
-  -H 'Content-Type: application/json' \
-  -d '{"stocks": ["600519", "000858"], "boards": [{"code": "881270", "source": "ths"}], "days": 90}'
-
-# 8. 全市场涨幅统计（个股 + 板块，含桶形数据；per-block 错误隔离）
-curl 'http://localhost:8888/api/v1/agent/market-stats'
-
-# 8.1 只看个股（跳过板块上游调用）
-curl 'http://localhost:8888/api/v1/agent/market-stats?include_boards=false'
-
-# 8.2 拿 markdown（表格化桶形数据，便于 LLM 阅读）
-curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'
-```
+> ⚠️ 字段、单位、调用约束、典型调用模式：[detail/agent-batch.md](market-data-obtain/agent-batch.md)
 
 ---
 
@@ -335,454 +221,77 @@ curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'
 
 > **本节是 fallback 策略的高频触发区域**——"为什么涨/跌"等外部事件型原因主要通过本节端点获取。
 
-| 端点 | Capability | Markets | 主要 fetcher | 用途 |
-|---|---|---|---|---|
-| `GET /api/v1/news/search` | NEWS_SEARCH | csi | EastMoney / Ths / Baidu | 新闻搜索（关键词/股票代码/主题） |
-| `GET /api/v1/news/flash` | NEWS_FLASH | csi | EastMoney / Ths | 全球财经快讯（7×24 实时） |
-| `GET /api/v1/news/content` | — | csi / hk / us | 本地解析器 | 新闻正文提取（给定 URL 抓详情页） |
-| `GET /api/v1/stocks/{stock_code}/news` | STOCK_NEWS | csi | EastMoney / Ths | 个股资讯 |
-| `GET /api/v1/news/morning-briefing` | MORNING_BRIEFING | csi | ClsFetcher | 财联社早报（按日，28 天窗口） |
-| `GET /api/v1/news/market-recap` | MARKET_RECAP | csi | ClsFetcher | 财联社焦点复盘（按日，28 天窗口） |
+| 端点 | Capability | 一句话用途 |
+|---|---|---|
+| `GET /api/v1/news/search` | `NEWS_SEARCH` | 按关键词 / 股票代码搜索新闻 |
+| `GET /api/v1/news/flash` | `NEWS_FLASH` | 获取全球财经快讯（7×24 实时） |
+| `GET /api/v1/news/content` | — | 给定 URL 抓取新闻详情页正文（SSRF 防护） |
+| `GET /api/v1/stocks/{stock_code}/news` | `STOCK_NEWS` | 获取个股相关新闻 |
+| `GET /api/v1/news/morning-briefing` | `MORNING_BRIEFING` | 获取财联社早报（28 天窗口） |
+| `GET /api/v1/news/market-recap` | `MARKET_RECAP` | 获取财联社焦点复盘（28 天窗口） |
+
+> ⚠️ 字段、单位、调用约束、示例：[detail/news.md](market-data-obtain/news.md)
 
 ---
 
 ## 11. 其他（Meta）
 
-| 端点 | Capability | Markets | 主要 fetcher | 用途 |
-|---|---|---|---|---|
-| `GET /healthz` | — | csi / hk / us | 本地 | 健康检查 + fetcher 断路器状态 |
-| `GET /api/v1/indicators` | — | csi / hk / us | 本地计算 | 技术指标目录（MA / MACD / BOLL / KDJ 等 14 种） |
+| 端点 | Capability | 一句话用途 |
+|---|---|---|
+| `GET /healthz` | — | 服务器健康检查 + fetcher 断路器状态 |
+| `GET /api/v1/indicators` | — | 获取技术指标目录（MA / MACD / BOLL / KDJ 等 14 种） |
+
+> ⚠️ 字段、单位、调用约束、示例：[detail/meta.md](market-data-obtain/meta.md)
 
 ---
 
 ## 12. 典型场景的端点组合
 
-### 场景 A：判断"为什么今天 X 股票/板块涨/跌"
+> 本节只列"做 X 任务需要哪些端点"——**具体调用顺序、入参、失败 fallback 见每个端点的 detail 文件**。
+
+### 场景 A：判断"为什么今天 X 股票 / 板块涨 / 跌"
 
 | 步骤 | 端点 | 失败 fallback |
 |---|---|---|
-| 1. 拉快讯看当日大事 | `GET /news/flash` | 网络搜索工具 `"今日 A股 快讯"` |
-| 2. 拉个股/板块新闻 | `GET /stocks/{code}/news` 或 `GET /news/search?q={code or keyword}` | 网络搜索工具 + 关键词 |
-| 3. 拉板块清单确认关联 | `GET /boards` 或 `GET /stocks/{code}/boards` | — |
-| 4. 拉资金流验证 | `GET /stocks/{code}/fund-flow/daily` | — |
-| 5. 拉龙虎榜看机构动向 | `GET /stocks/{code}/dragon-tiger` | 网络搜索工具 `"{code} 龙虎榜"` |
-| 6. 拉公告/研报 | `GET /stocks/{code}/announcements` / `GET /stocks/{code}/reports` | 网络搜索工具 |
+| 1. 拉快讯看当日大事 | `/news/flash` | 网络搜索工具 `"今日 A股 快讯"` |
+| 2. 拉个股 / 板块新闻 | `/stocks/{code}/news` 或 `/news/search?q={code or keyword}` | 网络搜索工具 + 关键词 |
+| 3. 拉板块清单确认关联 | `/boards` 或 `/stocks/{code}/boards` | — |
+| 4. 拉资金流验证 | `/stocks/{code}/fund-flow/daily` | — |
+| 5. 拉龙虎榜看机构动向 | `/stocks/{code}/dragon-tiger` | 网络搜索工具 `"{code} 龙虎榜"` |
+| 6. 拉公告 / 研报 | `/stocks/{code}/announcements` / `/stocks/{code}/reports` | 网络搜索工具 |
 
 ### 场景 B：复盘当日市场
 
 | 步骤 | 端点 |
 |---|---|
-| 1. 拉指数行情 | `GET /indices/{code}/quote` |
-| 1.1 **指数全景（一次 fan-out）** | **`GET /agent/indices/batch-profile`**（替代步骤 1 的 N 次调用） |
-| 2. 拉涨跌停股池 | `GET /zt-pools?type=zt`、`GET /zt-pools?type=dt` |
-| 3. 拉全市场龙虎榜 | `GET /dragon-tiger` |
-| 4. 拉热点题材 | `GET /hot-topics` |
-| 5. 拉早报/复盘（如已发布） | `GET /news/morning-briefing`、`GET /news/market-recap` |
-| 5.1 **市场全景（一次拿全）** | **`GET /agent/market-context`**（替代步骤 1.1 + 2 + 3 + 5） |
+| 1. 拉指数行情 | `/indices/{code}/quote` |
+| 1.1 指数全景（一次 fan-out） | `/agent/indices/batch-profile` |
+| 2. 拉涨跌停股池 | `/zt-pools?type=zt` / `/zt-pools?type=dt` |
+| 3. 拉全市场龙虎榜 | `/dragon-tiger` |
+| 4. 拉热点题材 | `/hot-topics` |
+| 5. 拉早报 / 复盘 | `/news/morning-briefing` / `/news/market-recap` |
+| 5.1 市场全景（一次拿全） | `/agent/market-context` |
 
 ### 场景 C：判断龙头股
 
 | 步骤 | 端点 |
 |---|---|
-| 1. 圈定候选池 | `GET /zt-pools?type=zt` |
-| 2. 看板块归属 | `GET /stocks/{code}/boards` |
-| 3. 看板块行情 | `GET /boards/{board_code}/quote` 或 `GET /boards?type=concept&include_quote=true` |
-| 4. 看板块 K 线 | `GET /boards/{board_code}/history` |
-| 4.1 **候选板块批量画像（1-5 个 THS platecode）** | **`POST /agent/boards/batch-profile`**（一次拿 extended `MinimalQuote`（23 字段，board-only `up_count`/`down_count`/`net_inflow`/`rank` + `volume_unit="wan_shou"` + `amount` ×1e8 转元）+ trend/pivots/volume 计算特征，取代步骤 4 的 N 次调用；THS 单源，board_type 自动推断） |
-| 5. 看个股 K 线 + 量价 | `GET /stocks/{code}/kline?period=daily&days=30` |
-| 5.1 **看候选股两两同板块** | `POST /agent/stocks/board-overlap`（取代手算 N×N 交集） |
-| 5.2 **看候选板块两两同成分股** | `POST /agent/boards/stock-overlap` |
-| 5.3 **板块成分股数值过滤** | `POST /agent/boards/filter-stocks`（取代手写 SQL/if 链） |
-| 5.4 **候选股批量画像（1-5 只）** | **`POST /agent/stocks/batch-profile`**（一次拿 quote + features + info + boards，取代步骤 2 + 5 的 N 次调用） |
-| 5.5 **候选股 / 板块两两相关性（"是否同涨同跌"）** | **`POST /agent/correlation/matrix`**（2-10 资产混合，d/w/m/1m/5m/15m/30m/60m；A 股 only；输出 Pearson + Spearman NxN 矩阵 + 对齐信息） |
-| 5.6 **看全市场情绪（涨跌家数 + 涨幅分布桶）** | **`GET /agent/market-stats`**（个股 + 板块 各 1 块；11/9 桶形数据；`?include_boards=false` 可只取个股块；`?format=md` 拿表格化 markdown） |
+| 1. 圈定候选池 | `/zt-pools?type=zt` |
+| 2. 看板块归属 | `/stocks/{code}/boards` |
+| 3. 看板块行情 | `/boards/{board_code}/quote` 或 `/boards?type=concept&include_quote=true` |
+| 4. 看板块 K 线 | `/boards/{board_code}/history` |
+| 4.1 候选板块批量画像 | `/agent/boards/batch-profile` |
+| 5. 看个股 K 线 + 量价 | `/stocks/{code}/kline` |
+| 5.1 看候选股两两同板块 | `/agent/stocks/board-overlap` |
+| 5.2 看候选板块两两同成分股 | `/agent/boards/stock-overlap` |
+| 5.3 板块成分股数值过滤 | `/agent/boards/filter-stocks` |
+| 5.4 候选股批量画像 | `/agent/stocks/batch-profile` |
+| 5.5 候选股 / 板块两两相关性 | `/agent/correlation/matrix` |
+| 5.6 全市场情绪 | `/agent/market-stats` |
 
 ---
 
-## 13. 各端点返回字段说明
-
-> **本节是 agent 解读响应的字段手册**——按 capability 域组织（行情/资金面/基础数据/公告/研报/特殊池/板块/新闻/其他）。每条端点列出**核心字段含义**与**易踩坑点**。完整 JSON 示例见 `api-reference.md`；运行时字段定义唯一真相源是 `stock_data/api/schemas.py` 的 Pydantic model。
-
-### 13.1 行情类
-
-#### `GET /stocks/{code}/quote` — 个股实时行情
-
-| 字段 | 含义 | 使用建议 |
-|---|---|---|
-| `current_price` | 当前价(元) | 行情主字段 |
-| `change` | 涨跌额(元) | `current_price - prev_close` |
-| `change_percent` | 涨跌幅(%) | 直接显示；正值=涨、负值=跌 |
-| `open` / `high` / `low` / `prev_close` | 今开/最高/最低/昨收(元) | 算振幅 `(high-low)/prev_close*100` |
-| `volume` | 成交量(**股**) | 注意单位是**股**，1 手 = 100 股 |
-| `amount` | 成交额(元) | — |
-| `pe_ttm` | 滚动市盈率(TTM) | Tencent财经增强 |
-| `pe_static` | 静态市盈率 | **本服务固定返回 null**，需要时直接用 `pe_ttm` |
-| `pb` | 市净率 | Tencent 增强 |
-| `mcap_yi` | **总市值（亿元）** | 1 亿 = 1e8 元；用于"大票/小票"判断 |
-| `float_mcap_yi` | 流通市值（亿元） | — |
-| `turnover_pct` | 换手率(%) | `volume / float_share` |
-| `amplitude_pct` | 振幅(%) | `(high-low)/prev_close*100` |
-| `vol_ratio` | 量比 | 现量/过去 5 日同时段均量 |
-| `limit_up` / `limit_down` | 涨停价/跌停价 | Zzshare / Tencent 返回真实值，其他 fetcher (Akshare / Zhitu / Yfinance / Tushare / Myquant) 仍为 null；缺数据时按 `prev_close × (1 ± 10%)` 自行计算 |
-| `source` | 数据来源 fetcher 名（zzshare/akshare/...） | 用于判断数据新鲜度 |
-
-#### `GET /stocks/{code}/kline` — K 线
-
-顶层 `{code, stock_name, period, data[], source}`，核心在 `data[]` 每根 K 线：
-
-| 字段 | 含义 | 备注 |
-|---|---|---|
-| `date` | YYYY-MM-DD (d/w/m) 或 `YYYY-MM-DD HH:MM:SS` (分钟级) | 格式随 frequency 变化 |
-| `frequency` | d/w/m/1m/5m/15m/30m/60m | 每根 K 线**自带**频率标签，校验用 |
-| `open` / `high` / `low` / `close` | OHLC（元） | — |
-| `volume` | 成交量(**股**) | 单位固定股，1 手 = 100 股 |
-| `volume_unit` | 固定 `"share"` | 不变式：始终是股 |
-| `amount` | 成交额(元) | 缺数据时为 `null`（不是 0） |
-| `change_percent` | 涨跌幅(%) | 缺数据时为 `null` |
-| `indicators` | dict, e.g. `{ma5: 12.34, macd_dif: 0.23}` | **仅在传 `?indicators=` 时出现**；未传则整个字段从 JSON 中**省略**（非 null） |
-
-> 复权: `?adjust=qfq` 前复权 / `?adjust=hfq` 后复权 / 不传 不复权。**注意 1m 拒绝 adjust**（Akshare 1m 端点不支持复权），传了会报错。
-
-#### `GET /stocks/{code}/info` — 公司画像
-
-| 字段 | 含义 |
-|---|---|
-| `code` / `name` | 6 位代码 / 股票名 |
-| `exchange` | `SH` / `SZ` / `BJ`，**未匹配时为 `null`**（注意不是空字符串） |
-| `industry` | 行业 |
-| `listing_date` | 上市日 YYYY-MM-DD |
-| `total_share` | 总股本(**股**) |
-| `float_share` | 流通股(**股**) |
-| `reg_capital` | 注册资本(元) |
-
-> 字段**不会**包含股价/市值/PE；要看行情用 `/quote`，要看财务用其他基本面端点（当前项目未实现）。
-
-#### `GET /stocks` — 股票列表
-
-每条 `{code, name, market, exchange}`：
-- `market` 固定 `csi` / `hk` / `us`（**A 股是 `csi`，不是 `cn`**）
-- `exchange` 可能为 `null`
-
-#### `GET /indices` / `GET /indices/{code}/quote` / `GET /indices/{code}/kline`
-
-- `/indices` 列表：`{code, name, market}`，三市场（csi/hk/us）
-- `/indices/{code}/quote`：**字段含义同 `/stocks/{code}/quote`**，但**没有** PE/PB/市值/换手率/振幅/涨跌停价等腾讯增强字段；`current_price` 单位是**指数点位**（不是元）
-- `/indices/{code}/kline`：结构同 `/stocks/{code}/kline`（每根 K 线 shape 完全一致），但**指数无复权**，传 `?adjust=qfq|hfq` 会被 422 拒绝
-
-#### `GET /calendar` — A 股交易日历
-
-| 字段 | 含义 |
-|---|---|
-| `trade_dates[]` | 所有交易日期（升序） |
-| `latest_date` | 最新一日 |
-| `total` | 总天数 |
-
----
-
-### 13.2 资金面
-
-#### `GET /stocks/{code}/fund-flow` (分钟级) / `/fund-flow/daily` (120 日)
-
-顶层 `{code, name, type, records[], source}`，`type` 区分 `"minute"` / `"daily"`。
-
-`records[]` 每条：
-
-| 字段 | 含义 | 备注 |
-|---|---|---|
-| `time` (minute) / `date` (daily) | HH:mm / YYYY-MM-DD | — |
-| `main_net` | 主力净流入(元) | **正=流入、负=流出** |
-| `super_net` | 超大单净流入(元) | — |
-| `large_net` | 大单净流入(元) | — |
-| `mid_net` | 中单净流入(元) | — |
-| `small_net` | 小单净流入(元) | — |
-
-> 通常阈值: `|main_net| > 1e7`(1千万) 才视为显著。**别用 absolute amount 与换手率/涨跌幅混着判断**。
-
-#### `GET /north-flow/realtime` — 北向资金
-
-`records[]` 每条 `{time (HH:mm), hgt_yi (沪股通累计净买入/亿元), sgt_yi (深股通累计净买入/亿元)}`。
-沪+深相加为北向资金合计。
-
-#### `GET /stocks/{code}/margin` — 融资融券
-
-`records[]` 每条：
-
-| 字段 | 含义 |
-|---|---|
-| `date` | YYYY-MM-DD |
-| `rzye` | 融资余额(元) |
-| `rzmre` | 融资买入额(元) |
-| `rzche` | 融资偿还额(元) |
-| `rqye` | 融券余额(元) |
-| `rqmcl` | 融券卖出量(股) |
-| `rqchl` | 融券偿还量(股) |
-| `rzrqye` | 融资融券余额合计(元) |
-
-> 杠杆情绪观察: `rzye` 趋势 + `rzmre - rzche` 增量；融券量小，多数场景只看融资侧。
-
-#### `GET /stocks/{code}/block-trade` — 大宗交易
-
-`records[]` 每条 `{date, price, close, premium_pct, vol, amount, buyer, seller}`：
-- `premium_pct` 溢价率(%)：正值=溢价成交、负值=折价成交
-- `vol` 成交量(**股**)
-- `buyer` / `seller` 营业部名（如"机构专用"、"中信证券"）
-
-#### `GET /stocks/{code}/holder-num` — 股东户数
-
-`records[]` 每条 `{date, holder_num, change_num, change_ratio, avg_shares}`：
-- `change_num` 正=户数增加、负=减少；**减少通常视为筹码集中**（看多信号之一）
-- `change_ratio` 环比(%)；`avg_shares` 户均持股(**股**)
-
----
-
-### 13.3 基础数据
-
-#### `GET /stocks/{code}/dividend` — 分红送转
-
-`records[]` 每条 `{date, bonus_rmb, transfer_ratio, bonus_ratio, plan}`：
-- `date` 除权除息日
-- `bonus_rmb` **每股派息（税前，元）**
-- `transfer_ratio` 每 10 股转增股数（如 5 表示 10 转 5）
-- `bonus_ratio` 每 10 股送股数
-- `plan` 进度（如"实施完成"、"股东大会通过"）
-
----
-
-### 13.4 公告 / 研报
-
-#### `GET /stocks/{code}/announcements` — 公告
-
-`announcements[]` 每条 `{title, type, date, url}`：
-- `type` 类型（如"年报"、"季报"、"重大事项"）
-- `url` 详情页 URL（cninfo / eastmoney）
-
-#### `GET /stocks/{code}/reports` — 研报列表
-
-`reports[]` 每条 `{title, publish_date, org, info_code, rating, predict_eps_this, predict_eps_next, predict_eps_next2}`：
-- `org` 机构名（中信证券等）
-- `info_code` 报告 ID，**用于 `/reports/{report_id}/pdf` 下载**
-- `rating` 评级（"买入" / "增持" / "中性" / "减持" / "卖出"）
-- `predict_eps_this/next/next2` 当年/次年/后年 EPS 预测（元）
-
-#### `GET /stocks/{code}/reports/{report_id}/pdf` — 研报 PDF
-
-返回 `{report_id, download_path (本地路径), url (原始 URL)}`。
-
----
-
-### 13.5 特殊池 & 板块
-
-#### 板块类型总览（`concept` / `industry` / `index` / `special`）
-
-系统定义 4 种板块类型，以 `source=ths` 的分类为默认参考：
-
-| 类型 | 含义 | `ths` 支持 | `ths` subtype | 典型代码前缀 | 其他 source 补充 |
-|---|---|---|---|---|---|
-| `concept` | 概念板块（题材/热点） | ✅ | `同花顺概念` / `同花顺题材` | `885xxx` | eastmoney（无 subtype 拆分）/ zhitu（`热门概念` / `概念板块` / `地域板块`） |
-| `industry` | 行业板块 | ✅ | `同花顺行业` | `881xxx` | eastmoney / zhitu（`申万行业` / `申万二级` / `证监会行业`） |
-| `index` | 大盘/分类指数 | ❌ 不暴露 | — | — | **仅 zhitu**（`分类` / `指数成分` / `大盘指数`） |
-| `special` | 特殊池（风险警示/次新/沪深港通） | ❌ 不暴露 | — | — | **仅 zhitu**（`风险警示` / `次新股` / `沪港通` / `深港通`） |
-
-**关键约束**：
-
-- **`source=ths` 只覆盖 `concept` + `industry` 两类**。要查 `index` / `special` 必须 `?source=zhitu`。
-- **不传 `?type=` = 默认查该 source 支持的所有类型**（route 内部 fan-out：ths 走 concept+industry；zhitu 走全 4 类；eastmoney 走 concept+industry）。
-- **跨 source 含义不同**：同名"互联网服务"概念，ths 与 eastmoney 的成分股集合**不保证一致**（不同源用的板块分类系统不同），默认用 `source=ths` 可避免跨源语义混淆。
-- 错误示例：`?source=ths&type=index` → 400（ths 不支持 index）；`?source=ths&type=special` → 400（ths 不支持 special）；`?source=eastmoney&type=index` → 400（同理）。
-
-#### `GET /boards` — 板块清单
-
-`data[]` 每条 BoardInfo 字段（**`include_quote=true` 才会有报价字段**）：
-
-| 字段 | 含义 | include_quote 必填? |
-|---|---|---|
-| `code` | 板块代码（ths=`885xxx`/`881xxx`；eastmoney=`BKxxxx`；zhitu=`sw_xxx`） | 否 |
-| `name` | 板块名 | 否 |
-| `type` | concept / industry / index / special | 否（始终填充） |
-| `price` / `change_pct` / `change_amount` | 板块指数点位 / 涨跌幅 / 涨跌额 | **是** |
-| `volume` / `amount` / `turnover_rate` / `total_mv` | 板块量价数据 | **是** |
-| `up_count` / `down_count` | 板块内上涨/下跌家数 | **是** |
-| `leading_stock` / `leading_stock_price` / `leading_stock_pct` | 龙头股名/价/涨幅 | **是** |
-| `net_inflow` | 资金净流入(亿元) | **行业板块 only**，其他类型固定 null |
-
-> 排序: `?sort_by=change_pct|volume|amount|price` + `?sort_order=asc|desc`，**必须**配合 `?include_quote=true`（否则 400）。
-
-#### `GET /boards/{code}/stocks` — 板块成分股
-
-- `board` 板块简表（字段同 `/boards`）
-- `stocks[]` 每条 BoardStockInfo：核心字段 `{code, name, price, change_pct, change_amount, volume, amount, turnover_rate}`；THS 上游额外暴露 6 字段 `{change_speed (涨速%), volume_ratio (量比), amplitude (振幅%), free_float_shares (流通股/股), float_market_cap (流通市值/元), pe_ratio (市盈率)}`
-- `query_source` / `data_source` / `effective_source` 数据源追踪；判 fallback 用 `query_source != effective_source`（详见 `api-reference.md` / `CLAUDE.md` 缓存部分）
-- `quote_truncated` / `quote_top_n` / `quote_total_in_board` 仅在 `?include_quote=true` 配合 `?sort_by`/`?top_n` 时填充；`truncated=true` 表示超过 `top_n` 截断后用 ZZSHARE 补全无报价的成员
-
-#### `GET /boards/{code}/quote` — 板块实时行情
-
-| 字段 | 含义 | 备注 |
-|---|---|---|
-| `price` / `change_pct` / `change_amount` | 板块指数点位/涨跌幅/额 | THS 唯一实现 |
-| `open` / `high` / `low` / `prev_close` | 今开/高/低/昨收(指数点位) | — |
-| `volume` | **成交量(万手，整数)** | 上游返回浮点字符串，fetcher `safe_int` 截断；精度损失约 0.005% |
-| `amount` | 成交额(亿元) | — |
-| `net_inflow` | 资金净流入(亿元) | — |
-| `up_count` / `down_count` | 涨跌家数 | — |
-| `rank` | 涨幅排名，形如 `"229/389"` | string |
-
-#### `GET /boards/{code}/news` — 板块新闻
-
-`data[]` 每条 `{title, url, publish_date, publish_time, summary, source_domain}`：
-- `summary` 摘要（THS 上游可能为空字符串 `""`）
-- `source_domain` 默认 `news.10jqka.com.cn`
-- 分页: `?limit=20`（1-50），游标分页无 14 条硬上限
-
-#### `GET /boards/{code}/surges` — 板块炒作周期
-
-`data[]` 每条 `{date, board_change_pct, sh_change_pct, limit_up_count, limit_up_stocks[], up_count, down_count}`：
-- `board_change_pct` 板块涨幅(%)；`sh_change_pct` 上证同周期涨幅(%)（**用上证做基准对比**）
-- `limit_up_count` 涨停家数；`limit_up_stocks[]` 涨停股代码列表
-- `up_count` / `down_count` **F10 未暴露，固定 null**
-
-#### `GET /stocks/{code}/boards` — 个股所属板块
-
-`data[]` 每条 `{code, name, type, subtype, source}`：
-- `name` 板块全名（形如 `"A股-申万行业-银行"`）
-- `subtype` 子类型（ths=同花顺概念/同花顺行业；zhitu=申万行业/热门概念 等）
-- `source` 来自哪个 fetcher（ths / eastmoney / zhitu）
-- `cold_sources[]` 没拉到的 source 列表（cold cache 提示，可选重试）
-
-#### `GET /boards/{code}/history` — 板块 K 线
-
-顶层 `{board_code, board_name, period, data[], source}`，`data[]` 每根 K 线 shape 与 `/stocks/{code}/kline` 完全一致（OHLCV + frequency + amount + change_percent）。`period` 取值 `d | w | m | 1m | 5m | 15m | 30m | 60m`；ths 支持全 8 频率，eastmoney 支持 7 频率（**无 1m**，传 1m 会在 fetcher 内部 5xx 报错）。
-
-#### `GET /zt-pools` — 涨跌停股池
-
-`stocks[]` 每条 ZTPoolStock：
-
-| 字段 | 含义 |
-|---|---|
-| `code` / `name` / `price` / `change_pct` / `amount` | 股票基础信息 |
-| `circ_mv` | 流通市值(元) |
-| `total_mv` | 总市值(元) |
-| `turnover_rate` | 换手率(%) |
-| `lb_count` | **连板数**（N 连板） |
-| `first_seal_time` / `last_seal_time` | 首次/最后封板时间(HH:mm) |
-| `seal_amount` | 封单金额(元) |
-| `seal_count` | 封单次数（涨停后开板又封回去的次数） |
-| `zt_count` | 涨停次数 |
-
-> zt vs dt vs zbgc: zt=涨停；dt=跌停；zbgc=炸板（**曾涨停但未封住**）。`date` 默认取今日或最近一个交易日。
-
-#### `GET /dragon-tiger` — 全市场龙虎榜
-
-顶层 `{date, total, stocks[]}`，`stocks[]` 每条 DailyDragonTigerStock：
-
-| 字段 | 含义 | 备注 |
-|---|---|---|
-| `code` / `name` | 股票代码/名 | — |
-| `reason` | **上榜原因**（"日涨幅偏离值达7%"、"换手率20%"等） | 用于筛选/分组 |
-| `change_pct` | 涨跌幅(%) | — |
-| `turnover_pct` | 换手率(%) | — |
-| `close` | 收盘价 | Zzshare 上游**不返回**，固定 null；EastMoney 有值 |
-| `net_buy_wan` | 净买入(万元) | 主力资金净买入 |
-| `buy_wan` / `sell_wan` | 买入/卖出(万元) | Zzshare 上游不拆分，固定 null；EastMoney 有值 |
-
-过滤: `?trade_date=YYYY-MM-DD` 必传；`?min_net_buy=5000`（万元）筛显著净买入。
-
-#### `GET /stocks/{code}/dragon-tiger` — 个股龙虎榜
-
-顶层 `{code, name, records[], seats{buy[], sell[]}, institution, source}`：
-- `records[]` 字段同全市场 `stocks[]`（个股当日上榜记录，通常 1 条）
-- `seats.buy[]` / `seats.sell[]` 营业部席位 `{name, buy_wan, sell_wan, net_wan}`
-- `institution` 机构席位合计 `{buy_amt, sell_amt, net_amt}`（万元）
-
-> 单日 `?trade_date=` 不传时默认查最新一个交易日。`records` 最多包含一条对应 `trade_date` 的上榜记录。
-
-#### `GET /hot-topics` — 热点题材
-
-`topics[]` 每条 `{code, name, reason, change_pct, turnover_rate, volume, amount, dde_net}`：
-- `reason` **题材归因**（如 `"人形机器人+减速器+特斯拉"`）——分类/筛选的关键字段
-- `dde_net` 大单净量（DDX 风格指标）
-
----
-
-### 13.6 新闻
-
-#### `GET /news/search` — 新闻搜索
-
-`data[]` 每条 `{title, url, publish_date, source_domain, summary}`：
-- `publish_date` YYYY-MM-DD
-- `summary` 可能为空（部分上游不提供）
-- `source_domain` 限定 `finance.eastmoney.com` / `www.cls.cn` / `news.10jqka.com.cn`（canonical 子域白名单）
-
-#### `GET /news/flash` — 全球财经快讯
-
-`data[]` 每条 `{title, publish_time, url, code, source_domain}`：
-- **`code` 是文章 ID，不是股票代码**（⚠️ 踩坑高发区）
-- `publish_time` 形如 `"2026-05-20 09:31:00"`
-
-#### `GET /news/content` — 新闻正文
-
-| 字段 | 含义 |
-|---|---|
-| `url` | 入参 URL（echo） |
-| `title` / `body` | 标题 / 提取的正文纯文本（保留段落换行） |
-| `publish_date` / `author` / `source_domain` | 元信息 |
-| `extractor` | 解析器名（`"default"` 等） |
-| `byte_size` | body 字节数 |
-| `content_status` | `ok` / `failed` |
-| `reason` | 失败原因（仅 failed 时非空） |
-| `canonical_url` / `http_status` | 抓取诊断（URL 跳转后的最终地址 / HTTP 状态码） |
-
-> 入口做了 SSRF 防护：`127.0.0.1` / `10.0.0.0/8` 等内网 URL 会被 400 拒绝。
-
-#### `GET /stocks/{code}/news` — 个股资讯
-
-`data[]` 每条 `{title, url, publish_time, source_domain}`，结构比 `/news/search` 简（无 `summary`）。
-
-#### `GET /news/morning-briefing` / `/news/market-recap` — 财联社
-
-顶层 `{subject, subject_id, date, article{}, source}`：
-- `subject` `"morning_briefing"` / `"market_recap"`
-- `subject_id` 固定 `1151` / `1135`（CLS 上游枚举，probed 2026-07-14；如 CLS 改枚举，service 会通过 `subject_id mismatch` 告警）
-- `article`：
-  - `article_id` 文章 ID
-  - `title` / `brief` 标题 / 简介
-  - `author` / `date` / `ctime`（epoch 秒）
-  - `read_num` / `comments_num` / `share_num` 阅读/评论/分享数
-  - `images[]` 图片 URL 列表
-  - `body_text` **完整正文（纯文本，BS4 提取 `get_text("\n", strip=True)`，3+ 空行折叠为 2）**——这是 agent 拿全文做总结的主字段
-
-> **28 天窗口**（`?date=` 校验）：超出窗口 → 400；窗口内但 CLS 当日未发 → 404。
-
----
-
-### 13.7 其他（Meta）
-
-#### `GET /healthz` — 健康检查
-
-`status`: `ok` / `degraded` / `unhealthy`；`?details=true` 时 `sources[]` 列出每个 fetcher：
-
-| 字段 | 含义 |
-|---|---|
-| `name` | fetcher 名（tushare/akshare/...） |
-| `state` | `closed` / `open` / `half_open`（断路器状态） |
-| `available` | 当前是否可用（无 token / 配置缺失 = false） |
-| `last_success_time` / `last_failure_time` | epoch 秒；缺数据时为 null |
-| `failure_count` | 累计失败次数 |
-| `unavailable_reason` | 不可用原因（仅 `available=false` 时填充） |
-
-#### `GET /indicators` — 技术指标目录
-
-`indicators[]` 每条：
-- `key` 标识符（`ma` / `macd` / `kdj` / `boll` / ...）
-- `input_shape` `"closes"` 或 `"ohlcv"`
-- `default_options` 字典（如 `ma: {periods: [5,10,20,30,60], type: "sma"}`）
-- `output_columns[]` 输出列名（如 `["ma5","ma10",...]`）
-- `default_lookback` 预热所需最少 K 线根数（路由层会自动 `max(days, lookback)` 拉更多再截断）
-
-> agent 用法：先 `GET /indicators` 看可用指标，再在 K 线请求里 `?indicators=ma,macd,kdj` 一次取多个。
-
----
-
-## 14. 与 `market-principles` 的协作
+## 13. 与 `market-principles` 的协作
 
 - **入口**：agent 收到市场判断请求 → 触发 `market-principles`
 - **数据采集**：`market-principles` 工作流第 5 步（通过配套 skill 收集消息、行情、板块、资金数据）→ 通过**本 skill** 选定服务器端点
