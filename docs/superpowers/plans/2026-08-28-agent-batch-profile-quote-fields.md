@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Extend `MinimalQuote` on the three `/agent/{stocks,indices,boards}/batch-profile` endpoints from 2 fields (`price` + `change_pct`) to ~21 fields covering OHLV + turnover + valuation + 涨跌停价 + (board-only) 板块统计.
+**Goal:** Extend `MinimalQuote` on the three `/agent/{stocks,indices,boards}/batch-profile` endpoints from 2 fields (`price` + `change_pct`) to ~23 fields covering OHLV + turnover + valuation + 涨跌停价 + (board-only) 板块统计.
 
 **Architecture:** One schema (`MinimalQuote`), three call-site rewrites in `agent.py` (one per endpoint), two pure helper builders (`_build_minimal_quote_from_unified` for stock/index, `_build_minimal_quote_from_board_dict` for board), one new MD projection helper (`_md_quote_block`) wired into the three existing MD templates. TDD throughout; each task ends with a passing test + a commit.
 
@@ -24,7 +24,7 @@
 - `tests/test_minimal_quote_helpers.py` — unit tests for the two builder helpers.
 
 **Modified:**
-- `stock_data/api/schemas.py` — `MinimalQuote` (lines 1603-1607) extended to ~21 fields.
+- `stock_data/api/schemas.py` — `MinimalQuote` (lines 1603-1607) extended to ~23 fields.
 - `stock_data/api/routes/agent.py` — two new helpers + three call-site rewrites + one new MD helper + three MD template rewrites (~150 net lines added).
 - `tests/test_agent_batch_features.py` — extend `TestFormatMdFeatureCompleteness` with quote-block assertions.
 - `tests/test_agent_endpoints.py` — add three endpoint integration tests (one per batch-profile endpoint).
@@ -41,6 +41,37 @@
 **Interfaces:**
 - Consumes: nothing.
 - Produces: `MinimalQuote` with ~21 optional fields (price, change_pct, change_amount, open, high, low, prev_close, volume, volume_unit, amount, turnover_pct, amplitude_pct, volume_ratio, pe_ratio, pb_ratio, mcap_yi, float_mcap_yi, limit_up, limit_down, up_count, down_count, net_inflow, rank).
+
+- [ ] **Step 0: Update the existing `test_minimal_quote` to use subset assertion**
+
+The existing test at `tests/test_agent_batch_features.py:310-312` asserts exact equality:
+
+```python
+def test_minimal_quote(self):
+    q = MinimalQuote(price=1721.0, change_pct=1.2)
+    assert q.model_dump() == {"price": 1721.0, "change_pct": 1.2}
+```
+
+This will fail after Task 1's schema extension because `model_dump()` will return 23 keys (21 new `None`s + `volume_unit="share"` + the two populated fields). Replace the body with:
+
+```python
+def test_minimal_quote(self):
+    q = MinimalQuote(price=1721.0, change_pct=1.2)
+    dumped = q.model_dump()
+    # Backward-compatible: the 2-field anchor still serializes
+    # the original price/change_pct values; the rest are None defaults.
+    assert dumped["price"] == 1721.0
+    assert dumped["change_pct"] == 1.2
+    assert dumped["volume_unit"] == "share"
+    # New fields are present-but-None.
+    assert dumped["open"] is None
+    assert dumped["amount"] is None
+    assert dumped["mcap_yi"] is None
+    assert dumped["rank"] is None
+```
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_agent_batch_features.py::TestSchemas::test_minimal_quote -v`
+Expected: FAIL with `AssertionError` on `dumped["price"]` (the new fields don't exist yet, so this test runs against the old 2-field schema and the assertion still passes — but the wider point is that this test runs cleanly under both schemas). Actually expected: PASS because `dumped["volume_unit"]` defaults to `"share"` after Task 1's schema extension; the subset check works against both schemas. The point of Step 0 is to convert the brittle exact-equality assertion into a robust subset/field-by-field check BEFORE Task 1's schema edit, so the test doesn't break in Step 4.
 
 - [ ] **Step 1: Create the test file**
 
@@ -207,7 +238,7 @@ Expected: PASS for all 3 tests in `TestMinimalQuoteSchema`.
 
 ```bash
 git add stock_data/api/schemas.py tests/test_minimal_quote_helpers.py
-git commit -m "feat(schemas): extend MinimalQuote to ~21 fields for batch-profile
+git commit -m "feat(schemas): extend MinimalQuote to ~23 fields for batch-profile
 
 Adds OHLV, 量价 (turnover/amplitude/volume_ratio), 估值
 (PE/PB/mcap_yi/float_mcap_yi), 涨跌停价, and (board-only) 板块统计
@@ -1152,7 +1183,7 @@ class TestBatchProfileQuoteFields:
     """Pins the JSON-path contract: every extended MinimalQuote field
     is present in the batch-profile response (even when None)."""
 
-    def test_stocks_batch_profile_quote_has_all_21_keys(self, client, monkeypatch):
+    def test_stocks_batch_profile_quote_has_all_23_keys(self, client, monkeypatch):
         from stock_data.api.routes import agent as agent_module
         from stock_data.api.routes import reset_manager
 

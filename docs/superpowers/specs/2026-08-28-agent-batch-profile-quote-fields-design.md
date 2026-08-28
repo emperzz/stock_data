@@ -2,7 +2,7 @@
 
 > Spec for extending the `quote` block on the three batch-profile
 > endpoints. Currently a 2-field anchor (`price` + `change_pct`); this
-> expands it to ~21 fields covering OHLV + turnover + valuation +
+> expands it to ~23 fields covering OHLV + turnover + valuation +
 > 涨跌停价 + (board-only) 板块统计. No new endpoint, no new fetcher,
 > no new `DataCapability`. Reuses the existing
 > `UnifiedRealtimeQuote` (stock/index path) and the THS
@@ -356,9 +356,9 @@ def _build_minimal_quote_from_board_dict(q: dict) -> MinimalQuote:
         high=q.get("high"),
         low=q.get("low"),
         prev_close=q.get("prev_close"),
-        volume=q.get("volume"),  # already int-truncated from upstream "15343.80" string
+        volume=q.get("volume"),  # THS upstream uses safe_int → int | None; pass-through
         volume_unit="wan_shou",
-        amount=raw_amount * 1e8 if raw_amount is not None else None,
+        amount=(raw_amount * 1e8) if raw_amount is not None else None,
         up_count=q.get("up_count"),
         down_count=q.get("down_count"),
         net_inflow=q.get("net_inflow"),  # board upstream already 亿元; pass-through
@@ -400,13 +400,15 @@ name = getattr(q, "name", "") or ""
 
 # after
 quote = _build_minimal_quote_from_unified(q) if q is not None else None
-name = (q.name if q is not None else "") or ""
+name = q.name or ""
 ```
 
-The `name = getattr(q, "name", "")` line moves outside the
-`q is not None` guard because the original code already did it inside
-the try block. After the change it must read `q.name` only when `q` is
-non-None; the rewrite above preserves the existing semantics.
+Both rewrites stay inside the existing `if q is not None:` block (which
+is itself inside the `try / except`). The defensive
+`getattr(q, "name", "")` collapses to `q.name or ""` because
+`UnifiedRealtimeQuote` always declares `name: str` — it's never
+missing as an attribute, only sometimes empty as a value. The `or ""`
+fallback handles the empty-string case identically.
 
 ### 5.3 `post_boards_batch_profile` (~line 1027)
 
@@ -567,33 +569,49 @@ def _md_quote_block(out: list[str], q) -> None:
 
 ### 6.4 Per-endpoint MD rewrites
 
-Three templates updated, identical mechanical change:
+Three templates updated. The stocks template has no existing failure
+branch (errors are surfaced per-aspect via `errors[]`), so the
+"before/after" is straightforward. The indices and boards templates
+ALREADY have an else branch that surfaces the failure (`- 行情失败: ...`)
+on the `quote` key — the rewrite preserves that branch verbatim.
+
+**Stocks template** (`render_stocks_batch_profile_as_md`):
 
 ```python
-# before (all three templates)
+# before
 if entry.quote:
     out.append(f"- 最新: {_md_num(entry.quote.price)} ({_md_pct(entry.quote.change_pct)})")
 out.append("")
 
 # after
-if entry.quote:
-    _md_quote_block(out, entry.quote)
-elif (entry.errors or {}).get("quote") or (entry.errors or {}).get("quote"):
-    out.append(f"- 行情失败: {(entry.errors or {}).get('quote') or 'no quote'}")
-out.append("")
-```
-
-The `elif` branch preserves the existing failure-surfacing behavior
-on the indices / boards templates. The stocks template uses a
-different errors shape (`list[StockBatchAspectError]` instead of
-`dict[str, str | None]`), so the elif for stocks is:
-
-```python
 quote_err = next((e.message for e in entry.errors if e.aspect == "quote"), None)
 if entry.quote:
     _md_quote_block(out, entry.quote)
 elif quote_err:
     out.append(f"- 行情失败: {quote_err}")
+out.append("")
+```
+
+The stocks template's errors shape is `list[StockBatchAspectError]`
+(not `dict[str, str | None]`), so we extract the quote error by
+filtering on `e.aspect == "quote"`.
+
+**Indices / boards templates** (`render_indices_batch_profile_as_md` /
+`render_boards_batch_profile_as_md`):
+
+```python
+# before
+if idx.quote:  # or board.quote
+    out.append(f"- 最新: {_md_num(idx.quote.price)} ({_md_pct(idx.quote.change_pct)})")
+else:
+    out.append(f"- 行情失败: {(idx.errors or {}).get('quote') or 'no quote'}")
+out.append("")
+
+# after (else branch unchanged)
+if idx.quote:  # or board.quote
+    _md_quote_block(out, idx.quote)
+else:
+    out.append(f"- 行情失败: {(idx.errors or {}).get('quote') or 'no quote'}")
 out.append("")
 ```
 
