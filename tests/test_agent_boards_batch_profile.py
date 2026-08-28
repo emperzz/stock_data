@@ -354,6 +354,71 @@ class TestHandler:
             "cached_store was called; boards/batch-profile must NOT add a composite cache"
         )
 
+    def test_features_consume_list_of_dict_rows_from_manager(self, client, monkeypatch):
+        """Pin the real manager.get_board_history contract: list[dict], NOT DataFrame.
+
+        Real DataFetcherManager.get_board_history returns (list[dict], source)
+        (see stock_data/data_provider/manager.py docstring). boards/batch-profile
+        must wrap the rows in a DataFrame before handing to build_features.
+        Regression guard: previously the handler unpacked as ``df, _src = ...``
+        and passed the list straight to build_features, which then raised
+        ``AttributeError: 'list' object has no attribute 'empty'`` on every
+        real request — covered up by tests that injected a DataFrame into the
+        mock (out-of-band with reality).
+        """
+        rows = _make_kline_df(90).to_dict(orient="records")
+        realtime = {"881270": {"price": 1234.5, "change_pct": 1.23}}
+        history = {"881270": rows}  # REAL shape: list[dict]
+        manager = _mock_manager(realtime_results=realtime, history_results=history)
+        monkeypatch.setattr(agent_module, "get_manager", lambda: manager)
+        monkeypatch.setattr(
+            "stock_data.data_provider.persistence.board.get_board_name_with_fallback",
+            lambda code, source, manager=None: "半导体",
+        )
+        r = client.post(
+            "/api/v1/agent/boards/batch-profile",
+            json={"codes": ["881270"], "frequency": "d", "days": 60},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["boards"][0]["errors"] == {"quote": None, "features": None}, body
+        # build_features populated the trend block — proves rows→DataFrame wrap worked.
+        assert body["boards"][0]["features"]["trend"]
+
+    def test_features_empty_rows_yield_empty_feature_blocks(self, client, monkeypatch):
+        """Empty list from get_board_history → empty feature blocks (NOT an error).
+
+        Real manager returns ``[]`` (empty rows) for an upstream that has no K-line
+        for the requested range. ``pd.DataFrame([])`` produces a (0,0) frame;
+        ``build_features`` treats it as a no-op, ``BatchFeatures`` expands via
+        default_factory, and the entry is reported as ``features succeeded``
+        (errors[] stays null) — same contract as the legacy empty-DataFrame path
+        pinned by ``test_empty_kline_dataframe_yields_empty_features``.
+        """
+        realtime = {"881270": {"price": 1.0, "change_pct": 0.0}}
+        history = {"881270": []}  # empty rows → empty features
+        manager = _mock_manager(realtime_results=realtime, history_results=history)
+        monkeypatch.setattr(agent_module, "get_manager", lambda: manager)
+        monkeypatch.setattr(
+            "stock_data.data_provider.persistence.board.get_board_name_with_fallback",
+            lambda code, source, manager=None: "",
+        )
+        r = client.post(
+            "/api/v1/agent/boards/batch-profile",
+            json={"codes": ["881270"], "frequency": "d", "days": 60},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        board = body["boards"][0]
+        assert board["errors"] == {"quote": None, "features": None}
+        # Compare specific empty markers (mirrors test_empty_kline_dataframe_yields_empty_features)
+        f = board["features"]
+        assert f["trend"]["ma"] == {} and f["trend"]["ma_change"] == {}
+        assert f["trend"]["adx"] is None and f["trend"]["pdi"] is None and f["trend"]["mdi"] is None
+        assert f["pivots"]["swings"] == [] and f["pivots"]["params"] == {}
+        assert f["pivots"]["window_high"] is None and f["pivots"]["window_low"] is None
+        assert f["volume"]["z_anomalies"] == [] and f["volume"]["latest_volume"] is None
+
 
 class TestMarkdown:
     def test_md_renders_full_payload(self):

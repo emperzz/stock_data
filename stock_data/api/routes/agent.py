@@ -31,6 +31,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+import pandas as pd
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from datetime import time as dt_time
@@ -1036,7 +1037,7 @@ def post_boards_batch_profile(
 
         # --- computed features ---
         try:
-            df, _src = manager.get_board_history(
+            rows, _src = manager.get_board_history(
                 code,
                 source="ths",
                 # NOTE: pass the PUBLIC frequency string ("5m"), NOT profile.mgr_frequency ("5").
@@ -1046,6 +1047,13 @@ def post_boards_batch_profile(
                 frequency=payload.frequency,
                 days=fetch_days,
             )
+            # manager.get_board_history returns (list[dict], source) — NOT a DataFrame
+            # (unlike manager.get_kline_data used by stocks/indices batch-profile).
+            # Wrap the rows so build_features can call df.empty / df["date"].iloc[-1].
+            # ``pd.DataFrame(rows)`` correctly produces an empty (0,0) frame for
+            # ``rows=[]`` or ``rows=None`` without raising — build_features treats
+            # the empty frame as a no-op and returns ``{trend:{}, pivots:{}, volume:{}}``.
+            df = pd.DataFrame(rows)
             features = BatchFeatures(**build_features(df, frequency=payload.frequency, days=days))
         except Exception as exc:
             logger.warning(
