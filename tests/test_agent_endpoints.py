@@ -1624,3 +1624,120 @@ class TestFormatMdDataCompleteness:
         assert "### 龙虎榜全表 (1 只)" in body
         # Summary aggregate value
         assert "**全市场净买入合计**: 5,000" in body
+
+
+class TestBatchProfileQuoteFields:
+    """Pins the JSON-path contract: every extended MinimalQuote field
+    is present in the batch-profile response (even when None)."""
+
+    def test_stocks_batch_profile_quote_has_all_23_keys(self, client, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from stock_data.api.routes import agent as agent_module
+        from stock_data.api.routes import reset_manager
+        from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
+
+        reset_manager()
+        mock_manager = MagicMock()
+        q = UnifiedRealtimeQuote(
+            code="600519", name="贵州茅台", source=RealtimeSource.ZZSHARE,
+            price=1680.0, change_pct=1.23, change_amount=20.4,
+            open_price=1660.0, high=1690.0, low=1655.0, pre_close=1659.6,
+            volume=12_345_678, volume_unit="share", amount=2_050_000_000.0,
+            turnover_rate=0.45, amplitude=2.11, volume_ratio=1.20,
+            pe_ratio=25.3, pb_ratio=8.7,
+            total_mv=2_112_350_000_000.0, circ_mv=2_100_010_000_000.0,
+            limit_up=1825.56, limit_down=1493.64,
+        )
+        mock_manager.get_realtime_quote.return_value = q
+        mock_manager.get_kline_data.return_value = (_make_kline_df([]), "zzshare")
+        mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
+            resp = client.post(
+                "/api/v1/agent/stocks/batch-profile",
+                json={"codes": ["600519"], "frequency": "d", "days": 60},
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        quote = data["results"][0]["quote"]
+        expected = {
+            "price", "change_pct", "change_amount",
+            "open", "high", "low", "prev_close",
+            "volume", "volume_unit", "amount",
+            "turnover_pct", "amplitude_pct", "volume_ratio",
+            "pe_ratio", "pb_ratio", "mcap_yi", "float_mcap_yi",
+            "limit_up", "limit_down",
+            "up_count", "down_count", "net_inflow", "rank",
+        }
+        assert expected <= set(quote.keys())
+        assert quote["volume_unit"] == "share"
+        assert quote["amount"] == 2_050_000_000.0
+        import pytest as _pytest
+        assert quote["mcap_yi"] == _pytest.approx(21_123.5)
+
+    def test_indices_batch_profile_volume_unit_share(self, client, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from stock_data.api.routes import agent as agent_module
+        from stock_data.api.routes import reset_manager
+        from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
+
+        reset_manager()
+        mock_manager = MagicMock()
+        q = UnifiedRealtimeQuote(
+            code="000300", name="沪深300", source=RealtimeSource.AKSHARE,
+            price=3000.0, change_pct=0.5,
+            volume=5_000_000, volume_unit="share", amount=1e10,
+            turnover_rate=0.3,
+        )
+        mock_manager.get_index_realtime_quote.return_value = q
+        mock_manager.get_kline_data.return_value = (_make_kline_df([]), "akshare")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        resp = client.get("/api/v1/agent/indices/batch-profile")
+        assert resp.status_code == 200
+        data = resp.json()
+        for entry in data["indices"]:
+            assert entry["quote"]["volume_unit"] == "share"
+
+    def test_boards_batch_profile_volume_unit_wan_shou_and_x1e8(self, client, monkeypatch):
+        from unittest.mock import MagicMock
+
+        import pytest as _pytest
+        from stock_data.api.routes import agent as agent_module
+        from stock_data.api.routes import reset_manager
+
+        reset_manager()
+        mock_manager = MagicMock()
+        board_quote = {
+            "board_code": "885595", "board_name": "人形机器人",
+            "price": 1234.5, "change_pct": 1.23, "change_amount": 15.0,
+            "open": 1230.0, "high": 1240.0, "low": 1225.0, "prev_close": 1219.5,
+            "volume": 15343, "amount": 12.5,
+            "up_count": 12, "down_count": 5,
+            "net_inflow": 1.23, "rank": "229/389",
+        }
+        mock_manager.get_board_realtime.return_value = (board_quote, "ths")
+        mock_manager.get_board_history.return_value = ([
+            {"date": "2026-08-01", "open": 1200, "high": 1210, "low": 1190,
+             "close": 1205, "volume": 100, "amount": 1_000_000, "pct_chg": 0.5},
+        ], "ths")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        resp = client.post(
+            "/api/v1/agent/boards/batch-profile",
+            json={"codes": ["885595"], "frequency": "d", "days": 60},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        quote = data["boards"][0]["quote"]
+        assert quote["volume_unit"] == "wan_shou"
+        assert quote["volume"] == 15343
+        assert quote["amount"] == _pytest.approx(1_250_000_000.0)  # 12.5 × 1e8
+        assert quote["up_count"] == 12
+        assert quote["down_count"] == 5
+        assert quote["net_inflow"] == 1.23  # 亿元 pass-through
+        assert quote["rank"] == "229/389"
+        # stock-only fields are None on board
+        assert quote["pe_ratio"] is None
+        assert quote["mcap_yi"] is None
+        assert quote["limit_up"] is None
