@@ -461,12 +461,12 @@ lb_count: int | None = None           # 连板数（涨停时才有）
 
 **Board type 处理**:不暴露给 caller。`ThsFetcher.get_board_realtime(board_code, board_type=None)` 内部从 `stock_board` cache 推断,cache miss 时调用 `get_board_metadata` 备用。失败 → `errors["quote"] = "DataFetchError: ..."`。
 
-**缓存**:**没有 composite cache 层**——这是与 stocks/indices batch-profile 的有意偏离:
+**缓存**:**没有 composite cache 层**(2026-08-28 起与 stocks/indices batch-profile 统一):
 - 底层 `manager.get_board_realtime` 走 `get_quote_cache`(短期 TTL);`manager.get_board_history` 走 `get_history_cache`(per-frequency 多日 TTL)
 - board 数据 intraday 时效性敏感,加 composite cache 反而引入 60s stale 风险
 - `build_features` 是纯计算,sub-ms,在 N+1 网络往返面前不构成瓶颈
 
-Stocks / indices batch-profile 的 composite cache 撤除跟踪在 spec §8.1 Future Work,**不**在此 PR 范围内。
+Stocks / indices batch-profile 的 composite cache 已在 2026-08-28 同步撤除(参考 boards/batch-profile 实现先例 + 同口径合理论证);`make_stocks_batch_profile_cache_key` / `make_indices_batch_profile_cache_key` 工厂已删除,`_reorder_by_code` helper 已删除。
 
 **Manager 频率转换陷阱**:`manager.get_board_history` 验证 `BOARD_KLINE_FREQ_BY_SOURCE["ths"]`,其中包含**公开字符串**(`"5m"` 而非 `"5"`)。`_FEATURE_FREQS[frequency].mgr_frequency` 是为 stock/index 路径(`manager.get_kline_data`)设计的——**board 路径必须直接传 `frequency` 公开字符串**,否则每个分钟级请求 raise ValueError → 400。详见 `docs/superpowers/specs/2026-08-27-boards-batch-profile-design.md` §3.1 "Frequency translation note"。
 

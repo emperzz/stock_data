@@ -1590,7 +1590,7 @@ GET /api/v1/agent/indices/batch-profile?codes=000001,000300&frequency=d&days=120
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `codes` | string | `000001,399001,399006` | Comma-separated CSI index codes (1-5). Empty = the 3 core indices (上证 / 深证 / 创业板). > 5 → 422. |
-| `frequency` | string | `d` | One of `d/w/m/1m/5m/15m/30m/60m`. Single-valued per call — long + short frames = two calls (cheap under the 60s shared cache). |
+| `frequency` | string | `d` | One of `d/w/m/1m/5m/15m/30m/60m`. Single-valued per call — long + short frames = two calls (the fetcher-level `get_history_cache` per-frequency TTL handles back-to-back same-`frequency` overlap). |
 | `days` | int | per-frequency default | Calendar days. Per-frequency min/max enforced server-side (table below); out-of-range → 422. |
 | `format` | string | `json` | `json` (default) or `md` — see [`?format=json|md` projection](#agent-batch-api). |
 
@@ -1693,10 +1693,10 @@ use the requested `days` window.
 - `422 invalid_request` — unknown `frequency`; `codes` > 5; `days`
   outside the per-frequency range.
 
-**Cache:** `make_indices_batch_profile_cache_key(sorted(codes), frequency, days)` →
-`agent_indices_batch_profile:{frequency}:{days}:<sorted_codes>`. Codes are
-sorted for order-perturbation immunity; the response list is reordered to
-the caller's input order on cache hit.
+**No composite cache layer** (post-2026-08-28 removal). The endpoint
+relies on the fetcher-level `get_quote_cache` (realtime) +
+`get_history_cache` (per-frequency K-line) TTLs for repeated-request
+absorption. Manager is invoked on every call.
 
 ---
 
@@ -1796,7 +1796,7 @@ Content-Type: application/json
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `codes` | string[] | yes | 1-5 stock codes (bare 6-digit A-share). The 5-code cap matches the stock-picking funnel. |
-| `frequency` | string | no (default `d`) | One of `d/w/m/1m/5m/15m/30m/60m`. Single-valued per call — long + short frames = two calls (cheap under the 60s shared cache). |
+| `frequency` | string | no (default `d`) | One of `d/w/m/1m/5m/15m/30m/60m`. Single-valued per call — long + short frames = two calls (the fetcher-level `get_history_cache` per-frequency TTL handles back-to-back same-`frequency` overlap). |
 | `days` | int | no (per-frequency default) | Calendar days. Per-frequency min/max enforced server-side (same table as the indices variant above); out-of-range → 422. |
 
 **Response (200):**
@@ -1902,10 +1902,10 @@ the manager so that codes like `000001` (which is also a CSI index) route
 to `STOCK_KLINE`, not `INDEX_KLINE`, and `adjust="qfq"`. Pinned by
 `test_passes_adjust_qfq_and_converts_minute_freq_for_manager`.
 
-**Cache:** `make_stocks_batch_profile_cache_key(sorted(codes), frequency, days)` →
-`agent_stocks_batch_profile:{frequency}:{days}:<sorted_codes>`. Codes are
-sorted so the same set in a different order collapses to one entry; the
-response is reordered to the caller's input order on hit.
+**No composite cache layer** (post-2026-08-28 removal). The endpoint
+relies on the fetcher-level `get_quote_cache` + `get_history_cache` +
+`get_stock_info_cache` TTLs for repeated-request absorption. Manager is
+called for every aspect of every code on every request.
 
 **Errors:**
 
@@ -1981,12 +1981,11 @@ would raise `ValueError` → 400 on every minute-frequency request. This is
 the inverse of `?adjust=qfq` on `/stocks/{code}/kline`, where the public
 string is also passed through.
 
-**Caching: NO composite cache layer** (deliberate deviation from stocks /
-indices batch-profile). The fetcher-level `get_quote_cache` +
-`get_history_cache` already cover N+1 fan-out; a composite cache here
-would only add a stale-risk window on intraday board data. Removal of
-the composite cache on stocks / indices is tracked as a separate
-follow-up.
+**Caching: NO composite cache layer** (unified with stocks / indices
+batch-profile as of 2026-08-28). The fetcher-level `get_quote_cache` +
+`get_history_cache` already cover N+1 fan-out; a composite cache would
+only add a stale-risk window on intraday data. Manager is invoked on
+every call.
 
 **Errors:**
 

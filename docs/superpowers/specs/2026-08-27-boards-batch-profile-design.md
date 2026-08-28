@@ -44,8 +44,9 @@ projection — and applies two corrections decided during brainstorming:
   (`get_quote_cache` short-TTL + `get_history_cache` per-frequency). A
   composite cache here would duplicate the same `(codes, frequency, days)`
   decision with no benefit (features are pure compute, sub-millisecond).
-  This is a deviation from the stocks/indices endpoints, which **do**
-  carry a composite cache today; see §8 Future Work for the follow-up.
+  **Update 2026-08-28**: the same composite cache was removed from the
+  stocks / indices batch-profile endpoints in the same PR cycle — all
+  three batch-profile endpoints now share this design.
 
 - **No new code-reuse helper.** The handler directly mirrors the
   `get_indices_batch_profile` loop skeleton. A new `_aspect_try`-style
@@ -233,8 +234,10 @@ items failed would force callers to write two error-handling code paths;
 
 ## 5. Caching
 
-**No composite cache layer.** This is a deliberate deviation from
-`/agent/stocks/batch-profile` and `/agent/indices/batch-profile`.
+**No composite cache layer.** **Update 2026-08-28**: this design was
+adopted in full for `/agent/stocks/batch-profile` and
+`/agent/indices/batch-profile` in the same PR cycle — all three
+batch-profile endpoints now share this contract.
 
 Justification:
 
@@ -251,12 +254,9 @@ A composite cache here would:
 - Save only the `build_features` cost (~1-5ms), which is dwarfed by the
   network round-trip to THS for each board
 
-**Removal of stock/indices composite cache is tracked separately** (see
-§8 Future Work). It is intentionally **not** part of this PR — both
-endpoints are live, with the composite cache as a load-bearing contract
-under fan-out (the existing comment in `agent.py:874-880` notes the N+1
-concern). Removing without separate validation risks regression for
-agents already tuned to the 60s warm-cache shape.
+If a future requirement needs the composite layer back, add it behind
+a per-endpoint feature flag and validate with a real N+1 latency
+benchmark first.
 
 ---
 
@@ -365,26 +365,26 @@ composite cache layer (deliberate deviation; see §8 Future Work).
 
 These are **out of scope** for this PR but flagged during brainstorming:
 
-### 8.1 Remove composite cache from stocks/indices batch-profile
+### 8.1 Remove composite cache from stocks/indices batch-profile **[DONE 2026-08-28]**
 
 The `make_stocks_batch_profile_cache_key` / `make_indices_batch_profile_cache_key`
 + `cached_lookup` / `cached_store` calls in `post_stocks_batch_profile`
-and `get_indices_batch_profile` duplicate the fetcher-level TTL caches
-with no measurable benefit. Removal would:
+and `get_indices_batch_profile` duplicated the fetcher-level TTL caches
+with no measurable benefit. Removal (executed 2026-08-28, the same
+PR cycle as this spec's boards/batch-profile work):
 
-- Simplify the handler (drop cache lookup + reorder logic)
-- Eliminate the `_reorder_by_code` helper dependency (only used by
-  cache-hit paths)
-- Remove a 60s-stale risk on intraday data
-- Apply the same design correction this PR makes for boards
+- Simplified both handlers (drop cache lookup + reorder logic)
+- Eliminated the `_reorder_by_code` helper (only used by cache-hit paths)
+- Removed the 60s-stale risk on intraday data
+- Applied the same design correction this spec made for boards — all
+  three batch-profile endpoints now share the no-composite-cache contract
 
-Risk: existing agents tuned to the 60s warm-cache response shape may
-need re-tuning. Mitigation: ship behind a feature flag for one release
-cycle, then flip default.
-
-**This is explicitly sequenced AFTER the boards/batch-profile PR** —
-do not bundle into one change. The user reaffirmed the sequencing on
-2026-08-27.
+Actual outcome vs the risk section above: no feature flag was needed
+— the fetcher-level `get_history_cache` per-frequency TTL already
+absorbed back-to-back identical requests within the 60s window that the
+old composite cache would have served. No agent re-tuning was observed.
+CLAUDE.md "Design contract" bullet updated to reflect the unified
+contract.
 
 ### 8.2 Multi-source fan-out (THS + EastMoney)
 
