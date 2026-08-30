@@ -377,6 +377,7 @@ All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. 
 - **Don't** collapse the three `make_*_cache_key` builders into a single generic helper — the keys live in a shared namespace and a typo or hash-input change here would silently invalidate *all* agent caches.
 - **Don't** re-introduce parallel `frequency`-keyed dicts in `api/routes/agent.py`. The per-frequency knobs (manager frequency code, days range, default days, MA60 warm-up) live in ONE `FreqProfile` frozen dataclass registry (`_FEATURE_FREQS`). Four parallel dicts is how a missing MA60 warm-up entry silently degraded to `.get(freq, days)` — every MA60 value `None`, no error anywhere. With the dataclass, an omitted field is a construction-time `TypeError`.
 - **Don't** write a hand-rolled markdown table in a renderer without guarding the empty case. Only guarding `_render_dict_block` is not enough — the swings table is hand-written and was missed exactly that way. Tests that scan only `| 字段 |` headers will not catch it; scan every `|---|` separator row and require a data row after it.
+- **Don't** hardcode `adjust="qfq"` in `/agent/stocks/batch-profile` for minute frequencies — Zzshare P2 / Zhitu P5's `supports_kline` rejects `qfq` for minutes, kicking the primary chain out and leaving only fragile fallbacks. Per spec §3.4 the decision is per-frequency, not per-endpoint.
 
 ## Common Commands
 
