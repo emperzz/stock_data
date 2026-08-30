@@ -281,9 +281,11 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         if "trade_date" in df.columns and "date" not in df.columns:
             rename["trade_date"] = "date"
         df = df.rename(columns=rename)
-        # Minute path: derive date from trade_time (first 8 digits of YYYYMMDDHHMM)
+        # Minute path: derive date from trade_time (full YYYYMMDDHHMM, preserve HH:MM)
         if "date" not in df.columns and "trade_time" in df.columns:
-            df["date"] = df["trade_time"].astype(str).str.slice(0, 8).apply(_from_yyyymmdd)
+            df["date"] = pd.to_datetime(
+                df["trade_time"].astype(str), format="%Y%m%d%H%M"
+            )
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"])
         if "code" not in df.columns:

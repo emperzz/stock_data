@@ -2152,8 +2152,14 @@ class TestBoardSubtypeValidation:
 class TestNormalizeMinute:
     """Tests for _normalize_data minute branch."""
 
-    def test_normalize_minute_extracts_date_from_trade_time(self):
-        """trade_time (YYYYMMDDHHMM, 12 digits) → date column (YYYY-MM-DD)."""
+    def test_normalize_minute_preserves_hhmm_in_date_column(self):
+        """trade_time (YYYYMMDDHHMM, 12 digits) → date column (YYYY-MM-DD HH:MM).
+
+        Pinned 2026-08-30 after fix: pivots.swings[].date, volume.z_anomalies[].date,
+        and pivots.window_high/window_low/max_vol_bar.date all read ``str(df["date"])``
+        downstream — truncating to date-only silently collapses every intraday bar onto
+        the same timestamp and makes swing/volume features uncalibratable.
+        """
 
         fetcher = ZzshareFetcher()
         raw = pd.DataFrame(
@@ -2170,11 +2176,16 @@ class TestNormalizeMinute:
         )
         out = fetcher._normalize_data(raw, "600519")
         assert "date" in out.columns
-        # trade_time[0:8] = "20260520" → "2026-05-20"
+        # Full timestamp preserved (NOT truncated to date-only)
         dates = sorted(out["date"].astype(str).unique())
-        assert dates == ["2026-05-20", "2026-05-21"]
+        assert dates == [
+            "2026-05-20 09:35:00",
+            "2026-05-20 09:40:00",
+            "2026-05-21 09:35:00",
+            "2026-05-21 09:40:00",
+        ]
         # vol renamed to volume
         assert "volume" in out.columns
         assert "vol" not in out.columns
-        # No time column (lost per spec §3.1)
+        # No separate time column (date already carries HH:MM)
         assert "time" not in out.columns
