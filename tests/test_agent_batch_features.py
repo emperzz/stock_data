@@ -411,21 +411,64 @@ class TestStocksBatchProfile:
         assert e["quote"] is not None
         assert any(err["aspect"] == "features" for err in e["errors"])
 
-    def test_passes_adjust_qfq_and_converts_minute_freq_for_manager(self, client, monkeypatch):
+    def test_passes_adjust_qfq_for_d_and_none_for_minute(self, client, monkeypatch):
         mock_manager = MagicMock()
         mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
         mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
         mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
         _bind_manager(monkeypatch, mock_manager)
         with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
+            # d → qfq
+            client.post(
+                "/api/v1/agent/stocks/batch-profile",
+                json=_stock_request(["600519"], frequency="d", days=60),
+            )
+            d_kwargs = mock_manager.get_kline_data.call_args.kwargs
+            assert d_kwargs["adjust"] == "qfq"
+            assert d_kwargs["asset"] == "stock"
+            assert d_kwargs["frequency"] == "d"
+
+            # 5m → None (Zzshare P2 不再被 supports_kline filter 踢掉)
             client.post(
                 "/api/v1/agent/stocks/batch-profile",
                 json=_stock_request(["600519"], frequency="5m", days=3),
             )
-        kwargs = mock_manager.get_kline_data.call_args.kwargs
-        assert kwargs["adjust"] == "qfq"
-        assert kwargs["asset"] == "stock"
-        assert kwargs["frequency"] == "5"  # public "5m" -> manager "5"
+            m_kwargs = mock_manager.get_kline_data.call_args.kwargs
+            assert m_kwargs["adjust"] is None
+            assert m_kwargs["asset"] == "stock"
+            assert m_kwargs["frequency"] == "5"
+
+    def test_5m_features_uses_unadjusted_so_zzshare_is_in_candidates(
+        self, client, monkeypatch
+    ):
+        """Pin the contract: 5m + adjust=None keeps Zzshare/Zhitu in the manager's
+        candidate list so the primary P2/P5 chain is exercised; with the old
+        hard-coded qfq they were filtered out by supports_kline and the call fell
+        through to fragile fallbacks (Akshare/Yfinance/Myquant), giving features=null
+        in production whenever those three were unavailable.
+
+        The test mocks get_kline_data so it doesn't hit real upstreams; the
+        assertion is at the route boundary (adjust value sent to manager) — same
+        level as the regression pin above.
+        """
+        mock_manager = MagicMock()
+        mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+        mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
+        mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+        _bind_manager(monkeypatch, mock_manager)
+        with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
+            resp = client.post(
+                "/api/v1/agent/stocks/batch-profile",
+                json=_stock_request(["600519"], frequency="5m", days=3),
+            )
+        assert resp.status_code == 200
+        sent_adjust = mock_manager.get_kline_data.call_args.kwargs["adjust"]
+        assert sent_adjust is None, (
+            "5m + adjust='qfq' filters Zzshare/Zhitu out of candidates via "
+            "supports_kline, leaving only fragile fallbacks. Spec §3.4 mandates "
+            "`adjust='qfq' where the fetcher supports it`; minute fetchers "
+            "ignore adjust upstream, so passing None keeps the primary chain alive."
+        )
 
     def test_days_out_of_range_422(self, client, monkeypatch):
         _bind_manager(monkeypatch, MagicMock())
