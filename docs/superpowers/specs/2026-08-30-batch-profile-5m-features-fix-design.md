@@ -14,6 +14,8 @@ This spec aligns the route with the existing design intent recorded in
 `docs/superpowers/specs/2026-08-27-agent-batch-profile-features-design.md §3.4` —
 *"qfq applied where the serving fetcher supports it; otherwise upstream returns unadjusted bars"* — which was correct on paper but never implemented at the route boundary.
 
+**Nuance on `1m`**: even after this fix, `frequency="1m"` is fragile. Zhitu P5 explicitly excludes `1m` for stock (`zhitu_fetcher.py:101` only includes `5/15/30/60`), Akshare rejects `1m+qfq` (`akshare/fetcher.py:80-81`, irrelevant after this fix but worth noting), Yfinance has no `1m` interval (`yfinance_fetcher.py:64`), Myquant doesn't include `1m`. Only Zzshare P2 actually serves `1m`. Since `1m` is a rarely-used edge case and out of scope for the user-reported bug (which is `5m`), this spec does not address `1m`.
+
 ---
 
 ## 2. Root cause
@@ -32,9 +34,9 @@ df, _src = manager.get_kline_data(
 )
 ```
 
-### 2.2 The `supports_kline` filter asymmetry
+### 2.2 The `supports_kline` filter asymmetry (pre-fix state)
 
-Per-fetcher `supports_kline(period=..., adjust="qfq", market="csi", asset="stock")` matrix:
+Per-fetcher `supports_kline(period=..., adjust="qfq", market="csi", asset="stock")` matrix — this is the **before-fix** state. After §3.1, minute rows flip: Zzshare/Zhitu pass with `adjust=None`.
 
 | mgr_frequency | Tushare P0 | Baostock P1 | **Zzshare P2** | Akshare P3 | Yfinance P4 | **Zhitu P5** | Myquant P9 | Robust? |
 |---|---|---|---|---|---|---|---|---|
@@ -80,9 +82,10 @@ This table is the **single source of truth** for what `adjust` value the route s
 | `d` | `"qfq"` | `None` | stock: all d-serving fetchers (Tushare P0 / Baostock P1 / Zzshare P2 / Akshare P3 / Yfinance P4) accept qfq; 前复权让 ex-dividend gaps 不污染 MA / 支撑压力位。index: 无 qfq 概念。 |
 | `w` | `"qfq"` | `None` | 同 d。 |
 | `m` | `"qfq"` | `None` | 同 d。 |
-| `1m`/`5m`/`15m`/`30m`/`60m` | `None` | `None` | stock: Zzshare P2 / Zhitu P5 的 minute upstream 忽略 adjust —— 传 qfq 会把它们从 candidate filter 踢出,只剩 Akshare/Yfinance/Myquant 这条脆弱 fallback 链。index: 无 qfq。 |
+| `1m` | `None` | `None` | stock: Zzshare P2 的 1m 走 `stk_mins`(忽略 adjust); Zhitu P5 显式不支持 1m,Akshare 拒 1m+qfq(无关 adjust),Yfinance 不支持 1m,Myquant 不支持 1m。所以 `frequency="1m"` 实际只有 Zzshare 一根独苗(本就是稀有路径,不修)。 |
+| `5m`/`15m`/`30m`/`60m` | `None` | `None` | stock: Zzshare P2 / Zhitu P5 的 minute upstream 忽略 adjust —— 传 qfq 会把它们从 candidate filter 踢出,只剩 Akshare/Yfinance/Myquant 这条脆弱 fallback 链。index: 无 qfq。 |
 
-The route implementation (`api/routes/agent.py`) reads `profile.mgr_frequency` directly. Don't repeat the if/else at the call site — the source of truth is this table.
+The route implementation (`api/routes/agent.py`) reads `profile.mgr_frequency` (values `d/w/m/1/5/15/30/60`, NOT public `frequency` strings `d/w/m/1m/5m/...`) directly. Don't repeat the if/else at the call site — the source of truth is this table.
 
 ### 3.3 Why a retry/fallback layer is **not** the right shape
 
@@ -214,7 +217,7 @@ def test_5m_features_not_null_in_real_env(self, client):
 - `test_kline_failure_isolated` (`agent_batch_features.py:398`) — mocks `get_kline_data.side_effect = DataFetchError(...)`. After the fix the route still raises → `features=None` → `errors[]` populated → unchanged behavior.
 - `test_days_out_of_range_422` (`agent_batch_features.py:430`) — `_resolve_and_validate_days` is upstream of the adjust branch. Unchanged.
 - `TestIndicesBatchProfile::*` and `TestBoardsBatchProfile::*` — different routes, no change.
-- `TestStocksBatchProfile::test_all_aspects_populated` (`agent_batch_features.py:358` region) — uses default `frequency="d"` which now still passes `adjust="qfq"`. Unchanged behavior.
+- `TestStocksBatchProfile::test_all_aspects_populated` (`agent_batch_features.py:354`) — uses default `frequency="d"` which now still passes `adjust="qfq"`. Unchanged behavior.
 
 ---
 

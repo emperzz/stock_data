@@ -262,7 +262,7 @@ git add tests/test_agent_batch_features.py
 git commit -m "test(batch-profile): pin 5m→adjust=None; rename split test (red)"
 ```
 
-The commit message notes "red" so the next commit can be "green" — standard TDD bookkeeping.
+The commit message notes "red" so the next commit can be "green" — standard TDD bookkeeping. **Note**: this commit intentionally leaves master red for a moment (the new `adjust=None` assertions fail against the still-hard-coded route). Task 4's commit immediately follows and flips master to green. This is standard TDD discipline, not a regression.
 
 ---
 
@@ -385,7 +385,7 @@ Expected: no formatting changes, no lint errors. If `ruff format` rewrites anyth
 Run:
 
 ```bash
-grep -n "adjust=\"qfq\" if profile.mgr_frequency" stock_data/api/routes/agent.py
+grep -n 'adjust="qfq" if profile.mgr_frequency' stock_data/api/routes/agent.py
 ```
 
 Expected: exactly one line, the new expression.
@@ -393,10 +393,12 @@ Expected: exactly one line, the new expression.
 Run:
 
 ```bash
-grep -n "adjust=\"qfq\"" stock_data/api/routes/agent.py
+grep -nE 'adjust="qfq",' stock_data/api/routes/agent.py
 ```
 
-Expected: zero lines. The old hard-coded form should be gone.
+Expected: zero lines. The trailing comma immediately after the closing quote (no condition following) is the old hard-coded form. The new conditional expression does NOT match this pattern — `adjust="qfq" if ... else None,` ends with `else None,` not `"qfq",`.
+
+A naive `grep -n 'adjust="qfq"'` would false-positive here because the new expression contains `adjust="qfq"` as a substring — don't use that pattern.
 
 - [ ] **Step 4: Show the commit log for this change**
 
