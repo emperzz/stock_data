@@ -62,7 +62,7 @@ from tenacity import (
 )
 
 from ..base import BaseFetcher, DataCapability, DataFetchError
-from ..core.types import safe_float
+from ..core.types import safe_float, safe_int
 from ..persistence.board import THS_CONCEPT_SUBTYPE, THS_INDUSTRY_SUBTYPE
 from ..utils.http import json_get, json_post, random_ua
 from ..utils.normalize import normalize_stock_code
@@ -1600,16 +1600,41 @@ class ThsFetcher(BaseFetcher):
     def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict]:
         """THS concept membership via basic.10jqka.com.cn stock_concept_list.
 
-        Returns list[{code, name, type, subtype}] or [] on upstream empty /
-        no market_id mapping (北交所暂不支持).
+        Returns list[dict] or [] on upstream empty / no market_id mapping
+        (北交所暂不支持).
+
+        Each dict carries (added 2026-08-30) the per-concept quote envelope
+        upstream exposes when ``simple`` is omitted:
 
         - code = quote_code (885xxx) — matches zzshare board-list code
           system, so forward board-list cache and reverse cold-fill rows
           join cleanly via (board_code, source).
+        - name = concept name.
         - type = 'concept' (硬编码 — endpoint is stock_concept_list).
         - subtype = THS_CONCEPT_SUBTYPE — matches
           VALID_SUBTYPES_BY_SOURCE["ths"]["concept"] (single source of truth
           via stock_data.data_provider.persistence.board).
+        - change_pct (float | None) ← upstream ``price_change_ratio_pct``
+          (板块涨跌幅, %).
+        - up_count (int | None) ← upstream ``rise_cnt`` (上涨家数).
+        - down_count (int | None) ← upstream ``fall_cnt`` (下跌家数).
+        - limit_up_count (int | None) ← upstream ``up_down_limit_up_num``
+          (涨停家数; 上游可能为 null).
+        - limit_down_count (int | None) ← upstream ``up_down_limit_down_num``
+          (跌停家数; 上游可能为 null).
+        - explain (str | None) ← upstream ``explain`` (概念解析文本, e.g.
+          "2022年8月23日公司互动回复：...").
+        - relevance (int | None) ← upstream ``weight`` (关联度标签:
+          2 = "走势最相关", 0 = 普通; 对应 UI 的 "走势最相关" 标签).
+
+        Numeric upstream fields are returned as STRINGS (e.g. ``"30"``,
+        ``"-0.4114"``); ``safe_int`` / ``safe_float`` coerce them on the
+        way out so callers don't have to re-parse. Missing / null /
+        non-numeric values fall back to ``None``.
+
+        Field naming is shared with ``BoardQuoteResponse``
+        (``change_pct`` / ``up_count`` / ``down_count``) so callers reading
+        both surfaces can use the same key names without translation.
 
         Raises:
             DataFetchError: HTTP fetch failed.
@@ -1623,9 +1648,17 @@ class ThsFetcher(BaseFetcher):
             )
             return []
         try:
+            # NOTE: do NOT pass ``simple=1`` here — the upstream trims the
+            # per-concept quote envelope (price_change_ratio_pct / rise_cnt /
+            # fall_cnt / up_down_limit_up_num / explain / weight / leading /
+            # components) when simple=1, which is exactly the fields callers
+            # need. Omitting ``simple`` returns the full payload — typically
+            # 30-80 KB depending on how many concept boards the stock
+            # belongs to (4 concepts ~30 KB for 300519; some A-shares belong
+            # to 10-20+ concept boards and run 50-80 KB).
             payload = json_get(
                 _STOCK_CONCEPT_LIST_URL,
-                params={"code": code, "market_id": market_id, "simple": 1},
+                params={"code": code, "market_id": market_id},
                 headers={
                     "Referer": "https://basic.10jqka.com.cn/astockpc/astockmain/index.html",
                     "User-Agent": THS_UA,
@@ -1649,6 +1682,13 @@ class ThsFetcher(BaseFetcher):
                 "name": str(r.get("name", "")).strip(),
                 "type": "concept",
                 "subtype": THS_CONCEPT_SUBTYPE,
+                "change_pct": safe_float(r.get("price_change_ratio_pct")),
+                "up_count": safe_int(r.get("rise_cnt")),
+                "down_count": safe_int(r.get("fall_cnt")),
+                "limit_up_count": safe_int(r.get("up_down_limit_up_num")),
+                "limit_down_count": safe_int(r.get("up_down_limit_down_num")),
+                "explain": (str(r.get("explain", "")).strip() or None),
+                "relevance": safe_int(r.get("weight")),
             }
             for r in rows
             if r.get("quote_code")

@@ -30,6 +30,7 @@ from ..cache import (
     get_board_news_cache,
     get_board_surges_cache,
     get_pools_cache,
+    get_stock_boards_quote_cache,
     is_cache_enabled,
     make_board_news_cache_key,
     make_board_surges_cache_key,
@@ -899,6 +900,40 @@ def get_stock_boards(
     Reads from stock_board_membership; cold data surfaces in cold_sources.
     Background backfill keeps the THS membership cache warm (env var
     BOARD_BACKFILL_ON_STARTUP=true).
+
+    Per-board quote envelope (change_pct / up_count / down_count /
+    limit_up_count / limit_down_count / explain / relevance) is
+    live-enriched from ``ThsFetcher.get_stock_boards`` whenever
+    ``ths`` is in the requested source list. The fetcher call is
+    unconditional for THS requests (even on warm persistence cache) so
+    the user always sees fresh quote data:
+
+    - Warm cache: 5 legacy fields from persistence + 7 enrichment fields
+      from the live fetcher (60s in-process TTLCache bounds upstream
+      QPS, see ``_fetch_stock_boards_quote_enrichment``).
+    - Cold cache (persistence has no rows for the requested stock,
+      typically first query after startup or for a stock backfill
+      didn't cover): the live fetcher's full result IS the response
+      data — the persistence cache is not written back (per design
+      decision 2026-08-30, since the fetcher fires on every THS
+      request anyway and writeback would be redundant overhead).
+
+    Other sources (eastmoney / zhitu) do NOT trigger THS fetcher calls
+    — enrichment is gated on ``"ths" in normalized_sources``. They
+    surface new fields as ``None``.
+
+    Stale-cache semantics (I3 review): the persistence layer is the
+    authoritative source for *board membership* (which boards a stock
+    belongs to), updated by the startup backfill. Live enrichment is
+    the authoritative source for *per-board quote / 解析 data*, refreshed
+    every 60s. When the two diverge — e.g. upstream adds a new concept
+    board and backfill hasn't run yet, or upstream drops a board and
+    backfill hasn't re-run — the response is constructed as follows:
+    a new concept (in enrichment, not persistence) is silently dropped
+    (warm-cache path merges by persistence row); a dropped concept (in
+    persistence, not enrichment) keeps its row but with None enrichment
+    fields (merge misses the code). This is per-design: a full refresh
+    requires re-running the backfill (``BOARD_BACKFILL_ON_STARTUP=true``).
     """
     normalized_sources = _parse_stock_boards_source_csv(source)
 
@@ -921,26 +956,221 @@ def get_stock_boards(
         manager=get_manager(),
     )
 
+    # Live enrichment for THS-sourced entries. Only the THS upstream exposes
+    # the per-concept quote envelope (price_change_ratio_pct / rise_cnt /
+    # fall_cnt / up_down_limit_up_num / explain / weight / leading); the
+    # persistence layer's stock_board_membership schema has no slot for
+    # them. Best-effort: a fetcher failure degrades to no enrichment (the
+    # 5 legacy fields still flow through from the cache), surfaced via
+    # WARNING so spikes are visible in logs.
+    fetcher_full_result: list[dict] | None = None
+    enrichment_by_code: dict[str, dict] = {}
+    ths_in_source_list = "ths" in normalized_sources
+    if ths_in_source_list:
+        fetcher_full_result, enrichment_by_code = (
+            _fetch_stock_boards_quote_enrichment(stock_code, get_manager())
+        )
+
+    # Identify the THS subset of persistence entries (if any).
+    ths_cached_entries = [e for e in entries if e["source"] == "ths"]
+    has_ths_warm_cache = bool(ths_cached_entries)
+
     # Top-level source field:
     # - multi-source → "merged"
     # - single source → origin from helper (persistence / zhitu / "")
-    top_source = "merged" if len(normalized_sources) > 1 else origin
+    # - THS cold cache served via enrichment → "ths" (enrichment effectively
+    #   acted as the source)
+    if not has_ths_warm_cache and ths_in_source_list and fetcher_full_result:
+        top_source = "ths"
+    elif len(normalized_sources) > 1:
+        top_source = "merged"
+    else:
+        top_source = origin
 
-    return StockBoardsResponse(
-        code=stock_code,
-        source=top_source,
-        data=[
-            StockBoardInfo(
+    # Build the response data list. Three branches:
+    #
+    # 1. has_ths_warm_cache → merge enrichment fields onto existing entries.
+    #    Non-THS persistence entries keep their None enrichment fields.
+    # 2. !has_ths_warm_cache && ths_in_source_list && fetcher_full_result
+    #    → cold-cache fallback: live fetcher result IS the response data
+    #    (no persistence writeback; per design 2026-08-30).
+    # 3. !has_ths_warm_cache && !ths_in_source_list → persistence entries
+    #    flow through as-is (no enrichment possible since ths wasn't
+    #    requested). This is the standard "?source=eastmoney" or
+    #    "?source=zhitu" path with their own persistence rows.
+    data: list[StockBoardInfo] = []
+
+    if has_ths_warm_cache:
+        # Warm-cache path: merge the 7 enrichment fields onto each
+        # persistence entry whose source == 'ths'. Non-THS entries
+        # keep their None enrichment fields.
+        for e in entries:
+            base = {
+                "code": e["code"],
+                "name": e["name"],
+                "type": e.get("type", ""),
+                "subtype": e.get("subtype", ""),
+                "source": e["source"],
+            }
+            if e["source"] == "ths" and e["code"] in enrichment_by_code:
+                base.update(enrichment_by_code[e["code"]])
+            data.append(StockBoardInfo(**base))
+    elif ths_in_source_list and fetcher_full_result:
+        # Cold-cache fallback (no persistence writeback): the live fetcher
+        # result IS the response data. We rely on the fetcher's safe_int /
+        # safe_float coercion (in ThsFetcher.get_stock_boards) so the 11
+        # fields per entry are already typed correctly.
+        for r in fetcher_full_result:
+            data.append(StockBoardInfo(
+                code=r.get("code", ""),
+                name=r.get("name", ""),
+                type=r.get("type", ""),
+                subtype=r.get("subtype", ""),
+                source="ths",
+                change_pct=r.get("change_pct"),
+                up_count=r.get("up_count"),
+                down_count=r.get("down_count"),
+                limit_up_count=r.get("limit_up_count"),
+                limit_down_count=r.get("limit_down_count"),
+                explain=r.get("explain"),
+                relevance=r.get("relevance"),
+            ))
+        # THS was effectively served via enrichment (not persistence),
+        # so it should NOT be reported as a cold source. Other cold
+        # sources stay in cold_sources as-is.
+        cold_sources = [s for s in cold_sources if s != "ths"]
+    else:
+        # Non-THS source or all-source cold cache with no fetcher data:
+        # persistence entries flow through unmodified. Enrichment is
+        # either impossible (ths not requested) or unavailable (fetcher
+        # exception / empty upstream). New enrichment fields stay None.
+        for e in entries:
+            data.append(StockBoardInfo(
                 code=e["code"],
                 name=e["name"],
                 type=e.get("type", ""),
                 subtype=e.get("subtype", ""),
                 source=e["source"],
-            )
-            for e in entries
-        ],
+            ))
+
+    # Apply type / subtype filters (post-merge, in-memory). The persistence
+    # helper already filtered the cache-side entries; enrichment-derived
+    # entries are filtered here because they bypassed the helper.
+    if type is not None:
+        data = [d for d in data if d.type == type]
+    if subtype is not None:
+        data = [d for d in data if d.subtype == subtype]
+
+    return StockBoardsResponse(
+        code=stock_code,
+        source=top_source,
+        data=data,
         cold_sources=cold_sources,
     )
+
+
+# ----- /stocks/{code}/boards live quote enrichment -------------------------
+
+
+def _fetch_stock_boards_quote_enrichment(
+    stock_code: str, manager
+) -> tuple[list[dict] | None, dict[str, dict]]:
+    """Live-fetch THS stock_concept_list for /stocks/{code}/boards enrichment.
+
+    The ``manager`` parameter is dependency-injected rather than calling
+    ``get_manager()`` internally so tests can swap in a ``MagicMock`` and
+    exercise the helper's try/except contract independently of the route
+    (see ``test_ths_source_enrichment_helper_internal_try_except_swallows_fetcher_error``
+    for the canonical example). Production callers pass the route-level
+    ``get_manager()`` singleton; tests pass a fake manager whose
+    ``get_stock_boards`` raises / returns / etc.
+
+    Returns ``(fetcher_full_result, enrichment_by_code)`` where:
+    - ``fetcher_full_result`` is the full fetcher list (each entry has all
+      11 fields: 4 legacy + 7 enrichment), or ``None`` on failure /
+      disabled cache. Used by the route as the response data when
+      persistence has no rows for THS (cold-cache fallback).
+    - ``enrichment_by_code`` is ``{code: {7 enrichment keys}}`` keyed by
+      THS platecode (885xxx). Used by the route to merge onto warm-cache
+      entries whose source == 'ths'. Empty dict on failure / no rows.
+
+    Both empty / None when:
+    - the in-process cache is disabled (``ENABLE_API_CACHE=false``);
+    - the fetcher raises (best-effort: WARNING logged, no exception
+      propagated — the rest of the response must still ship);
+    - the fetcher returns an empty list (no concepts for this stock);
+    - every THS board for this stock has no ``quote_code`` (defensive).
+
+    Field naming matches ``BoardQuoteResponse`` (change_pct / up_count /
+    down_count) and ``StockBoardInfo`` (limit_up_count / limit_down_count
+    / explain / relevance). Numeric values are already coerced by
+    ``ThsFetcher.get_stock_boards`` (``safe_int`` / ``safe_float``).
+
+    The 60s TTL bounds upstream QPS to one ``stock_concept_list`` call
+    per (stock_code) per minute, regardless of how many
+    ``GET /stocks/{code}/boards`` requests land on the server.
+
+    Cache slot: dedicated ``_stock_boards_quote_cache`` (maxsize=512, ttl=60s)
+    in ``api/cache.py`` — split out from the shared ``_quote_cache`` so the
+    high-fanout enrichment keys don't evict true quote keys
+    (e.g. ``"600519"``, ``"idx_quote:000300"``).
+
+    Cache-value contract (m6 review): only store tuples of the form
+    ``(list, dict)``. ``cached_lookup`` returns ``None`` on cache miss
+    AND on disabled cache AND on missing key — a future caller storing
+    ``cached_store(..., None)`` would be indistinguishable from a miss
+    and silently re-fetch forever. Storing ``([], {})`` for the empty
+    result avoids this footgun and still lets the route distinguish
+    "no upstream data" from "first uncached call" (the route handles
+    both identically today, but the contract is documented).
+    """
+    if not is_cache_enabled():
+        return None, {}
+    cache_key = f"stock_boards_quote:{stock_code}"
+    hit = cached_lookup(get_stock_boards_quote_cache, cache_key, "stock_boards_quote")
+    if hit is not None:
+        return hit
+    try:
+        result, _name = manager.get_stock_boards(stock_code, source="ths")
+    except DataFetchError as e:
+        # Circuit-breaker-open / upstream 5xx / business-level stock_concept_list
+        # failure: log + skip enrichment. The 5 legacy fields still flow.
+        logger.warning(
+            f"[boards.get_stock_boards] live enrichment failed for "
+            f"{stock_code!r}: {e}"
+        )
+        return None, {}
+    except Exception as e:  # defensive: never break the response
+        logger.warning(
+            f"[boards.get_stock_boards] live enrichment unexpected error "
+            f"for {stock_code!r}: {type(e).__name__}: {e}"
+        )
+        return None, {}
+    if not result:
+        # Cache the empty result for 60s so we don't keep retrying the
+        # upstream for a stock that genuinely has no concept membership.
+        cached_store(get_stock_boards_quote_cache, cache_key, ([], {}))
+        return [], {}
+    enrichment: dict[str, dict] = {}
+    enrichment_keys = (
+        "change_pct",
+        "up_count",
+        "down_count",
+        "limit_up_count",
+        "limit_down_count",
+        "explain",
+        "relevance",
+    )
+    for entry in result:
+        code = entry.get("code")
+        if not code:
+            continue
+        # Forward ONLY the 7 enrichment keys — don't shadow code/name/type/
+        # subtype/source, which are owned by the persistence layer's
+        # authoritative read.
+        enrichment[code] = {k: entry.get(k) for k in enrichment_keys}
+    cached_store(get_stock_boards_quote_cache, cache_key, (result, enrichment))
+    return result, enrichment
 
 
 @router.get(

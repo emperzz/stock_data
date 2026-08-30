@@ -799,6 +799,47 @@ class StockBoardInfo(BaseModel):
         description="eastmoney / zhitu / zzshare — which source provided this entry. "
         "Always present after endpoint merge (was implicit before).",
     )
+    # Per-board quote / 解析 enrichment (added 2026-08-30).
+    # Sourced live from THS upstream ``basic.10jqka.com.cn/fuyao/f10_stock_index/concept/v1/stock_concept_list``
+    # via ``ThsFetcher.get_stock_boards`` (with ``simple`` omitted so the
+    # upstream quote envelope is preserved). The live enrichment runs
+    # whenever ``ths`` is in the requested source list; see
+    # ``api/routes/boards.py::get_stock_boards``. Naming is aligned with
+    # ``BoardQuoteResponse`` for the 3 shared quote fields, so consumers
+    # reading both surfaces can use the same key names.
+    # Non-THS sources (eastmoney / zhitu) do not populate these — the
+    # route leaves them ``None`` instead of synthesising zeros.
+    change_pct: float | None = Field(
+        default=None,
+        description="板块涨跌幅 (%). THS 上游字段 price_change_ratio_pct.",
+    )
+    up_count: int | None = Field(
+        default=None,
+        description="上涨家数. 对齐 BoardQuoteResponse.up_count. THS 上游字段 rise_cnt.",
+    )
+    down_count: int | None = Field(
+        default=None,
+        description="下跌家数. 对齐 BoardQuoteResponse.down_count. THS 上游字段 fall_cnt.",
+    )
+    limit_up_count: int | None = Field(
+        default=None,
+        description="涨停家数. THS 上游字段 up_down_limit_up_num; 上游为 null 时本字段为 null.",
+    )
+    limit_down_count: int | None = Field(
+        default=None,
+        description="跌停家数. THS 上游字段 up_down_limit_down_num; 上游为 null 时本字段为 null.",
+    )
+    explain: str | None = Field(
+        default=None,
+        description="概念解析文本 (e.g. \"2022年8月23日公司互动回复：...\"). THS 上游字段 explain.",
+    )
+    relevance: int | None = Field(
+        default=None,
+        description=(
+            "关联度标签. 2 = \"走势最相关\" (UI 上 '走势最相关' tag), 0 = 普通. "
+            "THS 上游字段 weight."
+        ),
+    )
 
 
 class StockBoardsResponse(BaseModel):

@@ -80,6 +80,14 @@ _cls_feed_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_CLS_FEED)
 _board_news_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_BOARD_NEWS)
 _board_surges_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_BOARD_SURGES)
 
+# /stocks/{code}/boards live enrichment (THS quote envelope) — split out of
+# ``_quote_cache`` (2026-08-30) to keep true quote keys
+# (``"<code>"`` / ``"idx_quote:000300"``) from being evicted by the high
+# fan-out of per-stock enrichment keys. Same 60s TTL as ``_quote_cache``
+# — the enrichment TTL is bounded by THS upstream rate, not by data
+# freshness requirement.
+_stock_boards_quote_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_QUOTE)
+
 
 def get_quote_cache() -> TTLCache:
     return _quote_cache
@@ -222,6 +230,20 @@ def get_board_surges_cache() -> TTLCache:
     TTL is safe (re-reading every day is plenty fresh).
     """
     return _board_surges_cache
+
+
+def get_stock_boards_quote_cache() -> TTLCache:
+    """Return the /stocks/{code}/boards live enrichment cache instance.
+
+    TTL 60s — matches ``_quote_cache`` (the project's general quote TTL)
+    and THS's per-IP rate envelope. The enrichment fan-out (one entry per
+    stock_code per minute) is bounded by the agent / dashboard polling
+    pattern; maxsize=512 covers ~500 polled stocks before LRU eviction.
+
+    Key shape: ``"stock_boards_quote:{stock_code}"`` — see
+    ``api/routes/boards.py::_fetch_stock_boards_quote_enrichment``.
+    """
+    return _stock_boards_quote_cache
 
 
 def make_board_news_cache_key(board_code: str, limit: int, **_) -> str:

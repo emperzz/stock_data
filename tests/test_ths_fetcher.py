@@ -903,7 +903,13 @@ class TestGetStockBoards:
         self.fetcher = ThsFetcher()
 
     def test_returns_normalized_dicts(self):
-        """Verify HTTP call shape + response normalization for known market."""
+        """Verify HTTP call shape + response normalization for known market.
+
+        Pinned 2026-08-30: do NOT pass ``simple=1`` to the upstream — it
+        strips the per-concept quote envelope (price_change_ratio_pct /
+        rise_cnt / fall_cnt / up_down_limit_up_num / explain / weight /
+        leading / components) that callers now rely on.
+        """
         fake_payload = {
             "status_code": 0,
             "data": [
@@ -924,7 +930,8 @@ class TestGetStockBoards:
         assert args[0].endswith("/stock_concept_list")
         assert kwargs["params"]["code"] == "300740"
         assert kwargs["params"]["market_id"] == "33"  # 深市 (3xx prefix)
-        assert kwargs["params"]["simple"] == 1
+        # No ``simple`` parameter — full quote envelope must come back.
+        assert "simple" not in kwargs["params"]
         assert "Referer" in kwargs["headers"]
 
         # Response normalized
@@ -934,8 +941,138 @@ class TestGetStockBoards:
             "name": "跨境电商",
             "type": "concept",
             "subtype": "同花顺概念",
+            # New fields, all None because the fake_payload only has the
+            # minimal simple=1-style subset; safe_int / safe_float / str
+            # coercion treat missing keys as None.
+            "change_pct": None,
+            "up_count": None,
+            "down_count": None,
+            "limit_up_count": None,
+            "limit_down_count": None,
+            "explain": None,
+            "relevance": None,
         }
         assert result[1]["code"] == "885910"
+
+    def test_extracts_quote_envelope_fields(self):
+        """Real-shape payload: every quote / 解析 field roundtrips with safe coercion.
+
+        The upstream returns numeric fields as STRINGS ("30", "-0.4114")
+        and ``up_down_limit_down_num`` as null when no stocks hit the
+        limit. Verify each new field type:
+        - change_pct → float
+        - up_count / down_count / limit_up_count / limit_down_count → int (None on null)
+        - explain → str (None when upstream omits)
+        - relevance → int
+        """
+        # Snapshot of the 4-concept payload for stock 300519 (截取自实测).
+        # Includes one concept with explicit null on limit_down_count to
+        # verify None propagation.
+        fake_payload = {
+            "status_code": 0,
+            "data": [
+                {
+                    "quote_code": "885909",
+                    "name": "辅助生殖",
+                    "price_change_ratio_pct": "-0.4114",
+                    "rise_cnt": "30",
+                    "fall_cnt": "43",
+                    "up_down_limit_up_num": "1",
+                    "up_down_limit_down_num": None,  # → None
+                    "explain": (
+                        "2022年8月23日公司互动回复：公司产品中辅助生殖类的"
+                        "产品有：阳春口服液、男宝胶囊。"
+                    ),
+                    "weight": 2,
+                },
+                {
+                    "quote_code": "885879",
+                    "name": "流感",
+                    "price_change_ratio_pct": "-0.7418",
+                    "rise_cnt": "66",
+                    "fall_cnt": "114",
+                    "up_down_limit_up_num": "4",
+                    "up_down_limit_down_num": "0",
+                    "explain": "2020年2月11日互动平台显示：公司生产的复方大青叶合剂。",
+                    "weight": 2,
+                },
+            ],
+        }
+
+        with patch(
+            "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+            return_value=fake_payload,
+        ):
+            result = self.fetcher.get_stock_boards("300519")
+
+        assert len(result) == 2
+
+        # First concept: all numeric fields coerce; null limit_down_count → None.
+        first = result[0]
+        assert first["code"] == "885909"
+        assert first["name"] == "辅助生殖"
+        assert first["type"] == "concept"
+        assert first["subtype"] == "同花顺概念"
+        assert first["change_pct"] == -0.4114
+        assert isinstance(first["change_pct"], float)
+        assert first["up_count"] == 30
+        assert first["down_count"] == 43
+        assert first["limit_up_count"] == 1
+        assert first["limit_down_count"] is None
+        assert first["explain"] == (
+            "2022年8月23日公司互动回复：公司产品中辅助生殖类的"
+            "产品有：阳春口服液、男宝胶囊。"
+        )
+        assert first["relevance"] == 2
+
+        # Second concept: limit_down_count is "0" (string), should coerce to 0.
+        second = result[1]
+        assert second["code"] == "885879"
+        assert second["change_pct"] == -0.7418
+        assert second["up_count"] == 66
+        assert second["limit_up_count"] == 4
+        assert second["limit_down_count"] == 0  # "0" → 0 (not None)
+        assert second["relevance"] == 2
+
+    def test_handles_non_numeric_quote_envelope_gracefully(self):
+        """Dirty / malformed upstream fields: safe_int / safe_float return None."""
+        fake_payload = {
+            "status_code": 0,
+            "data": [
+                {
+                    "quote_code": "885111",
+                    "name": "测试概念",
+                    "price_change_ratio_pct": "--",  # upstream placeholder
+                    "rise_cnt": "",  # empty string
+                    "fall_cnt": None,
+                    "up_down_limit_up_num": "nan",
+                    "up_down_limit_down_num": "-",
+                    "explain": "",  # empty → None via ``or None``
+                    "weight": "not-a-number",
+                },
+            ],
+        }
+
+        with patch(
+            "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+            return_value=fake_payload,
+        ):
+            result = self.fetcher.get_stock_boards("300740")
+
+        assert len(result) == 1
+        e = result[0]
+        assert e["change_pct"] is None
+        assert e["up_count"] is None
+        assert e["down_count"] is None
+        assert e["limit_up_count"] is None
+        assert e["limit_down_count"] is None
+        assert e["explain"] is None  # empty string → None
+        assert e["relevance"] is None
+        # The legacy fields still flow.
+        assert e["code"] == "885111"
+        assert e["name"] == "测试概念"
+        assert e["type"] == "concept"
+        assert e["subtype"] == "同花顺概念"
 
     def test_market_id_mapping(self):
         """沪市代码 → market_id=17; 深市 → 33."""
