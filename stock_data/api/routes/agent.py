@@ -915,7 +915,7 @@ def post_stocks_batch_profile(
                 code,
                 days=fetch_days,
                 frequency=profile.mgr_frequency,
-                adjust="qfq",
+                adjust="qfq" if profile.mgr_frequency in ("d", "w", "m") else None,
                 asset="stock",
             )
             features = BatchFeatures(**build_features(df, frequency=payload.frequency, days=days))
