@@ -281,24 +281,45 @@ enlarged per user decision:
 1. Route validates `frequency` / `days` (per §3.4 table) and normalizes
    `codes` (max 5; bare 6-digit; `HKxxxx` / US letters as canonical).
 2. Per code: `manager.get_kline_data(code, days=feature_days,
-   frequency=<mgr-freq>, adjust="qfq" if asset=="stock" else None,
-   asset=<stock|index>)`.
+   frequency=<mgr-freq>, adjust=<per-asset-and-frequency>,
+   asset=<stock|index>)`. The `adjust` value is decided by both axes:
+   - **stock + d/w/m** → `"qfq"`. 前复权让 ex-dividend gaps 不污染 MA /
+     支撑压力位算术; d/w/m 的 serving fetcher(Tushare P0 / Baostock P1 /
+     Zzshare P2 / Akshare P3 / Yfinance P4)全部接受 qfq。
+   - **stock + minute (1m/5m/15m/30m/60m)** → `None`. Zzshare P2 和
+     Zhitu P5 的 `supports_kline` 在 minute 下显式拒绝 qfq(stk_mins /
+     stock-history upstream 忽略 adjust); 若 route 仍传 qfq,两 fetcher
+     被 filter 排除,候选只剩 Akshare/Yfinance/Myquant 这条脆弱 fallback
+     链,生产里 `MYQUANT_TOKEN` 未配或 `.venv` 未装 akshare/yfinance 时
+     整个 aspect fail、`features=null`。Spec §3.4 早在初版就预告过
+     *"qfq applied where the serving fetcher supports it; otherwise
+     upstream returns unadjusted bars"* — 此处实现终于对齐这条注释。
+   - **index** → `None`. 指数无 qfq/hfq 概念,所有 index fetcher 都是
+     `adjust in ("", None)` 接受度。
    - `feature_days = max(requested days, indicator warm-up)` — the
      existing `max(days, lookback)` pattern (see CLAUDE.md "Indicator
      Computation"). MA60 + 20-bar context + ATR14 + swing detection want
      ≥ ~90 daily bars to be warm; minute frames warm in fewer bars.
-   - `adjust="qfq"` is **hard-coded** for stocks (user decision: no
-     `adjust` request param; 前复权 so ex-dividend gaps do not corrupt
-     MA / support-resistance math). Indices: no adjust. Minute
-     frequencies: qfq applied where the serving fetcher supports it;
-     otherwise upstream returns unadjusted bars (documented, not an
-     error).
 3. The fetched df feeds the pure feature module (trend / pivots / volume).
    Window-scoped values (`window_high/low`, `max_vol_bar`, `z_anomalies`,
    `vol_ratio_5`) use the bars within the requested `days` window; the
    indicator-latest values and swing detection use the full (warm) df.
 4. Response assembled per §2; per-code failures isolated in `errors[]`
    without aborting the batch (existing contract).
+
+### 3.4.1 Minute-frequency qfq 决策表(防止 hard-code 回归)
+
+| frequency | stock adjust | index adjust | 原因 |
+|---|---|---|---|
+| `d` | `"qfq"` | `None` | stock: 全部 serving fetcher 支持 qfq; index: 无 qfq 概念 |
+| `w` | `"qfq"` | `None` | 同上 |
+| `m` | `"qfq"` | `None` | 同上 |
+| `1m`/`5m`/`15m`/`30m`/`60m` | `None` | `None` | stock: Zzshare P2 / Zhitu P5 的 minute upstream 忽略 adjust; index: 无 qfq |
+
+这条表是 `post_stocks_batch_profile` 的 **唯一权威来源** ——
+不要凭印象 hard-code `adjust="qfq"`。route 的实现
+(`api/routes/agent.py:918` 区域)直接读 `profile.mgr_frequency`,
+不在调用点重复 if/else。
 
 ---
 
