@@ -182,7 +182,7 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | `GET /api/v1/boards/{board_code}/quote` | `STOCK_BOARD` | 获取板块实时行情 |
 | `GET /api/v1/boards/{board_code}/news` | `BOARD_NEWS` | 获取板块新闻 |
 | `GET /api/v1/boards/{board_code}/surges` | `BOARD_SURGES` | 获取板块炒作周期 |
-| `GET /api/v1/stocks/{stock_code}/boards` | `STOCK_BOARD` | 获取个股所属板块 |
+| `GET /api/v1/stocks/{stock_code}/boards` | `STOCK_BOARD` | 获取个股所属板块（**THS 行额外带 7 个 live-enrichment 字段**：板块涨跌幅 / 上涨家数 / 下跌家数 / 涨停家数 / 跌停家数 / 概念解析 / 关联度） |
 | `GET /api/v1/boards/{board_code}/history` | `STOCK_BOARD` | 获取板块 K 线 |
 | `GET /api/v1/zt-pools` | `STOCK_ZT_POOL` | 获取涨跌停股池（zt / dt / zbgc） |
 | `GET /api/v1/dragon-tiger` | `DRAGON_TIGER` | 获取全市场龙虎榜 |

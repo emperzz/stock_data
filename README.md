@@ -14,7 +14,7 @@ Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / 
 ## Features
 
 - **Multi-source aggregation** (13 fetchers): Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Cls, Myquant, Baidu
-- **Board data** (concept / industry / index / special): source-routed across `ths` (concept + industry, d/w/m/1m/5m/15m/30m/60m K-line), `eastmoney` (concept + industry, d/w/m/5m/15m/30m/60m K-line), `zhitu` (all 4 types, no K-line); `zzshare` unified under `ths` since 2026-07-08. THS also serves `GET /boards/{code}/quote`, `/news`, and `/surges` (F10 炒作周期).
+- **Board data** (concept / industry / index / special): source-routed across `ths` (concept + industry, d/w/m/1m/5m/15m/30m/60m K-line), `eastmoney` (concept + industry, d/w/m/5m/15m/30m/60m K-line), `zhitu` (all 4 types, no K-line); `zzshare` unified under `ths` since 2026-07-08. THS also serves `GET /boards/{code}/quote`, `/news`, and `/surges` (F10 炒作周期). `/stocks/{code}/boards` THS rows carry 7 extra per-board fields (板块涨跌幅 / 涨跌家数 / 涨停跌停家数 / 概念解析 / 关联度) — see `skills/market-data-obtain/boards.md`.
 - **Automatic failover**: priority-based source selection with capability-routed fallback
 - **Circuit breaker**: prevents cascading failures from unavailable sources
 - **Persistent metadata cache**: SQLite for stock lists, board metadata, trade calendar, ZT/DT/ZBGC pools (separate from in-process TTLCache)
@@ -180,6 +180,7 @@ The `/quote` and `/kline` endpoints are cached using an in-memory TTLCache to av
 | `GET /stocks/{code}/kline` (monthly) | `code:m:days` | 7200s |
 | `GET /indices/{code}/quote` | `idx_quote:{code}` | 60s |
 | `GET /indices/{code}/kline` | `{code}:{freq}:{days}` | 300/3600/7200s (daily/weekly/monthly); 30s for 1m/5m/15m/30m/60m |
+| `GET /stocks/{code}/boards` (THS 7 enrichment fields) | `stock_boards_quote:{stock_code}` | 60s |
 
 **Cache behavior:**
 - First request fetches from upstream (subject to rate limiting)

@@ -298,6 +298,7 @@ curl 'http://localhost:8888/api/v1/boards/885595/surges'
 - 主要 fetcher: ths / eastmoney / zhitu
 - `name` 形如 `"A股-申万行业-银行"`（含层级前缀）
 - `cold_sources[]` 顶层字段：列出没拉到的 source（cold cache 提示，可选重试）
+- **THS 板块额外带 7 个字段**（`change_pct` / `up_count` / `down_count` / `limit_up_count` / `limit_down_count` / `explain` / `relevance`）——见下表
 
 ### 入参
 
@@ -319,12 +320,32 @@ curl 'http://localhost:8888/api/v1/boards/885595/surges'
 | `type` | string | — | `concept` / `industry` / `index` / `special` |
 | `subtype` | string | — | 子类型（ths=`同花顺概念` / zhitu=`申万行业` 等） |
 | `source` | string | — | 来自哪个 fetcher（`ths` / `eastmoney` / `zhitu`） |
+| `change_pct` | number | % | **板块涨跌幅（THS 才有）** |
+| `up_count` | number | — | **上涨家数（THS 才有）** |
+| `down_count` | number | — | **下跌家数（THS 才有）** |
+| `limit_up_count` | number | — | **涨停家数（THS 才有；上游无涨停时为 `null`）** |
+| `limit_down_count` | number | — | **跌停家数（THS 才有；上游无跌停时为 `null`）** |
+| `explain` | string | — | **概念解析文本（THS 才有；如 `"2022年8月23日公司互动回复：..."`）** |
+| `relevance` | number | — | **关联度标签（THS 才有；`2` = UI 的"走势最相关"标签，`0` = 普通）** |
 | `cold_sources`（顶层） | array | — | **顶层字段**，不在 `data[]` 内：拉取失败的 source 列表 |
+
+**7 个新字段的填充规则**：
+
+- **仅 `source='ths'` 的行才填充**。其他 source 行这 7 个字段一律为 `null`
+- `change_pct` / `up_count` / `down_count` 字段名与 `/boards/{code}/quote` 一致，可复用客户端解析代码
+- 字段类型：`change_pct` 为 `float`；`up_count` / `down_count` / `limit_up_count` / `limit_down_count` / `relevance` 为 `int`；`limit_up_count` / `limit_down_count` 上游无对应数据时为 `null`（不是 `0`）；`explain` 为 `str` 或 `null`
 
 ### 示例
 
 ```bash
+# 默认查所有 source；THS 行带 7 字段，其他 source 行这 7 字段为 null
 curl 'http://localhost:8888/api/v1/stocks/600519/boards'
+
+# 仅 THS（7 字段全填）
+curl 'http://localhost:8888/api/v1/stocks/600519/boards?source=ths'
+
+# THS + type 过滤
+curl 'http://localhost:8888/api/v1/stocks/600519/boards?source=ths&type=concept'
 ```
 
 ---
