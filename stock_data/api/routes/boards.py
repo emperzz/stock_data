@@ -31,7 +31,6 @@ from ..cache import (
     get_board_news_cache,
     get_board_surges_cache,
     get_pools_cache,
-    get_stock_boards_quote_cache,
     is_cache_enabled,
     make_board_news_cache_key,
     make_board_surges_cache_key,

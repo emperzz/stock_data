@@ -31,13 +31,13 @@ import logging
 import re
 import time
 from collections.abc import Callable
-import pandas as pd
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from datetime import time as dt_time
 from itertools import combinations
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 from fastapi import HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -55,6 +55,7 @@ from ...data_provider.utils.stats import (
     build_stock_buckets,
     compute_aggregate,
 )
+from .._helpers import stock_boards
 from ..cache import (
     cached_lookup,
     cached_store,
@@ -65,7 +66,6 @@ from ..cache import (
     make_market_stats_cache_key,
     make_stocks_board_overlap_cache_key,
 )
-from .._helpers import stock_boards
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
     BatchFeatures,
