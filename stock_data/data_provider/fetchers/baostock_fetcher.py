@@ -82,6 +82,35 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
         mapping = {"qfq": "2", "hfq": "1"}
         return mapping.get(adjust, "3")
 
+    # Baostock SDK accepts different field sets for daily vs minute K-line.
+    # ``pctChg`` is in the daily/weekly/monthly set but is **rejected**
+    # for minute frequencies (5/15/30/60) with the error
+    # ``"5分钟线指标参数传入错误:pctChg"`` (and symmetric wording for the
+    # other minute buckets). The two constants below pin the contract
+    # — keeping them at module-internal scope so the self-heal retry
+    # path on line ~189 stays in sync with the primary call.
+    _KLINE_FIELDS_DAILY: str = (
+        "date,open,high,low,close,volume,amount,pctChg"
+    )
+    _KLINE_FIELDS_MINUTE: str = (
+        "date,open,high,low,close,volume,amount"
+    )
+    _MINUTE_FREQUENCIES: frozenset[str] = frozenset({"5", "15", "30", "60"})
+
+    def _kline_fields(self, frequency: str) -> str:
+        """Return the fields string for ``bs.query_history_k_data_plus``.
+
+        Daily/weekly/monthly requests include ``pctChg`` (the unified
+        schema's ``pct_chg`` column depends on it). Minute requests
+        omit it because the Baostock SDK rejects ``pctChg`` on minute
+        frequencies — see the module docstring for the regression
+        history. Unknown frequencies default to the daily set so a
+        future addition doesn't silently drop data.
+        """
+        if frequency in self._MINUTE_FREQUENCIES:
+            return self._KLINE_FIELDS_MINUTE
+        return self._KLINE_FIELDS_DAILY
+
     def supports_kline(self, period, adjust, market, asset):
         if asset == "stock":
             if period in ("d", "w", "m"):
@@ -154,7 +183,7 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
 
             rs = bs.query_history_k_data_plus(
                 bs_code,
-                "date,open,high,low,close,volume,amount,pctChg",
+                self._kline_fields(frequency),
                 start_date=start_date,
                 end_date=end_date,
                 frequency=frequency,
@@ -188,7 +217,7 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
                     _bs_sock.SocketUtil().connect()  # overwrites default_socket
                     rs = bs.query_history_k_data_plus(
                         bs_code,
-                        "date,open,high,low,close,volume,amount,pctChg",
+                        self._kline_fields(frequency),
                         start_date=start_date,
                         end_date=end_date,
                         frequency=frequency,
