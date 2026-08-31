@@ -104,6 +104,26 @@ unchanged.
 - In `get_stock_boards` (line 971), replace
   `_fetch_stock_boards_quote_enrichment(stock_code, get_manager())`
   with `fetch_stock_boards_quote_enrichment(stock_code, get_manager())`.
+- Update one docstring cross-link in `get_stock_boards`'s docstring
+  (line 913):
+
+  ```
+  - Warm cache: 5 legacy fields from persistence + 7 enrichment fields
+    from the live fetcher (60s in-process TTLCache bounds upstream
+    QPS, see ``_fetch_stock_boards_quote_enrichment``).
+  ```
+
+  →
+
+  ```
+  - Warm cache: 5 legacy fields from persistence + 7 enrichment fields
+    from the live fetcher (60s in-process TTLCache bounds upstream
+    QPS, see ``fetch_stock_boards_quote_enrichment`` at
+    ``api/_helpers/stock_boards.py``).
+  ```
+
+  Without this, line 913 dangles (the symbol it's pointing to is no
+  longer in this module after the line-1072 deletion).
 
 `stock_data/api/cache.py` — update one docstring cross-link
 (line 244):
@@ -287,6 +307,19 @@ extend the existing file):
 | `test_boards_enrichment_cold_cache_fallback` | Mock persistence returns `[]`; mock `manager.get_stock_boards` returns 2 entries (11 fields each). | `boards.source == "ths"`; `len(boards.data) == 2`; each entry has 11 keys; `errors == []`. |
 | `test_boards_enrichment_fetcher_failure` | Mock persistence returns 1 entry; mock `manager.get_stock_boards` raises `DataFetchError`. | `boards.source == "persistence"`; entry has 5 keys (enrichment all absent); `errors == []` (boards aspect NOT in errors — fetcher failure is not a boards failure). |
 
+**Test isolation prerequisite**: `tests/test_agent_batch_features.py`'s
+`reset_before_test` autouse fixture (line 21) clears 8 caches via the
+`getter_name` tuple (line 26-35) but does NOT include
+`get_stock_boards_quote_cache`. Without this, the new fetcher-failure
+test is order-dependent: a prior test that succeeds and warms the 60s
+cache makes the helper return the cached tuple on the next test, the
+manager mock is never called, and the test fails on second-and-later
+runs within the same `pytest` session. **Add
+`"get_stock_boards_quote_cache"` to the `getter_name` tuple** so all
+tests in the file start with a clean cache. No other change to the
+fixture is needed — the existing `getattr` + `getter().clear()` loop
+already handles this cache.
+
 ### 6.2 MD completeness case
 
 Add to `TestFormatMdFeatureCompleteness` (or new section):
@@ -300,8 +333,8 @@ assert:
   limit_up_count=2, limit_down_count=0, relevance=2, explain="..."`:
   the rendered row contains `+1.23%`, `15/8`, `2/0`, `走势最相关`.
 - For an entry with all enrichment fields `None`: the rendered row
-  contains four `—` markers (4 None fields → 4 "—" cells), the
-  column count is preserved.
+  contains five `—` markers (5 None fields → 5 "—" cells — 涨跌幅 /
+  上涨下跌 / 涨停跌停 / 关联度 / 解析), the column count is preserved.
 
 ### 6.3 Updated import path
 

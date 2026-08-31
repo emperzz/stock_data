@@ -15,7 +15,14 @@
 - `.venv/Scripts/python.exe -m pytest` is the test runner — never system `python` (see CLAUDE.md "Common Commands").
 - Default `pytest` skips `live_network` — pre-flight runs as-is; this plan has zero `live_network` markers.
 - Commit messages end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
-- Code commit boundary (per CLAUDE.md): feat/fix Python + tests → `feat/*` / `fix/*` branch; docs / spec / CLAUDE.md / skill edits → direct master.
+- Commit strategy (this plan): Tasks 1-4 (Python + tests) + Task 5
+  (CLAUDE.md cross-link) ALL go on a single `feat/agent-batch-profile-boards-enrichment`
+  branch → one PR to master. Task 6 has no commit (verification only).
+  Rationale: Task 5's CLAUDE.md cross-link references symbols that
+  only exist on the unmerged branch — committing it directly to
+  master would create a dangling cross-link until the code merges.
+  Folding the doc change into the same PR keeps the docs aligned
+  with the code at every commit on master.
 - 7 enrichment fields (THS upstream → route schema → entry dict):
   `change_pct` (float) / `up_count` (int) / `down_count` (int) /
   `limit_up_count` (int) / `limit_down_count` (int) /
@@ -265,6 +272,34 @@ Edit `stock_data/api/cache.py` line 244:
 
 (The old text was `api/routes/boards.py::_fetch_stock_boards_quote_enrichment`.)
 
+- [ ] **Step 3b: Update the cross-link in boards.py docstring (line 913)**
+
+`stock_data/api/routes/boards.py::get_stock_boards`'s docstring
+references ``_fetch_stock_boards_quote_enrichment`` at line 913.
+After Step 1 deletes the helper, this becomes a dangling cross-link.
+Edit the docstring:
+
+```python
+    - Warm cache: 5 legacy fields from persistence + 7 enrichment fields
+      from the live fetcher (60s in-process TTLCache bounds upstream
+      QPS, see ``_fetch_stock_boards_quote_enrichment``).
+```
+
+Replace the trailing ``_fetch_stock_boards_quote_enrichment`` reference
+with ``fetch_stock_boards_quote_enrichment`` (and update the
+````api/routes/boards.py::...```` path to
+````api/_helpers/stock_boards.py::...```` if the cross-link includes the
+path; read line 913 verbatim first).
+
+The full cross-link block is 3 lines (lines 911-913) — replace with:
+
+```python
+    - Warm cache: 5 legacy fields from persistence + 7 enrichment fields
+      from the live fetcher (60s in-process TTLCache bounds upstream
+      QPS, see ``fetch_stock_boards_quote_enrichment`` at
+      ``api/_helpers/stock_boards.py``).
+```
+
 - [ ] **Step 4: Update test imports + call sites**
 
 In `tests/test_stock_boards_ths_enrichment.py`, find the 5 reference
@@ -350,6 +385,36 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: `fetch_stock_boards_quote_enrichment(stock_code, manager) -> tuple[list[dict] | None, dict[str, dict]]` (Task 2)
 - Produces: `boards` dict on each `StockBatchProfileEntry` with the same `{source, data}` shape, but `data[i]` carries 11 keys (warm-cache merge path) or 11 keys (cold-cache fallback path) or 5 keys (fetcher-failed path) per spec §4.3.
+
+- [ ] **Step 0: Add `_stock_boards_quote_cache` to the autouse reset fixture**
+
+`tests/test_agent_batch_features.py`'s `reset_before_test` (line 21)
+clears 8 caches but does NOT clear `_stock_boards_quote_cache`. The
+new `test_boards_enrichment_fetcher_failure` mocks
+`mock_manager.get_stock_boards.side_effect = DataFetchError(...)`, but
+if a prior test left the cache warm the helper returns the cached
+success tuple without ever calling the manager — the test then fails
+on second-and-later runs within the same `pytest` session.
+
+Edit `tests/test_agent_batch_features.py` line 26-35 — extend the
+`getter_name` tuple:
+
+```python
+    for getter_name in (
+        "get_quote_cache",
+        "get_index_quote_cache",
+        "get_history_cache",
+        "get_pools_cache",
+        "get_stock_info_cache",
+        "get_news_flash_cache",
+        "get_cls_feed_cache",
+        "get_dragontiger_cache",
+        "get_stock_boards_quote_cache",  # NEW — 60s TTL, must clear between tests
+    ):
+```
+
+(No other change to the loop — the existing `getattr(api_cache, ...)`
+and `getter().clear()` lines already handle this cache.)
 
 - [ ] **Step 1: Write the warm-cache merge test**
 
@@ -659,20 +724,13 @@ def test_md_boards_block_full_field_table(client, monkeypatch):
     assert "走势最相关" in md
     assert "数据中心是新基建" in md
 
-    # Second row: all enrichment fields None → four "—" markers
-    # 4 None fields → 4 "—" cells: 涨跌幅, 上涨/下跌, 涨停/跌停, 关联度
-    # (explain None also becomes "—" but is in the same cell as the
-    # previous row's value, so we count distinct "—" occurrences on
-    # the second row by finding the line that contains 881166.)
+    # Second row: all enrichment fields None → five "—" markers
+    # 5 enrichment cells: 涨跌幅, 上涨/下跌, 涨停/跌停, 关联度, 解析
+    # All 5 are None for the second entry → 5 "—" cells.
     second_row = [line for line in md.splitlines() if "881166" in line]
     assert len(second_row) == 1
-    assert second_row[0].count("—") == 4  # 涨跌幅, 上涨/下跌, 涨停/跌停, 关联度 → 解析=— too → 5
-    # Actually 5: change_pct + up_count/down_count + limit_up_count/limit_down_count + relevance + explain
     assert second_row[0].count("—") == 5
 ```
-
-(Confirm the math: 5 enrichment fields map to 5 cells in the table;
-all 5 are `None` for the second entry, so 5 `—` cells.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -803,7 +861,10 @@ Two additions:
    behavior (fetcher exception does NOT demote ok / append boards
    aspect error).
 
-Direct-to-master per skip-branch-for-trivial-changes (markdown only).
+Folds into the same feat/agent-batch-profile-boards-enrichment PR as
+Tasks 1-4 — the cross-link references symbols (helper at
+api/_helpers/stock_boards.py, _stock_boards_quote_cache) that only
+exist on the unmerged branch, so direct-to-master would dangle.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -852,6 +913,7 @@ If nothing to fix, skip this step.
 
 - §3.1 (new helper module) → Task 1
 - §3.2 (boards.py drops local helper + import + rename call site) → Task 2
+- §3.2 (boards.py docstring cross-link at line 913) → Task 2 Step 3b
 - §3.2 (cache.py docstring cross-link) → Task 2 Step 3
 - §3.3 (agent.py imports) → Task 3 Step 5
 - §4.1 (schema contract) → Task 3 (data shape) + Task 4 (MD)
@@ -860,6 +922,7 @@ If nothing to fix, skip this step.
 - §4.4 (backward compat) → implicit (additive schema changes only)
 - §5 (MD rendering) → Task 4
 - §6.1 (3 new agent cases) → Task 3 Steps 1-3
+- §6.1 (test isolation — `_stock_boards_quote_cache` reset fixture) → Task 3 Step 0
 - §6.2 (MD completeness case) → Task 4 Step 1
 - §6.3 (8 existing test import updates) → Task 2 Step 4
 - §6.4 (pre-flight test run) → Task 6 Steps 1-2
@@ -874,7 +937,7 @@ Gaps: none. All 10 spec sections map to a task or task step.
 
 - No "TBD", "TODO", "fill in later" anywhere.
 - Every code step shows full code (helper verbatim copy in Task 1 Step 2; tests fully written; merge code fully written; MD code fully written).
-- The "5 '—' markers" assertion in Task 4 Step 1 was self-corrected inline (initial draft had "4 — markers" which double-counted).
+- The "5 '—' markers" assertion in Task 4 Step 1 was self-corrected inline (initial draft had "4 — markers" which double-counted). Final assertion: `== 5`.
 
 **3. Type consistency:**
 
@@ -885,4 +948,35 @@ Gaps: none. All 10 spec sections map to a task or task step.
 - `boards.source` three states `"persistence"` / `"ths"` — consistent across Task 3 (code) and Task 3 (tests).
 - File paths (`stock_data/api/_helpers/stock_boards.py`, etc.) — consistent across all tasks.
 
-No inconsistencies found.
+**4. Double-check fixes applied (2026-08-31):**
+
+A subagent double-check found 4 critical + 6 minor issues; this
+revision addresses all criticals:
+
+- **(C1) `boards.py:913` docstring cross-link** — Task 2 Step 3b added
+  to update the dangling cross-link in `get_stock_boards`'s docstring.
+- **(C2) Test isolation cache reset** — Task 3 Step 0 added to extend
+  `reset_before_test` fixture with `get_stock_boards_quote_cache`.
+- **(C3) Commit ordering / dangling ref** — Global Constraints updated;
+  Task 5 commit message now folds the CLAUDE.md change into the same
+  `feat/agent-batch-profile-boards-enrichment` branch as Tasks 1-4 (no
+  direct-to-master for the markdown edit).
+- **(C4) MD test dead `== 4` assertion** — removed; final assertion
+  is `== 5`.
+
+Minors addressed:
+
+- **(M1) Test placement ambiguity** — the spec's wording
+  "TestStocksBatchProfileBoards section" is approximate; the actual
+  file has `TestStocksBatchProfile` only. Plan Task 3 Steps 1-3
+  declare the new tests as **standalone functions** (matching the
+  style of existing fetcher tests like
+  `test_helper_internal_try_except_*` in
+  `test_stock_boards_ths_enrichment.py`). No file edit needed.
+- **(M2) Patch style inconsistency** — accepted; `monkeypatch.setattr`
+  and the file's existing `_BOARD_STOCKS_PATCH` `patch()`-form both
+  work and target the same module attribute. Left as-is for
+  readability of the new tests (which need a callable lambda for
+  `get_stock_memberships`, awkward in `patch()` form).
+
+No inconsistencies remaining.
