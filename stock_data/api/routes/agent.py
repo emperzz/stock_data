@@ -65,6 +65,7 @@ from ..cache import (
     make_market_stats_cache_key,
     make_stocks_board_overlap_cache_key,
 )
+from .._helpers import stock_boards
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
     BatchFeatures,
@@ -940,7 +941,21 @@ def post_stocks_batch_profile(
             entries, _cold, _origin = stock_board_cache.get_stock_memberships(
                 stock_code=code, sources=["ths"], manager=manager
             )
-            boards = {"source": "persistence", "data": entries}
+            fetcher_full_result, enrichment_by_code = (
+                stock_boards.fetch_stock_boards_quote_enrichment(code, manager)
+            )
+            ths_cached = [e for e in entries if e.get("source") == "ths"]
+            if ths_cached:
+                merged = []
+                for e in ths_cached:
+                    base = {k: e.get(k) for k in ("code", "name", "type", "subtype", "source")}
+                    base.update(enrichment_by_code.get(e["code"], {}))
+                    merged.append(base)
+                boards = {"source": "persistence", "data": merged}
+            elif fetcher_full_result:
+                boards = {"source": "ths", "data": fetcher_full_result}
+            else:
+                boards = {"source": "persistence", "data": entries}
         except Exception as exc:
             logger.warning(f"[agent/stocks/batch-profile] {code} boards failed: {exc}")
             errors.append(

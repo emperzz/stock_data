@@ -32,6 +32,7 @@ def reset_before_test():
         "get_news_flash_cache",
         "get_cls_feed_cache",
         "get_dragontiger_cache",
+        "get_stock_boards_quote_cache",  # 60s TTL, must clear between tests
     ):
         getter = getattr(api_cache, getter_name, None)
         if getter is None:
@@ -762,3 +763,126 @@ class TestFormatMdFeatureCompleteness:
         assert "万手" in body  # volume unit annotation
         assert "上涨家数" in body
         assert "229/389" in body
+
+
+def test_boards_enrichment_warm_cache_merge(client, monkeypatch):
+    """Warm persistence + live fetcher → merge 7 enrichment fields onto 5-field entries."""
+    from stock_data.data_provider.persistence import board as stock_board_cache
+
+    cached_entries = [
+        {"code": "881155", "name": "数据中心", "type": "concept",
+         "subtype": "concept", "source": "ths"},
+    ]
+    fetcher_result = [
+        {"code": "881155", "name": "数据中心", "type": "concept", "subtype": "concept",
+         "change_pct": 1.23, "up_count": 15, "down_count": 8,
+         "limit_up_count": 2, "limit_down_count": 0,
+         "explain": "...", "relevance": 2},
+    ]
+
+    mock_manager = MagicMock()
+    mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+    mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
+    mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+    mock_manager.get_stock_boards.return_value = (fetcher_result, "ths")
+    _bind_manager(monkeypatch, mock_manager)
+
+    monkeypatch.setattr(
+        stock_board_cache, "get_stock_memberships",
+        lambda stock_code, sources, manager: (cached_entries, [], "persistence"),
+    )
+
+    r = client.post("/api/v1/agent/stocks/batch-profile",
+                    json=_stock_request(["600519"]))
+    assert r.status_code == 200
+    body = r.json()
+    boards = body["results"][0]["boards"]
+    assert boards["source"] == "persistence"
+    assert len(boards["data"]) == 1
+    entry = boards["data"][0]
+    assert entry["code"] == "881155"
+    assert entry["change_pct"] == 1.23
+    assert entry["up_count"] == 15
+    assert entry["down_count"] == 8
+    assert entry["limit_up_count"] == 2
+    assert entry["limit_down_count"] == 0
+    assert entry["explain"] == "..."
+    assert entry["relevance"] == 2
+    assert body["results"][0]["errors"] == []
+
+
+def test_boards_enrichment_cold_cache_fallback(client, monkeypatch):
+    """No persistence rows for THS → live fetcher's full result IS the response."""
+    from stock_data.data_provider.persistence import board as stock_board_cache
+
+    fetcher_result = [
+        {"code": "881155", "name": "数据中心", "type": "concept", "subtype": "concept",
+         "change_pct": 1.23, "up_count": 15, "down_count": 8,
+         "limit_up_count": 2, "limit_down_count": 0, "explain": "...", "relevance": 2},
+        {"code": "881166", "name": "算力", "type": "concept", "subtype": "concept",
+         "change_pct": 0.5, "up_count": 10, "down_count": 5,
+         "limit_up_count": 1, "limit_down_count": 0, "explain": None, "relevance": 0},
+    ]
+
+    mock_manager = MagicMock()
+    mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+    mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
+    mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+    mock_manager.get_stock_boards.return_value = (fetcher_result, "ths")
+    _bind_manager(monkeypatch, mock_manager)
+
+    monkeypatch.setattr(
+        stock_board_cache, "get_stock_memberships",
+        lambda stock_code, sources, manager: ([], ["ths"], "persistence"),
+    )
+
+    r = client.post("/api/v1/agent/stocks/batch-profile",
+                    json=_stock_request(["600519"]))
+    assert r.status_code == 200
+    body = r.json()
+    boards = body["results"][0]["boards"]
+    assert boards["source"] == "ths"
+    assert len(boards["data"]) == 2
+    assert boards["data"][0]["code"] == "881155"
+    assert boards["data"][0]["change_pct"] == 1.23
+    assert boards["data"][1]["code"] == "881166"
+    assert body["results"][0]["errors"] == []
+
+
+def test_boards_enrichment_fetcher_failure(client, monkeypatch):
+    """Fetcher raises → persistence entries ship without enrichment; no boards error."""
+    from stock_data.data_provider.base import DataFetchError
+    from stock_data.data_provider.persistence import board as stock_board_cache
+
+    cached_entries = [
+        {"code": "881155", "name": "数据中心", "type": "concept",
+         "subtype": "concept", "source": "ths"},
+    ]
+
+    mock_manager = MagicMock()
+    mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+    mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
+    mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+    mock_manager.get_stock_boards.side_effect = DataFetchError("circuit open")
+    _bind_manager(monkeypatch, mock_manager)
+
+    monkeypatch.setattr(
+        stock_board_cache, "get_stock_memberships",
+        lambda stock_code, sources, manager: (cached_entries, [], "persistence"),
+    )
+
+    r = client.post("/api/v1/agent/stocks/batch-profile",
+                    json=_stock_request(["600519"]))
+    assert r.status_code == 200
+    body = r.json()
+    boards = body["results"][0]["boards"]
+    assert boards["source"] == "persistence"
+    assert len(boards["data"]) == 1
+    entry = boards["data"][0]
+    # 5 legacy keys present, 7 enrichment keys absent
+    assert entry["code"] == "881155"
+    assert "change_pct" not in entry
+    assert "up_count" not in entry
+    assert "relevance" not in entry
+    # boards aspect NOT in errors (fetcher failure is not a boards failure)
+    assert body["results"][0]["errors"] == []
