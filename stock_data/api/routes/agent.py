@@ -1850,9 +1850,21 @@ def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
             out.append("")
         if entry.boards and entry.boards.get("data"):
             out.append("### 所属板块")
+            out.append("| 板块 | 涨跌幅 | 上涨/下跌 | 涨停/跌停 | 关联度 | 解析 |")
+            out.append("|---|---|---|---|---|---|")
             for b in entry.boards["data"]:
-                t = b.get("type") or "-"
-                out.append(f"- {b.get('code', '?')} ({t}) {b.get('name', '')}")
+                code = b.get("code", "?")
+                name = b.get("name", "")
+                type_ = b.get("type", "") or "—"
+                cp = _md_pct(b.get("change_pct")) if b.get("change_pct") is not None else "—"
+                uc, dc = b.get("up_count"), b.get("down_count")
+                up_dn = f"{uc}/{dc}" if (uc is not None and dc is not None) else "—"
+                luc, ldc = b.get("limit_up_count"), b.get("limit_down_count")
+                lim = f"{luc}/{ldc}" if (luc is not None and ldc is not None) else "—"
+                rel = b.get("relevance")
+                rel_str = "—" if rel is None else ("走势最相关" if rel == 2 else "普通")
+                explain = b.get("explain") or "—"
+                out.append(f"| {code} {name} ({type_}) | {cp} | {up_dn} | {lim} | {rel_str} | {explain} |")
             out.append("")
     s = p.summary or {}
     out.append(

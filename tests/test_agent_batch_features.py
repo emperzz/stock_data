@@ -886,3 +886,62 @@ def test_boards_enrichment_fetcher_failure(client, monkeypatch):
     assert "relevance" not in entry
     # boards aspect NOT in errors (fetcher failure is not a boards failure)
     assert body["results"][0]["errors"] == []
+
+
+def test_md_boards_block_full_field_table(client, monkeypatch):
+    """Boards MD must include all 7 enrichment fields; None → '—'."""
+    from stock_data.data_provider.persistence import board as stock_board_cache
+
+    cached_entries = [
+        {"code": "881155", "name": "数据中心", "type": "concept",
+         "subtype": "concept", "source": "ths"},
+        {"code": "881166", "name": "算力", "type": "concept",
+         "subtype": "concept", "source": "ths"},
+    ]
+    fetcher_result = [
+        {"code": "881155", "name": "数据中心", "type": "concept", "subtype": "concept",
+         "change_pct": 1.23, "up_count": 15, "down_count": 8,
+         "limit_up_count": 2, "limit_down_count": 0,
+         "explain": "数据中心是新基建", "relevance": 2},
+        {"code": "881166", "name": "算力", "type": "concept", "subtype": "concept",
+         "change_pct": None, "up_count": None, "down_count": None,
+         "limit_up_count": None, "limit_down_count": None,
+         "explain": None, "relevance": None},
+    ]
+
+    mock_manager = MagicMock()
+    mock_manager.get_realtime_quote.return_value = _make_unified_quote("600519")
+    mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
+    mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
+    mock_manager.get_stock_boards.return_value = (fetcher_result, "ths")
+    _bind_manager(monkeypatch, mock_manager)
+
+    monkeypatch.setattr(
+        stock_board_cache, "get_stock_memberships",
+        lambda stock_code, sources, manager: (cached_entries, [], "persistence"),
+    )
+
+    r = client.post("/api/v1/agent/stocks/batch-profile?format=md",
+                    json=_stock_request(["600519"]))
+    assert r.status_code == 200
+    md = r.text
+
+    # Section header + table headers
+    assert "### 所属板块" in md
+    assert "| 板块 | 涨跌幅 | 上涨/下跌 | 涨停/跌停 | 关联度 | 解析 |" in md
+    assert "|---|---|---|---|---|---|" in md
+
+    # First row: all enrichment fields populated
+    assert "881155" in md and "数据中心" in md
+    assert "+1.23%" in md
+    assert "15/8" in md
+    assert "2/0" in md
+    assert "走势最相关" in md
+    assert "数据中心是新基建" in md
+
+    # Second row: all enrichment fields None → five "—" markers
+    # 5 enrichment cells: 涨跌幅, 上涨/下跌, 涨停/跌停, 关联度, 解析
+    # All 5 are None for the second entry → 5 "—" cells.
+    second_row = [line for line in md.splitlines() if "881166" in line]
+    assert len(second_row) == 1
+    assert second_row[0].count("—") == 5
