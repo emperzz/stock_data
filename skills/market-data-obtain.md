@@ -182,7 +182,7 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | `GET /api/v1/boards/{board_code}/quote` | `STOCK_BOARD` | 获取板块实时行情 |
 | `GET /api/v1/boards/{board_code}/news` | `BOARD_NEWS` | 获取板块新闻 |
 | `GET /api/v1/boards/{board_code}/surges` | `BOARD_SURGES` | 获取板块炒作周期 |
-| `GET /api/v1/stocks/{stock_code}/boards` | `STOCK_BOARD` | 获取个股所属板块（**THS 行额外带 7 个 live-enrichment 字段**：板块涨跌幅 / 上涨家数 / 下跌家数 / 涨停家数 / 跌停家数 / 概念解析 / 关联度） |
+| `GET /api/v1/stocks/{stock_code}/boards` | `STOCK_BOARD` | 获取个股所属板块（THS 行额外带 7 个 enrichment 字段，契约见 [boards.md](market-data-obtain/boards.md) `/stocks/{code}/boards`；也用于 `agent/stocks/batch-profile` 的 `boards` 块） |
 | `GET /api/v1/boards/{board_code}/history` | `STOCK_BOARD` | 获取板块 K 线 |
 | `GET /api/v1/zt-pools` | `STOCK_ZT_POOL` | 获取涨跌停股池（zt / dt / zbgc） |
 | `GET /api/v1/dragon-tiger` | `DRAGON_TIGER` | 获取全市场龙虎榜 |
@@ -203,7 +203,7 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | `POST /api/v1/agent/boards/filter-stocks` | 板块成分股服务端数值过滤（换手 / 涨跌幅 / 成交额 / 市值） |
 | `GET /api/v1/agent/indices/batch-profile` | 指数批量画像（1-5 指数；单 frequency） |
 | `GET /api/v1/agent/market-context` | 每日市场全景快照（早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜） |
-| `POST /api/v1/agent/stocks/batch-profile` | 股票批量画像（1-5 股票；quote + features + info + boards；boards 块带 THS 7 字段 enrichment：`change_pct` / `up_count` / `down_count` / `limit_up_count` / `limit_down_count` / `explain` / `relevance`） |
+| `POST /api/v1/agent/stocks/batch-profile` | 股票批量画像（1-5 股票；quote + features + info + boards；boards 块与 `/stocks/{code}/boards` 同契约，见 [agent-batch.md](market-data-obtain/agent-batch.md)） |
 | `POST /api/v1/agent/boards/batch-profile` | 板块批量画像（1-5 THS platecode；单 frequency） |
 | `POST /api/v1/agent/correlation/matrix` | 跨资产 Pearson + Spearman 相关性矩阵（2-10 资产） |
 | `GET /api/v1/agent/market-stats` | 全市场涨幅统计（个股 + 板块 + 桶形数据） |
@@ -291,6 +291,6 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 - **入口**：agent 收到市场判断请求 → 触发 `market-principles`
 - **数据采集**：`market-principles` 工作流第 5 步（通过配套 skill 收集消息、行情、板块、资金数据）→ 通过**本 skill** 选定服务器端点
 - **判断**：采集完数据后，回到 `market-principles` **第 5 节核心原则 + 第 6 节龙头股判断方法**做判断
-- **回写**：判断结果按 `market-principles` **第 9 节（每日 md 文件模板）** + **第 10 节（持久化文档模板）** 写入每日 md 和 `market_tracking.md`
+- **回写**：判断结果按 [market-files.md](./market-files.md) **§3（每日 md 模板）** + **§4（market_tracking.md 模板）** 写入每日 md 和 `market_tracking.md`
 
-详细工作流见 `market-principles` 第 9 节。
+详细工作流见 `market-principles` 第 11 节。

@@ -1,6 +1,6 @@
 ---
 name: trade-timing-advisor
-description: A 股个股买卖时机判断 skill。agent 收到判断请求时（"X 现在怎样"、"判断下 X"、"该不该买"、"该不该卖"），按"市场环境→板块→个股"三层漏斗给出**正反两组论据**供用户决策。本 skill 是**判断流程执行器**：规定"按什么顺序取数、论据怎么翻译、分组怎么输出、判断逻辑怎么落地"，不规定仓位/止损/加减仓（用户决策层），不重复端点目录（走 `market-data-obtain`），不重复龙头识别方法论（走 `market-principles §6`）。
+description: A 股个股买卖时机判断 skill。agent 收到判断请求时（"X 现在怎样"、"该不该买"、"该不该卖"、"扫一遍持仓"）——输出支持/不支持两组的论据，不下结论。本 skill 是**判断流程执行器**，不规定仓位/止损/加减仓（用户决策层），不重复端点目录（走 `market-data-obtain`），不重复龙头识别方法论（走 `market-principles §6`）。
 triggers:
   - "X 现在怎样" / "X 怎么样" / "判断下 X"
   - "该不该买 X" / "X 能买吗" / "现在能不能买 X"
@@ -77,7 +77,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 
 #### 路径 C：code ∉ portfolio 且用户未提供 board（自动推荐）
 
-调 `GET /api/v1/stocks/{code}/boards?source=ths`，THS 行带 7 个 enrichment 字段（`change_pct` / `up_count` / `down_count` / `limit_up_count` / `limit_down_count` / `explain` / `relevance`），按以下优先级选 Top-1 推荐给用户确认：
+调 `GET /api/v1/stocks/{code}/boards?source=ths`（THS 行 7 个 enrichment 字段契约见 `market-data-obtain/boards.md`），按以下优先级选 Top-1 推荐给用户确认：
 
 1. **首选**：`relevance` 最高（关联度由 THS 上游给出，是最直接的"最相关板块"信号）
 2. **次选**：若 `relevance` 缺失或并列，按 `limit_up_count` 降序（板块活跃度代理）
@@ -295,7 +295,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 - `agent/stocks/batch-profile (5m, days=5)` 的 `features.pivots.swings + features.volume.z_anomalies`
 - `agent/stocks/batch-profile.quote` 的 extended `MinimalQuote`（`price/change_pct/open/high/low/volume/turnover_pct/amplitude_pct` 等，字段与单位见 agent-batch.md）
 - `agent/stocks/batch-profile.info` 的主营近似（`business_scope` + `concepts`）
-- `agent/stocks/batch-profile.boards` 的所属板块（用于和 portfolio.json 对照；THS 行带 7 个 enrichment 字段）
+- `agent/stocks/batch-profile.boards` 的所属板块（用于和 portfolio.json 对照；与 `/stocks/{code}/boards` 同契约，见 `market-data-obtain/boards.md`）
 
 **每只 code 的个股层论据**：
 

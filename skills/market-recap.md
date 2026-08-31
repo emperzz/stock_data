@@ -1,6 +1,6 @@
 ---
 name: market-recap
-description: A 股市场复盘 skill。配套 `market-principles` 使用——agent 收到市场复盘请求时（盘前 / 盘中 / 盘后任一时段），自动判断时段、拉取数据、归因总结，写入 `./market_recap/{date}.md` 并按需更新 `./market_recap/market_tracking.md`。本 skill 是**复盘流程执行器**：规定"按什么顺序读、按什么策略写、判断归因到哪里"，不重复端点目录（端点走 `market-data-obtain`），不规定判断标准（标准走 `market-principles`）。
+description: A 股市场复盘 skill。agent 收到市场复盘请求时（盘前 / 盘中 / 盘后任一时段）使用。本 skill 是**复盘流程执行器**：规定"按什么顺序读、按什么策略写、归因到哪里"，不重复端点目录（走 `market-data-obtain`），不规定判断标准（走 `market-principles`）。
 triggers:
   - "复盘" / "今日市场" / "市场总结" / "市场情况"
   - "盘前" / "早盘怎么看" / "开盘前"
@@ -121,15 +121,9 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 
 **输出**：进入步骤 2 时，agent 心中已有的上下文：当前 watchlist、最近 N 天主线演化、待验证假设
 
-### 步骤 2：判断时段 + 网络搜索
+### 步骤 2：判断时段
 
-按第 2.2 节时段表分支：
-
-- **`pre-market`**：搜"昨日盘后总结"、"财联社早报"、"美股收盘"、"今日 A 股消息面"
-- **`intraday`**：搜"今日 A 股快讯"、关注 watchlist 主线的最新动态、查盘中异动新闻
-- **`post-market`**：搜"今日 A 股盘后"、"今日涨停原因"、"今日板块异动归因"（**注意 18:00 前信息不完整**）
-
-**信源优先级**：完全走 `market-data-obtain.md` 第 3 节 fallback 策略（服务器端点 → agent 自带的网络搜索工具），market-recap 不重复定义。
+按第 2.2 节时段表分支，仅确定当前时段（`pre-market` / `intraday` / `post-market`）及对应时间锚点（17:00 龙虎榜、18:00 复盘、20:30 美股外盘等）。**本步不发起任何数据获取**——早报 / 美股收盘 / 消息面等全部在步骤 3 走服务器端点（`agent/market-context` / `agent/indices/batch-profile`），**服务器失败才** fallback 到 `market-data-obtain` 第 3 节的网络搜索协议（market-recap 不重复定义）。
 
 ### 步骤 3：拉取市场数据
 
@@ -169,7 +163,7 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 
 - **chat 回复**：精简摘要 + 结论（**市场情绪方向**、主线 1-N、龙头候选、**领涨板块 K 线方向**、关键归因）
 - **`{date}.md`**：完整版（数据引用、源链接、时间戳、归因展开、板块 K 线方向）——**不列**涨跌停股原始明细，写入端点路径（`GET /zt-pools?type=zt\|dt`）供按需查询；文件保留"总结 + 重点关注的股票"。**`{date}.md` 嵌入**：本步骤要写入文件的取数（§9.1 `agent/market-context` / `agent/indices/batch-profile` / `agent/boards/filter-stocks` 等）通过 query 参数 `?format=md` 拿 markdown 投影直接 paste——服务端保证无信息丢失（每个 JSON 字段映射到 MD 表格 / 列表 / 段落），渲染失败自动回退 JSON，agent 永远能拿到数据
-- **`market_tracking.md`**：本次复盘新识别的主线 / 龙头 / 待验证假设 + **强制追加**今日领涨板块至"持续关注的板块"区（**退出规则**：板块多日走弱 + 无龙头 → agent 临场判定淘汰，判定标准走 market-principles 第 10 节）
+- **`market_tracking.md`**：本次复盘新识别的主线 / 龙头 / 待验证假设 + **强制追加**今日领涨板块至"持续关注的板块"区（**退出规则**：板块多日走弱 + 无龙头 → agent 临场判定淘汰，判定标准走 [market-files.md](./market-files.md) §4 移除规则）
 
 ### 步骤 6：处理用户追问
 
@@ -185,27 +179,17 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 
 ### 5.1 每日文件 `{date}.md`
 
-**模板与结构**：参照 `market-principles.md` 第 9 节"每日 md 文件模板"——含 消息 / 复盘 / 时间戳判断 / 判断演化日志 四块。market-recap 不重复定义模板，**与 `market-principles` 共用同一份模板**。
+**模板与写入协议**：每日 md 的模板（消息 / 时间戳判断 / 主线归因 / 判断演化日志）、覆写 / 追加策略、写入前必做见 [market-files.md](./market-files.md) §2 + §3——market-recap 不重复定义，**与 `market-principles` 共用同一份模板**。
 
-**写入策略**：实现 `market-principles.md` 第 4.3 节协议——
-
-| 文档块 | 策略 | 工具操作 |
-|---|---|---|
-| 顶部"消息"块 | **覆写** | Edit 替换该 section 内容 |
-| 时间戳"判断"块（`### [HH:MM]`） | **追加** | Edit 在"判断演化日志"前插入新块 |
-| "判断演化日志"块 | **追加** | Edit 在该块末尾追加新条目 |
-
-**首次写入**：先 Write 完整模板骨架；之后每次按覆写 / 追加协议操作。
-
-**写入前必做**：每次写入前先 `Read` 文件，定位到合适的插入点，避免覆盖未处理内容（沿用 market-principles 第 4.4 节）。
+**首次写入**：先 Write 完整模板骨架；之后每次按 [market-files.md](./market-files.md) 的覆写 / 追加协议操作。
 
 ### 5.2 跟踪文件 `market_tracking.md`
 
-**模板与结构**：参照 `market-principles.md` 第 10 节"持久化文档模板"——含 活跃主线 / 持续关注的龙头股 / 板块轮动状态 / 未兑现逻辑 / 已失效已兑现。market-recap 不重复定义模板，**与 `market-principles` 共用同一份模板**。
+**模板与结构**：参照 [market-files.md](./market-files.md) §4——含 活跃主线 / 减弱主线 / 持续关注的龙头股 / 板块轮动状态 / 未兑现的逻辑。market-recap 不重复定义模板，**与 `market-principles` 共用同一份模板**。
 
-**slug 命名**：主线条目 `标识` 字段的 slug 派生规则见参考资料 [slug_glossary.md](./slug_glossary.md)（L1/L2/L3/L4 四级词汇表 + 创建工作流）。**禁止自由命名**。
+**slug 命名**：主线条目 `标识` 字段的 slug 硬规则 + 创建工作流见 [market-files.md](./market-files.md) 附录 A，词汇映射表见 [slug_glossary.md](./slug_glossary.md)。**禁止自由命名**。
 
-**更新规则**：每次复盘按需同步更新；按 market-principles 第 4.3 节协议"全量重写或 diff 增量均可"。淘汰触发参考 market-principles 第 10 节。
+**更新规则**：每次复盘按需同步更新（全量重写或 diff 增量均可，见 [market-files.md](./market-files.md) §2）；移除 / 淘汰触发见 [market-files.md](./market-files.md) §4 移除规则。
 
 ---
 
@@ -226,9 +210,9 @@ agent 在执行步骤 2-3 时，按需跳读 `market-data-obtain` 取端点。
 **market-recap 是流程执行器，`market-principles` 是判断方法论总入口。** 本 skill **不规定**：
 
 - 归因判断标准（市场 / 板块 / 个股归因的原则 → market-principles 第 5 节）
-- 文件模板（每日 md / market_tracking.md 模板 → market-principles 第 9-10 节）
-- 写入协议（覆写 / 追加 / 淘汰触发 → market-principles 第 4.3、10 节）
-- watchlist 维护规则（market-principles **第 10 节持久化文档移除规则** + **第 4.5 节任务前后协议**）
+- 文件模板（每日 md / market_tracking.md 模板 → [market-files.md](./market-files.md) §3 / §4）
+- 写入协议（覆写 / 追加 / 淘汰触发 → [market-files.md](./market-files.md) §2 / §4 移除规则）
+- watchlist 维护规则（[market-files.md](./market-files.md) §4 移除规则 + §2 任务前后协议）
 
 agent 在执行步骤 4-5 时，按需跳读 `market-principles` 取判断方法。
 
@@ -269,10 +253,9 @@ agent 在执行步骤 4-5 时，按需跳读 `market-principles` 取判断方法
 agent 流程：
 1. 读取 market_tracking.md + 最近 3 个交易日文件
 2. 判断时段：pre-market
-3. 网络搜索：昨日盘后总结、财联社早报、美股收盘
-4. 数据获取：隔夜外盘 + 昨日板块涨跌 + watchlist 主线最新状态
-5. 归因：今日可能的主线（基于昨日尾盘 + 隔夜外盘 + 早报）
-6. 输出：
+3. 数据获取（服务器端点优先，失败 fallback 网络搜索）：隔夜外盘 + 昨日板块涨跌 + 财联社早报（`agent/market-context`）+ watchlist 主线最新状态
+4. 归因：今日可能的主线（基于昨日尾盘 + 隔夜外盘 + 早报）
+5. 输出：
    - chat：今日关注主线 1-N，关键事件 X、Y、Z
    - 文件：2026-07-21.md（追加 [HH:MM] 时间戳判断块 + 更新消息 / 复盘块）
    - tracking：追加新主线 / 更新主线天数
@@ -286,10 +269,9 @@ agent 流程：
 agent 流程：
 1. 读取今日已有文件（如果盘前已写过）
 2. 判断时段：intraday
-3. 网络搜索：今日盘中新出的快讯与异动
-4. 数据获取：当日分时 + 当日板块涨跌 + 实时资金流
-5. 归因：上午的板块轮动 + 异动个股归因
-6. 输出：
+3. 数据获取（服务器端点优先，失败 fallback 网络搜索）：当日分时 + 当日板块涨跌 + 实时资金流 + 盘中快讯（`agent/market-context`）
+4. 归因：上午的板块轮动 + 异动个股归因
+5. 输出：
    - chat：上午主线、关键异动、盘中关注点
    - 文件：2026-07-21.md（追加 [HH:MM] 时间戳判断块）
    - tracking：识别新主线则追加
@@ -303,11 +285,10 @@ agent 流程：
 agent 流程：
 1. 读取今日已有文件（盘前 / 盘中内容）
 2. 判断时段：post-market
-3. 网络搜索：今日盘后总结、涨停原因、板块异动归因
-4. 数据获取：当日收盘 + 板块涨跌排名 + 龙虎榜 + 涨停股池 + 财联社焦点复盘
-5. 覆写顶部"消息" / "复盘"块（用最新数据替换盘中版本）
-6. 归因：全天主线 / 板块归因 / 龙头归因
-7. 输出：
+3. 数据获取（服务器端点优先，失败 fallback 网络搜索）：当日收盘 + 板块涨跌排名 + 龙虎榜 + 涨停股池 + 财联社焦点复盘（`agent/market-context`）
+4. 覆写顶部"消息" / "复盘"块（用最新数据替换盘中版本）
+5. 归因：全天主线 / 板块归因 / 龙头归因
+6. 输出：
    - chat：今日主线 1-N、龙头候选、关键归因
    - 文件：2026-07-21.md（追加 [HH:MM] 时间戳判断块 + 覆写消息 / 复盘块）
    - tracking：本次复盘新识别的主线 / 龙头 / 待验证假设
