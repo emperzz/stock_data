@@ -1,6 +1,6 @@
 ---
 name: watchlist-manager
-description: 个股监控列表管理 skill。维护用户的"关注"与"持仓"状态——新增关注、记录买入/卖出、查询当前快照、补全关注/操作原因、取消关注并归档。配套 `market-principles` 与 `trade-timing-advisor` 使用——本 skill 是**状态 CRUD 执行器**：规定"按什么命令操作、字段怎么写、什么情况追问、什么情况阻止"，不重复判断逻辑（买卖时机判断走 `trade-timing-advisor`），不重复取数方法论（端点走 `market-data-obtain`）。
+description: 个股监控列表管理 skill。维护用户的"watch"（关注）与"position"（持仓）状态——新增关注、记录买入/卖出、查询当前快照、补全关注/操作原因、取消关注并归档。本 skill 是**纯被动状态写入器**：只规定"按什么命令操作、字段怎么写、什么情况追问、什么情况阻止"，不做交易判断也不绑定任何特定下游消费者。
 triggers:
   - "关注 X" / "加关注 X" / "加入关注 X"
   - "我买了 X" / "买入 X" / "建仓 X"
@@ -17,18 +17,14 @@ scope:
   exclusion:
     - 北交所个股 / ST 股 / 美股 / 港股 / 期货 / 加密货币（超出 A 股范围）
     - 交易决策（仓位 / 止损 / 加减仓由用户自行决定）
-    - 主动行为（agent 不会主动建议关注、不会主动提醒补全 reason、不会主动调用判断 skill）
-  companions:
-    - trade-timing-advisor（判断买卖时机；本 skill 不做判断）
-    - market-principles（判断方法论总入口）
-    - market-data-obtain（取数；本 skill 不取数，但判断 skill 消费本 skill 的 portfolio.json）
+    - 主动行为（agent 不会主动建议关注、不会反复追问 reason、不会主动调用任何判断 skill）
 ---
 
 # watchlist-manager
 
 个股监控列表管理 skill。**纯被动状态写入器**——只在用户主动发起请求时操作文件，不主动判断、不主动触发其他 skill。
 
-> **核心约束**：本 skill 不绑定任何特定数据 API。判断逻辑（"该不该买"、"该不该卖"）一律走 `trade-timing-advisor`。本 skill 只负责"用户说做了什么，就忠实地记录什么"。
+> **核心约束**：本 skill 是文件状态写入层（writer），不做任何交易判断。"该不该买"、"该不该卖"由用户或专门的判断 skill 自行处理，本 skill 不耦合到任何特定下游消费者。判断 skill 若要消费本 skill 的产出，按需读 `portfolio.json` / `events.jsonl` 即可（详见 [数据文件结构](#2-数据文件结构) 与 [数据一致性规则](#3-数据一致性规则)）。
 
 ---
 
@@ -43,19 +39,19 @@ scope:
 
 **不适用的请求**：
 
-- 判断买卖时机 / 复盘 / 选股 / 板块分析 → 走 `trade-timing-advisor` / `market-recap` / `stock-picking`
+- 判断买卖时机 / 复盘 / 选股 / 板块分析 → 走对应的判断 / 复盘 / 选股 skill
 - 仓位 / 止损 / 加减仓策略 → 交易决策层，本 skill 不覆盖
 
 ---
 
 ## 2. 数据文件结构
 
-本 skill 维护**3 个文件**，全部放在和 `market_tracking.md` **同一目录**下：
+本 skill 维护 **3 个文件**，全部放在和 `market_tracking.md` **同一目录**下：
 
 ```
 <workspace>/
   portfolio.json                 # 当前快照（按 code 管理）
-  events.jsonl                   # 事件流（append-only，source of truth）
+  events.jsonl                   # 事件流（operations append-only；reason 字段可回填）
   archive/
     removed_codes.json           # 取消关注的 code 备份
 ```
@@ -68,12 +64,12 @@ scope:
     {
       "code": "600519",
       "name": "贵州茅台",
-      "关注": {
+      "watch": {
         "reason": "高端消费复苏",
         "added_at": "2026-08-27",
         "board": { "code": "881xxx", "name": "白酒" }
       },
-      "持仓": {
+      "position": {
         "shares": 200,
         "avg_cost": 1807.50,
         "first_event_at": "2026-07-10",
@@ -85,13 +81,15 @@ scope:
 }
 ```
 
+**字段命名**：watch（关注）+ position（持仓）是两个互不依赖的子状态；同一 code 在 watch 但未买入时 `position` 为 `null`。
+
 **关键字段说明**：
 
-- `codes[]` 按 code 索引（一个 code 一条记录），关注与持仓是该 code 的子状态字段
-- `关注.board` **必填**，且 `code` **必须是 THS platecode**（`885xxx` 概念 / `881xxx` 行业）——下游 `trade-timing-advisor` 的板块取数走 THS 单源，东财 `BKxxxx` 等异源代码会在判断时 422。加关注时若用户未提供，反馈用户要求提供 code + name
-- `关注.reason` 可选——用户没给就留空字符串，**agent 不自动生成**
-- `持仓` 可为 `null`（仅关注未买入）；非空时 `shares > 0`
-- `last_event_action` 记录该 code 最近一次操作方向，供判断 skill 快速读取
+- `codes[]` 按 code 索引（一个 code 一条记录），watch 与 position 是该 code 的子状态字段
+- `watch.board` **必填**，`code` **必须是 THS platecode**（`885xxx` 概念 / `881xxx` 行业）。理由：stock_data server 的板块端点（板块 K 线、成分股、板块统计等）走 THS 单源，异源代码（如东财 `BKxxxx`）无法通用。在加关注时一次性记录，可避免事后手工补查。**异源代码不要写入**。加关注时若用户未提供，反馈用户要求提供 code + name
+- `watch.reason` 可选——用户没给就留空字符串，**agent 不自动生成**
+- `position` 可为 `null`（仅关注未买入）；非空时 `shares > 0`
+- `last_event_action` 记录该 code 最近一次操作方向，供下游消费者快速读取
 
 ### events.jsonl 结构（每行一个 JSON）
 
@@ -101,6 +99,8 @@ scope:
 
 - `action` ∈ `{"buy", "sell"}`（**只有两个取值**，加仓/减仓/止损/止盈统一记为 buy/sell）
 - `reason` 可选字符串——用户没给就留空，**agent 不自动生成**
+- **append-only 范围**：新增操作（buy/sell）只能通过追加新行完成，**不允许**删除或修改既有行的 `ts` / `code` / `action` / `shares` / `price`。**`reason` 字段可回填**——回填采用"按行重写"方式（详见 [§4.5 补全 reason](#45-补全-reason)）。这一区分的理由：`ts/code/action/shares/price` 是金融事实，事后不可改；`reason` 是用户事后可补全的注释
+- 该文件是 portfolio.json `position` 字段的 **source of truth**——`position.shares / avg_cost / first_event_at / last_event_at / last_event_action` 任何时候都可由 events.jsonl 重算得出
 
 ### archive/removed_codes.json 结构
 
@@ -109,14 +109,22 @@ scope:
   {
     "code": "000034",
     "name": "神州数码",
-    "关注_added_at": "2026-06-10",
+    "added_at": "2026-06-10",
+    "reason": "关注时的原因（高端服务器渠道转型预期）",
+    "board": { "code": "881xxx", "name": "信息技术" },
     "removed_at": "2026-08-27",
     "removed_reason": "板块走弱" | ""
   }
 ]
 ```
 
-`removed_reason` 可选——用户没给就留空。
+**字段说明**：
+
+- `added_at` —— 加关注的时间（YYYY-MM-DD）
+- `reason` —— **加关注时**填写的 reason（非 removed 时的原因）；用户当时未填写则为空字符串
+- `board` —— 加关注时记录的板块快照（保留便于事后追溯"当时为什么关注它"）
+- `removed_reason` 可选——用户没给就留空
+- 字段命名沿用 portfolio.json 的英文 schema（`added_at` / `reason` / `board`），**不再带 `关注_` 前缀**
 
 ---
 
@@ -124,10 +132,10 @@ scope:
 
 ### 3.1 事件流为唯一真相源
 
-**所有 portfolio.json 的字段都由 events.jsonl 派生**。每次写入事件后必须：
+**所有 portfolio.json 的 `position.*` 字段都由 events.jsonl 派生**。每次写入事件后必须：
 
-1. 追加一行到 `events.jsonl`
-2. 重算该 code 的 `持仓.shares`、`持仓.avg_cost`、`持仓.last_event_at`、`last_event_action`
+1. 追加一行到 `events.jsonl`（新行可写完整 reason，也可后续回填）
+2. 重算该 code 的 `position.shares`、`position.avg_cost`、`position.last_event_at`、`last_event_action`
 3. 更新 `portfolio.json`
 
 **重算公式**：
@@ -139,14 +147,14 @@ scope:
 平均持仓成本 = (总买入金额 - 总卖出金额) / 剩余份额
 ```
 
-`剩余份额 == 0` 时 → 该 code 的 `持仓` 字段设为 `null`，但**保留主表行**（用户仍可能关注一只已清仓的票）。
+`剩余份额 == 0` 时 → 该 code 的 `position` 字段设为 `null`，但**保留主表行**（用户仍可能关注一只已清仓的票）。
 
-> **为什么 events.jsonl 是 source of truth**：双写时如果 portfolio.json 写成功、events.jsonl 写失败，或反过来，会留下不一致状态。agent 是唯一写入方（用户操作后告诉 agent），追加 + 重算顺序操作，要么都成功要么都失败。
+**回填 reason 时不必重算 position**：回填只修改 events.jsonl 中已有行的 `reason` 字段，不改变 ts/code/action/shares/price，因此 portfolio.json 的 position 派生结果不变。
 
 ### 3.2 code 主键不变性
 
-- `codes[]` 中每个 code **只有一条记录**——关注和持仓是该 code 的子字段
-- 同一 code 再次"关注"不是新增记录，而是**已存在则只更新 `关注.added_at`（如果用户要求）**
+- `codes[]` 中每个 code **只有一条记录**——watch 和 position 是该 code 的子字段
+- 同一 code 再次"关注"不是新增记录，而是**已存在则只更新 `watch.*` 字段**（`added_at` 默认不动，用户说"重新加入"才更新）
 - 取消关注 = 主表删除该 code + 写 archive
 
 ---
@@ -165,21 +173,22 @@ agent 根据用户输入识别命令 → 映射到 schema 操作。
 |---|---|
 | `code` | 用户提供（优先 code，可由 name 反查但需确认） |
 | `name` | 用户提供，或由 code 反查 |
-| `关注.board.code` | **必须用户提供**，无默认（THS platecode 885xxx/881xxx） |
-| `关注.board.name` | 必须用户提供，或由 board code 反查 |
+| `watch.board.code` | **必须用户提供**，无默认（THS platecode 885xxx/881xxx） |
+| `watch.board.name` | 必须用户提供，或由 board code 反查 |
 
 **选填字段**：
 
 | 字段 | 处理 |
 |---|---|
-| `关注.reason` | 用户提供就写，否则留空字符串 |
-| `关注.added_at` | 默认当天（YYYY-MM-DD） |
+| `watch.reason` | 用户提供就写，否则留空字符串；agent **触发后会追问一次** reason（详见 [§6.1](#61-完全被动)） |
+| `watch.added_at` | 默认当天（YYYY-MM-DD） |
 
 **操作流程**：
 
 1. 检查 code 是否已存在于 `codes[]`
-2. 存在 → 更新该 code 的 `关注.*` 字段（`added_at` 默认不动，用户说"重新加入"才更新）
-3. 不存在 → 新增条目，`持仓: null`，`last_event_action: null`
+2. 存在 → 更新该 code 的 `watch.*` 字段（`added_at` 默认不动，用户说"重新加入"才更新）
+3. 不存在 → 新增条目，`position: null`，`last_event_action: null`
+4. 完成后追问一次"要补 reason 吗？"，用户答复则回填（见 [§4.5](#45-补全-reason)）
 
 ### 4.2 记录买入 / 卖出
 
@@ -199,18 +208,19 @@ agent 根据用户输入识别命令 → 映射到 schema 操作。
 
 | 字段 | 处理 |
 |---|---|
-| `reason` | 用户提供就写，否则留空字符串 |
+| `reason` | 用户提供就写，否则留空字符串；agent **触发后会追问一次** reason |
 
 **操作流程**：
 
 1. 验证 code 已存在于 `codes[]`——**若不存在则提示用户先加关注**（"code X 不在关注列表，要先关注吗？"），等用户决定
 2. 验证 shares / price / ts 都是正数且 ts 不晚于今天
-3. 追加到 `events.jsonl`
-4. 重算该 code 的 `持仓` 字段：
+3. 追加到 `events.jsonl`（**只追加新行，不修改既有行的 action/shares/price/ts**）
+4. 重算该 code 的 `position` 字段：
    - 算剩余份额 = 旧份额 + (action=buy ? +shares : -shares)
-   - 剩余份额 == 0 → `持仓` 设为 `null`，但保留主表行
+   - 剩余份额 == 0 → `position` 设为 `null`，但保留主表行
    - 剩余份额 > 0 → 按公式重算 `avg_cost`
-5. 更新 `last_event_action` 和 `持仓.last_event_at`（或首次买入时 `持仓.first_event_at`）
+5. 更新 `last_event_action` 和 `position.last_event_at`（或首次买入时 `position.first_event_at`）
+6. 完成后追问一次"要补 reason 吗？"，用户答复则按 [§4.5](#45-补全-reason) 回填
 
 **反模式**：
 
@@ -224,7 +234,7 @@ agent 根据用户输入识别命令 → 映射到 schema 操作。
 
 **行为**：
 
-- 读 `portfolio.json`，按用户要求展示（全部 / 单只 / 按关注分组）
+- 读 `portfolio.json`，按用户要求展示（全部 / 单只 / 按 watch 分组）
 - **不调任何 server API**——本 skill 是纯文件操作
 
 ### 4.4 取消关注
@@ -234,19 +244,30 @@ agent 根据用户输入识别命令 → 映射到 schema 操作。
 **操作流程**：
 
 1. 检查该 code 是否存在
-2. 检查 `持仓.shares`：
+2. 检查 `position.shares`：
    - **shares > 0** → 阻止，反馈用户"该 code 仍有持仓 X 股（平均成本 Y），请确认是否还有未告知的卖出操作"，等用户明确
-   - **shares == 0 或 持仓 == null** → 直接从 `codes[]` 删除 + 追加到 `archive/removed_codes.json`
+   - **shares == 0 或 position == null** → 直接从 `codes[]` 删除 + 追加到 `archive/removed_codes.json`
 3. 不二次确认，直接执行
 
 ### 4.5 补全 reason
 
-**触发**：用户说"补全 X 的关注原因：Y" 或 "X 的买入原因是 Y"
+**触发**：用户说"补全 X 的关注原因：Y" / "X 的买入原因是 Y" / agent 在 [§4.1](#41-加关注--修改关注) / [§4.2](#42-记录买入--卖出) 后追问得到的答复
 
-**操作流程**：
+#### 4.5.1 补全 watch.reason
 
-- "关注原因" → 更新 `codes[].关注.reason`
-- "买入/卖出原因" → **不修改历史 events.jsonl**（append-only 不变性），而是新增一条 note 提示用户"events.jsonl 是 append-only，历史操作原因不能回填；如需记录，可追加一条新的 buy/sell with reason"
+- 直接更新 `codes[].watch.reason`
+
+#### 4.5.2 补全 events.jsonl 中某条 buy/sell 的 reason
+
+- **匹配规则**：默认匹配**该 code 最近一次**对应 action（buy 或 sell）的 event 行；若用户指定了日期或时间戳，则匹配该日（YYYY-MM-DD）内最近一次对应 action 的 event 行
+- **写入方式**：用更新后的 `reason` 重写该行 JSON 并原地写回 events.jsonl。**该行的 ts/code/action/shares/price 一律不改**
+- **匹配失败**：若 events.jsonl 中找不到匹配行，反馈用户"没有可补全的 event 行；若您想记录新的操作，请用买入/卖出命令"，**不要**伪造一条 event 行
+
+#### 4.5.3 不允许的反模式
+
+- ❌ 不要为了"补全"而新增一条 buy/sell event 行——补全是修改既有行，不是新增操作
+- ❌ 不要把"加仓/减仓/止损/止盈"作为 reason 的枚举值——reason 就是自由文本
+- ❌ 不要在补全 reason 时重算 portfolio.json（reason 不影响 position 派生结果）
 
 ---
 
@@ -272,14 +293,18 @@ agent 写之前必须验证用户输入是否齐全。决策表：
 
 ## 6. agent 行为边界（重要）
 
-### 6.1 完全被动
+### 6.1 主动 vs 一次性询问
 
 agent **不会**主动：
 
 - ❌ 建议用户关注某只股票
-- ❌ 提醒用户补全 reason（用户没说就不提）
-- ❌ 触发 `trade-timing-advisor`（用户问"现在该不该买"才走判断 skill）
+- ❌ **反复**追问 reason——追问只在用户**刚触发** watch/buy/sell 操作后**进行一次**，用户不答就记空 reason 继续流程，下次再触发同样的操作时也不重提（避免骚扰）
+- ❌ 主动调用任何下游判断 skill（用户明确说"判断下"才走）
 - ❌ 校验数据合理性（用户说"100股 @1元" agent 也照写，不评判）
+
+agent **会**：
+
+- ✅ 在 [§4.1](#41-加关注--修改关注) / [§4.2](#42-记录买入--卖出) 完成后**一次**询问"要补 reason 吗？"——这是补全数据完整性的一环，不算主动行为
 
 ### 6.2 不写模糊记录
 
@@ -298,13 +323,4 @@ agent **不会**主动：
 - ❌ 不要把 reason 字段做枚举（"建仓" / "加仓" / "止损"）——它就是自由文本，用户怎么写就怎么记
 - ❌ 不要在 agent 收到 buy/sell 操作后立即调判断 skill——本 skill 写完就结束，不联动
 - ❌ 不要给 portfolio.json 加 schema 版本号或迁移逻辑——schema 是 agent 内部约定，变了就改 agent 的读取逻辑，旧 portfolio.json 可以直接读（旧字段被忽略）
-
----
-
-## 8. 与 trade-timing-advisor 的衔接
-
-- `portfolio.json` 是 `trade-timing-advisor` 的输入数据源之一（读取 `关注.board.code`、`持仓.shares/avg_cost` 等）
-- 本 skill **不调** `trade-timing-advisor`
-- `trade-timing-advisor` **不写** portfolio.json / events.jsonl（判断输出是文本/对话，不落盘）
-
-判断 skill 的入口命令（"X 现在怎样"、"判断下 X"）**不走本 skill**——直接走判断 skill 的命令动词清单。
+- ❌ 不要把本 skill 视为某个下游 skill 的"前置依赖"——它只是状态写入器，任何下游消费者（判断 skill / 复盘 / 用户自定义查询）按需读 portfolio.json / events.jsonl 即可，**不存在必然的上下游关系**
