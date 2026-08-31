@@ -292,7 +292,7 @@ curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=50&trade_dat
 | `results[].features.pivots` | object | — | 同 indices/batch-profile（含 `params`） |
 | `results[].features.volume` | object | — | 同 indices/batch-profile |
 | `results[].info` | object | — | **形状是 `{"source": str, "data": {...}}`**——公司画像在 `data` 子键下，`source` 标记 fetcher / `"persistence"` |
-| `results[].boards` | object | — | **形状是 `{"source": str, "data": [...]}`**——所属板块列表在 `data` 子键下。`data[]` 与 `/stocks/{stock_code}/boards` **同一份 11 字段契约**：5 legacy（`code`/`name`/`type`/`subtype`/`source`）+ 7 THS enrichment（`change_pct` / `up_count` / `down_count` / `limit_up_count` / `limit_down_count` / `explain` / `relevance`）；`source` 三态：`"persistence"`（warm-cache merge，`data` 含 11 字段）/ `"ths"`（cold-cache fallback，`data` 含 11 字段）/ `"persistence"`（fetcher 失败，`data` 只含 5 legacy 字段，enrichment 全部不存在——**不是 `null`**）。字段含义与单位见 [boards.md](../market-data-obtain/boards.md) 的 `/stocks/{stock_code}/boards` 章节 |
+| `results[].boards` | object | — | **形状是 `{"source": str, "data": [...]}`**——所属板块列表在 `data` 子键下。`data[]` 与 `/stocks/{stock_code}/boards` **同一份字段契约**：5 legacy（`code`/`name`/`type`/`subtype`/`source`）+ 7 THS enrichment（`change_pct` / `up_count` / `down_count` / `limit_up_count` / `limit_down_count` / `explain` / `relevance`）；7 enrichment 字段**可能缺失**（用 `"key" in entry` 检测，不要 `entry.get("...") is None`）。字段含义与单位见 [boards.md](../market-data-obtain/boards.md) 的 `/stocks/{stock_code}/boards` 章节 |
 | `results[].errors[]` | array | — | 失败的 aspect 列表；每条 `{aspect, error, message}`（`aspect` ∈ `quote` / `features` / `info` / `boards`） |
 | `summary` | object | — | `{requested, ok, failed, elapsed_ms}` |
 
