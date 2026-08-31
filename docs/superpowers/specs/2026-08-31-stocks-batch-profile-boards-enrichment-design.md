@@ -104,12 +104,20 @@ unchanged.
 - In `get_stock_boards` (line 971), replace
   `_fetch_stock_boards_quote_enrichment(stock_code, get_manager())`
   with `fetch_stock_boards_quote_enrichment(stock_code, get_manager())`.
-- The 8 existing tests in `tests/test_stock_boards_ths_enrichment.py`
-  change their import path only:
-  `from ...api.routes.boards import _fetch_stock_boards_quote_enrichment`
+
+`stock_data/api/cache.py` — update one docstring cross-link
+(line 244):
+
+- ``api/routes/boards.py::_fetch_stock_boards_quote_enrichment``
   →
-  `from ...api._helpers.stock_boards import fetch_stock_boards_quote_enrichment`.
-  Test bodies unchanged.
+  ``api/_helpers/stock_boards.py::fetch_stock_boards_quote_enrichment``.
+
+The 8 existing tests in `tests/test_stock_boards_ths_enrichment.py`
+change their import path only:
+`from ...api.routes.boards import _fetch_stock_boards_quote_enrichment`
+→
+`from ...api._helpers.stock_boards import fetch_stock_boards_quote_enrichment`.
+Test bodies unchanged.
 
 ### 3.3 `agent.py` — import + use
 
@@ -297,17 +305,45 @@ assert:
 
 ### 6.3 Updated import path
 
-`tests/test_stock_boards_ths_enrichment.py`:
+`tests/test_stock_boards_ths_enrichment.py` has 5 reference sites for the
+helper (verified via grep 2026-08-31: lines 83, 88, 381, 389, 395, 420):
 
-- 8 existing test cases: replace
+- **1 direct import** (line 381):
   `from stock_data.api.routes.boards import _fetch_stock_boards_quote_enrichment`
-  with
+  →
   `from stock_data.api._helpers.stock_boards import fetch_stock_boards_quote_enrichment`.
-- Replace all call sites
-  `_fetch_stock_boards_quote_enrichment(stock_code, ...)`
-  with
-  `fetch_stock_boards_quote_enrichment(stock_code, ...)`.
-- Test bodies unchanged.
+- **2 direct call sites** (lines 389, 395):
+  `_fetch_stock_boards_quote_enrichment(stock_code, fake_mgr)`
+  →
+  `fetch_stock_boards_quote_enrichment(stock_code, fake_mgr)`.
+- **2 `monkeypatch` / `patch.object` sites** (lines 83, 88, 420) — these
+  currently patch `_fetch_stock_boards_quote_enrichment` *as an attribute
+  of `stock_data.api.routes.boards`* (helper `_patch_enrichment_with`,
+  lines 60-90). After the move, the helper lives on
+  `stock_data.api._helpers.stock_boards`, not on `boards`. The patch
+  must target the new module — change `_patch_enrichment_with` to:
+
+  ```python
+  from stock_data.api._helpers import stock_boards as stock_boards_helper
+  ...
+  return patch.object(
+      stock_boards_helper,
+      "fetch_stock_boards_quote_enrichment",
+      side_effect=RuntimeError("simulated fetcher failure"),
+  )
+  ```
+
+  This works because `boards.py` re-imports the helper via
+  `from ._helpers.stock_boards import fetch_stock_boards_quote_enrichment` — Python's module-level attribute lookup chains through
+  the import, so patching the original module's attribute also patches
+  what `boards.py` sees when it calls the helper.
+
+  The `patch.object(boards_route, "_fetch_stock_boards_quote_enrichment", side_effect=RuntimeError("boom"))` call at line 420
+  (in `test_helper_internal_try_except_swallows_fetcher_error`) also
+  needs the same module-target switch.
+
+- Test bodies, assertions, and request/response shapes are otherwise
+  unchanged. The 8 cases still pin the same contract.
 
 ### 6.4 Pre-flight test run
 
