@@ -17,7 +17,7 @@ from ..cache import (
 logger = logging.getLogger(__name__)
 
 
-def _fetch_stock_boards_quote_enrichment(
+def fetch_stock_boards_quote_enrichment(
     stock_code: str, manager
 ) -> tuple[list[dict] | None, dict[str, dict]]:
     """Live-fetch THS stock_concept_list for /stocks/{code}/boards enrichment.
