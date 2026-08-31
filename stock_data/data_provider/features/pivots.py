@@ -25,7 +25,7 @@ from ..indicators import atr as _atr
 _DEFAULT_PIVOT_WINDOW = 2
 _DEFAULT_ATR_MULT = 1.0
 _DEFAULT_ATR_PERIOD = 14
-_DEFAULT_MAX_SWINGS = 6
+_DEFAULT_MAX_SWINGS = 50  # safety cap for minute frequencies; d/w/m in practice emit <= 28 swings
 
 
 def _atr_value(df: pd.DataFrame, period: int) -> float | None:
@@ -147,6 +147,7 @@ def compute_pivots(
                 "pivot_window": pivot_window,
                 "reversal_atr_mult": atr_mult,
                 "atr_period": atr_period,
+                "max_swings": max_swings,
             },
         }
     atr_value = _atr_value(df, atr_period)
@@ -159,5 +160,6 @@ def compute_pivots(
             "pivot_window": pivot_window,
             "reversal_atr_mult": atr_mult,
             "atr_period": atr_period,
+            "max_swings": max_swings,
         },
     }

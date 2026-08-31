@@ -220,7 +220,12 @@ class TestPivotFeatures:
         df = _make_pivot_df([10, 12, 15, 14, 11, 9, 12, 16])
         window = _window_by_last_days(df, 30)
         out = compute_pivots(df, window)
-        assert out["params"] == {"pivot_window": 2, "reversal_atr_mult": 1.0, "atr_period": 14}
+        assert out["params"] == {
+            "pivot_window": 2,
+            "reversal_atr_mult": 1.0,
+            "atr_period": 14,
+            "max_swings": 50,
+        }
 
     def test_swings_alternate_with_loose_threshold(self):
         # 10→15→9→16→10 : majors high@15, low@9, high@16, pending low@10
@@ -245,6 +250,41 @@ class TestPivotFeatures:
         assert out["window_high"] is None
         assert out["swings"] == []
         assert out["pending"] is None
+
+    def test_default_max_swings_is_50(self):
+        """Default cap raised 6 → 50 so historical pivots (e.g. 300642 Jan 13)
+        aren't truncated out of the response."""
+        from stock_data.data_provider.features.pivots import _DEFAULT_MAX_SWINGS
+
+        assert _DEFAULT_MAX_SWINGS == 50
+        df = _make_pivot_df([10, 12, 15, 14, 11, 9, 12, 16, 14, 12, 11, 13])
+        out = compute_pivots(df, df)
+        assert out["params"]["max_swings"] == 50
+
+    def test_swings_not_truncated_under_28(self):
+        """~250 bars (300642 days=365 scale) emits enough swings to exceed
+        the old cap=6; with cap=50 none should be truncated."""
+        rng = random.Random(42)
+        closes = [10.0]
+        for _ in range(249):
+            closes.append(closes[-1] * (1 + rng.uniform(-0.04, 0.05)))
+        dates = pd.date_range("2025-08-01", periods=250, freq="B")
+        df = pd.DataFrame(
+            {
+                "date": [d.strftime("%Y-%m-%d") for d in dates],
+                "open": [c * 0.995 for c in closes],
+                "high": [c * 1.01 for c in closes],
+                "low": [c * 0.99 for c in closes],
+                "close": closes,
+                "volume": [1_000_000] * 250,
+                "amount": [1.0] * 250,
+                "pct_chg": [0.0] * 250,
+            }
+        )
+        out = compute_pivots(df, df)
+        assert len(out["swings"]) >= 25, (
+            f"expected ~28 swings on 250-bar random walk, got {len(out['swings'])}"
+        )
 
 
 class TestBuildFeatures:
@@ -568,7 +608,8 @@ class TestFormatMdFeatures:
                     "max_vol_bar": None,
                     "swings": [{"date": "2026-07-15", "type": "low", "price": 1.0, "confirmed": True}],
                     "pending": {"side": "high", "bars": 2, "price": 2.0, "date": "2026-08-10"},
-                    "params": {"pivot_window": 2, "reversal_atr_mult": 1.0, "atr_period": 14}},
+                    "params": {"pivot_window": 2, "reversal_atr_mult": 1.0,
+                              "atr_period": 14, "max_swings": 50}},
             volume={"latest_volume": 100.0, "vol_ratio_5": 1.5,
                     "z_anomalies": [{"date": "2026-08-10", "open": 1.0, "high": 2.0, "low": 0.5,
                                      "close": 1.5, "volume": 100.0, "z_score": 3.0,

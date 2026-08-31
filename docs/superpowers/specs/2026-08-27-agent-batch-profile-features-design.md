@@ -225,11 +225,15 @@ Output (see §2.3):
   的最高价 / 最低价".
 - `max_vol_bar`: the bar with the max `volume` within the window — its
   `{price, volume, date}` — the "成交量最高的价格".
-- `swings`: last ≤6 confirmed pivots, `{date, type: high|low, price,
-  confirmed: true}`, ordered chronologically.
+- `swings`: last ≤50 confirmed pivots, `{date, type: high|low, price,
+  confirmed: true}`, ordered chronologically. (Default `max_swings=50`
+  safety cap; d/w/m in practice emit ≤ 28 swings, only minute frequencies
+  ever approach the cap. Raised 6 → 50 on 2026-08-31 so historical pivots
+  like 300642's 2026-01-13 high @ 22.72 are not truncated out.)
 - `pending`: the in-flight extreme (see step 3).
 - `params`: the fixed algorithm settings, echoed for transparency
-  (`{pivot_window, reversal_atr_mult, atr_period}`). Not request-tunable.
+  (`{pivot_window, reversal_atr_mult, atr_period, max_swings}`). Not
+  request-tunable.
 
 ### 3.3 `volume` — volume-price coordination
 

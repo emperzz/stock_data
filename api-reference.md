@@ -1915,11 +1915,13 @@ Content-Type: application/json
 - `pivots`: significance-filtered swing points (ZigZag).
   `window_high` / `window_low` / `max_vol_bar` are the max-high / min-low /
   max-volume bar within the requested `days` window (with dates);
-  `swings` = last ≤ 6 confirmed pivots
-  `{date, type: high|low, price, confirmed: true}`; `pending` = the
-  in-flight (not yet confirmed) extreme; `params` echoes the fixed algorithm
-  settings (`pivot_window=2, reversal_atr_mult=1.0, atr_period=14`) — not
-  request-tunable.
+  `swings` = last ≤ 50 confirmed pivots
+  `{date, type: high|low, price, confirmed: true}` (default `max_swings=50`
+  cap; d/w/m in practice emit ≤ 28, only minute frequencies approach the cap).
+  `pending` = the in-flight (not yet confirmed) extreme; `params` echoes
+  the fixed algorithm settings
+  (`pivot_window=2, reversal_atr_mult=1.0, atr_period=14, max_swings=50`)
+  — not request-tunable.
 - `volume`: `latest_volume` + `vol_ratio_5` (latest / mean of the previous
   5 bars) + `z_anomalies` (bars whose volume Z-score > 2.0 within the
   window, sorted by `z_score` desc, capped at 20; each carries
