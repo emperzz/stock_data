@@ -16,7 +16,7 @@ enrichment is gated on ``"ths" in normalized_sources``. They surface
 new fields as ``None``.
 
 This file mocks the persistence layer (``stock_board_cache``) and the
-enrichment helper (``_fetch_stock_boards_quote_enrichment``) at module
+enrichment helper (``fetch_stock_boards_quote_enrichment``) at module
 boundaries — no live upstream, no DB writes. The fetcher-level tests in
 ``tests/test_ths_fetcher.py::TestGetStockBoards`` cover the upstream
 parsing contract; this file covers the route-layer merge + cold-cache
@@ -58,7 +58,7 @@ def _patch_persistence_with_ths_entries(entries, cold_sources=None, origin="pers
 
 
 def _patch_enrichment_with(fetcher_result=None, enrichment_by_code=None):
-    """Replace ``_fetch_stock_boards_quote_enrichment`` with a stub.
+    """Replace ``fetch_stock_boards_quote_enrichment`` with a stub.
 
     The real helper returns ``(fetcher_full_result, enrichment_by_code)``.
     Tests that need a fetcher failure pass ``None`` (causes a RuntimeError
@@ -72,20 +72,20 @@ def _patch_enrichment_with(fetcher_result=None, enrichment_by_code=None):
         enrichment_by_code: keyed by code, 7 enrichment fields each.
             Defaults to {}.
     """
-    from stock_data.api.routes import boards as boards_route
+    from stock_data.api._helpers import stock_boards as stock_boards_helper
 
     if fetcher_result is None and enrichment_by_code is None:
         # Explicit "fetcher failed" sentinel — raise so route's
         # @map_errors surfaces it. Tests for the helper's internal
         # try/except live separately and patch the manager instead.
         return patch.object(
-            boards_route,
-            "_fetch_stock_boards_quote_enrichment",
+            stock_boards_helper,
+            "fetch_stock_boards_quote_enrichment",
             side_effect=RuntimeError("simulated fetcher failure"),
         )
     return patch.object(
-        boards_route,
-        "_fetch_stock_boards_quote_enrichment",
+        stock_boards_helper,
+        "fetch_stock_boards_quote_enrichment",
         return_value=(fetcher_result or [], enrichment_by_code or {}),
     )
 
@@ -378,7 +378,7 @@ def test_ths_source_enrichment_helper_internal_try_except_swallows_fetcher_error
 
     from unittest.mock import MagicMock
 
-    from stock_data.api.routes.boards import _fetch_stock_boards_quote_enrichment
+    from stock_data.api._helpers.stock_boards import fetch_stock_boards_quote_enrichment
     from stock_data.data_provider.base import DataFetchError
 
     fake_mgr = MagicMock()
@@ -386,13 +386,13 @@ def test_ths_source_enrichment_helper_internal_try_except_swallows_fetcher_error
         side_effect=DataFetchError("upstream timeout")
     )
 
-    fetcher_result, enrichment = _fetch_stock_boards_quote_enrichment("300519", fake_mgr)
+    fetcher_result, enrichment = fetch_stock_boards_quote_enrichment("300519", fake_mgr)
     assert fetcher_result is None
     assert enrichment == {}
 
     # Also assert a generic Exception is caught (defensive net).
     fake_mgr.get_stock_boards = MagicMock(side_effect=RuntimeError("network reset"))
-    fetcher_result, enrichment = _fetch_stock_boards_quote_enrichment("300519", fake_mgr)
+    fetcher_result, enrichment = fetch_stock_boards_quote_enrichment("300519", fake_mgr)
     assert fetcher_result is None
     assert enrichment == {}
 
@@ -414,10 +414,10 @@ def test_ths_enrichment_helper_leak_surfaces_500_via_map_errors(client):
         },
     ]
 
-    from stock_data.api.routes import boards as boards_route
+    from stock_data.api._helpers import stock_boards as stock_boards_helper
 
     with _patch_persistence_with_ths_entries(cached_entries), patch.object(
-        boards_route, "_fetch_stock_boards_quote_enrichment", side_effect=RuntimeError("boom")
+        stock_boards_helper, "fetch_stock_boards_quote_enrichment", side_effect=RuntimeError("boom")
     ):
         r = client.get("/api/v1/stocks/300519/boards?source=ths")
 

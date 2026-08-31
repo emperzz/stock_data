@@ -241,7 +241,7 @@ def get_stock_boards_quote_cache() -> TTLCache:
     pattern; maxsize=512 covers ~500 polled stocks before LRU eviction.
 
     Key shape: ``"stock_boards_quote:{stock_code}"`` — see
-    ``api/routes/boards.py::_fetch_stock_boards_quote_enrichment``.
+    ``api/_helpers/stock_boards.py::fetch_stock_boards_quote_enrichment``.
     """
     return _stock_boards_quote_cache
 
