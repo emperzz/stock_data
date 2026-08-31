@@ -57,7 +57,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 | 当前 watch / position 上下文 | watchlist-manager（**读** portfolio.json + events.jsonl） | 路径 A 直接读 `codes[].watch.board`；批量场景（如"扫一遍持仓"）读全部 codes |
 | 主线 / 板块轮动状态（**仅**复盘场景） | market-recap（**读** market_tracking.md） | 用户主动问"今天市场怎么样"或要求结合主线判断时再读；纯单股判断可跳过 |
 | 实时行情 + 计算 features（趋势 / 顶底 / 量异常） | market-data-obtain 批量端点 | `agent/{indices,stocks,boards}/batch-profile`（参数见 §3） |
-| 板块成分股 / 龙头 / 实时 | market-data-obtain 板块端点 | `/boards/{code}/stocks?source=ths&include_quote=true&with_zt_flags=true` |
+| 板块成分股 / 龙头 / 实时 | market-data-obtain 板块端点 | `/boards/{code}/stocks?source=ths&include_quote=true`（触板判定走 §3.1 #6） |
 | 板块行情 + 板块涨幅相对位置 | market-data-obtain agent 端点 | `agent/boards/batch-profile`（板块）+ `agent/market-stats.boards.buckets`（市场桶位） |
 | 全市场情绪 / 涨跌停 / 龙虎榜 / 消息面 | market-data-obtain agent 端点 | `agent/market-stats` + `agent/market-context` |
 | 跨资产重合度 / 相关性 | market-data-obtain agent 端点 | `agent/{stocks,boards}-overlap` + `agent/correlation/matrix` |
@@ -103,6 +103,8 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 
 > **频率选择**：本 skill 只用 `d + days=365` 与 `5m + days=5` 两个频率覆盖长短期趋势——d+365 提供长周期信号（隐含 52 根周线），5m+5 覆盖当日分时。
 
+> **涨跌停状态判定**：本 skill 不重复定义判定路径——按 `market-principles §12` 的优先级选择数据源；本表只列各步具体调哪个端点。
+
 | # | 层 | 取数需求 | 端点 | 本 skill 的参数选择 |
 |---|---|---|---|---|
 | 1 | 市场环境 | 大盘长期趋势 | `agent/indices/batch-profile` | `frequency=d`，`days=365`；`codes` 走 API 默认（`000001 / 399001 / 399006`——上证 + 深证 + 创业板） |
@@ -110,7 +112,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 | 3 | 市场环境 | 全市场个股 + 板块涨幅统计 | `agent/market-stats` | 默认（含板块块） |
 | 4 | 市场环境 | 涨跌停 + 连板结构 + 龙虎榜 + 消息面 | `agent/market-context` | 默认 |
 | 5 | 板块 | 板块长期 + 当日分时 features | `agent/boards/batch-profile` | THS platecodes，`frequency=d&days=365` 与 `frequency=5m&days=5` 各一次 |
-| 6 | 板块 | 成分股龙头 / 前 3 + 当日触板标记 | `GET /boards/{code}/stocks` | `source=ths&include_quote=true&with_zt_flags=true`（龙头 / 前 3 = 列表按涨幅倒序的前几行；触板 = `is_limit_up`） |
+| 6 | 板块 | 成分股龙头 / 前 3 | `GET /boards/{code}/stocks` | `source=ths&include_quote=true`（龙头 / 前 3 = 列表按涨幅倒序的前几行）；触板判定按 `market-principles §12` 优先级 1 走 `/zt-pools?type=zt` |
 | 7 | 个股 | 用户当前请求的每只 X 的长期 + 当日分时 features | `agent/stocks/batch-profile` | `frequency=d&days=365` 与 `frequency=5m&days=5` 各一次；`codes` = 用户本次请求涉及的股票集合（watchlist 子集 / 全集 / 或 watchlist 之外的临时指定） |
 | 8 | 重合度 | X 与板块龙头的重合度（业务 + 板块 + 走势） | `agent/stocks/board-overlap` + `agent/correlation/matrix` + `info.data.business_scope/concepts` | 详见 §5.4 |
 | 9 | 备查 | X 精确 K 线（仅在论据翻译规则需"近 N 日累计涨幅"等 batch-profile 不含字段时） | `GET /stocks/{code}/kline` 或 `GET /indices/{code}/kline` | 按需单拉，默认不调 |
@@ -277,7 +279,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 
 - `agent/boards/batch-profile`（`d&days=365` 与 `5m&days=5` 各一次）的 `features.trend / pivots / volume`
 - `agent/market-stats.boards.buckets[]` 看该 code 所在板块涨幅落在哪个桶
-- `/boards/{code}/stocks` 取龙头 / 前 3 + 触板状态（必带参数见 §3.1 #6）
+- `/boards/{code}/stocks` 取龙头 / 前 3（参数见 §3.1 #6）；触板状态按 §3.1 #6 走 `/zt-pools?type=zt` 验证（判定优先级见 `market-principles §12`）
 
 **每只 code 的板块层论据**：
 
