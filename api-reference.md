@@ -630,6 +630,29 @@ sources with no cached data (the caller can decide whether to retry
 against those sources — removed 2026-07-10; reverse lookup relies on
 startup backfill or returns `cold_sources` on miss).
 
+**Response (per `data[]` entry) — `data[]` carries 5 legacy + 7 live-enrichment fields:**
+
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `code` | string | — | Board code (source-specific, e.g. `885595` for THS, `sw_yx` for zhitu) |
+| `name` | string | — | Full board name (e.g. `"A股-申万行业-银行"`) |
+| `type` | string | — | `concept` / `industry` / `index` / `special` |
+| `subtype` | string | — | Source-specific subtype (ths=`同花顺概念` / zhitu=`申万行业`) |
+| `source` | string | — | `ths` / `eastmoney` / `zhitu` — which fetcher supplied the entry |
+| `change_pct` | float \| null | % | **THS only** — 板块涨跌幅 |
+| `up_count` | int \| null | — | **THS only** — 上涨家数 |
+| `down_count` | int \| null | — | **THS only** — 下跌家数 |
+| `limit_up_count` | int \| null | — | **THS only** — 涨停家数; null when upstream reports no limit-up |
+| `limit_down_count` | int \| null | — | **THS only** — 跌停家数; null when upstream reports no limit-down |
+| `explain` | string \| null | — | **THS only** — 概念解析文本 (e.g. `"2022年8月23日公司互动回复：..."`) |
+| `relevance` | int \| null | — | **THS only** — 关联度标签 (`2` = "走势最相关" UI tag, `0` = 普通) |
+
+The 7 enrichment fields are populated only when `ths` is in the
+requested source list (auto-refreshed every 60s; non-THS sources
+leave them as `null`). Field names `change_pct` / `up_count` /
+`down_count` are shared with `/boards/{code}/quote` so a single
+parser handles both surfaces.
+
 **Parameters for `GET /boards/{board_code}/history`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -1860,7 +1883,7 @@ Content-Type: application/json
         }
       },
       "info":   {"source": "zhitu", "data": {"code": "600519", "name": "贵州茅台", "industry": "白酒"}},
-      "boards": {"source": "persistence", "data": [{"code": "885595", "name": "白酒", "type": "industry", "subtype": "同花顺行业", "source": "ths"}]},
+      "boards": {"source": "persistence", "data": [{"code": "885595", "name": "白酒", "type": "industry", "subtype": "同花顺行业", "source": "ths", "change_pct": 1.23, "up_count": 15, "down_count": 8, "limit_up_count": 2, "limit_down_count": 0, "explain": "...", "relevance": 2}]},
       "errors": []
     }
   ],
@@ -1877,7 +1900,7 @@ Content-Type: application/json
 | `results[].quote` | object \| null | Extended `MinimalQuote` (post-2026-08-28, see [MinimalQuote field inventory](#minimalquote-field-inventory)): full OHLV + 量价 + valuation (PE/PB/mcap_yi/float_mcap_yi) + 涨跌停价. This is **not** the full `StockQuote` (`/stocks/{code}/quote` returns more — extra `pe_static`, `pb`, plus a `code/name/source` envelope); `MinimalQuote` is the trimmed 23-field form used by batch-profile. |
 | `results[].features` | object \| null | Server-computed `{trend, pivots, volume}` at the requested `(frequency, days)`. |
 | `results[].info` | object \| null | `{source, data}` company-profile envelope. |
-| `results[].boards` | object \| null | `{source, data}` board-membership envelope. |
+| `results[].boards` | object \| null | `{source, data}` board-membership envelope. `data[]` carries the same 11-field entry contract as `/stocks/{stock_code}/boards` (5 legacy + 7 THS live-enrichment `change_pct` / `up_count` / `down_count` / `limit_up_count` / `limit_down_count` / `explain` / `relevance`); `source` is `"persistence"` (warm-cache merge / fetcher failure — `data` entries then have **5 fields, enrichment all absent**) or `"ths"` (cold-cache fallback — `data` entries have **11 fields**). |
 | `results[].errors[]` | object[] | Per-aspect failure: `{"aspect": "<name>", "error": "<ExceptionClassName>", "message": "<str>"}`. |
 | `summary` | object | `{requested, ok, failed, elapsed_ms}`. |
 
