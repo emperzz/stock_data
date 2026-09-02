@@ -203,6 +203,7 @@ def _resolve_and_validate_days(frequency: str, days: int | None) -> int:
     summary="板块成分股两两重叠度（set-op 服务端化，替代 LLM 手算交集）",
     markets=["csi"],
     capabilities=[],
+    depends_on=["/api/v1/boards/{board_code}/stocks", "cache.get_board_stocks"],
 )
 @map_errors
 def post_boards_stock_overlap(
@@ -288,6 +289,7 @@ def post_boards_stock_overlap(
     summary="股票所属板块两两重叠度（龙头 / 候选 板块重叠度服务端化）",
     markets=["csi"],
     capabilities=[],
+    depends_on=["/api/v1/stocks/{stock_code}/boards", "cache.get_stock_memberships"],
 )
 @map_errors
 def post_stocks_board_overlap(
@@ -425,6 +427,11 @@ def _passes_range(value, range_):
     summary="板块成分股数值过滤（量价/换手/市值/最高涨幅 服务端化）",
     markets=["csi"],
     capabilities=[],
+    depends_on=[
+        "/api/v1/boards/{board_code}/stocks",
+        "cache.get_board_stocks",
+        "cache.get_board_name_with_fallback",
+    ],
 )
 @map_errors
 def post_filter_stocks(
@@ -603,6 +610,11 @@ def _summarize_dragon_tiger(stocks: list[dict]) -> MarketContextDragonTigerSumma
     summary="指数批量画像（trend/pivots/volume 计算指标 + 极简 quote，单 frequency）",
     markets=["csi"],
     capabilities=[],
+    depends_on=[
+        "/api/v1/indices/{index_code}/quote",
+        "/api/v1/indices/{index_code}/kline",
+        "features.build_features",
+    ],
 )
 @map_errors
 def get_indices_batch_profile(
@@ -710,6 +722,16 @@ def get_indices_batch_profile(
     summary="市场全景（早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜；含时段判断）",
     markets=["csi"],
     capabilities=[],
+    depends_on=[
+        "/api/v1/calendar",
+        "/api/v1/news/morning-briefing",
+        "/api/v1/news/market-recap",
+        "/api/v1/news/flash",
+        "/api/v1/zt-pools",
+        "/api/v1/dragon-tiger",
+        "calendar.is_trade_date",
+        "calendar.get_latest_trade_date_on_or_before",
+    ],
 )
 @map_errors
 def get_market_context(
@@ -866,6 +888,14 @@ def get_market_context(
     summary="股票批量画像（trend/pivots/volume 计算指标 + 极简 quote + info + boards）",
     markets=["csi"],
     capabilities=[],
+    depends_on=[
+        "/api/v1/stocks/{stock_code}/quote",
+        "/api/v1/stocks/{code}/kline",
+        "/api/v1/stocks/{code}/info",
+        "/api/v1/stocks/{stock_code}/boards",
+        "features.build_features",
+        "cache.get_stock_memberships",
+    ],
 )
 @map_errors
 def post_stocks_batch_profile(
@@ -1071,6 +1101,12 @@ def _build_minimal_quote_from_board_dict(q: dict) -> MinimalQuote:
     summary="板块批量画像（trend/pivots/volume 计算指标 + 极简 realtime，THS 单源，单 frequency）",
     markets=["csi"],
     capabilities=[],
+    depends_on=[
+        "/api/v1/boards/{board_code}/quote",
+        "/api/v1/boards/{board_code}/history",
+        "features.build_features",
+        "cache.get_board_name_with_fallback",
+    ],
 )
 @map_errors
 def post_boards_batch_profile(
@@ -1200,6 +1236,12 @@ def _board_stats_from_aggregate(agg: AggregateStats, source: str) -> "BoardStats
     summary="市场全量统计（个股+板块涨幅分布 + 桶形数据）",
     markets=["csi"],
     capabilities=[],  # agent aggregation, no single capability
+    depends_on=[
+        "/api/v1/stocks",
+        "/api/v1/boards",
+        "manager.get_realtime_quotes",
+        "cache.get_board_list",
+    ],
 )
 @map_errors
 def get_market_stats(
@@ -1510,9 +1552,7 @@ def _md_quote_block(out: list[str], q) -> None:
         ("昨收", _md_num(q.prev_close, 3)),
     ]
     if q.limit_up is not None or q.limit_down is not None:
-        price_rows.append(
-            ("涨跌停价", f"{_md_num(q.limit_up, 3)} / {_md_num(q.limit_down, 3)}")
-        )
+        price_rows.append(("涨跌停价", f"{_md_num(q.limit_up, 3)} / {_md_num(q.limit_down, 3)}"))
     if any(v and v != "—" for _, v in price_rows):
         _render_dict_block(out, "价格", dict(price_rows))
 
@@ -1864,7 +1904,9 @@ def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
                 rel = b.get("relevance")
                 rel_str = "—" if rel is None else ("走势最相关" if rel == 2 else "普通")
                 explain = b.get("explain") or "—"
-                out.append(f"| {code} {name} ({type_}) | {cp} | {up_dn} | {lim} | {rel_str} | {explain} |")
+                out.append(
+                    f"| {code} {name} ({type_}) | {cp} | {up_dn} | {lim} | {rel_str} | {explain} |"
+                )
             out.append("")
     s = p.summary or {}
     out.append(
