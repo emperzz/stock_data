@@ -517,7 +517,13 @@ class TestMarketStatsPoolsBlock:
         monkeypatch.setenv("ENABLE_API_CACHE", "false")
 
     def test_format_md_renders_pools_section(self, client, monkeypatch):
-        """?format=md → body contains ## 涨跌停 + table headers for zt and dt."""
+        """?format=md → body contains ## 涨跌停 + zt 8-col + dt 7-col tables.
+
+        Field names match ZTPoolStock (schemas.py) — see spec
+        docs/superpowers/specs/2026-09-02-market-context-and-market-stats-redesign-design.md.
+        Renderer previously looked up fossil names (limit_time / limit_count / industry)
+        that no fetcher populates; this test pins the real names.
+        """
         _patch_zt_pool(
             monkeypatch,
             zt_value=(
@@ -525,10 +531,12 @@ class TestMarketStatsPoolsBlock:
                     {
                         "code": "600519",
                         "name": "茅台",
-                        "pct_chg": 10.0,
-                        "limit_time": "10:00",
-                        "limit_count": 2,
-                        "industry": "白酒",
+                        "change_pct": 10.0,
+                        "first_seal_time": "09:30:00",
+                        "last_seal_time": "09:30:00",
+                        "lb_count": 2,
+                        "turnover_pct": 0.85,
+                        "seal_amount": 12345678.0,
                     }
                 ],
                 "akshare",
@@ -539,9 +547,11 @@ class TestMarketStatsPoolsBlock:
                     {
                         "code": "000001",
                         "name": "平安",
-                        "pct_chg": -10.0,
-                        "limit_time": "10:00",
-                        "industry": "银行",
+                        "change_pct": -10.0,
+                        "first_seal_time": "14:00:00",
+                        "last_seal_time": "14:00:00",
+                        "lb_count": 1,
+                        "turnover_pct": 0.42,
                     }
                 ],
                 "akshare",
@@ -555,9 +565,29 @@ class TestMarketStatsPoolsBlock:
         assert "## 涨跌停" in body
         assert "**涨停池**: 1 只" in body
         assert "**跌停池**: 1 只" in body
-        assert "| 代码 | 名称 | 涨跌幅 | 涨停时间 | 连板数 | 所属行业 |" in body
-        assert "| 600519 | 茅台 | +10.00% | 10:00 | 2 | 白酒 |" in body
-        assert "| 000001 | 平安 | -10.00% | 10:00 | 银行 |" in body
+        # ZT 8 列：首次/最后涨停时间 是独立两列；封单金额与换手率补全；所属行业不在 schema。
+        assert (
+            "| 代码 | 名称 | 涨跌幅 | 首次涨停时间 | 最后涨停时间 | "
+            "连板数 | 换手率 | 封单金额 |"
+        ) in body
+        # DT 7 列：跌停无 封单金额 字段，schema 未声明。
+        assert (
+            "| 代码 | 名称 | 涨跌幅 | 首次跌停时间 | 最后跌停时间 | "
+            "连板数 | 换手率 |"
+        ) in body
+        # ZT 行：换手率 2 位小数无符号 + 封单金额用千分位整数（元）。
+        assert (
+            "| 600519 | 茅台 | +10.00% | 09:30:00 | 09:30:00 | "
+            "2 | 0.85% | 12,345,678 |"
+        ) in body
+        # DT 行：连板数 = 1，跌停时长字段直接打印上游字符串。
+        assert (
+            "| 000001 | 平安 | -10.00% | 14:00:00 | 14:00:00 | "
+            "1 | 0.42% |"
+        ) in body
+        # 负向：旧的化石列头不应再出现。
+        assert "涨停时间 | 连板数 | 所属行业" not in body
+        assert "跌停时间 | 所属行业" not in body
 
     def test_format_md_renders_null_pools_when_disabled(self, client, monkeypatch):
         """?include_pools=false&format=md → body contains ## 涨跌停 + null markers."""

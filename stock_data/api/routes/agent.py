@@ -1884,15 +1884,33 @@ def _md_stats_block(title: str, stats, *, total_universe_label: str) -> list[str
 
 def _md_limit_pools_block(out: list[str], pools) -> None:
     """Render the limit_pools block. Always emits a `## 涨跌停` heading;
-    distinguishes disabled / empty / partial / full via inner labels."""
+    distinguishes disabled / empty / partial / full via inner labels.
+
+    Field names map to :class:`stock_data.api.schemas.ZTPoolStock`
+    (zzshare / akshare / zhitu all normalize to the same canonical keys).
+    Industry is intentionally NOT rendered — ``ZTPoolStock`` does not
+    declare an industry field and no fetcher populates one (zzshare
+    upstream has no per-stock industry for limit pools); a backfill
+    path is a separate spec item, not a renderer concern.
+    """
     out.append("## 涨跌停")
     if pools is None:
         out.append("（未启用）")
         out.append("")
         return
     for label, key, headers in [
-        ("涨停池", "zt", "| 代码 | 名称 | 涨跌幅 | 涨停时间 | 连板数 | 所属行业 |"),
-        ("跌停池", "dt", "| 代码 | 名称 | 涨跌幅 | 跌停时间 | 所属行业 |"),
+        (
+            "涨停池",
+            "zt",
+            "| 代码 | 名称 | 涨跌幅 | 首次涨停时间 | 最后涨停时间 | "
+            "连板数 | 换手率 | 封单金额 |",
+        ),
+        (
+            "跌停池",
+            "dt",
+            "| 代码 | 名称 | 涨跌幅 | 首次跌停时间 | 最后跌停时间 | "
+            "连板数 | 换手率 |",
+        ),
     ]:
         rows = getattr(pools, key)
         if rows is None:
@@ -1903,23 +1921,38 @@ def _md_limit_pools_block(out: list[str], pools) -> None:
             out.append(f"**{label}**: {len(rows)} 只")
             out.append("")
             out.append(headers)
-            out.append("|---|---|---|---|---|---|")
+            out.append("|---|---|---|---|---|---|" + ("|" if key == "zt" else ""))
             for s in rows:
                 code = s.get("code", "")
                 name = s.get("name", "")
-                pct = s.get("pct_chg") or s.get("change_pct")
+                pct = s.get("change_pct")
+                first_seal = s.get("first_seal_time") or ""
+                last_seal = s.get("last_seal_time") or ""
+                lb = s.get("lb_count")
+                turnover = s.get("turnover_pct")
+                # 换手率始终为正，用无符号 2 位小数；上游已是百分比单位
+                # （如 0.85 代表 0.85%，不是 0.0085）。
+                turnover_cell = (
+                    f"{turnover:.2f}%" if turnover is not None else "—"
+                )
                 if key == "zt":
-                    t = s.get("limit_time") or s.get("first_limit_time") or ""
-                    lb = s.get("limit_count") or s.get("continuous_limit_count")
-                    industry = s.get("industry", "")
+                    seal_amount = s.get("seal_amount")
+                    seal_cell = (
+                        f"{seal_amount:,.0f}" if seal_amount is not None else "—"
+                    )
+                    lb_cell = str(lb) if lb is not None else "—"
                     out.append(
-                        f"| {code} | {name} | {_md_pct(pct)} | {t} | "
-                        f"{lb if lb is not None else '—'} | {industry} |"
+                        f"| {code} | {name} | {_md_pct(pct)} | "
+                        f"{first_seal} | {last_seal} | "
+                        f"{lb_cell} | {turnover_cell} | {seal_cell} |"
                     )
                 else:
-                    t = s.get("limit_time") or s.get("first_limit_time") or ""
-                    industry = s.get("industry", "")
-                    out.append(f"| {code} | {name} | {_md_pct(pct)} | {t} | {industry} |")
+                    lb_cell = str(lb) if lb is not None else "—"
+                    out.append(
+                        f"| {code} | {name} | {_md_pct(pct)} | "
+                        f"{first_seal} | {last_seal} | "
+                        f"{lb_cell} | {turnover_cell} |"
+                    )
         out.append("")
 
 
