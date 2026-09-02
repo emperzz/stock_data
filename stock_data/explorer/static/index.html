@@ -752,6 +752,254 @@
   })();
   </script>
   <script>
+  // ========================================================================
+  // Module: GraphView
+  // Purpose: render the dependency node-graph (endpoint <-> fetcher served-by
+  //          edges + agent -> endpoint composed-of edges) using vis-network.
+  //          Lazy-loads vis-network from CDN on first render; degrades to a
+  //          message if the CDN is unreachable. Public API:
+  //   GraphView.load()            - async; resolve when vis is loaded (or failed)
+  //   GraphView.render(container, manifest, {onNodeClick}) - draw graph
+  //   GraphView.applyFilter(state) - hide endpoints not matching market/fetcher filter
+  //   GraphView.applySearch(q)    - dim non-matching nodes
+  //   GraphView.destroy()         - tear down the network instance
+  // Reuses: window.MANIFEST shape (fetchers[], depends_on[]), fuzzyMatch logic.
+  // ========================================================================
+  const GraphView = (() => {
+    const VIS_CDN = "https://cdn.jsdelivr.net/npm/vis-network@9/standalone/umd/vis-network.min.js";
+    let network = null;          // vis.Network instance
+    let dataSet = null;          // { nodes: vis.DataSet, edges: vis.DataSet }
+    let lastManifest = null;
+    let lastCallbacks = null;
+    let visLoadPromise = null;
+
+    function load() {
+      if (visLoadPromise) return visLoadPromise;
+      if (window.vis && window.vis.Network) return Promise.resolve();
+      visLoadPromise = new Promise((resolve) => {
+        const s = document.createElement("script");
+        s.src = VIS_CDN;
+        s.onload = () => resolve();
+        s.onerror = () => resolve();  // resolve anyway; render() checks vis
+        document.head.appendChild(s);
+      });
+      return visLoadPromise;
+    }
+
+    // Read a CSS variable from :root, fall back to a hex.
+    function cssVar(name, fallback) {
+      try {
+        const v = getComputedStyle(document.documentElement)
+          .getPropertyValue(name).trim();
+        return v || fallback;
+      } catch { return fallback; }
+    }
+
+    // local fuzzy match (main app's is inside its own IIFE)
+    function fuzzyMatchGlobal(query, text) {
+      if (!query) return true;
+      const q = query.toLowerCase(), t = (text || "").toLowerCase();
+      let i = 0;
+      for (const c of t) { if (c === q[i]) i++; if (i === q.length) return true; }
+      return false;
+    }
+
+    // Build {nodes, edges} from the manifest.
+    //  - Endpoint nodes: one per endpoint. shape = dot (ordinary) / diamond
+    //    (agent composite, capabilities=[] AND tag starts with "agent") /
+    //    dot small grey (no fetchers & no capabilities, e.g. /indicators).
+    //    color by HTTP method.
+    //  - Fetcher nodes: one per distinct fetcher name across all endpoints'
+    //    fetchers[]. box shape, priority badge in label.
+    //  - served-by edges: endpoint -> fetcher (one per fetchers[] entry).
+    //  - composed-of edges: agent endpoint -> target endpoint (depends_on
+    //    kind:"endpoint" items).
+    function buildGraph(manifest) {
+      const nodes = [];
+      const edges = [];
+      const fetcherNames = new Set();
+      const epByPath = {};
+      const accent = cssVar("--accent", "#0071e3");
+      const accentPost = cssVar("--accent-post", "#34c759");
+      const textMuted = cssVar("--text-muted", "#6e6e73");
+      const border = cssVar("--border", "#e5e5ea");
+
+      // First pass: collect fetcher names + index endpoints by path.
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          epByPath[ep.path] = ep;
+          for (const f of (ep.fetchers || [])) fetcherNames.add(f.name);
+        }
+      }
+
+      // Endpoint nodes.
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          const isAgent = (!ep.capabilities || ep.capabilities.length === 0)
+            && sec.id === "agent";
+          const isPure = (!ep.fetchers || ep.fetchers.length === 0)
+            && (!ep.capabilities || ep.capabilities.length === 0)
+            && !isAgent;
+          let shape, color, size;
+          if (isAgent) {
+            shape = "diamond"; color = { border: "#af52de", background: "#f3e8ff", highlight: { border: "#af52de", background: "#e9d5ff" } }; size = 18;
+          } else if (isPure) {
+            shape = "dot"; color = { background: textMuted, border: textMuted }; size = 8;
+          } else {
+            shape = "dot"; const c = ep.method === "POST" ? accentPost : accent; color = { background: c, border: c }; size = 14;
+          }
+          const label = `${ep.method} ${ep.path.length > 28 ? ep.path.slice(0, 25) + "…" : ep.path}`;
+          nodes.push({
+            id: "ep:" + ep.path,
+            label,
+            shape,
+            color,
+            size,
+            title: `${ep.method} ${ep.path}\n${ep.summary || ""}`,
+            group: "endpoint",
+            _ep: ep,
+          });
+        }
+      }
+
+      // Fetcher nodes.
+      for (const name of [...fetcherNames].sort()) {
+        nodes.push({
+          id: "fx:" + name,
+          label: name.replace(/Fetcher$/, ""),
+          shape: "box",
+          color: { background: "#f5f5f7", border: border, highlight: { background: "#e5e5ea", border: textMuted } },
+          font: { color: textMuted, size: 12 },
+          margin: 6,
+          title: name,
+          group: "fetcher",
+          _name: name,
+        });
+      }
+
+      // served-by edges (endpoint -> fetcher).
+      let edgeId = 0;
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          for (const f of (ep.fetchers || [])) {
+            edges.push({
+              id: "e" + (edgeId++),
+              from: "ep:" + ep.path,
+              to: "fx:" + f.name,
+              // lower priority = thicker. P0 -> 2.5px, P9 -> 0.5px.
+              width: Math.max(0.5, 2.5 - 0.2 * (f.priority ?? 5)),
+              color: { color: f.available === false ? border : textMuted, opacity: f.available === false ? 0.4 : 0.6 },
+              dashes: f.available === false,
+              title: `.${f.method}()  P${f.priority}`,
+              _kind: "served-by",
+            });
+          }
+        }
+      }
+
+      // composed-of edges (agent endpoint -> target endpoint).
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          for (const d of (ep.depends_on || [])) {
+            if (d.kind === "endpoint" && epByPath[d.target_path]) {
+              edges.push({
+                id: "e" + (edgeId++),
+                from: "ep:" + ep.path,
+                to: "ep:" + d.target_path,
+                width: 1.5,
+                color: { color: "#af52de", opacity: 0.7 },
+                arrows: "to",
+                dashes: false,
+                title: "composed-of",
+                _kind: "composed-of",
+              });
+            }
+          }
+        }
+      }
+      return { nodes, edges };
+    }
+
+    function render(container, manifest, callbacks) {
+      lastManifest = manifest;
+      lastCallbacks = callbacks || {};
+      if (!window.vis || !window.vis.Network) {
+        container.innerHTML =
+          '<div class="result-empty"><span class="arrow">⚠</span>' +
+          '图库 (vis-network) 加载失败 — 请检查网络，或把库 vendor 到 ' +
+          '<code>explorer/static/vendor/</code> 并改 GraphView 的 VIS_CDN。</div>';
+        return;
+      }
+      const { nodes, edges } = buildGraph(manifest);
+      dataSet = {
+        nodes: new window.vis.DataSet(nodes),
+        edges: new window.vis.DataSet(edges),
+      };
+      const options = {
+        nodes: { font: { color: cssVar("--text", "#1d1d1f"), size: 13 } },
+        edges: { smooth: { type: "continuous", roundness: 0.5 } },
+        physics: {
+          stabilization: { iterations: 120, fit: true },
+          barnesHut: { gravitationalConstant: -8000, springLength: 140, springConstant: 0.04 },
+        },
+        interaction: { hover: true, tooltipDelay: 120, navigationButtons: false, zoomView: true, dragView: true },
+      };
+      network = new window.vis.Network(container, dataSet, options);
+      network.on("click", (params) => {
+        if (params.nodes.length && lastCallbacks.onNodeClick) {
+          const node = dataSet.nodes.get(params.nodes[0]);
+          lastCallbacks.onNodeClick(node);
+        }
+      });
+    }
+
+    // Hide nodes whose endpoint doesn't match the market/fetcher filter.
+    // Fetcher nodes stay visible iff at least one served-by neighbor stays.
+    function applyFilter(state) {
+      if (!network || !dataSet) return;
+      const visibleEp = new Set();
+      for (const sec of lastManifest.sections) {
+        for (const ep of sec.endpoints) {
+          const marketOk = (ep.markets || []).some(m => (state.marketFilter || []).includes(m));
+          const fetcherOk = !state.fetcherFilter
+            || (ep.fetchers || []).some(f => f.name === state.fetcherFilter)
+            || (!ep.fetchers || ep.fetchers.length === 0);
+          if (marketOk && fetcherOk) visibleEp.add("ep:" + ep.path);
+        }
+      }
+      // fetchers visible iff a visible endpoint serves them
+      const visibleFx = new Set();
+      for (const e of dataSet.edges.get()) {
+        if (e._kind === "served-by" && visibleEp.has(e.from)) visibleFx.add(e.to);
+      }
+      const updates = dataSet.nodes.get().map(n => ({
+        id: n.id,
+        hidden: !(n.group === "endpoint" ? visibleEp.has(n.id) : visibleFx.has(n.id)),
+      }));
+      dataSet.nodes.update(updates);
+      network.redraw();
+    }
+
+    // Dim (not hide) nodes whose label doesn't fuzzy-match q.
+    function applySearch(q) {
+      if (!network || !dataSet) return;
+      const query = (q || "").trim();
+      const updates = dataSet.nodes.get().map(n => {
+        const match = !query || fuzzyMatchGlobal(query, n.label);
+        return { id: n.id, opacity: match ? 1.0 : 0.15 };
+      });
+      dataSet.nodes.update(updates);
+    }
+
+    function destroy() {
+      if (network) { network.destroy(); network = null; }
+      dataSet = null;
+    }
+
+    return { load, render, applyFilter, applySearch, destroy };
+  })();
+  </script>
+  <script>
   // === Main app (boots after MANIFEST) ===
   (function() {
     "use strict";
