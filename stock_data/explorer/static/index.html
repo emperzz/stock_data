@@ -781,6 +781,9 @@
     let lastManifest = null;
     let lastCallbacks = null;
     let visLoadPromise = null;
+    let lastLayout = "force";   // "force" | "section"
+    let expandedEp = null;      // section 模式下当前展开的 endpoint 节点 id ("ep:<path>")
+    let allServedBy = [];       // 全部 served-by 边(进 DataSet 前备份, section 模式展开用)
 
     function load() {
       if (visLoadPromise) return visLoadPromise;
@@ -811,6 +814,88 @@
       let i = 0;
       for (const c of t) { if (c === q[i]) i++; if (i === q.length) return true; }
       return false;
+    }
+
+    // 分区模式短标签: 去掉 /api/v1 前缀, 截到 26 字符。agent 端点附加依赖计数。
+    function shortGraphLabel(ep) {
+      const p = (ep.path || "").replace(/^\/api\/v1/, "");
+      let s = `${ep.method} ${p}`;
+      if (ep.capabilities && ep.capabilities.length === 0 && ep.depends_on) {
+        const n = ep.depends_on.filter(d => d.kind === "endpoint").length;
+        if (n > 0) s += ` ⇢${n}`;
+      }
+      return s.length > 30 ? s.slice(0, 29) + "…" : s;
+    }
+
+    // 按 section 手工摆点(关 physics)。端点 → 每 section 一列; fetcher → 底部一行。
+    // 返回 {w,h} 供容器扩容。行/列间距是近似值(非等宽字体), 允许个别轻微重叠。
+    function layoutSection(nodes) {
+      const epNodes = nodes.filter(n => n.group === "endpoint");
+      const fxNodes = nodes.filter(n => n.group === "fetcher");
+      // path -> sectionId(manifest 顺序稳定)
+      const p2s = {};
+      for (const sec of lastManifest.sections)
+        for (const ep of sec.endpoints) p2s[ep.path] = sec.id;
+      const cols = new Map();
+      for (const n of epNodes) {
+        const sid = p2s[n._ep.path] || "?";
+        if (!cols.has(sid)) cols.set(sid, []);
+        cols.get(sid).push(n);
+      }
+      const X_PAD = 24, Y_PAD = 24, ROW_H = 34, TITLE_H = 40;
+      let x = X_PAD, maxY = Y_PAD;
+      for (const [sid, list] of cols) {
+        let colW = TITLE_H + sid.length * 9; // 标题宽度下限
+        for (const n of list) colW = Math.max(colW, n.label.length * 8.6 + 28);
+        let y = Y_PAD + TITLE_H;
+        for (const n of list) { n.x = x; n.y = y; y += ROW_H; }
+        maxY = Math.max(maxY, y);
+        x += colW + 18;
+      }
+      // fetcher 底部条
+      const fxY = maxY + 90;
+      let fxW = 0;
+      for (const n of fxNodes) fxW = Math.max(fxW, n.label.length * 9 + 30);
+      let fxX = X_PAD;
+      for (const n of fxNodes) { n.x = fxX; n.y = fxY; fxX += fxW; }
+      return { w: Math.max(x, fxX) + 30, h: fxY + 44 };
+    }
+
+    function fetcherColor(active) {
+      if (active) return { background: "#fff4e0", border: cssVar("--accent-warn", "#ff9500") };
+      return { background: "#f5f5f7", border: cssVar("--border", "#e5e5ea") };
+    }
+
+    // 给一个端点的服务 fetcher 点亮, 其余置灰。
+    function focusFetchers(fromEpId) {
+      if (!dataSet) return;
+      const act = new Set(
+        allServedBy.filter(e => e.from === fromEpId).map(e => e.to)
+      );
+      const ups = dataSet.nodes.get()
+        .filter(n => n.group === "fetcher")
+        .map(n => ({ id: n.id, color: fetcherColor(act.has(n.id)) }));
+      dataSet.nodes.update(ups);
+    }
+
+    function collapseExpansion() {
+      if (!dataSet || !expandedEp) return;
+      const toDrop = allServedBy.filter(e => e.from === expandedEp).map(e => e.id);
+      dataSet.edges.remove(toDrop);
+      expandedEp = null;
+      focusFetchers(null);       // 全部 fetcher 复原置灰
+      if (network) network.redraw();
+    }
+
+    // 单击切换: 已展开同端点 → 收起; 否则先收旧再展新。
+    function toggleExpansion(epNodeId) {
+      if (!dataSet) return;
+      if (expandedEp === epNodeId) { collapseExpansion(); return; }
+      collapseExpansion();
+      expandedEp = epNodeId;
+      dataSet.edges.add(allServedBy.filter(e => e.from === epNodeId));
+      focusFetchers(epNodeId);
+      if (network) network.redraw();
     }
 
     // Build {nodes, edges} from the manifest.
@@ -932,6 +1017,7 @@
     function render(container, manifest, callbacks) {
       lastManifest = manifest;
       lastCallbacks = callbacks || {};
+      lastLayout = (callbacks && callbacks.layout) || "force";
       if (!window.vis || !window.vis.Network) {
         container.innerHTML =
           '<div class="result-empty"><span class="arrow">⚠</span>' +
@@ -939,7 +1025,33 @@
           '<code>explorer/static/vendor/</code> 并改 GraphView 的 VIS_CDN。</div>';
         return;
       }
-      const { nodes, edges } = buildGraph(manifest);
+      const isSection = lastLayout === "section";
+      const graph = buildGraph(manifest);          // nodes + 全部边(两种 _kind)
+      const nodes = graph.nodes;
+      allServedBy = graph.edges.filter(e => e._kind === "served-by");
+      let edges = isSection
+        ? graph.edges.filter(e => e._kind !== "served-by")  // served-by 默认不画
+        : graph.edges;
+
+      if (isSection) {
+        // 端点换短标签(force 模式保持原长标签)
+        nodes.filter(n => n.group === "endpoint").forEach(n => {
+          n._fullLabel = n.label;
+          n.label = shortGraphLabel(n._ep);
+          n.title = `${n._ep.method} ${n._ep.path}\n${n._ep.summary || ""}`;
+        });
+        const extent = layoutSection(nodes);        // 赋 x/y
+        nodes.forEach(n => { n.fixed = { x: true, y: true }; });
+        // 容器按内容尺寸扩容(外层 #graphWrap 滚动)
+        container.style.width = extent.w + "px";
+        container.style.height = extent.h + "px";
+        container.style.minWidth = "640px";
+      } else {
+        // force: 只改宽, 不动 height(保留 applyView inline / 或父 #graphWrap 决定)
+        container.style.width = "100%";
+        container.style.minWidth = "640px";
+      }
+
       dataSet = {
         nodes: new window.vis.DataSet(nodes),
         edges: new window.vis.DataSet(edges),
@@ -947,19 +1059,31 @@
       const options = {
         nodes: { font: { color: cssVar("--text", "#1d1d1f"), size: 13 } },
         edges: { smooth: { type: "continuous", roundness: 0.5 } },
-        physics: {
-          stabilization: { iterations: 120, fit: true },
-          barnesHut: { gravitationalConstant: -8000, springLength: 140, springConstant: 0.04 },
-        },
+        physics: isSection
+          ? false
+          : {
+              stabilization: { iterations: 120, fit: true },
+              barnesHut: { gravitationalConstant: -8000, springLength: 140, springConstant: 0.04 },
+            },
         interaction: { hover: true, tooltipDelay: 120, navigationButtons: false, zoomView: true, dragView: true },
       };
       network = new window.vis.Network(container, dataSet, options);
+      expandedEp = null;
+
       network.on("click", (params) => {
-        if (params.nodes.length && lastCallbacks.onNodeClick) {
+        if (isSection && (!params.nodes || params.nodes.length === 0)) {
+          collapseExpansion();   // 点空白收回
+          return;
+        }
+        if (params.nodes && params.nodes.length) {
           const node = dataSet.nodes.get(params.nodes[0]);
-          lastCallbacks.onNodeClick(node);
+          if (node && isSection && node.group === "endpoint") {
+            toggleExpansion(node.id);
+          }
+          if (node && lastCallbacks.onNodeClick) lastCallbacks.onNodeClick(node);
         }
       });
+      if (isSection) network.fit({ animation: false });
     }
 
     // Hide nodes whose endpoint doesn't match the market/fetcher filter.
@@ -986,6 +1110,11 @@
         hidden: !(n.group === "endpoint" ? visibleEp.has(n.id) : visibleFx.has(n.id)),
       }));
       dataSet.nodes.update(updates);
+      // 分区模式: 若当前展开的端点被过滤隐藏, 收起其边, 避免悬空线。
+      if (lastLayout === "section" && expandedEp) {
+        const hiddenEps = new Set(updates.filter(u => u.hidden).map(u => u.id));
+        if (hiddenEps.has(expandedEp)) collapseExpansion();
+      }
       network.redraw();
     }
 
