@@ -59,6 +59,7 @@
     .segmented .seg.active { background: var(--accent); color: #fff; }
     .graph-toolbar { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; flex-wrap: wrap; }
     .graph-toolbar .graph-toolbar-hint { font-size: 12px; color: var(--text-muted); }
+    .graph-dir-off { opacity: 0.45; pointer-events: none; }
     /* === Layout === */
     .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 440px; gap: 0; }
     .sidebar {
@@ -783,9 +784,17 @@
     let lastManifest = null;
     let lastCallbacks = null;
     let visLoadPromise = null;
-    let lastLayout = "force";   // "force" | "section"
-    let expandedEp = null;      // section 模式下当前展开的 endpoint 节点 id ("ep:<path>")
-    let allServedBy = [];       // 全部 served-by 边(进 DataSet 前备份, section 模式展开用)
+    let lastLayout = "force";   // "force" | "section"(旧别名) | "flow"(Task 2 起)
+    let focusedId = null;       // 依赖流: 当前聚焦节点 id (null=无)
+    let pinnedFocus = false;    // 聚焦是否被 click 钉住(hover 不钉)
+    let searchDim = {};         // node id -> 命中?未命中:0.15(applySearch 写入)
+    let flowBoxes = [];         // [{sid,x,y,w,h}] section 分组框几何(beforeDrawing 画)
+    let allServedBy = [];       // 全部 served-by 边(applyFilter 派生 fetcher 可见性)
+    let baseEdges = [];         // 边样式快照 {id,from,to,width,color:{color,opacity}}
+    let baseNode = {};          // node id -> {color} 样式快照(聚焦/复原用)
+
+    // "flow" 与其旧字面 "section"(Task 2 改名前的占位)都算依赖流布局。
+    function isFlowLayout(l) { return l === "flow" || l === "section"; }
 
     function load() {
       if (visLoadPromise) return visLoadPromise;
@@ -818,86 +827,207 @@
       return false;
     }
 
-    // 分区模式短标签: 去掉 /api/v1 前缀, 截到 26 字符。agent 端点附加依赖计数。
-    function shortGraphLabel(ep) {
-      const p = (ep.path || "").replace(/^\/api\/v1/, "");
-      let s = `${ep.method} ${p}`;
-      if (ep.capabilities && ep.capabilities.length === 0 && ep.depends_on) {
-        const n = ep.depends_on.filter(d => d.kind === "endpoint").length;
-        if (n > 0) s += ` ⇢${n}`;
+    // 端点图内短标签: 分组框标题已表达 section 前缀 → 在标签里去掉该前缀,
+    // 超长再省略; agent(顶行/左列)用末段 action 名, 避免长 path 占满。
+    function flowLabelFor(ep, sid) {
+      const base = (ep.path || "").replace(/^\/api\/v1/, "");
+      let rest;
+      if (sid === "agent") {
+        const segs = base.split("/").filter(Boolean);
+        rest = segs.length ? segs[segs.length - 1] : base;
+        rest = ep.method + " " + rest;
+      } else {
+        const re = new RegExp("^/" + sid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+        const cut = base.replace(re, "");
+        // 去掉前缀后余下能以 / 或 { 开头才算有效; 否则保留原名, 防把整段删光。
+        rest = (cut && /^[/{]/.test(cut)) ? cut : base;
+        rest = ep.method + " " + rest;
       }
-      return s.length > 30 ? s.slice(0, 29) + "…" : s;
+      rest = rest.replace(/^(\w+ )\//, "$1");      // "GET /{..}" -> "GET {..}"
+      return rest.length > 26 ? rest.slice(0, 25) + "…" : rest;
     }
 
-    // 按 section 手工摆点(关 physics)。端点 → 每 section 一列; fetcher → 底部一行。
-    // 返回 {w,h} 供容器扩容。行/列间距是近似值(非等宽字体), 允许个别轻微重叠。
-    function layoutSection(nodes) {
-      const epNodes = nodes.filter(n => n.group === "endpoint");
-      const fxNodes = nodes.filter(n => n.group === "fetcher");
-      // path -> sectionId(manifest 顺序稳定)
+    // 依赖流布局: 3 个横排 rank —— agent(上/左)→ section 分组框(中)→ fetcher(下/右)。
+    // 端点固定坐标、physics off。agent/fetcher 按其目标/来源端点的质心定位,
+    // 冲突向流动方向推避免重叠, 使 served-by/composed-of 边尽量短且少交叉。
+    function floatRow(list, desiredOf, y, widthOf, clampMin, clampMax, minGap) {
+      const arr = [...list].sort((a, b) => desiredOf(a) - desiredOf(b));
+      let cursor = clampMin;
+      for (const n of arr) {
+        const want = Math.max(clampMin, Math.min(desiredOf(n), clampMax));
+        n.x = Math.max(want, cursor);
+        n.y = y;
+        cursor = n.x + widthOf(n) + minGap;
+      }
+    }
+
+    // 垂直摊开(横排 LR 用): 固定 x, 依 desiredOf(沿 y)排序并避免重叠。
+    function floatCol(list, desiredOf, x, minV, maxV, gap) {
+      const arr = [...list].sort((a, b) => desiredOf(a) - desiredOf(b));
+      let cursor = minV;
+      for (const n of arr) {
+        const want = Math.max(minV, Math.min(desiredOf(n), maxV));
+        n.x = x;
+        n.y = Math.max(want, cursor);
+        cursor = n.y + 34 + gap;
+      }
+    }
+
+    // 把已解析好的一行节点整体在 [lo, hi] 区间内居中, 避免窝在单侧留大片空白。
+    function centerRow(list, sizeOf, lo, hi) {
+      if (!list.length) return;
+      const minX = Math.min(...list.map(n => n.x));
+      const span = Math.max(...list.map(n => n.x + sizeOf(n))) - minX;
+      if (span >= hi - lo) return;
+      const d = lo + (hi - lo - span) / 2 - minX;
+      list.forEach(n => { n.x += d; });
+    }
+
+    // centerRow 的纵向版本(用于 LR 的列)。
+    function centerCol(list, sizeOf, lo, hi) {
+      if (!list.length) return;
+      const minY = Math.min(...list.map(n => n.y));
+      const span = Math.max(...list.map(n => n.y + sizeOf(n))) - minY;
+      if (span >= hi - lo) return;
+      const d = lo + (hi - lo - span) / 2 - minY;
+      list.forEach(n => { n.y += d; });
+    }
+
+    // 返回 {w,h};给每个 node 赋 x/y;填充 flowBoxes;在 nodes 尾部追加不可见 anchor。
+    // dir = "TB"(竖排, 默认: 框横排 + agent 顶行 + fetcher 底行) |
+    //       "LR"(横排: agent 左列 / section 框纵向堆叠 / fetcher 右列)。
+    function layoutFlow(nodes, dir) {
       const p2s = {};
       for (const sec of lastManifest.sections)
         for (const ep of sec.endpoints) p2s[ep.path] = sec.id;
-      const cols = new Map();
+
+      const epNodes = nodes.filter(n => n.group === "endpoint");
+      const fxNodes = nodes.filter(n => n.group === "fetcher");
+      const epById = {};
+      for (const n of epNodes) epById[n.id] = n;
+
+      const agents = [];
+      const cols = new Map();                    // sectionId -> endpoint node[]
       for (const n of epNodes) {
         const sid = p2s[n._ep.path] || "?";
-        if (!cols.has(sid)) cols.set(sid, []);
-        cols.get(sid).push(n);
+        n.label = flowLabelFor(n._ep, sid);      // 布局宽度与显示共用同一短标签
+        if (sid === "agent") agents.push(n);
+        else { if (!cols.has(sid)) cols.set(sid, []); cols.get(sid).push(n); }
       }
-      const X_PAD = 24, Y_PAD = 24, ROW_H = 34, TITLE_H = 40;
-      let x = X_PAD, maxY = Y_PAD;
+
+      // 间距(ROW/HEAD)放大, 中间层端点不贴太紧。
+      const PAD = 56, ROW = 42, HEAD = 40, ROW_W = 7.6;
+      const isTB = dir !== "LR";
+      const tgtOf = n => (n._ep.depends_on || [])
+        .filter(d => d.kind === "endpoint")
+        .map(d => epById["ep:" + d.target_path])
+        .filter(Boolean);
+      const srcOf = n => allServedBy.filter(e => e.to === n.id).map(e => epById[e.from]).filter(Boolean);
+      const mean = a => a.reduce((s, t) => s + t, 0) / a.length;
+      const boxWOf = list => Math.max(70, ...list.map(n => Math.ceil(n.label.length) * ROW_W)) + 18;
+      const boxHOf = list => HEAD + list.length * ROW + 26;
+      const placeInBox = (b, list) =>
+        list.forEach((n, i) => { n.x = b.x + 28; n.y = b.y + HEAD + ROW / 2 + i * ROW; });
+      const anchorOf = (cw, ch) => [
+        { id: "flow:tl", group: "anchor", x: 0, y: 0, label: "", shape: "dot", size: 1, opacity: 0, fixed: { x: true, y: true } },
+        { id: "flow:br", group: "anchor", x: cw, y: ch, label: "", shape: "dot", size: 1, opacity: 0, fixed: { x: true, y: true } },
+      ];
+
+      flowBoxes = [];
+      if (isTB) {
+        // R1: 分组框从左到右横排(框内端点竖排)。
+        const rowTop = PAD + 170;                // 顶部留走廊画 composed-of
+        let x = PAD;
+        for (const [sid, list] of cols) {
+          const w = boxWOf(list), h = boxHOf(list);
+          const b = { sid, x, y: rowTop, w, h, eps: list };
+          flowBoxes.push(b);
+          placeInBox(b, list);
+          x += w + 58;                           // 框间距
+        }
+        const boxRight = Math.max(PAD, x - 58);
+        const maxBoxBottom = flowBoxes.length
+          ? Math.max(...flowBoxes.map(b => b.y + b.h)) : rowTop + HEAD;
+        const contentW = Math.max(PAD * 2 + agents.length * 120, boxRight + PAD);
+        const agentDesired = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.x)) : contentW / 2; };
+        floatRow(agents, agentDesired, PAD, n => n.label.length * ROW_W + 60, PAD, contentW - PAD, 60);
+        centerRow(agents, n => n.label.length * ROW_W + 60, PAD, contentW - PAD);
+        const fxY = maxBoxBottom + 210;
+        const fxDesired = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.x)) : contentW / 2; };
+        floatRow(fxNodes, fxDesired, fxY, n => n.label.length * 9 + 80, PAD, contentW - PAD, 50);
+        centerRow(fxNodes, n => n.label.length * 9 + 80, PAD, contentW - PAD);
+        const h = fxY + 80;
+        nodes.push(...anchorOf(contentW, h));
+        return { w: contentW, h };
+      }
+
+      // LR: 中间层 section 框改为纵向堆叠(从上到下), 各框仍是端点竖列。
+      const agentColW = agents.length
+        ? Math.max(...agents.map(n => n.label.length * ROW_W + 70)) : 120;
+      const boxColX = PAD + agentColW + 70;
+      let cy = PAD;
+      let colMaxW = 10;
       for (const [sid, list] of cols) {
-        let colW = TITLE_H + sid.length * 9; // 标题宽度下限
-        for (const n of list) colW = Math.max(colW, n.label.length * 8.6 + 28);
-        let y = Y_PAD + TITLE_H;
-        for (const n of list) { n.x = x; n.y = y; y += ROW_H; }
-        maxY = Math.max(maxY, y);
-        x += colW + 18;
+        const w = boxWOf(list), h = boxHOf(list);
+        const b = { sid, x: boxColX, y: cy, w, h, eps: list };
+        flowBoxes.push(b);
+        placeInBox(b, list);
+        colMaxW = Math.max(colMaxW, w);
+        cy += h + 46;
       }
-      // fetcher 底部条
-      const fxY = maxY + 90;
-      let fxW = 0;
-      for (const n of fxNodes) fxW = Math.max(fxW, n.label.length * 9 + 30);
-      let fxX = X_PAD;
-      for (const n of fxNodes) { n.x = fxX; n.y = fxY; fxX += fxW; }
-      return { w: Math.max(x, fxX) + 30, h: fxY + 44 };
+      const fxX = boxColX + colMaxW + 180;
+      const fxMaxW = fxNodes.length ? Math.max(...fxNodes.map(n => n.label.length * 9 + 80)) : 220;
+      const yMax = Math.max(cy - 46 + HEAD, PAD + 60);
+      const aDesY = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.y)) : PAD + HEAD; };
+      floatCol(agents, aDesY, PAD, PAD, yMax, 46);
+      centerCol(agents, () => 40, PAD, yMax);
+      const fDesY = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.y)) : PAD + HEAD; };
+      floatCol(fxNodes, fDesY, fxX, PAD, yMax, 36);
+      centerCol(fxNodes, () => 40, PAD, yMax);
+      const colBottom = a => a.length ? Math.max(...a.map(n => n.y + 40)) : 0;
+      const contentW = fxX + fxMaxW + PAD;
+      const contentH = Math.max(yMax, colBottom(agents), colBottom(fxNodes)) + PAD;
+      nodes.push(...anchorOf(contentW, contentH));
+      return { w: contentW, h: contentH };
     }
 
-    function fetcherColor(active) {
-      if (active) return { background: "#fff4e0", border: cssVar("--accent-warn", "#ff9500") };
-      return { background: "#f5f5f7", border: cssVar("--border", "#e5e5ea") };
+    function hexA(hex, a) {
+      const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+      if (!m) return null;
+      const n = parseInt(m[1], 16);
+      return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
     }
 
-    // 给一个端点的服务 fetcher 点亮, 其余置灰。
-    function focusFetchers(fromEpId) {
-      if (!dataSet) return;
-      const act = new Set(
-        allServedBy.filter(e => e.from === fromEpId).map(e => e.to)
-      );
-      const ups = dataSet.nodes.get()
-        .filter(n => n.group === "fetcher")
-        .map(n => ({ id: n.id, color: fetcherColor(act.has(n.id)) }));
-      dataSet.nodes.update(ups);
+    function rrPath(ctx, x, y, w, h, r) {
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
     }
 
-    function collapseExpansion() {
-      if (!dataSet || !expandedEp) return;
-      const toDrop = allServedBy.filter(e => e.from === expandedEp).map(e => e.id);
-      dataSet.edges.remove(toDrop);
-      expandedEp = null;
-      focusFetchers(null);       // 全部 fetcher 复原置灰
-      if (network) network.redraw();
-    }
-
-    // 单击切换: 已展开同端点 → 收起; 否则先收旧再展新。
-    function toggleExpansion(epNodeId) {
-      if (!dataSet) return;
-      if (expandedEp === epNodeId) { collapseExpansion(); return; }
-      collapseExpansion();
-      expandedEp = epNodeId;
-      dataSet.edges.add(allServedBy.filter(e => e.from === epNodeId));
-      focusFetchers(epNodeId);
-      if (network) network.redraw();
+    // 在每次重绘的底层画 section 分组框(半透明圆角 + 标题)。
+    function drawFlowBoxes(ctx) {
+      if (!flowBoxes.length) return;
+      const border = cssVar("--border", "#e5e5ea");
+      const muted = cssVar("--text-muted", "#6e6e73");
+      ctx.save();
+      ctx.font = "600 12px -apple-system, 'PingFang SC', sans-serif";
+      for (const b of flowBoxes) {
+        ctx.beginPath();
+        rrPath(ctx, b.x, b.y, b.w, b.h, 8);
+        ctx.fillStyle = hexA(border, 0.45) || "transparent";
+        ctx.fill();
+        ctx.strokeStyle = border;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = muted;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+        ctx.fillText(b.sid, b.x + 12, b.y + 19);
+      }
+      ctx.restore();
     }
 
     // Build {nodes, edges} from the manifest.
@@ -1027,30 +1157,26 @@
           '<code>explorer/static/vendor/</code> 并改 GraphView 的 VIS_CDN。</div>';
         return;
       }
-      const isSection = lastLayout === "section";
-      const graph = buildGraph(manifest);          // nodes + 全部边(两种 _kind)
+      const isFlow = isFlowLayout(lastLayout);
+      const graph = buildGraph(manifest);       // nodes + 全部边(两种 _kind)
       const nodes = graph.nodes;
       allServedBy = graph.edges.filter(e => e._kind === "served-by");
-      let edges = isSection
-        ? graph.edges.filter(e => e._kind !== "served-by")  // served-by 默认不画
-        : graph.edges;
+      const edges = graph.edges;                // 依赖流与力导向都全画(聚焦淡化靠 paint)
 
-      if (isSection) {
-        // 端点换短标签(force 模式保持原长标签)
+      if (isFlow) {
+        // 端点短标签在 layoutFlow 内按 section 前缀生成; 这里只设 tooltip 全文。
         nodes.filter(n => n.group === "endpoint").forEach(n => {
-          n._fullLabel = n.label;
-          n.label = shortGraphLabel(n._ep);
           n.title = `${n._ep.method} ${n._ep.path}\n${n._ep.summary || ""}`;
         });
-        const extent = layoutSection(nodes);        // 赋 x/y
+        const extent = layoutFlow(nodes, (callbacks && callbacks.dir) || "TB");
         nodes.forEach(n => { n.fixed = { x: true, y: true }; });
-        // 容器按内容尺寸扩容(外层 #graphWrap 滚动)
         container.style.width = extent.w + "px";
         container.style.height = extent.h + "px";
         container.style.minWidth = "640px";
       } else {
         // force: 复位为铺满父容器 #graphWrap(其有定高, height:100% 有效)。
-        // 分区切换曾把 height 设成内容 px, 切回 force 必须复位。
+        // 依赖流/旧分区切换曾把 height 设成内容 px, 切回 force 必须复位。
+        flowBoxes = [];
         container.style.width = "100%";
         container.style.height = "100%";
         container.style.minWidth = "640px";
@@ -1060,10 +1186,18 @@
         nodes: new window.vis.DataSet(nodes),
         edges: new window.vis.DataSet(edges),
       };
+      // 样式快照: focus paint 复原/强调依据(对象保持 render 时的原样)。
+      baseEdges = dataSet.edges.get().map(e => ({
+        id: e.id, from: e.from, to: e.to, width: e.width,
+        color: { color: e.color.color, opacity: e.color.opacity },
+      }));
+      baseNode = {};
+      dataSet.nodes.get().forEach(n => { baseNode[n.id] = { color: n.color }; });
+
       const options = {
         nodes: { font: { color: cssVar("--text", "#1d1d1f"), size: 13 } },
         edges: { smooth: { type: "continuous", roundness: 0.5 } },
-        physics: isSection
+        physics: isFlow
           ? false
           : {
               stabilization: { iterations: 120, fit: true },
@@ -1072,26 +1206,40 @@
         interaction: { hover: true, tooltipDelay: 120, navigationButtons: false, zoomView: true, dragView: true },
       };
       network = new window.vis.Network(container, dataSet, options);
-      expandedEp = null;
+      focusedId = null;
+      pinnedFocus = false;
+      searchDim = {};
 
-      network.on("click", (params) => {
-        if (isSection && (!params.nodes || params.nodes.length === 0)) {
-          collapseExpansion();   // 点空白收回
-          return;
-        }
-        if (params.nodes && params.nodes.length) {
+      if (isFlow) {
+        network.on("beforeDrawing", drawFlowBoxes);
+        network.on("hoverNode", (p) => {
+          const n = dataSet.nodes.get(p.node);
+          if (!n || n.group === "anchor") return;
+          if (!pinnedFocus && focusedId !== n.id) setFocus(n.id, false);
+        });
+        network.on("blurNode", () => { if (!pinnedFocus) clearFocus(); });
+        network.on("click", (params) => {
+          const id = params.nodes && params.nodes.length ? params.nodes[0] : null;
+          const node = id ? dataSet.nodes.get(id) : null;
+          if (!node || node.group === "anchor") { clearFocus(); return; }
+          if (focusedId === node.id && pinnedFocus) { clearFocus(); }
+          else { setFocus(node.id, true); }
+          if (lastCallbacks.onNodeClick) lastCallbacks.onNodeClick(node);
+        });
+      } else {
+        network.on("click", (params) => {
+          if (!params.nodes || params.nodes.length === 0) return;
           const node = dataSet.nodes.get(params.nodes[0]);
-          if (node && isSection && node.group === "endpoint") {
-            toggleExpansion(node.id);
-          }
           if (node && lastCallbacks.onNodeClick) lastCallbacks.onNodeClick(node);
-        }
-      });
-      if (isSection) network.fit({ animation: false });
+        });
+      }
+
+      if (isFlow) network.fit({ animation: false });
     }
 
     // Hide nodes whose endpoint doesn't match the market/fetcher filter.
     // Fetcher nodes stay visible iff at least one served-by neighbor stays.
+    // vis 会自动不画 hidden 节点的相连边 → 无需手动删边, 也不会悬空线。
     function applyFilter(state) {
       if (!network || !dataSet) return;
       const visibleEp = new Set();
@@ -1104,36 +1252,83 @@
           if (marketOk && fetcherOk) visibleEp.add("ep:" + ep.path);
         }
       }
-      // fetchers visible iff a visible endpoint serves them. Derive from
-      // allServedBy (full served-by set) not dataSet.edges: in section mode
-      // served-by edges are absent from the DataSet until an endpoint is
-      // expanded, so an edges-based walk would hide every fetcher node.
       const visibleFx = new Set();
-      for (const e of allServedBy) {
-        if (visibleEp.has(e.from)) visibleFx.add(e.to);
-      }
-      const updates = dataSet.nodes.get().map(n => ({
-        id: n.id,
-        hidden: !(n.group === "endpoint" ? visibleEp.has(n.id) : visibleFx.has(n.id)),
-      }));
+      for (const e of allServedBy) if (visibleEp.has(e.from)) visibleFx.add(e.to);
+      const updates = dataSet.nodes.get().map(n => {
+        if (n.group === "anchor") return null;
+        const vis = n.group === "endpoint" ? visibleEp.has(n.id)
+          : n.group === "fetcher" ? visibleFx.has(n.id) : true;
+        return { id: n.id, hidden: !vis };
+      }).filter(Boolean);
       dataSet.nodes.update(updates);
-      // 分区模式: 若当前展开的端点被过滤隐藏, 收起其边, 避免悬空线。
-      if (lastLayout === "section" && expandedEp) {
-        const hiddenEps = new Set(updates.filter(u => u.hidden).map(u => u.id));
-        if (hiddenEps.has(expandedEp)) collapseExpansion();
+      if (focusedId) {
+        const f = dataSet.nodes.get(focusedId);
+        if (!f || f.hidden) clearFocus();
       }
-      network.redraw();
+      if (network) network.redraw();
     }
 
-    // Dim (not hide) nodes whose label doesn't fuzzy-match q.
+    // 聚焦某节点: paint 会强调它及其 1 跳邻居的边/节点, 淡化其余。
+    function setFocus(id, pin) {
+      focusedId = id;
+      pinnedFocus = !!pin;
+      paint();
+    }
+
+    function clearFocus() {
+      if (!focusedId) return;
+      focusedId = null;
+      pinnedFocus = false;
+      paint();
+    }
+
+    // 依 searchDim(暗化) × focus(聚焦强调)重算全部节点/边最终样式。
+    // 无聚焦时等价于纯 search 暗化; force 模式 focusedId 恒 null → 与旧行为一致。
+    function paint() {
+      if (!network || !dataSet) return;
+      const warn = cssVar("--accent-warn", "#ff9500");
+      const emph = new Set();
+      if (focusedId) {
+        emph.add(focusedId);
+        for (const e of baseEdges) {
+          if (e.from === focusedId || e.to === focusedId) { emph.add(e.from); emph.add(e.to); }
+        }
+      }
+      const nodeUpd = dataSet.nodes.get()
+        .filter(n => n.group !== "anchor")
+        .map(n => {
+          const base = (n.id in searchDim) ? searchDim[n.id] : 1;   // 1 or 0.15
+          const opacity = (focusedId && !emph.has(n.id)) ? base * 0.15 : base;
+          const upd = { id: n.id, opacity };
+          const baseC = baseNode[n.id] ? baseNode[n.id].color : n.color;
+          if (focusedId === n.id) upd.color = Object.assign({}, baseC, { border: warn });
+          else upd.color = baseC;
+          return upd;
+        });
+      dataSet.nodes.update(nodeUpd);
+
+      const edgeUpd = baseEdges.map(e => {
+        const inc = !!focusedId && (e.from === focusedId || e.to === focusedId);
+        return {
+          id: e.id,
+          color: { color: e.color.color, opacity: inc ? e.color.opacity : e.color.opacity * 0.06 },
+          width: inc ? e.width + 0.5 : e.width,
+        };
+      });
+      dataSet.edges.update(edgeUpd);
+    }
+
+    // Dim (not hide) nodes whose label doesn't fuzzy-match q; then paint() so
+    // search dim and focus emphasis combine. Anchors stay at creation opacity 0.
     function applySearch(q) {
       if (!network || !dataSet) return;
       const query = (q || "").trim();
-      const updates = dataSet.nodes.get().map(n => {
-        const match = !query || fuzzyMatchGlobal(query, n.label);
-        return { id: n.id, opacity: match ? 1.0 : 0.15 };
+      searchDim = {};
+      dataSet.nodes.get().forEach(n => {
+        if (n.group === "anchor") return;
+        if (query && !fuzzyMatchGlobal(query, n.label)) searchDim[n.id] = 0.15;
       });
-      dataSet.nodes.update(updates);
+      paint();
     }
 
     function destroy() {
@@ -1392,7 +1587,13 @@
       baseUrl: safeGetItem("baseUrl", ""),
       theme: safeGetItem("theme", "light"),
       view: safeGetItem("view", "endpoints"),
-      graphLayout: safeGetItem("graphLayout", "section"),
+      // 旧值 "section" 已更名为 "flow"; 读到 "section" 视为 "flow"(不强制回写)。
+      graphLayout: (() => {
+        const v = safeGetItem("graphLayout", "section");
+        return v === "force" ? "force" : "flow";
+      })(),
+      // 依赖流方向: "TB"(竖排, 默认) | "LR"(横排)。仅依赖流有意义。
+      graphDir: safeGetItem("graphDir", "TB") === "LR" ? "LR" : "TB",
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
       // fetcherFilter: null = 无选中(全选); string = 选中的 fetcher 名
       fetcherFilter: (() => {
@@ -1517,15 +1718,15 @@
       const content = $("#content");
       if (isGraph) {
         content.innerHTML = "";
-        // 布局工具条(分区/力导向)
+        // 布局工具条(依赖流/力导向 + 竖排/横排)
         const bar = el("div", { className: "graph-toolbar" });
         const seg = el("div", {
           id: "graphLayoutSwitch", className: "segmented", role: "group",
           "aria-label": "Graph layout",
         });
         seg.appendChild(el("button", {
-          type: "button", className: "seg" + (state.graphLayout === "section" ? " active" : ""),
-          dataset: { layout: "section" }, textContent: "分区",
+          type: "button", className: "seg" + (state.graphLayout === "flow" ? " active" : ""),
+          dataset: { layout: "flow" }, textContent: "依赖流",
         }));
         seg.appendChild(el("button", {
           type: "button", className: "seg" + (state.graphLayout === "force" ? " active" : ""),
@@ -1536,10 +1737,31 @@
           if (b) setGraphLayout(b.dataset.layout);
         };
         bar.appendChild(seg);
+
+        // 方向(竖排/横排): 仅依赖流可用(force 无方向, 见 syncDirControl)。
+        const dirCtl = el("div", {
+          id: "graphDirSwitch", className: "segmented graph-dir", role: "group",
+          "aria-label": "Flow direction",
+        });
+        dirCtl.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphDir === "TB" ? " active" : ""),
+          dataset: { dir: "TB" }, textContent: "竖排",
+        }));
+        dirCtl.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphDir === "LR" ? " active" : ""),
+          dataset: { dir: "LR" }, textContent: "横排",
+        }));
+        dirCtl.onclick = (e) => {
+          const b = e.target.closest(".seg");
+          if (b && state.graphLayout === "flow") setGraphDir(b.dataset.dir);
+        };
+        bar.appendChild(dirCtl);
+        syncDirControl();
+
         bar.appendChild(el("span", {
           className: "graph-toolbar-hint",
-          textContent: state.graphLayout === "section"
-            ? "端点按 section 归区; 点端点展开它的 fetcher; 点空白收回"
+          textContent: state.graphLayout === "flow"
+            ? "agent → 端点 → fetcher 三层; hover / 单击节点聚焦其邻边"
             : "力导向全局图(served-by 实线 + composed-of 虚线)",
         }));
         content.appendChild(bar);
@@ -1570,6 +1792,7 @@
       await GraphView.load();
       GraphView.render(container, MANIFEST, {
         layout: state.graphLayout,
+        dir: state.graphDir,
         onNodeClick: (n) => {
           if (n.group === "endpoint") NodeDetailPanel.showEndpoint(n._ep, MANIFEST);
           else if (n.group === "fetcher") NodeDetailPanel.showFetcher(n._name, MANIFEST);
@@ -1585,10 +1808,32 @@
       safeSetItem("graphLayout", v);
       $$("#graphLayoutSwitch .seg").forEach(b =>
         b.classList.toggle("active", b.dataset.layout === state.graphLayout));
+      syncDirControl();   // force 无方向 → 禁用/恢复方向控件
       const canvas = $("#graphCanvas");
       if (!canvas) return;
       GraphView.destroy();
       renderGraph(canvas);
+    }
+
+    function setGraphDir(v) {
+      if (state.graphDir === v) return;
+      state.graphDir = v;
+      safeSetItem("graphDir", v);
+      $$("#graphDirSwitch .seg").forEach(b =>
+        b.classList.toggle("active", b.dataset.dir === state.graphDir));
+      const canvas = $("#graphCanvas");
+      if (!canvas) return;
+      GraphView.destroy();
+      renderGraph(canvas);
+    }
+
+    // force 布局没有方向概念 → 禁用方向控件; 切回依赖流恢复。
+    function syncDirControl() {
+      const dc = $("#graphDirSwitch");
+      if (!dc) return;
+      const off = state.graphLayout !== "flow";
+      dc.classList.toggle("graph-dir-off", off);
+      dc.setAttribute("aria-disabled", off ? "true" : "false");
     }
 
     function setView(v) {
