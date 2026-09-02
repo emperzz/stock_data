@@ -1000,6 +1000,225 @@
   })();
   </script>
   <script>
+  // ========================================================================
+  // Module: NodeDetailPanel
+  // Purpose: render node detail in the right-side #resultPanel container
+  //          (shared with ResultPanel — they swap by current view). Reuses
+  //          JSONView for schema rendering. Public API:
+  //   NodeDetailPanel.init()                          - bind refs (shared with ResultPanel)
+  //   NodeDetailPanel.showEndpoint(ep, manifest)       - endpoint node detail
+  //   NodeDetailPanel.showFetcher(name, manifest)      - fetcher node detail
+  //   NodeDetailPanel.clear()                          - reset to empty
+  // ========================================================================
+  const NodeDetailPanel = (() => {
+    let bodyEl;
+
+    function init() {
+      bodyEl = document.getElementById("resultBody");
+    }
+
+    function clear() {
+      bodyEl.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "result-empty";
+      empty.innerHTML = '<span class="arrow">◐</span>点击图节点查看依赖详情。';
+      bodyEl.appendChild(empty);
+    }
+
+    function esc(s) {
+      if (s == null) return "";
+      return String(s).replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    function chip(label, icon) {
+      const s = document.createElement("span");
+      s.className = "chip cap-chip";
+      s.textContent = (icon ? icon + " " : "") + label;
+      return s;
+    }
+
+    function sectionTitle(text) {
+      const t = document.createElement("div");
+      t.className = "result-section-title";
+      t.textContent = text;
+      return t;
+    }
+
+    function schemaBlock(title, schema, note) {
+      const wrap = document.createElement("div");
+      wrap.appendChild(sectionTitle(title));
+      if (note) {
+        const n = document.createElement("div");
+        n.style.cssText = "font-size:11px;color:var(--text-muted);margin-bottom:4px;";
+        n.textContent = note;
+        wrap.appendChild(n);
+      }
+      if (schema) {
+        wrap.appendChild(JSONView.render(schema));
+      } else {
+        const e = document.createElement("div");
+        e.style.cssText = "font-size:12px;color:var(--text-muted);";
+        e.textContent = "（无）";
+        wrap.appendChild(e);
+      }
+      return wrap;
+    }
+
+    function paramsBlock(ep) {
+      if (!ep.params || !ep.params.length) return null;
+      const wrap = document.createElement("div");
+      wrap.appendChild(sectionTitle("Parameters"));
+      const pre = document.createElement("pre");
+      pre.className = "result-raw";
+      pre.style.maxHeight = "30vh";
+      ep.params.forEach(p => {
+        pre.appendChild(document.createTextNode(
+          `${p.in}.${p.name}${p.required ? " (required)" : ""}: ${p.type}\n`
+        ));
+      });
+      wrap.appendChild(pre);
+      return wrap;
+    }
+
+    function fetcherRowMini(f) {
+      // Compact version of renderFetcherRow for the detail panel.
+      const row = document.createElement("div");
+      row.style.cssText = "display:grid;grid-template-columns:40px 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);";
+      const p = document.createElement("span");
+      p.className = "fetcher-priority";
+      p.textContent = "P" + f.priority;
+      if (f.available === false) { p.style.opacity = "0.5"; }
+      row.appendChild(p);
+      const body = document.createElement("div");
+      const name = document.createElement("div");
+      name.style.fontWeight = "600";
+      name.style.fontSize = "13px";
+      name.textContent = f.name + (f.available === false ? "  ⚠" : "");
+      body.appendChild(name);
+      const sig = document.createElement("div");
+      sig.style.cssText = "font-family:monospace;font-size:11px;color:var(--text-muted);";
+      sig.textContent = `.${f.method}(${(f.signature || []).map(s => s.name).join(", ")})`;
+      body.appendChild(sig);
+      row.appendChild(body);
+      return row;
+    }
+
+    function showEndpoint(ep, manifest) {
+      bodyEl.innerHTML = "";
+      // meta header
+      const meta = document.createElement("div");
+      meta.className = "result-meta";
+      const caps = (ep.capabilities || []).map(c => {
+        const lbl = (manifest.meta.capabilities || {})[c] || {};
+        return chip(lbl.label || c, lbl.icon);
+      });
+      const line1 = document.createElement("div");
+      line1.className = "row";
+      line1.innerHTML = `<span class="label">Endpoint:</span> <span class="value">${esc(ep.method)} ${esc(ep.path)}</span>`;
+      meta.appendChild(line1);
+      const line2 = document.createElement("div");
+      line2.className = "row";
+      line2.innerHTML = `<span class="label">Summary:</span> <span class="value">${esc(ep.summary || "")}</span>`;
+      meta.appendChild(line2);
+      const line3 = document.createElement("div");
+      line3.className = "row";
+      line3.appendChild(document.createTextNode("Markets/Caps: "));
+      (ep.markets || []).forEach(m => meta.appendChild(chip(m)));
+      caps.forEach(c => meta.appendChild(c));
+      meta.appendChild(line3);
+      bodyEl.appendChild(meta);
+
+      const params = paramsBlock(ep);
+      if (params) bodyEl.appendChild(params);
+
+      bodyEl.appendChild(schemaBlock("Request body schema", ep.body && ep.body.schema));
+      bodyEl.appendChild(schemaBlock(
+        "Response schema",
+        ep.response_schema,
+        "静态字段清单；@model_serializer 条件序列化（如 KLineData.indicators 空值 omit）不反映，以 CLAUDE.md Standardized Data Schema 为准。"
+      ));
+
+      // Fetcher backends (served-by chain)
+      if (ep.fetchers && ep.fetchers.length) {
+        bodyEl.appendChild(sectionTitle(`Fetcher backends (${ep.fetchers.length})`));
+        ep.fetchers.forEach(f => bodyEl.appendChild(fetcherRowMini(f)));
+      }
+
+      // Dependencies (agent composed-of)
+      if (ep.depends_on && ep.depends_on.length) {
+        bodyEl.appendChild(sectionTitle("Dependencies"));
+        const ul = document.createElement("div");
+        ep.depends_on.forEach(d => {
+          const row = document.createElement("div");
+          row.style.cssText = "padding:4px 0;border-bottom:1px solid var(--border);font-size:12px;";
+          if (d.kind === "endpoint") {
+            row.innerHTML = `<span class="chip" style="background:#f3e8ff;color:#af52de;">edge</span> → ${esc(d.label)}`;
+          } else {
+            row.innerHTML = `<span class="chip">internal</span> ${esc(d.label)}`;
+          }
+          ul.appendChild(row);
+        });
+        bodyEl.appendChild(ul);
+      }
+    }
+
+    function showFetcher(name, manifest) {
+      bodyEl.innerHTML = "";
+      // Reverse index: all endpoints whose fetchers[] include this name.
+      const served = [];
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          for (const f of (ep.fetchers || [])) {
+            if (f.name === name) {
+              served.push({ ep, method: f.method, priority: f.priority, signature: f.signature, available: f.available, caps: f.capabilities });
+            }
+          }
+        }
+      }
+      const meta = document.createElement("div");
+      meta.className = "result-meta";
+      const l1 = document.createElement("div");
+      l1.className = "row";
+      l1.innerHTML = `<span class="label">Fetcher:</span> <span class="value">${esc(name)}</span>`;
+      meta.appendChild(l1);
+      if (served.length) {
+        const p = served[0].priority;
+        const l2 = document.createElement("div");
+        l2.className = "row";
+        l2.innerHTML = `<span class="label">Priority:</span> <span class="value">P${p}</span>`;
+        meta.appendChild(l2);
+        const l3 = document.createElement("div");
+        l3.className = "row";
+        l3.appendChild(document.createTextNode("Capabilities: "));
+        served[0].caps.forEach(c => meta.appendChild(chip(c)));
+        meta.appendChild(l3);
+        if (served[0].available === false) {
+          const l4 = document.createElement("div");
+          l4.className = "row";
+          l4.style.color = "var(--accent-warn)";
+          l4.textContent = "⚠ unavailable (见 endpoint 详情的 reason)";
+          meta.appendChild(l4);
+        }
+      }
+      bodyEl.appendChild(meta);
+
+      bodyEl.appendChild(sectionTitle(`Serves ${served.length} endpoint(s)`));
+      const ul = document.createElement("div");
+      served.forEach(({ ep, method, signature }) => {
+        const row = document.createElement("div");
+        row.style.cssText = "padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;";
+        row.innerHTML = `${esc(ep.method)} <code>${esc(ep.path)}</code><br><span style="font-family:monospace;color:var(--text-muted);">.${esc(method)}(${(signature || []).map(s => s.name).join(", ")})</span>`;
+        ul.appendChild(row);
+      });
+      bodyEl.appendChild(ul);
+    }
+
+    return { init, showEndpoint, showFetcher, clear };
+  })();
+  </script>
+  <script>
   // === Main app (boots after MANIFEST) ===
   (function() {
     "use strict";
