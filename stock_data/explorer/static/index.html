@@ -1474,7 +1474,11 @@
       baseUrl: safeGetItem("baseUrl", ""),
       theme: safeGetItem("theme", "light"),
       view: safeGetItem("view", "endpoints"),
-      graphLayout: safeGetItem("graphLayout", "section"),
+      // 旧值 "section" 已更名为 "flow"; 读到 "section" 视为 "flow"(不强制回写)。
+      graphLayout: (() => {
+        const v = safeGetItem("graphLayout", "section");
+        return v === "force" ? "force" : "flow";
+      })(),
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
       // fetcherFilter: null = 无选中(全选); string = 选中的 fetcher 名
       fetcherFilter: (() => {
@@ -1606,8 +1610,8 @@
           "aria-label": "Graph layout",
         });
         seg.appendChild(el("button", {
-          type: "button", className: "seg" + (state.graphLayout === "section" ? " active" : ""),
-          dataset: { layout: "section" }, textContent: "分区",
+          type: "button", className: "seg" + (state.graphLayout === "flow" ? " active" : ""),
+          dataset: { layout: "flow" }, textContent: "依赖流",
         }));
         seg.appendChild(el("button", {
           type: "button", className: "seg" + (state.graphLayout === "force" ? " active" : ""),
@@ -1620,8 +1624,8 @@
         bar.appendChild(seg);
         bar.appendChild(el("span", {
           className: "graph-toolbar-hint",
-          textContent: state.graphLayout === "section"
-            ? "端点按 section 归区; 点端点展开它的 fetcher; 点空白收回"
+          textContent: state.graphLayout === "flow"
+            ? "agent → 端点 → fetcher 三层; hover / 单击节点聚焦其邻边"
             : "力导向全局图(served-by 实线 + composed-of 虚线)",
         }));
         content.appendChild(bar);
