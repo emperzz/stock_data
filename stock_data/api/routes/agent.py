@@ -90,6 +90,7 @@ from ..schemas import (
     MarketContextMessages,
     MarketContextResponse,
     MarketStatsErrorEntry,
+    MarketStatsLimitPools,
     MarketStatsResponse,
     MinimalQuote,
     StockBatchAspectError,
@@ -566,6 +567,49 @@ def _batch_summary(requested: int, ok: int, started: float) -> dict:
         "failed": requested - ok,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
     }
+
+
+def _compute_limit_pools_block(
+    manager, target_date: str
+) -> tuple["MarketStatsLimitPools", list["MarketStatsErrorEntry"]]:
+    """Compute the limit_pools block for market-stats.
+
+    Per-pool fan-out with per-pool error isolation — zt failure emits
+    a `{"block": "zt_pool"}` entry and leaves zt=None while dt is
+    still attempted (and vice versa). No session-aware short-circuit:
+    whatever the upstream returns for the given date is the truth
+    (pre-market today → empty list, completed day → full pool, error
+    → null + errors[] entry).
+    """
+    errors: list[MarketStatsErrorEntry] = []
+    zt: list[dict] | None = None
+    dt: list[dict] | None = None
+
+    try:
+        zt, _src, _ = manager.get_zt_pool(pool_type="zt", date=target_date)
+    except Exception as exc:
+        logger.warning(f"[agent/market-stats] zt_pool failed: {exc}", exc_info=True)
+        errors.append(
+            MarketStatsErrorEntry(
+                block="zt_pool",
+                error=type(exc).__name__,
+                message=str(exc),
+            )
+        )
+
+    try:
+        dt, _src, _ = manager.get_zt_pool(pool_type="dt", date=target_date)
+    except Exception as exc:
+        logger.warning(f"[agent/market-stats] dt_pool failed: {exc}", exc_info=True)
+        errors.append(
+            MarketStatsErrorEntry(
+                block="dt_pool",
+                error=type(exc).__name__,
+                message=str(exc),
+            )
+        )
+
+    return MarketStatsLimitPools(zt=zt, dt=dt), errors
 
 
 def _summarize_dragon_tiger(stocks: list[dict]) -> MarketContextDragonTigerSummary:
@@ -1233,14 +1277,17 @@ def _board_stats_from_aggregate(agg: AggregateStats, source: str) -> "BoardStats
     tags=["agent"],
 )
 @endpoint_meta(
-    summary="市场全量统计（个股+板块涨幅分布 + 桶形数据）",
+    summary="市场全量统计（个股+板块涨幅分布 + 涨跌停池 + 桶形数据）",
     markets=["csi"],
     capabilities=[],  # agent aggregation, no single capability
     depends_on=[
         "/api/v1/stocks",
         "/api/v1/boards",
+        "/api/v1/zt-pools",
         "manager.get_realtime_quotes",
         "cache.get_board_list",
+        "manager.get_zt_pool",
+        "calendar.get_latest_trade_date_on_or_before",
     ],
 )
 @map_errors
@@ -1248,6 +1295,17 @@ def get_market_stats(
     include_boards: bool = Query(
         default=True,
         description="是否包含板块块;false 时只返回个股块 (无板块上游调用)",
+    ),
+    include_pools: bool = Query(
+        default=True,
+        description="是否包含涨跌停池块;false 时只返回个股+板块 (无 zt/dt 上游调用)",
+    ),
+    trade_date: str | None = Query(
+        default=None,
+        description=(
+            "交易日 YYYY-MM-DD;不传默认 = "
+            "get_latest_trade_date_on_or_before(today). 影响 zt/dt 池子查询日期."
+        ),
     ),
     format: str = Query(
         "json",
@@ -1258,14 +1316,33 @@ def get_market_stats(
     """Per-block fan-out with per-block error isolation.
 
     stocks block:  manager.get_realtime_quotes('csi') (single upstream call)
-    boards block:  stock_board_cache.get_board_list(board_type=None, source='ths', include_quote=True, manager=manager)
-                   (single upstream call, persistence-routed)
+    boards block:  stock_board_cache.get_board_list(board_type=None, source='ths',
+                   include_quote=True, manager=manager) (single upstream call,
+                   persistence-routed)
+    pools block:   manager.get_zt_pool(pool_type='zt'|'dt', date=trade_date)
+                   (two upstream calls; per-pool error isolation)
 
     A single upstream failure sets that block to ``null`` and surfaces
-    the exception in ``errors[]``; the other block continues normally.
+    the exception in ``errors[]``; the other blocks continue normally.
     Cached 60s via ``get_quote_cache`` (one entry shared between json/md).
     """
-    cache_key = make_market_stats_cache_key(include_boards)
+    if trade_date is not None and not _TRADE_DATE_RE.match(trade_date):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_trade_date",
+                "message": (
+                    f"trade_date must be YYYY-MM-DD; got {trade_date!r}. "
+                    "Empty = server-defaulted to most recent trade date on/before today."
+                ),
+            },
+        )
+    today_str = datetime.now(_CST).date().isoformat()
+    target_date = (
+        trade_date or trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
+    )
+
+    cache_key = make_market_stats_cache_key(include_boards, include_pools, target_date)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_market_stats")
     if hit is not None:
         return _render_agent("market-stats", hit, format)
@@ -1275,7 +1352,9 @@ def get_market_stats(
     errors: list[MarketStatsErrorEntry] = []
     stocks_stats: StockStats | None = None
     boards_stats: BoardStats | None = None
-    requested = 1 + (1 if include_boards else 0)
+    limit_pools_block: MarketStatsLimitPools | None = None
+
+    requested = 1 + (1 if include_boards else 0) + (1 if include_pools else 0)
     ok = 0
 
     # --- stocks block (always attempted) ---
@@ -1333,9 +1412,26 @@ def get_market_stats(
                 )
             )
 
+    # --- limit_pools block ---
+    # The field is ALWAYS present in the JSON response (per spec §4 wire
+    # format), even when include_pools=false. When disabled, we populate
+    # it with `MarketStatsLimitPools(zt=None, dt=None)` so consumers
+    # see a stable shape; the field's presence is NOT a signal that
+    # pools were attempted. (That signal is in `summary.requested`.)
+    if include_pools:
+        limit_pools_block, pool_errors = _compute_limit_pools_block(manager, target_date)
+        errors.extend(pool_errors)
+        # Per-pool failures don't decrement ok — the block call DID
+        # complete (with partial data). Empty upstream results also
+        # count as success (caller distinguishes via inner [] vs null).
+        ok += 1
+    else:
+        limit_pools_block = MarketStatsLimitPools(zt=None, dt=None)
+
     result = MarketStatsResponse(
         stocks=stocks_stats,
         boards=boards_stats,
+        limit_pools=limit_pools_block,
         errors=errors,
         summary=_batch_summary(requested, ok, started),
     )
@@ -1944,11 +2040,54 @@ def _md_stats_block(title: str, stats, *, total_universe_label: str) -> list[str
     return out
 
 
+def _md_limit_pools_block(out: list[str], pools) -> None:
+    """Render the limit_pools block. Always emits a `## 涨跌停` heading;
+    distinguishes disabled / empty / partial / full via inner labels."""
+    out.append("## 涨跌停")
+    if pools is None:
+        out.append("（未启用）")
+        out.append("")
+        return
+    for label, key, headers in [
+        ("涨停池", "zt", "| 代码 | 名称 | 涨跌幅 | 涨停时间 | 连板数 | 所属行业 |"),
+        ("跌停池", "dt", "| 代码 | 名称 | 涨跌幅 | 跌停时间 | 所属行业 |"),
+    ]:
+        rows = getattr(pools, key)
+        if rows is None:
+            out.append(f"**{label}**: null")
+        elif not rows:
+            out.append(f"**{label}**: （空）")
+        else:
+            out.append(f"**{label}**: {len(rows)} 只")
+            out.append("")
+            out.append(headers)
+            out.append("|---|---|---|---|---|---|")
+            for s in rows:
+                code = s.get("code", "")
+                name = s.get("name", "")
+                pct = s.get("pct_chg") or s.get("change_pct")
+                if key == "zt":
+                    t = s.get("limit_time") or s.get("first_limit_time") or ""
+                    lb = s.get("limit_count") or s.get("continuous_limit_count")
+                    industry = s.get("industry", "")
+                    out.append(
+                        f"| {code} | {name} | {_md_pct(pct)} | {t} | "
+                        f"{lb if lb is not None else '—'} | {industry} |"
+                    )
+                else:
+                    t = s.get("limit_time") or s.get("first_limit_time") or ""
+                    industry = s.get("industry", "")
+                    out.append(f"| {code} | {name} | {_md_pct(pct)} | {t} | {industry} |")
+        out.append("")
+
+
 def render_market_stats_as_md(p: MarketStatsResponse) -> str:
     out: list[str] = ["# 市场全量统计", ""]
     out.extend(_md_stats_block("个股", p.stocks, total_universe_label="A 股全市场"))
     out.append("")
     out.extend(_md_stats_block("板块", p.boards, total_universe_label="ths 板块清单"))
+    out.append("")
+    _md_limit_pools_block(out, p.limit_pools)
     out.append("")
     out.append("## 失败列表")
     out.extend(_md_errors([e.model_dump() for e in p.errors], key="block", header="块"))

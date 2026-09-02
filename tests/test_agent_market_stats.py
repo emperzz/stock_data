@@ -98,33 +98,34 @@ def _patch_board_cache(monkeypatch, *, all_boards_payload):
 
 
 def test_market_stats_returns_200(client, monkeypatch):
-    """Happy path — both blocks populated, summary reports 2/2 ok."""
+    """Happy path — all 3 blocks populated, summary reports 3/3 ok."""
     quotes = [_make_quote("600000", 1.0), _make_quote("600001", -1.0), _make_quote("600002", 0.0)]
     boards = [{"code": "BK0001", "name": "X", "change_pct": 0.5}]
-    _patch_manager(monkeypatch, quotes=quotes)
+    fake_manager = _patch_manager(monkeypatch, quotes=quotes)
+    fake_manager.get_zt_pool.return_value = ([], "akshare", None)
     _patch_board_cache(monkeypatch, all_boards_payload=(boards, "ths"))
 
     resp = client.get("/api/v1/agent/market-stats")
     assert resp.status_code == 200
     body = resp.json()
     assert body["stocks"]["sample_size"] == 3
-    assert body["stocks"]["up_count"] == 1
-    assert body["stocks"]["down_count"] == 1
-    assert body["stocks"]["flat_count"] == 1
     assert body["boards"]["sample_size"] == 1
-    assert body["boards"]["source"] == "ths"
+    assert body["limit_pools"] is not None
+    assert body["limit_pools"]["zt"] == []
+    assert body["limit_pools"]["dt"] == []
     assert body["errors"] == []
-    assert body["summary"]["requested"] == 2
-    assert body["summary"]["ok"] == 2
+    assert body["summary"]["requested"] == 3
+    assert body["summary"]["ok"] == 3
 
 
 # ----- error isolation -----
 
 
 def test_stocks_upstream_failure_does_not_affect_boards(client, monkeypatch):
-    """When get_realtime_quotes raises, stocks=null but boards is still populated."""
+    """When get_realtime_quotes raises, stocks=null but boards + pools are still populated."""
     fake_manager = MagicMock()
     fake_manager.get_realtime_quotes.side_effect = DataFetchError("upstream down")
+    fake_manager.get_zt_pool.return_value = ([], "akshare", None)
     monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
     boards = [{"code": "BK0001", "name": "X", "change_pct": 0.5}]
     _patch_board_cache(monkeypatch, all_boards_payload=(boards, "ths"))
@@ -134,16 +135,17 @@ def test_stocks_upstream_failure_does_not_affect_boards(client, monkeypatch):
     body = resp.json()
     assert body["stocks"] is None
     assert body["boards"] is not None
-    assert body["boards"]["sample_size"] == 1
+    assert body["limit_pools"] is not None
     assert any(e["block"] == "stocks" for e in body["errors"])
-    assert body["summary"]["ok"] == 1
+    assert body["summary"]["ok"] == 2
     assert body["summary"]["failed"] == 1
 
 
 def test_boards_upstream_failure_does_not_affect_stocks(client, monkeypatch):
-    """Symmetric — boards=null but stocks still populated."""
+    """Symmetric — boards=null but stocks + pools still populated."""
     quotes = [_make_quote("600000", 1.0)]
-    _patch_manager(monkeypatch, quotes=quotes)
+    fake_manager = _patch_manager(monkeypatch, quotes=quotes)
+    fake_manager.get_zt_pool.return_value = ([], "akshare", None)
     fake_cache = MagicMock()
     fake_cache.get_board_list.side_effect = ValueError("cid_unresolved")
     monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
@@ -153,14 +155,16 @@ def test_boards_upstream_failure_does_not_affect_stocks(client, monkeypatch):
     body = resp.json()
     assert body["stocks"] is not None
     assert body["boards"] is None
+    assert body["limit_pools"] is not None
     assert any(e["block"] == "boards" for e in body["errors"])
-    assert body["summary"]["ok"] == 1
+    assert body["summary"]["ok"] == 2
 
 
 def test_both_blocks_fail(client, monkeypatch):
-    """Both upstream failures — both null, 2 errors, summary.ok=0."""
+    """Stocks + boards fail, pools succeed — 2 errors, summary.ok=1, requested=3."""
     fake_manager = MagicMock()
     fake_manager.get_realtime_quotes.side_effect = DataFetchError("stocks down")
+    fake_manager.get_zt_pool.return_value = ([], "akshare", None)
     monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
     fake_cache = MagicMock()
     fake_cache.get_board_list.side_effect = RuntimeError("boards down")
@@ -171,19 +175,21 @@ def test_both_blocks_fail(client, monkeypatch):
     body = resp.json()
     assert body["stocks"] is None
     assert body["boards"] is None
+    assert body["limit_pools"] is not None
     assert len(body["errors"]) == 2
-    assert body["summary"]["ok"] == 0
-    assert body["summary"]["requested"] == 2
+    assert body["summary"]["ok"] == 1
+    assert body["summary"]["requested"] == 3
 
 
 # ----- include_boards toggle -----
 
 
 def test_include_boards_false_skips_boards_upstream(client, monkeypatch):
-    """?include_boards=false must NOT invoke any boards upstream call."""
+    """?include_boards=false must NOT invoke any boards upstream call (pools still on)."""
     quotes = [_make_quote("600000", 1.0)]
     fake_manager = MagicMock()
     fake_manager.get_realtime_quotes.return_value = (quotes, "akshare")
+    fake_manager.get_zt_pool.return_value = ([], "akshare", None)
     monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
     fake_cache = MagicMock()
     monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
@@ -193,10 +199,10 @@ def test_include_boards_false_skips_boards_upstream(client, monkeypatch):
     body = resp.json()
     assert body["stocks"] is not None
     assert body["boards"] is None
+    assert body["limit_pools"] is not None
     assert body["errors"] == []
-    assert body["summary"]["requested"] == 1
-    assert body["summary"]["ok"] == 1
-    # Boards upstream NEVER called — fake_cache.get_board_list.assert_not_called()
+    assert body["summary"]["requested"] == 2
+    assert body["summary"]["ok"] == 2
     fake_cache.get_board_list.assert_not_called()
 
 
@@ -283,6 +289,7 @@ def test_market_stats_cache_hit_skips_upstream(monkeypatch):
     boards = [{"code": "BK0001", "name": "X", "change_pct": 0.5}]
     fake_manager = MagicMock()
     fake_manager.get_realtime_quotes.return_value = (quotes, "akshare")
+    fake_manager.get_zt_pool.return_value = ([], "akshare", None)
     monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
     fake_cache = MagicMock()
     fake_cache.get_board_list.return_value = (boards, "ths")
@@ -297,6 +304,7 @@ def test_market_stats_cache_hit_skips_upstream(monkeypatch):
     assert resp1.status_code == 200
     assert fake_manager.get_realtime_quotes.call_count == 1
     assert fake_cache.get_board_list.call_count == 1
+    assert fake_manager.get_zt_pool.call_count == 2  # zt + dt
 
     # Second call within 60s → cache hit, NO upstream calls
     resp2 = fresh_client.get("/api/v1/agent/market-stats")
@@ -304,6 +312,258 @@ def test_market_stats_cache_hit_skips_upstream(monkeypatch):
     assert resp2.json() == resp1.json()  # bit-for-bit identical payload
     assert fake_manager.get_realtime_quotes.call_count == 1  # still 1
     assert fake_cache.get_board_list.call_count == 1  # still 1
+    assert fake_manager.get_zt_pool.call_count == 2  # cache hit
 
     # Restore cache-disabled state so other tests don't see TTL leaks.
     monkeypatch.setenv("ENABLE_API_CACHE", "false")
+
+
+# ----- pools block (post-2026-09-02) -----
+
+
+def _patch_zt_pool(monkeypatch, *, zt_value=([], "akshare", None), dt_value=([], "akshare", None)):
+    """Patch manager.get_zt_pool + the other market-stats upstreams.
+
+    Each of ``zt_value`` / ``dt_value`` is either:
+    - a 3-tuple ``(rows, src, error_reason)`` — returned to the caller
+      at the matching call
+    - an ``Exception`` instance — raised at the matching call
+
+    MagicMock's ``side_effect`` accepts a list of mixed return-or-raise
+    values, so we just pass the args straight through.
+    """
+    fake_manager = MagicMock()
+    fake_manager.get_zt_pool.side_effect = [zt_value, dt_value]
+    fake_manager.get_realtime_quotes.return_value = (
+        [_make_quote("600000", 1.0)],
+        "akshare",
+    )
+    monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
+    fake_cache = MagicMock()
+    fake_cache.get_board_list.return_value = (
+        [{"code": "BK0001", "name": "X", "change_pct": 0.5}],
+        "ths",
+    )
+    monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
+    return fake_manager
+
+
+class TestMarketStatsPoolsBlock:
+    def test_happy_path_includes_pools(self, client, monkeypatch):
+        """Default request includes pools block; summary.requested=3."""
+        _patch_zt_pool(
+            monkeypatch,
+            zt_value=([{"code": "600519", "name": "茅台"}], "akshare", None),
+            dt_value=([{"code": "000001", "name": "平安"}], "akshare", None),
+        )
+        resp = client.get("/api/v1/agent/market-stats")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["limit_pools"] is not None
+        assert len(body["limit_pools"]["zt"]) == 1
+        assert len(body["limit_pools"]["dt"]) == 1
+        assert body["limit_pools"]["zt"][0]["code"] == "600519"
+        assert body["errors"] == []
+        assert body["summary"]["requested"] == 3
+        assert body["summary"]["ok"] == 3
+
+    def test_zt_pool_failure_isolates_dt(self, client, monkeypatch):
+        """zt upstream raises → zt=null, dt populated, errors[] has zt_pool entry."""
+        _patch_zt_pool(
+            monkeypatch,
+            zt_value=DataFetchError("zt down"),
+            dt_value=([{"code": "000001"}], "akshare", None),
+        )
+        resp = client.get("/api/v1/agent/market-stats")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["limit_pools"]["zt"] is None
+        assert body["limit_pools"]["dt"] is not None
+        assert len(body["limit_pools"]["dt"]) == 1
+        zt_errs = [e for e in body["errors"] if e["block"] == "zt_pool"]
+        assert len(zt_errs) == 1
+        assert "zt down" in zt_errs[0]["message"]
+        assert body["summary"]["ok"] == 3
+
+    def test_dt_pool_failure_isolates_zt(self, client, monkeypatch):
+        """Symmetric — dt fails, zt populated."""
+        _patch_zt_pool(
+            monkeypatch,
+            zt_value=([{"code": "600519"}], "akshare", None),
+            dt_value=DataFetchError("dt down"),
+        )
+        resp = client.get("/api/v1/agent/market-stats")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["limit_pools"]["zt"] is not None
+        assert body["limit_pools"]["dt"] is None
+        dt_errs = [e for e in body["errors"] if e["block"] == "dt_pool"]
+        assert len(dt_errs) == 1
+        assert body["summary"]["ok"] == 3
+
+    def test_both_pools_fail(self, client, monkeypatch):
+        """Both raise → both null, 2 pool errors, ok still 3."""
+        _patch_zt_pool(
+            monkeypatch,
+            zt_value=DataFetchError("zt down"),
+            dt_value=DataFetchError("dt down"),
+        )
+        resp = client.get("/api/v1/agent/market-stats")
+        body = resp.json()
+        assert body["limit_pools"]["zt"] is None
+        assert body["limit_pools"]["dt"] is None
+        assert len(body["errors"]) == 2
+        blocks = {e["block"] for e in body["errors"]}
+        assert blocks == {"zt_pool", "dt_pool"}
+        assert body["summary"]["ok"] == 3
+
+    def test_pools_empty_passthrough(self, client, monkeypatch):
+        """Upstream returns [] for both → both [] in response, no errors."""
+        _patch_zt_pool(monkeypatch)
+        resp = client.get("/api/v1/agent/market-stats")
+        body = resp.json()
+        assert body["limit_pools"]["zt"] == []
+        assert body["limit_pools"]["dt"] == []
+        assert body["errors"] == []
+        assert body["summary"]["ok"] == 3
+
+    def test_include_pools_false_skips_pools_upstream(self, client, monkeypatch):
+        """?include_pools=false → no upstream pool call, field present with both null, requested=2."""
+        fake_manager = MagicMock()
+        fake_manager.get_realtime_quotes.return_value = ([_make_quote("600000", 1.0)], "akshare")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
+        fake_cache = MagicMock()
+        fake_cache.get_board_list.return_value = (
+            [{"code": "BK0001", "name": "X", "change_pct": 0.5}],
+            "ths",
+        )
+        monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
+
+        resp = client.get("/api/v1/agent/market-stats?include_pools=false")
+        body = resp.json()
+        assert body["limit_pools"] is not None
+        assert body["limit_pools"]["zt"] is None
+        assert body["limit_pools"]["dt"] is None
+        assert body["errors"] == []
+        assert body["summary"]["requested"] == 2
+        assert body["summary"]["ok"] == 2
+        fake_manager.get_zt_pool.assert_not_called()
+
+    def test_pools_trade_date_passed_through(self, client, monkeypatch):
+        """?trade_date=2026-09-01 → manager.get_zt_pool called twice with date='2026-09-01'."""
+        fake_manager = _patch_zt_pool(
+            monkeypatch,
+            zt_value=([{"code": "600519"}], "akshare", None),
+            dt_value=([{"code": "000001"}], "akshare", None),
+        )
+        client.get("/api/v1/agent/market-stats?trade_date=2026-09-01")
+        calls = fake_manager.get_zt_pool.call_args_list
+        assert len(calls) == 2, f"expected 2 calls, got {len(calls)}"
+        seen_pool_types = set()
+        for call in calls:
+            assert call.kwargs.get("date") == "2026-09-01", (
+                f"expected date=2026-09-01, got {call.kwargs.get('date')!r}"
+            )
+            seen_pool_types.add(call.kwargs.get("pool_type"))
+        assert seen_pool_types == {"zt", "dt"}
+
+    def test_pools_trade_date_malformed_400(self, client):
+        """?trade_date=not-a-date → 400 with invalid_trade_date code (matches market-context)."""
+        resp = client.get("/api/v1/agent/market-stats?trade_date=not-a-date")
+        assert resp.status_code == 400
+        body = resp.json()
+        # FastAPI wraps HTTPException(detail=...) so the error is at body["detail"]
+        assert body["detail"]["error"] == "invalid_trade_date"
+        assert "trade_date" in body["detail"]["message"]
+
+    def test_pools_trade_date_default_to_latest_trade_date(self, client, monkeypatch):
+        """Omit ?trade_date → handler resolves via get_latest_trade_date_on_or_before."""
+        fake_manager = _patch_zt_pool(
+            monkeypatch,
+            zt_value=([{"code": "600519"}], "akshare", None),
+            dt_value=([{"code": "000001"}], "akshare", None),
+        )
+        client.get("/api/v1/agent/market-stats")
+        for call in fake_manager.get_zt_pool.call_args_list:
+            assert call.kwargs.get("date"), "date must be non-empty (trade_calendar default)"
+
+    def test_pools_cache_hit(self, client, monkeypatch):
+        """Second call with same params → cache hit, no new pool upstream calls."""
+        monkeypatch.setenv("ENABLE_API_CACHE", "true")
+        import importlib
+
+        import stock_data.server as server_module
+
+        importlib.reload(server_module)
+        from fastapi.testclient import TestClient
+
+        fresh_client = TestClient(server_module.app)
+
+        fake_manager = _patch_zt_pool(
+            monkeypatch,
+            zt_value=([{"code": "600519"}], "akshare", None),
+            dt_value=([{"code": "000001"}], "akshare", None),
+        )
+        from stock_data.api.cache import get_quote_cache
+
+        get_quote_cache().clear()
+
+        fresh_client.get("/api/v1/agent/market-stats?trade_date=2026-09-01")
+        assert fake_manager.get_zt_pool.call_count == 2
+
+        fresh_client.get("/api/v1/agent/market-stats?trade_date=2026-09-01")
+        assert fake_manager.get_zt_pool.call_count == 2  # cache hit
+
+        monkeypatch.setenv("ENABLE_API_CACHE", "false")
+
+    def test_format_md_renders_pools_section(self, client, monkeypatch):
+        """?format=md → body contains ## 涨跌停 + table headers for zt and dt."""
+        _patch_zt_pool(
+            monkeypatch,
+            zt_value=(
+                [
+                    {
+                        "code": "600519",
+                        "name": "茅台",
+                        "pct_chg": 10.0,
+                        "limit_time": "10:00",
+                        "limit_count": 2,
+                        "industry": "白酒",
+                    }
+                ],
+                "akshare",
+                None,
+            ),
+            dt_value=(
+                [
+                    {
+                        "code": "000001",
+                        "name": "平安",
+                        "pct_chg": -10.0,
+                        "limit_time": "10:00",
+                        "industry": "银行",
+                    }
+                ],
+                "akshare",
+                None,
+            ),
+        )
+        resp = client.get("/api/v1/agent/market-stats?format=md")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/markdown")
+        body = resp.text
+        assert "## 涨跌停" in body
+        assert "**涨停池**: 1 只" in body
+        assert "**跌停池**: 1 只" in body
+        assert "| 代码 | 名称 | 涨跌幅 | 涨停时间 | 连板数 | 所属行业 |" in body
+        assert "| 600519 | 茅台 | +10.00% | 10:00 | 2 | 白酒 |" in body
+        assert "| 000001 | 平安 | -10.00% | 10:00 | 银行 |" in body
+
+    def test_format_md_renders_null_pools_when_disabled(self, client, monkeypatch):
+        """?include_pools=false&format=md → body contains ## 涨跌停 + null markers."""
+        _patch_zt_pool(monkeypatch)
+        resp = client.get("/api/v1/agent/market-stats?include_pools=false&format=md")
+        body = resp.text
+        assert "## 涨跌停" in body
+        assert "**涨停池**: null" in body
+        assert "**跌停池**: null" in body
