@@ -219,11 +219,10 @@ curl 'http://localhost:8888/api/v1/agent/indices/batch-profile?codes=000001,0003
 
 ### 功能
 
-每日市场全景快照：早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜。`market_session` 由服务器本地 CST + `is_trade_date(today)` 推得：`pre-market`（09:15 前）/ `intraday`（09:15-15:00）/ `post-market`（15:00 后）/ `closed`（非交易日）。
+每日市场**消息面快照**（**slim contract**：早报 + 复盘 + 快讯）。**涨跌停池已迁出到 `/api/v1/agent/market-stats.limit_pools`**；龙虎榜按需归因时单独走 `GET /api/v1/dragon-tiger`，不在本端点内联。`market_session` 由服务器本地 CST + `is_trade_date(today)` 推得：`pre-market`（09:15 前）/ `intraday`（09:15-15:00）/ `post-market`（15:00 后）/ `closed`（非交易日）。
 
-- **pre-market 时涨跌停池强制 `null`**（池子可能未成形）
-- `dragon_tiger.summary` 服务端计算：`total_net_buy_wan` 符号位（正=净买入、负=净卖出）；`top_by_net_sell` 仅取 `net_buy_wan < 0` 的行（all-positive 日子里不会出现"伪卖出"）
-- per-block 错误隔离：CLS / zt / dt / dtiger 任一失败不影响其他（**本端点无 `errors[]` 字段**：失败块以该字段 `null` 表达，例如 `messages.morning_briefing=null`、`dragon_tiger=null`）
+- per-block 错误隔离：CLS / briefing / recap / flash 任一失败不影响其他（**本端点无 `errors[]` 字段**：失败块以 `null` 表达，例如 `messages.morning_briefing=null`）
+- 缓存键：`make_market_context_cache_key(flash_limit, trade_date)` —— 不再带 `session` 维度（slim 之后 pre / intra / post 输出内容同质化，session 不再影响响应内容）
 - **`trade_date` 格式必须 `YYYY-MM-DD`**，否则 400（防止"yesterday"这类非日期字符串静默 200 返回空结果）
 
 ### 入参
@@ -232,6 +231,7 @@ curl 'http://localhost:8888/api/v1/agent/indices/batch-profile?codes=000001,0003
 |---|---|---|---|---|
 | `flash_limit`（query） | int | ❌ | `20` | 快讯条数；1-200 |
 | `trade_date`（query） | string | ❌ | 今日（CST） | `YYYY-MM-DD`；**格式错 → 400** |
+| `format`（query） | string | ❌ | `json` | `json` / `md` |
 
 ### 返回参数
 
@@ -243,13 +243,9 @@ curl 'http://localhost:8888/api/v1/agent/indices/batch-profile?codes=000001,0003
 | `messages.morning_briefing` | object / null | — | 财联社早报（28 天窗口）；null = 上游失败 / 无文章 |
 | `messages.market_recap` | object / null | — | 财联社复盘（28 天窗口）；null 同上 |
 | `messages.flash_news[]` | array | — | 快讯列表；空列表 = 上游静默期 |
-| `limit_pools.zt` | array / null | — | 涨停股池；**`pre-market` 时为 `null`** |
-| `limit_pools.dt` | array / null | — | 跌停股池；`pre-market` 时为 `null` |
-| `dragon_tiger.stocks[]` | array / null | — | 龙虎榜个股列表；null = 上游失败 |
-| `dragon_tiger.summary.total_net_buy_wan` | number | 万元 | 净买入合计（**符号位表方向**） |
-| `dragon_tiger.summary.top_by_net_sell[]` | array | — | 净卖出排行（**仅 `net_buy_wan < 0` 的行**） |
-| `dragon_tiger.summary.top_by_net_buy[]` | array | — | 净买入 Top 10 |
 | `summary` | object | — | `{requested, ok, failed, elapsed_ms}` |
+
+> **已移除字段（2026-09-02 slim）**：`limit_pools` 块（在 `agent/market-stats.limit_pools` 下保留同一份数据）；`dragon_tiger` 块。详见 `docs/superpowers/specs/2026-09-02-market-context-and-market-stats-redesign-design.md` §2.1。
 
 ### 示例
 
@@ -422,17 +418,20 @@ curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
 
 ### 功能
 
-全市场涨幅统计：个股 + 板块各 1 块，含均值 / 中位 / 最高 / 最低 / 上涨下跌平盘家数 + 桶形数据（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶）。
+全市场涨幅统计：**个股 + 板块 + 涨跌停池（zt/dt）** 三块。buckets 与 source-tracking 详见 `api-reference.md` §`/api/v1/agent/market-stats`；涨跌停池 zt/dt 系从 `market-context` 迁出（2026-09-02 slim）后的统一入口，**字段集走 `ZTPoolStock`（`first_seal_time` / `last_seal_time` / `lb_count` / `turnover_pct` / `seal_amount` 等）**——字段表见 [boards.md §涨跌停池](./boards.md#涨跌停池-ztdt-zbgc) 的 zt / dt 子段。
 
 - **A 股 only**
-- per-block 错误隔离（个股块 / 板块块）；失败的块为 `null`，失败原因进入 `errors[]`
-- `?include_boards=false` 时**板块上游根本不被调用**
+- per-block 错误隔离（个股 / 板块 / zt_pool / dt_pool）；失败的块为 `null`，失败原因进入 `errors[]`
+- `?include_boards=false` 时**板块上游根本不被调用**；`?include_pools=false` 时涨跌停池上游不被调用
+- `?trade_date=YYYY-MM-DD` 控制 pool 池的目标日期（影响 `zt_pool` / `dt_pool` 上游的 `date=` 参数；默认走 `trade_calendar.get_latest_trade_date_on_or_before(today)`）
 
 ### 入参
 
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
-| `include_boards`（query） | bool | ❌ | `true` | `false` 时跳过板块上游 |
+| `include_boards`（query） | bool | ❌ | `true` | `false` 时跳过板块上游（**上游不被调用**，与失败→`null` 不同） |
+| `include_pools`（query） | bool | ❌ | `true` | `false` 时跳过 zt / dt 池上游；`limit_pools` 字段在 JSON 中**仍以 `{zt:null, dt:null}` 存在**（schema 稳定） |
+| `trade_date`（query） | string | ❌ | `trade_calendar.get_latest_trade_date_on_or_before(today)` | `YYYY-MM-DD`；仅影响 zt / dt 池上游的 `date`；格式错 → 400 |
 | `format`（query） | string | ❌ | `json` | `json` / `md` |
 
 ### 返回参数
@@ -450,17 +449,26 @@ curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
 | `boards` | object / null | — | 板块块；`include_boards=false` 或上游失败时为 `null` |
 | `boards.sample_size` / `mean_pct` / `median_pct` / `max_pct` / `min_pct` / `up_count` / `down_count` / `flat_count` / `bin_width` / `buckets[]` | 同 `stocks` | — | 9 个 1% 宽桶 [-3%, +3%]，0% 单独成桶；`bin_width` 固定 1；多一个 `source` 字段标记 fetcher |
 | `boards.source` | string | — | 服务本次数据的 fetcher（ths / persistence） |
-| `errors[]` | array | — | 失败的块：`{block, error, message}`（`block` ∈ `stocks` / `boards`） |
+| `limit_pools.zt` | array / null | — | 涨停股池；`pre-market` 时为 `null`；字段同 `ZTPoolStock`（见 boards.md） |
+| `limit_pools.dt` | array / null | — | 跌停股池；`pre-market` 时为 `null`；字段同 `ZTPoolStock` |
+| `errors[]` | array | — | 失败的块：`{block, error, message}`（`block` ∈ `stocks` / `boards` / `zt_pool` / `dt_pool`） |
 | `summary` | object | — | `{requested, ok, failed, elapsed_ms}` |
+
+### 缓存键
+
+`make_market_stats_cache_key(include_pools, include_boards, trade_date)`——三个 query 参数都参与 key（同一请求不同 `trade_date` 走不同 cache entry）。`summary.requested` 反映**实际尝试调用过的块数**，不是 schema 总块数；用 `include_boards=false & include_pools=false` 时 `requested=1`（仅个股块）。
 
 ### 示例
 
 ```bash
-# 完整（含板块）
+# 完整（个股 + 板块 + 涨跌停池）
 curl 'http://localhost:8888/api/v1/agent/market-stats'
 
 # 只看个股
-curl 'http://localhost:8888/api/v1/agent/market-stats?include_boards=false'
+curl 'http://localhost:8888/api/v1/agent/market-stats?include_boards=false&include_pools=false'
+
+# 显式指定池的目标日期
+curl 'http://localhost:8888/api/v1/agent/market-stats?trade_date=2026-09-01'
 
 # markdown 投影
 curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'

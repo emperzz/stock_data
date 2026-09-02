@@ -59,7 +59,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 | 实时行情 + 计算 features（趋势 / 顶底 / 量异常） | market-data-obtain 批量端点 | `agent/{indices,stocks,boards}/batch-profile`（参数见 §3） |
 | 板块成分股 / 龙头 / 实时 | market-data-obtain 板块端点 | `/boards/{code}/stocks?source=ths&include_quote=true`（触板判定走 §3.1 #6） |
 | 板块行情 + 板块涨幅相对位置 | market-data-obtain agent 端点 | `agent/boards/batch-profile`（板块）+ `agent/market-stats.boards.buckets`（市场桶位） |
-| 全市场情绪 / 涨跌停 / 龙虎榜 / 消息面 | market-data-obtain agent 端点 | `agent/market-stats` + `agent/market-context` |
+| 全市场情绪 + 涨跌停池 + 消息面 | market-data-obtain agent 端点 | `agent/market-stats`（情绪桶 + `limit_pools`）+ `agent/market-context`（消息面）。**龙虎榜**按需归因时单独走 `/api/v1/dragon-tiger`，不进常规流程 |
 | 跨资产重合度 / 相关性 | market-data-obtain agent 端点 | `agent/{stocks,boards}-overlap` + `agent/correlation/matrix` |
 | 个股公司画像（业务重合度对比用） | market-data-obtain agent 端点 | `agent/stocks/batch-profile` 的 `info.data` 块（`business_scope` + `concepts`） |
 
@@ -110,7 +110,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 | 1 | 市场环境 | 大盘长期趋势 | `agent/indices/batch-profile` | `frequency=d`，`days=365`；`codes` 走 API 默认（`000001 / 399001 / 399006`——上证 + 深证 + 创业板） |
 | 2 | 市场环境 | 大盘当日分时 | `agent/indices/batch-profile` | `frequency=5m`，`days=5`，`codes` 同上 |
 | 3 | 市场环境 | 全市场个股 + 板块涨幅统计 | `agent/market-stats` | 默认（含板块块） |
-| 4 | 市场环境 | 涨跌停 + 连板结构 + 龙虎榜 + 消息面 | `agent/market-context` | 默认 |
+| 4 | 市场环境 | 涨跌停池 + 连板结构 + 消息面 | `agent/market-stats.limit_pools`（涨跌停池）+ `agent/market-context`（消息面） | 默认 | 龙虎榜（`/api/v1/dragon-tiger`）按需归因拉，本表不列 |
 | 5 | 板块 | 板块长期 + 当日分时 features | `agent/boards/batch-profile` | THS platecodes，`frequency=d&days=365` 与 `frequency=5m&days=5` 各一次 |
 | 6 | 板块 | 成分股龙头 / 前 3 | `GET /boards/{code}/stocks` | `source=ths&include_quote=true`（龙头 / 前 3 = 列表按涨幅倒序的前几行）；触板判定按 `market-principles §12` 优先级 1 走 `/zt-pools?type=zt` |
 | 7 | 个股 | 用户当前请求的每只 X 的长期 + 当日分时 features | `agent/stocks/batch-profile` | `frequency=d&days=365` 与 `frequency=5m&days=5` 各一次；`codes` = 用户本次请求涉及的股票集合（watchlist 子集 / 全集 / 或 watchlist 之外的临时指定） |
@@ -262,7 +262,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 - `agent/indices/batch-profile`（`5m&days=5`）的 `features.pivots`（当日分时顶底 + 量能）
 - `agent/market-stats.stocks`（11 桶分布 + 算术平均 + 中位数）
 - `agent/market-stats.boards`（9 桶分布 + 算术平均 + 中位数）
-- `agent/market-context.limit_pools`（涨跌停池）
+- `agent/market-stats.limit_pools`（涨跌停池，zt/dt 全集；连板来自 `lb_count` 字段，连板分布广度按 `lb_count` 聚合）
 
 **输出**（共享给所有 code）：
 

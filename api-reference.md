@@ -1297,11 +1297,11 @@ summarize" is folded into one request. Seven endpoints ship in v1:
 | `/agent/stocks/board-overlap` | POST | Pairwise board-set intersection + Jaccard across 2-10 stocks |
 | `/agent/boards/filter-stocks` | POST | Server-side numeric filter on a board's constituents |
 | `/agent/indices/batch-profile` | GET | Per-index extended `MinimalQuote` (23 fields, see [inventory](#minimalquote-field-inventory)) + trend/pivots/volume features (3 default CSI indices) |
-| `/agent/market-context` | GET | Morning briefing + market recap + flash + zt/dt + dragon-tiger |
+| `/agent/market-context` | GET | Slim daily snapshot: morning briefing + market recap + flash news (no `limit_pools` / `dragon_tiger` blocks — see below) |
 | `/agent/stocks/batch-profile` | POST | Per-stock fan-out across extended `MinimalQuote` (23 fields) / features / info / boards (1-5 codes) |
 | `/agent/boards/batch-profile` | POST | Per-board fan-out: extended `MinimalQuote` (23 fields, board-only `volume_unit="wan_shou"`) + trend/pivots/volume features (1-5 THS platecodes, single source THS) |
 | `/agent/correlation/matrix` | POST | Pairwise Pearson + Spearman correlation matrix across 2-10 stocks/boards (A-share only) |
-| `/agent/market-stats` | GET | Full-market stats (mean / median / max / min / up-down-flat + percentage buckets) for stocks + boards |
+| `/agent/market-stats` | GET | Full-market stats (mean / median / max / min + percentage buckets for stocks + boards) **with `limit_pools` block (zt/dt) sourced from the same call** (post-2026-09-02: the pools block moved here from `market-context`) |
 
 **Common contract:**
 
@@ -1313,10 +1313,15 @@ summarize" is folded into one request. Seven endpoints ship in v1:
   (reused as a generic 60s TTLCache slot for agent results). The
   `filter-stocks` cache key also includes `limit`, because `limit` is
   forwarded to upstream `get_board_stocks(..., top_n=limit)`. The
-  `market-context` cache key also includes `session`
-  (`pre-market` / `intraday` / `post-market` / `closed`) — without
-  it, a 09:00 pre-market cache hit would mask a 16:00 post-market
-  refresh.
+  `market-stats` cache key also includes `trade_date` + `include_pools`
+  (the pools upstream call is `date=` keyed); two requests with
+  different `trade_date` use different cache entries (a stale
+  2026-08-31 pool snapshot must not serve a 2026-09-01 request).
+  `market-context` no longer needs a `session` dimension
+  (`pre-market` / `intraday` / `post-market` / `closed`) — the slim
+  contract returns homogeneous content across sessions, so removing
+  that dimension eliminates a class of cross-session cache drift
+  (pre-market 09:00 vs post-market 16:00).
 - **No LLM judgment.** These endpoints emit only numeric / set-arithmetic
   facts. "Which stock is the leader" / "Which board is the better pick"
   remains the agent's job via `skills/market-principles.md`.
@@ -1336,17 +1341,21 @@ All 7 endpoints accept an optional `?format` query parameter:
 The MD projection renders the Pydantic response to a stable markdown
 layout (tables + headings + bullet lists). No data is dropped — every
 JSON field appears in the MD output (e.g. the `matched_stocks` table
-on `filter-stocks` carries all 16 fields; the `dragon_tiger.stocks`
-list on `market-context` shows the full table alongside the top-10
-summary; the batch-profile feature blocks carry `pivots.params` and
-the full OHLC of each `z_anomalies` bar). Pinned by
+on `filter-stocks` carries all 16 fields; the `limit_pools.zt` /
+`limit_pools.dt` lists on `market-stats` show the real-schema-column
+tables — see [`?format=md` shape for market-stats](#get-apiv1agentmarket-stats)
+for the exact column list; the batch-profile feature blocks carry
+`pivots.params` and the full OHLC of each `z_anomalies` bar). Pinned by
 `tests/test_agent_endpoints.py::TestFormatMdDataCompleteness` (7 tests,
 covering boards/stock-overlap + stocks/board-overlap + market-context)
 and `tests/test_agent_batch_features.py::TestFormatMdFeatureCompleteness`
-(3 tests, covering the batch-profile feature blocks). A block computed
-from an empty DataFrame renders `（无数据）` rather than an empty table
-skeleton — `build_features` returns `{}` without raising, so `errors`
-stays None and the marker is the only signal that no bars were available.
+(3 tests, covering the batch-profile feature blocks) and
+`tests/test_agent_market_stats.py::TestMarketStatsPoolsBlock::test_format_md_renders_pools_section`
+(MD table columns for `limit_pools.zt` / `limit_pools.dt`). A block
+computed from an empty DataFrame renders `（无数据）` rather than an
+empty table skeleton — `build_features` returns `{}` without raising,
+so `errors` stays None and the marker is the only signal that no
+bars were available.
 
 **Cache + format interaction:** the cache is **format-agnostic** — the
 same Pydantic model serves both `?format=json` and `?format=md`. A
@@ -1734,9 +1743,18 @@ absorption. Manager is invoked on every call.
 
 ### GET /api/v1/agent/market-context
 
-Daily market snapshot: morning briefing + market recap + flash news +
-zt/dt pools + dragon-tiger. Use case: "give me everything I need for
-one market-recap pass in a single call".
+Daily market **message snapshot** (slim contract post-2026-09-02):
+morning briefing + market recap + flash news only. The zt/dt pools
+that previously lived here have moved to
+[`market-stats.limit_pools`](#get-apiv1agentmarket-stats) — agents
+that need pool data should call that endpoint instead, and agents
+that previously got pools + 龙虎榜 inline now fetch 龙虎榜 on demand
+from `GET /api/v1/dragon-tiger` (per spec rationale: pool data is a
+full-market snapshot that fits next to `stocks` / `boards`
+distribution; 龙虎榜 is per-tag value-flow data the agent should
+request only when attribution requires it). Use case: "give me the
+morning briefing + recap + flash for one market-recap pass in one
+call, without paying for unrelated pool / 龙虎榜 fetches".
 
 ```bash
 GET /api/v1/agent/market-context
@@ -1748,7 +1766,7 @@ GET /api/v1/agent/market-context?flash_limit=50&trade_date=2026-07-14
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `flash_limit` | int | 20 | Flash news item count (1-200, matches `fetch_flash_news`'s `pageSize` hard cap). |
-| `trade_date` | string | latest trade date ≤ today | `YYYY-MM-DD`; affects morning-briefing / market-recap / dragon-tiger. zt and dt pools and flash news are not date-keyed (zt/dt default to today, flash is real-time). Malformed values → 400 `invalid_trade_date`. |
+| `trade_date` | string | latest trade date ≤ today | `YYYY-MM-DD`; affects morning-briefing / market-recap. Flash news is real-time (not date-keyed). Malformed values → 400 `invalid_trade_date`. |
 | `format` | string | `json` | `json` (default) or `md` — see [`?format=json|md` projection](#agent-batch-api). |
 
 **Response (200):**
@@ -1763,19 +1781,7 @@ GET /api/v1/agent/market-context?flash_limit=50&trade_date=2026-07-14
     "market_recap":    {"article_id": 1842400, "title": "财联社7月14日复盘", "date": "2026-07-14", "body_text": "..."},
     "flash_news": [{"title": "...", "publish_time": "2026-07-14 09:31:00", "url": "..."}]
   },
-  "limit_pools": {
-    "zt": [{"code": "601001", "name": "晋控煤业", "change_pct": 10.02, "first_seal_time": "09:41", "lb_count": 2, "industry": "煤炭"}],
-    "dt": null
-  },
-  "dragon_tiger": {
-    "stocks": [{"code": "002475", "name": "立讯精密", "net_buy_wan": 15230.5, "buy_wan": 18000.0, "sell_wan": 2769.5, "total_amount_wan": 95000.0, "pct_chg": 10.0, "pct_chg_after": 10.5}],
-    "summary": {
-      "total_net_buy_wan": 12345.0,
-      "top_by_net_buy": [{"code": "002475", "name": "立讯精密", "net_buy_wan": 15230.5}],
-      "top_by_net_sell": [{"code": "300750", "name": "宁德时代", "net_buy_wan": -8500.0}]
-    }
-  },
-  "summary": {"requested": 6, "ok": 6, "failed": 0, "elapsed_ms": 567}
+  "summary": {"requested": 3, "ok": 3, "failed": 0, "elapsed_ms": 184}
 }
 ```
 
@@ -1787,20 +1793,27 @@ GET /api/v1/agent/market-context?flash_limit=50&trade_date=2026-07-14
 | `messages.morning_briefing` | object \| null | CLS morning briefing article dict; `null` when no article published / fetch failed. |
 | `messages.market_recap` | object \| null | CLS market recap article dict; same null semantics. |
 | `messages.flash_news` | object[] | Global flash news list (default 20 items, configurable via `flash_limit`). Empty list on upstream failure. |
-| `limit_pools.zt` / `dt` | object[] \| null | ZT / DT pool lists. `null` in pre-market (池子未成形) OR when the upstream call failed entirely. Empty list `[]` is distinct from `null` (means "fetch succeeded, 0 stocks"). |
-| `dragon_tiger.stocks` | object[] | Full daily 龙虎榜 list (not truncated to top 10). |
-| `dragon_tiger.summary` | object | Server-computed rollup: `total_net_buy_wan` (signed), `top_by_net_buy` (top 10 by net_buy DESC), `top_by_net_sell` (top 10 by net_buy ASC among rows with `net_buy_wan < 0` only — surfacing positive rows as "top sell" would be misleading on all-positive days). |
-| `summary` | object | `{requested, ok, failed, elapsed_ms}` — `requested` is the number of attempts made; in pre-market the zt + dt attempts are skipped, so `requested` drops to 4 (briefing + recap + flash + dtiger). |
+| `summary` | object | `{requested, ok, failed, elapsed_ms}` — `requested` is always 3 in the slim contract (briefing + recap + flash). |
 
-**Per-block isolation:** each upstream call is wrapped in its own
-try/except, so a failure in one block (e.g. CLS HTML parser crash on
-the briefing) does not abort the others. The failed block's value is
-its `null` (or `[]` for flash) and the failed count is incremented.
+**Removed in slim contract (2026-09-02):**
 
-**Cache:** `make_market_context_cache_key(flash_limit, trade_date, session)` →
-`agent_market_context:<flash_limit>:<trade_date>:<session>`. The
-`session` dimension is required because pre/intra/post-market produce
-materially different responses (pre-market forces zt/dt to null).
+- `limit_pools` block — moved to [`agent-stats.limit_pools`](#get-apiv1agentmarket-stats).
+- `dragon_tiger` block — agent endpoint now on-demand only; use
+  `GET /api/v1/dragon-tiger?trade_date=YYYY-MM-DD`.
+- `session` dimension from the cache key — the slim shape is
+  homogeneous across sessions, so two requests with the same
+  `(flash_limit, trade_date)` reuse the same cache entry.
+
+**Per-block isolation:** each upstream call (briefing / recap / flash)
+is wrapped in its own try/except, so a failure in one block (e.g.
+CLS HTML parser crash on the briefing) does not abort the others.
+The failed block's value is `null` (or `[]` for flash) and the failed
+count is incremented.
+
+**Cache:** `make_market_context_cache_key(flash_limit, trade_date)` →
+`agent_market_context:<flash_limit>:<trade_date>`. The `session`
+dimension is no longer part of the key (see "Removed in slim
+contract" above).
 
 **`trade_date` validation:** the route enforces a `^\d{4}-\d{2}-\d{2}$`
 regex. Non-date strings (e.g. `yesterday`) → 400 `invalid_trade_date`,
@@ -2282,15 +2295,17 @@ pre-pct-change size. `np.corrcoef` handles zero-variance columns (NaN
 Full-market A-share stats aggregator: returns distribution statistics
 (mean / median / max / min of `change_pct`, up / down / flat counts,
 and a fixed-bucket histogram) for **both** the full stock universe and
-the full board universe in one response. Per-block error isolation:
-one upstream failure sets that block to `null` and surfaces the
-exception in `errors[]`; the other block continues normally. Use case:
-"how is the market doing right now" without an N+1 fetch + client-side
-bucket loop.
+the full board universe, **plus the daily zt/dt limit pools**
+(post-2026-09-02 — zt/dt moved here from `market-context`). Per-block
+error isolation: one upstream failure sets that block to `null` and
+surfaces the exception in `errors[]`; the other blocks continue
+normally. Use case: "give me a full-market dashboard — distribution +
+pools — in one call" without an N+1 fetch + client-side bucket loop.
 
 ```bash
 GET /api/v1/agent/market-stats
 GET /api/v1/agent/market-stats?include_boards=false
+GET /api/v1/agent/market-stats?trade_date=2026-09-01
 GET /api/v1/agent/market-stats?format=md
 ```
 
@@ -2298,7 +2313,9 @@ GET /api/v1/agent/market-stats?format=md
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `include_boards` | bool | `true` | When `false`, the boards block is skipped — no boards upstream call is made. Useful when the caller only wants stock stats (saves the THS board-list-with-quotes fetch). |
+| `include_boards` | bool | `true` | When `false`, the boards block is skipped — no boards upstream call is made. The `boards` field is **still present in JSON as `null`**; presence is NOT a signal that boards were attempted — read `summary.requested`. |
+| `include_pools` | bool | `true` | When `false`, the zt/dt upstream calls are **not** made (pool upstream is skipped). The `limit_pools` field is **still present in JSON as `{zt: null, dt: null}`**. Same rule as `include_boards`: field presence ≠ upstream attempt. |
+| `trade_date` | string | `trade_calendar.get_latest_trade_date_on_or_before(today)` | `YYYY-MM-DD`; controls the `date=` parameter on `manager.get_zt_pool(pool_type=...)`. Affects `limit_pools` only (does NOT affect `stocks` / `boards` — those are real-time). Malformed values → 400. |
 | `format` | enum | `"json"` | `json` (default) or `md` — see [`?format=json\|md` projection](#agent-batch-api). |
 
 **Response (200):**
@@ -2352,8 +2369,23 @@ GET /api/v1/agent/market-stats?format=md
       {"label":"(+3%, +∞)",  "lower": 3.0, "upper":null, "count":  6}
     ]
   },
+  "limit_pools": {
+    "zt": [
+      {"code": "600519", "name": "贵州茅台", "price": 1820.50, "change_pct": 10.01,
+       "amount": 4.2e9, "circ_mv": null, "total_mv": 2.28e12, "turnover_pct": 0.18,
+       "lb_count": 2,
+       "first_seal_time": "09:30:00", "last_seal_time": "09:30:00",
+       "seal_amount": 1.23e8, "seal_count": 0, "zt_count": "1天/2板"}
+    ],
+    "dt": [
+      {"code": "000001", "name": "平安银行", "price": 10.50, "change_pct": -10.01,
+       "amount": 8.5e8, "circ_mv": null, "total_mv": 2.0e11, "turnover_pct": 0.42,
+       "lb_count": 1,
+       "first_seal_time": "14:00:00", "last_seal_time": "14:00:00"}
+    ]
+  },
   "errors": [],
-  "summary": {"requested": 2, "ok": 2, "failed": 0, "elapsed_ms": 184}
+  "summary": {"requested": 4, "ok": 4, "failed": 0, "elapsed_ms": 220}
 }
 ```
 
@@ -2368,8 +2400,51 @@ GET /api/v1/agent/market-stats?format=md
 | `stocks.buckets[i].{label,lower,upper}` | str / float \| null | Bucket label and edges. `lower == upper == 0` for the flat bucket; one of `{lower, upper}` is `null` for ±∞ boundary buckets; otherwise left-open right-closed `[lower, upper]` (e.g. `(-3%, 0)` for the right-open bucket adjacent to the flat bucket — see bucket convention note below). |
 | `stocks.buckets[i].count` | int | Number of values falling in this bucket. |
 | `boards.source` | str | `"ths"` (or `"persistence"` if served from cache without a refresh). Mirrors the `effective_source` semantics of `/boards/{code}/stocks`. |
-| `errors[]` | object[] | Per-block failures: `{block: "stocks"\|"boards", error, message}`. Empty on success. See error isolation matrix below. |
-| `summary` | object | `{requested, ok, failed, elapsed_ms}` — same contract as `IndicesBatchProfileResponse` / `MarketContextResponse`. |
+| `limit_pools.zt` | object[] \| null | ZT pool list. **`null` in pre-market** (池子未成形) OR when the upstream call failed OR `include_pools=false`. Empty list `[]` is distinct from `null` (means "fetch succeeded, 0 stocks"). Each item follows the `ZTPoolStock` contract — see the [field inventory below](#limit_pools-field-inventory). |
+| `limit_pools.dt` | object[] \| null | DT pool list. Same null semantics. Same field inventory as `zt`. |
+| `errors[]` | object[] | Per-block failures: `{block, error, message}` where `block` ∈ `stocks` \| `boards` \| `zt_pool` \| `dt_pool`. Empty on success. See error isolation matrix below. |
+| `summary` | object | `{requested, ok, failed, elapsed_ms}` — `requested` is the **number of actual upstream attempts** (varies by `include_boards` / `include_pools`; default with all four blocks enabled: `requested=4`). Same contract as `IndicesBatchProfileResponse` / the slim `MarketContextResponse`. |
+
+#### `limit_pools` field inventory
+
+Each item in `limit_pools.zt[]` / `limit_pools.dt[]` follows the
+`ZTPoolStock` schema (see `stock_data/api/schemas.py`). Fields a
+caller can rely on across all upstream fetchers:
+
+| Field | Type | Description |
+|---|---|---|
+| `code` | string | Bare 6-digit stock code. |
+| `name` | string | Stock name. |
+| `change_pct` | float | `change_pct` at the moment of the pool snapshot. |
+| `first_seal_time` | string \| null | First seal time `HH:MM:SS` (zzshare normalizes `"HH:MM"` → `"HH:MM:SS"`). |
+| `last_seal_time` | string \| null | Last seal time `HH:MM:SS`. |
+| `lb_count` | int \| null | Consecutive limit-up count (涨停连板) for zt / consecutive limit-down count for dt. |
+| `turnover_pct` | float \| null | Turnover rate (%). |
+| `seal_amount` | float \| null | Seal amount / 封单金额 (元). **ZT-only in practice**; DT pools typically `null`. |
+| `seal_count` | int \| null | Seal-break count (炸板次数). |
+| `zt_count` | string \| null | "x天/y板" notation. **ZT-only**. |
+| `amount` / `circ_mv` / `total_mv` | float \| null | Trading amount + market-cap fields (元). |
+
+> ⚠️ **`industry` is not a field** — no fetcher populates a per-stock
+> 行业 on zt/dt pool items, and `ZTPoolStock` does not declare it.
+>  zzshare's `area/industry_left empty` upstream contract carries
+>  through unchanged. A backfill path is a separate spec item.
+
+**Error isolation matrix** (per `block` field of `errors[]`):
+
+| `block` value | Triggering condition |
+|---|---|
+| `stocks` | `manager.get_realtime_quotes("csi")` raised. |
+| `boards` | `stock_board_cache.get_board_list(source="ths", include_quote=True)` raised OR `include_boards=false` was set. |
+| `zt_pool` | `manager.get_zt_pool(pool_type="zt", date=...)` raised OR `include_pools=false` was set OR `pre-market` (no pool yet). |
+| `dt_pool` | Same as `zt_pool`, for `pool_type="dt"`. |
+
+**Cache:** `make_market_stats_cache_key(include_pools, include_boards, trade_date)` →
+`agent_market_stats:<include_pools>:<include_boards>:<trade_date>`.
+All three query parameters participate in the key — a same-shape
+request with a different `trade_date` (or different `include_pools`)
+uses a different cache entry. Agents that re-fetch with stale dates
+must not hit yesterday's pool snapshot.
 
 **Bucket convention** (left-open right-closed with flat-first routing):
 

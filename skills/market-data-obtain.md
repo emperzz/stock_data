@@ -204,11 +204,11 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | `POST /api/v1/agent/stocks/board-overlap` | 多股票所属板块两两交集 + Jaccard（2-10 股票） |
 | `POST /api/v1/agent/boards/filter-stocks` | 板块成分股服务端数值过滤（换手 / 涨跌幅 / 成交额 / 市值） |
 | `GET /api/v1/agent/indices/batch-profile` | 指数批量画像（1-5 指数；单 frequency） |
-| `GET /api/v1/agent/market-context` | 每日市场全景快照（早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜） |
+| `GET /api/v1/agent/market-context` | 每日市场消息面快照（早报 + 复盘 + 快讯；slim contract：涨跌停池已迁至 `market-stats`，龙虎榜按需走 `/api/v1/dragon-tiger`） |
 | `POST /api/v1/agent/stocks/batch-profile` | 股票批量画像（1-5 股票；quote + features + info + boards；boards 块与 `/stocks/{code}/boards` 同契约，见 [agent-batch.md](market-data-obtain/agent-batch.md)） |
 | `POST /api/v1/agent/boards/batch-profile` | 板块批量画像（1-5 THS platecode；单 frequency） |
 | `POST /api/v1/agent/correlation/matrix` | 跨资产 Pearson + Spearman 相关性矩阵（2-10 资产） |
-| `GET /api/v1/agent/market-stats` | 全市场涨幅统计（个股 + 板块 + 桶形数据） |
+| `GET /api/v1/agent/market-stats` | 全市场涨幅统计（个股 + 板块 + 涨跌停池 zt/dt + 桶形数据） |
 
 > ⚠️ 字段、单位、调用约束、典型调用模式：[detail/agent-batch.md](market-data-obtain/agent-batch.md)
 
