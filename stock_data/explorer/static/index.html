@@ -1168,13 +1168,29 @@
       pinnedFocus = false;
       searchDim = {};
 
-      if (isFlow) network.on("beforeDrawing", drawFlowBoxes);
-      network.on("click", (params) => {
-        if (!params.nodes || params.nodes.length === 0) return;   // 点空白: 无操作(Task 3 改为清聚焦)
-        const node = dataSet.nodes.get(params.nodes[0]);
-        if (!node || node.group === "anchor") return;
-        if (lastCallbacks.onNodeClick) lastCallbacks.onNodeClick(node);
-      });
+      if (isFlow) {
+        network.on("beforeDrawing", drawFlowBoxes);
+        network.on("hoverNode", (p) => {
+          const n = dataSet.nodes.get(p.node);
+          if (!n || n.group === "anchor") return;
+          if (!pinnedFocus && focusedId !== n.id) setFocus(n.id, false);
+        });
+        network.on("blurNode", () => { if (!pinnedFocus) clearFocus(); });
+        network.on("click", (params) => {
+          const id = params.nodes && params.nodes.length ? params.nodes[0] : null;
+          const node = id ? dataSet.nodes.get(id) : null;
+          if (!node || node.group === "anchor") { clearFocus(); return; }
+          if (focusedId === node.id && pinnedFocus) { clearFocus(); }
+          else { setFocus(node.id, true); }
+          if (lastCallbacks.onNodeClick) lastCallbacks.onNodeClick(node);
+        });
+      } else {
+        network.on("click", (params) => {
+          if (!params.nodes || params.nodes.length === 0) return;
+          const node = dataSet.nodes.get(params.nodes[0]);
+          if (node && lastCallbacks.onNodeClick) lastCallbacks.onNodeClick(node);
+        });
+      }
 
       if (isFlow) network.fit({ animation: false });
     }
@@ -1203,20 +1219,74 @@
         return { id: n.id, hidden: !vis };
       }).filter(Boolean);
       dataSet.nodes.update(updates);
+      if (focusedId) {
+        const f = dataSet.nodes.get(focusedId);
+        if (!f || f.hidden) clearFocus();
+      }
       if (network) network.redraw();
     }
 
-    // Dim (not hide) nodes whose label doesn't fuzzy-match q. Anchors excluded.
+    // 聚焦某节点: paint 会强调它及其 1 跳邻居的边/节点, 淡化其余。
+    function setFocus(id, pin) {
+      focusedId = id;
+      pinnedFocus = !!pin;
+      paint();
+    }
+
+    function clearFocus() {
+      if (!focusedId) return;
+      focusedId = null;
+      pinnedFocus = false;
+      paint();
+    }
+
+    // 依 searchDim(暗化) × focus(聚焦强调)重算全部节点/边最终样式。
+    // 无聚焦时等价于纯 search 暗化; force 模式 focusedId 恒 null → 与旧行为一致。
+    function paint() {
+      if (!network || !dataSet) return;
+      const warn = cssVar("--accent-warn", "#ff9500");
+      const emph = new Set();
+      if (focusedId) {
+        emph.add(focusedId);
+        for (const e of baseEdges) {
+          if (e.from === focusedId || e.to === focusedId) { emph.add(e.from); emph.add(e.to); }
+        }
+      }
+      const nodeUpd = dataSet.nodes.get()
+        .filter(n => n.group !== "anchor")
+        .map(n => {
+          const base = (n.id in searchDim) ? searchDim[n.id] : 1;   // 1 or 0.15
+          const opacity = (focusedId && !emph.has(n.id)) ? base * 0.15 : base;
+          const upd = { id: n.id, opacity };
+          const baseC = baseNode[n.id] ? baseNode[n.id].color : n.color;
+          if (focusedId === n.id) upd.color = Object.assign({}, baseC, { border: warn });
+          else upd.color = baseC;
+          return upd;
+        });
+      dataSet.nodes.update(nodeUpd);
+
+      const edgeUpd = baseEdges.map(e => {
+        const inc = !!focusedId && (e.from === focusedId || e.to === focusedId);
+        return {
+          id: e.id,
+          color: { color: e.color.color, opacity: inc ? e.color.opacity : e.color.opacity * 0.06 },
+          width: inc ? e.width + 0.5 : e.width,
+        };
+      });
+      dataSet.edges.update(edgeUpd);
+    }
+
+    // Dim (not hide) nodes whose label doesn't fuzzy-match q; then paint() so
+    // search dim and focus emphasis combine. Anchors stay at creation opacity 0.
     function applySearch(q) {
       if (!network || !dataSet) return;
       const query = (q || "").trim();
-      const updates = dataSet.nodes.get()
-        .filter(n => n.group !== "anchor")
-        .map(n => {
-          const match = !query || fuzzyMatchGlobal(query, n.label);
-          return { id: n.id, opacity: match ? 1.0 : 0.15 };
-        });
-      dataSet.nodes.update(updates);
+      searchDim = {};
+      dataSet.nodes.get().forEach(n => {
+        if (n.group === "anchor") return;
+        if (query && !fuzzyMatchGlobal(query, n.label)) searchDim[n.id] = 0.15;
+      });
+      paint();
     }
 
     function destroy() {
