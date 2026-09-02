@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 import types
 from typing import Any, Union, get_args, get_origin
 
@@ -98,14 +99,14 @@ def build_manifest(app: FastAPI) -> dict[str, Any]:
         section = sections_map.setdefault(
             tag, {"id": tag, "title": TAG_TO_TITLE.get(tag, tag), "endpoints": []}
         )
-        section["endpoints"].append(_build_endpoint_node(route, meta, manager))
+        section["endpoints"].append(_build_endpoint_node(route, meta, manager, app))
     return {
         "meta": _build_meta(),
         "sections": sorted(sections_map.values(), key=_section_sort_key),
     }
 
 
-def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager) -> dict:
+def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager, app) -> dict:
     params: list[dict] = []
     for p in route.dependant.path_params:
         params.append(
@@ -162,6 +163,7 @@ def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager) -> dict:
         except Exception as e:  # pragma: no cover — defensive
             logger.warning(f"[manifest] response schema reflection failed for {route.path}: {e}")
             response_schema = None
+    depends_on = _resolve_depends_on(meta.depends_on, app) if meta.depends_on else []
     return {
         "id": _slugify(f"{method}_{full_path}"),
         "method": method,
@@ -174,6 +176,7 @@ def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager) -> dict:
         "response_model": route.response_model.__name__ if route.response_model else None,
         "response_schema": response_schema,
         "fetchers": fetchers,
+        "depends_on": depends_on,
     }
 
 
@@ -454,3 +457,50 @@ def _slugify(s: str) -> str:
                 out.append("_")
             prev_sep = True
     return "".join(out)
+
+
+def _normalize_path(path: str) -> str:
+    """Collapse path-param names so {code} and {stock_code} match the same route.
+
+    depends_on refs may use a different param name than the target route's
+    registration (e.g. agent code says {code} but /stocks/{stock_code}/quote
+    registered {stock_code}). Normalizing both to {} before comparing makes
+    the ref resilient to param-name drift.
+    """
+    return re.sub(r"\{[^}]+\}", "{}", path)
+
+
+def _resolve_depends_on(deps: list[str] | None, app: FastAPI) -> list[dict]:
+    """Resolve @endpoint_meta(depends_on=[...]) into graph-edge-ready dicts.
+
+    Each item becomes {target_path, kind, label}:
+      - starts with "/" and matches a real route (exact OR normalized) →
+        kind:"endpoint", target_path = the REAL route path (param name from
+        the route, not the ref), label = same. Frontend draws a composed-of
+        edge to the endpoint node with this path.
+      - otherwise → kind:"internal", target_path=None, label = the item as-is.
+        Frontend shows it as text in the detail panel, no graph edge.
+    """
+    if not deps:
+        return []
+    # Index real route paths: exact + normalized, so a ref can hit either.
+    exact_paths: set[str] = set()
+    norm_to_real: dict[str, str] = {}
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            exact_paths.add(route.path)
+            norm_to_real[_normalize_path(route.path)] = route.path
+    out: list[dict] = []
+    for dep in deps:
+        if dep.startswith("/"):
+            if dep in exact_paths:
+                out.append({"target_path": dep, "kind": "endpoint", "label": dep})
+            else:
+                real = norm_to_real.get(_normalize_path(dep))
+                if real is not None:
+                    out.append({"target_path": real, "kind": "endpoint", "label": real})
+                else:
+                    out.append({"target_path": dep, "kind": "internal", "label": dep})
+        else:
+            out.append({"target_path": None, "kind": "internal", "label": dep})
+    return out
