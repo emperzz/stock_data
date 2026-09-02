@@ -43,7 +43,7 @@ depends_on,也没有"目标端点再当来源"的链式 → 当前数据是干�
   多个 fetcher 容器;已在 brainstorming 中确认作废)。
 - 不引第三方布局库(dagre / cytoscape / mermaid / elk)。crossing minimization 用手写
   重心排序,保持单文件零新依赖。
-- 不做树方向选择(LR 等)、不保存用户自定义坐标 —— YAGNI。
+- 不保存用户自定义坐标 —— YAGNI(方向仅 竖排/横排 二选,见 §4.2)。
 - 不引入前端测试框架(沿用"前端手动 smoke"约定)。
 
 ## 3. Current state (要动的代码)
@@ -87,16 +87,25 @@ R2  fetcher(13)盒子 横排一条
   节点垫底"任选(实现时选可控、且在平移/缩放/theme 下不漂的;详见 §5 的分组框画法
   注意)。框的视觉 = 半
   透明填充 + 边框 + 左上角 section 名,颜色读 CSS 变量(light/dark 都可用)。
-- **重心排序(crossing minimization,手写 ~几十行)**,按层内 x 序迭代 2-3 轮使相邻两层
-  边交叉最小:
-  - R1 各框的水平顺序与框内端点序,按 R0→R1 的 composed-of 目标重心对齐;
-  - R2 fetcher 序按"服务它的端点(所在框/框内)位置均值"排序 → served-by 边基本是
-    短的下垂线,少量交叉。
-  - R0 agent 序按 R1 目标的平均 x。
+- **质心锚定(crossing minimization,手写 ~几十行)**:框内端点先摆成竖列;agent 与
+  fetcher 按其"相邻端点"的 x 质心定位,一行 `floatRow` 顺序摊开避免重叠 → composed-of /
+  served-by 边大多是短下垂线,少量交叉。
 - 孤立端点(无 fetcher 且不被任何 composed-of 指向,如 `/indicators`、`/healthz`、
   `/news/content`、`/stocks/{code}/reports/{id}/pdf`、`/boards/{code}/news|surges` 等)
   仍然摆进自己 section 框、正常显示,只是无边 —— 不与 agent/fetcher 层耦合。
 - 画布按内容尺寸扩容,外层 `#graphWrap` 滚动;render 后 `network.fit()`。
+- **方向选项(竖排 TB / 横排 LR)**:依赖流支持两种排版,`GraphView.render(…,{dir})`,
+  `dir ∈ "TB"|"LR"`(缺省 `"TB"`):
+  - **TB(竖排, 默认)**: agent 顶行、分组框中部、fetcher 底行 —— 自上而下读(本小节
+    描述即此形态)。
+  - **LR(横排, 用户拍板 = "两侧接线")**: section 分组框**仍是中部竖列**(框几何与框内
+    端点排布和 TB 完全一致),只把 agent 移到**最左列**、fetcher 移到**最右列**;
+    `floatRow` 的水平摊开换成垂直版 `floatCol`(y 取相邻端点质心);整组框水平右移空出
+    agent 列 → 箭头从左往右读 `agent → 端点 → fetcher`。
+  - 状态 `state.graphDir`(localStorage `graphDir`,默认 `"TB"`);图内工具条在依赖流下
+    显示「竖排/横排」,切到力导向时该控件禁用(方向对 force 无意义)。
+  - 边/交互(focus/search/filter)对两种方向一致 —— 只依赖节点 id/DataSet,不依赖排布
+    方向;两种方向的渲染无动画、固定坐标。
 
 ### 4.3 边:served-by 默认全画 + composed-of 主干 + focus 强调
 
@@ -181,11 +190,15 @@ filter/search/theme 操作同一批 DataSet 节点,不需为两布局写两套�
 5. 搜索 `kline` 暗化 / 取消勾 csi 过滤隐藏相关端点与边 / 🌗 切主题 → 均无报错、分组框颜色正确。
 6. reload 布局选择持久化(`依赖流`);旧浏览器 localStorage 里 `graphLayout="section"`
    读入后变 `flow` 不报错;切回 Endpoints 再回来无残留。
+7. **方向**:默认 `竖排`(agent 上/fetcher 下,从上往下)。点 `横排` → agent 到最左一列、
+   fetcher 到最右一列、中间仍是 section 竖列框,箭头左→右读;focus/search/filter 在横排
+   下照常;切 `力导向` 时「竖排/横排」控件禁用、切回依赖流恢复。reload 后 `graphDir`
+   选择持久化。
 
 ## 7. Out of scope (explicit)
 
 - 把端点塞进 fetcher 容器、折叠即隐藏端点的字面模型 —— brainstorming 已否
   (多对多使端点无法同属多容器)。
-- 树方向选择 / 严格树 / 用户自定义坐标 / 框可拖拽重排 —— YAGNI。
+- 严格树(把 46 端点当树、支持展开/收起/根选择)/ 用户自定义坐标 / 框可拖拽重排 —— YAGNI。
 - 引入 dagre/mermaid/cytoscape 等布局库。
 - 后端 manifest / `@endpoint_meta` 改动。

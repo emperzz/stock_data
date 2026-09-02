@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 `/explorer/` Dependency Graph 默认布局从"按 section 竖列分区"改为**三层依赖流水**:agent(9) → 按 section 分组的带标题业务端点框(46) → fetcher(13);served-by 边默认可见、composed-of 为主干;hover/单击节点聚焦其邻边、其余淡化。原力导向保留为逃生口。
+**Goal:** 把 `/explorer/` Dependency Graph 默认布局从"按 section 竖列分区"改为**三层依赖流水**:agent(9) → 按 section 分组的带标题业务端点框(46) → fetcher(13);served-by 边默认可见、composed-of 为主干;hover/单击节点聚焦其邻边、其余淡化;依赖流支持 **竖排(TB, 默认)/横排(LR)** 两种方向。原力导向保留为逃生口。
 
-**Architecture:** 全部改动在 `stock_data/explorer/static/index.html`(无后端)。GraphView 用新的 `layoutFlow()`(固定坐标三 rank + 质心锚定 + 手写重心避免重叠)替换旧 `layoutSection()` 与"点端点展开 served-by"状态机;served-by 边从"默认剔除/点击展开"改为**常驻 DataSet**,`beforeDrawing` 用 canvas 画 section 分组框;新增 `paint()`(searchDim × focus 重算节点/边透明度)。主 app 把 `graphLayout` 值域从 `"section"|"force"` 换成 `"flow"|"force"`(旧 `"section"` 归一为 `"flow"`),工具条文案改为 依赖流/力导向。
+**Architecture:** 全部改动在 `stock_data/explorer/static/index.html`(无后端)。GraphView 用新的 `layoutFlow(nodes, dir)`(固定坐标三 rank + 质心锚定,`dir="TB"` 竖排 / `"LR"` 横排把 agent、fetcher 移到左/右列)替换旧 `layoutSection()` 与"点端点展开 served-by"状态机;served-by 边从"默认剔除/点击展开"改为**常驻 DataSet**,`beforeDrawing` 用 canvas 画 section 分组框;新增 `paint()`(searchDim × focus 重算节点/边透明度)。主 app 把 `graphLayout` 值域从 `"section"|"force"` 换成 `"flow"|"force"`(旧 `"section"` 归一为 `"flow"`),工具条改为 依赖流/力导向 + **竖排/横排**(`state.graphDir`, 力导向下禁用)。
 
 **Tech Stack:** Python 3.13 + FastAPI(仅跑 server 供 smoke);vanilla JS + vis-network@9 UMD via CDN(前端单 HTML)。
 
@@ -54,7 +54,7 @@ node -e 'const fs=require("fs");const s=fs.readFileSync("stock_data/explorer/sta
 
 **Interfaces:**
 - Consumes: `buildGraph()` 现有产出(节点有 `id/group/shape/color/label/_ep`;边有 `_kind ∈ "served-by"|"composed-of"`、`from/to/id/width/color/{color,opacity}`);`shortGraphLabel(ep)`;`cssVar(name,fallback)`;`lastManifest`。
-- Produces: 模块级 `lastLayout/isFlowLayout()/focusedId=null/pinnedFocus=false/searchDim={}/flowBoxes=[]/allServedBy/baseEdges/baseNode`;`layoutFlow(nodes)->{w,h}`(赋节点 `x/y`,填 `flowBoxes`,追加 2 个 `group:"anchor"` 不可见节点);canvas `beforeDrawing` 画分组框;`render` 中 `"section"`(≈flow)路径 = 三层坐标 + 全边 + physics off + fit;force 路径原样。
+- Produces: 模块级 `lastLayout/isFlowLayout()/focusedId=null/pinnedFocus=false/searchDim={}/flowBoxes=[]/allServedBy/baseEdges/baseNode`;`layoutFlow(nodes, dir)->{w,h}`,`dir ∈ "TB"|"LR"`(赋节点 `x/y`,填 `flowBoxes`,追加 2 个 `group:"anchor"` 不可见节点);canvas `beforeDrawing` 画分组框;`render` 中 `"section"`(≈flow)路径 = 三层坐标 + 全边 + physics off + fit,读 `callbacks.dir` 缺省 `"TB"`;force 路径原样。Task 2b 依赖 `render(...,{dir})` 与 `layoutFlow(nodes,dir)` 的 LR 分支。
 - 依赖后续: Task 2 依赖 `isFlowLayout()` 同时匹配 `"flow"`,Task 3 依赖 `focusedId/pinnedFocus/searchDim/baseEdges/baseNode/paint()`。
 
 - [ ] **Step 1: 替换模块变量(:786-788)与新布局判断**
@@ -102,8 +102,21 @@ node -e 'const fs=require("fs");const s=fs.readFileSync("stock_data/explorer/sta
       }
     }
 
+    // 垂直摊开(横排 LR 用): 固定 x, 依 desiredOf(沿 y)排序并避免重叠。
+    function floatCol(list, desiredOf, x, minV, maxV, gap) {
+      const arr = [...list].sort((a, b) => desiredOf(a) - desiredOf(b));
+      let cursor = minV;
+      for (const n of arr) {
+        const want = Math.max(minV, Math.min(desiredOf(n), maxV));
+        n.x = x;
+        n.y = Math.max(want, cursor);
+        cursor = n.y + 34 + gap;
+      }
+    }
+
     // 返回 {w,h};给每个 node 赋 x/y;填充 flowBoxes;在 nodes 尾部追加不可见 anchor。
-    function layoutFlow(nodes) {
+    // dir = "TB"(竖排, 默认) | "LR"(横排: agent 左列 / fetcher 右列, 框仍是中部竖列)。
+    function layoutFlow(nodes, dir) {
       const p2s = {};
       for (const sec of lastManifest.sections)
         for (const ep of sec.endpoints) p2s[ep.path] = sec.id;
@@ -122,52 +135,66 @@ node -e 'const fs=require("fs");const s=fs.readFileSync("stock_data/explorer/sta
       }
 
       const PAD = 56, ROW = 32, HEAD = 30, BOX_GAP = 46, ROW_W = 7.4;
-      const agentY = PAD;
-      const R1_TOP = PAD + 160;                  // agent 行下留走廊画 composed-of
+      const isTB = dir !== "LR";
+      const rowTop = isTB ? PAD + 160 : PAD + 36;   // TB 顶部给 agent 行留走廊
 
-      // R1: section 分组框(保持 manifest 顺序, 稳定可读)。框内端点竖排左对齐。
+      // R1: section 分组框(框内端点竖排左对齐; 两种方向共用同一几何)。
       flowBoxes = [];
       let x = PAD;
       for (const [sid, list] of cols) {
         let w = 50;
         for (const n of list) w = Math.max(w, Math.ceil(n.label.length) * ROW_W);
-        const by = R1_TOP;
+        const by = rowTop;
         const h = HEAD + list.length * ROW + 26;
-        flowBoxes.push({ sid, x, y: by, w, h });
+        flowBoxes.push({ sid, x, y: by, w, h, eps: list });
         list.forEach((n, i) => { n.x = x + 24; n.y = by + HEAD + ROW / 2 + i * ROW; });
         x += w + BOX_GAP;
       }
-      const contentW = Math.max(PAD * 2 + agents.length * 110, x - BOX_GAP + PAD);
+      const boxRight = Math.max(PAD, x - BOX_GAP);
       const maxBoxBottom = flowBoxes.length
-        ? Math.max(...flowBoxes.map(b => b.y + b.h)) : R1_TOP;
+        ? Math.max(...flowBoxes.map(b => b.y + b.h)) : rowTop + HEAD;
 
-      // R0: agent 行, 锚定其 composed-of 目标端点的平均 x。
-      const agentDesired = n => {
-        const tgt = (n._ep.depends_on || [])
-          .filter(d => d.kind === "endpoint")
-          .map(d => epById["ep:" + d.target_path])
-          .filter(Boolean);
-        if (!tgt.length) return contentW / 2;
-        return tgt.reduce((s, t) => s + t.x, 0) / tgt.length;
-      };
-      floatRow(agents, agentDesired, agentY, () => 110, PAD, contentW - PAD, 70);
-
-      // R2: fetcher 行, 锚定其 served-by 源端点的平均 x。
-      const fxDesired = n => {
-        const src = allServedBy.filter(e => e.to === n.id).map(e => epById[e.from]).filter(Boolean);
-        if (!src.length) return contentW / 2;
-        return src.reduce((s, t) => s + t.x, 0) / src.length;
-      };
-      const fxY = maxBoxBottom + 190;
-      floatRow(fxNodes, fxDesired, fxY, n => n.label.length * 8.6 + 70,
-        PAD, contentW - PAD, 40);
-
-      // 不可见 anchor 撑满内容, 让 network.fit() 纳入分组框边界。
-      nodes.push(
+      const tgtOf = n => (n._ep.depends_on || [])
+        .filter(d => d.kind === "endpoint")
+        .map(d => epById["ep:" + d.target_path])
+        .filter(Boolean);
+      const srcOf = n => allServedBy.filter(e => e.to === n.id).map(e => epById[e.from]).filter(Boolean);
+      const mean = a => a.reduce((s, t) => s + t, 0) / a.length;
+      const anchorOf = (cw, ch) => [
         { id: "flow:tl", group: "anchor", x: 0, y: 0, label: "", shape: "dot", size: 1, opacity: 0, fixed: { x: true, y: true } },
-        { id: "flow:br", group: "anchor", x: contentW, y: fxY + 70, label: "", shape: "dot", size: 1, opacity: 0, fixed: { x: true, y: true } }
-      );
-      return { w: contentW, h: fxY + 70 };
+        { id: "flow:br", group: "anchor", x: cw, y: ch, label: "", shape: "dot", size: 1, opacity: 0, fixed: { x: true, y: true } },
+      ];
+
+      if (isTB) {
+        // R0 agent 顶行 / R2 fetcher 底行(水平 floatRow)。
+        const contentW = Math.max(PAD * 2 + agents.length * 110, boxRight + PAD);
+        const agentDesired = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.x)) : contentW / 2; };
+        floatRow(agents, agentDesired, PAD, n => n.label.length * ROW_W + 46, PAD, contentW - PAD, 50);
+        const fxY = maxBoxBottom + 190;
+        const fxDesired = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.x)) : contentW / 2; };
+        floatRow(fxNodes, fxDesired, fxY, n => n.label.length * 8.6 + 70, PAD, contentW - PAD, 40);
+        const h = fxY + 70;
+        nodes.push(...anchorOf(contentW, h));
+        return { w: contentW, h };
+      }
+
+      // LR: agent 左列 / fetcher 右列; 整组框右移空出 agent 列。
+      const agentColW = agents.length
+        ? Math.max(...agents.map(n => n.label.length * ROW_W + 60)) : PAD;
+      const shift = agentColW + 80;
+      flowBoxes.forEach(b => { b.x += shift; b.eps.forEach(q => { q.x += shift; }); });
+      const fxX = boxRight + shift + 150;
+      const fxMaxW = fxNodes.length ? Math.max(...fxNodes.map(n => n.label.length * 8.6 + 70)) : 200;
+      const yMin = PAD, yMax = maxBoxBottom;
+      const aDesY = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.y)) : yMin + HEAD; };
+      floatCol(agents, aDesY, PAD, yMin, yMax, 44);
+      const fDesY = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.y)) : yMin + HEAD; };
+      floatCol(fxNodes, fDesY, fxX, yMin, yMax, 30);
+      const colBottom = a => a.length ? Math.max(...a.map(n => n.y + 44)) : 0;
+      const contentW = fxX + fxMaxW + PAD;
+      const contentH = Math.max(maxBoxBottom + PAD, colBottom(agents), colBottom(fxNodes));
+      nodes.push(...anchorOf(contentW, contentH));
+      return { w: contentW, h: contentH };
     }
 
     // hex "#rrggbb" -> "rgba(r,g,b,a)";解析失败返回 null(调用方不填充)。
@@ -239,7 +266,7 @@ node -e 'const fs=require("fs");const s=fs.readFileSync("stock_data/explorer/sta
           n.label = shortGraphLabel(n._ep);
           n.title = `${n._ep.method} ${n._ep.path}\n${n._ep.summary || ""}`;
         });
-        const extent = layoutFlow(nodes);       // 赋 x/y、填 flowBoxes、追加 anchor
+        const extent = layoutFlow(nodes, (callbacks && callbacks.dir) || "TB"); // dir 见 Task 2b
         nodes.forEach(n => { n.fixed = { x: true, y: true }; });
         container.style.width = extent.w + "px";
         container.style.height = extent.h + "px";
@@ -477,6 +504,126 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
+### Task 2b: 依赖流方向切换(竖排 TB / 横排 LR)
+
+依赖流排版支持方向切换: **TB(竖排, 默认, agent 上→fetcher 下)** 与 **LR(横排, agent 左列→fetcher 右列, 框仍是中部竖列)**。方向只对依赖流生效;力导向下方向控件禁用。UI 加第二组 segmented「竖排 / 横排」。
+
+**Files:** Modify: `stock_data/explorer/static/index.html`(主 app IIFE:`state`、`applyView` graph 分支、`setGraphLayout`、`renderGraph`;CSS `.graph-dir-off`)
+
+**Interfaces:**
+- Consumes: Task 1 的 `GraphView.render(…,{dir})`(缺省 `"TB"`)与 `layoutFlow(nodes,dir)` 的 LR 分支;Task 2 的 `state.graphLayout ∈ "flow"|"force"`。
+- Produces: `state.graphDir ∈ "TB"|"LR"`(默认 `"TB"`,persist `graphDir`);工具条 `#graphDirSwitch`(两段 竖排/横排,dataset.dir=`"TB"|"LR"`);`setGraphDir(v)`;`syncDirControl()`;`renderGraph` 传 `dir: state.graphDir`。Task 3/4 不感知方向(只依赖节点 id/DataSet)。
+
+- [ ] **Step 1: `state` 加 `graphDir`**
+
+把 Task 2 Step 1 已替换的 `state` 中、`graphLayout` 行之后插入:
+
+```javascript
+      // 依赖流方向: "TB"(竖排, 默认) | "LR"(横排)。仅依赖流有意义。
+      graphDir: safeGetItem("graphDir", "TB") === "LR" ? "LR" : "TB",
+```
+
+- [ ] **Step 2: CSS 加禁用态**
+
+在 `<style>` 里 `.graph-toolbar .graph-toolbar-hint { … }` 规则之后加:
+
+```css
+    .graph-dir-off { opacity: 0.45; pointer-events: none; }
+```
+
+- [ ] **Step 3: `applyView` graph 分支加方向控件**
+
+在 graph 分支里,`bar.appendChild(seg);`(布局 segmented)之后、构建 wrap 之前插入:
+
+```javascript
+        // 方向: 仅依赖流可用(force 无方向, 见 syncDirControl)。
+        const dirCtl = el("div", {
+          id: "graphDirSwitch", className: "segmented graph-dir", role: "group",
+          "aria-label": "Flow direction",
+        });
+        dirCtl.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphDir === "TB" ? " active" : ""),
+          dataset: { dir: "TB" }, textContent: "竖排",
+        }));
+        dirCtl.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphDir === "LR" ? " active" : ""),
+          dataset: { dir: "LR" }, textContent: "横排",
+        }));
+        dirCtl.onclick = (e) => {
+          const b = e.target.closest(".seg");
+          if (b && state.graphLayout === "flow") setGraphDir(b.dataset.dir);
+        };
+        bar.appendChild(dirCtl);
+        syncDirControl();
+```
+
+- [ ] **Step 4: 加 `setGraphDir` + `syncDirControl`(放在 `setGraphLayout` 之后)**
+
+```javascript
+    function setGraphDir(v) {
+      if (state.graphDir === v) return;
+      state.graphDir = v;
+      safeSetItem("graphDir", v);
+      $$("#graphDirSwitch .seg").forEach(b =>
+        b.classList.toggle("active", b.dataset.dir === state.graphDir));
+      const canvas = $("#graphCanvas");
+      if (!canvas) return;
+      GraphView.destroy();
+      renderGraph(canvas);
+    }
+
+    // force 布局没有方向概念 → 禁用方向控件; 切回依赖流恢复。
+    function syncDirControl() {
+      const dc = $("#graphDirSwitch");
+      if (!dc) return;
+      const off = state.graphLayout !== "flow";
+      dc.classList.toggle("graph-dir-off", off);
+      dc.setAttribute("aria-disabled", off ? "true" : "false");
+    }
+```
+
+- [ ] **Step 5: `setGraphLayout` 切换后同步方向控件 + `renderGraph` 传 `dir`**
+
+在 `setGraphLayout` 里 `b.classList.toggle("active", b.dataset.layout === state.graphLayout));` 之后插入 `syncDirControl();`。
+
+把 `renderGraph` 里传给 `GraphView.render` 的配置对象加一行:
+
+```javascript
+      GraphView.render(container, MANIFEST, {
+        layout: state.graphLayout,
+        dir: state.graphDir,
+        onNodeClick: (n) => {
+```
+
+- [ ] **Step 6: 语法校验**
+
+Run: 语法校验命令。
+Expected: `scripts: 5 errors: 0`。
+
+- [ ] **Step 7: smoke**
+
+浏览器(server 8891),默认依赖流:
+1. 工具条出现「依赖流/力导向」+「竖排/横排」;默认高亮 **竖排**,三层上下排布(同前)。
+2. 点 `横排` → agent 到最左一列、fetcher 到最右一列、中间仍是 section 竖列框;served-by/composed-of 边仍可见且方向左→右;focus(点某 fetcher)/search/过滤照常。
+3. 点回 `竖排` → 恢复上下排布;切 `力导向` → 方向控件变灰(禁用),无方向按钮可点;切回 `依赖流` → 控件恢复且保留之前的竖/横选择。
+4. DevTools → localStorage 设 `graphDir="LR"` reload → 进图即为横排;设 `"TB"`/删掉 → 竖排。
+5. console 无 `Error`(favicon 404 忽略)。
+
+- [ ] **Step 8: commit**
+
+```bash
+git add stock_data/explorer/static/index.html
+git commit -m "feat(explorer): dependency-flow direction toggle (竖排 TB / 横排 LR)
+
+state.graphDir persisted; second toolbar segmented enables vertical
+(top-to-bottom) or horizontal (agent-left / fetcher-right columns) flow
+rendering. Disabled in force mode via syncDirControl().
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 3: 聚焦强调交互(hover/click/空白 + 与 search/filter 协同)
 
 加"聚焦邻边、其余淡化"的强调机制:单击端点/fetcher 钉住聚焦并开详情;hover 临时聚焦;点空白/再点钉住节点复原。search 暗化与 focus 叠加(`searchDim × focus 淡化`),filter 隐藏聚焦节点时自动清聚焦。force 模式不做强调(维持现状)。
@@ -655,7 +802,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 - [ ] **Step 1: 完整回归**
 
-按 spec §6 全清单跑一遍(默认依赖流三层 + 分组框标题;served-by 默认可见;composed-of 紫虚线恒显;hover/单击 fetcher 聚焦强调;点空白复原;search 暗化与聚焦叠加;market/fetcher 过滤;🌗 主题;reload 布局持久化 `flow`;旧 localStorage `"section"` 归一;切 Endpoints 再回来无残留)。全部通过。
+按 spec §6 全清单跑一遍(默认依赖流三层 + 分组框标题;served-by 默认可见;composed-of 紫虚线恒显;hover/单击 fetcher 聚焦强调;点空白复原;search 暗化与聚焦叠加;market/fetcher 过滤;🌗 主题;reload 布局持久化 `flow` + `graphDir`;旧 localStorage `"section"` 归一;**竖排/横排方向切换 + force 下控件禁用**;切 Endpoints 再回来无残留)。全部通过。
 
 - [ ] **Step 2: git status 干净确认 + 分支合并**
 
@@ -677,9 +824,9 @@ PID=$(netstat -ano | grep -E ':8891\b' | grep LISTENING | head -1 | awk '{print 
 
 ## Self-Review
 
-1. **Spec coverage**: spec §4.1 改名/默认 flow/旧值迁移 → Task 2;§4.2 三层 + 分组框 + 质心 + 孤立端点兜底 → Task 1 `layoutFlow`/`drawFlowBoxes`;§4.3 served-by 全画/composed-of 主干/focus → Task 1 render(全边) + Task 3 paint;§4.4 交互(hover/click fetcher 聚焦 + 详情 + 点空白复原 + 清理)→ Task 3;§4.5 保留 search/filter/theme/复用 → Task 1 applyFilter/applySearch + 主 app 既有 handler;§4.6 共享节点 id/DataSet → Task 1;§4.7 只改 index.html → 是;§5 edge cases(空 section、孤立端点、画法坐标系→探针 §已证、旧 localStorage、focus 清理)→ Task 1/3 + 探针结论;§6 手动 smoke → Task 1/3/4。无缺口。
+1. **Spec coverage**: spec §4.1 改名/默认 flow/旧值迁移 → Task 2;§4.2 三层 + 分组框 + 质心 + 孤立端点兜底 + **方向(竖排 TB / 横排 LR)** → Task 1 `layoutFlow(nodes,dir)`/`drawFlowBoxes` + Task 2b(UI);§4.3 served-by 全画/composed-of 主干/focus → Task 1 render(全边) + Task 3 paint;§4.4 交互(hover/click fetcher 聚焦 + 详情 + 点空白复原 + 清理)→ Task 3;§4.5 保留 search/filter/theme/复用 → Task 1 applyFilter/applySearch + 主 app 既有 handler;§4.6 共享节点 id/DataSet → Task 1;§4.7 只改 index.html → 是;§5 edge cases(空 section、孤立端点、画法坐标系→探针已证、旧 localStorage、focus 清理)→ Task 1/3 + 探针结论;§6 手动 smoke(含方向)→ Task 1/2b/3/4。无缺口。
 2. **Placeholder scan**: 无 TBD/TODO;每步有完整代码/命令/期望。
-3. **Type/名一致性**: `isFlowLayout` 兼容 `"flow"|"section"`,Task 1 用 `"section"`(旧)触发、Task 2 改 app 发 `"flow"`;`state.graphLayout` 只存 `"flow"|"force"`;`focusedId/pinnedFocus/searchDim/baseEdges/baseNode/flowBoxes/allServedBy` 全程同名;`setFocus(id,pin)/clearFocus()/paint()` 在 Task 3 定义并被 render/applyFilter/applySearch 引用一致;`drawFlowBoxes/rrPath/hexA/floatRow/layoutFlow` 定义即用;anchor 用 `group:"anchor"` 并被 render/applyFilter/applySearch/paint 一致跳过。锚点 `ep:<path>`/`fx:<name>` 不变。
+3. **Type/名一致性**: `isFlowLayout` 兼容 `"flow"|"section"`,Task 1 用 `"section"`(旧)触发、Task 2 改 app 发 `"flow"`;`state.graphLayout ∈ "flow"|"force"`,`state.graphDir ∈ "TB"|"LR"`;`layoutFlow(nodes, dir)` 在 Task 1 定义、render 调用 `(callbacks && callbacks.dir) || "TB"`、Task 2b 从 app 传 `dir: state.graphDir`(未传时缺省 TB,故 Task 1/2 smoke 不受影响);`focusedId/pinnedFocus/searchDim/baseEdges/baseNode/flowBoxes/allServedBy` 全程同名;`setFocus(id,pin)/clearFocus()/paint()` 在 Task 3 定义并被 render/applyFilter/applySearch 引用一致;`drawFlowBoxes/rrPath/hexA/floatRow/floatCol/layoutFlow` 定义即用;anchor 用 `group:"anchor"` 并被 render/applyFilter/applySearch/paint 一致跳过;`setGraphDir/syncDirControl` 在 Task 2b 定义并被 applyView/setGraphLayout 引用一致。锚点 `ep:<path>`/`fx:<name>` 不变。
 
 ## Execution Handoff
 
