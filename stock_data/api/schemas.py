@@ -831,7 +831,7 @@ class StockBoardInfo(BaseModel):
     )
     explain: str | None = Field(
         default=None,
-        description="概念解析文本 (e.g. \"2022年8月23日公司互动回复：...\"). THS 上游字段 explain.",
+        description='概念解析文本 (e.g. "2022年8月23日公司互动回复：..."). THS 上游字段 explain.',
     )
     relevance: int | None = Field(
         default=None,
@@ -1801,9 +1801,9 @@ class IndicesBatchProfileResponse(BaseModel):
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Agent market-context (Phase 2 §3.2.3 — news + zt/dt pools + dragon
-# tiger aggregation). Replaces the originally-planned
-# /agent/news/cls/bundle + /agent/zt + /agent/dragon-tiger trio.
+# Agent market-context — POST-2026-09-02 messages-only snapshot.
+# ZT/DT pools moved to /agent/market-stats; dragon-tiger removed entirely
+# (callers use GET /api/v1/dragon-tiger).
 # ────────────────────────────────────────────────────────────────────────
 
 
@@ -1827,64 +1827,13 @@ class MarketContextMessages(BaseModel):
     )
 
 
-class MarketContextLimitPools(BaseModel):
-    """涨跌停 block of /agent/market-context.
-
-    Both pools forced to null in pre-market (per spec §3.2.3). Otherwise
-    null only when the upstream failed entirely.
-    """
-
-    zt: list[dict] | None = Field(
-        default=None,
-        description="涨停池 list. null in pre-market OR on upstream failure.",
-    )
-    dt: list[dict] | None = Field(
-        default=None,
-        description="跌停池 list. null in pre-market OR on upstream failure.",
-    )
-
-
-class MarketContextDragonTigerSummaryTop(BaseModel):
-    """One row in top_by_net_buy / top_by_net_sell."""
-
-    code: str
-    name: str
-    net_buy_wan: float = Field(default=0, description="净买入(万元)")
-
-
-class MarketContextDragonTigerSummary(BaseModel):
-    """Server-side rollup over the day's dragon-tiger list."""
-
-    total_net_buy_wan: float = Field(default=0, description="全市场净买入合计 (万元)")
-    top_by_net_buy: list[MarketContextDragonTigerSummaryTop] = Field(
-        default_factory=list,
-        description="净买入 Top 10 (default)",
-    )
-    top_by_net_sell: list[MarketContextDragonTigerSummaryTop] = Field(
-        default_factory=list,
-        description="净卖出 Top 10 (default, signed net_buy_wan < 0)",
-    )
-
-
-class MarketContextDragonTiger(BaseModel):
-    """龙虎榜 block of /agent/market-context.
-
-    On upstream failure both fields are null (caller can detect via
-    the explicit null).
-    """
-
-    stocks: list[dict] | None = Field(
-        default=None,
-        description="龙虎榜个股列表 (DailyDragonTigerStock-shaped dicts). null on failure.",
-    )
-    summary: MarketContextDragonTigerSummary | None = Field(
-        default=None,
-        description="Server-computed summary (totals + top 10). null on failure.",
-    )
-
-
 class MarketContextResponse(BaseModel):
-    """GET response for /agent/market-context."""
+    """GET response for /agent/market-context.
+
+    Post-2026-09-02: messages-only snapshot. ZT/DT pools moved to
+    /agent/market-stats; dragon-tiger removed entirely (callers use
+    GET /api/v1/dragon-tiger directly).
+    """
 
     trade_date: str = Field(description="The trade date this snapshot represents (YYYY-MM-DD).")
     is_trade_day: bool = Field(description="Whether today (server local) is a trade day.")
@@ -1892,11 +1841,6 @@ class MarketContextResponse(BaseModel):
         description="Server-local time + trade-calendar derived session label.",
     )
     messages: MarketContextMessages = Field(default_factory=MarketContextMessages)
-    limit_pools: MarketContextLimitPools = Field(default_factory=MarketContextLimitPools)
-    dragon_tiger: MarketContextDragonTiger | None = Field(
-        default=None,
-        description="龙虎榜 block; null when upstream failed entirely.",
-    )
     summary: dict = Field(
         default_factory=dict,
         description="{requested, ok, failed, elapsed_ms}",
@@ -2085,9 +2029,29 @@ class BoardStats(BaseModel):
 class MarketStatsErrorEntry(BaseModel):
     """One per-block failure surfaced in errors[]."""
 
-    block: Literal["stocks", "boards"]
+    block: Literal["stocks", "boards", "zt_pool", "dt_pool"]
     error: str
     message: str
+
+
+class MarketStatsLimitPools(BaseModel):
+    """涨跌停 block of /agent/market-stats.
+
+    Each pool is independently nullable: zt may be null while dt has
+    data (per-pool error isolation). An empty list (`[]`) means
+    "upstream returned no data for this date" — distinct from null,
+    which means "upstream failed OR pools were not queried
+    (`include_pools=false`)".
+    """
+
+    zt: list[dict] | None = Field(
+        default=None,
+        description="涨停池 list. null on per-pool upstream failure or include_pools=false.",
+    )
+    dt: list[dict] | None = Field(
+        default=None,
+        description="跌停池 list. null on per-pool upstream failure or include_pools=false.",
+    )
 
 
 class MarketStatsResponse(BaseModel):
@@ -2101,6 +2065,11 @@ class MarketStatsResponse(BaseModel):
 
     stocks: StockStats | None
     boards: BoardStats | None
+    # The handler ALWAYS populates `limit_pools` (with `MarketStatsLimitPools
+    # (zt=None, dt=None)` when `include_pools=false`), so the field is
+    # present in every response. Default `None` exists only as a
+    # defensive fallback for non-handler construction.
+    limit_pools: MarketStatsLimitPools | None = None
     errors: list[MarketStatsErrorEntry]
     summary: dict
 

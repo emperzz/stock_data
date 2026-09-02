@@ -83,13 +83,10 @@ from ..schemas import (
     FilterStocksResponse,
     IndexProfile,
     IndicesBatchProfileResponse,
-    MarketContextDragonTiger,
-    MarketContextDragonTigerSummary,
-    MarketContextDragonTigerSummaryTop,
-    MarketContextLimitPools,
     MarketContextMessages,
     MarketContextResponse,
     MarketStatsErrorEntry,
+    MarketStatsLimitPools,
     MarketStatsResponse,
     MinimalQuote,
     StockBatchAspectError,
@@ -568,33 +565,47 @@ def _batch_summary(requested: int, ok: int, started: float) -> dict:
     }
 
 
-def _summarize_dragon_tiger(stocks: list[dict]) -> MarketContextDragonTigerSummary:
-    """Compute the dragon-tiger summary block.
+def _compute_limit_pools_block(
+    manager, target_date: str
+) -> tuple["MarketStatsLimitPools", list["MarketStatsErrorEntry"]]:
+    """Compute the limit_pools block for market-stats.
 
-    - total_net_buy_wan = sum across ALL rows (signed: positive = 净买入, negative = 净卖出)
-    - top_by_net_buy: top 10 by net_buy_wan DESC (positive-first)
-    - top_by_net_sell: top 10 by net_buy_wan ASC, but only rows with
-      net_buy_wan < 0 (a positive row is by definition NOT a sell-side
-      candidate; surfacing it as "top sell" would be misleading on
-      all-positive days).
+    Per-pool fan-out with per-pool error isolation — zt failure emits
+    a `{"block": "zt_pool"}` entry and leaves zt=None while dt is
+    still attempted (and vice versa). No session-aware short-circuit:
+    whatever the upstream returns for the given date is the truth
+    (pre-market today → empty list, completed day → full pool, error
+    → null + errors[] entry).
     """
-    rows = [
-        MarketContextDragonTigerSummaryTop(
-            code=s.get("code", ""),
-            name=s.get("name", ""),
-            net_buy_wan=float(s.get("net_buy_wan") or 0),
+    errors: list[MarketStatsErrorEntry] = []
+    zt: list[dict] | None = None
+    dt: list[dict] | None = None
+
+    try:
+        zt, _src, _ = manager.get_zt_pool(pool_type="zt", date=target_date)
+    except Exception as exc:
+        logger.warning(f"[agent/market-stats] zt_pool failed: {exc}", exc_info=True)
+        errors.append(
+            MarketStatsErrorEntry(
+                block="zt_pool",
+                error=type(exc).__name__,
+                message=str(exc),
+            )
         )
-        for s in (stocks or [])
-    ]
-    total = sum(r.net_buy_wan for r in rows)
-    top_buy = sorted(rows, key=lambda r: -r.net_buy_wan)[:10]
-    negative_only = [r for r in rows if r.net_buy_wan < 0]
-    top_sell = sorted(negative_only, key=lambda r: r.net_buy_wan)[:10]
-    return MarketContextDragonTigerSummary(
-        total_net_buy_wan=total,
-        top_by_net_buy=top_buy,
-        top_by_net_sell=top_sell,
-    )
+
+    try:
+        dt, _src, _ = manager.get_zt_pool(pool_type="dt", date=target_date)
+    except Exception as exc:
+        logger.warning(f"[agent/market-stats] dt_pool failed: {exc}", exc_info=True)
+        errors.append(
+            MarketStatsErrorEntry(
+                block="dt_pool",
+                error=type(exc).__name__,
+                message=str(exc),
+            )
+        )
+
+    return MarketStatsLimitPools(zt=zt, dt=dt), errors
 
 
 @router.get(
@@ -719,7 +730,7 @@ def get_indices_batch_profile(
     tags=["agent"],
 )
 @endpoint_meta(
-    summary="市场全景（早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜；含时段判断）",
+    summary="市场消息面快照（早报 + 复盘 + 快讯；含时段判断）",
     markets=["csi"],
     capabilities=[],
     depends_on=[
@@ -727,8 +738,6 @@ def get_indices_batch_profile(
         "/api/v1/news/morning-briefing",
         "/api/v1/news/market-recap",
         "/api/v1/news/flash",
-        "/api/v1/zt-pools",
-        "/api/v1/dragon-tiger",
         "calendar.is_trade_date",
         "calendar.get_latest_trade_date_on_or_before",
     ],
@@ -745,7 +754,7 @@ def get_market_context(
         default=None,
         description=(
             "交易日 YYYY-MM-DD;不传默认 = get_latest_trade_date_on_or_before(today). "
-            "影响早报/复盘/龙虎榜的查询日期;涨跌停与快讯不受影响(涨跌停按 today,快讯按实时)。"
+            "影响早报/复盘查询日期;快讯不受影响(按实时)."
         ),
     ),
     format: str = Query(
@@ -754,13 +763,13 @@ def get_market_context(
         description="Output format. json=application/json (default); md=text/markdown.",
     ),
 ) -> Response:
-    """Aggregate morning-briefing + market-recap + flash + zt + dt + dragon-tiger.
+    """Aggregate morning-briefing + market-recap + flash.
 
     Per spec §3.2.3:
-    - zt/dt forced to null in pre-market (池子可能未成形);
     - morning/recap return null on per-source failure (NOT 503);
-    - flash + dragon-tiger always attempt;
-    - dragon-tiger summary is server-computed.
+    - flash always attempts;
+    - zt/dt pools moved to /agent/market-stats (post-2026-09-02);
+    - dragon-tiger removed entirely (callers use /api/v1/dragon-tiger).
     """
     # trade_date format gate. The manager chain accepts arbitrary strings
     # and may return 200 with empty results; better to 400 here with a
@@ -778,29 +787,23 @@ def get_market_context(
         )
     today_str = datetime.now(_CST).date().isoformat()
     is_trade_day = trade_calendar.is_trade_date(today_str)
-    if trade_date:
-        target_date = trade_date
-    else:
-        # Fall back to the most recent trade date on/before today.
-        target_date = trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
+    target_date = (
+        trade_date or trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
+    )
 
     session = _classify_market_session(is_trade_day)
-    # Cache key MUST include the session — pre/intra/post/closed produce
-    # materially different responses (pre-market forces zt/dt to null;
-    # post-market returns full pool data). Without this, a 09:00 pre-market
-    # cache hit would mask a 16:00 post-market refresh.
-    cache_key = make_market_context_cache_key(flash_limit, target_date, session)
+    # Session dropped from cache key (post-2026-09-02): the response no
+    # longer varies by session — pools and dragon-tiger moved out, so
+    # pre/intra/post/closed produce identical bodies for a given
+    # (flash_limit, trade_date). See docs/superpowers/specs/2026-09-02
+    # -market-context-and-market-stats-redesign-design.md §3.6.
+    cache_key = make_market_context_cache_key(flash_limit, target_date)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_market_context")
     if hit is not None:
         return _render_agent("market-context", hit, format)
 
     started = time.monotonic()
     manager = get_manager()
-    # Pre-market intentionally skips zt+dt (per spec §3.2.3 — 涨跌停池
-    # may not be formed yet); don't even attempt, so requested drops.
-    # Spec requires per-block isolation: a runtime error from upstream
-    # serialization (e.g. CLS HTML parser crash) must NOT abort the
-    # whole response. Each call below is wrapped in a per-block try.
     attempts: list[tuple[str, Callable, object]] = [
         ("morning_briefing", lambda: manager.get_morning_briefing(target_date)[0], None),
         ("market_recap", lambda: manager.get_market_recap(target_date)[0], None),
@@ -808,28 +811,6 @@ def get_market_context(
         # attempt (the upstream may legitimately have no flash in quiet periods).
         ("flash_news", lambda: manager.get_flash_news(limit=flash_limit)[0], []),
     ]
-    if session != "pre-market":
-        attempts.extend(
-            [
-                (
-                    "zt_pool",
-                    lambda: manager.get_zt_pool(pool_type="zt", date=target_date)[0],
-                    None,
-                ),
-                (
-                    "dt_pool",
-                    lambda: manager.get_zt_pool(pool_type="dt", date=target_date)[0],
-                    None,
-                ),
-            ]
-        )
-    attempts.append(
-        (
-            "daily_dragon_tiger",
-            lambda: manager.get_daily_dragon_tiger(target_date, min_net_buy=None)[0],
-            None,
-        ),
-    )
 
     results: dict[str, object] = {}
     n_ok = 0
@@ -841,33 +822,15 @@ def get_market_context(
             logger.warning(f"[agent/market-context] {name} failed: {exc}", exc_info=True)
             results[name] = default
 
-    morning = results["morning_briefing"]
-    recap = results["market_recap"]
-    flash = results["flash_news"]
-    zt = results.get("zt_pool")
-    dt = results.get("dt_pool")
-    data = results["daily_dragon_tiger"]
-    if isinstance(data, dict):
-        stocks = data.get("stocks", [])
-        dtiger: MarketContextDragonTiger | None = MarketContextDragonTiger(
-            stocks=stocks,
-            summary=_summarize_dragon_tiger(stocks),
-        )
-    else:
-        # daily_dragon_tiger failed; results[] holds the default (None).
-        dtiger = None
-
     result = MarketContextResponse(
         trade_date=target_date,
         is_trade_day=is_trade_day,
         market_session=session,  # type: ignore[arg-type]
         messages=MarketContextMessages(
-            morning_briefing=morning,
-            market_recap=recap,
-            flash_news=flash,
+            morning_briefing=results["morning_briefing"],
+            market_recap=results["market_recap"],
+            flash_news=results["flash_news"],
         ),
-        limit_pools=MarketContextLimitPools(zt=zt, dt=dt),
-        dragon_tiger=dtiger,
         summary=_batch_summary(len(attempts), n_ok, started),
     )
     cached_store(get_quote_cache, cache_key, result)
@@ -1233,14 +1196,17 @@ def _board_stats_from_aggregate(agg: AggregateStats, source: str) -> "BoardStats
     tags=["agent"],
 )
 @endpoint_meta(
-    summary="市场全量统计（个股+板块涨幅分布 + 桶形数据）",
+    summary="市场全量统计（个股+板块涨幅分布 + 涨跌停池 + 桶形数据）",
     markets=["csi"],
     capabilities=[],  # agent aggregation, no single capability
     depends_on=[
         "/api/v1/stocks",
         "/api/v1/boards",
+        "/api/v1/zt-pools",
         "manager.get_realtime_quotes",
         "cache.get_board_list",
+        "manager.get_zt_pool",
+        "calendar.get_latest_trade_date_on_or_before",
     ],
 )
 @map_errors
@@ -1248,6 +1214,17 @@ def get_market_stats(
     include_boards: bool = Query(
         default=True,
         description="是否包含板块块;false 时只返回个股块 (无板块上游调用)",
+    ),
+    include_pools: bool = Query(
+        default=True,
+        description="是否包含涨跌停池块;false 时只返回个股+板块 (无 zt/dt 上游调用)",
+    ),
+    trade_date: str | None = Query(
+        default=None,
+        description=(
+            "交易日 YYYY-MM-DD;不传默认 = "
+            "get_latest_trade_date_on_or_before(today). 影响 zt/dt 池子查询日期."
+        ),
     ),
     format: str = Query(
         "json",
@@ -1258,14 +1235,33 @@ def get_market_stats(
     """Per-block fan-out with per-block error isolation.
 
     stocks block:  manager.get_realtime_quotes('csi') (single upstream call)
-    boards block:  stock_board_cache.get_board_list(board_type=None, source='ths', include_quote=True, manager=manager)
-                   (single upstream call, persistence-routed)
+    boards block:  stock_board_cache.get_board_list(board_type=None, source='ths',
+                   include_quote=True, manager=manager) (single upstream call,
+                   persistence-routed)
+    pools block:   manager.get_zt_pool(pool_type='zt'|'dt', date=trade_date)
+                   (two upstream calls; per-pool error isolation)
 
     A single upstream failure sets that block to ``null`` and surfaces
-    the exception in ``errors[]``; the other block continues normally.
+    the exception in ``errors[]``; the other blocks continue normally.
     Cached 60s via ``get_quote_cache`` (one entry shared between json/md).
     """
-    cache_key = make_market_stats_cache_key(include_boards)
+    if trade_date is not None and not _TRADE_DATE_RE.match(trade_date):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_trade_date",
+                "message": (
+                    f"trade_date must be YYYY-MM-DD; got {trade_date!r}. "
+                    "Empty = server-defaulted to most recent trade date on/before today."
+                ),
+            },
+        )
+    today_str = datetime.now(_CST).date().isoformat()
+    target_date = (
+        trade_date or trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
+    )
+
+    cache_key = make_market_stats_cache_key(include_boards, include_pools, target_date)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_market_stats")
     if hit is not None:
         return _render_agent("market-stats", hit, format)
@@ -1275,7 +1271,9 @@ def get_market_stats(
     errors: list[MarketStatsErrorEntry] = []
     stocks_stats: StockStats | None = None
     boards_stats: BoardStats | None = None
-    requested = 1 + (1 if include_boards else 0)
+    limit_pools_block: MarketStatsLimitPools | None = None
+
+    requested = 1 + (1 if include_boards else 0) + (1 if include_pools else 0)
     ok = 0
 
     # --- stocks block (always attempted) ---
@@ -1333,9 +1331,26 @@ def get_market_stats(
                 )
             )
 
+    # --- limit_pools block ---
+    # The field is ALWAYS present in the JSON response (per spec §4 wire
+    # format), even when include_pools=false. When disabled, we populate
+    # it with `MarketStatsLimitPools(zt=None, dt=None)` so consumers
+    # see a stable shape; the field's presence is NOT a signal that
+    # pools were attempted. (That signal is in `summary.requested`.)
+    if include_pools:
+        limit_pools_block, pool_errors = _compute_limit_pools_block(manager, target_date)
+        errors.extend(pool_errors)
+        # Per-pool failures don't decrement ok — the block call DID
+        # complete (with partial data). Empty upstream results also
+        # count as success (caller distinguishes via inner [] vs null).
+        ok += 1
+    else:
+        limit_pools_block = MarketStatsLimitPools(zt=None, dt=None)
+
     result = MarketStatsResponse(
         stocks=stocks_stats,
         boards=boards_stats,
+        limit_pools=limit_pools_block,
         errors=errors,
         summary=_batch_summary(requested, ok, started),
     )
@@ -1742,6 +1757,11 @@ def _render_dict_block(out: list[str], title: str, d: dict) -> None:
 
 
 def render_market_context_as_md(p: MarketContextResponse) -> str:
+    """MD projection for the slimmed market-context (messages-only).
+
+    Drops the pre-2026-09-02 `## 涨跌停` and `## 龙虎榜` sections —
+    pools live in /agent/market-stats, dragon-tiger in /api/v1/dragon-tiger.
+    """
     out = [
         f"# 市场全景 — {p.trade_date} {p.market_session}",
         f"**is_trade_day**: {p.is_trade_day}",
@@ -1775,88 +1795,6 @@ def render_market_context_as_md(p: MarketContextResponse) -> str:
             out.append(line)
             if content:
                 out.append(f"  {content}")
-    else:
-        out.append("（无）")
-    out.append("")
-    out.append("## 涨跌停")
-    pools = p.limit_pools
-    if pools.zt is None:
-        out.append("**涨停池**: null")
-    elif not pools.zt:
-        out.append("**涨停池**: （空）")
-    else:
-        out.append(f"**涨停池**: {len(pools.zt)} 只")
-        out.append("")
-        out.append("| 代码 | 名称 | 涨跌幅 | 涨停时间 | 连板数 | 所属行业 |")
-        out.append("|---|---|---|---|---|---|")
-        for s in pools.zt:
-            code = s.get("code", "")
-            name = s.get("name", "")
-            pct = s.get("pct_chg") or s.get("change_pct")
-            t = s.get("limit_time") or s.get("first_limit_time") or ""
-            lb = s.get("limit_count") or s.get("continuous_limit_count")
-            industry = s.get("industry", "")
-            out.append(
-                f"| {code} | {name} | {_md_pct(pct)} | {t} | "
-                f"{lb if lb is not None else '—'} | {industry} |"
-            )
-    out.append("")
-    if pools.dt is None:
-        out.append("**跌停池**: null")
-    elif not pools.dt:
-        out.append("**跌停池**: （空）")
-    else:
-        out.append(f"**跌停池**: {len(pools.dt)} 只")
-        out.append("")
-        out.append("| 代码 | 名称 | 涨跌幅 | 跌停时间 | 所属行业 |")
-        out.append("|---|---|---|---|---|")
-        for s in pools.dt:
-            code = s.get("code", "")
-            name = s.get("name", "")
-            pct = s.get("pct_chg") or s.get("change_pct")
-            t = s.get("limit_time") or s.get("first_limit_time") or ""
-            industry = s.get("industry", "")
-            out.append(f"| {code} | {name} | {_md_pct(pct)} | {t} | {industry} |")
-    out.append("")
-    out.append("## 龙虎榜")
-    if p.dragon_tiger and p.dragon_tiger.stocks:
-        s = p.dragon_tiger.summary
-        if s:
-            out.append(f"**全市场净买入合计**: {s.total_net_buy_wan:,.0f} 万元")
-            out.append("")
-            out.append("### 净买入 Top 10")
-            out.append("| 代码 | 名称 | 净买入(万元) |")
-            out.append("|---|---|---|")
-            for r in s.top_by_net_buy:
-                out.append(f"| {r.code} | {r.name} | {_md_num(r.net_buy_wan, 0)} |")
-            if s.top_by_net_sell:
-                out.append("")
-                out.append("### 净卖出 Top 10")
-                out.append("| 代码 | 名称 | 净买入(万元) |")
-                out.append("|---|---|---|")
-                for r in s.top_by_net_sell:
-                    out.append(f"| {r.code} | {r.name} | {_md_num(r.net_buy_wan, 0)} |")
-        out.append("")
-        out.append(f"### 龙虎榜全表 ({len(p.dragon_tiger.stocks)} 只)")
-        out.append(
-            "| 代码 | 名称 | 净买入(万元) | 买入金额(万元) | 卖出金额(万元) | "
-            "成交额(万元) | 涨跌幅 | 解读后涨幅 |"
-        )
-        out.append("|---|---|---|---|---|---|---|---|")
-        for r in p.dragon_tiger.stocks:
-            code = r.get("code", "")
-            name = r.get("name", "")
-            nb = r.get("net_buy_wan")
-            bamt = r.get("buy_wan") or r.get("buy_amount_wan")
-            samt = r.get("sell_wan") or r.get("sell_amount_wan")
-            tamt = r.get("total_amount_wan") or r.get("amount_wan")
-            pct = r.get("pct_chg") or r.get("change_pct")
-            pct_after = r.get("pct_chg_after") or r.get("change_pct_after")
-            out.append(
-                f"| {code} | {name} | {_md_num(nb, 0)} | "
-                f"{_md_num(bamt, 0)} | {_md_num(samt, 0)} | "
-                f"{_md_num(tamt, 0)} | {_md_pct(pct)} | {_md_pct(pct_after)} |"
-            )
     else:
         out.append("（无）")
     out.append("")
@@ -1944,11 +1882,54 @@ def _md_stats_block(title: str, stats, *, total_universe_label: str) -> list[str
     return out
 
 
+def _md_limit_pools_block(out: list[str], pools) -> None:
+    """Render the limit_pools block. Always emits a `## 涨跌停` heading;
+    distinguishes disabled / empty / partial / full via inner labels."""
+    out.append("## 涨跌停")
+    if pools is None:
+        out.append("（未启用）")
+        out.append("")
+        return
+    for label, key, headers in [
+        ("涨停池", "zt", "| 代码 | 名称 | 涨跌幅 | 涨停时间 | 连板数 | 所属行业 |"),
+        ("跌停池", "dt", "| 代码 | 名称 | 涨跌幅 | 跌停时间 | 所属行业 |"),
+    ]:
+        rows = getattr(pools, key)
+        if rows is None:
+            out.append(f"**{label}**: null")
+        elif not rows:
+            out.append(f"**{label}**: （空）")
+        else:
+            out.append(f"**{label}**: {len(rows)} 只")
+            out.append("")
+            out.append(headers)
+            out.append("|---|---|---|---|---|---|")
+            for s in rows:
+                code = s.get("code", "")
+                name = s.get("name", "")
+                pct = s.get("pct_chg") or s.get("change_pct")
+                if key == "zt":
+                    t = s.get("limit_time") or s.get("first_limit_time") or ""
+                    lb = s.get("limit_count") or s.get("continuous_limit_count")
+                    industry = s.get("industry", "")
+                    out.append(
+                        f"| {code} | {name} | {_md_pct(pct)} | {t} | "
+                        f"{lb if lb is not None else '—'} | {industry} |"
+                    )
+                else:
+                    t = s.get("limit_time") or s.get("first_limit_time") or ""
+                    industry = s.get("industry", "")
+                    out.append(f"| {code} | {name} | {_md_pct(pct)} | {t} | {industry} |")
+        out.append("")
+
+
 def render_market_stats_as_md(p: MarketStatsResponse) -> str:
     out: list[str] = ["# 市场全量统计", ""]
     out.extend(_md_stats_block("个股", p.stocks, total_universe_label="A 股全市场"))
     out.append("")
     out.extend(_md_stats_block("板块", p.boards, total_universe_label="ths 板块清单"))
+    out.append("")
+    _md_limit_pools_block(out, p.limit_pools)
     out.append("")
     out.append("## 失败列表")
     out.extend(_md_errors([e.model_dump() for e in p.errors], key="block", header="块"))

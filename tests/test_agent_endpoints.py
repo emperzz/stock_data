@@ -744,13 +744,12 @@ class TestMarketContext:
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
         return mock_manager
 
-    def test_happy_path_all_blocks_present(self, client, monkeypatch):
+    def test_messages_only_no_pools_no_dragon_tiger(self, client, monkeypatch):
+        """Slim market-context: messages block only. No limit_pools, no dragon_tiger."""
         from stock_data.api.routes import agent as agent_module
 
         self._patch_all_ok(monkeypatch)
-        # Force post-market so zt/dt pools are not nulled out by pre-market
-        # session logic (the real clock would make this test flaky around
-        # 09:15 CST).
+        # Force post-market so the test isn't flaky around 09:15 CST.
         monkeypatch.setattr(
             agent_module,
             "_classify_market_session",
@@ -759,7 +758,6 @@ class TestMarketContext:
         response = client.get("/api/v1/agent/market-context?flash_limit=10")
         assert response.status_code == 200
         data = response.json()
-        # trade_date resolved to a YYYY-MM-DD
         assert len(data["trade_date"]) == 10
         assert "is_trade_day" in data
         assert data["market_session"] in {"pre-market", "intraday", "post-market", "closed"}
@@ -767,39 +765,12 @@ class TestMarketContext:
         assert data["messages"]["morning_briefing"]["title"] == "早报"
         assert data["messages"]["market_recap"]["title"] == "复盘"
         assert len(data["messages"]["flash_news"]) == 1
-        # zt/dt pool
-        assert data["limit_pools"]["zt"] is not None
-        assert len(data["limit_pools"]["zt"]) == 1
-        assert data["limit_pools"]["dt"] is not None
-        # dragon-tiger
-        assert data["dragon_tiger"] is not None
-        assert len(data["dragon_tiger"]["stocks"]) == 2
-        assert data["dragon_tiger"]["summary"]["total_net_buy_wan"] == 3000.0
-        assert data["dragon_tiger"]["summary"]["top_by_net_buy"][0]["code"] == "600519"
-        assert data["dragon_tiger"]["summary"]["top_by_net_sell"][0]["code"] == "000001"
-
-    def test_pre_market_pools_forced_null(self, client, monkeypatch):
-        """During pre-market (09:15 CST) zt and dt are forced to null regardless of upstream."""
-
-        from stock_data.api.routes import agent as agent_module
-
-        mock_manager = self._patch_all_ok(monkeypatch)
-
-        # Patch the helper to return 'pre-market' regardless of real time
-        monkeypatch.setattr(
-            agent_module,
-            "_classify_market_session",
-            lambda _is_td: "pre-market",
-        )
-        response = client.get("/api/v1/agent/market-context")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["market_session"] == "pre-market"
-        # pools forced null even though upstream returned data
-        assert data["limit_pools"]["zt"] is None
-        assert data["limit_pools"]["dt"] is None
-        # But the underlying manager was NOT called for pools in pre-market
-        mock_manager.get_zt_pool.assert_not_called()
+        # Post-2026-09-02: dragon_tiger and limit_pools MUST NOT appear
+        assert "dragon_tiger" not in data
+        assert "limit_pools" not in data
+        # summary has the standard {requested, ok, failed, elapsed_ms} shape
+        assert "summary" in data
+        assert "requested" in data["summary"]
 
     def test_morning_briefing_null_on_no_article(self, client, monkeypatch):
         """morning_briefing returns (None, '') (no article for this date) → morning_briefing=null in response."""
@@ -814,8 +785,6 @@ class TestMarketContext:
             "cls",
         )
         mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
 
         response = client.get("/api/v1/agent/market-context")
@@ -825,34 +794,8 @@ class TestMarketContext:
         # market_recap still ok
         assert data["messages"]["market_recap"] is not None
 
-    def test_dragon_tiger_failure_isolated_other_blocks_served(self, client, monkeypatch):
-        """Dragon-tiger upstream fails → dragon_tiger=null; news + pools still emitted."""
-        from unittest.mock import MagicMock
-
-        from stock_data.api.routes import agent as agent_module
-        from stock_data.data_provider.base import DataFetchError
-
-        mock_manager = MagicMock()
-        mock_manager.get_morning_briefing.return_value = (
-            {"title": "早报", "date": "2026-07-25"},
-            "cls",
-        )
-        mock_manager.get_market_recap.return_value = (None, "")
-        mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.side_effect = DataFetchError("dragon-tiger down")
-        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
-
-        response = client.get("/api/v1/agent/market-context")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["dragon_tiger"] is None
-        # Other blocks unaffected
-        assert data["messages"]["morning_briefing"] is not None
-        assert data["limit_pools"]["zt"] is not None
-
     def test_trade_date_query_param(self, client, monkeypatch):
-        """?trade_date=YYYY-MM-DD is plumbed to morning/recap/dragon-tiger."""
+        """?trade_date=YYYY-MM-DD is plumbed to morning/recap."""
         from unittest.mock import MagicMock
 
         from stock_data.api.routes import agent as agent_module
@@ -861,18 +804,17 @@ class TestMarketContext:
         mock_manager.get_morning_briefing.return_value = (None, "")
         mock_manager.get_market_recap.return_value = (None, "")
         mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
 
         response = client.get("/api/v1/agent/market-context?trade_date=2026-07-20")
         assert response.status_code == 200
         data = response.json()
         assert data["trade_date"] == "2026-07-20"
-        # All date-keyed calls got 2026-07-20
+        # Date-keyed calls got 2026-07-20
         assert mock_manager.get_morning_briefing.call_args.args[0] == "2026-07-20"
         assert mock_manager.get_market_recap.call_args.args[0] == "2026-07-20"
-        assert mock_manager.get_daily_dragon_tiger.call_args.args[0] == "2026-07-20"
+        # Flash is NOT date-keyed (it returns realtime)
+        assert mock_manager.get_flash_news.call_args.kwargs.get("limit") == 20
 
     def test_cache_hit_same_flash_limit_and_date(self, client, monkeypatch):
         """Second request with same (flash_limit, trade_date) hits cache."""
@@ -884,8 +826,6 @@ class TestMarketContext:
         mock_manager.get_morning_briefing.return_value = (None, "")
         mock_manager.get_market_recap.return_value = (None, "")
         mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
 
         client.get("/api/v1/agent/market-context?flash_limit=20&trade_date=2026-07-25")
@@ -922,60 +862,27 @@ class TestPhase2DefensiveGuards:
         r = client.get("/api/v1/agent/market-context?trade_date=not-a-date")
         assert r.status_code == 400
 
-    def test_market_context_pre_market_summary_drops_pool_attempts(self, client, monkeypatch):
-        """In pre-market, n_requested drops to 4 (skipping zt+dt attempts).
+    def test_market_context_cache_key_omits_session(self):
+        """Cache key no longer includes session (post-2026-09-02 slim).
 
-        Without this fix the summary reported requested=6/failed=2 even
-        though pools were intentionally skipped (not failed).
+        Same (flash_limit, trade_date) → same key. Different inputs →
+        different keys. The session dimension was dropped because the
+        response content no longer varies by session (pools and
+        dragon-tiger moved out).
         """
-        from unittest.mock import MagicMock
+        from stock_data.api.cache import make_market_context_cache_key
 
-        from stock_data.api.routes import agent as agent_module
-
-        mock_manager = MagicMock()
-        mock_manager.get_morning_briefing.return_value = (None, "")
-        mock_manager.get_market_recap.return_value = (None, "")
-        mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
-        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
-        monkeypatch.setattr(
-            agent_module,
-            "_classify_market_session",
-            lambda _is_td: "pre-market",
+        assert make_market_context_cache_key(20, "2026-07-25") == (
+            "agent_market_context:20:2026-07-25"
         )
-
-        r = client.get("/api/v1/agent/market-context?flash_limit=20&trade_date=2026-07-25")
-        assert r.status_code == 200
-        data = r.json()
-        # 4 attempted (briefing + recap + flash + dtiger); 2 skipped (zt + dt)
-        assert data["summary"]["requested"] == 4
-        # Pools NOT attempted in pre-market
-        mock_manager.get_zt_pool.assert_not_called()
-
-    def test_market_context_cache_key_includes_session(self, client, monkeypatch):
-        """Same (flash_limit, trade_date) but different session → different cache entries."""
-        from unittest.mock import MagicMock
-
-        from stock_data.api.routes import agent as agent_module
-
-        mock_manager = MagicMock()
-        mock_manager.get_morning_briefing.return_value = (None, "")
-        mock_manager.get_market_recap.return_value = (None, "")
-        mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
-        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
-
-        # First call: pre-market
-        monkeypatch.setattr(agent_module, "_classify_market_session", lambda *_: "pre-market")
-        client.get("/api/v1/agent/market-context?flash_limit=20&trade_date=2026-07-25")
-        # Second call: post-market — same flash_limit + date, different session
-        monkeypatch.setattr(agent_module, "_classify_market_session", lambda *_: "post-market")
-        client.get("/api/v1/agent/market-context?flash_limit=20&trade_date=2026-07-25")
-        # Without session in cache key, the 2nd request would hit cache and
-        # call counts would stay flat. With it, both calls execute fresh.
-        assert mock_manager.get_morning_briefing.call_count == 2
+        # Different trade_date → different keys
+        assert make_market_context_cache_key(20, "2026-07-25") != make_market_context_cache_key(
+            20, "2026-07-26"
+        )
+        # Different flash_limit → different keys
+        assert make_market_context_cache_key(20, "2026-07-25") != make_market_context_cache_key(
+            10, "2026-07-25"
+        )
 
     def test_quote_none_counted_as_failure(self, client, monkeypatch):
         """If get_index_realtime_quote returns None (no fetcher could serve),
@@ -1183,11 +1090,9 @@ class TestFormatMd:
         assert "### 早报" in body
         assert "### 复盘" in body
         assert "### 快讯" in body
-        # pool section
-        assert "## 涨跌停" in body
-        # dragon-tiger section
-        assert "## 龙虎榜" in body
-        assert "**全市场净买入合计**: 3,000" in body
+        # Post-2026-09-02: pools and dragon-tiger sections MUST NOT appear
+        assert "## 涨跌停" not in body
+        assert "## 龙虎榜" not in body
 
 
 class TestFormatMdDefaults:
@@ -1258,8 +1163,6 @@ class TestFormatMdFallback:
         mock_manager.get_morning_briefing.return_value = (None, "")
         mock_manager.get_market_recap.return_value = (None, "")
         mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
         monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
 
@@ -1402,8 +1305,6 @@ class TestFormatMdDataCompleteness:
             ],
             "eastmoney",
         )
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
         monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
 
@@ -1416,70 +1317,6 @@ class TestFormatMdDataCompleteness:
         assert "快讯24" in body
         # Section header reflects the actual count, not the truncate-cap
         assert "### 快讯 (25 条)" in body
-
-    def test_market_context_zt_dt_full_pool_table(self, client, monkeypatch):
-        """zt/dt pools must be rendered as a full table, not just a count."""
-        from unittest.mock import MagicMock
-
-        from stock_data.api.routes import agent as agent_module
-
-        mock_manager = MagicMock()
-        mock_manager.get_morning_briefing.return_value = (None, "")
-        mock_manager.get_market_recap.return_value = (None, "")
-        mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.side_effect = [
-            (
-                [
-                    {
-                        "code": "600519",
-                        "name": "茅台",
-                        "pct_chg": 10.0,
-                        "limit_time": "10:00",
-                        "limit_count": 2,
-                        "industry": "白酒",
-                    },
-                    {
-                        "code": "688981",
-                        "name": "中芯",
-                        "pct_chg": 20.0,
-                        "limit_time": "13:30",
-                        "limit_count": 1,
-                        "industry": "半导体",
-                    },
-                ],
-                "akshare",
-                None,
-            ),
-            (
-                [
-                    {
-                        "code": "000001",
-                        "name": "平安",
-                        "pct_chg": -10.0,
-                        "limit_time": "10:00",
-                        "industry": "银行",
-                    }
-                ],
-                "akshare",
-                None,
-            ),
-        ]
-        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
-        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
-        monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
-
-        r = client.get(
-            "/api/v1/agent/market-context?flash_limit=10&trade_date=2026-07-25&format=md"
-        )
-        body = r.text
-        # zt pool table headers
-        assert "| 代码 | 名称 | 涨跌幅 | 涨停时间 | 连板数 | 所属行业 |" in body
-        # zt pool rows
-        assert "| 600519 | 茅台 | +10.00% | 10:00 | 2 | 白酒 |" in body
-        assert "| 688981 | 中芯 | +20.00% | 13:30 | 1 | 半导体 |" in body
-        # dt pool table headers + rows
-        assert "| 代码 | 名称 | 涨跌幅 | 跌停时间 | 所属行业 |" in body
-        assert "| 000001 | 平安 | -10.00% | 10:00 | 银行 |" in body
 
     def test_market_context_morning_recap_rendered_in_full(self, client, monkeypatch):
         """morning_briefing / market_recap dicts must be rendered with all fields,
@@ -1511,8 +1348,6 @@ class TestFormatMdDataCompleteness:
             "cls",
         )
         mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.return_value = ({"stocks": []}, "zzshare")
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
         monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
 
@@ -1530,8 +1365,11 @@ class TestFormatMdDataCompleteness:
             )
 
     def test_market_context_dragon_tiger_full_table(self, client, monkeypatch):
-        """dragon_tiger.stocks MUST be rendered as a full table, not only the
-        top-10 summary."""
+        """POST-2026-09-02: dragon_tiger moved out of market-context.
+
+        This test is kept as a regression net — verifying the absence
+        of dragon-tiger rendering prevents accidental re-introduction.
+        """
         from unittest.mock import MagicMock
 
         from stock_data.api.routes import agent as agent_module
@@ -1540,27 +1378,6 @@ class TestFormatMdDataCompleteness:
         mock_manager.get_morning_briefing.return_value = (None, "")
         mock_manager.get_market_recap.return_value = (None, "")
         mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        # 12 stocks so the top-10 summary is NOT the full list
-        mock_manager.get_daily_dragon_tiger.return_value = (
-            {
-                "date": "2026-07-25",
-                "stocks": [
-                    {
-                        "code": f"60{i:04d}",
-                        "name": f"股票{i}",
-                        "net_buy_wan": 1000.0 * (12 - i),
-                        "buy_wan": 5000.0,
-                        "sell_wan": 4000.0,
-                        "total_amount_wan": 50000.0,
-                        "pct_chg": 5.0,
-                        "pct_chg_after": 7.0,
-                    }
-                    for i in range(12)
-                ],
-            },
-            "zzshare",
-        )
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
         monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
 
@@ -1568,62 +1385,11 @@ class TestFormatMdDataCompleteness:
             "/api/v1/agent/market-context?flash_limit=10&trade_date=2026-07-25&format=md"
         )
         body = r.text
-        # Full table header
-        assert (
-            "| 代码 | 名称 | 净买入(万元) | 买入金额(万元) | 卖出金额(万元) | "
-            "成交额(万元) | 涨跌幅 | 解读后涨幅 |"
-        ) in body
-        # Full table is the full list — not just top 10
-        assert "龙虎榜全表 (12 只)" in body
-        # The 12th stock (lowest net_buy) only appears in the FULL table,
-        # not in top_by_net_buy (which is sorted desc, top 10). So this row
-        # is the regression net for "was the full table dropped?".
-        assert "600011" in body  # code from the 12th item
-        # And the full table cell carries its computed buy/sell/total:
-        # code 600011, name 股票11, net_buy = 1000.00 (12 - 11 = 1 × 1000).
-        assert "| 600011 | 股票11 | 1,000 | 5,000 | 4,000 | 50,000 |" in body
-
-    def test_market_context_dragon_tiger_summary_still_present(self, client, monkeypatch):
-        """The summary top-10 sections stay (alongside the full table) — they're
-        complementary, not a replacement."""
-        from unittest.mock import MagicMock
-
-        from stock_data.api.routes import agent as agent_module
-
-        mock_manager = MagicMock()
-        mock_manager.get_morning_briefing.return_value = (None, "")
-        mock_manager.get_market_recap.return_value = (None, "")
-        mock_manager.get_flash_news.return_value = ([], "eastmoney")
-        mock_manager.get_zt_pool.return_value = ([], "akshare", None)
-        mock_manager.get_daily_dragon_tiger.return_value = (
-            {
-                "stocks": [
-                    {
-                        "code": "600519",
-                        "name": "茅台",
-                        "net_buy_wan": 5000.0,
-                        "buy_wan": 8000.0,
-                        "sell_wan": 3000.0,
-                        "total_amount_wan": 100000.0,
-                        "pct_chg": 5.0,
-                        "pct_chg_after": 7.0,
-                    }
-                ],
-            },
-            "zzshare",
-        )
-        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
-        monkeypatch.setattr(agent_module, "_classify_market_session", lambda _is_td: "post-market")
-
-        r = client.get(
-            "/api/v1/agent/market-context?flash_limit=10&trade_date=2026-07-25&format=md"
-        )
-        body = r.text
-        # Summary header + full table both present
-        assert "### 净买入 Top 10" in body
-        assert "### 龙虎榜全表 (1 只)" in body
-        # Summary aggregate value
-        assert "**全市场净买入合计**: 5,000" in body
+        # No dragon-tiger sections should appear (moved to /api/v1/dragon-tiger)
+        assert "## 龙虎榜" not in body
+        assert "### 净买入 Top 10" not in body
+        assert "### 龙虎榜全表" not in body
+        assert "**全市场净买入合计**" not in body
 
 
 class TestBatchProfileQuoteFields:
@@ -1640,14 +1406,28 @@ class TestBatchProfileQuoteFields:
         reset_manager()
         mock_manager = MagicMock()
         q = UnifiedRealtimeQuote(
-            code="600519", name="贵州茅台", source=RealtimeSource.ZZSHARE,
-            price=1680.0, change_pct=1.23, change_amount=20.4,
-            open_price=1660.0, high=1690.0, low=1655.0, pre_close=1659.6,
-            volume=12_345_678, volume_unit="share", amount=2_050_000_000.0,
-            turnover_rate=0.45, amplitude=2.11, volume_ratio=1.20,
-            pe_ratio=25.3, pb_ratio=8.7,
-            total_mv=2_112_350_000_000.0, circ_mv=2_100_010_000_000.0,
-            limit_up=1825.56, limit_down=1493.64,
+            code="600519",
+            name="贵州茅台",
+            source=RealtimeSource.ZZSHARE,
+            price=1680.0,
+            change_pct=1.23,
+            change_amount=20.4,
+            open_price=1660.0,
+            high=1690.0,
+            low=1655.0,
+            pre_close=1659.6,
+            volume=12_345_678,
+            volume_unit="share",
+            amount=2_050_000_000.0,
+            turnover_rate=0.45,
+            amplitude=2.11,
+            volume_ratio=1.20,
+            pe_ratio=25.3,
+            pb_ratio=8.7,
+            total_mv=2_112_350_000_000.0,
+            circ_mv=2_100_010_000_000.0,
+            limit_up=1825.56,
+            limit_down=1493.64,
         )
         mock_manager.get_realtime_quote.return_value = q
         mock_manager.get_kline_data.return_value = (_make_kline_df([]), "zzshare")
@@ -1662,18 +1442,35 @@ class TestBatchProfileQuoteFields:
         data = resp.json()
         quote = data["results"][0]["quote"]
         expected = {
-            "price", "change_pct", "change_amount",
-            "open", "high", "low", "prev_close",
-            "volume", "volume_unit", "amount",
-            "turnover_pct", "amplitude_pct", "volume_ratio",
-            "pe_ratio", "pb_ratio", "mcap_yi", "float_mcap_yi",
-            "limit_up", "limit_down",
-            "up_count", "down_count", "net_inflow", "rank",
+            "price",
+            "change_pct",
+            "change_amount",
+            "open",
+            "high",
+            "low",
+            "prev_close",
+            "volume",
+            "volume_unit",
+            "amount",
+            "turnover_pct",
+            "amplitude_pct",
+            "volume_ratio",
+            "pe_ratio",
+            "pb_ratio",
+            "mcap_yi",
+            "float_mcap_yi",
+            "limit_up",
+            "limit_down",
+            "up_count",
+            "down_count",
+            "net_inflow",
+            "rank",
         }
         assert expected <= set(quote.keys())
         assert quote["volume_unit"] == "share"
         assert quote["amount"] == 2_050_000_000.0
         import pytest as _pytest
+
         assert quote["mcap_yi"] == _pytest.approx(21_123.5)
 
     def test_indices_batch_profile_volume_unit_share(self, client, monkeypatch):
@@ -1686,9 +1483,14 @@ class TestBatchProfileQuoteFields:
         reset_manager()
         mock_manager = MagicMock()
         q = UnifiedRealtimeQuote(
-            code="000300", name="沪深300", source=RealtimeSource.AKSHARE,
-            price=3000.0, change_pct=0.5,
-            volume=5_000_000, volume_unit="share", amount=1e10,
+            code="000300",
+            name="沪深300",
+            source=RealtimeSource.AKSHARE,
+            price=3000.0,
+            change_pct=0.5,
+            volume=5_000_000,
+            volume_unit="share",
+            amount=1e10,
             turnover_rate=0.3,
         )
         mock_manager.get_index_realtime_quote.return_value = q
@@ -1710,18 +1512,38 @@ class TestBatchProfileQuoteFields:
         reset_manager()
         mock_manager = MagicMock()
         board_quote = {
-            "board_code": "885595", "board_name": "人形机器人",
-            "price": 1234.5, "change_pct": 1.23, "change_amount": 15.0,
-            "open": 1230.0, "high": 1240.0, "low": 1225.0, "prev_close": 1219.5,
-            "volume": 15343, "amount": 12.5,
-            "up_count": 12, "down_count": 5,
-            "net_inflow": 1.23, "rank": "229/389",
+            "board_code": "885595",
+            "board_name": "人形机器人",
+            "price": 1234.5,
+            "change_pct": 1.23,
+            "change_amount": 15.0,
+            "open": 1230.0,
+            "high": 1240.0,
+            "low": 1225.0,
+            "prev_close": 1219.5,
+            "volume": 15343,
+            "amount": 12.5,
+            "up_count": 12,
+            "down_count": 5,
+            "net_inflow": 1.23,
+            "rank": "229/389",
         }
         mock_manager.get_board_realtime.return_value = (board_quote, "ths")
-        mock_manager.get_board_history.return_value = ([
-            {"date": "2026-08-01", "open": 1200, "high": 1210, "low": 1190,
-             "close": 1205, "volume": 100, "amount": 1_000_000, "pct_chg": 0.5},
-        ], "ths")
+        mock_manager.get_board_history.return_value = (
+            [
+                {
+                    "date": "2026-08-01",
+                    "open": 1200,
+                    "high": 1210,
+                    "low": 1190,
+                    "close": 1205,
+                    "volume": 100,
+                    "amount": 1_000_000,
+                    "pct_chg": 0.5,
+                },
+            ],
+            "ths",
+        )
         monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
         resp = client.post(
             "/api/v1/agent/boards/batch-profile",
