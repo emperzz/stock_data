@@ -209,19 +209,17 @@ def get_market_context(
 
 ```python
 def _compute_limit_pools_block(
-    manager, target_date: str, session: str
-) -> tuple[MarketStatsLimitPools | None, list[MarketStatsErrorEntry]]:
+    manager, target_date: str
+) -> tuple[MarketStatsLimitPools, list[MarketStatsErrorEntry]]:
     """Compute the limit_pools block for market-stats.
 
-    Pre-market: returns (None, []) — both pools forced null per spec
-    §3.2.3 (pools may not be formed yet; not a failure). Other
-    sessions: per-pool fan-out with per-pool error isolation — zt
-    failure emits a `{"block": "zt_pool"}` entry and leaves zt=None
-    while dt is still attempted.
+    Per-pool fan-out with per-pool error isolation — zt failure emits
+    a `{"block": "zt_pool"}` entry and leaves zt=None while dt is
+    still attempted (and vice versa). No session-aware short-circuit:
+    whatever the upstream returns for the given date is the truth
+    (pre-market today → empty list, completed day → full pool, error
+    → null + errors[] entry).
     """
-    if session == "pre-market":
-        return None, []
-
     errors: list[MarketStatsErrorEntry] = []
     zt: list[dict] | None = None
     dt: list[dict] | None = None
@@ -297,8 +295,6 @@ def get_market_stats(
         or trade_calendar.get_latest_trade_date_on_or_before(today_str)
         or today_str
     )
-    is_trade_day = trade_calendar.is_trade_date(today_str)
-    session = _classify_market_session(is_trade_day)
 
     cache_key = make_market_stats_cache_key(include_boards, include_pools, target_date)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_market_stats")
@@ -312,11 +308,7 @@ def get_market_stats(
     boards_stats: BoardStats | None = None
     limit_pools_block: MarketStatsLimitPools | None = None
 
-    # Pools count toward `requested` only when they'd actually be
-    # attempted — pre-market returns (None, []) without firing any
-    # upstream call, so it must NOT count as requested or failed.
-    pools_active = include_pools and session != "pre-market"
-    requested = 1 + (1 if include_boards else 0) + (1 if pools_active else 0)
+    requested = 1 + (1 if include_boards else 0) + (1 if include_pools else 0)
     ok = 0
 
     # --- stocks block (always attempted) ---
@@ -345,16 +337,16 @@ def get_market_stats(
             logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
             errors.append(MarketStatsErrorEntry(block="boards", error=type(exc).__name__, message=str(exc)))
 
-    # --- limit_pools block (skipped when include_pools=false or pre-market) ---
-    if pools_active:
-        limit_pools_block, pool_errors = _compute_limit_pools_block(manager, target_date, session)
+    # --- limit_pools block (skipped only when include_pools=false) ---
+    if include_pools:
+        limit_pools_block, pool_errors = _compute_limit_pools_block(manager, target_date)
         errors.extend(pool_errors)
-        # OK when the helper returns a non-None block (i.e. it actually
-        # fired upstream calls). Per-pool failures inside the helper
-        # are surfaced via errors[] but do NOT decrement ok — the
-        # call DID complete (with partial data).
-        if limit_pools_block is not None:
-            ok += 1
+        # Per-pool failures inside the helper are surfaced via errors[]
+        # but do NOT decrement ok — the call DID complete (with partial
+        # data). When the upstream returns an empty list for the given
+        # date (e.g. pre-market today), the inner pool is `[]`, not
+        # null, and the call still counts as ok.
+        ok += 1
 
     result = MarketStatsResponse(
         stocks=stocks_stats,
@@ -375,8 +367,8 @@ shape + `errors[]`:
 | State | `limit_pools` JSON | `errors[]` entries |
 |---|---|---|
 | include_pools=false | `{"zt": null, "dt": null}` | none |
-| pre-market, include_pools=true | `{"zt": null, "dt": null}` | none (not attempted, not failed) |
 | include_pools=true, both OK | `{"zt": [...], "dt": [...]}` | none |
+| include_pools=true, empty pools (e.g. pre-market today) | `{"zt": [], "dt": []}` | none |
 | include_pools=true, zt failed | `{"zt": null, "dt": [...]}` | `[{"block": "zt_pool"}]` |
 | include_pools=true, dt failed | `{"zt": [...], "dt": null}` | `[{"block": "dt_pool"}]` |
 | include_pools=true, both failed | `{"zt": null, "dt": null}` | 2 entries |
@@ -391,18 +383,20 @@ and emits `## 涨跌停` with an appropriate marker for each state.
 class MarketStatsLimitPools(BaseModel):
     """涨跌停 block of /agent/market-stats.
 
-    Both pools forced to null in pre-market (per spec §3.2.3). Each
-    pool is independently nullable: zt may be null while dt has data
-    (per-pool error isolation).
+    Each pool is independently nullable: zt may be null while dt has
+    data (per-pool error isolation). An empty list (`[]`) means
+    "upstream returned no data for this date" — distinct from null,
+    which means "upstream failed OR pools were not queried
+    (`include_pools=false`)".
     """
 
     zt: list[dict] | None = Field(
         default=None,
-        description="涨停池 list. null in pre-market OR on per-pool upstream failure.",
+        description="涨停池 list. null on per-pool upstream failure or include_pools=false.",
     )
     dt: list[dict] | None = Field(
         default=None,
-        description="跌停池 list. null in pre-market OR on per-pool upstream failure.",
+        description="跌停池 list. null on per-pool upstream failure or include_pools=false.",
     )
 
 
@@ -565,23 +559,24 @@ def render_market_stats_as_md(p: MarketStatsResponse) -> str:
 | ZT pool fails | populated | populated | `{zt:null, dt:[...]}` | `[zt_pool]` | `{4, 3, 1}` |
 | DT pool fails | populated | populated | `{zt:[...], dt:null}` | `[dt_pool]` | `{4, 3, 1}` |
 | Both pools fail | populated | populated | `{zt:null, dt:null}` | `[zt_pool, dt_pool]` | `{4, 2, 2}` |
-| Pre-market, pools on | populated | populated | `{zt:null, dt:null}` | `[]` | `{3, 3, 0}` |
-| Pre-market, pools off | populated | populated | `{zt:null, dt:null}` | `[]` | `{2, 2, 0}` |
+| Pools empty for date (e.g. pre-market today) | populated | populated | `{zt:[], dt:[]}` | `[]` | `{4, 4, 0}` |
 | `include_pools=false` | populated | populated | `{zt:null, dt:null}` | `[]` | `{2, 2, 0}` (or `{1, 1, 0}` with `include_boards=false`) |
 | All blocks fail | `null` | `null` | `{zt:null, dt:null}` | 3+ entries | `{4, 0, 4}` |
 
-`limit_pools` is always present in the JSON. The three "null but no
-error" rows (pre-market × 2, include_pools=false) all surface as
-`{zt:null, dt:null}` with empty `errors[]` — the difference is
-visible only in `summary.requested` (counts the upstream call) and the
-absence of any pool-specific error entry.
+`limit_pools` is always present in the JSON. Two "no data" states
+have distinct wire shapes:
 
-Pre-market contract rationale: per spec §3.2.3, 涨跌停 pools may not be
-formed yet at pre-market — emitting null is the documented behavior,
-not a failure. We treat pre-market as "not applicable" — counted out
-of `requested`, no error reported. Distinct from "upstream failed"
-where the field is present with the failing inner pool(s) null and
-`errors[]` records the cause.
+- **Upstream returned empty** (`{zt:[], dt:[]}`) — pool was queried,
+  upstream answered honestly. `errors==[]`, `summary.ok` counts the
+  pool call as success.
+- **`include_pools=false`** (`{zt:null, dt:null}`) — pool was NOT
+  queried. `errors==[]`, `summary.requested` doesn't count the pool.
+
+`session` is not a factor: the helper calls upstream regardless of
+pre/intra/post/closed and surfaces whatever the upstream gives back.
+A pre-market call for today's date will naturally return `[]` (no
+limits hit yet today); a non-trade-day call returns the most recent
+trade day's pools; an outage returns null + `errors[]` entry.
 
 ---
 
@@ -630,10 +625,10 @@ where the field is present with the failing inner pool(s) null and
 | Test | What it pins |
 |---|---|
 | `test_market_stats_limit_pools_happy_path` | zt + dt both populated; `errors==[]`; `summary.requested==3` (stocks + boards + pools), `ok==3` |
-| `test_market_stats_zt_pool_failure_isolates_dt` | `manager.get_zt_pool(side_effect=[..., raise DataFetchError("zt down"), ...])` → `limit_pools.zt is None`, `limit_pools.dt` populated, `errors[]` has 1 `zt_pool` entry, `summary.ok==2` |
+| `test_market_stats_zt_pool_failure_isolates_dt` | `manager.get_zt_pool(side_effect=[..., raise DataFetchError("zt down"), ...])` → `limit_pools.zt is None`, `limit_pools.dt` populated, `errors[]` has 1 `zt_pool` entry, `summary.ok==3` |
 | `test_market_stats_dt_pool_failure_isolates_zt` | symmetric — dt fails, zt populated |
 | `test_market_stats_both_pools_fail` | both raise → `limit_pools.zt is None and limit_pools.dt is None`, 2 pool errors in `errors[]` |
-| `test_market_stats_pre_market_pools_forced_null` | patch `_classify_market_session` to "pre-market" → `manager.get_zt_pool.assert_not_called()`, `limit_pools.zt is None and limit_pools.dt is None` (field present, both inner nulls), `errors==[]`, `summary.requested==2` |
+| `test_market_stats_pools_empty_passthrough` | upstream returns `([], ...)` for both zt and dt (e.g. pre-market today) → `limit_pools.zt == [] and limit_pools.dt == []`, `errors==[]`, `summary.ok==3` |
 | `test_market_stats_include_pools_false_skips_pools_upstream` | `?include_pools=false` → `manager.get_zt_pool.assert_not_called()`, `limit_pools.zt is None and limit_pools.dt is None` (field present, both inner nulls), `errors==[]`, `summary.requested==2` |
 | `test_market_stats_pools_trade_date_passed_through` | `?trade_date=2026-09-01` → `manager.get_zt_pool.call_args.kwargs["date"]=="2026-09-01"` for both zt and dt |
 | `test_market_stats_pools_trade_date_malformed_400` | `?trade_date=not-a-date` → 400 |
@@ -672,12 +667,12 @@ A grep for `MarketContextLimitPools` / `MarketContextDragonTiger` /
   another layer here would re-introduce the very regression
   `test_market_stats_cache_hit_skips_upstream` exists to pin (per
   CLAUDE.md "No composite cache" anti-pattern).
-- **Don't** emit `limit_pools: {zt: null, dt: null}` for pre-market
-  the same way as upstream failure. Pre-market pools are
-  **not applicable**; the field should be absent from the wire (via
-  `exclude_none`), keeping `summary.requested==2` (only stocks +
-  boards attempted). Mixing them in `errors[]` would mislead
-  consumers into "pool upstream is down".
+- **Don't** emit `limit_pools: {zt: null, dt: null}` for pre-market the
+  same way as upstream failure. Pre-market today → upstream returns
+  `[]`, which is the honest "no limits hit yet" signal — let it
+  through as `[]` (inner pool is empty list, not null). `null` is
+  reserved for upstream failures (per-pool error isolation) and
+  `include_pools=false`.
 - **Don't** leave `MarketContextDragonTiger*` schemas around "just in
   case". They're not referenced anywhere else after the change.
   Cleanup is the documented anti-pattern antidote (per
