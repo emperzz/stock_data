@@ -57,6 +57,8 @@
     .segmented .seg { font: inherit; font-size: 13px; padding: 6px 14px; border: 0; background: var(--bg-card); color: var(--text-muted); cursor: pointer; border-right: 1px solid var(--border); }
     .segmented .seg:last-child { border-right: 0; }
     .segmented .seg.active { background: var(--accent); color: #fff; }
+    .graph-toolbar { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; flex-wrap: wrap; }
+    .graph-toolbar .graph-toolbar-hint { font-size: 12px; color: var(--text-muted); }
     /* === Layout === */
     .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 440px; gap: 0; }
     .sidebar {
@@ -1047,8 +1049,10 @@
         container.style.height = extent.h + "px";
         container.style.minWidth = "640px";
       } else {
-        // force: 只改宽, 不动 height(保留 applyView inline / 或父 #graphWrap 决定)
+        // force: 复位为铺满父容器 #graphWrap(其有定高, height:100% 有效)。
+        // 分区切换曾把 height 设成内容 px, 切回 force 必须复位。
         container.style.width = "100%";
+        container.style.height = "100%";
         container.style.minWidth = "640px";
       }
 
@@ -1385,6 +1389,7 @@
       baseUrl: safeGetItem("baseUrl", ""),
       theme: safeGetItem("theme", "light"),
       view: safeGetItem("view", "endpoints"),
+      graphLayout: safeGetItem("graphLayout", "section"),
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
       // fetcherFilter: null = 无选中(全选); string = 选中的 fetcher 名
       fetcherFilter: (() => {
@@ -1509,8 +1514,44 @@
       const content = $("#content");
       if (isGraph) {
         content.innerHTML = "";
-        const g = el("div", { id: "graphCanvas", style: "width:100%;height:calc(100vh - 120px);min-height:400px;" });
-        content.appendChild(g);
+        // 布局工具条(分区/力导向)
+        const bar = el("div", { className: "graph-toolbar" });
+        const seg = el("div", {
+          id: "graphLayoutSwitch", className: "segmented", role: "group",
+          "aria-label": "Graph layout",
+        });
+        seg.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphLayout === "section" ? " active" : ""),
+          dataset: { layout: "section" }, textContent: "分区",
+        }));
+        seg.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphLayout === "force" ? " active" : ""),
+          dataset: { layout: "force" }, textContent: "力导向",
+        }));
+        seg.onclick = (e) => {
+          const b = e.target.closest(".seg");
+          if (b) setGraphLayout(b.dataset.layout);
+        };
+        bar.appendChild(seg);
+        bar.appendChild(el("span", {
+          className: "graph-toolbar-hint",
+          textContent: state.graphLayout === "section"
+            ? "端点按 section 归区; 点端点展开它的 fetcher; 点空白收回"
+            : "力导向全局图(served-by 实线 + composed-of 虚线)",
+        }));
+        content.appendChild(bar);
+
+        // 滚动容器: render 会把 #graphCanvas 按分区内容尺寸扩容。
+        const wrap = el("div", {
+          id: "graphWrap",
+          style: "width:100%;height:calc(100vh - 220px);overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);",
+        });
+        const g = el("div", {
+          id: "graphCanvas",
+          style: "width:100%;height:100%;min-width:640px;",
+        });
+        wrap.appendChild(g);
+        content.appendChild(wrap);
         NodeDetailPanel.clear();
         renderGraph(g);
       } else {
@@ -1525,12 +1566,26 @@
     async function renderGraph(container) {
       await GraphView.load();
       GraphView.render(container, MANIFEST, {
+        layout: state.graphLayout,
         onNodeClick: (n) => {
           if (n.group === "endpoint") NodeDetailPanel.showEndpoint(n._ep, MANIFEST);
           else if (n.group === "fetcher") NodeDetailPanel.showFetcher(n._name, MANIFEST);
         },
       });
       GraphView.applyFilter(state);
+      GraphView.applySearch($("#search").value);
+    }
+
+    function setGraphLayout(v) {
+      if (state.graphLayout === v) return;
+      state.graphLayout = v;
+      safeSetItem("graphLayout", v);
+      $$("#graphLayoutSwitch .seg").forEach(b =>
+        b.classList.toggle("active", b.dataset.layout === state.graphLayout));
+      const canvas = $("#graphCanvas");
+      if (!canvas) return;
+      GraphView.destroy();
+      renderGraph(canvas);
     }
 
     function setView(v) {
