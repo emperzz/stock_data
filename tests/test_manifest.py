@@ -53,7 +53,7 @@ class TestBuildManifestIncludesDecoratedRoutes:
 
     def test_meta_has_version_and_capabilities(self):
         m = build_manifest(self._build_app())
-        assert m["meta"]["version"] == "1.1"
+        assert m["meta"]["version"] == "1.2"
         assert "server_version" in m["meta"]
         assert "STOCK_REALTIME_QUOTE" in m["meta"]["capabilities"]
         assert m["meta"]["capabilities"]["STOCK_REALTIME_QUOTE"]["icon"] == "💹"
@@ -136,6 +136,39 @@ class TestResponseModelReflection:
         m = build_manifest(app)
         ep = m["sections"][0]["endpoints"][0]
         assert ep["response_model"] == "QuoteResp"
+
+    def test_response_schema_reflected_when_response_model_set(self):
+        app = FastAPI()
+
+        @app.get("/q", response_model=QuoteResp, tags=["stocks"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
+        def q():
+            return None
+
+        m = build_manifest(app)
+        ep = m["sections"][0]["endpoints"][0]
+        assert ep["response_model"] == "QuoteResp"
+        # response_schema is the full Pydantic JSON Schema (mirror of body.schema)
+        assert isinstance(ep["response_schema"], dict)
+        assert ep["response_schema"]["type"] == "object"
+        # the three QuoteResp fields appear as properties
+        assert set(ep["response_schema"]["properties"].keys()) == {"code", "price", "name"}
+        # code is required (no default); name is optional (default None)
+        assert "code" in ep["response_schema"].get("required", [])
+        assert "name" not in ep["response_schema"].get("required", [])
+
+    def test_response_schema_none_when_no_response_model(self):
+        app = FastAPI()
+
+        @app.get("/h", tags=["health"])
+        @endpoint_meta(summary="x", capabilities=[])
+        def h():
+            return None
+
+        m = build_manifest(app)
+        ep = m["sections"][0]["endpoints"][0]
+        assert ep["response_model"] is None
+        assert ep["response_schema"] is None
 
     def test_no_response_model(self):
         app = FastAPI()

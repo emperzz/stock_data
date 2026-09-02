@@ -36,7 +36,7 @@ _ZHITU_STOCK_KLINE_METHOD = "get_intraday_data"
 
 
 # manifest schema version——schema 字段有 breaking 变化时递增
-MANIFEST_VERSION = "1.1"
+MANIFEST_VERSION = "1.2"
 
 
 def _lookup_registry(endpoint: Any) -> EndpointMeta | None:
@@ -141,15 +141,27 @@ def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager) -> dict:
                     "schema": annotation.model_json_schema(),
                 }
             except Exception as e:  # pragma: no cover — defensive
-                logger.warning(
-                    f"[manifest] body schema reflection failed for {route.path}: {e}"
-                )
+                logger.warning(f"[manifest] body schema reflection failed for {route.path}: {e}")
                 body = None
     # 完整 URL: FastAPI 在 include_router(prefix=...) 时已把 prefix 合并到 route.path
     full_path = route.path
     # HTTP method: route.methods 是 frozenset, 例 {'GET'} 或 {'GET', 'HEAD'}
     method = _pick_method(route.methods)
     fetchers = _resolve_fetchers(meta, manager) if manager is not None else []
+    # Response body schema: mirror the body.schema reflection above, but for
+    # the response_model. route.response_model is the Pydantic class (or None);
+    # .model_json_schema() returns the standard JSON Schema (properties /
+    # required / $defs / nested). Used by the node-graph detail panel to show
+    # the response field inventory. NOTE: this is the STATIC schema —
+    # @model_serializer conditional serialization (e.g. KLineData.indicators
+    # omit-when-empty) is NOT reflected; see spec §5.3.
+    response_schema: dict | None = None
+    if route.response_model is not None and hasattr(route.response_model, "model_json_schema"):
+        try:
+            response_schema = route.response_model.model_json_schema()
+        except Exception as e:  # pragma: no cover — defensive
+            logger.warning(f"[manifest] response schema reflection failed for {route.path}: {e}")
+            response_schema = None
     return {
         "id": _slugify(f"{method}_{full_path}"),
         "method": method,
@@ -160,6 +172,7 @@ def _build_endpoint_node(route: APIRoute, meta: EndpointMeta, manager) -> dict:
         "params": params,
         "body": body,
         "response_model": route.response_model.__name__ if route.response_model else None,
+        "response_schema": response_schema,
         "fetchers": fetchers,
     }
 
