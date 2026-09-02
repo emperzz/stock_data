@@ -1104,10 +1104,13 @@
           if (marketOk && fetcherOk) visibleEp.add("ep:" + ep.path);
         }
       }
-      // fetchers visible iff a visible endpoint serves them
+      // fetchers visible iff a visible endpoint serves them. Derive from
+      // allServedBy (full served-by set) not dataSet.edges: in section mode
+      // served-by edges are absent from the DataSet until an endpoint is
+      // expanded, so an edges-based walk would hide every fetcher node.
       const visibleFx = new Set();
-      for (const e of dataSet.edges.get()) {
-        if (e._kind === "served-by" && visibleEp.has(e.from)) visibleFx.add(e.to);
+      for (const e of allServedBy) {
+        if (visibleEp.has(e.from)) visibleFx.add(e.to);
       }
       const updates = dataSet.nodes.get().map(n => ({
         id: n.id,
