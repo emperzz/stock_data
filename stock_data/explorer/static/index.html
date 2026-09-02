@@ -59,6 +59,7 @@
     .segmented .seg.active { background: var(--accent); color: #fff; }
     .graph-toolbar { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; flex-wrap: wrap; }
     .graph-toolbar .graph-toolbar-hint { font-size: 12px; color: var(--text-muted); }
+    .graph-dir-off { opacity: 0.45; pointer-events: none; }
     /* === Layout === */
     .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 440px; gap: 0; }
     .sidebar {
@@ -1479,6 +1480,8 @@
         const v = safeGetItem("graphLayout", "section");
         return v === "force" ? "force" : "flow";
       })(),
+      // 依赖流方向: "TB"(竖排, 默认) | "LR"(横排)。仅依赖流有意义。
+      graphDir: safeGetItem("graphDir", "TB") === "LR" ? "LR" : "TB",
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
       // fetcherFilter: null = 无选中(全选); string = 选中的 fetcher 名
       fetcherFilter: (() => {
@@ -1603,7 +1606,7 @@
       const content = $("#content");
       if (isGraph) {
         content.innerHTML = "";
-        // 布局工具条(分区/力导向)
+        // 布局工具条(依赖流/力导向 + 竖排/横排)
         const bar = el("div", { className: "graph-toolbar" });
         const seg = el("div", {
           id: "graphLayoutSwitch", className: "segmented", role: "group",
@@ -1622,6 +1625,27 @@
           if (b) setGraphLayout(b.dataset.layout);
         };
         bar.appendChild(seg);
+
+        // 方向(竖排/横排): 仅依赖流可用(force 无方向, 见 syncDirControl)。
+        const dirCtl = el("div", {
+          id: "graphDirSwitch", className: "segmented graph-dir", role: "group",
+          "aria-label": "Flow direction",
+        });
+        dirCtl.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphDir === "TB" ? " active" : ""),
+          dataset: { dir: "TB" }, textContent: "竖排",
+        }));
+        dirCtl.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphDir === "LR" ? " active" : ""),
+          dataset: { dir: "LR" }, textContent: "横排",
+        }));
+        dirCtl.onclick = (e) => {
+          const b = e.target.closest(".seg");
+          if (b && state.graphLayout === "flow") setGraphDir(b.dataset.dir);
+        };
+        bar.appendChild(dirCtl);
+        syncDirControl();
+
         bar.appendChild(el("span", {
           className: "graph-toolbar-hint",
           textContent: state.graphLayout === "flow"
@@ -1656,6 +1680,7 @@
       await GraphView.load();
       GraphView.render(container, MANIFEST, {
         layout: state.graphLayout,
+        dir: state.graphDir,
         onNodeClick: (n) => {
           if (n.group === "endpoint") NodeDetailPanel.showEndpoint(n._ep, MANIFEST);
           else if (n.group === "fetcher") NodeDetailPanel.showFetcher(n._name, MANIFEST);
@@ -1671,10 +1696,32 @@
       safeSetItem("graphLayout", v);
       $$("#graphLayoutSwitch .seg").forEach(b =>
         b.classList.toggle("active", b.dataset.layout === state.graphLayout));
+      syncDirControl();   // force 无方向 → 禁用/恢复方向控件
       const canvas = $("#graphCanvas");
       if (!canvas) return;
       GraphView.destroy();
       renderGraph(canvas);
+    }
+
+    function setGraphDir(v) {
+      if (state.graphDir === v) return;
+      state.graphDir = v;
+      safeSetItem("graphDir", v);
+      $$("#graphDirSwitch .seg").forEach(b =>
+        b.classList.toggle("active", b.dataset.dir === state.graphDir));
+      const canvas = $("#graphCanvas");
+      if (!canvas) return;
+      GraphView.destroy();
+      renderGraph(canvas);
+    }
+
+    // force 布局没有方向概念 → 禁用方向控件; 切回依赖流恢复。
+    function syncDirControl() {
+      const dc = $("#graphDirSwitch");
+      if (!dc) return;
+      const off = state.graphLayout !== "flow";
+      dc.classList.toggle("graph-dir-off", off);
+      dc.setAttribute("aria-disabled", off ? "true" : "false");
     }
 
     function setView(v) {
