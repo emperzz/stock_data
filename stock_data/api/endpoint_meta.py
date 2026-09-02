@@ -30,20 +30,30 @@ REGISTRY: dict[Callable, EndpointMeta] = {}
 class EndpointMeta:
     """OpenAPI 拿不到、但 explorer 需要展示的字段。
 
-    path / method / params / response_model 不在此处——它们在 build_manifest()
-    里从 FastAPI 路由对象反射出来(单一真相在 @router.get 装饰器)。
+    path / method / params / response_model / response_schema / body 不在此处——
+    它们在 build_manifest() 里从 FastAPI 路由对象反射出来(单一真相在
+    @router.get 装饰器)。
 
     `fetcher_method` (optional): overrides the default method derived from
     CAPABILITY_TO_METHOD. Use when the endpoint's capability is shared by
     multiple endpoints calling different fetcher methods (e.g.
     /api/v1/dragon-tiger declares DRAGON_TIGER but calls
     get_daily_dragon_tiger, not the default get_dragon_tiger).
+
+    `depends_on` (optional): for composite (agent) endpoints, declares which
+    other endpoints / internal calls this one composes. Each item is either an
+    endpoint path (starts with "/") — drawn as a composed-of graph edge — or
+    an internal-call label string ("manager.xxx"/"cache.xxx"/"calendar.xxx"/
+    "features.xxx") shown only in the detail panel. Path-param names are
+    normalized at manifest-build time, so "/stocks/{code}/quote" matches a
+    route registered as "/stocks/{stock_code}/quote".
     """
 
     summary: str
     markets: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
     fetcher_method: str | None = None
+    depends_on: list[str] | None = None
 
 
 def endpoint_meta(
@@ -52,6 +62,7 @@ def endpoint_meta(
     markets: list[str] | None = None,
     capabilities: list[str] | None = None,
     fetcher_method: str | None = None,
+    depends_on: list[str] | None = None,
 ) -> Callable:
     """装饰器,把 EndpointMeta 存到 REGISTRY[func]。"""
     meta = EndpointMeta(
@@ -59,6 +70,7 @@ def endpoint_meta(
         markets=list(markets) if markets else [],
         capabilities=list(capabilities) if capabilities else [],
         fetcher_method=fetcher_method,
+        depends_on=list(depends_on) if depends_on else None,
     )
 
     def deco(func: Callable) -> Callable:

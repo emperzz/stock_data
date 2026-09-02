@@ -4,6 +4,7 @@ Request: `stocks` and `boards` are independent optional lists; any combination
 with >= 2 assets in total works (stocks-only, boards-only, or mixed). `boards`
 entries may be bare code strings (source defaults to "ths") or {"code", "source"}.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -25,6 +26,7 @@ from stock_data.data_provider.utils.normalize import normalize_stock_code
 from ._router import router
 
 # ----- pure-compute helpers (private) -----
+
 
 def _align_series(
     series_by_label: dict[str, pd.Series],
@@ -59,7 +61,7 @@ def _align_series(
             s = s.copy()
             s.index = pd.to_datetime(s.index)
         s = s.copy()
-        s.index = s.index.normalize()   # strip time-of-day (Vibe-Trading correlation.py:146)
+        s.index = s.index.normalize()  # strip time-of-day (Vibe-Trading correlation.py:146)
         s = s.sort_index()
         # Drop duplicate dates defensively — an upstream bar series can carry two
         # rows on one date (e.g. suspend/resume, a merged today bar); pd.concat
@@ -159,7 +161,7 @@ def _fetch_stock_series(
             stock_code=canonical,
             days=days,
             frequency=frequency,
-            asset="stock",   # disambiguate from CSI index codes (000001, 000300, etc.)
+            asset="stock",  # disambiguate from CSI index codes (000001, 000300, etc.)
         )
         if df is None or df.empty or "close" not in df.columns:
             return None, None, "empty"
@@ -215,6 +217,7 @@ def _resolve_stock_name(code: str) -> str | None:
     """Best-effort name lookup. Returns None on failure."""
     try:
         from stock_data.data_provider.persistence.stock_list import get_stock_name
+
         return get_stock_name(code)
     except Exception:
         return None
@@ -224,6 +227,7 @@ def _resolve_board_name(board_code: str, source: str) -> str | None:
     """Best-effort name lookup. Returns None on failure."""
     try:
         from stock_data.data_provider.persistence.board import get_board_metadata
+
         meta = get_board_metadata(board_code, source)
         return meta.get("board_name") if isinstance(meta, dict) else None
     except Exception:
@@ -238,14 +242,14 @@ _FREQ_DAYS_RANGE = {
     # 只剩 2 行 -> 1 个 return -> 必 422,所以分钟下界取 2。d/w/m 下界同理按
     # "等价 ~2 trading bars" 对齐;极端低值在周末/节假日对齐下仍可能 422
     # (calendar 窗口内的实际交易日不足),属 calendar 语义的固有行为。
-    "d":   (2,   365),
-    "w":   (14,  1095),
-    "m":   (60,  1825),
-    "1m":  (2,   3),
-    "5m":  (2,   3),
-    "15m": (2,   5),
-    "30m": (2,   10),
-    "60m": (2,   20),
+    "d": (2, 365),
+    "w": (14, 1095),
+    "m": (60, 1825),
+    "1m": (2, 3),
+    "5m": (2, 3),
+    "15m": (2, 5),
+    "30m": (2, 10),
+    "60m": (2, 20),
 }
 
 
@@ -264,40 +268,65 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
     HTTPException(400) when normalize_stock_code raises on the input.
     """
     if not isinstance(raw, dict):
-        raise HTTPException(400, detail={"error": "bad_request", "message": "body must be a JSON object"})
+        raise HTTPException(
+            400, detail={"error": "bad_request", "message": "body must be a JSON object"}
+        )
 
     stocks_raw = raw.get("stocks", []) or []
     boards_raw = raw.get("boards", []) or []
-    freq       = raw.get("frequency", "d")
-    days       = raw.get("days", 90)
-    methods    = raw.get("methods", ["pearson", "spearman"])
+    freq = raw.get("frequency", "d")
+    days = raw.get("days", 90)
+    methods = raw.get("methods", ["pearson", "spearman"])
 
     if not isinstance(stocks_raw, list) or not isinstance(boards_raw, list):
-        raise HTTPException(422, detail={"error": "bad_request", "message": "stocks/boards must be lists"})
+        raise HTTPException(
+            422, detail={"error": "bad_request", "message": "stocks/boards must be lists"}
+        )
     if len(stocks_raw) + len(boards_raw) < 2:
-        raise HTTPException(422, detail={"error": "bad_request",
-            "message": "stocks + boards must contain at least 2 entries"})
+        raise HTTPException(
+            422,
+            detail={
+                "error": "bad_request",
+                "message": "stocks + boards must contain at least 2 entries",
+            },
+        )
     if len(stocks_raw) > 10 or len(boards_raw) > 10:
-        raise HTTPException(422, detail={"error": "bad_request",
-            "message": "stocks/boards each capped at 10 entries"})
+        raise HTTPException(
+            422,
+            detail={"error": "bad_request", "message": "stocks/boards each capped at 10 entries"},
+        )
     if len(stocks_raw) + len(boards_raw) > 10:
-        raise HTTPException(422, detail={"error": "bad_request",
-            "message": "total assets capped at 10"})
+        raise HTTPException(
+            422, detail={"error": "bad_request", "message": "total assets capped at 10"}
+        )
 
     if freq not in _FREQ_DAYS_RANGE:
-        raise HTTPException(422, detail={"error": "bad_request",
-            "message": f"unsupported frequency: {freq}"})
+        raise HTTPException(
+            422, detail={"error": "bad_request", "message": f"unsupported frequency: {freq}"}
+        )
     lo, hi = _FREQ_DAYS_RANGE[freq]
     if not isinstance(days, int) or not (lo <= days <= hi):
-        raise HTTPException(422, detail={"error": "bad_request",
-            "message": f"days must be an int in [{lo}, {hi}] for frequency={freq}"})
+        raise HTTPException(
+            422,
+            detail={
+                "error": "bad_request",
+                "message": f"days must be an int in [{lo}, {hi}] for frequency={freq}",
+            },
+        )
 
     if not isinstance(methods, list) or not methods:
-        raise HTTPException(422, detail={"error": "bad_request", "message": "methods must be non-empty list"})
-    methods = list(dict.fromkeys(methods))   # de-dup, preserve order
+        raise HTTPException(
+            422, detail={"error": "bad_request", "message": "methods must be non-empty list"}
+        )
+    methods = list(dict.fromkeys(methods))  # de-dup, preserve order
     if any(m not in ("pearson", "spearman") for m in methods):
-        raise HTTPException(422, detail={"error": "bad_request",
-            "message": 'methods must be subset of ["pearson","spearman"]'})
+        raise HTTPException(
+            422,
+            detail={
+                "error": "bad_request",
+                "message": 'methods must be subset of ["pearson","spearman"]',
+            },
+        )
 
     # Board source × frequency (early 422 to avoid manager explosion).
     # Use the upstream allow-list from constants so this stays in lockstep
@@ -311,14 +340,25 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
         elif isinstance(b, dict) and "code" in b:
             bcode, bsrc = b["code"], b.get("source", "ths")
         else:
-            raise HTTPException(422, detail={"error": "bad_request",
-                "message": 'each board must be a code string or an object with a "code"'})
+            raise HTTPException(
+                422,
+                detail={
+                    "error": "bad_request",
+                    "message": 'each board must be a code string or an object with a "code"',
+                },
+            )
         if bsrc not in valid_sources:
-            raise HTTPException(422, detail={"error": "bad_request",
-                "message": f"unsupported board source: {bsrc}"})
+            raise HTTPException(
+                422, detail={"error": "bad_request", "message": f"unsupported board source: {bsrc}"}
+            )
         if freq not in valid_sources[bsrc]:
-            raise HTTPException(422, detail={"error": "bad_request",
-                "message": f"frequency {freq} is not supported for board source {bsrc}"})
+            raise HTTPException(
+                422,
+                detail={
+                    "error": "bad_request",
+                    "message": f"frequency {freq} is not supported for board source {bsrc}",
+                },
+            )
         board_pairs.append((bcode, bsrc))
 
     # Normalize stock codes (raises on truly bad input)
@@ -326,12 +366,15 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
     stocks_canonical: list[str] = []
     for s in stocks_raw:
         if not isinstance(s, str):
-            raise HTTPException(422, detail={"error": "bad_request", "message": "stock must be string"})
+            raise HTTPException(
+                422, detail={"error": "bad_request", "message": "stock must be string"}
+            )
         try:
             canonical = normalize_stock_code(s)
         except Exception as e:
-            raise HTTPException(400, detail={"error": "bad_request",
-                "message": f"invalid stock code {s}: {e}"}) from e
+            raise HTTPException(
+                400, detail={"error": "bad_request", "message": f"invalid stock code {s}: {e}"}
+            ) from e
         labels.append({"type": "stock", "code": canonical, "name": None, "source": None})
         stocks_canonical.append(canonical)
 
@@ -351,19 +394,19 @@ def _parse_and_validate(raw: dict) -> tuple[list[dict], list[str], list[dict]]:
 
 def render_correlation_matrix_as_md(resp: dict) -> str:
     """Render a CorrelationMatrixResponse-shaped dict as markdown (spec §2.4)."""
-    freq       = resp["frequency"]
-    days       = resp["days"]
-    labels     = resp["labels"]
-    alignment  = resp["alignment"]
-    matrices   = resp["matrices"]
-    errors     = resp.get("errors", [])
+    freq = resp["frequency"]
+    days = resp["days"]
+    labels = resp["labels"]
+    alignment = resp["alignment"]
+    matrices = resp["matrices"]
+    errors = resp.get("errors", [])
 
     n = len(labels)
 
     def _short_label(label: dict) -> str:
         if label["type"] == "stock":
             return label["code"]
-        return f'{label["code"]} ({label.get("source", "?")})'
+        return f"{label['code']} ({label.get('source', '?')})"
 
     # Pre-compute sorted pair list per method that exists
     sections: list[str] = []
@@ -374,9 +417,7 @@ def render_correlation_matrix_as_md(resp: dict) -> str:
         pairs: list[tuple[float, str, str]] = []
         for i in range(n):
             for j in range(i + 1, n):
-                pairs.append((float(m[i][j]),
-                              _short_label(labels[i]),
-                              _short_label(labels[j])))
+                pairs.append((float(m[i][j]), _short_label(labels[i]), _short_label(labels[j])))
         pairs.sort(key=lambda x: -abs(x[0]))
 
         sec = []
@@ -396,7 +437,7 @@ def render_correlation_matrix_as_md(resp: dict) -> str:
         # Full matrix
         sec.append(f"### 完整矩阵 ({method})")
         header = "|          | " + " | ".join(_short_label(L) for L in labels) + " |"
-        sep    = "|----------|" + "|".join(["--------"] * n) + "|"
+        sep = "|----------|" + "|".join(["--------"] * n) + "|"
         sec.append(header)
         sec.append(sep)
         for i, label_i in enumerate(labels):
@@ -431,6 +472,12 @@ def render_correlation_matrix_as_md(resp: dict) -> str:
     summary="Compute pairwise Pearson + Spearman correlation matrices across stocks and boards.",
     markets=["csi"],
     capabilities=[],
+    depends_on=[
+        "/api/v1/stocks/{code}/kline",
+        "/api/v1/boards/{board_code}/history",
+        "manager.get_kline_data",
+        "manager.get_board_history",
+    ],
 )
 @map_errors
 async def post_correlation_matrix(
@@ -451,22 +498,27 @@ async def post_correlation_matrix(
     methods: list[str] = raw["methods"]
 
     # 2) Fetch + assemble per-asset close series
-    fetch_days = days + 1   # +1 buffer for pct_change 前置 bar
+    fetch_days = days + 1  # +1 buffer for pct_change 前置 bar
     stock_labels = {lbl["code"]: lbl for lbl in labels_raw if lbl["type"] == "stock"}
-    board_labels = {(lbl["code"], lbl["source"]): lbl
-                    for lbl in labels_raw if lbl["type"] == "board"}
+    board_labels = {
+        (lbl["code"], lbl["source"]): lbl for lbl in labels_raw if lbl["type"] == "board"
+    }
     series_by_label: dict[str, pd.Series] = {}
-    label_by_key: dict[str, dict] = {}   # series key (stock code / "code@src") → label
+    label_by_key: dict[str, dict] = {}  # series key (stock code / "code@src") → label
     errors_out: list[dict] = []
 
     # Stocks (with names)
     for code in stocks:
         s, name, reason = _fetch_stock_series(code, fetch_days, frequency)
         if s is None:
-            errors_out.append({
-                "type": "stock", "code": code, "source": None,
-                "reason": reason or "data_unavailable",
-            })
+            errors_out.append(
+                {
+                    "type": "stock",
+                    "code": code,
+                    "source": None,
+                    "reason": reason or "data_unavailable",
+                }
+            )
             continue
         lbl = stock_labels[code]
         lbl["name"] = name or lbl["name"]
@@ -478,10 +530,14 @@ async def post_correlation_matrix(
         bcode, bsrc = b["code"], b["source"]
         s, name, reason = _fetch_board_series(bcode, bsrc, fetch_days, frequency)
         if s is None:
-            errors_out.append({
-                "type": "board", "code": bcode, "source": bsrc,
-                "reason": reason or "data_unavailable",
-            })
+            errors_out.append(
+                {
+                    "type": "board",
+                    "code": bcode,
+                    "source": bsrc,
+                    "reason": reason or "data_unavailable",
+                }
+            )
             continue
         lbl = board_labels[(bcode, bsrc)]
         lbl["name"] = name or lbl["name"]
@@ -490,13 +546,16 @@ async def post_correlation_matrix(
         series_by_label[key] = s
 
     if len(series_by_label) < 2:
-        raise HTTPException(422, detail={
-            "error": "insufficient_assets",
-            "message": (
-                f"after filtering failed fetches, only "
-                f"{len(series_by_label)} assets survived; need >= 2"
-            ),
-        })
+        raise HTTPException(
+            422,
+            detail={
+                "error": "insufficient_assets",
+                "message": (
+                    f"after filtering failed fetches, only "
+                    f"{len(series_by_label)} assets survived; need >= 2"
+                ),
+            },
+        )
 
     # 3) Align + compute. trailing_window=days+1 is an UPPER CEILING, not a
     # guarantee: d/w/m fetchers resolve days as a calendar window and return
@@ -506,20 +565,27 @@ async def post_correlation_matrix(
     # common_bars is always reported truthfully; it will typically be
     # < days+1 for d/w/m. (spec §2.5 calendar-days semantics)
     aligned_df, common_bars, missing = _align_series(
-        series_by_label, trailing_window=days + 1,   # ceiling for minute freq; no-op for d/w/m
+        series_by_label,
+        trailing_window=days + 1,  # ceiling for minute freq; no-op for d/w/m
     )
     if aligned_df.empty or common_bars < 2:
-        raise HTTPException(422, detail={
-            "error": "insufficient_assets",
-            "message": f"no overlapping trading days after join; common_bars={common_bars}",
-        })
+        raise HTTPException(
+            422,
+            detail={
+                "error": "insufficient_assets",
+                "message": f"no overlapping trading days after join; common_bars={common_bars}",
+            },
+        )
 
     returns = _pct_change(aligned_df)
     if returns.empty or len(returns) < 2:
-        raise HTTPException(422, detail={
-            "error": "insufficient_assets",
-            "message": "after pct_change + dropna, fewer than 2 return observations remain",
-        })
+        raise HTTPException(
+            422,
+            detail={
+                "error": "insufficient_assets",
+                "message": "after pct_change + dropna, fewer than 2 return observations remain",
+            },
+        )
 
     matrices = _compute_matrices(returns, methods)
 

@@ -53,7 +53,7 @@ class TestBuildManifestIncludesDecoratedRoutes:
 
     def test_meta_has_version_and_capabilities(self):
         m = build_manifest(self._build_app())
-        assert m["meta"]["version"] == "1.1"
+        assert m["meta"]["version"] == "1.2"
         assert "server_version" in m["meta"]
         assert "STOCK_REALTIME_QUOTE" in m["meta"]["capabilities"]
         assert m["meta"]["capabilities"]["STOCK_REALTIME_QUOTE"]["icon"] == "💹"
@@ -136,6 +136,39 @@ class TestResponseModelReflection:
         m = build_manifest(app)
         ep = m["sections"][0]["endpoints"][0]
         assert ep["response_model"] == "QuoteResp"
+
+    def test_response_schema_reflected_when_response_model_set(self):
+        app = FastAPI()
+
+        @app.get("/q", response_model=QuoteResp, tags=["stocks"])
+        @endpoint_meta(summary="x", capabilities=["STOCK_REALTIME_QUOTE"])
+        def q():
+            return None
+
+        m = build_manifest(app)
+        ep = m["sections"][0]["endpoints"][0]
+        assert ep["response_model"] == "QuoteResp"
+        # response_schema is the full Pydantic JSON Schema (mirror of body.schema)
+        assert isinstance(ep["response_schema"], dict)
+        assert ep["response_schema"]["type"] == "object"
+        # the three QuoteResp fields appear as properties
+        assert set(ep["response_schema"]["properties"].keys()) == {"code", "price", "name"}
+        # code is required (no default); name is optional (default None)
+        assert "code" in ep["response_schema"].get("required", [])
+        assert "name" not in ep["response_schema"].get("required", [])
+
+    def test_response_schema_none_when_no_response_model(self):
+        app = FastAPI()
+
+        @app.get("/h", tags=["health"])
+        @endpoint_meta(summary="x", capabilities=[])
+        def h():
+            return None
+
+        m = build_manifest(app)
+        ep = m["sections"][0]["endpoints"][0]
+        assert ep["response_model"] is None
+        assert ep["response_schema"] is None
 
     def test_no_response_model(self):
         app = FastAPI()
@@ -283,3 +316,82 @@ class TestPep604Union:
         params = {p["name"]: p for p in m["sections"][0]["endpoints"][0]["params"]}
         assert params["days"]["type"] == "int"
         assert params["days"]["required"] is False
+
+
+class TestDependsOnResolution:
+    """depends_on: list[str] where each item is either an endpoint path
+    (starts with '/') → kind:"endpoint", or an internal-call label
+    ("manager.xxx"/"cache.xxx"/...) → kind:"internal". Path-param names
+    are normalized: {code} and {stock_code} both match /stocks/{stock_code}/q.
+    """
+
+    def _build_app_with_dep(self):
+        app = FastAPI()
+
+        @app.get("/stocks/{stock_code}/quote", tags=["stocks"])
+        @endpoint_meta(summary="q", capabilities=["STOCK_REALTIME_QUOTE"])
+        def quote(stock_code: str):
+            return None
+
+        @app.get("/agent/x", tags=["agent"])
+        @endpoint_meta(
+            summary="agg",
+            capabilities=[],
+            depends_on=[
+                "/stocks/{code}/quote",  # normalized match against {stock_code}
+                "manager.get_realtime_quote",  # internal
+                "cache.get_board_list",  # internal
+            ],
+        )
+        def agg():
+            return None
+
+        return app
+
+    def test_depends_on_resolves_endpoint_and_internal(self):
+        m = build_manifest(self._build_app_with_dep())
+        agg = next(
+            ep for sec in m["sections"] for ep in sec["endpoints"] if ep["path"] == "/agent/x"
+        )
+        deps = agg["depends_on"]
+        assert len(deps) == 3
+        # endpoint ref: target_path is the REAL route path ({stock_code}),
+        # even though depends_on wrote {code} — normalization matched it.
+        assert deps[0] == {
+            "target_path": "/stocks/{stock_code}/quote",
+            "kind": "endpoint",
+            "label": "/stocks/{stock_code}/quote",
+        }
+        assert deps[1]["kind"] == "internal"
+        assert deps[1]["label"] == "manager.get_realtime_quote"
+        assert deps[1]["target_path"] is None
+        assert deps[2]["kind"] == "internal"
+        assert deps[2]["label"] == "cache.get_board_list"
+
+    def test_depends_on_defaults_empty_list_when_unset(self):
+        app = FastAPI()
+
+        @app.get("/q", tags=["stocks"])
+        @endpoint_meta(summary="q", capabilities=["STOCK_REALTIME_QUOTE"])
+        def q():
+            return None
+
+        m = build_manifest(app)
+        assert m["sections"][0]["endpoints"][0]["depends_on"] == []
+
+    def test_depends_on_path_not_in_routes_falls_back_to_internal(self):
+        app = FastAPI()
+
+        @app.get("/agent/x", tags=["agent"])
+        @endpoint_meta(summary="agg", capabilities=[], depends_on=["/no/such/endpoint"])
+        def agg():
+            return None
+
+        m = build_manifest(app)
+        deps = next(
+            ep for sec in m["sections"] for ep in sec["endpoints"] if ep["path"] == "/agent/x"
+        )["depends_on"]
+        # path that matches no route → kind:"internal" (no crash, no edge drawn)
+        assert deps == [
+            {"target_path": "/no/such/endpoint", "kind": "internal", "label": "/no/such/endpoint"}
+        ]

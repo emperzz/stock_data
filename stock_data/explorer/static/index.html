@@ -52,6 +52,13 @@
       color: var(--text);
     }
     .topbar .icon-btn { cursor: pointer; background: none; border: 0; font-size: 18px; }
+    /* === Segmented view switch (Endpoints / Dependency Graph) === */
+    .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .segmented .seg { font: inherit; font-size: 13px; padding: 6px 14px; border: 0; background: var(--bg-card); color: var(--text-muted); cursor: pointer; border-right: 1px solid var(--border); }
+    .segmented .seg:last-child { border-right: 0; }
+    .segmented .seg.active { background: var(--accent); color: #fff; }
+    .graph-toolbar { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; flex-wrap: wrap; }
+    .graph-toolbar .graph-toolbar-hint { font-size: 12px; color: var(--text-muted); }
     /* === Layout === */
     .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 440px; gap: 0; }
     .sidebar {
@@ -326,6 +333,10 @@
 <body>
   <header class="topbar">
     <h1>◐ stock_data API Explorer</h1>
+    <div class="segmented" id="viewSwitch" role="group" aria-label="View">
+      <button type="button" data-view="endpoints" class="seg active">Endpoints</button>
+      <button type="button" data-view="graph" class="seg">Dependency Graph</button>
+    </div>
     <input type="search" id="search" placeholder="Search endpoints (Ctrl+K)..." style="width:300px">
     <span class="spacer"></span>
     <label style="font-size:13px;color:var(--text-muted)">Base URL:</label>
@@ -752,6 +763,607 @@
   })();
   </script>
   <script>
+  // ========================================================================
+  // Module: GraphView
+  // Purpose: render the dependency node-graph (endpoint <-> fetcher served-by
+  //          edges + agent -> endpoint composed-of edges) using vis-network.
+  //          Lazy-loads vis-network from CDN on first render; degrades to a
+  //          message if the CDN is unreachable. Public API:
+  //   GraphView.load()            - async; resolve when vis is loaded (or failed)
+  //   GraphView.render(container, manifest, {onNodeClick}) - draw graph
+  //   GraphView.applyFilter(state) - hide endpoints not matching market/fetcher filter
+  //   GraphView.applySearch(q)    - dim non-matching nodes
+  //   GraphView.destroy()         - tear down the network instance
+  // Reuses: window.MANIFEST shape (fetchers[], depends_on[]), fuzzyMatch logic.
+  // ========================================================================
+  const GraphView = (() => {
+    const VIS_CDN = "https://cdn.jsdelivr.net/npm/vis-network@9/standalone/umd/vis-network.min.js";
+    let network = null;          // vis.Network instance
+    let dataSet = null;          // { nodes: vis.DataSet, edges: vis.DataSet }
+    let lastManifest = null;
+    let lastCallbacks = null;
+    let visLoadPromise = null;
+    let lastLayout = "force";   // "force" | "section"
+    let expandedEp = null;      // section 模式下当前展开的 endpoint 节点 id ("ep:<path>")
+    let allServedBy = [];       // 全部 served-by 边(进 DataSet 前备份, section 模式展开用)
+
+    function load() {
+      if (visLoadPromise) return visLoadPromise;
+      if (window.vis && window.vis.Network) return Promise.resolve();
+      visLoadPromise = new Promise((resolve) => {
+        const s = document.createElement("script");
+        s.src = VIS_CDN;
+        s.onload = () => resolve();
+        s.onerror = () => resolve();  // resolve anyway; render() checks vis
+        document.head.appendChild(s);
+      });
+      return visLoadPromise;
+    }
+
+    // Read a CSS variable from :root, fall back to a hex.
+    function cssVar(name, fallback) {
+      try {
+        const v = getComputedStyle(document.documentElement)
+          .getPropertyValue(name).trim();
+        return v || fallback;
+      } catch { return fallback; }
+    }
+
+    // local fuzzy match (main app's is inside its own IIFE)
+    function fuzzyMatchGlobal(query, text) {
+      if (!query) return true;
+      const q = query.toLowerCase(), t = (text || "").toLowerCase();
+      let i = 0;
+      for (const c of t) { if (c === q[i]) i++; if (i === q.length) return true; }
+      return false;
+    }
+
+    // 分区模式短标签: 去掉 /api/v1 前缀, 截到 26 字符。agent 端点附加依赖计数。
+    function shortGraphLabel(ep) {
+      const p = (ep.path || "").replace(/^\/api\/v1/, "");
+      let s = `${ep.method} ${p}`;
+      if (ep.capabilities && ep.capabilities.length === 0 && ep.depends_on) {
+        const n = ep.depends_on.filter(d => d.kind === "endpoint").length;
+        if (n > 0) s += ` ⇢${n}`;
+      }
+      return s.length > 30 ? s.slice(0, 29) + "…" : s;
+    }
+
+    // 按 section 手工摆点(关 physics)。端点 → 每 section 一列; fetcher → 底部一行。
+    // 返回 {w,h} 供容器扩容。行/列间距是近似值(非等宽字体), 允许个别轻微重叠。
+    function layoutSection(nodes) {
+      const epNodes = nodes.filter(n => n.group === "endpoint");
+      const fxNodes = nodes.filter(n => n.group === "fetcher");
+      // path -> sectionId(manifest 顺序稳定)
+      const p2s = {};
+      for (const sec of lastManifest.sections)
+        for (const ep of sec.endpoints) p2s[ep.path] = sec.id;
+      const cols = new Map();
+      for (const n of epNodes) {
+        const sid = p2s[n._ep.path] || "?";
+        if (!cols.has(sid)) cols.set(sid, []);
+        cols.get(sid).push(n);
+      }
+      const X_PAD = 24, Y_PAD = 24, ROW_H = 34, TITLE_H = 40;
+      let x = X_PAD, maxY = Y_PAD;
+      for (const [sid, list] of cols) {
+        let colW = TITLE_H + sid.length * 9; // 标题宽度下限
+        for (const n of list) colW = Math.max(colW, n.label.length * 8.6 + 28);
+        let y = Y_PAD + TITLE_H;
+        for (const n of list) { n.x = x; n.y = y; y += ROW_H; }
+        maxY = Math.max(maxY, y);
+        x += colW + 18;
+      }
+      // fetcher 底部条
+      const fxY = maxY + 90;
+      let fxW = 0;
+      for (const n of fxNodes) fxW = Math.max(fxW, n.label.length * 9 + 30);
+      let fxX = X_PAD;
+      for (const n of fxNodes) { n.x = fxX; n.y = fxY; fxX += fxW; }
+      return { w: Math.max(x, fxX) + 30, h: fxY + 44 };
+    }
+
+    function fetcherColor(active) {
+      if (active) return { background: "#fff4e0", border: cssVar("--accent-warn", "#ff9500") };
+      return { background: "#f5f5f7", border: cssVar("--border", "#e5e5ea") };
+    }
+
+    // 给一个端点的服务 fetcher 点亮, 其余置灰。
+    function focusFetchers(fromEpId) {
+      if (!dataSet) return;
+      const act = new Set(
+        allServedBy.filter(e => e.from === fromEpId).map(e => e.to)
+      );
+      const ups = dataSet.nodes.get()
+        .filter(n => n.group === "fetcher")
+        .map(n => ({ id: n.id, color: fetcherColor(act.has(n.id)) }));
+      dataSet.nodes.update(ups);
+    }
+
+    function collapseExpansion() {
+      if (!dataSet || !expandedEp) return;
+      const toDrop = allServedBy.filter(e => e.from === expandedEp).map(e => e.id);
+      dataSet.edges.remove(toDrop);
+      expandedEp = null;
+      focusFetchers(null);       // 全部 fetcher 复原置灰
+      if (network) network.redraw();
+    }
+
+    // 单击切换: 已展开同端点 → 收起; 否则先收旧再展新。
+    function toggleExpansion(epNodeId) {
+      if (!dataSet) return;
+      if (expandedEp === epNodeId) { collapseExpansion(); return; }
+      collapseExpansion();
+      expandedEp = epNodeId;
+      dataSet.edges.add(allServedBy.filter(e => e.from === epNodeId));
+      focusFetchers(epNodeId);
+      if (network) network.redraw();
+    }
+
+    // Build {nodes, edges} from the manifest.
+    //  - Endpoint nodes: one per endpoint. shape = dot (ordinary) / diamond
+    //    (agent composite, capabilities=[] AND tag starts with "agent") /
+    //    dot small grey (no fetchers & no capabilities, e.g. /indicators).
+    //    color by HTTP method.
+    //  - Fetcher nodes: one per distinct fetcher name across all endpoints'
+    //    fetchers[]. box shape, priority badge in label.
+    //  - served-by edges: endpoint -> fetcher (one per fetchers[] entry).
+    //  - composed-of edges: agent endpoint -> target endpoint (depends_on
+    //    kind:"endpoint" items).
+    function buildGraph(manifest) {
+      const nodes = [];
+      const edges = [];
+      const fetcherNames = new Set();
+      const epByPath = {};
+      const accent = cssVar("--accent", "#0071e3");
+      const accentPost = cssVar("--accent-post", "#34c759");
+      const textMuted = cssVar("--text-muted", "#6e6e73");
+      const border = cssVar("--border", "#e5e5ea");
+
+      // First pass: collect fetcher names + index endpoints by path.
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          epByPath[ep.path] = ep;
+          for (const f of (ep.fetchers || [])) fetcherNames.add(f.name);
+        }
+      }
+
+      // Endpoint nodes.
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          const isAgent = (!ep.capabilities || ep.capabilities.length === 0)
+            && sec.id === "agent";
+          const isPure = (!ep.fetchers || ep.fetchers.length === 0)
+            && (!ep.capabilities || ep.capabilities.length === 0)
+            && !isAgent;
+          let shape, color, size;
+          if (isAgent) {
+            shape = "diamond"; color = { border: "#af52de", background: "#f3e8ff", highlight: { border: "#af52de", background: "#e9d5ff" } }; size = 18;
+          } else if (isPure) {
+            shape = "dot"; color = { background: textMuted, border: textMuted }; size = 8;
+          } else {
+            shape = "dot"; const c = ep.method === "POST" ? accentPost : accent; color = { background: c, border: c }; size = 14;
+          }
+          const label = `${ep.method} ${ep.path.length > 28 ? ep.path.slice(0, 25) + "…" : ep.path}`;
+          nodes.push({
+            id: "ep:" + ep.path,
+            label,
+            shape,
+            color,
+            size,
+            title: `${ep.method} ${ep.path}\n${ep.summary || ""}`,
+            group: "endpoint",
+            _ep: ep,
+          });
+        }
+      }
+
+      // Fetcher nodes.
+      for (const name of [...fetcherNames].sort()) {
+        nodes.push({
+          id: "fx:" + name,
+          label: name.replace(/Fetcher$/, ""),
+          shape: "box",
+          color: { background: "#f5f5f7", border: border, highlight: { background: "#e5e5ea", border: textMuted } },
+          font: { color: textMuted, size: 12 },
+          margin: 6,
+          title: name,
+          group: "fetcher",
+          _name: name,
+        });
+      }
+
+      // served-by edges (endpoint -> fetcher).
+      let edgeId = 0;
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          for (const f of (ep.fetchers || [])) {
+            edges.push({
+              id: "e" + (edgeId++),
+              from: "ep:" + ep.path,
+              to: "fx:" + f.name,
+              // lower priority = thicker. P0 -> 2.5px, P9 -> 0.5px.
+              width: Math.max(0.5, 2.5 - 0.2 * (f.priority ?? 5)),
+              color: { color: f.available === false ? border : textMuted, opacity: f.available === false ? 0.4 : 0.6 },
+              dashes: f.available === false,
+              title: `.${f.method}()  P${f.priority}`,
+              _kind: "served-by",
+            });
+          }
+        }
+      }
+
+      // composed-of edges (agent endpoint -> target endpoint).
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          for (const d of (ep.depends_on || [])) {
+            if (d.kind === "endpoint" && epByPath[d.target_path]) {
+              edges.push({
+                id: "e" + (edgeId++),
+                from: "ep:" + ep.path,
+                to: "ep:" + d.target_path,
+                width: 1.5,
+                color: { color: "#af52de", opacity: 0.7 },
+                arrows: "to",
+                dashes: false,
+                title: "composed-of",
+                _kind: "composed-of",
+              });
+            }
+          }
+        }
+      }
+      return { nodes, edges };
+    }
+
+    function render(container, manifest, callbacks) {
+      lastManifest = manifest;
+      lastCallbacks = callbacks || {};
+      lastLayout = (callbacks && callbacks.layout) || "force";
+      if (!window.vis || !window.vis.Network) {
+        container.innerHTML =
+          '<div class="result-empty"><span class="arrow">⚠</span>' +
+          '图库 (vis-network) 加载失败 — 请检查网络，或把库 vendor 到 ' +
+          '<code>explorer/static/vendor/</code> 并改 GraphView 的 VIS_CDN。</div>';
+        return;
+      }
+      const isSection = lastLayout === "section";
+      const graph = buildGraph(manifest);          // nodes + 全部边(两种 _kind)
+      const nodes = graph.nodes;
+      allServedBy = graph.edges.filter(e => e._kind === "served-by");
+      let edges = isSection
+        ? graph.edges.filter(e => e._kind !== "served-by")  // served-by 默认不画
+        : graph.edges;
+
+      if (isSection) {
+        // 端点换短标签(force 模式保持原长标签)
+        nodes.filter(n => n.group === "endpoint").forEach(n => {
+          n._fullLabel = n.label;
+          n.label = shortGraphLabel(n._ep);
+          n.title = `${n._ep.method} ${n._ep.path}\n${n._ep.summary || ""}`;
+        });
+        const extent = layoutSection(nodes);        // 赋 x/y
+        nodes.forEach(n => { n.fixed = { x: true, y: true }; });
+        // 容器按内容尺寸扩容(外层 #graphWrap 滚动)
+        container.style.width = extent.w + "px";
+        container.style.height = extent.h + "px";
+        container.style.minWidth = "640px";
+      } else {
+        // force: 复位为铺满父容器 #graphWrap(其有定高, height:100% 有效)。
+        // 分区切换曾把 height 设成内容 px, 切回 force 必须复位。
+        container.style.width = "100%";
+        container.style.height = "100%";
+        container.style.minWidth = "640px";
+      }
+
+      dataSet = {
+        nodes: new window.vis.DataSet(nodes),
+        edges: new window.vis.DataSet(edges),
+      };
+      const options = {
+        nodes: { font: { color: cssVar("--text", "#1d1d1f"), size: 13 } },
+        edges: { smooth: { type: "continuous", roundness: 0.5 } },
+        physics: isSection
+          ? false
+          : {
+              stabilization: { iterations: 120, fit: true },
+              barnesHut: { gravitationalConstant: -8000, springLength: 140, springConstant: 0.04 },
+            },
+        interaction: { hover: true, tooltipDelay: 120, navigationButtons: false, zoomView: true, dragView: true },
+      };
+      network = new window.vis.Network(container, dataSet, options);
+      expandedEp = null;
+
+      network.on("click", (params) => {
+        if (isSection && (!params.nodes || params.nodes.length === 0)) {
+          collapseExpansion();   // 点空白收回
+          return;
+        }
+        if (params.nodes && params.nodes.length) {
+          const node = dataSet.nodes.get(params.nodes[0]);
+          if (node && isSection && node.group === "endpoint") {
+            toggleExpansion(node.id);
+          }
+          if (node && lastCallbacks.onNodeClick) lastCallbacks.onNodeClick(node);
+        }
+      });
+      if (isSection) network.fit({ animation: false });
+    }
+
+    // Hide nodes whose endpoint doesn't match the market/fetcher filter.
+    // Fetcher nodes stay visible iff at least one served-by neighbor stays.
+    function applyFilter(state) {
+      if (!network || !dataSet) return;
+      const visibleEp = new Set();
+      for (const sec of lastManifest.sections) {
+        for (const ep of sec.endpoints) {
+          const marketOk = (ep.markets || []).some(m => (state.marketFilter || []).includes(m));
+          const fetcherOk = !state.fetcherFilter
+            || (ep.fetchers || []).some(f => f.name === state.fetcherFilter)
+            || (!ep.fetchers || ep.fetchers.length === 0);
+          if (marketOk && fetcherOk) visibleEp.add("ep:" + ep.path);
+        }
+      }
+      // fetchers visible iff a visible endpoint serves them. Derive from
+      // allServedBy (full served-by set) not dataSet.edges: in section mode
+      // served-by edges are absent from the DataSet until an endpoint is
+      // expanded, so an edges-based walk would hide every fetcher node.
+      const visibleFx = new Set();
+      for (const e of allServedBy) {
+        if (visibleEp.has(e.from)) visibleFx.add(e.to);
+      }
+      const updates = dataSet.nodes.get().map(n => ({
+        id: n.id,
+        hidden: !(n.group === "endpoint" ? visibleEp.has(n.id) : visibleFx.has(n.id)),
+      }));
+      dataSet.nodes.update(updates);
+      // 分区模式: 若当前展开的端点被过滤隐藏, 收起其边, 避免悬空线。
+      if (lastLayout === "section" && expandedEp) {
+        const hiddenEps = new Set(updates.filter(u => u.hidden).map(u => u.id));
+        if (hiddenEps.has(expandedEp)) collapseExpansion();
+      }
+      network.redraw();
+    }
+
+    // Dim (not hide) nodes whose label doesn't fuzzy-match q.
+    function applySearch(q) {
+      if (!network || !dataSet) return;
+      const query = (q || "").trim();
+      const updates = dataSet.nodes.get().map(n => {
+        const match = !query || fuzzyMatchGlobal(query, n.label);
+        return { id: n.id, opacity: match ? 1.0 : 0.15 };
+      });
+      dataSet.nodes.update(updates);
+    }
+
+    function destroy() {
+      if (network) { network.destroy(); network = null; }
+      dataSet = null;
+    }
+
+    return { load, render, applyFilter, applySearch, destroy };
+  })();
+  </script>
+  <script>
+  // ========================================================================
+  // Module: NodeDetailPanel
+  // Purpose: render node detail in the right-side #resultPanel container
+  //          (shared with ResultPanel — they swap by current view). Reuses
+  //          JSONView for schema rendering. Public API:
+  //   NodeDetailPanel.init()                          - bind refs (shared with ResultPanel)
+  //   NodeDetailPanel.showEndpoint(ep, manifest)       - endpoint node detail
+  //   NodeDetailPanel.showFetcher(name, manifest)      - fetcher node detail
+  //   NodeDetailPanel.clear()                          - reset to empty
+  // ========================================================================
+  const NodeDetailPanel = (() => {
+    let bodyEl;
+
+    function init() {
+      bodyEl = document.getElementById("resultBody");
+    }
+
+    function clear() {
+      bodyEl.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "result-empty";
+      empty.innerHTML = '<span class="arrow">◐</span>点击图节点查看依赖详情。';
+      bodyEl.appendChild(empty);
+    }
+
+    function esc(s) {
+      if (s == null) return "";
+      return String(s).replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    function chip(label, icon) {
+      const s = document.createElement("span");
+      s.className = "chip cap-chip";
+      s.textContent = (icon ? icon + " " : "") + label;
+      return s;
+    }
+
+    function sectionTitle(text) {
+      const t = document.createElement("div");
+      t.className = "result-section-title";
+      t.textContent = text;
+      return t;
+    }
+
+    function schemaBlock(title, schema, note) {
+      const wrap = document.createElement("div");
+      wrap.appendChild(sectionTitle(title));
+      if (note) {
+        const n = document.createElement("div");
+        n.style.cssText = "font-size:11px;color:var(--text-muted);margin-bottom:4px;";
+        n.textContent = note;
+        wrap.appendChild(n);
+      }
+      if (schema) {
+        wrap.appendChild(JSONView.render(schema));
+      } else {
+        const e = document.createElement("div");
+        e.style.cssText = "font-size:12px;color:var(--text-muted);";
+        e.textContent = "（无）";
+        wrap.appendChild(e);
+      }
+      return wrap;
+    }
+
+    function paramsBlock(ep) {
+      if (!ep.params || !ep.params.length) return null;
+      const wrap = document.createElement("div");
+      wrap.appendChild(sectionTitle("Parameters"));
+      const pre = document.createElement("pre");
+      pre.className = "result-raw";
+      pre.style.maxHeight = "30vh";
+      ep.params.forEach(p => {
+        pre.appendChild(document.createTextNode(
+          `${p.in}.${p.name}${p.required ? " (required)" : ""}: ${p.type}\n`
+        ));
+      });
+      wrap.appendChild(pre);
+      return wrap;
+    }
+
+    function fetcherRowMini(f) {
+      // Compact version of renderFetcherRow for the detail panel.
+      const row = document.createElement("div");
+      row.style.cssText = "display:grid;grid-template-columns:40px 1fr;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);";
+      const p = document.createElement("span");
+      p.className = "fetcher-priority";
+      p.textContent = "P" + f.priority;
+      if (f.available === false) { p.style.opacity = "0.5"; }
+      row.appendChild(p);
+      const body = document.createElement("div");
+      const name = document.createElement("div");
+      name.style.fontWeight = "600";
+      name.style.fontSize = "13px";
+      name.textContent = f.name + (f.available === false ? "  ⚠" : "");
+      body.appendChild(name);
+      const sig = document.createElement("div");
+      sig.style.cssText = "font-family:monospace;font-size:11px;color:var(--text-muted);";
+      sig.textContent = `.${f.method}(${(f.signature || []).map(s => s.name).join(", ")})`;
+      body.appendChild(sig);
+      row.appendChild(body);
+      return row;
+    }
+
+    function showEndpoint(ep, manifest) {
+      bodyEl.innerHTML = "";
+      // meta header
+      const meta = document.createElement("div");
+      meta.className = "result-meta";
+      const caps = (ep.capabilities || []).map(c => {
+        const lbl = (manifest.meta.capabilities || {})[c] || {};
+        return chip(lbl.label || c, lbl.icon);
+      });
+      const line1 = document.createElement("div");
+      line1.className = "row";
+      line1.innerHTML = `<span class="label">Endpoint:</span> <span class="value">${esc(ep.method)} ${esc(ep.path)}</span>`;
+      meta.appendChild(line1);
+      const line2 = document.createElement("div");
+      line2.className = "row";
+      line2.innerHTML = `<span class="label">Summary:</span> <span class="value">${esc(ep.summary || "")}</span>`;
+      meta.appendChild(line2);
+      const line3 = document.createElement("div");
+      line3.className = "row";
+      line3.appendChild(document.createTextNode("Markets/Caps: "));
+      (ep.markets || []).forEach(m => meta.appendChild(chip(m)));
+      caps.forEach(c => meta.appendChild(c));
+      meta.appendChild(line3);
+      bodyEl.appendChild(meta);
+
+      const params = paramsBlock(ep);
+      if (params) bodyEl.appendChild(params);
+
+      bodyEl.appendChild(schemaBlock("Request body schema", ep.body && ep.body.schema));
+      bodyEl.appendChild(schemaBlock(
+        "Response schema",
+        ep.response_schema,
+        "静态字段清单；@model_serializer 条件序列化（如 KLineData.indicators 空值 omit）不反映，以 CLAUDE.md Standardized Data Schema 为准。"
+      ));
+
+      // Fetcher backends (served-by chain)
+      if (ep.fetchers && ep.fetchers.length) {
+        bodyEl.appendChild(sectionTitle(`Fetcher backends (${ep.fetchers.length})`));
+        ep.fetchers.forEach(f => bodyEl.appendChild(fetcherRowMini(f)));
+      }
+
+      // Dependencies (agent composed-of)
+      if (ep.depends_on && ep.depends_on.length) {
+        bodyEl.appendChild(sectionTitle("Dependencies"));
+        const ul = document.createElement("div");
+        ep.depends_on.forEach(d => {
+          const row = document.createElement("div");
+          row.style.cssText = "padding:4px 0;border-bottom:1px solid var(--border);font-size:12px;";
+          if (d.kind === "endpoint") {
+            row.innerHTML = `<span class="chip" style="background:#f3e8ff;color:#af52de;">edge</span> → ${esc(d.label)}`;
+          } else {
+            row.innerHTML = `<span class="chip">internal</span> ${esc(d.label)}`;
+          }
+          ul.appendChild(row);
+        });
+        bodyEl.appendChild(ul);
+      }
+    }
+
+    function showFetcher(name, manifest) {
+      bodyEl.innerHTML = "";
+      // Reverse index: all endpoints whose fetchers[] include this name.
+      const served = [];
+      for (const sec of manifest.sections) {
+        for (const ep of sec.endpoints) {
+          for (const f of (ep.fetchers || [])) {
+            if (f.name === name) {
+              served.push({ ep, method: f.method, priority: f.priority, signature: f.signature, available: f.available, caps: f.capabilities });
+            }
+          }
+        }
+      }
+      const meta = document.createElement("div");
+      meta.className = "result-meta";
+      const l1 = document.createElement("div");
+      l1.className = "row";
+      l1.innerHTML = `<span class="label">Fetcher:</span> <span class="value">${esc(name)}</span>`;
+      meta.appendChild(l1);
+      if (served.length) {
+        const p = served[0].priority;
+        const l2 = document.createElement("div");
+        l2.className = "row";
+        l2.innerHTML = `<span class="label">Priority:</span> <span class="value">P${p}</span>`;
+        meta.appendChild(l2);
+        const l3 = document.createElement("div");
+        l3.className = "row";
+        l3.appendChild(document.createTextNode("Capabilities: "));
+        served[0].caps.forEach(c => meta.appendChild(chip(c)));
+        meta.appendChild(l3);
+        if (served[0].available === false) {
+          const l4 = document.createElement("div");
+          l4.className = "row";
+          l4.style.color = "var(--accent-warn)";
+          l4.textContent = "⚠ unavailable (见 endpoint 详情的 reason)";
+          meta.appendChild(l4);
+        }
+      }
+      bodyEl.appendChild(meta);
+
+      bodyEl.appendChild(sectionTitle(`Serves ${served.length} endpoint(s)`));
+      const ul = document.createElement("div");
+      served.forEach(({ ep, method, signature }) => {
+        const row = document.createElement("div");
+        row.style.cssText = "padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;";
+        row.innerHTML = `${esc(ep.method)} <code>${esc(ep.path)}</code><br><span style="font-family:monospace;color:var(--text-muted);">.${esc(method)}(${(signature || []).map(s => s.name).join(", ")})</span>`;
+        ul.appendChild(row);
+      });
+      bodyEl.appendChild(ul);
+    }
+
+    return { init, showEndpoint, showFetcher, clear };
+  })();
+  </script>
+  <script>
   // === Main app (boots after MANIFEST) ===
   (function() {
     "use strict";
@@ -779,6 +1391,8 @@
     let state = {
       baseUrl: safeGetItem("baseUrl", ""),
       theme: safeGetItem("theme", "light"),
+      view: safeGetItem("view", "endpoints"),
+      graphLayout: safeGetItem("graphLayout", "section"),
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
       // fetcherFilter: null = 无选中(全选); string = 选中的 fetcher 名
       fetcherFilter: (() => {
@@ -881,18 +1495,125 @@
       $("#captionBaseUrl").textContent = state.baseUrl;
       refreshServerStatus();
       renderSidebar();
-      renderContent();
+      // Right-side panel is shared: ResultPanel (endpoints-view responses) and
+      // NodeDetailPanel (graph-view node detail) both own #resultBody.
+      NodeDetailPanel.init();
+      // Render the active view — endpoint list or dependency graph.
+      applyView();
     }
 
     function applyTheme() {
       document.documentElement.dataset.theme = state.theme;
     }
 
+    // --- Dependency-graph view switching ---
+    // Applies the current state.view to the topbar segmented control and the
+    // main content area. Graph view swaps the right-side #resultBody to
+    // NodeDetailPanel; the endpoint view keeps the ResultPanel behavior.
+    function applyView() {
+      const segs = $$("#viewSwitch .seg");
+      segs.forEach(b => b.classList.toggle("active", b.dataset.view === state.view));
+      const isGraph = state.view === "graph";
+      const content = $("#content");
+      if (isGraph) {
+        content.innerHTML = "";
+        // 布局工具条(分区/力导向)
+        const bar = el("div", { className: "graph-toolbar" });
+        const seg = el("div", {
+          id: "graphLayoutSwitch", className: "segmented", role: "group",
+          "aria-label": "Graph layout",
+        });
+        seg.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphLayout === "section" ? " active" : ""),
+          dataset: { layout: "section" }, textContent: "分区",
+        }));
+        seg.appendChild(el("button", {
+          type: "button", className: "seg" + (state.graphLayout === "force" ? " active" : ""),
+          dataset: { layout: "force" }, textContent: "力导向",
+        }));
+        seg.onclick = (e) => {
+          const b = e.target.closest(".seg");
+          if (b) setGraphLayout(b.dataset.layout);
+        };
+        bar.appendChild(seg);
+        bar.appendChild(el("span", {
+          className: "graph-toolbar-hint",
+          textContent: state.graphLayout === "section"
+            ? "端点按 section 归区; 点端点展开它的 fetcher; 点空白收回"
+            : "力导向全局图(served-by 实线 + composed-of 虚线)",
+        }));
+        content.appendChild(bar);
+
+        // 滚动容器: render 会把 #graphCanvas 按分区内容尺寸扩容。
+        const wrap = el("div", {
+          id: "graphWrap",
+          style: "width:100%;height:calc(100vh - 220px);overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);",
+        });
+        const g = el("div", {
+          id: "graphCanvas",
+          style: "width:100%;height:100%;min-width:640px;",
+        });
+        wrap.appendChild(g);
+        content.appendChild(wrap);
+        NodeDetailPanel.clear();
+        renderGraph(g);
+      } else {
+        renderContent();
+        // Coming back from the graph view: reset the panel (it may hold a
+        // NodeDetailPanel node detail) to the ResultPanel default empty state.
+        ResultPanel.clear();
+      }
+      $(".result-panel-header span").textContent = isGraph ? "Node Detail" : "Response";
+    }
+
+    async function renderGraph(container) {
+      await GraphView.load();
+      GraphView.render(container, MANIFEST, {
+        layout: state.graphLayout,
+        onNodeClick: (n) => {
+          if (n.group === "endpoint") NodeDetailPanel.showEndpoint(n._ep, MANIFEST);
+          else if (n.group === "fetcher") NodeDetailPanel.showFetcher(n._name, MANIFEST);
+        },
+      });
+      GraphView.applyFilter(state);
+      GraphView.applySearch($("#search").value);
+    }
+
+    function setGraphLayout(v) {
+      if (state.graphLayout === v) return;
+      state.graphLayout = v;
+      safeSetItem("graphLayout", v);
+      $$("#graphLayoutSwitch .seg").forEach(b =>
+        b.classList.toggle("active", b.dataset.layout === state.graphLayout));
+      const canvas = $("#graphCanvas");
+      if (!canvas) return;
+      GraphView.destroy();
+      renderGraph(canvas);
+    }
+
+    function setView(v) {
+      if (state.view === v) return;
+      // Tear down the graph network (frees its canvas) before leaving graph view.
+      if (state.view === "graph") GraphView.destroy();
+      state.view = v;
+      safeSetItem("view", v);
+      applyView();
+    }
+
     function bindUI() {
+      $("#viewSwitch").onclick = (e) => {
+        const btn = e.target.closest(".seg");
+        if (btn) setView(btn.dataset.view);
+      };
       $("#themeToggle").onclick = () => {
         state.theme = state.theme === "light" ? "dark" : "light";
         safeSetItem("theme", state.theme);
         applyTheme();
+        // Rebuild the graph so node colors re-read the (new) CSS variables.
+        if (state.view === "graph") {
+          const g = $("#graphCanvas");
+          if (g) { GraphView.destroy(); applyView(); }
+        }
       };
       $("#baseUrl").onchange = (e) => {
         state.baseUrl = e.target.value;
@@ -900,7 +1621,10 @@
         $("#captionBaseUrl").textContent = state.baseUrl;
       };
       // --- Search: fuzzy match + Ctrl+K to focus + ↑/↓/Enter to navigate ---
-      $("#search").oninput = () => applySearchAndFilter();
+      $("#search").oninput = () => {
+        if (state.view === "graph") GraphView.applySearch($("#search").value);
+        else applySearchAndFilter();
+      };
       $("#search").onkeydown = (e) => {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
@@ -923,7 +1647,8 @@
           }
         } else if (e.key === "Escape") {
           $("#search").value = "";
-          applySearchAndFilter();
+          if (state.view === "graph") GraphView.applySearch("");
+          else applySearchAndFilter();
           $("#search").blur();
         }
       };
@@ -940,14 +1665,16 @@
         const checked = Array.from($$("#marketFilter input:checked"), i => i.value);
         state.marketFilter = checked;
         safeSetItem("marketFilter", JSON.stringify(checked));
-        renderContent();
+        if (state.view === "graph") GraphView.applyFilter(state);
+        else renderContent();
       };
       $("#fetcherFilter").onchange = (e) => {
         if (e.target.checked) {
           state.fetcherFilter = e.target.value;
           safeSetItem("fetcherFilter", JSON.stringify(state.fetcherFilter));
         }
-        renderContent();
+        if (state.view === "graph") GraphView.applyFilter(state);
+        else renderContent();
       };
       // Radio 可取消: 点击已选中的 radio → 取消选中
       $("#fetcherFilter").addEventListener("click", (e) => {
@@ -958,7 +1685,8 @@
             input.checked = false;
             state.fetcherFilter = null;
             safeSetItem("fetcherFilter", "null");
-            renderContent();
+            if (state.view === "graph") GraphView.applyFilter(state);
+            else renderContent();
           }, 0);
         }
       });
