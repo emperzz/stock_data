@@ -134,7 +134,7 @@ agent 激活本 skill 后，按以下顺序执行（**步骤 1 是只读，步�
 | 类别 | 数据形态 | 推荐取数路径 | 时段差异 |
 |---|---|---|---|
 | **指数全景** | 上证 / 深证成指 / 创业板指 —— extended `MinimalQuote` + 计算指标（trend/pivots/volume），单 frequency（字段与单位见 agent-batch.md） | `§9.1` `agent/indices/batch-profile`（默认 3 指数；单 `frequency`，要长短期各调一次） | `pre`：昨日收盘 + 隔夜外盘；`intra`：当日分时 + 5m features；`post`：当日收盘 + features（要长短期趋势则分 `frequency` 调） |
-| **市场全景（涨跌停 / 龙虎榜 / 消息面）** | 涨停 + 跌停 + 龙虎榜（含服务端净买入汇总 + Top 买卖榜） + 早报/复盘/快讯 + `market_session` 判定 | `§9.1` `agent/market-context`（per-block 失败隔离） | `pre` / `intra` / `post` / `closed` 全时段（pre-market 涨跌停池服务端强制 null） |
+| **市场全景（涨跌停池 + 消息面）** | 涨跌停池 zt/dt + 早报/复盘/快讯 + `market_session` 判定 | zt/dt 池 → `§9.1` `agent/market-stats.limit_pools`（与全市场情绪块同次调用，`include_pools=false` 可单独关闭）；消息面（早报/复盘/快讯）→ `§9.1` `agent/market-context`（per-block 失败隔离）。**龙虎榜不在本 skill 必备数据范围内**：归因需要时按 §4 步骤 4 单独走 `/api/v1/dragon-tiger`，否则不读。 | `pre` / `intra` / `post` / `closed` 全时段（pre-market zt/dt 池服务端强制 null） |
 | **板块异动 + 成分股数值筛选** | 板块清单（带涨幅）+ 多板成分股按 涨幅 / 换手 / 成交额 / 市值 / 最高涨幅 过滤 | 板块清单走主表相关端点；批量数值筛走 `§9.1` `agent/boards/filter-stocks`（`max_gain_pct` = 盘中最高涨幅 vs 开盘价，服务端计算） | `pre`：昨日 + 今日预热；`intra`：实时异动；`post`：收盘涨跌 |
 | **全市场情绪（涨跌家数 + 涨幅分布桶）** | 全市场涨幅统计：均值 / 中位 / 最高 / 最低 / 上涨下跌平盘家数 + 11/9 个百分比桶（个股 3% 宽 ±12% 截断，板块 1% 宽 ±3% 截断；0% 单独成桶） | `§9.1` `agent/market-stats`（`include_boards=false` 可只取个股块） | `pre`：昨日收盘快照；`intra`：实时分布变化；`post`：当日全量收尾分布 |
 | **板块 K 线** | 领涨 Top1-5（同类去重、取涨幅更高者）+ watchlist 已记录领跌板块 —— 各 5m / d / w 三周期 | `§9.1` `agent/boards/batch-profile`（THS 单源；字段与单位见 agent-batch.md） | `intra` / `post`：按领涨 / 领跌排名拉；`pre`：仅拉 watchlist 已记录板块 |
@@ -236,7 +236,9 @@ agent 在执行步骤 4-5 时，按需跳读 `market-principles` 取判断方法
 - **不要**在 `{date}.md` 列出所有涨跌停股原始明细 —— 写入端点路径（`GET /zt-pools?type=zt\|dt`）供按需查询，文件保留"总结 + 重点关注的股票"即可
 - **不要**为指数全景 per-index × 多频率 手拉 raw K 线 —— 走 `agent/indices/batch-profile`（单 `frequency`；要长短期各调一次）（§4 步骤 3 取数策略）
 - **不要**为领涨/领跌板块 per-board × 多频率 手拉 raw K 线 —— 走 `agent/boards/batch-profile`（THS 单源，1-5 platecodes，单 `frequency`；要长短期各调一次）（§4 步骤 3 取数策略）
-- **不要**为涨跌停 + 龙虎榜 + 早报 + 复盘 + 快讯 5-6 个 per-call 拉——走 `agent/market-context`（§4 步骤 3）
+- **不要**为早报 + 复盘 + 快讯 3 个 per-call 拉——走 `agent/market-context`（§4 步骤 3）
+- **不要**为涨跌停池 zt/dt 单独调上游——走 `agent/market-stats.limit_pools`，与全市场情绪桶同次调用（§4 步骤 3）；pre-market 该池服务端强制 null，不需 fallback
+- 龙虎榜（`/api/v1/dragon-tiger`）按需且归因需要时单独拉，**不**进复盘必经流程——避免无关消费与无谓上下文开销
 - **不要**为 ≥2 个候选板块手算两两成分股交集——走 `agent/boards/stock-overlap`（§4 步骤 3）
 - **不要**为 ≥2 个候选股手算所属板块交集——走 `agent/stocks/board-overlap`（§4 步骤 3）
 - **不要**把 `agent/*` 响应拿 JSON 后再 client-side 转 markdown 嵌入 `{date}.md` —— 直接 `?format=md` 让服务端投影（§4 步骤 5）
@@ -285,7 +287,7 @@ agent 流程：
 agent 流程：
 1. 读取今日已有文件（盘前 / 盘中内容）
 2. 判断时段：post-market
-3. 数据获取（服务器端点优先，失败 fallback 网络搜索）：当日收盘 + 板块涨跌排名 + 龙虎榜 + 涨停股池 + 财联社焦点复盘（`agent/market-context`）
+3. 数据获取（服务器端点优先，失败 fallback 网络搜索）：当日收盘 + 板块涨跌排名 + 涨停股池（`agent/market-stats.limit_pools`）+ 财联社焦点复盘（`agent/market-context`）
 4. 覆写顶部"消息" / "复盘"块（用最新数据替换盘中版本）
 5. 归因：全天主线 / 板块归因 / 龙头归因
 6. 输出：
