@@ -527,15 +527,18 @@ def make_filter_stocks_cache_key(
     )
 
 
-def make_market_context_cache_key(flash_limit: int, trade_date: str, session: str) -> str:
+def make_market_context_cache_key(flash_limit: int, trade_date: str) -> str:
     """Cache key for GET /agent/market-context.
 
-    Includes ``session`` (pre-market/intraday/post-market/closed) because
-    the same (flash_limit, trade_date) can produce materially different
-    responses across sessions (e.g. pre-market forces zt/dt to null).
-    Without it a 09:00 cache hit would mask a 16:00 post-market refresh.
+    Session dropped (post-2026-09-02): the response no longer varies
+    by session — pools and dragon-tiger moved out, so pre/intra/post/
+    closed produce identical bodies for a given (flash_limit,
+    trade_date). Existing in-flight cache entries from before the
+    change have shape ``agent_market_context:{flash_limit}:{date}:{session}``
+    (3 segments) and will not match the new 2-segment shape; they
+    orphan and self-expire in 60s. No manual flush required.
     """
-    return f"agent_market_context:{flash_limit}:{trade_date}:{session}"
+    return f"agent_market_context:{flash_limit}:{trade_date}"
 
 
 def make_market_stats_cache_key(
