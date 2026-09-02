@@ -29,8 +29,8 @@ _index_quote_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_INDEX_QUOTE)
 _stock_intraday_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INTRADAY)
 
 # /api/v1/stocks caches (Task 2 — see docs/superpowers/plans/2026-07-29-stocks-list-include-quote.md)
-_stock_list_cache: TTLCache = TTLCache(maxsize=64, ttl=300)        # metadata only
-_stock_list_quote_cache: TTLCache = TTLCache(maxsize=8, ttl=60)    # full-market quote (intraday, 60s)
+_stock_list_cache: TTLCache = TTLCache(maxsize=64, ttl=300)  # metadata only
+_stock_list_quote_cache: TTLCache = TTLCache(maxsize=8, ttl=60)  # full-market quote (intraday, 60s)
 # Slow companion for /api/v1/stocks?include_quote=true outside trading hours.
 # Holds the most recent "frozen" snapshot keyed by (close_date, close_session).
 # 7d TTL is a safety cap; the real freshness gate is the (date, session) match
@@ -538,11 +538,16 @@ def make_market_context_cache_key(flash_limit: int, trade_date: str, session: st
     return f"agent_market_context:{flash_limit}:{trade_date}:{session}"
 
 
-def make_market_stats_cache_key(include_boards: bool) -> str:
+def make_market_stats_cache_key(
+    include_boards: bool, include_pools: bool = True, trade_date: str = ""
+) -> str:
     """Cache key for GET /api/v1/agent/market-stats.
 
-    Independent of ``format`` (json/md share one cache entry, same
-    convention as every other agent endpoint). 60s TTL via
-    ``get_quote_cache``.
+    All three knobs participate (post-2026-09-02): changing any of them
+    produces a materially different response (different blocks
+    populated / zt pool for a different date). 60s TTL via
+    get_quote_cache. ``include_pools`` and ``trade_date`` default for
+    Task-1 backwards compatibility; Task 2 will plumb them through
+    the route handler.
     """
-    return f"agent_market_stats:{include_boards}"
+    return f"agent_market_stats:{include_boards}:{include_pools}:{trade_date}"

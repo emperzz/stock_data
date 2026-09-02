@@ -3,6 +3,7 @@
 All tests mock at the FastAPI route layer (manager + stock_board_cache)
 so they're fast and don't touch the network.
 """
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -229,10 +230,32 @@ def test_format_invalid_returns_422(client):
 # ----- cache key -----
 
 
-def test_cache_key_includes_include_boards():
-    assert make_market_stats_cache_key(True) == "agent_market_stats:True"
-    assert make_market_stats_cache_key(False) == "agent_market_stats:False"
-    assert make_market_stats_cache_key(True) != make_market_stats_cache_key(False)
+def test_cache_key_includes_all_three_dimensions():
+    """Cache key includes include_boards, include_pools, and trade_date.
+
+    All three knobs produce distinct cache entries because changing
+    any of them produces a materially different response.
+    """
+    assert make_market_stats_cache_key(True, True, "2026-09-02") == (
+        "agent_market_stats:True:True:2026-09-02"
+    )
+    assert make_market_stats_cache_key(False, True, "2026-09-02") == (
+        "agent_market_stats:False:True:2026-09-02"
+    )
+    assert make_market_stats_cache_key(True, False, "2026-09-02") == (
+        "agent_market_stats:True:False:2026-09-02"
+    )
+    assert make_market_stats_cache_key(True, True, "2026-09-01") == (
+        "agent_market_stats:True:True:2026-09-01"
+    )
+    # All four are distinct entries
+    keys = {
+        make_market_stats_cache_key(True, True, "2026-09-02"),
+        make_market_stats_cache_key(False, True, "2026-09-02"),
+        make_market_stats_cache_key(True, False, "2026-09-02"),
+        make_market_stats_cache_key(True, True, "2026-09-01"),
+    }
+    assert len(keys) == 4
 
 
 def test_market_stats_cache_hit_skips_upstream(monkeypatch):
@@ -252,6 +275,7 @@ def test_market_stats_cache_hit_skips_upstream(monkeypatch):
     import importlib
 
     import stock_data.server as server_module
+
     importlib.reload(server_module)
     fresh_client = TestClient(server_module.app)
 
@@ -265,6 +289,7 @@ def test_market_stats_cache_hit_skips_upstream(monkeypatch):
     monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
 
     from stock_data.api.cache import get_quote_cache
+
     get_quote_cache().clear()
 
     # First call → upstream invoked
@@ -278,7 +303,7 @@ def test_market_stats_cache_hit_skips_upstream(monkeypatch):
     assert resp2.status_code == 200
     assert resp2.json() == resp1.json()  # bit-for-bit identical payload
     assert fake_manager.get_realtime_quotes.call_count == 1  # still 1
-    assert fake_cache.get_board_list.call_count == 1        # still 1
+    assert fake_cache.get_board_list.call_count == 1  # still 1
 
     # Restore cache-disabled state so other tests don't see TTL leaks.
     monkeypatch.setenv("ENABLE_API_CACHE", "false")

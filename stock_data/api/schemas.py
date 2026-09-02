@@ -831,7 +831,7 @@ class StockBoardInfo(BaseModel):
     )
     explain: str | None = Field(
         default=None,
-        description="概念解析文本 (e.g. \"2022年8月23日公司互动回复：...\"). THS 上游字段 explain.",
+        description='概念解析文本 (e.g. "2022年8月23日公司互动回复：..."). THS 上游字段 explain.',
     )
     relevance: int | None = Field(
         default=None,
@@ -2085,9 +2085,29 @@ class BoardStats(BaseModel):
 class MarketStatsErrorEntry(BaseModel):
     """One per-block failure surfaced in errors[]."""
 
-    block: Literal["stocks", "boards"]
+    block: Literal["stocks", "boards", "zt_pool", "dt_pool"]
     error: str
     message: str
+
+
+class MarketStatsLimitPools(BaseModel):
+    """涨跌停 block of /agent/market-stats.
+
+    Each pool is independently nullable: zt may be null while dt has
+    data (per-pool error isolation). An empty list (`[]`) means
+    "upstream returned no data for this date" — distinct from null,
+    which means "upstream failed OR pools were not queried
+    (`include_pools=false`)".
+    """
+
+    zt: list[dict] | None = Field(
+        default=None,
+        description="涨停池 list. null on per-pool upstream failure or include_pools=false.",
+    )
+    dt: list[dict] | None = Field(
+        default=None,
+        description="跌停池 list. null on per-pool upstream failure or include_pools=false.",
+    )
 
 
 class MarketStatsResponse(BaseModel):
@@ -2101,6 +2121,11 @@ class MarketStatsResponse(BaseModel):
 
     stocks: StockStats | None
     boards: BoardStats | None
+    # The handler ALWAYS populates `limit_pools` (with `MarketStatsLimitPools
+    # (zt=None, dt=None)` when `include_pools=false`), so the field is
+    # present in every response. Default `None` exists only as a
+    # defensive fallback for non-handler construction.
+    limit_pools: MarketStatsLimitPools | None = None
     errors: list[MarketStatsErrorEntry]
     summary: dict
 
