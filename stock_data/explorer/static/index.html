@@ -52,6 +52,11 @@
       color: var(--text);
     }
     .topbar .icon-btn { cursor: pointer; background: none; border: 0; font-size: 18px; }
+    /* === Segmented view switch (Endpoints / Dependency Graph) === */
+    .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .segmented .seg { font: inherit; font-size: 13px; padding: 6px 14px; border: 0; background: var(--bg-card); color: var(--text-muted); cursor: pointer; border-right: 1px solid var(--border); }
+    .segmented .seg:last-child { border-right: 0; }
+    .segmented .seg.active { background: var(--accent); color: #fff; }
     /* === Layout === */
     .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 440px; gap: 0; }
     .sidebar {
@@ -326,6 +331,10 @@
 <body>
   <header class="topbar">
     <h1>◐ stock_data API Explorer</h1>
+    <div class="segmented" id="viewSwitch" role="group" aria-label="View">
+      <button type="button" data-view="endpoints" class="seg active">Endpoints</button>
+      <button type="button" data-view="graph" class="seg">Dependency Graph</button>
+    </div>
     <input type="search" id="search" placeholder="Search endpoints (Ctrl+K)..." style="width:300px">
     <span class="spacer"></span>
     <label style="font-size:13px;color:var(--text-muted)">Base URL:</label>
@@ -1246,6 +1255,7 @@
     let state = {
       baseUrl: safeGetItem("baseUrl", ""),
       theme: safeGetItem("theme", "light"),
+      view: safeGetItem("view", "endpoints"),
       marketFilter: JSON.parse(safeGetItem("marketFilter", '["csi","hk","us"]')),
       // fetcherFilter: null = 无选中(全选); string = 选中的 fetcher 名
       fetcherFilter: (() => {
@@ -1348,18 +1358,75 @@
       $("#captionBaseUrl").textContent = state.baseUrl;
       refreshServerStatus();
       renderSidebar();
-      renderContent();
+      // Right-side panel is shared: ResultPanel (endpoints-view responses) and
+      // NodeDetailPanel (graph-view node detail) both own #resultBody.
+      NodeDetailPanel.init();
+      // Render the active view — endpoint list or dependency graph.
+      applyView();
     }
 
     function applyTheme() {
       document.documentElement.dataset.theme = state.theme;
     }
 
+    // --- Dependency-graph view switching ---
+    // Applies the current state.view to the topbar segmented control and the
+    // main content area. Graph view swaps the right-side #resultBody to
+    // NodeDetailPanel; the endpoint view keeps the ResultPanel behavior.
+    function applyView() {
+      const segs = $$("#viewSwitch .seg");
+      segs.forEach(b => b.classList.toggle("active", b.dataset.view === state.view));
+      const isGraph = state.view === "graph";
+      const content = $("#content");
+      if (isGraph) {
+        content.innerHTML = "";
+        const g = el("div", { id: "graphCanvas", style: "width:100%;height:calc(100vh - 120px);min-height:400px;" });
+        content.appendChild(g);
+        NodeDetailPanel.clear();
+        renderGraph(g);
+      } else {
+        renderContent();
+        // Coming back from the graph view: reset the panel (it may hold a
+        // NodeDetailPanel node detail) to the ResultPanel default empty state.
+        ResultPanel.clear();
+      }
+      $(".result-panel-header span").textContent = isGraph ? "Node Detail" : "Response";
+    }
+
+    async function renderGraph(container) {
+      await GraphView.load();
+      GraphView.render(container, MANIFEST, {
+        onNodeClick: (n) => {
+          if (n.group === "endpoint") NodeDetailPanel.showEndpoint(n._ep, MANIFEST);
+          else if (n.group === "fetcher") NodeDetailPanel.showFetcher(n._name, MANIFEST);
+        },
+      });
+      GraphView.applyFilter(state);
+    }
+
+    function setView(v) {
+      if (state.view === v) return;
+      // Tear down the graph network (frees its canvas) before leaving graph view.
+      if (state.view === "graph") GraphView.destroy();
+      state.view = v;
+      safeSetItem("view", v);
+      applyView();
+    }
+
     function bindUI() {
+      $("#viewSwitch").onclick = (e) => {
+        const btn = e.target.closest(".seg");
+        if (btn) setView(btn.dataset.view);
+      };
       $("#themeToggle").onclick = () => {
         state.theme = state.theme === "light" ? "dark" : "light";
         safeSetItem("theme", state.theme);
         applyTheme();
+        // Rebuild the graph so node colors re-read the (new) CSS variables.
+        if (state.view === "graph") {
+          const g = $("#graphCanvas");
+          if (g) { GraphView.destroy(); applyView(); }
+        }
       };
       $("#baseUrl").onchange = (e) => {
         state.baseUrl = e.target.value;
@@ -1367,7 +1434,10 @@
         $("#captionBaseUrl").textContent = state.baseUrl;
       };
       // --- Search: fuzzy match + Ctrl+K to focus + ↑/↓/Enter to navigate ---
-      $("#search").oninput = () => applySearchAndFilter();
+      $("#search").oninput = () => {
+        if (state.view === "graph") GraphView.applySearch($("#search").value);
+        else applySearchAndFilter();
+      };
       $("#search").onkeydown = (e) => {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
@@ -1390,7 +1460,8 @@
           }
         } else if (e.key === "Escape") {
           $("#search").value = "";
-          applySearchAndFilter();
+          if (state.view === "graph") GraphView.applySearch("");
+          else applySearchAndFilter();
           $("#search").blur();
         }
       };
@@ -1407,14 +1478,16 @@
         const checked = Array.from($$("#marketFilter input:checked"), i => i.value);
         state.marketFilter = checked;
         safeSetItem("marketFilter", JSON.stringify(checked));
-        renderContent();
+        if (state.view === "graph") GraphView.applyFilter(state);
+        else renderContent();
       };
       $("#fetcherFilter").onchange = (e) => {
         if (e.target.checked) {
           state.fetcherFilter = e.target.value;
           safeSetItem("fetcherFilter", JSON.stringify(state.fetcherFilter));
         }
-        renderContent();
+        if (state.view === "graph") GraphView.applyFilter(state);
+        else renderContent();
       };
       // Radio 可取消: 点击已选中的 radio → 取消选中
       $("#fetcherFilter").addEventListener("click", (e) => {
@@ -1425,7 +1498,8 @@
             input.checked = false;
             state.fetcherFilter = null;
             safeSetItem("fetcherFilter", "null");
-            renderContent();
+            if (state.view === "graph") GraphView.applyFilter(state);
+            else renderContent();
           }, 0);
         }
       });
