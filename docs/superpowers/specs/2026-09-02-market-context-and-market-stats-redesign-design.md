@@ -86,7 +86,7 @@ market-context wrapper block).
 {
   "stocks":      { /* same as before */ } | null,
   "boards":      { /* same as before; carries source field */ } | null,
-  "limit_pools": { "zt": [...] | null, "dt": [...] | null } | null,
+  "limit_pools": { "zt": [...] | null, "dt": [...] | null },
   "errors": [
     { "block": "stocks",   "error": "...", "message": "..." },
     { "block": "boards",   "error": "...", "message": "..." },
@@ -102,7 +102,7 @@ market-context wrapper block).
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `trade_date` | `str \| None` (YYYY-MM-DD) | server-defaulted via `trade_calendar.get_latest_trade_date_on_or_before(today)` | plumbed to `manager.get_zt_pool(pool_type="zt"/"dt", date=...)` |
-| `include_pools` | `bool` | `True` | when `false`, `limit_pools` field is omitted from the JSON (route-layer `model_dump(exclude_none=True)`) and no upstream pool calls fire |
+| `include_pools` | `bool` | `True` | when `false`, no upstream pool calls fire; `limit_pools` field is still present in JSON as `{zt: null, dt: null}` (field's presence is NOT a signal that pools were attempted — see `summary.requested`) |
 | `include_boards` | `bool` | `True` | unchanged |
 | `format` | `Literal["json","md"]` | `"json"` | unchanged |
 
@@ -407,11 +407,14 @@ class MarketStatsErrorEntry(BaseModel):
     message: str
 
 
-# UPDATED — add limit_pools field; default None keeps
-# include_pools=false wire-clean (dropped via model_dump)
+# UPDATED — add limit_pools field
 class MarketStatsResponse(BaseModel):
     stocks: StockStats | None
     boards: BoardStats | None
+    # The handler ALWAYS populates `limit_pools` (with `MarketStatsLimitPools
+    # (zt=None, dt=None)` when `include_pools=false`), so the field is
+    # present in every response. Default `None` exists only as a
+    # defensive fallback for non-handler construction.
     limit_pools: MarketStatsLimitPools | None = None
     errors: list[MarketStatsErrorEntry]
     summary: dict
@@ -446,11 +449,13 @@ class MarketContextResponse(BaseModel):
 def make_market_context_cache_key(flash_limit: int, trade_date: str) -> str:
     """Cache key for GET /agent/market-context.
 
-    Session removed (post-2026-09-02): the response no longer varies
+    Session dropped (post-2026-09-02): the response no longer varies
     by session — pools and dragon-tiger moved out, so pre/intra/post/
     closed produce identical bodies for a given (flash_limit,
-    trade_date). Kept the two-knob signature stable for backwards
-    compatibility with any existing cache entries.
+    trade_date). Existing in-flight cache entries from before the
+    change have shape ``agent_market_context:{flash_limit}:{date}:{session}``
+    (3 segments) and will not match the new 2-segment shape; they
+    orphan and self-expire in 60s. No manual flush required.
     """
     return f"agent_market_context:{flash_limit}:{trade_date}"
 

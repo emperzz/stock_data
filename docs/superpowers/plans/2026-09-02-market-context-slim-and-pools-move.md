@@ -10,7 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-02-market-context-and-market-stats-redesign-design.md`
 
-**Branch strategy:** Per CLAUDE.md "Skip branch for trivial changes", `*.md` commits go to master. This plan file is `*.md` → master. Implementation commits → `feat/agent-market-stats-pools` branch (Python server code per project rule).
+**Branch strategy:** Per CLAUDE.md "Skip branch for trivial changes", `*.md` commits go to master. This plan file AND the spec file at `docs/superpowers/specs/2026-09-02-market-context-and-market-stats-redesign-design.md` are `*.md` → both already on master. Implementation commits → `feat/agent-market-stats-pools` branch (Python server code per project rule).
+
+**Intermediate red state warning:** Between Task 3 commit and Task 4 commit, ~10 existing market-context tests will fail (they assert pre-slim fields: `limit_pools`, `dragon_tiger`, `make_market_context_cache_key(..., session)`). Task 4 cleans them up. Branch is NOT fast-forward-mergeable until Task 4 lands. CI on master stays green throughout because the branch isn't merged until Task 4.12 — no `git push origin master` happens until the full 4-task sequence is green.
+
+**Cache key shape drift:** Task 1 changes `agent_market_stats:{bool}` → `agent_market_stats:{bool}:{bool}:{str}`. Existing in-flight cache entries from before the change will orphan and self-expire in 60s (TTL); no manual flush required. The drift is unavoidable because the previous 1-arg signature didn't carry enough information to distinguish `(include_pools=true, today)` from `(include_pools=false, today)`.
 
 ---
 
@@ -393,20 +397,19 @@ In `tests/test_agent_market_stats.py`, append a new test class:
 # ----- pools block (post-2026-09-02) -----
 
 
-def _patch_zt_pool(monkeypatch, *, zt_value=("[]", "akshare"), dt_value=("[]", "akshare")):
-    """Patch manager.get_zt_pool with side_effect list [zt, dt] or scalar.
+def _patch_zt_pool(monkeypatch, *, zt_value=([], "akshare", None), dt_value=([], "akshare", None)):
+    """Patch manager.get_zt_pool + the other market-stats upstreams.
 
-    zt_value / dt_value: each is either a 3-tuple (rows, src, error) that
-    the mock will return, or an Exception instance to raise.
+    Each of ``zt_value`` / ``dt_value`` is either:
+    - a 3-tuple ``(rows, src, error_reason)`` — returned to the caller
+      at the matching call
+    - an ``Exception`` instance — raised at the matching call
+
+    MagicMock's ``side_effect`` accepts a list of mixed return-or-raise
+    values, so we just pass the args straight through.
     """
     fake_manager = MagicMock()
-    side_effects = []
-    for v in (zt_value, dt_value):
-        if isinstance(v, Exception):
-            side_effects.append(v)
-        else:
-            side_effects.append(v)
-    fake_manager.get_zt_pool.side_effect = side_effects
+    fake_manager.get_zt_pool.side_effect = [zt_value, dt_value]
     fake_manager.get_realtime_quotes.return_value = (
         [_make_quote("600000", 1.0)], "akshare",
     )
@@ -527,37 +530,41 @@ class TestMarketStatsPoolsBlock:
         fake_manager.get_zt_pool.assert_not_called()
 
     def test_pools_trade_date_passed_through(self, client, monkeypatch):
-        """?trade_date=2026-09-01 → manager.get_zt_pool called with date='2026-09-01'."""
-        _patch_zt_pool(
+        """?trade_date=2026-09-01 → manager.get_zt_pool called twice with date='2026-09-01'."""
+        fake_manager = _patch_zt_pool(
             monkeypatch,
             zt_value=([{"code": "600519"}], "akshare", None),
             dt_value=([{"code": "000001"}], "akshare", None),
         )
         client.get("/api/v1/agent/market-stats?trade_date=2026-09-01")
-        assert fake_manager_zt_calls_match(
-            monkeypatch, expected_date="2026-09-01", pool_types={"zt", "dt"}
-        )
+        calls = fake_manager.get_zt_pool.call_args_list
+        assert len(calls) == 2, f"expected 2 calls, got {len(calls)}"
+        seen_pool_types = set()
+        for call in calls:
+            assert call.kwargs.get("date") == "2026-09-01", (
+                f"expected date=2026-09-01, got {call.kwargs.get('date')!r}"
+            )
+            seen_pool_types.add(call.kwargs.get("pool_type"))
+        assert seen_pool_types == {"zt", "dt"}
 
     def test_pools_trade_date_malformed_400(self, client):
-        """?trade_date=not-a-date → 400 invalid_trade_date."""
+        """?trade_date=not-a-date → 400 with invalid_trade_date code (matches market-context)."""
         resp = client.get("/api/v1/agent/market-stats?trade_date=not-a-date")
         assert resp.status_code == 400
-        assert "invalid_request" in resp.text or "trade_date" in resp.text
+        body = resp.json()
+        assert body.get("error") == "invalid_trade_date"
+        assert "trade_date" in body.get("message", "")
 
     def test_pools_trade_date_default_to_latest_trade_date(self, client, monkeypatch):
         """Omit ?trade_date → handler resolves to get_latest_trade_date_on_or_before(today)."""
-        _patch_zt_pool(
+        fake_manager = _patch_zt_pool(
             monkeypatch,
             zt_value=([{"code": "600519"}], "akshare", None),
             dt_value=([{"code": "000001"}], "akshare", None),
         )
         client.get("/api/v1/agent/market-stats")
-        # Pinned via the trade_calendar patch (set up by _patch_zt_pool
-        # returning any data — the route will call get_latest_trade_date
-        # which is the default-resolution path).
-        fake_manager = agent_module.get_manager()
         for call in fake_manager.get_zt_pool.call_args_list:
-            assert call.kwargs.get("date")  # not empty
+            assert call.kwargs.get("date"), "date must be non-empty (trade_calendar default)"
 
     def test_pools_cache_hit(self, client, monkeypatch):
         """Second call with same (include_boards, include_pools, trade_date) → cache hit."""
@@ -571,7 +578,7 @@ class TestMarketStatsPoolsBlock:
 
         fresh_client = TestClient(server_module.app)
 
-        _patch_zt_pool(
+        fake_manager = _patch_zt_pool(
             monkeypatch,
             zt_value=([{"code": "600519"}], "akshare", None),
             dt_value=([{"code": "000001"}], "akshare", None),
@@ -581,7 +588,6 @@ class TestMarketStatsPoolsBlock:
         get_quote_cache().clear()
 
         fresh_client.get("/api/v1/agent/market-stats?trade_date=2026-09-01")
-        fake_manager = agent_module.get_manager()
         assert fake_manager.get_zt_pool.call_count == 2  # zt + dt on first call
 
         fresh_client.get("/api/v1/agent/market-stats?trade_date=2026-09-01")
@@ -616,28 +622,19 @@ class TestMarketStatsPoolsBlock:
         assert "| 000001 | 平安 | -10.00% | 10:00 | 银行 |" in body
 
     def test_format_md_renders_null_pools_when_disabled(self, client, monkeypatch):
-        """?include_pools=false&format=md → body contains ## 涨跌停 + null markers."""
+        """?include_pools=false&format=md → body contains ## 涨跌停 + null markers.
+
+        When include_pools=false the handler populates
+        MarketStatsLimitPools(zt=None, dt=None) (see Step 2.4) so the
+        field is present-but-null. The MD renderer emits the heading
+        with `**涨停池**: null` markers.
+        """
         _patch_zt_pool(monkeypatch)
         resp = client.get("/api/v1/agent/market-stats?include_pools=false&format=md")
         body = resp.text
         assert "## 涨跌停" in body
         assert "**涨停池**: null" in body
         assert "**跌停池**: null" in body
-
-
-def fake_manager_zt_calls_match(monkeypatch, *, expected_date, pool_types):
-    """Helper: assert manager.get_zt_pool was called once per pool type with date=expected_date."""
-    fake_manager = agent_module.get_manager()
-    calls = fake_manager.get_zt_pool.call_args_list
-    assert len(calls) == len(pool_types), f"expected {len(pool_types)} calls, got {len(calls)}"
-    seen_types = set()
-    for call in calls:
-        assert call.kwargs.get("date") == expected_date, (
-            f"expected date={expected_date}, got {call.kwargs.get('date')!r}"
-        )
-        seen_types.add(call.kwargs.get("pool_type"))
-    assert seen_types == pool_types, f"missing pool_type in {pool_types - seen_types}"
-    return True
 ```
 
 - [ ] **Step 2.2: Run the new tests to verify they all fail**
@@ -767,7 +764,7 @@ def get_market_stats(
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "invalid_request",
+                "error": "invalid_trade_date",  # match market-context's gate code (see CLAUDE.md tests)
                 "message": (
                     f"trade_date must be YYYY-MM-DD; got {trade_date!r}. "
                     "Empty = server-defaulted to most recent trade date on/before today."
@@ -851,7 +848,12 @@ def get_market_stats(
                 )
             )
 
-    # --- limit_pools block (skipped only when include_pools=false) ---
+    # --- limit_pools block ---
+    # The field is ALWAYS present in the JSON response (per spec §4 wire
+    # format), even when include_pools=false. When disabled, we populate
+    # it with `MarketStatsLimitPools(zt=None, dt=None)` so consumers
+    # see a stable shape; the field's presence is NOT a signal that
+    # pools were attempted. (That signal is in `summary.requested`.)
     if include_pools:
         limit_pools_block, pool_errors = _compute_limit_pools_block(manager, target_date)
         errors.extend(pool_errors)
@@ -859,6 +861,8 @@ def get_market_stats(
         # complete (with partial data). Empty upstream results also
         # count as success (caller distinguishes via inner [] vs null).
         ok += 1
+    else:
+        limit_pools_block = MarketStatsLimitPools(zt=None, dt=None)
 
     result = MarketStatsResponse(
         stocks=stocks_stats,
@@ -1698,17 +1702,23 @@ In `tests/test_agent_endpoints.py`, in `TestPhase2DefensiveGuards` (around line 
 def test_market_context_cache_key_omits_session(self):
     """Cache key no longer includes session (post-2026-09-02 slim).
 
-    Same (flash_limit, trade_date) → same key, regardless of session.
+    Same (flash_limit, trade_date) → same key. Different inputs →
+    different keys. The session dimension was dropped because the
+    response content no longer varies by session (pools and
+    dragon-tiger moved out).
     """
     from stock_data.api.cache import make_market_context_cache_key
 
     assert make_market_context_cache_key(20, "2026-07-25") == (
         "agent_market_context:20:2026-07-25"
     )
-    # Same shape regardless of session would have been (the helper no
-    # longer takes a session param at all)
-    assert make_market_context_cache_key(20, "2026-07-25") == make_market_context_cache_key(
-        20, "2026-07-25"
+    # Different trade_date → different keys
+    assert make_market_context_cache_key(20, "2026-07-25") != make_market_context_cache_key(
+        20, "2026-07-26"
+    )
+    # Different flash_limit → different keys
+    assert make_market_context_cache_key(20, "2026-07-25") != make_market_context_cache_key(
+        10, "2026-07-25"
     )
 ```
 
