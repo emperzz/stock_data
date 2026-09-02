@@ -827,15 +827,24 @@
       return false;
     }
 
-    // 分区模式短标签: 去掉 /api/v1 前缀, 截到 26 字符。agent 端点附加依赖计数。
-    function shortGraphLabel(ep) {
-      const p = (ep.path || "").replace(/^\/api\/v1/, "");
-      let s = `${ep.method} ${p}`;
-      if (ep.capabilities && ep.capabilities.length === 0 && ep.depends_on) {
-        const n = ep.depends_on.filter(d => d.kind === "endpoint").length;
-        if (n > 0) s += ` ⇢${n}`;
+    // 端点图内短标签: 分组框标题已表达 section 前缀 → 在标签里去掉该前缀,
+    // 超长再省略; agent(顶行/左列)用末段 action 名, 避免长 path 占满。
+    function flowLabelFor(ep, sid) {
+      const base = (ep.path || "").replace(/^\/api\/v1/, "");
+      let rest;
+      if (sid === "agent") {
+        const segs = base.split("/").filter(Boolean);
+        rest = segs.length ? segs[segs.length - 1] : base;
+        rest = ep.method + " " + rest;
+      } else {
+        const re = new RegExp("^/" + sid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+        const cut = base.replace(re, "");
+        // 去掉前缀后余下能以 / 或 { 开头才算有效; 否则保留原名, 防把整段删光。
+        rest = (cut && /^[/{]/.test(cut)) ? cut : base;
+        rest = ep.method + " " + rest;
       }
-      return s.length > 30 ? s.slice(0, 29) + "…" : s;
+      rest = rest.replace(/^(\w+ )\//, "$1");      // "GET /{..}" -> "GET {..}"
+      return rest.length > 26 ? rest.slice(0, 25) + "…" : rest;
     }
 
     // 依赖流布局: 3 个横排 rank —— agent(上/左)→ section 分组框(中)→ fetcher(下/右)。
@@ -865,7 +874,8 @@
     }
 
     // 返回 {w,h};给每个 node 赋 x/y;填充 flowBoxes;在 nodes 尾部追加不可见 anchor。
-    // dir = "TB"(竖排, 默认) | "LR"(横排: agent 左列 / fetcher 右列, 框仍是中部竖列)。
+    // dir = "TB"(竖排, 默认: 框横排 + agent 顶行 + fetcher 底行) |
+    //       "LR"(横排: agent 左列 / section 框纵向堆叠 / fetcher 右列)。
     function layoutFlow(nodes, dir) {
       const p2s = {};
       for (const sec of lastManifest.sections)
@@ -880,74 +890,83 @@
       const cols = new Map();                    // sectionId -> endpoint node[]
       for (const n of epNodes) {
         const sid = p2s[n._ep.path] || "?";
+        n.label = flowLabelFor(n._ep, sid);      // 布局宽度与显示共用同一短标签
         if (sid === "agent") agents.push(n);
         else { if (!cols.has(sid)) cols.set(sid, []); cols.get(sid).push(n); }
       }
 
-      const PAD = 56, ROW = 32, HEAD = 30, BOX_GAP = 46, ROW_W = 7.4;
+      // 间距(ROW/HEAD)放大, 中间层端点不贴太紧。
+      const PAD = 56, ROW = 36, HEAD = 36, ROW_W = 7.6;
       const isTB = dir !== "LR";
-      const rowTop = isTB ? PAD + 160 : PAD + 36;   // TB 顶部给 agent 行留走廊
-
-      // R1: section 分组框(框内端点竖排左对齐; 两种方向共用同一几何)。
-      flowBoxes = [];
-      let x = PAD;
-      for (const [sid, list] of cols) {
-        let w = 50;
-        for (const n of list) w = Math.max(w, Math.ceil(n.label.length) * ROW_W);
-        const by = rowTop;
-        const h = HEAD + list.length * ROW + 26;
-        flowBoxes.push({ sid, x, y: by, w, h, eps: list });
-        list.forEach((n, i) => { n.x = x + 24; n.y = by + HEAD + ROW / 2 + i * ROW; });
-        x += w + BOX_GAP;
-      }
-      const boxRight = Math.max(PAD, x - BOX_GAP);
-      const maxBoxBottom = flowBoxes.length
-        ? Math.max(...flowBoxes.map(b => b.y + b.h)) : rowTop + HEAD;
-
       const tgtOf = n => (n._ep.depends_on || [])
         .filter(d => d.kind === "endpoint")
         .map(d => epById["ep:" + d.target_path])
         .filter(Boolean);
       const srcOf = n => allServedBy.filter(e => e.to === n.id).map(e => epById[e.from]).filter(Boolean);
       const mean = a => a.reduce((s, t) => s + t, 0) / a.length;
+      const boxWOf = list => Math.max(70, ...list.map(n => Math.ceil(n.label.length) * ROW_W)) + 18;
+      const boxHOf = list => HEAD + list.length * ROW + 26;
+      const placeInBox = (b, list) =>
+        list.forEach((n, i) => { n.x = b.x + 28; n.y = b.y + HEAD + ROW / 2 + i * ROW; });
       const anchorOf = (cw, ch) => [
         { id: "flow:tl", group: "anchor", x: 0, y: 0, label: "", shape: "dot", size: 1, opacity: 0, fixed: { x: true, y: true } },
         { id: "flow:br", group: "anchor", x: cw, y: ch, label: "", shape: "dot", size: 1, opacity: 0, fixed: { x: true, y: true } },
       ];
 
+      flowBoxes = [];
       if (isTB) {
-        // R0 agent 顶行 / R2 fetcher 底行(水平 floatRow)。
-        const contentW = Math.max(PAD * 2 + agents.length * 110, boxRight + PAD);
+        // R1: 分组框从左到右横排(框内端点竖排)。
+        const rowTop = PAD + 170;                // 顶部留走廊画 composed-of
+        let x = PAD;
+        for (const [sid, list] of cols) {
+          const w = boxWOf(list), h = boxHOf(list);
+          const b = { sid, x, y: rowTop, w, h, eps: list };
+          flowBoxes.push(b);
+          placeInBox(b, list);
+          x += w + 58;                           // 框间距
+        }
+        const boxRight = Math.max(PAD, x - 58);
+        const maxBoxBottom = flowBoxes.length
+          ? Math.max(...flowBoxes.map(b => b.y + b.h)) : rowTop + HEAD;
+        const contentW = Math.max(PAD * 2 + agents.length * 120, boxRight + PAD);
         const agentDesired = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.x)) : contentW / 2; };
-        floatRow(agents, agentDesired, PAD, n => n.label.length * ROW_W + 46, PAD, contentW - PAD, 50);
-        const fxY = maxBoxBottom + 190;
+        floatRow(agents, agentDesired, PAD, n => n.label.length * ROW_W + 60, PAD, contentW - PAD, 60);
+        const fxY = maxBoxBottom + 210;
         const fxDesired = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.x)) : contentW / 2; };
-        floatRow(fxNodes, fxDesired, fxY, n => n.label.length * 8.6 + 70, PAD, contentW - PAD, 40);
-        const h = fxY + 70;
+        floatRow(fxNodes, fxDesired, fxY, n => n.label.length * 9 + 80, PAD, contentW - PAD, 50);
+        const h = fxY + 80;
         nodes.push(...anchorOf(contentW, h));
         return { w: contentW, h };
       }
 
-      // LR: agent 左列 / fetcher 右列; 整组框右移空出 agent 列。
+      // LR: 中间层 section 框改为纵向堆叠(从上到下), 各框仍是端点竖列。
       const agentColW = agents.length
-        ? Math.max(...agents.map(n => n.label.length * ROW_W + 60)) : PAD;
-      const shift = agentColW + 80;
-      flowBoxes.forEach(b => { b.x += shift; b.eps.forEach(q => { q.x += shift; }); });
-      const fxX = boxRight + shift + 150;
-      const fxMaxW = fxNodes.length ? Math.max(...fxNodes.map(n => n.label.length * 8.6 + 70)) : 200;
-      const yMin = PAD, yMax = maxBoxBottom;
-      const aDesY = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.y)) : yMin + HEAD; };
-      floatCol(agents, aDesY, PAD, yMin, yMax, 44);
-      const fDesY = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.y)) : yMin + HEAD; };
-      floatCol(fxNodes, fDesY, fxX, yMin, yMax, 30);
-      const colBottom = a => a.length ? Math.max(...a.map(n => n.y + 44)) : 0;
+        ? Math.max(...agents.map(n => n.label.length * ROW_W + 70)) : 120;
+      const boxColX = PAD + agentColW + 70;
+      let cy = PAD;
+      let colMaxW = 10;
+      for (const [sid, list] of cols) {
+        const w = boxWOf(list), h = boxHOf(list);
+        const b = { sid, x: boxColX, y: cy, w, h, eps: list };
+        flowBoxes.push(b);
+        placeInBox(b, list);
+        colMaxW = Math.max(colMaxW, w);
+        cy += h + 46;
+      }
+      const fxX = boxColX + colMaxW + 180;
+      const fxMaxW = fxNodes.length ? Math.max(...fxNodes.map(n => n.label.length * 9 + 80)) : 220;
+      const yMax = Math.max(cy - 46 + HEAD, PAD + 60);
+      const aDesY = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.y)) : PAD + HEAD; };
+      floatCol(agents, aDesY, PAD, PAD, yMax, 46);
+      const fDesY = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.y)) : PAD + HEAD; };
+      floatCol(fxNodes, fDesY, fxX, PAD, yMax, 36);
+      const colBottom = a => a.length ? Math.max(...a.map(n => n.y + 40)) : 0;
       const contentW = fxX + fxMaxW + PAD;
-      const contentH = Math.max(maxBoxBottom + PAD, colBottom(agents), colBottom(fxNodes));
+      const contentH = Math.max(yMax, colBottom(agents), colBottom(fxNodes)) + PAD;
       nodes.push(...anchorOf(contentW, contentH));
       return { w: contentW, h: contentH };
     }
 
-    // hex "#rrggbb" -> "rgba(r,g,b,a)";解析失败返回 null(调用方不填充)。
     function hexA(hex, a) {
       const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
       if (!m) return null;
@@ -1121,9 +1140,8 @@
       const edges = graph.edges;                // 依赖流与力导向都全画(聚焦淡化靠 paint)
 
       if (isFlow) {
+        // 端点短标签在 layoutFlow 内按 section 前缀生成; 这里只设 tooltip 全文。
         nodes.filter(n => n.group === "endpoint").forEach(n => {
-          n._fullLabel = n.label;
-          n.label = shortGraphLabel(n._ep);
           n.title = `${n._ep.method} ${n._ep.path}\n${n._ep.summary || ""}`;
         });
         const extent = layoutFlow(nodes, (callbacks && callbacks.dir) || "TB");
