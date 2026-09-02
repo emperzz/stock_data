@@ -87,21 +87,24 @@ R2  fetcher(13)盒子 横排一条
   节点垫底"任选(实现时选可控、且在平移/缩放/theme 下不漂的;详见 §5 的分组框画法
   注意)。框的视觉 = 半
   透明填充 + 边框 + 左上角 section 名,颜色读 CSS 变量(light/dark 都可用)。
-- **质心锚定(crossing minimization,手写 ~几十行)**:框内端点先摆成竖列;agent 与
-  fetcher 按其"相邻端点"的 x 质心定位,一行 `floatRow` 顺序摊开避免重叠 → composed-of /
-  served-by 边大多是短下垂线,少量交叉。
+- **质心锚定 + 居中(crossing minimization,手写 ~几十行)**:框内端点先摆成竖列;agent 与
+  fetcher 按其"相邻端点"的质心定位,`floatRow`/`floatCol` 顺序摊开避免重叠后再用
+  `centerRow`/`centerCol` 把整行/列在内容区间内**居中**(避免全部窝到单侧) → composed-of /
+  served-by 边大多是短连线,少量交叉。
 - 孤立端点(无 fetcher 且不被任何 composed-of 指向,如 `/indicators`、`/healthz`、
   `/news/content`、`/stocks/{code}/reports/{id}/pdf`、`/boards/{code}/news|surges` 等)
   仍然摆进自己 section 框、正常显示,只是无边 —— 不与 agent/fetcher 层耦合。
+- **短标签**:分组框标题已表达 section 前缀 → 框内端点标签去掉该前缀(如 `stocks` 框内
+  显示 `GET {code}/kline` 而非整条 path);agent(顶行/左列)用末段 action 名(如
+  `POST market-context`);仍过长才省略号。悬停 tooltip 保留完整 `method path`。
 - 画布按内容尺寸扩容,外层 `#graphWrap` 滚动;render 后 `network.fit()`。
 - **方向选项(竖排 TB / 横排 LR)**:依赖流支持两种排版,`GraphView.render(…,{dir})`,
   `dir ∈ "TB"|"LR"`(缺省 `"TB"`):
   - **TB(竖排, 默认)**: agent 顶行、分组框中部、fetcher 底行 —— 自上而下读(本小节
     描述即此形态)。
-  - **LR(横排, 用户拍板 = "两侧接线")**: section 分组框**仍是中部竖列**(框几何与框内
-    端点排布和 TB 完全一致),只把 agent 移到**最左列**、fetcher 移到**最右列**;
-    `floatRow` 的水平摊开换成垂直版 `floatCol`(y 取相邻端点质心);整组框水平右移空出
-    agent 列 → 箭头从左往右读 `agent → 端点 → fetcher`。
+  - **LR(横排)**: agent 移到**最左列**、fetcher 移到**最右列**;中间 section 分组框
+    **纵向堆叠**(从上到下,各框仍是端点竖列)。视觉上 agent(左)→ 纵向 section 列(中)→
+    fetcher(右),箭头从左往右读。
   - 状态 `state.graphDir`(localStorage `graphDir`,默认 `"TB"`);图内工具条在依赖流下
     显示「竖排/横排」,切到力导向时该控件禁用(方向对 force 无意义)。
   - 边/交互(focus/search/filter)对两种方向一致 —— 只依赖节点 id/DataSet,不依赖排布
@@ -191,8 +194,8 @@ filter/search/theme 操作同一批 DataSet 节点,不需为两布局写两套�
 6. reload 布局选择持久化(`依赖流`);旧浏览器 localStorage 里 `graphLayout="section"`
    读入后变 `flow` 不报错;切回 Endpoints 再回来无残留。
 7. **方向**:默认 `竖排`(agent 上/fetcher 下,从上往下)。点 `横排` → agent 到最左一列、
-   fetcher 到最右一列、中间仍是 section 竖列框,箭头左→右读;focus/search/filter 在横排
-   下照常;切 `力导向` 时「竖排/横排」控件禁用、切回依赖流恢复。reload 后 `graphDir`
+   fetcher 到最右一列、中间 section 框**纵向堆叠**,箭头左→右读;focus/search/filter 在
+   横排下照常;切 `力导向` 时「竖排/横排」控件禁用、切回依赖流恢复。reload 后 `graphDir`
    选择持久化。
 
 ## 7. Out of scope (explicit)
