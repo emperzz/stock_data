@@ -721,6 +721,61 @@ def get_indices_batch_profile(
     return _render_agent("indices/batch-profile", result, format)
 
 
+def build_market_context_response(
+    flash_limit: int,
+    target_date: str,
+    today_str: str,
+) -> MarketContextResponse:
+    """Build the Pydantic model for /agent/market-context.
+
+    Pure logic — cache lookup/store lives in the caller (route handler
+    or market-recap). Returns the slim post-2026-09-02 shape:
+    morning_briefing + market_recap + flash_news only (no pools,
+    no dragon-tiger).
+
+    `target_date` populates `trade_date` (may be historical if the
+    caller passed `?trade_date=...`). `today_str` is the server's
+    local date and is used ONLY to compute `is_trade_day` and
+    `market_session` — those fields describe the present moment,
+    not the queried date (see `MarketContextResponse.is_trade_day`
+    docstring at `schemas.py:1839`). The original handler at
+    `agent.py:788-794` already separates these two concepts; the
+    helper preserves that semantics.
+    """
+    started = time.monotonic()
+    manager = get_manager()
+    attempts: list[tuple[str, Callable, object]] = [
+        ("morning_briefing", lambda: manager.get_morning_briefing(target_date)[0], None),
+        ("market_recap", lambda: manager.get_market_recap(target_date)[0], None),
+        # flash default is [] (not None) — empty list counts as a successful
+        # attempt (the upstream may legitimately have no flash in quiet periods).
+        ("flash_news", lambda: manager.get_flash_news(limit=flash_limit)[0], []),
+    ]
+
+    results: dict[str, object] = {}
+    n_ok = 0
+    for name, fn, default in attempts:
+        try:
+            results[name] = fn()
+            n_ok += 1
+        except Exception as exc:
+            logger.warning(f"[agent/market-context] {name} failed: {exc}", exc_info=True)
+            results[name] = default
+
+    is_today_trade_day = trade_calendar.is_trade_date(today_str)
+    return MarketContextResponse(
+        trade_date=target_date,
+        is_trade_day=is_today_trade_day,
+        market_session=_classify_market_session(is_today_trade_day),  # type: ignore[arg-type]
+        messages=MarketContextMessages(
+            morning_briefing=results["morning_briefing"],
+            market_recap=results["market_recap"],
+            flash_news=results["flash_news"],
+        ),
+        summary=_batch_summary(len(attempts), n_ok, started),
+    )
+
+
 @router.get(
     "/agent/market-context",
     response_model=MarketContextResponse,
@@ -786,12 +841,10 @@ def get_market_context(
             },
         )
     today_str = datetime.now(_CST).date().isoformat()
-    is_trade_day = trade_calendar.is_trade_date(today_str)
     target_date = (
         trade_date or trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
     )
 
-    session = _classify_market_session(is_trade_day)
     # Session dropped from cache key (post-2026-09-02): the response no
     # longer varies by session — pools and dragon-tiger moved out, so
     # pre/intra/post/closed produce identical bodies for a given
@@ -802,36 +855,10 @@ def get_market_context(
     if hit is not None:
         return _render_agent("market-context", hit, format)
 
-    started = time.monotonic()
-    manager = get_manager()
-    attempts: list[tuple[str, Callable, object]] = [
-        ("morning_briefing", lambda: manager.get_morning_briefing(target_date)[0], None),
-        ("market_recap", lambda: manager.get_market_recap(target_date)[0], None),
-        # flash default is [] (not None) — empty list counts as a successful
-        # attempt (the upstream may legitimately have no flash in quiet periods).
-        ("flash_news", lambda: manager.get_flash_news(limit=flash_limit)[0], []),
-    ]
-
-    results: dict[str, object] = {}
-    n_ok = 0
-    for name, fn, default in attempts:
-        try:
-            results[name] = fn()
-            n_ok += 1
-        except Exception as exc:
-            logger.warning(f"[agent/market-context] {name} failed: {exc}", exc_info=True)
-            results[name] = default
-
-    result = MarketContextResponse(
-        trade_date=target_date,
-        is_trade_day=is_trade_day,
-        market_session=session,  # type: ignore[arg-type]
-        messages=MarketContextMessages(
-            morning_briefing=results["morning_briefing"],
-            market_recap=results["market_recap"],
-            flash_news=results["flash_news"],
-        ),
-        summary=_batch_summary(len(attempts), n_ok, started),
+    result = build_market_context_response(
+        flash_limit=flash_limit,
+        target_date=target_date,
+        today_str=today_str,
     )
     cached_store(get_quote_cache, cache_key, result)
     return _render_agent("market-context", result, format)

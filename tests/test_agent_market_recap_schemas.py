@@ -10,6 +10,7 @@ from stock_data.api.schemas import (
 )
 
 from stock_data.api.cache import make_market_recap_cache_key
+from stock_data.api.routes.agent import build_market_context_response
 
 
 def test_market_recap_indices_block_accepts_three_quotes():
@@ -79,3 +80,35 @@ def test_make_market_recap_cache_key_changes_with_each_param():
     assert make_market_recap_cache_key(40, True, True) != base
     assert make_market_recap_cache_key(20, False, True) != base
     assert make_market_recap_cache_key(20, True, False) != base
+
+
+def test_build_market_context_response_returns_model(monkeypatch):
+    """Smoke test: the helper returns a MarketContextResponse for valid inputs."""
+    from stock_data.api.routes import agent as agent_mod
+
+    class _FakeManager:
+        def get_morning_briefing(self, _date):
+            return (None, "ths")
+
+        def get_market_recap(self, _date):
+            return (None, "ths")
+
+        def get_flash_news(self, *, limit):
+            return ([], "ths")
+
+    monkeypatch.setattr(agent_mod, "get_manager", lambda: _FakeManager())
+
+    result = build_market_context_response(
+        flash_limit=20, target_date="2026-09-03", today_str="2026-09-03"
+    )
+    assert isinstance(result, MarketContextResponse)
+    assert result.trade_date == "2026-09-03"
+    # is_trade_day is whatever trade_calendar.is_trade_date(today_str) returns;
+    # the test DB may be cold, so accept either bool. The helper's contract is
+    # to delegate, not to assert — the date semantics are tested upstream.
+    assert isinstance(result.is_trade_day, bool)
+    assert result.market_session in {"pre-market", "intraday", "post-market", "closed"}
+    assert result.messages.morning_briefing is None
+    assert result.messages.market_recap is None
+    assert result.messages.flash_news == []
+    assert result.summary["requested"] == 3
