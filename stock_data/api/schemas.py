@@ -2133,3 +2133,52 @@ class BoardsBatchProfileResponse(BaseModel):
     days: int = 0
     boards: list[BoardProfile] = Field(default_factory=list)
     summary: dict = Field(default_factory=dict)
+
+
+class MarketRecapErrorEntry(BaseModel):
+    """Per-block error for the market-recap aggregation endpoint."""
+
+    block: Literal[
+        "context",
+        "stats",
+        "indices.sh",
+        "indices.shenzhen_composite",
+        "indices.chinext",
+    ] = Field(description="Which recap sub-block failed")
+    error: str = Field(description="Exception class name")
+    message: str = Field(description="Human-readable failure detail")
+
+
+class MarketRecapIndicesBlock(BaseModel):
+    """3-index snapshot for the market-recap endpoint.
+
+    Each field is IndexQuote on success, None on per-index failure.
+    Indices are fixed at v1: 上证 (000001) / 深成指 (399001) / 创业板 (399006).
+    """
+
+    sh: IndexQuote | None = Field(default=None, description="上证综指 quote")
+    shenzhen_composite: IndexQuote | None = Field(
+        default=None, description="深证成指 quote"
+    )
+    chinext: IndexQuote | None = Field(default=None, description="创业板指 quote")
+
+
+class MarketRecapResponse(BaseModel):
+    """Aggregated recap: messages + quantitative + 3-index snapshot."""
+
+    context: MarketContextResponse = Field(
+        description="Verbatim /agent/market-context response"
+    )
+    stats: MarketStatsResponse = Field(
+        description="Verbatim /agent/market-stats response"
+    )
+    indices: MarketRecapIndicesBlock = Field(
+        description="3-index quote block (上证 / 深成指 / 创业板)"
+    )
+    errors: list[MarketRecapErrorEntry] = Field(
+        default_factory=list,
+        description="Per-block failures across the recap aggregation",
+    )
+    summary: dict[str, int | float] = Field(
+        description="requested / ok / failed / elapsed_ms — mirrors context/stats"
+    )
