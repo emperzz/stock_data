@@ -31,10 +31,12 @@ from ..cache import (
     get_board_news_cache,
     get_board_surges_cache,
     get_pools_cache,
+    get_reasons_cache,
     is_cache_enabled,
     make_board_news_cache_key,
     make_board_surges_cache_key,
     make_pools_cache_key,
+    make_reasons_cache_key,
 )
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
@@ -54,6 +56,8 @@ from ..schemas import (
     StockBoardsResponse,
     ZTPoolResponse,
     ZTPoolStock,
+    ZTReasonResponse,
+    ZTReasonStock,
 )
 from ._router import router
 from .errors import map_errors
@@ -67,18 +71,8 @@ _SOURCES = stock_board_cache.VALID_SOURCES
 _TYPES = stock_board_cache.VALID_BOARD_TYPES
 
 
-def _build_board_stock_info(
-    s: dict,
-    *,
-    is_limit_up: bool | None = None,
-    lb_count: int | None = None,
-) -> BoardStockInfo:
-    """Map a persistence row to BoardStockInfo.
-
-    The two optional kwargs are populated only on the ``?with_zt_flags=true``
-    path; on the default path they stay None (matching the pre-existing
-    ``BoardStockInfo`` defaults).
-    """
+def _build_board_stock_info(s: dict) -> BoardStockInfo:
+    """Map a persistence row to BoardStockInfo."""
     return BoardStockInfo(
         code=s.get("stock_code", ""),
         name=s.get("stock_name", ""),
@@ -106,9 +100,6 @@ def _build_board_stock_info(
         free_float_shares=s.get("free_float_shares"),
         float_market_cap=s.get("float_market_cap"),
         pe_ratio=s.get("pe_ratio"),
-        # 2026-07-27 新增 (?with_zt_flags=true 投影)
-        is_limit_up=is_limit_up,
-        lb_count=lb_count,
     )
 
 
@@ -528,14 +519,6 @@ def get_board_stocks(
             "fill-in added rows (or ZZSHARE itself failed)."
         ),
     ),
-    with_zt_flags: bool = Query(
-        False,
-        description=(
-            "When true, also fetch the ZT pool for the resolved date and "
-            "annotate each stock with is_limit_up (bool) + lb_count (int|None). "
-            "Omit for default behavior (no ZT join, no extra network call)."
-        ),
-    ),
 ) -> BoardStocksResponse:
     """Get stocks belonging to a board.
 
@@ -652,33 +635,6 @@ def get_board_stocks(
     )
 
     stock_list = [_build_board_stock_info(s) for s in stocks]
-
-    # ZT-pool join (opt-in via ?with_zt_flags=true). 1 extra upstream call
-    # (or persistence cache hit) per request; best-effort, never raises.
-    if with_zt_flags:
-        zt_index: dict[str, dict] = {}
-        try:
-            zt_stocks, _, _ = manager.get_zt_pool(pool_type="zt")
-            for z in zt_stocks or []:
-                zt_code = z.get("code") or z.get("stock_code")
-                if zt_code:
-                    zt_index[zt_code] = z
-        except Exception as exc:
-            logger.warning(
-                f"[boards] with_zt_flags: zt-pool fetch failed: {exc}"
-            )
-            zt_index = {}
-        # Re-construct with ZT annotations. The default path above already
-        # produced the unannotated list; on the join path we replace it
-        # rather than mutating, so the two branches stay readable.
-        stock_list = [
-            _build_board_stock_info(
-                s,
-                is_limit_up=(code := s.get("stock_code", "")) in zt_index,
-                lb_count=(zt_index.get(code) or {}).get("lb_count"),
-            )
-            for s in stocks
-        ]
 
     # include_quote=true → also pull the board-level realtime quote.
     # Post-2026-07-10: the quote call is no longer hardcoded to ths. The
@@ -1426,4 +1382,88 @@ def get_pools(
 
     if is_current_day:
         cached_store(get_pools_cache, cache_key, result)
+    return result
+
+
+@router.get(
+    "/zt-reasons",
+    response_model=ZTReasonResponse,
+    tags=["zt-reasons"],
+)
+@endpoint_meta(
+    summary="涨停原因",
+    markets=["csi"],
+    capabilities=["STOCK_ZT_REASON"],
+)
+@map_errors
+def get_reasons(
+    date: str | None = Query(
+        None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description=(
+            "Pool date (YYYY-MM-DD). If not provided, defaults to today "
+            "(zzshare upstream returns the latest available day's reasons "
+            "for an empty date param). Malformed dates return 422."
+        ),
+    ),
+) -> ZTReasonResponse:
+    """Get ZT (涨停) *reasons* — per-stock attribution text + ZT-context fields.
+
+    Powered by ``DataCapability.STOCK_ZT_REASON`` (ZzshareFetcher only,
+    upstream ``review_uplimit_reason``). Distinct from /zt-pools: this
+    endpoint is built for the "why did this stock hit the limit" use
+    case; fields unsupported by zzshare (amount / total_mv /
+    first_seal_time / seal_count) are intentionally absent from the
+    response shape, and the headline ``reason`` field is added.
+    """
+    manager = get_manager()
+
+    # Volatile-data toggle: same convention as /zt-pools — cache only
+    # when the requested date is "today AND a trade day". Historical
+    # dates bypass the cache because they're not recomputed.
+    today_str = date_cls.today().strftime("%Y-%m-%d")
+    query_date = date or today_str
+    is_current_day = (query_date == today_str) and trade_calendar.is_trade_date(today_str)
+
+    cache_key = make_reasons_cache_key(query_date)
+    if is_current_day and is_cache_enabled():
+        hit = cached_lookup(get_reasons_cache, cache_key, "reasons")
+        if hit is not None:
+            return hit
+
+    stocks, origin, _warning = manager.get_zt_reasons(date=query_date)
+
+    if not stocks:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "No ZT reasons found"},
+        )
+
+    reason_stocks = [
+        ZTReasonStock(
+            code=s.get("code", ""),
+            name=s.get("name", ""),
+            price=s.get("price"),
+            change_pct=s.get("change_pct"),
+            circ_mv=s.get("circ_mv"),
+            turnover_rate=s.get("turnover_rate"),
+            lb_count=s.get("lb_count"),
+            last_seal_time=s.get("last_seal_time"),
+            seal_amount=s.get("seal_amount"),
+            zt_count=s.get("zt_count"),
+            reason=s.get("reason"),
+        )
+        for s in stocks
+    ]
+
+    result = ZTReasonResponse(
+        date=query_date,
+        type="reason",
+        total=len(reason_stocks),
+        stocks=reason_stocks,
+        source=origin or "",
+    )
+
+    if is_current_day:
+        cached_store(get_reasons_cache, cache_key, result)
     return result

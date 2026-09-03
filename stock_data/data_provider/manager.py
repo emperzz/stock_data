@@ -939,6 +939,46 @@ class DataFetcherManager:
         )
         return stocks, origin, warning
 
+    def get_zt_reasons(
+        self,
+        date: str | None = None,
+        refresh: bool = False,
+    ) -> tuple[list[dict], str, str | None]:
+        """Get ZT *reasons* (涨停原因) — the 2026-09-03 successor to ``get_zt_pool``
+        for the dedicated ``DataCapability.STOCK_ZT_REASON``.
+
+        Zzshare is the sole provider (single upstream call to
+        ``review_uplimit_reason``). The persistence layer is not
+        involved — this endpoint always serves fresh per-day upstream
+        data; the ``refresh`` flag is accepted for API symmetry with
+        /zt-pools but currently has no effect on the upstream call
+        pattern (zzshare has no internal cache-key to bypass).
+
+        Returns:
+            Tuple of ``(stocks, source, warning)``:
+            - ``stocks`` is the upstream per-stock list shaped by
+              ``ZzshareFetcher.get_zt_reason``.
+            - ``source`` is the serving fetcher name (always ``"zzshare"``
+              today; the contract is in place for a future failover).
+            - ``warning`` is reserved (always ``None`` for now).
+        """
+        from datetime import date as date_cls
+        # Date default: today if omitted (and not a holiday-aware default —
+        # upstream treats an empty date param as "latest available").
+        query_date = date or date_cls.today().strftime("%Y-%m-%d")
+        del refresh  # accepted for API symmetry; not threaded downstream
+
+        def _fetch(fetcher: BaseFetcher) -> list[dict] | None:
+            return fetcher.get_zt_reason(query_date)
+
+        return self._with_failover(
+            DataCapability.STOCK_ZT_REASON,
+            "csi",
+            f"ZT reasons {query_date}",
+            _fetch,
+            return_source=True,
+        )
+
     # ---------- index methods ----------
 
     def get_index_realtime_quote(self, index_code: str) -> UnifiedRealtimeQuote | None:

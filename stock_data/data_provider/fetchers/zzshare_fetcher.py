@@ -138,7 +138,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         | DataCapability.STOCK_LIST
         | DataCapability.TRADE_CALENDAR
         | DataCapability.STOCK_BOARD
-        | DataCapability.STOCK_ZT_POOL
+        | DataCapability.STOCK_ZT_REASON
         | DataCapability.DRAGON_TIGER
         | DataCapability.HOT_TOPICS
     )
@@ -402,7 +402,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             # (per the upstream column list in the project memory and the
             # existing test mock at tests/test_zzshare_fetcher.py:824-825).
             # safe_float rejects "nan" / "--" / inf so a malformed row
-            # doesn't poison downstream is_limit_up derivation.
+            # doesn't poison downstream limit derivation.
             limit_up=safe_float(row.get("high_limit")),
             limit_down=safe_float(row.get("low_limit")),
             turnover_rate=safe_float(row.get("turnover_rate")),
@@ -559,11 +559,6 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             return None
         return list(dates)
 
-    # Pool type -> zzshare endpoint name
-    _POOL_TYPE_MAP: dict[str, str] = {
-        "zt": "review_uplimit_reason",  # primary (richer than uplimit_stocks)
-    }
-
     @staticmethod
     def _normalize_seal_time(raw: str) -> str:
         """Normalize upstream seal time to HH:MM:SS format.
@@ -577,22 +572,32 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             return raw + ":00"
         return raw
 
-    def get_zt_pool(self, pool_type: str, date: str) -> list[dict] | None:
-        """Fetch ZT pool from zzshare review_uplimit_reason.
+    def get_zt_reason(self, date: str) -> list[dict] | None:
+        """Fetch per-stock limit-up *reasons* from zzshare ``review_uplimit_reason``.
 
-        Upstream returns a plate-grouped structure: ``list[dict]`` where each
-        dict has ``{plate_code, plate_name, plate_score, stocks: list[dict]}``.
-        Each stock dict carries per-stock fields (stock_code, stock_name,
-        stock_price, up_limit_keep_times, fengdan_money, actualcirculation_value,
-        etc.). We flatten and deduplicate by stock_code (a stock may appear in
-        multiple plates).
+        Distinct from the legacy ``get_zt_pool`` — this method returns the
+        same upstream payload but renames for callers that consume the
+        capability as "reason data" rather than "ZT pool data" and carries
+        the ``reason`` headline field (the upstream's own per-row
+        attribution text). Driven by ``DataCapability.STOCK_ZT_REASON``;
+        only provider is Zzshare.
 
-        Falls back gracefully: if the endpoint returns empty (no token or
-        no data), returns None so the manager failover chain can try the
-        next fetcher.
+        Upstream returns a plate-grouped structure: ``list[dict]`` where
+        each dict has ``{plate_code, plate_name, plate_score, stocks: list[dict]}``.
+        Per-stock fields kept here are the ones zzshare actually exposes —
+        no fabricated keys for upstream-absent values. In particular:
+
+        - ``last_seal_time`` comes from upstream ``up_limit_time`` (the
+          LAST seal — NOT the first; ``first_seal_time`` is absent by
+          design, see 2026-09-03 refactor note).
+        - ``amount`` / ``total_mv`` / ``seal_count`` are NOT emitted
+          (zzshare's review_uplimit_reason doesn't expose them).
+
+        Falls back gracefully: empty upstream (no token / no data) →
+        ``None`` so the manager failover chain can attempt other fetchers
+        (none currently back this capability, but the contract is in
+        place for future additions).
         """
-        if pool_type not in self._POOL_TYPE_MAP:
-            return None
         self._ensure_api()
         api = self.__class__._api
         if api is None:
@@ -601,7 +606,9 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         try:
             rows = api.review_uplimit_reason(date1=date_yyyymmdd)
         except Exception as e:
-            logger.warning(f"[ZzshareFetcher] review_uplimit_reason({date_yyyymmdd}) failed: {e}")
+            logger.warning(
+                f"[ZzshareFetcher] review_uplimit_reason({date_yyyymmdd}) failed: {e}"
+            )
             return None
         if not rows:
             return None
@@ -621,8 +628,11 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
                     continue
                 seen_codes.add(stock_code)
 
-                # Normalize seal time: upstream "HH:MM" → "HH:MM:SS"
-                seal_time = self._normalize_seal_time(str(row.get("up_limit_time", "")))
+                # upstream "HH:MM" → "HH:MM:SS". Only LAST seal exposed
+                # (up_limit_time); first_seal_time absent by contract.
+                last_seal_time = self._normalize_seal_time(
+                    str(row.get("up_limit_time", ""))
+                )
 
                 out.append(
                     {
@@ -630,16 +640,13 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
                         "name": str(row.get("stock_name", "")),
                         "price": safe_float(row.get("stock_price")),
                         "change_pct": safe_float(row.get("fd_close")),
-                        "amount": None,  # upstream amount is a ratio, not yuan
                         "circ_mv": safe_float(row.get("actualcirculation_value")),
-                        "total_mv": None,  # not available in this endpoint
                         "turnover_rate": safe_float(row.get("turnover_ration_real")),
                         "lb_count": safe_int(row.get("up_limit_keep_times")),
-                        "first_seal_time": seal_time,
-                        "last_seal_time": seal_time,  # same field (single seal event)
+                        "last_seal_time": last_seal_time,
                         "seal_amount": safe_float(row.get("fengdan_money")),
-                        "seal_count": None,  # not available in this endpoint
                         "zt_count": str(row.get("up_limit_desc", "")) or None,
+                        "reason": str(row.get("reason", "")) or None,
                     }
                 )
         return out or None

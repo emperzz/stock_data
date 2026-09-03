@@ -165,7 +165,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 |---|---|---|---|---|---|
 | `TushareFetcher` | 0 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` | `TUSHARE_TOKEN` | |
 | `BaostockFetcher` | 1 | csi | `STOCK_KLINE` `INDEX_KLINE` `DIVIDEND` | none | |
-| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_POOL` `DRAGON_TIGER` `HOT_TOPICS` | `ZZSHARE_TOKEN` (optional) | Board endpoints: not a public source label (unified under `ths`). `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. `get_realtime_quotes(csi) via rt_k(ts_code='60*.SH,68*.SH,0*.SZ,3*.SZ,9*.BJ', fields='all')` (single call; rate-limited 20/min). |
+| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_REASON` `DRAGON_TIGER` `HOT_TOPICS` | `ZZSHARE_TOKEN` (optional) | Board endpoints: not a public source label (unified under `ths`). `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. `STOCK_ZT_POOL` removed 2026-09-03 — Zzshare no longer serves `/zt-pools`; the upstream `review_uplimit_reason` is exposed via dedicated capability `STOCK_ZT_REASON` + `/api/v1/zt-reasons` (only provider). `get_realtime_quotes(csi) via rt_k(ts_code='60*.SH,68*.SH,0*.SZ,3*.SZ,9*.BJ', fields='all')` (single call; rate-limited 20/min). |
 | `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` `STOCK_ZT_POOL` | none | `get_realtime_quotes(csi) via ak.stock_zh_a_spot_em()` (single call). |
 | `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` `INDEX_REALTIME_QUOTE` | none | |
 | `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE` `STOCK_ZT_POOL` `STOCK_INFO` `STOCK_KLINE` (minute fallback) `STOCK_LIST` `STOCK_BOARD` `DIVIDEND` `FUND_FLOW` `HOLDER_NUM` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` | `ZHITU_TOKEN` | Index K-line via `/hz/` prefix |
@@ -194,7 +194,8 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | `get_index_realtime_quote` | `INDEX_REALTIME_QUOTE` | CSI: Akshare→Yfinance→Zhitu; HK/US: Yfinance |
 | `get_stock_name` | n/a | `persistence.stock_list` (DB + `STOCK_LIST` fallback) |
 | `get_trade_calendar` | `TRADE_CALENDAR` | ZzshareFetcher P2 primary |
-| `get_zt_pool` | `STOCK_ZT_POOL` | ZzshareFetcher P2 primary |
+| `get_zt_pool` | `STOCK_ZT_POOL` | AkshareFetcher P3 primary — Zzshare removed 2026-09-03 (see Task #3); falls through to ZhituFetcher P5 |
+| `get_zt_reason` | `STOCK_ZT_REASON` | ZzshareFetcher P2 primary — only provider; powers `/api/v1/zt-reasons` (added 2026-09-03) |
 | `get_dragon_tiger` (per-stock + daily) | `DRAGON_TIGER` | ZzshareFetcher P2 primary; **empty result is a soft failure, fall through to EastMoney** (`empty_is_failure=True`, see [Dragon-Tiger empty-fall-through](#dragon-tiger-empty-fall-through)) |
 | `get_margin_trading` | `MARGIN_TRADING` | |
 | `get_block_trade` | `BLOCK_TRADE` | |

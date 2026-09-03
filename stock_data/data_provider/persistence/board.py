@@ -1244,8 +1244,10 @@ def _enrich_rows_with_market_quote(
       Missing all 13 fillable fields. Enrichment fills all of them.
 
     THS-only fields (change_speed, free_float_shares, float_market_cap)
-    are NEVER set by this helper. ZT-pool join fields (is_limit_up,
-    lb_count) are also not set here (set by route-layer ZT join).
+    are NEVER set by this helper.
+
+    Note 2026-09-03: ZT-pool join fields (is_limit_up, lb_count) have
+    been retired from BoardStockInfo; this helper no longer touches them.
 
     Fillable fields (13) and their UnifiedRealtimeQuote source:
         price                ← q.price

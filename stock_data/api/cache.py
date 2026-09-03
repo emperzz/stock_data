@@ -72,6 +72,7 @@ _north_flow_cache: TTLCache = TTLCache(maxsize=64, ttl=_TTL_NORTH_FLOW)
 _reports_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_REPORTS)
 _announcements_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_ANNOUNCEMENTS)
 _pools_cache: TTLCache = TTLCache(maxsize=128, ttl=_TTL_POOLS)
+_reasons_cache: TTLCache = TTLCache(maxsize=128, ttl=_TTL_POOLS)
 _stock_info_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INFO)
 _news_search_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_SEARCH)
 _news_content_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_CONTENT)
@@ -191,6 +192,11 @@ def get_announcements_cache() -> TTLCache:
 
 def get_pools_cache() -> TTLCache:
     return _pools_cache
+
+
+def get_reasons_cache() -> TTLCache:
+    """In-process cache for ``GET /api/v1/zt-reasons`` (TTL mirrors pools)."""
+    return _reasons_cache
 
 
 def get_stock_info_cache() -> TTLCache:
@@ -347,6 +353,17 @@ def make_announcements_cache_key(stock_code: str, page_size: int) -> str:
 def make_pools_cache_key(pool_type: str, date: str | None) -> str:
     d = date or ""
     return f"pool:{pool_type}:{d}"
+
+
+def make_reasons_cache_key(date: str | None) -> str:
+    """Cache key for ``GET /api/v1/zt-reasons``.
+
+    Uses a ``reason:`` namespace prefix (vs ``pool:`` for /zt-pools) so
+    the two routes' caches can't collide even when both hit the same
+    date.
+    """
+    d = date or ""
+    return f"reason:{d}"
 
 
 def make_stock_info_cache_key(stock_code: str) -> str:

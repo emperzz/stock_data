@@ -822,6 +822,60 @@ current trading day, which is volatile and TTLCache-only).
 }
 ```
 
+> **Note 2026-09-03**: ZzshareFetcher was removed from the STOCK_ZT_POOL
+> failover chain. `/zt-pools` for ZT now routes through Akshare (P3) →
+> Zhitu (P5). Zzshare's `review_uplimit_reason` is exposed separately
+> as `/api/v1/zt-reasons` (DataCapability.STOCK_ZT_REASON) — see below.
+
+---
+
+### 涨停原因 (ZT Reasons)
+
+```bash
+GET /api/v1/zt-reasons?date=2026-05-20
+```
+
+Routed via `STOCK_ZT_REASON` capability. ZzshareFetcher is the sole
+provider (`review_uplimit_reason` upstream). Cached in-process (TTL
+mirrors pools); 404 on empty date.
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `date` | string | today | `YYYY-MM-DD`; malformed dates return 422 |
+
+**Field set (per stock):**
+- `code`, `name`, `price`, `change_pct`, `circ_mv`, `turnover_rate`
+- `lb_count` (连板数), `last_seal_time` (HH:MM:SS), `seal_amount` (元)
+- `zt_count` (e.g. "首板"/"3连板"), `reason` (upstream 涨停原因文本)
+
+**Differences from `/zt-pools`** (per 2026-09-03 refactor):
+- No `amount` / `total_mv` / `seal_count` / `first_seal_time` — these
+  upstream-absent fields are dropped from the contract (zzshare's
+  `review_uplimit_reason` doesn't expose them).
+- `last_seal_time` carries upstream `up_limit_time` directly (which is
+  the **LAST** seal, not the first); `first_seal_time` is intentionally
+  absent.
+- New headline field `reason` per stock.
+
+```json
+{
+  "date": "2026-05-20",
+  "type": "reason",
+  "total": 68,
+  "stocks": [
+    {
+      "code": "002115", "name": "三维通信", "price": 10.95,
+      "change_pct": 9.95, "circ_mv": 7387130000.0, "turnover_rate": 1.43,
+      "lb_count": 1, "last_seal_time": "09:31:00",
+      "seal_amount": 246887000.0, "zt_count": "首板",
+      "reason": "业绩增长+行业利好"
+    }
+  ],
+  "source": "zzshare"
+}
+```
+
 ---
 
 ### Quote Enhancement (PE/PB/Market Cap)

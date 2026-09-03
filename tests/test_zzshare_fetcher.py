@@ -82,22 +82,34 @@ class TestZzshareFetcherMetadata:
     def test_supported_markets(self):
         assert ZzshareFetcher.supported_markets == {"csi"}
 
-    def test_supported_data_types_all_9_caps(self):
-        # STOCK_INFO was removed 2026-07-14 — zzshare upstream endpoint
-        # /v3/open/stock/info returns data:null for every A-share.
+    def test_supported_data_types_excludes_retired_caps(self):
+        """Pin the supported capability set post-2026-09-03 refactor.
+
+        - STOCK_INFO removed 2026-07-14 — upstream /v3/open/stock/info
+          returns data:null for every A-share.
+        - STOCK_ZT_POOL removed 2026-09-03 — Zzshare no longer serves
+          /zt-pools; the upstream review_uplimit_reason is now
+          exposed via get_zt_reason + DataCapability.STOCK_ZT_REASON
+          (added separately in TestZtReason).
+        """
+        from stock_data.data_provider.base import DataCapability as _Dc
+
         expected = {
-            DataCapability.STOCK_KLINE,
-            DataCapability.STOCK_REALTIME_QUOTE,
-            DataCapability.STOCK_LIST,
-            DataCapability.TRADE_CALENDAR,
-            DataCapability.STOCK_BOARD,
-            DataCapability.STOCK_ZT_POOL,
-            DataCapability.DRAGON_TIGER,
-            DataCapability.HOT_TOPICS,
+            _Dc.STOCK_KLINE,
+            _Dc.STOCK_REALTIME_QUOTE,
+            _Dc.STOCK_LIST,
+            _Dc.TRADE_CALENDAR,
+            _Dc.STOCK_BOARD,
+            _Dc.DRAGON_TIGER,
+            _Dc.HOT_TOPICS,
         }
         # supported_data_types is a DataCapability Flag enum value; check membership
         for cap in expected:
             assert cap in ZzshareFetcher.supported_data_types
+
+        # Caps that must NOT be declared (retired / moved to other fetchers).
+        assert _Dc.STOCK_INFO not in ZzshareFetcher.supported_data_types
+        assert _Dc.STOCK_ZT_POOL not in ZzshareFetcher.supported_data_types
 
 
 class TestZzshareFetcherAvailability:
@@ -1288,145 +1300,14 @@ class TestTradeCalendar:
 
 
 # ====================================================================
-# STOCK_ZT_POOL
+# STOCK_ZT_POOL — REMOVED 2026-09-03 (ZzshareFetcher dropped from the
+# /zt-pools failover chain; the upstream ``review_uplimit_reason``
+# endpoint is now exposed via ``get_zt_reason`` with
+# DataCapability.STOCK_ZT_REASON). /zt-pools relies on akshare + zhitu.
+# Capability dropped from supported_data_types; method deleted outright.
+# To re-introduce /zt-pools coverage here: see ``TestZtReason`` further
+# below for the surviving reason-based coverage.
 # ====================================================================
-
-
-class TestZtPool:
-    """Tests for ZzshareFetcher.get_zt_pool — uses review_uplimit_reason endpoint.
-
-    Upstream returns a plate-grouped structure: ``list[dict]`` where each
-    dict has ``{plate_code, plate_name, plate_score, stocks: list[dict]}``.
-    """
-
-    # Real upstream stock shape (probed 2026-07-10 from review_uplimit_reason).
-    _STOCK_ROW = {
-        "id": 364247,
-        "date1": "2026-07-10",
-        "plate_code": "801843",
-        "plate_name": "业绩增长",
-        "plate_score": 20234,
-        "stock_code": "002115",
-        "stock_name": "三维通信",
-        "stock_price": 10.95,
-        "up_limit_keep_times": 1,
-        "up_limit_desc": "首板",
-        "up_limit_type": "封",
-        "up_limit_time": "09:31",
-        "reason": "业绩增长+行业利好",
-        "fengdan_volumn": 225468.0,
-        "fengdan_money": 246887000.0,
-        "fengdan_rate": 2.33,
-        "feng_circulation_rate": 3.34,
-        "actualcirculation_value": 7387130000.0,
-        "turnover_ration_real": 1.43,
-        "market_type": "",
-        "amount": 1.06,
-    }
-
-    def _fetcher_with_api(self, plates=None, hot_raises=False):
-        fetcher = ZzshareFetcher()
-        fake_api = MagicMock()
-        if hot_raises:
-            fake_api.uplimit_hot = MagicMock(side_effect=Exception("upstream error"))
-        else:
-            fake_api.uplimit_hot = MagicMock(return_value={})
-        fake_api.review_uplimit_reason = MagicMock(
-            return_value=plates if plates is not None else []
-        )
-        ZzshareFetcher._api = fake_api
-        ZzshareFetcher._init_attempted = True
-        return fetcher
-
-    def _make_plate(self, stocks, plate_code="801843", plate_name="业绩增长"):
-        """Helper: wrap stock rows in the plate-grouped upstream structure."""
-        return {
-            "plate_code": plate_code,
-            "plate_name": plate_name,
-            "plate_score": 20234,
-            "stocks": stocks,
-        }
-
-    def test_zt_pool_returns_stocks(self):
-        plates = [self._make_plate([dict(self._STOCK_ROW)])]
-        fetcher = self._fetcher_with_api(plates=plates)
-        result = fetcher.get_zt_pool("zt", "2026-05-20")
-        assert result is not None
-        assert len(result) == 1
-        assert result[0]["code"] == "002115"
-        assert result[0]["name"] == "三维通信"
-        assert result[0]["price"] == 10.95
-        assert result[0]["lb_count"] == 1
-        assert result[0]["first_seal_time"] == "09:31:00"
-        assert result[0]["last_seal_time"] == "09:31:00"
-        assert result[0]["seal_amount"] == 246887000.0
-        assert result[0]["circ_mv"] == 7387130000.0
-        assert result[0]["turnover_rate"] == 1.43
-        assert result[0]["zt_count"] == "首板"
-
-    def test_zt_pool_deduplicates_across_plates(self):
-        """Same stock in two plates → only one entry in output."""
-        stock = dict(self._STOCK_ROW)
-        plates = [
-            self._make_plate([stock], plate_code="801843", plate_name="业绩增长"),
-            self._make_plate([stock], plate_code="801574", plate_name="5G概念"),
-        ]
-        fetcher = self._fetcher_with_api(plates=plates)
-        result = fetcher.get_zt_pool("zt", "2026-05-20")
-        assert result is not None
-        assert len(result) == 1
-        assert result[0]["code"] == "002115"
-
-    def test_zt_pool_seal_time_normalized_to_hhmmss(self):
-        """Upstream "HH:MM" → "HH:MM:SS"."""
-        stock = dict(self._STOCK_ROW, up_limit_time="14:55")
-        plates = [self._make_plate([stock])]
-        fetcher = self._fetcher_with_api(plates=plates)
-        result = fetcher.get_zt_pool("zt", "2026-05-20")
-        assert result[0]["first_seal_time"] == "14:55:00"
-        assert result[0]["last_seal_time"] == "14:55:00"
-
-    def test_zt_pool_empty_stocks_returns_none(self):
-        """If review_uplimit_reason returns empty (no token or no data), return None."""
-        fetcher = self._fetcher_with_api(plates=[])
-        result = fetcher.get_zt_pool("zt", "2026-05-20")
-        assert result is None
-
-    def test_zt_pool_plate_with_empty_stocks_list(self):
-        """Plate with empty stocks list → skipped."""
-        plates = [self._make_plate([])]
-        fetcher = self._fetcher_with_api(plates=plates)
-        result = fetcher.get_zt_pool("zt", "2026-05-20")
-        assert result is None
-
-    def test_zt_pool_dt_returns_none(self):
-        """zzshare only supports zt via review_uplimit_reason — dt/zbgc return None."""
-        fetcher = self._fetcher_with_api()
-        assert fetcher.get_zt_pool("dt", "2026-05-20") is None
-        assert fetcher.get_zt_pool("zbgc", "2026-05-20") is None
-
-    def test_zt_pool_sdk_unavailable_returns_none(self, monkeypatch):
-        monkeypatch.delenv("ZZSHARE_TOKEN", raising=False)
-        with patch("importlib.util.find_spec", return_value=None):
-            fetcher = ZzshareFetcher()
-            assert fetcher.get_zt_pool("zt", "2026-05-20") is None
-
-    def test_zt_pool_date_converted_to_yyyymmdd(self):
-        plates = [self._make_plate([dict(self._STOCK_ROW)])]
-        fetcher = self._fetcher_with_api(plates=plates)
-        fetcher.get_zt_pool("zt", "2026-05-20")
-        call = ZzshareFetcher._api.review_uplimit_reason.call_args
-        # date1 should be YYYYMMDD format
-        assert call.kwargs.get("date1") == "20260520"
-
-    def test_zt_pool_none_amount_and_total_mv(self):
-        """amount and total_mv are None (not available in review_uplimit_reason)."""
-        plates = [self._make_plate([dict(self._STOCK_ROW)])]
-        fetcher = self._fetcher_with_api(plates=plates)
-        result = fetcher.get_zt_pool("zt", "2026-05-20")
-        assert result[0]["amount"] is None
-        assert result[0]["total_mv"] is None
-        assert result[0]["seal_count"] is None
 
 
 # ====================================================================

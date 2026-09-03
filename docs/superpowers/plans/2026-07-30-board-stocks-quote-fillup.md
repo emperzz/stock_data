@@ -145,13 +145,15 @@ class TestProjectUnifiedQuoteToDict:
     def test_ths_only_fields_not_in_dict(self):
         """change_speed / free_float_shares / float_market_cap must NOT appear
         in the dict (they're absent, not None). The route layer's
-        _build_board_stock_info reads s.get('change_speed') → default None."""
+        _build_board_stock_info reads s.get('change_speed') → default None.
+        Note (2026-09-03): `is_limit_up` / `lb_count` ZT-pool join fields
+        have been retired, so they are no longer expected keys — kept here
+        as historical reference; the live test suite drops these."""
         from stock_data.data_provider.persistence import board as pb
 
         q = self._q()
         d = pb._project_unified_quote_to_dict("600519", "贵州茅台", q)
-        for k in ("change_speed", "free_float_shares", "float_market_cap",
-                  "is_limit_up", "lb_count"):
+        for k in ("change_speed", "free_float_shares", "float_market_cap"):
             assert k not in d
 
     def test_name_fallback_to_quote_name_when_param_empty(self):

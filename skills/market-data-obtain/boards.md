@@ -39,6 +39,7 @@
 | `sort_order` | `/boards`、`/boards/{code}/stocks` | `asc` / `desc`；默认 `desc` |
 | `top_n` | `/boards/{code}/stocks` | 限制返回条数；默认 50（THS 上游硬上限） |
 | `refresh` | `/boards`、`/boards/{code}/stocks`、`/zt-pools` | 强制从上游刷新；默认 `false` |
+| `refresh` | `/zt-reasons` | 接受但当前无效（zzshare 无内部缓存可绕开；语义保留以备上游变更） |
 
 **`/boards/{code}/stocks` `source='ths'&include_quote=false` 的兜底**：`effective_source` 字段暴露实际服务的 fetcher（`ths` / `zzshare`）——读它判断是否走了兜底，不要读 `data_source`（缓存命中时固定为 `persistence`）。
 
@@ -125,7 +126,6 @@ curl 'http://localhost:8888/api/v1/boards?source=ths&type=industry&include_quote
 | `sort_by`（query） | string | ❌ | — | 排序键（**仅 `source='ths'` + `include_quote=true` 时生效**；否则 400） |
 | `sort_order`（query） | string | ❌ | `desc` | `asc` / `desc`；同上约束 |
 | `top_n`（query） | int | ❌ | `50` | 1-50；THS 上游硬上限 |
-| `with_zt_flags`（query） | bool | ❌ | `false` | `true` 时额外拉涨停池并打标（每条 `is_limit_up` + `lb_count`） |
 
 ### 返回参数
 
@@ -394,7 +394,7 @@ curl 'http://localhost:8888/api/v1/boards/885595/history?frequency=1m&days=2'
 
 获取涨跌停股池（涨停 / 跌停 / 炸板三类型）。`type=zt|dt|zbgc`。
 
-- 主要 fetcher: Zzshare
+- 主要 fetcher: **Akshare (P3)** → Zhitu (P5)。**Zzshare (P2) 已于 2026-09-03 从 failover 链移除**——zzshare 的 `review_uplimit_reason` 端点不再喂给这个端点，而是单独拆为 `STOCK_ZT_REASON` capability + `/api/v1/zt-reasons` 端点（见下方章节）。
 - `date` 默认取今日或最近一个交易日
 - `zt` = 涨停；`dt` = 跌停；`zbgc` = 炸板（**曾涨停但未封住**）
 - 交易日内早于 16:00 时 `warning` 非空（盘中提示，池子仍在变化）
@@ -434,6 +434,75 @@ curl 'http://localhost:8888/api/v1/boards/885595/history?frequency=1m&days=2'
 curl 'http://localhost:8888/api/v1/zt-pools?type=zt'
 curl 'http://localhost:8888/api/v1/zt-pools?type=dt'
 curl 'http://localhost:8888/api/v1/zt-pools?type=zbgc'
+```
+
+> **何时改用 `/zt-reasons`**：仅在需要"为什么涨停"归因文本 + 上游涨停原因类型数据时改走 `/zt-reasons`（见下）。`/zt-pools` 的 `dt` / `zbgc` 类型 zzshare 不支持，依旧只能走 akshare + zhitu。
+
+---
+
+## `GET /api/v1/zt-reasons`
+
+### 功能
+
+获取全市场**当日涨停原因**行级数据（上行同 `review_uplimit_reason` 上游）。这是 2026-09-03 从 `/zt-pools` 中拆分出来的专用端点：`DataCapability.STOCK_ZT_REASON`，**ZzshareFetcher 唯一 provider**。
+
+适用场景：
+- 拉涨停个股 + 上游归因文本质因（"业绩增长+行业利好"等）做题材归类 / 涨停归因摘要
+- 拉涨停个股的"最后封板时间 + 封单金额 + 连板数"做日内动量排序
+
+与 `/zt-pools` 的差异：
+- **不输出** `amount` / `total_mv` / `seal_count` / `first_seal_time`——这些字段 zzshare 上游 `review_uplimit_reason` 不暴露
+- **`last_seal_time` 来自 upstream `up_limit_time`**（最后一次封板时刻, 不是首次；2026-09-03 用户澄清：zzshare 的 `up_limit_time` 是 last 不是 first）
+- **新增 `reason` 字段**承载涨停归因文本质因
+
+### 入参
+
+| 参数名 | 类型 | 必填 | 默认值 | 约束 |
+|---|---|---|---|---|
+| `date`（query） | string | ❌ | 今日 | `YYYY-MM-DD`；非法格式 → 422 |
+
+### 返回参数
+
+顶层结构 `{date, type="reason", total, stocks[], source}`。`source` 固定为 `zzshare`（当前唯一 provider）。`stocks[]` 每条：
+
+| 字段 | 类型 | 单位 | 说明 |
+|---|---|---|---|
+| `code` / `name` | string | — | 股票代码 / 名 |
+| `price` | number | 元 | 当前价 |
+| `change_pct` | number | % | 涨跌幅 |
+| `circ_mv` | number | 元 | 流通市值 |
+| `turnover_rate` | number | % | 换手率（real turnover，命名与 `/zt-pools` 的 `turnover_pct` 不同但语义一致） |
+| `lb_count` | number | — | 连板数 |
+| `last_seal_time` | string | — | **最后一次封板时间** `HH:MM:SS`（取自 upstream `up_limit_time` ——**注意**：是 last 不是 first） |
+| `seal_amount` | number | 元 | 封单金额（`fengdan_money`） |
+| `zt_count` | string | — | 涨停统计标签（如 `"首板"` / `"3连板"`） |
+| `reason` | string / null | — | **涨停归因文本质因**（upstream `reason` 字段）——可能为 `null`（上游某行缺失） |
+
+### 示例
+
+```bash
+# 当日涨停原因
+curl 'http://localhost:8888/api/v1/zt-reasons'
+
+# 历史日期
+curl 'http://localhost:8888/api/v1/zt-reasons?date=2026-05-20'
+
+# 完整响应示例
+{
+  "date": "2026-05-20",
+  "type": "reason",
+  "total": 68,
+  "stocks": [
+    {
+      "code": "002115", "name": "三维通信", "price": 10.95,
+      "change_pct": 9.95, "circ_mv": 7387130000.0, "turnover_rate": 1.43,
+      "lb_count": 1, "last_seal_time": "09:31:00",
+      "seal_amount": 246887000.0, "zt_count": "首板",
+      "reason": "业绩增长+行业利好"
+    }
+  ],
+  "source": "zzshare"
+}
 ```
 
 ---

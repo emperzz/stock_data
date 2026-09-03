@@ -532,24 +532,6 @@ class BoardStockInfo(BaseModel):
         default=None, description="流通市值(元) — THS upstream column 12"
     )
     pe_ratio: float | None = Field(default=None, description="市盈率 — THS upstream column 13")
-    # === 2026-07-27 新增 (?with_zt_flags=true 投影) ===
-    is_limit_up: bool | None = Field(
-        default=None,
-        description=(
-            "True iff stock_code is in the ZT pool for the resolved date "
-            "(populated only when ?with_zt_flags=true). Computed server-side "
-            "by membership-test against manager.get_zt_pool('zt') to avoid "
-            "drift vs upstream 涨停判定 logic."
-        ),
-    )
-    lb_count: int | None = Field(
-        default=None,
-        description=(
-            "连板数 from the ZT pool row (populated only when "
-            "?with_zt_flags=true AND is_limit_up=true). None when the stock "
-            "is not in the ZT pool, or when the upstream row has no lb_count."
-        ),
-    )
 
 
 class BoardListResponse(BaseModel):
@@ -953,6 +935,79 @@ class ZTPoolResponse(BaseModel):
             "涨跌停股池可能仍在变化，建议收盘（16:00 后）重新查询以获取稳定快照。"
             "历史日期或收盘后的当日数据该字段为 null。"
         ),
+    )
+
+
+# ----------------------------------------------------------------------------
+# ZT (涨停原因) — 2026-09-03 新增
+#
+# Distinct from /zt-pools: 这份数据来自 zzshare 的 review_uplimit_reason
+# 上游,作为 ``DataCapability.STOCK_ZT_REASON`` 的唯一 provider。字段集
+# 缩减到 zzshare 上游真实暴露的列 (无 amount / total_mv / first_seal_time /
+# seal_count — 这些都是 /zt-pools 走 akshare+zhitu 时有的字段, zzshare 的
+# 涨停原因行本身没有)。新增 ``reason`` 字段承载上游文本质因。
+#
+# 涨跌停时间语义: zzshare ``up_limit_time`` 是**最后一次**封板时刻, 不是
+# 第一次. 故 ``first_seal_time`` 不存在 / ``last_seal_time`` 承载 upstream
+# up_limit_time. (see 2026-09-03 refactor 笔记)
+# ----------------------------------------------------------------------------
+
+
+class ZTReasonStock(BaseModel):
+    """涨停个股 + 上游涨停原因 (zzshare review_uplimit_reason).
+
+    Distinct from ZTPoolStock in field set: dropped the upstream-absent
+    columns (amount / total_mv / seal_count / first_seal_time) and
+    added the upstream ``reason`` field.
+    """
+
+    code: str = Field(description="Stock code")
+    name: str = Field(default="", description="Stock name")
+    price: float | None = Field(default=None, description="Current price")
+    change_pct: float | None = Field(default=None, description="Change percent")
+    circ_mv: float | None = Field(default=None, description="Float market cap (元)")
+    turnover_rate: float | None = Field(
+        default=None, description="Real turnover rate (%; upstream turnover_ration_real)"
+    )
+    lb_count: int | None = Field(
+        default=None, description="Consecutive limit-up count (连板数)"
+    )
+    last_seal_time: str | None = Field(
+        default=None,
+        description=(
+            "Last seal time HH:MM:SS (from upstream up_limit_time — per 2026-09-03 "
+            "refactor note, up_limit_time represents the LAST seal, not the first). "
+            "first_seal_time is intentionally absent for this capability."
+        ),
+    )
+    seal_amount: float | None = Field(
+        default=None, description="Seal (封板) amount (元; fengdan_money)"
+    )
+    zt_count: str | None = Field(default=None, description="Limit-up stats (e.g. '首板' / '3连板')")
+    reason: str | None = Field(
+        default=None,
+        description=(
+            "涨停原因文本 (upstream ``reason`` field on review_uplimit_reason). "
+            "Non-null iff zzshare exposed a reason row upstream."
+        ),
+    )
+
+
+class ZTReasonResponse(BaseModel):
+    """涨停原因响应 — ``GET /api/v1/zt-reasons``."""
+
+    date: str = Field(description="Query date (YYYY-MM-DD)")
+    type: str = Field(
+        default="reason",
+        description="Pool type discriminator: 'reason' for /zt-reasons (vs zt/dt/zbgc on /zt-pools)",
+    )
+    total: int = Field(description="Total number of stocks with a reason row")
+    stocks: list[ZTReasonStock] = Field(
+        default_factory=list, description="List of stocks with their reason"
+    )
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名 (此端点固定为 'zzshare' — 是 STOCK_ZT_REASON 唯一 provider)",
     )
 
 

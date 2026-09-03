@@ -34,7 +34,7 @@ A 股市场数据获取 skill。本 skill **不绑定任何特定数据 API**—
 | [fundamentals.md](market-data-obtain/fundamentals.md) | §6 基础数据 | 1 |
 | [announcements.md](market-data-obtain/announcements.md) | §7 公告 | 1 |
 | [research-reports.md](market-data-obtain/research-reports.md) | §8 研报 | 2 |
-| [boards.md](market-data-obtain/boards.md) | §9 特殊池 & 板块（不含 agent 批量） | 11 |
+| [boards.md](market-data-obtain/boards.md) | §9 特殊池 & 板块（不含 agent 批量） | 12 |
 | [agent-batch.md](market-data-obtain/agent-batch.md) | §9.1 Agent 批量端点 | 9 |
 | [news.md](market-data-obtain/news.md) | §10 新闻 / 消息 | 6 |
 | [meta.md](market-data-obtain/meta.md) | §11 其他 | 2 |
@@ -186,7 +186,8 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | `GET /api/v1/boards/{board_code}/surges` | `BOARD_SURGES` | 获取板块炒作周期 |
 | `GET /api/v1/stocks/{stock_code}/boards` | `STOCK_BOARD` | 获取个股所属板块（THS 行额外带 7 个 enrichment 字段，契约见 [boards.md](market-data-obtain/boards.md) `/stocks/{code}/boards`；也用于 `agent/stocks/batch-profile` 的 `boards` 块） |
 | `GET /api/v1/boards/{board_code}/history` | `STOCK_BOARD` | 获取板块 K 线 |
-| `GET /api/v1/zt-pools` | `STOCK_ZT_POOL` | 获取涨跌停股池（zt / dt / zbgc） |
+| `GET /api/v1/zt-pools` | `STOCK_ZT_POOL` | 获取涨跌停股池（zt / dt / zbgc；2026-09-03 起走 akshare + zhitu，**zzshare 不再作为 primary**） |
+| `GET /api/v1/zt-reasons` | `STOCK_ZT_REASON` | 获取涨停原因（每行带 `reason` 归因文本 + ZT 上下文；2026-09-03 新增，zzshare 唯一 provider） |
 | `GET /api/v1/dragon-tiger` | `DRAGON_TIGER` | 获取全市场龙虎榜 |
 | `GET /api/v1/stocks/{stock_code}/dragon-tiger` | `DRAGON_TIGER` | 获取个股龙虎榜 |
 | `GET /api/v1/hot-topics` | `HOT_TOPICS` | 获取热点题材（带归因标签） |
@@ -252,11 +253,12 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | 步骤 | 端点 | 失败 fallback |
 |---|---|---|
 | 1. 拉快讯看当日大事 | `/news/flash` | 网络搜索工具 `"今日 A股 快讯"` |
-| 2. 拉个股 / 板块新闻 | `/stocks/{code}/news` 或 `/news/search?q={code or keyword}` | 网络搜索工具 + 关键词 |
-| 3. 拉板块清单确认关联 | `/boards` 或 `/stocks/{code}/boards` | — |
-| 4. 拉资金流验证 | `/stocks/{code}/fund-flow/daily` | — |
-| 5. 拉龙虎榜看机构动向 | `/stocks/{code}/dragon-tiger` | 网络搜索工具 `"{code} 龙虎榜"` |
-| 6. 拉公告 / 研报 | `/stocks/{code}/announcements` / `/stocks/{code}/reports` | 网络搜索工具 |
+| 2. 拉涨停归因文本质因（题材归类常用）| `/zt-reasons?date={当天}` | `/zt-pools?type=zt` + 上游网络搜索 `"涨停原因"` |
+| 3. 拉个股 / 板块新闻 | `/stocks/{code}/news` 或 `/news/search?q={code or keyword}` | 网络搜索工具 + 关键词 |
+| 4. 拉板块清单确认关联 | `/boards` 或 `/stocks/{code}/boards` | — |
+| 5. 拉资金流验证 | `/stocks/{code}/fund-flow/daily` | — |
+| 6. 拉龙虎榜看机构动向 | `/stocks/{code}/dragon-tiger` | 网络搜索工具 `"{code} 龙虎榜"` |
+| 7. 拉公告 / 研报 | `/stocks/{code}/announcements` / `/stocks/{code}/reports` | 网络搜索工具 |
 
 ### 场景 B：复盘当日市场
 
@@ -268,6 +270,7 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | 1. 拉指数行情 | `/indices/{code}/quote` |
 | 1.1 指数全景（一次 fan-out） | `/agent/indices/batch-profile` |
 | 2. 拉涨跌停股池 | `/zt-pools?type=zt` / `/zt-pools?type=dt` |
+| 2.1 拉涨停归因文本质因（题材归类） | `/zt-reasons?date={当天}` |
 | 3. 拉全市场龙虎榜 | `/dragon-tiger` |
 | 4. 拉热点题材 | `/hot-topics` |
 | 5. 拉早报 / 复盘 | `/news/morning-briefing` / `/news/market-recap` |

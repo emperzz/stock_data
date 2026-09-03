@@ -50,7 +50,9 @@
 | `low` | **新增** | `UnifiedRealtimeQuote.low` |
 | `prev_close` | **新增** | `UnifiedRealtimeQuote.pre_close` |
 
-其余字段保持不变(包括 `change_speed` / `free_float_shares` / `float_market_cap` 等 THS 独有字段,以及 `is_limit_up` / `lb_count` 等 ZT-pool join 字段)。
+其余字段保持不变(包括 `change_speed` / `free_float_shares` / `float_market_cap` 等 THS 独有字段)。
+
+> 注 2026-09-03：`is_limit_up` / `lb_count` ZT-pool join 字段已与 `?with_zt_flags` 一起回滚。
 
 **`_build_board_stock_info` 路由投影(`boards.py:69-100`)同步调整**:
 
@@ -83,8 +85,10 @@ def _enrich_rows_with_market_quote(
     Applied to BOTH THS top-50 rows and suffix rows.
 
     THS-only fields (change_speed, free_float_shares, float_market_cap)
-    are NEVER set here. ZT-pool fields (is_limit_up, lb_count) are
-    NEVER set here.
+    are NEVER set here.
+
+    Note 2026-09-03: ZT-pool fields (is_limit_up, lb_count) were never
+    set here; both fields have since been retired entirely.
 
     Fillable fields (13) and their UnifiedRealtimeQuote source:
         price            ← q.price

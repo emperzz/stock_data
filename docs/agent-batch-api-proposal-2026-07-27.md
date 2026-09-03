@@ -39,7 +39,7 @@
 | 类型 | 路径模式 | 例子 |
 |---|---|---|
 | **通用端点**（既有 / 单能力） | `/api/v1/{resource}/{code}/{kind}` 或 `/api/v1/{resource}` | `/stocks/600519/kline`、`/boards`、`/zt-pools` |
-| **既有端点扩展**（query 参数新增） | 同上，**仅追加可选参数** | `/boards/{code}/stocks?with_zt_flags=true` |
+| **既有端点扩展**（query 参数新增） | 同上，**仅追加可选参数** | `/boards/{code}/stocks?with_zt_flags=true`（已移除，见 2026-09-03 refactor） |
 | **Agent 端点**（新增聚合 / 批量） | **`/api/v1/agent/{domain}/{action}`** | `/agent/boards/overlap`、`/agent/stocks/batch/profile` |
 
 **判定标准**：若改动**只是新增 query 参数**（响应 shape 仅追加可选字段）→ 走"既有端点扩展"；若改动是**新路由 / 新响应 shape / 新错误结构** → 走 `/api/v1/agent/` 命名空间。
@@ -78,9 +78,11 @@
 
 本提案共 **7 个变更点**：1 个既有端点扩展 + 6 个 agent 端点。
 
-### 3.1 既有端点扩展（保留 1 个）
+### 3.1 既有端点扩展（保留 1 个；2026-09-03 回滚）
 
-#### 3.1.1 `?with_zt_flags=true` — 板块成分股 + 涨停 join
+> **撤回**：`?with_zt_flags=true` 与 `BoardStockInfo.is_limit_up` / `BoardStockInfo.lb_count` 已于 2026-09-03 完全移除（refactor: 移除 with_zt_flags 与相关代码）。本小节作为历史提案存档保留，仅供追溯设计动机。
+
+#### 3.1.1 `?with_zt_flags=true` — 板块成分股 + 涨停 join *(已撤回)*
 
 **端点**：扩展 `GET /api/v1/boards/{code}/stocks`
 
@@ -485,7 +487,7 @@ Stocks / indices batch-profile 的 composite cache 已在 2026-08-28 同步撤�
 
 | 端点 / 变更 | 文件 |
 |---|---|
-| `?with_zt_flags=true`（既有扩展） | `stock_data/api/routes/boards.py` + `stock_data/api/schemas.py`（扩展 `BoardStockInfo`） |
+| `?with_zt_flags=true`（既有扩展；2026-09-03 已回滚） | ~~`stock_data/api/routes/boards.py` + `stock_data/api/schemas.py`~~ |
 | `POST /api/v1/agent/boards/overlap` | **`stock_data/api/routes/agent.py`** + `schemas.py` |
 | `POST /api/v1/agent/stocks/batch/profile` | **`stock_data/api/routes/agent.py`** + `schemas.py` |
 | `POST /api/v1/agent/stocks/board-overlap` | **`stock_data/api/routes/agent.py`** + `schemas.py` |
@@ -513,7 +515,7 @@ Stocks / indices batch-profile 的 composite cache 已在 2026-08-28 同步撤�
 
 ## 6. Manifest Stage 1 / Stage 2 兼容性
 
-- `?with_zt_flags=true` 是**既有端点扩展**，不需要在 manifest builder 改任何东西。
+- ~~`?with_zt_flags=true` 是**既有端点扩展**，不需要在 manifest builder 改任何东西。~~ (2026-09-03 已回滚)
 - **`/api/v1/agent/*` 端点**是新增 namespace：
   - `@endpoint_meta(capabilities=[])`：聚合端点不映射单 capability。`CAPABILITY_TO_METHOD`（`data_provider/base.py`）不期望为新端点造 flag；manifest builder 对 `capabilities=[]` 已有支持（fetcher drill-down 列表为空是合法状态）。
   - `/explorer/` UI 通过 `@router.post(..., tags=["agent"])` 独立分组（与 `tags=["stocks"]` / `["boards"]` / `["news"]` 平行），侧栏出现"Agent"独立区块。
@@ -547,7 +549,7 @@ Stocks / indices batch-profile 的 composite cache 已在 2026-08-28 同步撤�
 
 | # | 端点 | 类型 | 工作量 | 风险 |
 |---|---|---|---|---|
-| 1.1 | `?with_zt_flags=true` | 既有扩展 | 1-2 小时 | 低 |
+| 1.1 | ~~`?with_zt_flags=true`~~ | 既有扩展（2026-09-03 已回滚） | ~~1-2 小时~~ | ~~低~~ |
 | 1.2 | `POST /api/v1/agent/boards/overlap` | agent 端点 | 2-3 小时 | 低 |
 | 1.3 | `POST /api/v1/agent/stocks/board-overlap` | agent 端点 | 2-3 小时（与 1.2 镜像，复用 helper） | 低 |
 | 1.4 | `POST /api/v1/agent/boards/filter-stocks` | agent 端点 | 2-3 小时 | 低 |
@@ -588,7 +590,7 @@ Stocks / indices batch-profile 的 composite cache 已在 2026-08-28 同步撤�
 
 ## 9. 兼容性 / 回滚
 
-- `?with_zt_flags=true` 默认 `false`，回滚 = 不传新参数即可。
+- ~~`?with_zt_flags=true` 默认 `false`，回滚 = 不传新参数即可。~~ (2026-09-03 已完全回滚：参数 + `BoardStockInfo.is_limit_up` + `BoardStockInfo.lb_count` 字段都移除)
 - 6 个 agent 端点是新增，回滚 = 移除对应 `@router.post` + schema 即可，无既有 client 依赖。
 - `?format=md` 是 opt-in 投影（默认 `format=json`），回滚 = 不传 `format` 参数即可。MD 渲染失败 → 路由层捕获并 fallback 到 JSON 响应（带 warning header），保证 client 不会因 MD bug 整体不可用。
 

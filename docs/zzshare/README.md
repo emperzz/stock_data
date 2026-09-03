@@ -108,7 +108,8 @@ zzshare 接口与 `data_provider.base.DataCapability` 标志位的对应关系�
 | `stock_basic` | `STOCK_LIST` |
 | `trade_days` | `TRADE_CALENDAR` |
 | `plates_list` / `plates_rank` / `plates_stocks` / `market_plate_stocks` | `STOCK_BOARD` |
-| `uplimit_hot` / `uplimit_stocks` | `STOCK_ZT_POOL` |
+| ~~`uplimit_hot` / `uplimit_stocks`~~ | ~~`STOCK_ZT_POOL`~~（2026-09-03 已移除 — Zzshare 不再服务 `/zt-pools`；`/zt-pools` 走 akshare P3 → zhitu P5。`review_uplimit_reason` 通过独立 capability `STOCK_ZT_REASON` + `get_zt_reason` 暴露为 `/zt-reasons`） |
+| `review_uplimit_reason` | `STOCK_ZT_REASON`（2026-09-03 起 — `/api/v1/zt-reasons` 唯一上游） |
 | `lhb_list` / `lhb_detail` / `lhb_stock_history` / `lhb_trader_history` | `DRAGON_TIGER` |
 | `ths_hot_top` / `stock_ths_hot` | `HOT_TOPICS` |
 | `stock_info` | **已停用 2026-07-14** — 见下文 § 3；upstream `info_type=1` 对所有 A 股返 null，不再映射为 `STOCK_INFO` |

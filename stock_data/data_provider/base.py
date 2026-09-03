@@ -179,6 +179,7 @@ class DataCapability(Flag):
     TRADE_CALENDAR = auto()  # 交易日历
     STOCK_BOARD = auto()  # 板块数据（概念/行业板块列表）
     STOCK_ZT_POOL = auto()  # 涨跌停股池（涨停/跌停/炸板）
+    STOCK_ZT_REASON = auto()  # 涨停原因汇总（2026-09-03 新增 — zzshare review_uplimit_reason）
     DRAGON_TIGER = auto()  # 龙虎榜（个股+全市场）
     MARGIN_TRADING = auto()  # 融资融券
     BLOCK_TRADE = auto()  # 大宗交易
@@ -226,6 +227,7 @@ CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.TRADE_CALENDAR: "get_trade_calendar",
     DataCapability.STOCK_BOARD: "get_all_boards",  # default; .stocks variant overrides
     DataCapability.STOCK_ZT_POOL: "get_zt_pool",
+    DataCapability.STOCK_ZT_REASON: "get_zt_reason",
     DataCapability.DRAGON_TIGER: "get_dragon_tiger",  # default; /daily variant overrides
     DataCapability.MARGIN_TRADING: "get_margin_trading",
     DataCapability.BLOCK_TRADE: "get_block_trade",
