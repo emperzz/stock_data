@@ -944,8 +944,10 @@
       flowBoxes = [];
       if (isTB) {
         // agent 按 tier 由上至下堆叠, 最高 tier 在 y=PAD; maxTier=0 时与旧版像素一致。
-        const TIER_H = 60;
-        const rowTop = PAD + maxAgentTier * TIER_H + 170;   // 顶部留走廊画 composed-of
+        // TIER_H: tier 行间距(竖直)。多 tier 时多加 30 顶部 padding 防单节点贴工具栏。
+        const TIER_H = 100;
+        const topPad = maxAgentTier > 0 ? 30 : 0;
+        const rowTop = PAD + topPad + maxAgentTier * TIER_H + 170;   // 顶部留走廊画 composed-of
         // R1: 分组框从左到右横排(框内端点竖排)。
         let x = PAD;
         for (const [sid, list] of cols) {
@@ -962,7 +964,7 @@
         const contentW = Math.max(PAD * 2 + totalAgentCount * 120, boxRight + PAD);
         const agentDesired = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.x)) : contentW / 2; };
         for (const { tier, list } of populatedTiers) {
-          const y = PAD + (maxAgentTier - tier) * TIER_H;
+          const y = PAD + topPad + (maxAgentTier - tier) * TIER_H;
           floatRow(list, agentDesired, y, n => n.label.length * ROW_W + 60, PAD, contentW - PAD, 60);
           centerRow(list, n => n.label.length * ROW_W + 60, PAD, contentW - PAD);
         }
@@ -977,7 +979,9 @@
 
       // LR: agent tier 由左至右展开, 最高 tier 在最左(per spec §4.3 deepest-first);
       //     maxAgentTier=0 时 .reverse() 无操作, 单 tier 仍在 x=PAD, 像素一致。
-      const TIER_GAP = 70;
+      // TIER_GAP: tier 列间距(水平)。多 tier 时放宽以让单节点 column 不显局促;
+      //          maxAgentTier=0 时保持 OLD 值 70 以保证 pixel-identical。
+      const TIER_GAP = maxAgentTier > 0 ? 100 : 70;
       let agentColCursor = PAD;
       // populatedTiers 已按 tier ASC 排序; 反转后最深 tier 在最左。
       const tierPositions = populatedTiers.slice().reverse().map(({ tier, list }) => {
