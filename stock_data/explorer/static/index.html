@@ -1058,6 +1058,31 @@
         }
       }
 
+      // 收集所有 agent 端点路径, 用于后续计算 _agentTier。
+      // 仅 cross-agent depends_on 计入 tier(对非 agent 的依赖不影响)。
+      const agentPaths = new Set();
+      for (const sec of manifest.sections) {
+        if (sec.id === "agent") {
+          for (const ep of sec.endpoints) agentPaths.add(ep.path);
+        }
+      }
+
+      // DFS + 环检测算 tier。_stack 命中返回 0(降级到旧单行行为, 无回归)。
+      function agentTier(path, _stack = new Set()) {
+        if (_stack.has(path)) return 0;
+        const ep = epByPath[path];
+        if (!ep || !agentPaths.has(path)) return 0;
+        let max = 0;
+        _stack.add(path);
+        for (const d of (ep.depends_on || [])) {
+          if (d.kind === "endpoint" && agentPaths.has(d.target_path)) {
+            max = Math.max(max, agentTier(d.target_path, _stack) + 1);
+          }
+        }
+        _stack.delete(path);
+        return max;
+      }
+
       // Endpoint nodes.
       for (const sec of manifest.sections) {
         for (const ep of sec.endpoints) {
@@ -1067,8 +1092,10 @@
             && (!ep.capabilities || ep.capabilities.length === 0)
             && !isAgent;
           let shape, color, size;
+          let agentTierValue = 0;
           if (isAgent) {
             shape = "diamond"; color = { border: "#af52de", background: "#f3e8ff", highlight: { border: "#af52de", background: "#e9d5ff" } }; size = 18;
+            agentTierValue = agentTier(ep.path);
           } else if (isPure) {
             shape = "dot"; color = { background: textMuted, border: textMuted }; size = 8;
           } else {
@@ -1084,6 +1111,7 @@
             title: `${ep.method} ${ep.path}\n${ep.summary || ""}`,
             group: "endpoint",
             _ep: ep,
+            _agentTier: agentTierValue,
           });
         }
       }
