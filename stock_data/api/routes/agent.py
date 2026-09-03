@@ -2132,6 +2132,95 @@ def render_market_stats_as_md(p: MarketStatsResponse) -> str:
     return "\n".join(out)
 
 
+def _render_recap_indices_table_md(indices: MarketRecapIndicesBlock) -> str:
+    """Render the 3-index block as a markdown table with ALL 14 IndexQuote
+    columns (per spec §3.5 + CLAUDE.md `?format=md` "no field dropped"
+    contract). Null rows are rendered with explicit `—` markers.
+
+    Note: this table is wider than a human-friendly recap table, but the
+    recap endpoint targets LLM agents that prefer machine-readability.
+    The CLAUDE.md contract is satisfied by listing every IndexQuote field
+    by name, regardless of value.
+    """
+    lines: list[str] = ["## 指数快讯", ""]
+    cols = [
+        "code", "name", "source", "current_price", "change_amount",
+        "change_pct", "open", "high", "low", "prev_close",
+        "volume", "volume_unit", "amount", "update_time",
+    ]
+    lines.append("| " + " | ".join(cols) + " |")
+    lines.append("| " + " | ".join("---" for _ in cols) + " |")
+    for label, code, label_cn in (
+        ("sh", "000001", "上证综指"),
+        ("shenzhen_composite", "399001", "深证成指"),
+        ("chinext", "399006", "创业板指"),
+    ):
+        q = getattr(indices, label)
+        if q is None:
+            lines.append("| " + " | ".join(["—"] * len(cols)) + " |")
+            continue
+        # Helper: format a numeric field with `—` for None
+        def _num(v, fmt: str) -> str:
+            if v is None:
+                return "—"
+            if isinstance(v, float):
+                return format(v, fmt)
+            return str(v)
+
+        cells = [
+            q.code or code,
+            q.name or label_cn,
+            q.source or "—",
+            _num(q.current_price, ".2f"),
+            _num(q.change_amount, ".2f"),
+            (
+                f"{q.change_pct:+.2f}%"
+                if isinstance(q.change_pct, (int, float))
+                else "—"
+            ),
+            _num(q.open, ".2f"),
+            _num(q.high, ".2f"),
+            _num(q.low, ".2f"),
+            _num(q.prev_close, ".2f"),
+            _num(q.volume, ",d"),
+            q.volume_unit or "share",
+            _num(q.amount, ".0f"),
+            q.update_time or "—",
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def _render_recap_errors_md(errors: list[MarketRecapErrorEntry]) -> str:
+    """Render the top-level errors block as a bullet list."""
+    if not errors:
+        return ""
+    lines = ["## 错误", ""]
+    for e in errors:
+        lines.append(f"- `{e.block}`: {e.error} — {e.message}")
+    return "\n".join(lines)
+
+
+def render_market_recap_as_md(p: MarketRecapResponse) -> str:
+    """Render the market-recap aggregation as Markdown.
+
+    Reuses render_market_context_as_md and render_market_stats_as_md
+    for the verbatim sub-blocks (preserves their MD-completeness
+    contracts). Adds a 3-row index table and a top-level error block.
+    Sections are joined with `\\n\\n---\\n\\n` so each is visually
+    distinct in markdown renderers.
+    """
+    parts = [
+        render_market_context_as_md(p.context),
+        render_market_stats_as_md(p.stats),
+        _render_recap_indices_table_md(p.indices),
+    ]
+    err_md = _render_recap_errors_md(p.errors)
+    if err_md:
+        parts.append(err_md)
+    return "\n\n---\n\n".join(parts)
+
+
 # Map route → MD template. Routes look this up in the handler.
 _MD_TEMPLATES: dict[str, Callable] = {
     "boards/stock-overlap": render_boards_overlap_as_md,
@@ -2141,6 +2230,7 @@ _MD_TEMPLATES: dict[str, Callable] = {
     "market-context": render_market_context_as_md,
     "stocks/batch-profile": render_stocks_batch_profile_as_md,
     "market-stats": render_market_stats_as_md,
+    "market-recap": render_market_recap_as_md,
     "boards/batch-profile": render_boards_batch_profile_as_md,
 }
 

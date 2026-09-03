@@ -2,6 +2,7 @@
 
 from stock_data.api.schemas import (
     IndexQuote,
+    MarketContextMessages,
     MarketContextResponse,
     MarketRecapErrorEntry,
     MarketRecapIndicesBlock,
@@ -14,6 +15,7 @@ from stock_data.api.routes.agent import (
     _index_quote_from_unified,
     build_market_context_response,
     build_market_stats_response,
+    render_market_recap_as_md,
 )
 from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
 
@@ -194,3 +196,73 @@ def test_index_quote_from_unified_handles_missing_fields():
     assert out.volume is None
     assert out.volume_unit == "share"
     assert out.update_time is None
+
+
+def _stub_response() -> "MarketRecapResponse":
+    # Use a real MarketContextMessages (NOT None) so render_market_context_as_md
+    # exercises the full path — a `None` falls through to the JSON-fallback in
+    # _render_markdown and silently passes the assertions below.
+    ctx = MarketContextResponse.model_construct(
+        trade_date="2026-09-03",
+        is_trade_day=True,
+        market_session="intraday",
+        messages=MarketContextMessages(
+            morning_briefing={"article_id": 1, "title": "早报"},
+            market_recap=None,
+            flash_news=[],
+        ),
+        summary={"requested": 3, "ok": 2, "failed": 1, "elapsed_ms": 10},
+    )
+    stats = MarketStatsResponse.model_construct(
+        stocks=None,
+        boards=None,
+        limit_pools=None,
+        errors=[],
+        summary={"requested": 1, "ok": 1, "failed": 0, "elapsed_ms": 10},
+    )
+    indices = MarketRecapIndicesBlock(
+        sh=IndexQuote(code="000001", name="上证综指", change_pct=0.5, amount=1.0),
+        shenzhen_composite=IndexQuote(code="399001", name="深证成指", change_pct=1.2, amount=2.0),
+        chinext=None,
+    )
+    return MarketRecapResponse(
+        context=ctx,
+        stats=stats,
+        indices=indices,
+        errors=[MarketRecapErrorEntry(block="indices.chinext", error="X", message="boom")],
+        summary={"requested": 5, "ok": 4, "failed": 1, "elapsed_ms": 100},
+    )
+
+
+def test_render_market_recap_as_md_contains_all_sub_blocks():
+    md = render_market_recap_as_md(_stub_response())
+    # Reuses context renderer (real messages, not None — exercises the markdown path).
+    # render_market_context_as_md emits `**is_trade_day**: True` (not the bare
+    # field name `trade_date`); match the rendered label, not the Pydantic field.
+    assert "is_trade_day" in md
+    assert "2026-09-03" in md  # the value of trade_date
+    assert "早报" in md  # from MarketContextMessages.morning_briefing
+    # Reuses stats renderer (uses Chinese headings: 个股/板块/涨跌停, plus
+    # the summary line which contains "requested"/"ok" keys verbatim).
+    assert "个股" in md or "板块" in md or "涨跌停" in md or "requested" in md
+    # Index block — codes + names appear for non-null rows
+    assert "000001" in md
+    assert "399001" in md
+    assert "上证综指" in md
+    assert "深证成指" in md
+    # Error block surfaced
+    assert "indices.chinext" in md
+    assert "boom" in md
+
+
+def test_render_market_recap_as_md_includes_all_14_indexquote_columns():
+    """Spec §3.5: the index table must include all 14 IndexQuote columns per row
+    to satisfy the CLAUDE.md `?format=md` 'no field dropped' contract."""
+    md = render_market_recap_as_md(_stub_response())
+    expected_cols = [
+        "code", "name", "source", "current_price", "change_amount",
+        "change_pct", "open", "high", "low", "prev_close",
+        "volume", "volume_unit", "amount", "update_time",
+    ]
+    missing = [c for c in expected_cols if c not in md]
+    assert not missing, f"IndexQuote columns missing from MD: {missing}"
