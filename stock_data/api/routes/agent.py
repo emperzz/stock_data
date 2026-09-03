@@ -1216,6 +1216,126 @@ def _board_stats_from_aggregate(agg: AggregateStats, source: str) -> "BoardStats
     return BoardStats(**_stats_payload(agg), source=source)
 
 
+def build_market_stats_response(
+    include_boards: bool,
+    include_pools: bool,
+    target_date: str,
+) -> MarketStatsResponse:
+    """Build the Pydantic model for /agent/market-stats.
+
+    Pure logic — cache lookup/store lives in the caller. Per-block
+    fan-out with per-block error isolation:
+    - stocks block: manager.get_realtime_quotes('csi') (one upstream call)
+    - boards block: stock_board_cache.get_board_list(...) (one upstream call)
+    - pools block: delegated to the existing module-level helper
+      `_compute_limit_pools_block(manager, target_date)` (defined at
+      `agent.py:568`) so the 3-tuple unpack
+      (`zt_pool`, `dt_pool`, `_src`, `_warn`) and the per-pool
+      `MarketStatsErrorEntry` literals live in one place. `ok += 1`
+      is incremented **once** for the whole pools block (not per pool),
+      matching the original handler's accounting at `agent.py:1346`.
+
+    A single upstream failure sets that block to null and appends to
+    `errors[]`; the rest continue.
+    """
+    started = time.monotonic()
+    manager = get_manager()
+    errors: list[MarketStatsErrorEntry] = []
+    stocks_stats: StockStats | None = None
+    boards_stats: BoardStats | None = None
+    limit_pools_block: MarketStatsLimitPools | None = None
+
+    requested = 1 + (1 if include_boards else 0) + (1 if include_pools else 0)
+    ok = 0
+
+    # --- stocks block (always attempted) ---
+    try:
+        quotes, _src = manager.get_realtime_quotes("csi")
+        values = [
+            q.change_pct for q in (quotes or []) if getattr(q, "change_pct", None) is not None
+        ]
+        agg = compute_aggregate(
+            values,
+            bin_width=STOCK_BUCKET_BIN_WIDTH,
+            buckets_template=build_stock_buckets(),
+        )
+        stocks_stats = _stock_stats_from_aggregate(agg)
+        ok += 1
+    except Exception as exc:
+        logger.warning(f"[agent/market-stats] stocks failed: {exc}", exc_info=True)
+        errors.append(
+            MarketStatsErrorEntry(
+                block="stocks",
+                error=type(exc).__name__,
+                message=str(exc),
+            )
+        )
+
+    # --- boards block (skipped when include_boards=false) ---
+    if include_boards:
+        try:
+            boards, src = stock_board_cache.get_board_list(
+                board_type=None,
+                source="ths",
+                include_quote=True,
+                manager=manager,
+            )
+            values = [
+                b.get("change_pct")
+                for b in (boards or [])
+                if isinstance(b.get("change_pct"), (int, float))
+                and not isinstance(b.get("change_pct"), bool)
+            ]
+            agg = compute_aggregate(
+                values,
+                bin_width=BOARD_BUCKET_BIN_WIDTH,
+                buckets_template=build_board_buckets(),
+            )
+            boards_stats = _board_stats_from_aggregate(agg, src or "ths")
+            ok += 1
+        except Exception as exc:
+            logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
+            errors.append(
+                MarketStatsErrorEntry(
+                    block="boards",
+                    error=type(exc).__name__,
+                    message=str(exc),
+                )
+            )
+
+    # --- limit_pools block ---
+    # The field is ALWAYS present in the JSON response (per spec §4 wire
+    # format), even when include_pools=false. When disabled, we populate
+    # it with `MarketStatsLimitPools(zt=None, dt=None)` so consumers
+    # see a stable shape; the field's presence is NOT a signal that
+    # pools were attempted. (That signal is in `summary.requested`.)
+    if include_pools:
+        try:
+            limit_pools_block, pool_errors = _compute_limit_pools_block(manager, target_date)
+            errors.extend(pool_errors)
+            # Per-pool failures don't decrement ok — the block call DID
+            # complete (with partial data). Empty upstream results also
+            # count as success (caller distinguishes via inner [] vs null).
+            ok += 1
+        except Exception as exc:
+            logger.warning(f"[agent/market-stats] pools failed: {exc}", exc_info=True)
+            errors.append(
+                MarketStatsErrorEntry(
+                    block="pools",
+                    error=type(exc).__name__,
+                    message=str(exc),
+                )
+            )
+
+    return MarketStatsResponse(
+        stocks=stocks_stats,
+        boards=boards_stats,
+        limit_pools=limit_pools_block or MarketStatsLimitPools(zt=None, dt=None),
+        errors=errors,
+        summary=_batch_summary(requested, ok, started),
+    )
+
+
 @router.get(
     "/agent/market-stats",
     response_model=MarketStatsResponse,
@@ -1293,93 +1413,10 @@ def get_market_stats(
     if hit is not None:
         return _render_agent("market-stats", hit, format)
 
-    started = time.monotonic()
-    manager = get_manager()
-    errors: list[MarketStatsErrorEntry] = []
-    stocks_stats: StockStats | None = None
-    boards_stats: BoardStats | None = None
-    limit_pools_block: MarketStatsLimitPools | None = None
-
-    requested = 1 + (1 if include_boards else 0) + (1 if include_pools else 0)
-    ok = 0
-
-    # --- stocks block (always attempted) ---
-    try:
-        quotes, _src = manager.get_realtime_quotes("csi")
-        values = [
-            q.change_pct for q in (quotes or []) if getattr(q, "change_pct", None) is not None
-        ]
-        agg = compute_aggregate(
-            values,
-            bin_width=STOCK_BUCKET_BIN_WIDTH,
-            buckets_template=build_stock_buckets(),
-        )
-        stocks_stats = _stock_stats_from_aggregate(agg)
-        ok += 1
-    except Exception as exc:
-        logger.warning(f"[agent/market-stats] stocks failed: {exc}", exc_info=True)
-        errors.append(
-            MarketStatsErrorEntry(
-                block="stocks",
-                error=type(exc).__name__,
-                message=str(exc),
-            )
-        )
-
-    # --- boards block (skipped when include_boards=false) ---
-    if include_boards:
-        try:
-            boards, src = stock_board_cache.get_board_list(
-                board_type=None,
-                source="ths",
-                include_quote=True,
-                manager=manager,
-            )
-            values = [
-                b.get("change_pct")
-                for b in (boards or [])
-                if isinstance(b.get("change_pct"), (int, float))
-                and not isinstance(b.get("change_pct"), bool)
-            ]
-            agg = compute_aggregate(
-                values,
-                bin_width=BOARD_BUCKET_BIN_WIDTH,
-                buckets_template=build_board_buckets(),
-            )
-            boards_stats = _board_stats_from_aggregate(agg, src or "ths")
-            ok += 1
-        except Exception as exc:
-            logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
-            errors.append(
-                MarketStatsErrorEntry(
-                    block="boards",
-                    error=type(exc).__name__,
-                    message=str(exc),
-                )
-            )
-
-    # --- limit_pools block ---
-    # The field is ALWAYS present in the JSON response (per spec §4 wire
-    # format), even when include_pools=false. When disabled, we populate
-    # it with `MarketStatsLimitPools(zt=None, dt=None)` so consumers
-    # see a stable shape; the field's presence is NOT a signal that
-    # pools were attempted. (That signal is in `summary.requested`.)
-    if include_pools:
-        limit_pools_block, pool_errors = _compute_limit_pools_block(manager, target_date)
-        errors.extend(pool_errors)
-        # Per-pool failures don't decrement ok — the block call DID
-        # complete (with partial data). Empty upstream results also
-        # count as success (caller distinguishes via inner [] vs null).
-        ok += 1
-    else:
-        limit_pools_block = MarketStatsLimitPools(zt=None, dt=None)
-
-    result = MarketStatsResponse(
-        stocks=stocks_stats,
-        boards=boards_stats,
-        limit_pools=limit_pools_block,
-        errors=errors,
-        summary=_batch_summary(requested, ok, started),
+    result = build_market_stats_response(
+        include_boards=include_boards,
+        include_pools=include_pools,
+        target_date=target_date,
     )
     cached_store(get_quote_cache, cache_key, result)
     return _render_agent("market-stats", result, format)

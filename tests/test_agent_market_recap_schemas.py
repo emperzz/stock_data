@@ -10,7 +10,7 @@ from stock_data.api.schemas import (
 )
 
 from stock_data.api.cache import make_market_recap_cache_key
-from stock_data.api.routes.agent import build_market_context_response
+from stock_data.api.routes.agent import build_market_context_response, build_market_stats_response
 
 
 def test_market_recap_indices_block_accepts_three_quotes():
@@ -112,3 +112,28 @@ def test_build_market_context_response_returns_model(monkeypatch):
     assert result.messages.market_recap is None
     assert result.messages.flash_news == []
     assert result.summary["requested"] == 3
+
+
+def test_build_market_stats_response_returns_model(monkeypatch):
+    """Smoke test: the helper returns a MarketStatsResponse for valid inputs."""
+    from stock_data.api.routes import agent as agent_mod
+
+    class _FakeManager:
+        def get_realtime_quotes(self, market):
+            return ([], "akshare")
+
+    monkeypatch.setattr(agent_mod, "get_manager", lambda: _FakeManager())
+    # Patch the `stock_board_cache` symbol as bound on agent_mod (it's
+    # imported into agent.py's namespace at module load; the helper resolves
+    # it as a free variable via the module globals).
+    monkeypatch.setattr(
+        agent_mod.stock_board_cache, "get_board_list", lambda **kwargs: ([], "ths")
+    )
+
+    result = build_market_stats_response(
+        include_boards=True, include_pools=False, target_date="2026-09-03"
+    )
+    assert isinstance(result, MarketStatsResponse)
+    assert result.summary["requested"] == 2  # stocks + boards (no pools)
+    assert result.limit_pools.zt is None
+    assert result.limit_pools.dt is None
