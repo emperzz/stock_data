@@ -975,10 +975,25 @@
         return { w: contentW, h };
       }
 
-      // LR: 中间层 section 框改为纵向堆叠(从上到下), 各框仍是端点竖列。
-      const agentColW = agents.length
-        ? Math.max(...agents.map(n => n.label.length * ROW_W + 70)) : 120;
-      const boxColX = PAD + agentColW + 70;
+      // LR: agent tier 由左至右展开, 最高 tier 在最左(per spec §4.3 deepest-first);
+      //     maxAgentTier=0 时 .reverse() 无操作, 单 tier 仍在 x=PAD, 像素一致。
+      const TIER_GAP = 70;
+      let agentColCursor = PAD;
+      // populatedTiers 已按 tier ASC 排序; 反转后最深 tier 在最左。
+      const tierPositions = populatedTiers.slice().reverse().map(({ tier, list }) => {
+        // 严格匹配 OLD 代码(无 120 floor)以保证 maxTier=0 下 pixel-identical。
+        // 空 list 的 120 fallback 是死分支(populatedTiers 已 filter),但保留作为防御。
+        const w = list.length
+          ? Math.max(...list.map(n => n.label.length * ROW_W + 70))
+          : 120;
+        const pos = { tier, list, x: agentColCursor, w };
+        agentColCursor += w + TIER_GAP;
+        return pos;
+      });
+      const agentColW = tierPositions.length
+        ? agentColCursor - PAD - TIER_GAP
+        : 120;
+      const boxColX = PAD + agentColW + TIER_GAP;
       let cy = PAD;
       let colMaxW = 10;
       for (const [sid, list] of cols) {
@@ -993,14 +1008,16 @@
       const fxMaxW = fxNodes.length ? Math.max(...fxNodes.map(n => n.label.length * 9 + 80)) : 220;
       const yMax = Math.max(cy - 46 + HEAD, PAD + 60);
       const aDesY = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.y)) : PAD + HEAD; };
-      floatCol(agents, aDesY, PAD, PAD, yMax, 46);
-      centerCol(agents, () => 40, PAD, yMax);
+      for (const { list, x } of tierPositions) {
+        floatCol(list, aDesY, x, PAD, yMax, 46);
+        centerCol(list, () => 40, PAD, yMax);
+      }
       const fDesY = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.y)) : PAD + HEAD; };
       floatCol(fxNodes, fDesY, fxX, PAD, yMax, 36);
       centerCol(fxNodes, () => 40, PAD, yMax);
       const colBottom = a => a.length ? Math.max(...a.map(n => n.y + 40)) : 0;
       const contentW = fxX + fxMaxW + PAD;
-      const contentH = Math.max(yMax, colBottom(agents), colBottom(fxNodes)) + PAD;
+      const contentH = Math.max(yMax, colBottom(populatedTiers.flatMap(t => t.list)), colBottom(fxNodes)) + PAD;
       nodes.push(...anchorOf(contentW, contentH));
       return { w: contentW, h: contentH };
     }
