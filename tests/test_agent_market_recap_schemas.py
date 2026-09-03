@@ -9,6 +9,8 @@ from stock_data.api.schemas import (
     MarketStatsResponse,
 )
 
+from stock_data.api.cache import make_market_recap_cache_key
+
 
 def test_market_recap_indices_block_accepts_three_quotes():
     block = MarketRecapIndicesBlock(
@@ -65,3 +67,15 @@ def test_market_recap_response_constructs_with_minimum_required_fields():
     assert resp.errors == []
     assert resp.indices.sh is None
     assert resp.summary["ok"] == 5
+
+
+def test_make_market_recap_cache_key_format():
+    key = make_market_recap_cache_key(20, True, True)
+    assert key == "agent_market_recap:20:True:True"
+
+
+def test_make_market_recap_cache_key_changes_with_each_param():
+    base = make_market_recap_cache_key(20, True, True)
+    assert make_market_recap_cache_key(40, True, True) != base
+    assert make_market_recap_cache_key(20, False, True) != base
+    assert make_market_recap_cache_key(20, True, False) != base

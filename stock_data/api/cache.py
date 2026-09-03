@@ -554,3 +554,20 @@ def make_market_stats_cache_key(
     the route handler.
     """
     return f"agent_market_stats:{include_boards}:{include_pools}:{trade_date}"
+
+
+def make_market_recap_cache_key(
+    flash_limit: int,
+    include_boards: bool,
+    include_pools: bool,
+) -> str:
+    """Cache key for GET /api/v1/agent/market-recap.
+
+    3-segment colon-joined shape (no `trade_date` segment — recap
+    always targets the server-resolved latest trade date; there is
+    no user-facing date param). All three knobs participate:
+    changing any produces a materially different response
+    (different context flash count, different stats blocks,
+    different pools). 60s TTL via get_quote_cache.
+    """
+    return f"agent_market_recap:{flash_limit}:{include_boards}:{include_pools}"
