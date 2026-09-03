@@ -82,9 +82,13 @@ from ..schemas import (
     FilterStocksRequest,
     FilterStocksResponse,
     IndexProfile,
+    IndexQuote,
     IndicesBatchProfileResponse,
     MarketContextMessages,
     MarketContextResponse,
+    MarketRecapErrorEntry,
+    MarketRecapIndicesBlock,
+    MarketRecapResponse,
     MarketStatsErrorEntry,
     MarketStatsLimitPools,
     MarketStatsResponse,
@@ -1046,6 +1050,94 @@ def _build_minimal_quote_from_unified(q) -> MinimalQuote:
         limit_up=q.limit_up,
         limit_down=q.limit_down,
     )
+
+
+def _index_quote_from_unified(code: str, q) -> IndexQuote | None:
+    """Convert a UnifiedRealtimeQuote (or None) to an IndexQuote schema.
+
+    Defensive: uses getattr with None defaults so fetcher-side field
+    variance doesn't raise. Always sets volume_unit="share" per spec §3.4
+    (indices are always quoted in shares, never wan_shou).
+
+    Field-name mapping (UnifiedRealtimeQuote → IndexQuote):
+      open_price   → open
+      pre_close    → prev_close
+      source.value → source  (RealtimeSource enum → str)
+      update_time  → None    (UnifiedRealtimeQuote has no update_time)
+
+    `q` is intentionally untyped (mirrors `_build_minimal_quote_from_unified`
+    at line 1010) to avoid an explicit import of UnifiedRealtimeQuote —
+    the runtime check via `getattr` + the `is None` guard is the contract.
+    """
+    if q is None:
+        return None
+    src = getattr(q, "source", None)
+    # RealtimeSource is a str Enum; .value gives the slug the IndexQuote
+    # schema expects (e.g. "akshare"). If the fetcher didn't report a
+    # source, RealtimeSource.FALLBACK is the default — treat that as
+    # "no source" (empty string) so clients don't see the placeholder.
+    if hasattr(src, "value"):
+        src_str = "" if src.name == "FALLBACK" else src.value
+    else:
+        src_str = src or ""
+    return IndexQuote(
+        code=code,
+        name=getattr(q, "name", "") or "",
+        source=src_str,
+        current_price=float(getattr(q, "price", 0.0) or 0.0),
+        change_amount=getattr(q, "change_amount", None),
+        change_pct=getattr(q, "change_pct", None),
+        open=getattr(q, "open_price", None),
+        high=getattr(q, "high", None),
+        low=getattr(q, "low", None),
+        prev_close=getattr(q, "pre_close", None),
+        volume=getattr(q, "volume", None),
+        volume_unit="share",
+        amount=getattr(q, "amount", None),
+        update_time=None,
+    )
+
+
+# Fixed CSI index codes for the market-recap aggregation. v1 is hard-coded
+# (上证 / 深成指 / 创业板); see spec §2.1 / §7 for the deferred
+# configurable-list path.
+_RECAP_INDICES: tuple[tuple[str, str], ...] = (
+    ("sh", "000001"),
+    ("shenzhen_composite", "399001"),
+    ("chinext", "399006"),
+)
+
+
+def _build_three_index_quotes_block(
+    manager,
+) -> tuple[MarketRecapIndicesBlock, list[MarketRecapErrorEntry]]:
+    """Fetch the 3 fixed index quotes, with per-index error isolation.
+
+    Returns (block, errors). Each missing index is null in the block;
+    its failure is appended to errors. Sequential (not concurrent)
+    because manager.get_index_realtime_quote → _with_failover mutates
+    per-fetcher circuit-breaker state and is not re-entrant safe.
+    """
+    block_dict: dict[str, IndexQuote | None] = {}
+    errors: list[MarketRecapErrorEntry] = []
+    for label, code in _RECAP_INDICES:
+        try:
+            q = manager.get_index_realtime_quote(code)
+            block_dict[label] = _index_quote_from_unified(code, q)
+        except Exception as exc:
+            logger.warning(
+                f"[agent/market-recap] indices.{label} ({code}) failed: {exc}",
+                exc_info=True,
+            )
+            errors.append(
+                MarketRecapErrorEntry(
+                    block=f"indices.{label}",  # type: ignore[arg-type]
+                    error=type(exc).__name__,
+                    message=str(exc),
+                )
+            )
+            block_dict[label] = None
+    return MarketRecapIndicesBlock(**block_dict), errors
 
 
 def _build_minimal_quote_from_board_dict(q: dict) -> MinimalQuote:

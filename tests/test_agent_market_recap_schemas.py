@@ -10,7 +10,12 @@ from stock_data.api.schemas import (
 )
 
 from stock_data.api.cache import make_market_recap_cache_key
-from stock_data.api.routes.agent import build_market_context_response, build_market_stats_response
+from stock_data.api.routes.agent import (
+    _index_quote_from_unified,
+    build_market_context_response,
+    build_market_stats_response,
+)
+from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
 
 
 def test_market_recap_indices_block_accepts_three_quotes():
@@ -137,3 +142,55 @@ def test_build_market_stats_response_returns_model(monkeypatch):
     assert result.summary["requested"] == 2  # stocks + boards (no pools)
     assert result.limit_pools.zt is None
     assert result.limit_pools.dt is None
+
+
+def test_index_quote_from_unified_none_input():
+    assert _index_quote_from_unified("000001", None) is None
+
+
+def test_index_quote_from_unified_populates_all_fields():
+    # UnifiedRealtimeQuote field names differ from IndexQuote — see
+    # `stock_data/data_provider/core/types.py:56-100`. Notably:
+    #   open_price (not open), pre_close (not prev_close),
+    #   source is RealtimeSource enum, no update_time field.
+    q = UnifiedRealtimeQuote(
+        code="000001",
+        name="上证综指",
+        source=RealtimeSource.AKSHARE,
+        price=3245.67,
+        change_amount=12.34,
+        change_pct=0.38,
+        open_price=3230.0,
+        high=3255.0,
+        low=3228.0,
+        pre_close=3233.33,
+        volume=350_000_000,
+        amount=4.5e10,
+    )
+    out = _index_quote_from_unified("000001", q)
+    assert isinstance(out, IndexQuote)
+    assert out.code == "000001"
+    assert out.name == "上证综指"
+    assert out.source == "akshare"  # .value of RealtimeSource.AKSHARE
+    assert out.current_price == 3245.67
+    assert out.change_pct == 0.38
+    assert out.open == 3230.0
+    assert out.prev_close == 3233.33
+    assert out.volume == 350_000_000
+    assert out.volume_unit == "share"
+    assert out.amount == 4.5e10
+    assert out.update_time is None  # always None on recap path
+
+
+def test_index_quote_from_unified_handles_missing_fields():
+    """All optional fields default to None / empty / 0.0 — no raises."""
+    q = UnifiedRealtimeQuote(code="000001")  # only required field
+    out = _index_quote_from_unified("000001", q)
+    assert isinstance(out, IndexQuote)
+    assert out.name == ""
+    assert out.source == ""
+    assert out.current_price == 0.0
+    assert out.change_pct is None
+    assert out.volume is None
+    assert out.volume_unit == "share"
+    assert out.update_time is None
