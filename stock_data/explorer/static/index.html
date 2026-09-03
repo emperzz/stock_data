@@ -922,6 +922,8 @@
         .map((list, i) => ({ tier: i, list }))
         .filter(t => t.list.length);
       const maxAgentTier = populatedTiers.length ? populatedTiers[populatedTiers.length - 1].tier : 0;
+      // 多 tier 时全局顶部 padding, TB/LR 共用。maxAgentTier=0 时为 0(回归)。
+      const topPad = maxAgentTier > 0 ? 30 : 0;
 
       // 间距(ROW/HEAD)放大, 中间层端点不贴太紧。
       const PAD = 56, ROW = 42, HEAD = 40, ROW_W = 7.6;
@@ -944,9 +946,8 @@
       flowBoxes = [];
       if (isTB) {
         // agent 按 tier 由上至下堆叠, 最高 tier 在 y=PAD; maxTier=0 时与旧版像素一致。
-        // TIER_H: tier 行间距(竖直)。多 tier 时多加 30 顶部 padding 防单节点贴工具栏。
+        // TIER_H: tier 行间距(竖直)。topPad 已在外层声明, TB/LR 共用。
         const TIER_H = 100;
-        const topPad = maxAgentTier > 0 ? 30 : 0;
         const rowTop = PAD + topPad + maxAgentTier * TIER_H + 170;   // 顶部留走廊画 composed-of
         // R1: 分组框从左到右横排(框内端点竖排)。
         let x = PAD;
