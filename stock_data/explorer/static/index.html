@@ -1012,9 +1012,16 @@
       const fxMaxW = fxNodes.length ? Math.max(...fxNodes.map(n => n.label.length * 9 + 80)) : 220;
       const yMax = Math.max(cy - 46 + HEAD, PAD + 60);
       const aDesY = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.y)) : PAD + HEAD; };
-      for (const { list, x } of tierPositions) {
-        floatCol(list, aDesY, x, PAD, yMax, 46);
-        centerCol(list, () => 40, PAD, yMax);
+      for (const { tier, list, x } of tierPositions) {
+        if (tier >= 1) {
+          // Tier 1+ 不走 aDesY: targets 多在 section box 末端, aDesY 会把节点推到 canvas 下方不可见。
+          // 固定在 column 顶部(per TB 同语义: tier 越高越靠前), composed-of 边向右下走向 section box。
+          const y = PAD + topPad;
+          list.forEach(n => { n.x = x; n.y = y; });
+        } else {
+          floatCol(list, aDesY, x, PAD, yMax, 46);
+          centerCol(list, () => 40, PAD, yMax);
+        }
       }
       const fDesY = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.y)) : PAD + HEAD; };
       floatCol(fxNodes, fDesY, fxX, PAD, yMax, 36);
