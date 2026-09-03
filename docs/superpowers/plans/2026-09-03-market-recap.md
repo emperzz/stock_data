@@ -217,16 +217,15 @@ from stock_data.api.cache import make_market_recap_cache_key
 
 
 def test_make_market_recap_cache_key_format():
-    key = make_market_recap_cache_key(20, True, True, "2026-09-03")
-    assert key == "agent_market_recap:20:True:True:2026-09-03"
+    key = make_market_recap_cache_key(20, True, True)
+    assert key == "agent_market_recap:20:True:True"
 
 
 def test_make_market_recap_cache_key_changes_with_each_param():
-    base = make_market_recap_cache_key(20, True, True, "2026-09-03")
-    assert make_market_recap_cache_key(40, True, True, "2026-09-03") != base
-    assert make_market_recap_cache_key(20, False, True, "2026-09-03") != base
-    assert make_market_recap_cache_key(20, True, False, "2026-09-03") != base
-    assert make_market_recap_cache_key(20, True, True, "2026-09-04") != base
+    base = make_market_recap_cache_key(20, True, True)
+    assert make_market_recap_cache_key(40, True, True) != base
+    assert make_market_recap_cache_key(20, False, True) != base
+    assert make_market_recap_cache_key(20, True, False) != base
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -243,16 +242,17 @@ def make_market_recap_cache_key(
     flash_limit: int,
     include_boards: bool,
     include_pools: bool,
-    trade_date: str,
 ) -> str:
     """Cache key for GET /api/v1/agent/market-recap.
 
-    Mirrors the make_market_stats_cache_key 4-segment shape. All four
-    knobs participate: changing any produces a materially different
-    response (different context flash count, different stats blocks,
+    3-segment colon-joined shape (no `trade_date` segment — recap
+    always targets the server-resolved latest trade date; there is
+    no user-facing date param). All three knobs participate:
+    changing any produces a materially different response
+    (different context flash count, different stats blocks,
     different pools). 60s TTL via get_quote_cache.
     """
-    return f"agent_market_recap:{flash_limit}:{include_boards}:{include_pools}:{trade_date}"
+    return f"agent_market_recap:{flash_limit}:{include_boards}:{include_pools}"
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -317,9 +317,13 @@ def test_build_market_context_response_returns_model(monkeypatch):
 
     monkeypatch.setattr(agent_mod, "get_manager", lambda: _FakeManager())
 
-    result = build_market_context_response(flash_limit=20, target_date="2026-09-03")
+    result = build_market_context_response(
+        flash_limit=20, target_date="2026-09-03", today_str="2026-09-03"
+    )
     assert isinstance(result, MarketContextResponse)
     assert result.trade_date == "2026-09-03"
+    assert result.is_trade_day is True  # 2026-09-03 is a Thursday (and a trade day)
+    assert result.market_session in {"pre-market", "intraday", "post-market", "closed"}
     assert result.messages.morning_briefing is None
     assert result.messages.market_recap is None
     assert result.messages.flash_news == []
@@ -341,6 +345,7 @@ In `stock_data/api/routes/agent.py`, **before** `def get_market_context(...)` (i
 def build_market_context_response(
     flash_limit: int,
     target_date: str,
+    today_str: str,
 ) -> MarketContextResponse:
     """Build the Pydantic model for /agent/market-context.
 
@@ -348,6 +353,15 @@ def build_market_context_response(
     or market-recap). Returns the slim post-2026-09-02 shape:
     morning_briefing + market_recap + flash_news only (no pools,
     no dragon-tiger).
+
+    `target_date` populates `trade_date` (may be historical if the
+    caller passed `?trade_date=...`). `today_str` is the server's
+    local date and is used ONLY to compute `is_trade_day` and
+    `market_session` — those fields describe the present moment,
+    not the queried date (see `MarketContextResponse.is_trade_day`
+    docstring at `schemas.py:1839`). The original handler at
+    `agent.py:788-794` already separates these two concepts; the
+    helper preserves that semantics.
     """
     started = time.monotonic()
     manager = get_manager()
@@ -367,12 +381,11 @@ def build_market_context_response(
             logger.warning(f"[agent/market-context] {name} failed: {exc}", exc_info=True)
             results[name] = default
 
+    is_today_trade_day = trade_calendar.is_trade_date(today_str)
     return MarketContextResponse(
         trade_date=target_date,
-        is_trade_day=trade_calendar.is_trade_date(target_date),
-        market_session=_classify_market_session(
-            trade_calendar.is_trade_date(target_date)
-        ),  # type: ignore[arg-type]
+        is_trade_day=is_today_trade_day,
+        market_session=_classify_market_session(is_today_trade_day),  # type: ignore[arg-type]
         messages=MarketContextMessages(
             morning_briefing=results["morning_briefing"],
             market_recap=results["market_recap"],
@@ -382,18 +395,21 @@ def build_market_context_response(
     )
 ```
 
-**Note:** `is_trade_day` and `market_session` are now computed inside the helper rather than in the handler. The handler's existing `is_trade_day` and `session` locals were used to populate the same fields on the response. The helper computes them from `target_date` using `trade_calendar.is_trade_date()` (same call the handler already makes at line 789) — result is identical for a given `target_date`.
+**Note:** `is_trade_day` and `market_session` are computed from `today_str`, NOT from `target_date`. The original handler at `agent.py:788-794` uses `today_str = datetime.now(_CST).date().isoformat()` for these two fields, and `target_date` only for the data queries. The helper preserves this exact split.
 
 Then **in** `get_market_context(...)` body, replace the inline build (lines 805-836 of the original file) with:
 
 ```python
-    started = time.monotonic()  # still measured for handler-level elapsed_ms; not currently used.
-    result = build_market_context_response(flash_limit=flash_limit, target_date=target_date)
+    result = build_market_context_response(
+        flash_limit=flash_limit,
+        target_date=target_date,
+        today_str=today_str,
+    )
     cached_store(get_quote_cache, cache_key, result)
     return _render_agent("market-context", result, format)
 ```
 
-The `started = time.monotonic()` line is now dead — remove it.
+The `started = time.monotonic()` line that the original handler had is no longer needed — remove it (the helper measures its own `started`).
 
 - [ ] **Step 5: Re-run existing market-context tests + new helper test**
 
@@ -549,30 +565,24 @@ def build_market_stats_response(
                 )
             )
 
-    # --- pools block (skipped when include_pools=false) ---
+    # --- pools block (delegated to the existing helper — do NOT re-implement
+    #     the per-pool fan-out here; `_compute_limit_pools_block` is the
+    #     canonical implementation at agent.py:568 and unpacks the 3-tuple
+    #     from `manager.get_zt_pool` correctly.) ---
     if include_pools:
-        zt_list: list | None = None
-        dt_list: list | None = None
-        for pool_label, pool_type in (("zt", "zt"), ("dt", "dt")):
-            try:
-                pool_result, _src = manager.get_zt_pool(pool_type=pool_type, date=target_date)
-                if pool_label == "zt":
-                    zt_list = pool_result
-                else:
-                    dt_list = pool_result
-                ok += 1
-            except Exception as exc:
-                logger.warning(
-                    f"[agent/market-stats] {pool_label}_pool failed: {exc}", exc_info=True
+        try:
+            limit_pools_block, pool_errors = _compute_limit_pools_block(manager, target_date)
+            errors.extend(pool_errors)
+            ok += 1   # ONE block-level increment, matching the original handler
+        except Exception as exc:
+            logger.warning(f"[agent/market-stats] pools failed: {exc}", exc_info=True)
+            errors.append(
+                MarketStatsErrorEntry(
+                    block="pools",
+                    error=type(exc).__name__,
+                    message=str(exc),
                 )
-                errors.append(
-                    MarketStatsErrorEntry(
-                        block=f"{pool_label}_pool",
-                        error=type(exc).__name__,
-                        message=str(exc),
-                    )
-                )
-        limit_pools_block = MarketStatsLimitPools(zt=zt_list, dt=dt_list)
+            )
 
     return MarketStatsResponse(
         stocks=stocks_stats,
@@ -583,7 +593,7 @@ def build_market_stats_response(
     )
 ```
 
-**Note:** This helper preserves the original handler's exact behavior including the `requested`/`ok` counters and `MarketStatsLimitPools(zt=None, dt=None)` fallback when both pools are skipped. The `requested = 1 + 1 + 1 = 3` for the default (all true) case; `ok` increments per-block on success.
+**Note:** This helper preserves the original handler's exact behavior including the `requested`/`ok` counters and `MarketStatsLimitPools(zt=None, dt=None)` fallback when both pools are skipped. The pools block delegates to the existing `_compute_limit_pools_block` so the 3-tuple unpack (`zt_pool`, `dt_pool`, `_src`, `_warn`) and the per-pool error entries (`zt_pool` / `dt_pool` literals) live in one place. `ok += 1` is incremented **once** for the entire pools block (not per-pool), matching `agent.py:1346` in the original handler — otherwise `_batch_summary`'s `failed = requested - ok` would go negative on the default `include_pools=True` path.
 
 Then **in** `get_market_stats(...)` body, replace lines 1269-1357 with:
 
@@ -616,13 +626,13 @@ git commit -m "refactor(agent): extract build_market_stats_response helper"
 ## Task 5: Add Index Quote Converter + Three-Index Helper
 
 **Files:**
-- Modify: `stock_data/api/routes/agent.py` (new helpers, near the existing `_build_minimal_quote_from_unified` at line 899)
+- Modify: `stock_data/api/routes/agent.py` (new helpers, near the existing `_build_minimal_quote_from_unified` at line 983)
 
 **Interfaces:**
 - Consumes: `UnifiedRealtimeQuote | None`, the bare 6-digit code.
 - Produces: `IndexQuote | None`.
 
-**Background:** `manager.get_index_realtime_quote(code)` returns `UnifiedRealtimeQuote | None`. We need a small field-by-field converter to `IndexQuote` (the 13-key schema). Mirrors the defensive `getattr(..., None)` style of `_build_minimal_quote_from_unified`.
+**Background:** `manager.get_index_realtime_quote(code)` returns `UnifiedRealtimeQuote | None`. We need a small field-by-field converter to `IndexQuote` (the 13-key schema). Mirrors the defensive `getattr(..., None)` style of `_build_minimal_quote_from_unified` at `agent.py:983`. **Important**: `UnifiedRealtimeQuote` (defined at `stock_data/data_provider/core/types.py:56`) uses different field names than `IndexQuote`: `open_price` (not `open`), `pre_close` (not `prev_close`), and **has no `update_time` field at all** — so the converter maps those three explicitly.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -630,7 +640,7 @@ Append to `tests/test_agent_market_recap_schemas.py`:
 
 ```python
 from stock_data.api.routes.agent import _index_quote_from_unified
-from stock_data.api.core.types import UnifiedRealtimeQuote
+from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
 from stock_data.api.schemas import IndexQuote
 
 
@@ -639,31 +649,37 @@ def test_index_quote_from_unified_none_input():
 
 
 def test_index_quote_from_unified_populates_all_fields():
+    # UnifiedRealtimeQuote field names differ from IndexQuote — see
+    # `stock_data/data_provider/core/types.py:56-100`. Notably:
+    #   open_price (not open), pre_close (not prev_close),
+    #   source is RealtimeSource enum, no update_time field.
     q = UnifiedRealtimeQuote(
         code="000001",
         name="上证综指",
-        source="akshare",
+        source=RealtimeSource.AKSHARE,
         price=3245.67,
         change_amount=12.34,
         change_pct=0.38,
-        open=3230.0,
+        open_price=3230.0,
         high=3255.0,
         low=3228.0,
-        prev_close=3233.33,
+        pre_close=3233.33,
         volume=350_000_000,
         amount=4.5e10,
-        update_time="2026-09-03T15:00:00+08:00",
     )
     out = _index_quote_from_unified("000001", q)
     assert isinstance(out, IndexQuote)
     assert out.code == "000001"
     assert out.name == "上证综指"
-    assert out.source == "akshare"
+    assert out.source == "akshare"  # .value of RealtimeSource.AKSHARE
     assert out.current_price == 3245.67
     assert out.change_pct == 0.38
+    assert out.open == 3230.0
+    assert out.prev_close == 3233.33
     assert out.volume == 350_000_000
     assert out.volume_unit == "share"
     assert out.amount == 4.5e10
+    assert out.update_time is None  # always None on recap path
 
 
 def test_index_quote_from_unified_handles_missing_fields():
@@ -677,6 +693,7 @@ def test_index_quote_from_unified_handles_missing_fields():
     assert out.change_pct is None
     assert out.volume is None
     assert out.volume_unit == "share"
+    assert out.update_time is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -686,7 +703,7 @@ Expected: `ImportError: cannot import name '_index_quote_from_unified'`.
 
 - [ ] **Step 3: Add the converter and three-index helper**
 
-In `stock_data/api/routes/agent.py`, after `_build_minimal_quote_from_unified` (line 899), add:
+In `stock_data/api/routes/agent.py`, after `_build_minimal_quote_from_unified` (line 983), add:
 
 ```python
 def _index_quote_from_unified(code: str, q: UnifiedRealtimeQuote | None) -> IndexQuote | None:
@@ -695,24 +712,32 @@ def _index_quote_from_unified(code: str, q: UnifiedRealtimeQuote | None) -> Inde
     Defensive: uses getattr with None defaults so fetcher-side field
     variance doesn't raise. Always sets volume_unit="share" per spec §3.4
     (indices are always quoted in shares, never wan_shou).
+
+    Field-name mapping (UnifiedRealtimeQuote → IndexQuote):
+      open_price   → open
+      pre_close    → prev_close
+      source.value → source  (RealtimeSource enum → str)
+      update_time  → None    (UnifiedRealtimeQuote has no update_time)
     """
     if q is None:
         return None
+    src = getattr(q, "source", None)
+    src_str = src.value if hasattr(src, "value") else (src or "")
     return IndexQuote(
         code=code,
         name=getattr(q, "name", "") or "",
-        source=getattr(q, "source", "") or "",
+        source=src_str,
         current_price=float(getattr(q, "price", 0.0) or 0.0),
         change_amount=getattr(q, "change_amount", None),
         change_pct=getattr(q, "change_pct", None),
-        open=getattr(q, "open", None),
+        open=getattr(q, "open_price", None),
         high=getattr(q, "high", None),
         low=getattr(q, "low", None),
-        prev_close=getattr(q, "prev_close", None),
+        prev_close=getattr(q, "pre_close", None),
         volume=getattr(q, "volume", None),
         volume_unit="share",
         amount=getattr(q, "amount", None),
-        update_time=getattr(q, "update_time", None),
+        update_time=None,
     )
 
 
@@ -790,6 +815,7 @@ Append to `tests/test_agent_market_recap_schemas.py`:
 ```python
 from stock_data.api.routes.agent import render_market_recap_as_md
 from stock_data.api.schemas import (
+    MarketContextMessages,
     MarketRecapErrorEntry,
     MarketRecapIndicesBlock,
     MarketRecapResponse,
@@ -797,12 +823,19 @@ from stock_data.api.schemas import (
 
 
 def _stub_response() -> MarketRecapResponse:
+    # Use a real MarketContextMessages (NOT None) so render_market_context_as_md
+    # exercises the full path — a `None` falls through to the JSON-fallback in
+    # _render_markdown and silently passes the assertions below.
     ctx = MarketContextResponse.model_construct(
         trade_date="2026-09-03",
         is_trade_day=True,
         market_session="intraday",
-        messages=None,
-        summary={"requested": 1, "ok": 1, "failed": 0, "elapsed_ms": 10},
+        messages=MarketContextMessages(
+            morning_briefing={"article_id": 1, "title": "早报"},
+            market_recap=None,
+            flash_news=[],
+        ),
+        summary={"requested": 3, "ok": 2, "failed": 1, "elapsed_ms": 10},
     )
     stats = MarketStatsResponse.model_construct(
         stocks=None,
@@ -812,8 +845,8 @@ def _stub_response() -> MarketRecapResponse:
         summary={"requested": 1, "ok": 1, "failed": 0, "elapsed_ms": 10},
     )
     indices = MarketRecapIndicesBlock(
-        sh=IndexQuote(code="000001", name="上证综指", change_pct=0.5),
-        shenzhen_composite=IndexQuote(code="399001", name="深证成指", change_pct=1.2),
+        sh=IndexQuote(code="000001", name="上证综指", change_pct=0.5, amount=1.0),
+        shenzhen_composite=IndexQuote(code="399001", name="深证成指", change_pct=1.2, amount=2.0),
         chinext=None,
     )
     return MarketRecapResponse(
@@ -827,12 +860,13 @@ def _stub_response() -> MarketRecapResponse:
 
 def test_render_market_recap_as_md_contains_all_sub_blocks():
     md = render_market_recap_as_md(_stub_response())
-    # Reuses context renderer
+    # Reuses context renderer (real messages, not None — exercises the markdown path)
     assert "trade_date" in md
     assert "is_trade_day" in md
+    assert "早报" in md  # from MarketContextMessages.morning_briefing
     # Reuses stats renderer
     assert "stocks" in md or "boards" in md
-    # Index block — every IndexQuote field appears for non-null rows
+    # Index block — codes + names appear for non-null rows
     assert "000001" in md
     assert "399001" in md
     assert "上证综指" in md
@@ -842,14 +876,17 @@ def test_render_market_recap_as_md_contains_all_sub_blocks():
     assert "boom" in md
 
 
-def test_render_market_recap_as_md_no_field_drop_on_null_indices():
-    """The 13 IndexQuote fields must be represented per row, even on null."""
-    resp = _stub_response()
-    md = render_market_recap_as_md(resp)
-    # Each IndexQuote field key appears at least once in the index-table block.
-    # We assert the table column names per spec §3.5.
-    for col in ("code", "name", "change_pct", "amount", "volume"):
-        assert col in md, f"IndexQuote column {col!r} missing from MD output"
+def test_render_market_recap_as_md_includes_all_13_indexquote_columns():
+    """Spec §3.5: the index table must include all 13 IndexQuote columns per row
+    to satisfy the CLAUDE.md `?format=md` 'no field dropped' contract."""
+    md = render_market_recap_as_md(_stub_response())
+    expected_cols = [
+        "code", "name", "source", "current_price", "change_amount",
+        "change_pct", "open", "high", "low", "prev_close",
+        "volume", "volume_unit", "amount", "update_time",
+    ]
+    missing = [c for c in expected_cols if c not in md]
+    assert not missing, f"IndexQuote columns missing from MD: {missing}"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -863,16 +900,23 @@ In `stock_data/api/routes/agent.py`, after `render_market_stats_as_md` (line 195
 
 ```python
 def _render_recap_indices_table_md(indices: MarketRecapIndicesBlock) -> str:
-    """Render the 3-index block as a compact markdown table.
+    """Render the 3-index block as a markdown table with ALL 13 IndexQuote
+    columns (per spec §3.5 + CLAUDE.md `?format=md` "no field dropped"
+    contract). Null rows are rendered with explicit `—` markers.
 
-    Columns: code | name | change_pct | amount | volume. Null rows
-    are rendered with explicit `—` markers per CLAUDE.md
-    `format=md` "no field drop" contract. The `change_pct` value is
-    shown with a + sign when positive (e.g. `+0.50%`) for readability.
+    Note: this table is wider than a human-friendly recap table, but the
+    recap endpoint targets LLM agents that prefer machine-readability.
+    The CLAUDE.md contract is satisfied by listing every IndexQuote field
+    by name, regardless of value.
     """
     lines: list[str] = ["## 指数快讯", ""]
-    lines.append("| code | name | change_pct | amount | volume |")
-    lines.append("| --- | --- | --- | --- | --- |")
+    cols = [
+        "code", "name", "source", "current_price", "change_amount",
+        "change_pct", "open", "high", "low", "prev_close",
+        "volume", "volume_unit", "amount", "update_time",
+    ]
+    lines.append("| " + " | ".join(cols) + " |")
+    lines.append("| " + " | ".join("---" for _ in cols) + " |")
     for label, code, label_cn in (
         ("sh", "000001", "上证综指"),
         ("shenzhen_composite", "399001", "深证成指"),
@@ -880,17 +924,37 @@ def _render_recap_indices_table_md(indices: MarketRecapIndicesBlock) -> str:
     ):
         q = getattr(indices, label)
         if q is None:
-            lines.append(f"| {code} | {label_cn} | — | — | — |")
+            lines.append("| " + " | ".join(["—"] * len(cols)) + " |")
             continue
-        pct = q.change_pct
-        pct_str = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else "—"
-        amt = q.amount
-        amt_str = f"{amt:.0f}" if isinstance(amt, (int, float)) else "—"
-        vol = q.volume
-        vol_str = f"{vol:,}" if isinstance(vol, int) else "—"
-        lines.append(
-            f"| {q.code} | {q.name or label_cn} | {pct_str} | {amt_str} | {vol_str} |"
-        )
+        # Helper: format a numeric field with `—` for None
+        def _num(v, fmt: str) -> str:
+            if v is None:
+                return "—"
+            if isinstance(v, float):
+                return format(v, fmt)
+            return str(v)
+
+        cells = [
+            q.code or code,
+            q.name or label_cn,
+            q.source or "—",
+            _num(q.current_price, ".2f"),
+            _num(q.change_amount, ".2f"),
+            (
+                f"{q.change_pct:+.2f}%"
+                if isinstance(q.change_pct, (int, float))
+                else "—"
+            ),
+            _num(q.open, ".2f"),
+            _num(q.high, ".2f"),
+            _num(q.low, ".2f"),
+            _num(q.prev_close, ".2f"),
+            _num(q.volume, ",d"),
+            q.volume_unit or "share",
+            _num(q.amount, ".0f"),
+            q.update_time or "—",
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
 
@@ -980,20 +1044,26 @@ from fastapi.testclient import TestClient
 from stock_data.api.routes import agent as agent_mod
 from stock_data.api.schemas import (
     IndexQuote,
+    MarketContextMessages,
     MarketContextResponse,
     MarketRecapIndicesBlock,
-    MarketRecapResponse,
     MarketStatsResponse,
 )
 
 
 def _ctx_stub():
+    # Use a real MarketContextMessages (NOT None) so the response carries
+    # the messages sub-object end-to-end. A `None` here makes
+    # render_market_context_as_md raise and silently fall through to the
+    # JSON-fallback in `_render_markdown`, which would mask regressions.
     return MarketContextResponse.model_construct(
         trade_date="2026-09-03",
         is_trade_day=True,
         market_session="intraday",
-        messages=None,
-        summary={"requested": 1, "ok": 1, "failed": 0, "elapsed_ms": 10},
+        messages=MarketContextMessages(
+            morning_briefing=None, market_recap=None, flash_news=[]
+        ),
+        summary={"requested": 3, "ok": 3, "failed": 0, "elapsed_ms": 10},
     )
 
 
@@ -1009,7 +1079,6 @@ def _stats_stub():
 
 def test_market_recap_happy_path(monkeypatch):
     """All 5 sub-blocks OK → 200, all populated, errors empty, summary.ok == 5."""
-    from stock_data.api.core.types import UnifiedRealtimeQuote
     from stock_data.server import app
 
     # Stub the two extracted builders + the index helper
@@ -1046,7 +1115,17 @@ Expected: `404` (route not registered) or `AssertionError` (handler exists but r
 
 - [ ] **Step 3: Add minimal `get_market_recap` handler (passes happy path only)**
 
-Append to `stock_data/api/routes/agent.py` (after the existing `get_market_stats` handler):
+First, **add the new Pydantic symbols to the existing import block** in `stock_data/api/routes/agent.py`. Find the `from ..schemas import (...)` block (around lines 70-101) and extend it:
+
+```python
+    MarketRecapErrorEntry,
+    MarketRecapIndicesBlock,
+    MarketRecapResponse,
+```
+
+(If `asyncio` is not yet imported at the top of `agent.py`, also add `import asyncio` near the existing top-level imports. Check first.)
+
+Then append the new handler **after** the existing `get_market_stats` handler (around line 1747 of the current file):
 
 ```python
 @router.get(
@@ -1079,10 +1158,8 @@ async def get_market_recap(
     ),
     include_boards: bool = Query(default=True, description="是否包含板块块;透传给 market-stats."),
     include_pools: bool = Query(default=True, description="是否包含涨跌停池块;透传给 market-stats."),
-    trade_date: str | None = Query(
-        default=None,
-        description="交易日 YYYY-MM-DD;不传默认 = latest trade date on/before today.",
-    ),
+    # NOTE: no `trade_date` query param — recap always targets the server-resolved
+    # latest trade date. See spec §2.1 for the rationale.
     format: str = Query(
         default="json",
         pattern="^(json|md)$",
@@ -1098,26 +1175,17 @@ async def get_market_recap(
     - 3 indices fetched sequentially (manager singleton not re-entrant safe
       for concurrent _with_failover).
     - top-level cache via make_market_recap_cache_key (60s TTL).
+    - always targets the latest trade date on or before today (no user
+      date input — see spec §2.1).
     """
-    # 1. trade_date format gate
-    if trade_date is not None and not _TRADE_DATE_RE.match(trade_date):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_trade_date",
-                "message": (
-                    f"trade_date must be YYYY-MM-DD; got {trade_date!r}. "
-                    "Empty = server-defaulted to most recent trade date on/before today."
-                ),
-            },
-        )
+    # 1. resolve target_date via trade_calendar (no user input — always latest)
     today_str = datetime.now(_CST).date().isoformat()
     target_date = (
-        trade_date or trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
+        trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
     )
 
     # 2. top-level cache lookup
-    cache_key = make_market_recap_cache_key(flash_limit, include_boards, include_pools, target_date)
+    cache_key = make_market_recap_cache_key(flash_limit, include_boards, include_pools)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_market_recap")
     if hit is not None:
         return _render_agent("market-recap", hit, format)
@@ -1135,6 +1203,7 @@ async def get_market_recap(
                 build_market_context_response,
                 flash_limit=flash_limit,
                 target_date=target_date,
+                today_str=today_str,
             )
         except Exception as exc:
             logger.warning(f"[agent/market-recap] context failed: {exc}", exc_info=True)
@@ -1338,7 +1407,7 @@ def test_market_recap_cache_hit_skips_fanout(monkeypatch):
     from stock_data.server import app
 
     # Clear any stale entry from prior tests.
-    cache_key = make_market_recap_cache_key(20, True, True, "2026-09-03")
+    cache_key = make_market_recap_cache_key(20, True, True)
     get_quote_cache.pop(cache_key, None)
 
     call_counts = {"context": 0, "stats": 0, "indices": 0}
@@ -1366,10 +1435,11 @@ def test_market_recap_cache_hit_skips_fanout(monkeypatch):
     monkeypatch.setattr(agent_mod, "build_market_stats_response", _counted_stats)
     monkeypatch.setattr(agent_mod, "_build_three_index_quotes_block", _counted_indices)
 
-    # Pin trade_date so the cache key is deterministic across calls.
+    # Two consecutive calls — first misses + populates the cache, second hits.
+    # The 3-segment cache key (no trade_date) makes the hit deterministic.
     client = TestClient(app)
-    r1 = client.get("/api/v1/agent/market-recap?trade_date=2026-09-03")
-    r2 = client.get("/api/v1/agent/market-recap?trade_date=2026-09-03")
+    r1 = client.get("/api/v1/agent/market-recap")
+    r2 = client.get("/api/v1/agent/market-recap")
     assert r1.status_code == 200
     assert r2.status_code == 200
     assert call_counts["context"] == 1
@@ -1434,36 +1504,20 @@ def test_market_recap_md_format_no_field_drop(monkeypatch):
 Run: `.venv/Scripts/python.exe -m pytest tests/test_agent_market_recap.py::test_market_recap_md_format_no_field_drop -v`
 Expected: PASS (renderer already produces table columns + error list + reuses context/stats MD renderers).
 
-- [ ] **Step 13: Write test 6 — invalid trade_date returns 400**
+(There is no test 6 for `?trade_date=` 400 validation — recap has no
+`trade_date` query param after the scope-reduction, so the only 400
+that could fire would be a 422 from `format` validation, which
+FastAPI handles via the `pattern` regex. Pinned indirectly by the
+MD test which passes `format=md`.)
 
-Append to `tests/test_agent_market_recap.py`:
-
-```python
-def test_market_recap_invalid_trade_date_returns_400(monkeypatch):
-    """Invalid YYYY-MM-DD format → 400 with `error: 'invalid_trade_date'`."""
-    from stock_data.server import app
-
-    # No builder stubs needed — the date gate fires before any fan-out.
-    client = TestClient(app)
-    resp = client.get("/api/v1/agent/market-recap?trade_date=2026-9-3")  # missing zero-pad
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["error"] == "invalid_trade_date"
-```
-
-- [ ] **Step 14: Run test to verify it passes**
-
-Run: `.venv/Scripts/python.exe -m pytest tests/test_agent_market_recap.py::test_market_recap_invalid_trade_date_returns_400 -v`
-Expected: PASS (handler already does `_TRADE_DATE_RE.match` check at the top).
-
-- [ ] **Step 15: Run the full agent test suite + explorer manifest**
+- [ ] **Step 13: Run the full agent test suite + explorer manifest**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_agent_market_recap.py tests/test_agent_market_recap_schemas.py tests/test_agent_market_stats.py tests/test_agent_market_stats_schemas.py tests/test_agent_endpoints.py tests/test_explorer_manifest_endpoint.py -v`
 Expected: all pass.
 
 (If `test_explorer_manifest_endpoint.py` fails because the new endpoint isn't in the manifest, the manifest is rebuilt on every request — no cache invalidation needed. But verify the test asserts presence of routes decorated with `@endpoint_meta`, which the new route is.)
 
-- [ ] **Step 16: Commit**
+- [ ] **Step 14: Commit**
 
 ```bash
 git add stock_data/api/routes/agent.py tests/test_agent_market_recap.py
@@ -1528,25 +1582,26 @@ No commit needed if Steps 1-4 all pass cleanly. If any step required a code fix,
 |---|---|---|
 | §2.1 | `MarketRecapResponse` shape (context / stats / indices / errors / summary) | Task 1, Task 7 |
 | §2.1 | 3 fixed indices (上证 / 深成指 / 创业板) | Task 5 (`_RECAP_INDICES`) |
-| §2.1 | Query params (flash_limit, include_boards, include_pools, trade_date, format) | Task 7 |
+| §2.1 | Query params (flash_limit, include_boards, include_pools, format; **no trade_date**) | Task 7 |
 | §2.1 | `errors[].block` literals | Task 1, Task 5 |
+| §2.1 | Server-resolved target_date via trade_calendar | Task 7 (handler body) |
 | §2.2 | Verbatim context/stats shape (Pydantic composition, not re-modeling) | Task 1 |
 | §3.1 | Extract `build_market_context_response` + `build_market_stats_response` helpers | Tasks 3, 4 |
 | §3.2 | `get_market_recap` async handler with `asyncio.gather` + `to_thread` | Task 7 |
-| §3.3 | `IndexQuote` conversion from `UnifiedRealtimeQuote` | Task 5 |
-| §3.4 | Cache: `make_market_recap_cache_key` + reuse of context/stats key builders | Task 2, Task 3, Task 4, Task 7 |
-| §3.5 | MD renderer reusing existing renderers + 3-row index table | Task 6 |
+| §3.3 | `IndexQuote` conversion from `UnifiedRealtimeQuote` (open_price / pre_close / no update_time) | Task 5 |
+| §3.4 | Cache: `make_market_recap_cache_key` (3-segment, no trade_date) + reuse of context/stats key builders | Task 2, Task 3, Task 4, Task 7 |
+| §3.5 | MD renderer reusing existing renderers + 14-column index table (all IndexQuote fields + `update_time`) | Task 6 |
 | §3.6 | Per-block error isolation | Task 5 (`_build_three_index_quotes_block`), Task 7 (handler try/except) |
 | §3.7 | Schema models | Task 1 |
 | §4 | Files touched | Tasks 1-7 each enumerate their file edits |
 | §5 | Token economics discussion | (Spec-only, no code) |
-| §6 | 6 test cases | Task 7 (1 per cycle), Task 6 (renderer-level MD completeness subtest) |
+| §6 | 5 test cases (happy path, context fail, index fail, cache hit, MD completeness) — invalid_trade_date removed since param dropped | Task 7 (one per cycle), Task 6 (renderer-level MD completeness subtest) |
 | §7 | Migration / rollout (no DB change, no breaking change) | Verified by Task 8 regression run |
 
 **Type / name consistency check (across tasks):**
 
 - `_RECAP_INDICES` defined in Task 5, consumed in Task 5 only (single use). ✓
-- `build_market_context_response(flash_limit, target_date)` defined in Task 3, called from Task 7 with kwargs matching. ✓
+- `build_market_context_response(flash_limit, target_date, today_str)` defined in Task 3, called from Task 7 with kwargs matching. ✓
 - `build_market_stats_response(include_boards, include_pools, target_date)` defined in Task 4, called from Task 7 with kwargs matching. ✓
 - `_build_three_index_quotes_block(manager)` defined in Task 5, called from Task 7 with positional arg. ✓
 - `_index_quote_from_unified(code, q)` defined in Task 5, called from Task 5 only. ✓
@@ -1554,7 +1609,7 @@ No commit needed if Steps 1-4 all pass cleanly. If any step required a code fix,
 - `MarketRecapErrorEntry` defined in Task 1, used in Tasks 5, 7. ✓
 - `MarketRecapIndicesBlock` defined in Task 1, used in Tasks 5, 7. ✓
 - `MarketRecapResponse` defined in Task 1, used in Tasks 6, 7. ✓
-- `make_market_recap_cache_key(flash_limit, include_boards, include_pools, trade_date)` defined in Task 2, called from Task 7. ✓
+- `make_market_recap_cache_key(flash_limit, include_boards, include_pools)` defined in Task 2, called from Task 7. ✓
 
 **Placeholder scan:**
 
