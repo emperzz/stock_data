@@ -113,13 +113,14 @@ class TestZtReasonsRoute:
             assert "seal_count" not in stock
             assert "reason" in stock
 
-    def test_route_uses_zt_reasons_tag(self):
-        """Route is tagged ``zt-reasons`` so it shows in its own explorer section."""
+    def test_route_uses_zt_pools_tag(self):
+        """Route is tagged ``zt-pools`` so it shares the explorer's 涨跌停股池
+        section with ``/zt-pools`` (both endpoints relate to ZT/涨跌停 data)."""
         from stock_data.api.routes.boards import router
 
         for route in router.routes:
             if getattr(route, "path", "") == "/zt-reasons":
-                assert "zt-reasons" in (getattr(route, "tags", None) or [])
+                assert "zt-pools" in (getattr(route, "tags", None) or [])
                 return
         pytest.fail("Route not found")
 

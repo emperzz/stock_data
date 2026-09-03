@@ -23,7 +23,6 @@ TAG_TO_TITLE: dict[str, str] = {
     "calendar": "股票 / 指数列表与日历",
     "boards": "板块 (Boards)",
     "zt-pools": "涨跌停股池",
-    "zt-reasons": "涨停原因",
     "dragon-tiger": "龙虎榜",
     "hot-topics": "热点题材",
     "north-flow": "北向资金",

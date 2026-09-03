@@ -1388,7 +1388,7 @@ def get_pools(
 @router.get(
     "/zt-reasons",
     response_model=ZTReasonResponse,
-    tags=["zt-reasons"],
+    tags=["zt-pools"],
 )
 @endpoint_meta(
     summary="涨停原因",

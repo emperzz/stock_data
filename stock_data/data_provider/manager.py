@@ -971,13 +971,18 @@ class DataFetcherManager:
         def _fetch(fetcher: BaseFetcher) -> list[dict] | None:
             return fetcher.get_zt_reason(query_date)
 
-        return self._with_failover(
+        stocks, origin = self._with_failover(
             DataCapability.STOCK_ZT_REASON,
             "csi",
             f"ZT reasons {query_date}",
             _fetch,
             return_source=True,
         )
+        # ZT-reasons has no persistence layer, so ``warning`` is reserved
+        # (always None today); the route unpacks a 3-tuple mirroring
+        # ``get_zt_pool``. Future persistence integration would naturally
+        # produce a warning here.
+        return stocks, origin, None
 
     # ---------- index methods ----------
 
