@@ -201,7 +201,7 @@ new abstractions, no parameter objects, no new error wrappers.
 @router.get(
     "/agent/market-recap",
     response_model=MarketRecapResponse,
-    responses={400: {"model": ErrorResponse, ...}, 500: {"model": ErrorResponse, ...}},
+    responses={422: {"model": ErrorResponse, ...}, 500: {"model": ErrorResponse, ...}},
     tags=["agent"],
 )
 @endpoint_meta(
@@ -320,7 +320,7 @@ def render_market_recap_as_md(p: MarketRecapResponse) -> str:
 ```
 
 The index table is hand-written with **one row per index** and **all
-13 `IndexQuote` columns** (code / name / source / current_price /
+14 `IndexQuote` columns** (code / name / source / current_price /
 change_amount / change_pct / open / high / low / prev_close / volume /
 volume_unit / amount / update_time) so the `?format=md` "no field
 dropped" CLAUDE.md contract is satisfied for the indices block
@@ -330,7 +330,7 @@ specifically. `null` values render as `—` markers. No
 
 **MD completeness contract** (CLAUDE.md → `?format=md`): every JSON
 field appears in MD. The sub-block renderers already satisfy this
-for `context` and `stats`. The index table covers all 13 `IndexQuote`
+for `context` and `stats`. The index table covers all 14 `IndexQuote`
 keys per row (or marks `null`). Errors are rendered as a bullet list.
 
 ### 3.6 Error isolation
@@ -435,7 +435,7 @@ No changes to `manager.py`, no fetcher modifications, no
 |---|---|---|
 | `context` block | ~5 + 2 nested (`body_text` 1-3KB) | dominated by `body_text` of morning_briefing/market_recap articles |
 | `stats` block | ~5 + 80-100 pool entries × 14 fields | dominated by zt/dt pool lists |
-| `indices` block | 3 × 13 = **~40 keys flat** | the new addition; tiny |
+| `indices` block | 3 × 14 = **~42 keys flat** | the new addition; tiny |
 | `errors` + `summary` | ~5 + 5 | meta |
 
 Adding the `indices` block costs **~40 flat keys** to a payload

@@ -204,7 +204,7 @@ git commit -m "feat(schemas): add MarketRecap response models"
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `make_market_recap_cache_key(flash_limit: int, include_boards: bool, include_pools: bool, trade_date: str) -> str`
+- Produces: `make_market_recap_cache_key(flash_limit: int, include_boards: bool, include_pools: bool) -> str`
 
 **Background:** Cache key format mirrors `make_market_stats_cache_key` (4-segment colon-joined). Lives on `get_quote_cache` with the same 60s TTL used by the existing context/stats keys.
 
@@ -1027,7 +1027,7 @@ git commit -m "feat(agent): add render_market_recap_as_md"
 - Modify: `tests/test_agent_market_recap.py` (create, with 6 endpoint tests from spec §6)
 
 **Interfaces:**
-- Consumes: query params `flash_limit`, `include_boards`, `include_pools`, `trade_date`, `format`. Internal: `_batch_summary`, `asyncio.gather`, `asyncio.to_thread`, `cached_lookup`/`cached_store` on `get_quote_cache`, `make_market_recap_cache_key`, `_render_agent`.
+- Consumes: query params `flash_limit`, `include_boards`, `include_pools`, `format`. Internal: `_batch_summary`, `asyncio.gather`, `asyncio.to_thread`, `cached_lookup`/`cached_store` on `get_quote_cache`, `make_market_recap_cache_key`, `_render_agent`.
 - Produces: `Response` (JSON or MD, dispatched by `_render_agent("market-recap", payload, format)`).
 
 **Background:** TDD per the 6 spec §6 tests. Each sub-task is one cycle: write test → fail → implement/extend handler → pass → commit. The handler is built up across all 6 cycles.
@@ -1132,7 +1132,6 @@ Then append the new handler **after** the existing `get_market_stats` handler (a
     "/agent/market-recap",
     response_model=MarketRecapResponse,
     responses={
-        400: {"model": ErrorResponse, "description": "Invalid trade_date"},
         422: {"model": ErrorResponse, "description": "format not in (json, md)"},
         500: {"model": ErrorResponse, "description": "Server error"},
     },
