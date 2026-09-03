@@ -34,6 +34,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from datetime import time as dt_time
+import asyncio
 from itertools import combinations
 from zoneinfo import ZoneInfo
 
@@ -63,6 +64,7 @@ from ..cache import (
     make_boards_overlap_cache_key,
     make_filter_stocks_cache_key,
     make_market_context_cache_key,
+    make_market_recap_cache_key,
     make_market_stats_cache_key,
     make_stocks_board_overlap_cache_key,
 )
@@ -2249,3 +2251,169 @@ def _render_agent(route_key: str, payload, fmt: str):
     if fmt != "md":
         return payload
     return _render_markdown(payload, _MD_TEMPLATES[route_key])
+
+
+# ============================================================================
+# /agent/market-recap — server-side aggregation of context + stats + 3 indices.
+# Spec: docs/superpowers/specs/2026-09-03-market-recap-design.md
+# ============================================================================
+
+
+@router.get(
+    "/agent/market-recap",
+    response_model=MarketRecapResponse,
+    responses={
+        422: {"model": ErrorResponse, "description": "format not in (json, md)"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="市场全景聚合：context(messages) + stats(quantitative) + 3 指数 quote",
+    markets=["csi"],
+    capabilities=[],
+    depends_on=[
+        "/api/v1/agent/market-context",
+        "/api/v1/agent/market-stats",
+        "/api/v1/indices/{code}/quote",
+    ],
+)
+@map_errors
+async def get_market_recap(
+    flash_limit: int = Query(
+        default=20,
+        ge=1,
+        le=200,
+        description="快讯条数上限 1-200;默认 20;透传给 market-context.",
+    ),
+    include_boards: bool = Query(default=True, description="是否包含板块块;透传给 market-stats."),
+    include_pools: bool = Query(default=True, description="是否包含涨跌停池块;透传给 market-stats."),
+    # NOTE: no `trade_date` query param — recap always targets the server-resolved
+    # latest trade date. See spec §2.1 for the rationale.
+    format: str = Query(
+        default="json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
+    """Server-side aggregation of market-context + market-stats + 3 index quotes.
+
+    Per spec §3.6:
+    - per-block error isolation (5 blocks: context, stats, 3 indices);
+    - context/stats builders are reused from /agent/market-context and
+      /agent/market-stats (same cache keys, same Pydantic shapes);
+    - 3 indices fetched sequentially (manager singleton not re-entrant safe
+      for concurrent _with_failover).
+    - top-level cache via make_market_recap_cache_key (60s TTL).
+    - always targets the latest trade date on or before today (no user
+      date input — see spec §2.1).
+    """
+    # 1. resolve target_date via trade_calendar (no user input — always latest)
+    today_str = datetime.now(_CST).date().isoformat()
+    target_date = (
+        trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
+    )
+
+    # 2. top-level cache lookup
+    cache_key = make_market_recap_cache_key(flash_limit, include_boards, include_pools)
+    hit = cached_lookup(get_quote_cache, cache_key, "agent_market_recap")
+    if hit is not None:
+        return _render_agent("market-recap", hit, format)
+
+    # 3. parallel fan-out via asyncio.gather (handler is async; sync helpers
+    #    wrapped in asyncio.to_thread to avoid blocking the event loop)
+    started = time.monotonic()
+    manager = get_manager()
+    errors: list[MarketRecapErrorEntry] = []
+    requested = 5
+
+    async def _gather_context():
+        try:
+            return await asyncio.to_thread(
+                build_market_context_response,
+                flash_limit=flash_limit,
+                target_date=target_date,
+                today_str=today_str,
+            )
+        except Exception as exc:
+            logger.warning(f"[agent/market-recap] context failed: {exc}", exc_info=True)
+            errors.append(
+                MarketRecapErrorEntry(block="context", error=type(exc).__name__, message=str(exc))
+            )
+            return None
+
+    async def _gather_stats():
+        try:
+            return await asyncio.to_thread(
+                build_market_stats_response,
+                include_boards=include_boards,
+                include_pools=include_pools,
+                target_date=target_date,
+            )
+        except Exception as exc:
+            logger.warning(f"[agent/market-recap] stats failed: {exc}", exc_info=True)
+            errors.append(
+                MarketRecapErrorEntry(block="stats", error=type(exc).__name__, message=str(exc))
+            )
+            return None
+
+    async def _gather_indices():
+        block, idx_errors = await asyncio.to_thread(_build_three_index_quotes_block, manager)
+        errors.extend(idx_errors)
+        return block
+
+    context_resp, stats_resp, indices_block = await asyncio.gather(
+        _gather_context(), _gather_stats(), _gather_indices()
+    )
+
+    # 4. assemble response; fail-soft: any None sub-block is rendered as null
+    if context_resp is None:
+        context_resp = _ctx_stub_null()
+    if stats_resp is None:
+        stats_resp = _stats_stub_null()
+
+    # requested / ok counters
+    ok = (
+        (1 if context_resp is not None and not _is_placeholder_stub(context_resp) else 0)
+        + (1 if stats_resp is not None and not _is_placeholder_stub(stats_resp) else 0)
+        + (1 if indices_block.sh is not None else 0)
+        + (1 if indices_block.shenzhen_composite is not None else 0)
+        + (1 if indices_block.chinext is not None else 0)
+    )
+
+    result = MarketRecapResponse(
+        context=context_resp,
+        stats=stats_resp,
+        indices=indices_block,
+        errors=errors,
+        summary=_batch_summary(requested, ok, started),
+    )
+    cached_store(get_quote_cache, cache_key, result)
+    return _render_agent("market-recap", result, format)
+
+
+def _ctx_stub_null() -> MarketContextResponse:
+    """All-null placeholder used when the context builder raises."""
+    return MarketContextResponse.model_construct(
+        trade_date="",
+        is_trade_day=False,
+        market_session="closed",  # type: ignore[arg-type]
+        messages=None,
+        summary={"requested": 0, "ok": 0, "failed": 0, "elapsed_ms": 0},
+    )
+
+
+def _stats_stub_null() -> MarketStatsResponse:
+    """All-null placeholder used when the stats builder raises."""
+    return MarketStatsResponse.model_construct(
+        stocks=None,
+        boards=None,
+        limit_pools=None,
+        errors=[],
+        summary={"requested": 0, "ok": 0, "failed": 0, "elapsed_ms": 0},
+    )
+
+
+def _is_placeholder_stub(m) -> bool:
+    """The null-placeholders all have requested == 0; real builders always > 0."""
+    return bool(m.summary) and m.summary.get("requested", 0) == 0
