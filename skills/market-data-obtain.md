@@ -205,6 +205,7 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | `POST /api/v1/agent/boards/filter-stocks` | 板块成分股服务端数值过滤（换手 / 涨跌幅 / 成交额 / 市值） |
 | `GET /api/v1/agent/indices/batch-profile` | 指数批量画像（1-5 指数；单 frequency） |
 | `GET /api/v1/agent/market-context` | 每日市场消息面快照（早报 + 复盘 + 快讯；slim contract：涨跌停池已迁至 `market-stats`，龙虎榜按需走 `/api/v1/dragon-tiger`） |
+| `GET /api/v1/agent/market-recap` | 一站式复盘端点：`market-context` (messages) + `market-stats` (stocks/boards/pools) + 3 指数 quote (上证 / 深成指 / 创业板) 的服务端聚合。复盘 skill `skills/market-recap.md` 工作流的唯一推荐取数入口；**无 `trade_date` 参数**（服务端固定解析为 ≤ today 的最新交易日） |
 | `POST /api/v1/agent/stocks/batch-profile` | 股票批量画像（1-5 股票；quote + features + info + boards；boards 块与 `/stocks/{code}/boards` 同契约，见 [agent-batch.md](market-data-obtain/agent-batch.md)） |
 | `POST /api/v1/agent/boards/batch-profile` | 板块批量画像（1-5 THS platecode；单 frequency） |
 | `POST /api/v1/agent/correlation/matrix` | 跨资产 Pearson + Spearman 相关性矩阵（2-10 资产） |
@@ -259,15 +260,18 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 
 ### 场景 B：复盘当日市场
 
+> **场景 B 的首选取数入口是 `/api/v1/agent/market-recap`**（一次拿全 3 指数 + 早报 / 复盘 / 快讯 + 涨跌停池 + 全市场情绪桶；详见 `skills/market-recap.md`）。下表是各子需求对应的细粒度端点，**仅在需要某子项细节时**才单独拉。
+
 | 步骤 | 端点 |
 |---|---|
+| **B.0 一站式复盘（推荐）** | **`/agent/market-recap`** |
 | 1. 拉指数行情 | `/indices/{code}/quote` |
 | 1.1 指数全景（一次 fan-out） | `/agent/indices/batch-profile` |
 | 2. 拉涨跌停股池 | `/zt-pools?type=zt` / `/zt-pools?type=dt` |
 | 3. 拉全市场龙虎榜 | `/dragon-tiger` |
 | 4. 拉热点题材 | `/hot-topics` |
 | 5. 拉早报 / 复盘 | `/news/morning-briefing` / `/news/market-recap` |
-| 5.1 市场全景（一次拿全） | `/agent/market-context` |
+| 5.1 市场消息面快照（仅早报 / 复盘 / 快讯） | `/agent/market-context` |
 
 ### 场景 C：判断龙头股
 

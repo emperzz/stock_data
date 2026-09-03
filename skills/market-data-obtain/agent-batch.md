@@ -7,7 +7,7 @@
 ## 通用行为
 
 - **逐项错误隔离**：单 `code` / 单 aspect 拉取失败**不**中断整体响应；失败项进入 `errors[]`（或 `errors{}`，按端点形态不同），成功的项仍正常出现
-- **`?format=md`**：8 个端点统一支持，默认 `json`；返回 `text/markdown; charset=utf-8`（**无数据丢失**——所有 JSON 字段都映射到 MD 表 / 列表项）。**例外**：`correlation/matrix` 走 `PlainTextResponse`，渲染失败 → 500（**无**自动回退 JSON + `X-MD-Render-Error` 响应头；其余 7 个端点 MD 渲染失败 → 自动回退 JSON + 响应头）
+- **`?format=md`**：9 个端点统一支持，默认 `json`；返回 `text/markdown; charset=utf-8`（**无数据丢失**——所有 JSON 字段都映射到 MD 表 / 列表项）。**例外**：`correlation/matrix` 走 `PlainTextResponse`，渲染失败 → 500（**无**自动回退 JSON + `X-MD-Render-Error` 响应头；其余 8 个端点 MD 渲染失败 → 自动回退 JSON + 响应头）
 - **不做判断**：本节端点只返回"事实型"算结果（集合运算 / 过滤后列表 / Jaccard 系数 / 数值字段），不输出"龙头 / 候选"等结论
 
 ## MinimalQuote 字段约定（post-2026-08-28）
@@ -252,6 +252,80 @@ curl 'http://localhost:8888/api/v1/agent/indices/batch-profile?codes=000001,0003
 ```bash
 curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=20'
 curl 'http://localhost:8888/api/v1/agent/market-context?flash_limit=50&trade_date=2026-05-20'
+```
+
+---
+
+## `GET /api/v1/agent/market-recap`
+
+### 功能
+
+一站式复盘端点：`market-context`（messages）+ `market-stats`（个股 / 板块 / 涨跌停池）+ 3 指数 quote（上证 / 深成指 / 创业板）的服务端聚合。**复盘 skill `skills/market-recap.md` 工作流的唯一推荐取数入口**——agent 不需要分别拼装三次调用。
+
+- 复盘 skill 配套（盘前 / 盘中 / 盘后三时段统一触发）；参数 `flash_limit` / `include_boards` / `include_pools` / `format`，**没有 `trade_date` 参数**（服务端固定解析为 ≤ today 的最新交易日，理由：复盘是当日总结，移除该参数去掉一类 400 失败模式、简化 API 表面；历史复盘如需 → 单独拼装 `market-context?trade_date=...` + `market-stats?trade_date=...`）
+- per-block 错误隔离（5 blocks：context / stats / 3 indices）；任一失败 → 对应块为 `null` + `errors[]` 加一条 `{block, error, message}`；整体永远 200
+- 内部 `asyncio.gather` 扇出 + sync helpers 走 `asyncio.to_thread`（context / stats builder 是 `def` 同步函数，内部封装 blocking SDK）；3 指数 quote 内部**顺序**调用（`manager.get_index_realtime_quote` → `_with_failover` 改写 circuit breaker 状态，并发调用 manager 单例不安全）
+- `context` / `stats` / `indices` 三个子块是**逐字嵌入**（Pydantic composition）——字段命名 / 形状 / 默认值 / `summary` 字段与原端点完全一致，agent 不需要学第二套 schema
+
+### 入参
+
+| 参数名 | 类型 | 必填 | 默认值 | 约束 |
+|---|---|---|---|---|
+| `flash_limit`（query） | int | ❌ | `20` | 快讯条数；1-200；透传给 `market-context.messages.flash_news` |
+| `include_boards`（query） | bool | ❌ | `true` | 透传给 `market-stats.boards`；`false` 时**板块上游不被调用**（与失败→`null` 不同） |
+| `include_pools`（query） | bool | ❌ | `true` | 透传给 `market-stats.limit_pools`；`false` 时 zt / dt 上游不被调用 |
+| `format`（query） | string | ❌ | `json` | `json` / `md` |
+
+### 返回参数
+
+| 字段 | 类型 | 单位 | 说明 |
+|---|---|---|---|
+| `context` | object | — | **逐字 `MarketContextResponse`**——`trade_date` / `is_trade_day` / `market_session` + `messages.{morning_briefing, market_recap, flash_news}` + `summary`。详见上文 `market-context` 章节 |
+| `stats` | object | — | **逐字 `MarketStatsResponse`**——`stocks` / `boards` / `limit_pools` / `errors[]` + `summary`。详见下文 `market-stats` 章节 |
+| `indices.sh` | object / null | — | 上证综指（`000001`）`IndexQuote`；`null` = 上游失败 |
+| `indices.shenzhen_composite` | object / null | — | 深证成指（`399001`）`IndexQuote`；同上 |
+| `indices.chinext` | object / null | — | 创业板指（`399006`）`IndexQuote`；同上 |
+| `errors[]` | array | — | **顶层 recap-level 错误**：`{block, error, message}`，`block` ∈ `context` / `stats` / `indices.sh` / `indices.shenzhen_composite` / `indices.chinext`。**注意**：`context` / `stats` 子块失败时，**顶层 `errors[]` 只加一条** recap-level 记录；子块内部 partial failure（`context.messages.morning_briefing=null` 之类）仍然挂在 `context` / `stats` 自身结构里 |
+| `summary` | object | — | `{requested, ok, failed, elapsed_ms}`；`requested` 恒为 `5`（1 context + 1 stats + 3 indices） |
+
+#### `IndexQuote` schema（indices 块 14 字段）
+
+| 字段 | 类型 | 单位 | 说明 |
+|---|---|---|---|
+| `code` | string | — | 6 位指数代码（`000001` / `399001` / `399006`） |
+| `name` | string | — | 指数名（来自 `index_symbols` 或上游） |
+| `source` | string | — | fetcher slug（`"akshare"` / `"yfinance"` / ...）；上游未报告时为空串 |
+| `current_price` | number | — | 当前点位 |
+| `change_amount` | number / null | — | 与 `prev_close` 之差 |
+| `change_pct` | number / null | % | 与 `prev_close` 之差百分比 |
+| `open` | number / null | — | 今开 |
+| `high` | number / null | — | 今高 |
+| `low` | number / null | — | 今低 |
+| `prev_close` | number / null | — | 昨收 |
+| `volume` | int / null | 股 | 成交量原值 |
+| `volume_unit` | string | — | 恒为 `"share"`（指数永远按股；区别于 board 的 `"wan_shou"`） |
+| `amount` | number / null | 元 | 成交额 |
+| `update_time` | string / null | — | recap 路径上**恒为 `null`**——`UnifiedRealtimeQuote` 不携带 `update_time` 字段 |
+
+### `?format=md` 投影
+
+`render_market_recap_as_md` 把 `render_market_context_as_md` + `render_market_stats_as_md` verbatim 拼接（保留各自 MD 完整性契约），中间用 `---` 分隔，再追加：
+- `## 指数快讯` 表（3 行 × **全部 14 个 `IndexQuote` 字段**，满足 `?format=md` "无字段丢失" 契约；null 单元 → `—`）
+- `## 错误` 项目列表（顶层 `errors[]` 非空时）
+
+**故意不渲染 `features` block**——`batch-profile` 的 `trend` / `pivots` / `volume` 每指数约 7× token 成本且与 `market-context.messages.market_recap`（CLS 复盘本身已综合近期指数动作）重复；`batch-profile` 描述过去 60 天，`market-recap` 关心今日。MD 渲染失败 → 自动回退 JSON + `X-MD-Render-Error` 响应头（与除 `correlation/matrix` 之外的其他端点同契约）。
+
+### 示例
+
+```bash
+# 默认（3 指数 + 涨跌停池 + 板块 + 消息面全开）
+curl 'http://localhost:8888/api/v1/agent/market-recap'
+
+# 关闭涨跌停池、更多快讯
+curl 'http://localhost:8888/api/v1/agent/market-recap?include_pools=false&flash_limit=50'
+
+# markdown 投影
+curl 'http://localhost:8888/api/v1/agent/market-recap?format=md'
 ```
 
 ---

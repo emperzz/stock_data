@@ -106,7 +106,7 @@ The non-obvious behaviors worth memorizing here are:
 响应的 `source: str` 字段 (optional, `default=""`) 取值三类: **fetcher 名**
 (实时拉取 / TTLCache 命中时保留写入时的 fetcher)、**`"persistence"`**
 (SQLite 持久化层读取)、**缺失** (composite 聚合端点如
-`/agent/correlation/matrix` · `/agent/*/batch-profile` · `/agent/market-context`
+`/agent/correlation/matrix` · `/agent/*/batch-profile` · `/agent/market-context` · `/agent/market-recap`
 —— 由多 fetcher 拼装,无单一 serving fetcher 可署名)。
 
 Per-endpoint 覆盖矩阵: `docs/source-tracking.md`。
@@ -339,7 +339,8 @@ All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. 
 | `GET /agent/indices/batch-profile` | Per-index fan-out: 极简 quote + 单 frequency 计算特征 (`trend`/`pivots`/`volume`)。1-5 codes, 默认 3 核心 CSI 指数。 | per-code `manager.get_index_realtime_quote` + `manager.get_kline_data(asset="index", adjust=None)`, then `features.build_features()` |
 | `POST /agent/stocks/batch-profile` | Per-stock fan-out: quote + 计算特征 + info + boards。1-5 codes, 单 frequency。boards 块带 7 个 THS enrichment 字段 (change_pct/up_count/down_count/limit_up_count/limit_down_count/explain/relevance),与 `/stocks/{code}/boards` 共享 60s `_stock_boards_quote_cache`。 | per-code `manager.get_realtime_quote` + `manager.get_kline_data(adjust="qfq")` + `manager.get_stock_info` + `stock_board_cache`, then `features.build_features()` |
 | `POST /agent/boards/batch-profile` | Per-board fan-out: 极简 realtime quote + 单 frequency 计算特征 (`trend`/`pivots`/`volume`)。1-5 THS platecodes, 单 frequency, 单源 THS。 | per-code `manager.get_board_realtime` + `manager.get_board_history` (THS 单源, fetcher 自动推断 board_type), then `features.build_features()` |
-| `GET /agent/market-context` | 每日快照：早报 + 复盘 + 快讯 + 涨跌停 + 龙虎榜。 | 多 fetcher 组合；`market_session` 由本地 CST + `is_trade_date()` 推得 |
+| `GET /agent/market-context` | 每日消息面快照（slim contract post-2026-09-02）：早报 + 复盘 + 快讯。涨跌停池 zt/dt 已迁出到 `agent/market-stats.limit_pools`;龙虎榜按需走 `/api/v1/dragon-tiger`。 | 多 fetcher 组合;`market_session` 由本地 CST + `is_trade_date()` 推得;per-block 错误隔离;缓存键 3-segment `(flash_limit, trade_date)`(slim 后 session 不再入键) |
+| `GET /agent/market-recap` | 一站式复盘端点:`market-context` (messages) + `market-stats` (stocks/boards/pools) + 3 指数 quote (上证 / 深成指 / 创业板) 的服务端聚合。复盘 skill `skills/market-recap.md` 工作流的唯一推荐取数入口;**无 `trade_date` query 参数**(服务端固定解析为 ≤ today 的最新交易日)。 | per-block 错误隔离 (5 blocks);`asyncio.gather` 扇出 + sync helpers 走 `asyncio.to_thread`;3 指数内部顺序(manager 单例 + circuit breaker 不可重入);60s TTLCache via `get_quote_cache`;`?format=md` 渲染 14 列指数表 + context/stats verbatim |
 
 - **Extended `MinimalQuote` (post-2026-08-28).** The `quote` block on
   `/agent/{stocks,indices,boards}/batch-profile` is no longer a 2-field

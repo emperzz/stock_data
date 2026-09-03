@@ -1289,7 +1289,7 @@ All routes in this section live under `/api/v1/agent/*`
 (`stock_data/api/routes/agent.py`, plus `agent_correlation.py` for the
 correlation matrix endpoint). They are server-side aggregations: the
 typical AI-agent flow of "fetch N boards, pairwise compute intersection,
-summarize" is folded into one request. Seven endpoints ship in v1:
+summarize" is folded into one request. Ten endpoints ship in v1:
 
 | Endpoint | Method | Purpose |
 |---|---|---|
@@ -1298,6 +1298,7 @@ summarize" is folded into one request. Seven endpoints ship in v1:
 | `/agent/boards/filter-stocks` | POST | Server-side numeric filter on a board's constituents |
 | `/agent/indices/batch-profile` | GET | Per-index extended `MinimalQuote` (23 fields, see [inventory](#minimalquote-field-inventory)) + trend/pivots/volume features (3 default CSI indices) |
 | `/agent/market-context` | GET | Slim daily snapshot: morning briefing + market recap + flash news (no `limit_pools` / `dragon_tiger` blocks — see below) |
+| `/agent/market-recap` | GET | One-call end-of-day panorama: `market-context` + `market-stats` + 3 指数 quotes (上证 / 深成指 / 创业板) — replaces a 3-call fan-out for recap workflows |
 | `/agent/stocks/batch-profile` | POST | Per-stock fan-out across extended `MinimalQuote` (23 fields) / features / info / boards (1-5 codes) |
 | `/agent/boards/batch-profile` | POST | Per-board fan-out: extended `MinimalQuote` (23 fields, board-only `volume_unit="wan_shou"`) + trend/pivots/volume features (1-5 THS platecodes, single source THS) |
 | `/agent/correlation/matrix` | POST | Pairwise Pearson + Spearman correlation matrix across 2-10 stocks/boards (A-share only) |
@@ -1321,7 +1322,12 @@ summarize" is folded into one request. Seven endpoints ship in v1:
   (`pre-market` / `intraday` / `post-market` / `closed`) — the slim
   contract returns homogeneous content across sessions, so removing
   that dimension eliminates a class of cross-session cache drift
-  (pre-market 09:00 vs post-market 16:00).
+  (pre-market 09:00 vs post-market 16:00). `market-recap` does not
+  expose `trade_date` as a query param (always server-resolved to the
+  latest trade date on/before today), so its 3-segment key
+  (`flash_limit, include_boards, include_pools`) is shorter than the
+  inner context/stats keys — repeat hits on the same query shape share
+  one entry.
 - **No LLM judgment.** These endpoints emit only numeric / set-arithmetic
   facts. "Which stock is the leader" / "Which board is the better pick"
   remains the agent's job via `skills/market-principles.md`.
@@ -1345,13 +1351,20 @@ on `filter-stocks` carries all 16 fields; the `limit_pools.zt` /
 `limit_pools.dt` lists on `market-stats` show the real-schema-column
 tables — see [`?format=md` shape for market-stats](#get-apiv1agentmarket-stats)
 for the exact column list; the batch-profile feature blocks carry
-`pivots.params` and the full OHLC of each `z_anomalies` bar). Pinned by
+`pivots.params` and the full OHLC of each `z_anomalies` bar;
+`market-recap` adds a 14-column `IndexQuote` table covering all
+`code / name / source / current_price / change_amount / change_pct /
+open / high / low / prev_close / volume / volume_unit / amount /
+update_time` fields). Pinned by
 `tests/test_agent_endpoints.py::TestFormatMdDataCompleteness` (7 tests,
 covering boards/stock-overlap + stocks/board-overlap + market-context)
 and `tests/test_agent_batch_features.py::TestFormatMdFeatureCompleteness`
 (3 tests, covering the batch-profile feature blocks) and
 `tests/test_agent_market_stats.py::TestMarketStatsPoolsBlock::test_format_md_renders_pools_section`
-(MD table columns for `limit_pools.zt` / `limit_pools.dt`). A block
+(MD table columns for `limit_pools.zt` / `limit_pools.dt`) and
+`tests/test_agent_market_recap.py::test_market_recap_md_format_no_field_drop`
+(14-column index table + verbatim context/stats sub-block render).
+A block
 computed from an empty DataFrame renders `（无数据）` rather than an
 empty table skeleton — `build_features` returns `{}` without raising,
 so `errors` stays None and the marker is the only signal that no
@@ -1818,6 +1831,149 @@ contract" above).
 **`trade_date` validation:** the route enforces a `^\d{4}-\d{2}-\d{2}$`
 regex. Non-date strings (e.g. `yesterday`) → 400 `invalid_trade_date`,
 not a silent 200 with empty results.
+
+---
+
+### GET /api/v1/agent/market-recap
+
+One-call end-of-day panorama: embeds `market-context` + `market-stats`
++ 3 指数 quotes (上证 / 深成指 / 创业板) verbatim — designed for LLM
+agents building a recap narrative, replacing the 3-call fan-out
+(`/agent/market-context` + `/agent/market-stats` + 3× `/indices/{code}/quote`)
+with a single round-trip. Use case: "give me everything I need to
+write a market recap in one call".
+
+```bash
+GET /api/v1/agent/market-recap
+GET /api/v1/agent/market-recap?flash_limit=50&include_pools=false&format=md
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `flash_limit` | int | 20 | Flash news item count (1-200). Plumbed to `market-context.messages.flash_news`. |
+| `include_boards` | bool | `true` | Plumbed to `market-stats.boards`. `false` skips the boards upstream call (the inner `stats.boards` field still serializes as `null`). |
+| `include_pools` | bool | `true` | Plumbed to `market-stats.limit_pools`. `false` skips the zt/dt upstream calls (the inner `stats.limit_pools` field still serializes as `{zt: null, dt: null}`). |
+| `format` | string | `json` | `json` (default) or `md` — see [`?format=json\|md` projection](#agent-batch-api). |
+
+**No `trade_date` query param** — recap always targets the
+**server-resolved latest trade date on or before today**
+(`trade_calendar.get_latest_trade_date_on_or_before(today)`).
+Recap is an end-of-day summary; LLM agents rarely need historical
+recaps and removing the param removes a 400 failure mode, shortens the
+cache key, and keeps the surface minimal. Historical recaps can be
+obtained by composing separate calls to
+`/agent/market-context?trade_date=...` +
+`/agent/market-stats?trade_date=...` directly.
+
+**Response (200):**
+
+```json
+{
+  "context": { /* full MarketContextResponse — verbatim from /agent/market-context */ },
+  "stats":   { /* full MarketStatsResponse  — verbatim from /agent/market-stats */ },
+  "indices": {
+    "sh":                 {"code": "000001", "name": "上证综指", "source": "akshare",
+                           "current_price": 3540.20, "change_amount": 28.10,
+                           "change_pct": 0.80, "open": 3515.00, "high": 3555.00,
+                           "low": 3512.00, "prev_close": 3512.10,
+                           "volume": 312000000, "volume_unit": "share",
+                           "amount": 4.52e11, "update_time": null},
+    "shenzhen_composite": { /* IndexQuote for 399001 — 深证成指 */ },
+    "chinext":            { /* IndexQuote for 399006 — 创业板指 */ }
+  },
+  "errors": [],
+  "summary": {"requested": 5, "ok": 5, "failed": 0, "elapsed_ms": 320}
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `context` | object | **Verbatim** `MarketContextResponse` — same shape as `/agent/market-context` (slim contract: `messages.{morning_briefing, market_recap, flash_news}` only). |
+| `stats` | object | **Verbatim** `MarketStatsResponse` — same shape as `/agent/market-stats` (stocks + boards + `limit_pools` + `errors[]`). |
+| `indices.sh` | `IndexQuote \| null` | 上证综指 (`000001`) — `null` on upstream failure. |
+| `indices.shenzhen_composite` | `IndexQuote \| null` | 深证成指 (`399001`). |
+| `indices.chinext` | `IndexQuote \| null` | 创业板指 (`399006`). |
+| `errors[]` | object[] | **Top-level** recap errors only — `block ∈ {"context", "stats", "indices.sh", "indices.shenzhen_composite", "indices.chinext"}`. Sub-block errors (`context.errors[]` / `stats.errors[]`) stay nested in their respective blocks for debuggability. |
+| `summary` | object | `{requested, ok, failed, elapsed_ms}` — `requested` is always `5` (1 context + 1 stats + 3 indices). |
+
+**`IndexQuote` schema** (the three index blocks):
+
+| Field | Type | Description |
+|---|---|---|
+| `code` | string | Canonical 6-digit code. |
+| `name` | string | Index name (from `index_symbols` map or upstream). |
+| `source` | string | Fetcher slug (`"akshare"` / `"yfinance"` / ...); `""` when upstream didn't report. |
+| `current_price` | float | Current price. |
+| `change_amount` | float \| null | Absolute change vs `prev_close`. |
+| `change_pct` | float \| null | Percent change vs `prev_close`. |
+| `open` | float \| null | Today's open. |
+| `high` | float \| null | Today's high. |
+| `low` | float \| null | Today's low. |
+| `prev_close` | float \| null | Yesterday's close. |
+| `volume` | int \| null | Raw volume. |
+| `volume_unit` | string | Always `"share"` for indices (per spec §3.4). |
+| `amount` | float \| null | Trading amount (元). |
+| `update_time` | string \| null | Always `null` on the recap path — `UnifiedRealtimeQuote` has no `update_time` field. |
+
+**No `features` block.** Recap deliberately does NOT include the
+`trend` / `pivots` / `volume` features from `indices/batch-profile` —
+that's ~7× the token cost per index and is redundant with the
+narrative already in `context.messages.market_recap`
+(ClsFetcher's recap is itself a synthesis of recent index action).
+`batch-profile` describes the past 60 days; `market-recap` is asking
+about today's session.
+
+**Per-block error isolation** — the 5 blocks (context / stats /
+3 indices) fan out via `asyncio.gather` (with sync helpers wrapped in
+`asyncio.to_thread` to avoid blocking the event loop). Each block is
+wrapped in its own try/except — one failure does not abort the rest.
+Index fetches are **internally sequential** (not parallel) because
+`manager.get_index_realtime_quote` → `_with_failover` mutates per-fetcher
+circuit-breaker state and is not re-entrant safe under concurrent calls
+on the singleton manager. Worst case adds ~50ms × 3; the 60s cache
+absorbs repeat calls.
+
+**Sub-block error visibility.** When `context` or `stats` itself fails,
+the recap-level `errors[]` carries one entry (`{block: "context"}` /
+`{block: "stats"}`) but the inner `context.errors[]` / `stats.errors[]`
+are still populated for their partial-failure surfaces (e.g.
+`context.messages.morning_briefing=null` from a CLS HTML parser crash).
+The recap-level entry is the **recap's** view, not a recursive
+flattening.
+
+**Cache:** `make_market_recap_cache_key(flash_limit, include_boards, include_pools)`
+→ `agent_market_recap:<flash_limit>:<include_boards>:<include_pools>`.
+3 segments (no `trade_date` — server-resolved, identical for every
+caller at a given moment). Shared 60s TTL via `get_quote_cache`
+(format-agnostic — JSON and MD share one entry; `_render_agent` formats
+on the way out). Inner `market-context` and `market-stats` builders
+keep their own existing cache keys
+(`make_market_context_cache_key` /
+`make_market_stats_cache_key`).
+
+**Errors:**
+
+- `422 invalid_request` — `format` value other than `json` / `md`.
+- **No 5xx.** Per-block upstream failures surface in `errors[]` with
+  the block name, exception class, and message. The route never
+  aborts the whole response on a single failure.
+
+**`?format=md` projection:** `render_market_recap_as_md` joins the
+verbatim `render_market_context_as_md` + `render_market_stats_as_md`
+sub-blocks with `---` separators, adds a 3-row `## 指数快讯` table
+covering **all 14 `IndexQuote` columns** (per the CLAUDE.md `?format=md`
+"no field dropped" contract), and renders the top-level `errors[]` as
+a bullet list. Null cells render as `—`. Same `_render_agent` JSON-
+fallback contract applies: a template failure returns JSON with an
+`X-MD-Render-Error` header.
+
+**Why not just call from the agent side:** every additional round-trip
+is per-agent latency + N upstream fan-outs the server could have
+collapsed into one. The server-side cache layers
+(`make_market_context_cache_key` / `make_market_stats_cache_key` /
+`make_market_recap_cache_key`) absorb repeated calls within 60s.
 
 ---
 
