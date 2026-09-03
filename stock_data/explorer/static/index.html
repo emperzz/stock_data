@@ -906,14 +906,22 @@
       const epById = {};
       for (const n of epNodes) epById[n.id] = n;
 
-      const agents = [];
+      const agentTiers = [];                     // tier index → nodes[] (稀疏; 仅在有节点时占槽)
       const cols = new Map();                    // sectionId -> endpoint node[]
       for (const n of epNodes) {
         const sid = p2s[n._ep.path] || "?";
         n.label = flowLabelFor(n._ep, sid);      // 布局宽度与显示共用同一短标签
-        if (sid === "agent") agents.push(n);
+        if (sid === "agent") {
+          const t = n._agentTier || 0;
+          while (agentTiers.length <= t) agentTiers.push([]);
+          agentTiers[t].push(n);
+        }
         else { if (!cols.has(sid)) cols.set(sid, []); cols.get(sid).push(n); }
       }
+      const populatedTiers = agentTiers
+        .map((list, i) => ({ tier: i, list }))
+        .filter(t => t.list.length);
+      const maxAgentTier = populatedTiers.length ? populatedTiers[populatedTiers.length - 1].tier : 0;
 
       // 间距(ROW/HEAD)放大, 中间层端点不贴太紧。
       const PAD = 56, ROW = 42, HEAD = 40, ROW_W = 7.6;
@@ -935,8 +943,10 @@
 
       flowBoxes = [];
       if (isTB) {
+        // agent 按 tier 由上至下堆叠, 最高 tier 在 y=PAD; maxTier=0 时与旧版像素一致。
+        const TIER_H = 60;
+        const rowTop = PAD + maxAgentTier * TIER_H + 170;   // 顶部留走廊画 composed-of
         // R1: 分组框从左到右横排(框内端点竖排)。
-        const rowTop = PAD + 170;                // 顶部留走廊画 composed-of
         let x = PAD;
         for (const [sid, list] of cols) {
           const w = boxWOf(list), h = boxHOf(list);
@@ -948,10 +958,14 @@
         const boxRight = Math.max(PAD, x - 58);
         const maxBoxBottom = flowBoxes.length
           ? Math.max(...flowBoxes.map(b => b.y + b.h)) : rowTop + HEAD;
-        const contentW = Math.max(PAD * 2 + agents.length * 120, boxRight + PAD);
+        const totalAgentCount = populatedTiers.reduce((s, t) => s + t.list.length, 0);
+        const contentW = Math.max(PAD * 2 + totalAgentCount * 120, boxRight + PAD);
         const agentDesired = n => { const t = tgtOf(n); return t.length ? mean(t.map(q => q.x)) : contentW / 2; };
-        floatRow(agents, agentDesired, PAD, n => n.label.length * ROW_W + 60, PAD, contentW - PAD, 60);
-        centerRow(agents, n => n.label.length * ROW_W + 60, PAD, contentW - PAD);
+        for (const { tier, list } of populatedTiers) {
+          const y = PAD + (maxAgentTier - tier) * TIER_H;
+          floatRow(list, agentDesired, y, n => n.label.length * ROW_W + 60, PAD, contentW - PAD, 60);
+          centerRow(list, n => n.label.length * ROW_W + 60, PAD, contentW - PAD);
+        }
         const fxY = maxBoxBottom + 210;
         const fxDesired = n => { const s = srcOf(n); return s.length ? mean(s.map(q => q.x)) : contentW / 2; };
         floatRow(fxNodes, fxDesired, fxY, n => n.label.length * 9 + 80, PAD, contentW - PAD, 50);
