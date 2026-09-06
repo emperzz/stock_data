@@ -1506,6 +1506,7 @@ class TestBatchProfileQuoteFields:
         from unittest.mock import MagicMock
 
         import pytest as _pytest
+
         from stock_data.api.routes import agent as agent_module
         from stock_data.api.routes import reset_manager
 
@@ -1563,3 +1564,81 @@ class TestBatchProfileQuoteFields:
         assert quote["pe_ratio"] is None
         assert quote["mcap_yi"] is None
         assert quote["limit_up"] is None
+
+
+class TestBatchProfileHelperExtraction:
+    """Pin the build_stock_profile helper extraction — per-call count + boards
+    enrichment merge behavior must be preserved after refactor."""
+
+    def test_batch_profile_calls_helper_for_each_code(self, client, monkeypatch):
+        from unittest.mock import MagicMock
+
+        """重构后 helper 应被调用 N 次（N=输入 codes 数）。"""
+        from stock_data.api._helpers.agent_stock_profile import build_stock_profile
+        from stock_data.api.routes import agent as agent_module
+
+        mock_helper = MagicMock(wraps=build_stock_profile)
+        monkeypatch.setattr(agent_module, "build_stock_profile", mock_helper)
+        mock_manager = MagicMock()
+        mock_manager.get_realtime_quote.return_value = None
+        mock_manager.get_kline_data.return_value = (_make_kline_df([]), "zzshare")
+        mock_manager.get_stock_info.return_value = ({}, "zhitu")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
+            resp = client.post(
+                "/api/v1/agent/stocks/batch-profile",
+                json={"codes": ["300750", "600519"], "frequency": "d"},
+            )
+        assert resp.status_code == 200
+        assert mock_helper.call_count == 2
+        called_codes = {c.args[1] for c in mock_helper.call_args_list}
+        assert called_codes == {"300750", "600519"}
+
+    def test_batch_profile_boards_enrichment_merged(self, client, monkeypatch):
+        """boards 字段必须合并 THS enrichment（与重构前 agent.py:970-984 行为一致）。"""
+        from unittest.mock import MagicMock
+
+        from stock_data.api._helpers import stock_boards as sb_helper
+        from stock_data.api.routes import agent as agent_module
+        from stock_data.data_provider.persistence import board as stock_board_cache
+
+        cached_entry = {
+            "code": "300750",
+            "name": "宁德时代",
+            "type": "concept",
+            "subtype": "industry",
+            "source": "ths",
+        }
+        monkeypatch.setattr(
+            stock_board_cache,
+            "get_stock_memberships",
+            lambda stock_code, sources, manager=None, **kw: ([cached_entry], [], "persistence"),
+        )
+        monkeypatch.setattr(
+            sb_helper,
+            "fetch_stock_boards_quote_enrichment",
+            lambda stock_code, manager: (
+                [{"code": "300750", "change_pct": 20.0, "limit_up_count": 1}],
+                {"300750": {"change_pct": 20.0, "limit_up_count": 1}},
+            ),
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get_realtime_quote.return_value = None
+        mock_manager.get_kline_data.return_value = (_make_kline_df([]), "zzshare")
+        mock_manager.get_stock_info.return_value = ({}, "zhitu")
+        monkeypatch.setattr(agent_module, "get_manager", lambda: mock_manager)
+        with patch(_BOARD_STOCKS_PATCH, return_value=([], False, "persistence")):
+            resp = client.post(
+                "/api/v1/agent/stocks/batch-profile",
+                json={"codes": ["300750"], "frequency": "d"},
+            )
+        assert resp.status_code == 200
+        entry = resp.json()["results"][0]
+        assert entry["boards"] is not None
+        assert entry["boards"]["source"] == "persistence"
+        # enrichment merged onto cached entry
+        merged_entry = entry["boards"]["data"][0]
+        assert merged_entry["code"] == "300750"
+        assert merged_entry["change_pct"] == 20.0
+        assert merged_entry["limit_up_count"] == 1

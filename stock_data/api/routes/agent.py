@@ -27,6 +27,7 @@ MD projection (Phase 2.4):
   bottom of this file. Single source of truth per endpoint.
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -34,7 +35,6 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from datetime import time as dt_time
-import asyncio
 from itertools import combinations
 from zoneinfo import ZoneInfo
 
@@ -56,7 +56,7 @@ from ...data_provider.utils.stats import (
     build_stock_buckets,
     compute_aggregate,
 )
-from .._helpers import stock_boards
+from .._helpers.agent_stock_profile import build_minimal_quote_from_unified, build_stock_profile
 from ..cache import (
     cached_lookup,
     cached_store,
@@ -95,7 +95,6 @@ from ..schemas import (
     MarketStatsLimitPools,
     MarketStatsResponse,
     MinimalQuote,
-    StockBatchAspectError,
     StockBatchProfileEntry,
     StockBatchProfileRequest,
     StockBatchProfileResponse,
@@ -685,7 +684,7 @@ def get_indices_batch_profile(
             if q is None:
                 errors["quote"] = "no fetcher could serve realtime quote"
             else:
-                quote = _build_minimal_quote_from_unified(q)
+                quote = build_minimal_quote_from_unified(q)
         except (DataFetchError, ValueError) as exc:
             logger.warning(f"[agent/indices/batch-profile] quote {code} failed: {exc}")
             errors["quote"] = str(exc)
@@ -913,94 +912,43 @@ def post_stocks_batch_profile(
     days = _resolve_and_validate_days(payload.frequency, payload.days)
     started = time.monotonic()
     manager = get_manager()
-    profile = _FEATURE_FREQS[payload.frequency]
-    fetch_days = max(days, profile.ma60_warmup_days)
     results: list[StockBatchProfileEntry] = []
     n_ok = 0
 
     for code in payload.codes:
-        errors: list[StockBatchAspectError] = []
-        quote = None
-        features = None
-        info = None
-        boards = None
+        # Per-stock fan-out via shared helper (also used by /agent/lead-stocks).
+        # Per-aspect error isolation lives inside the helper; failures are
+        # surfaced in `profile.errors` rather than aborting the loop.
+        profile = build_stock_profile(
+            manager,
+            code,
+            frequency=payload.frequency,
+            days=days,
+        )
+        # name: prefer helper's per-quote view, fall back to empty.
+        # The helper doesn't carry `name` (MinimalQuote doesn't have the field);
+        # we re-fetch the name from manager only on quote success to keep the
+        # helper API minimal.
         name = ""
-
-        try:
-            q = manager.get_realtime_quote(code)
-            if q is not None:
-                quote = _build_minimal_quote_from_unified(q)
-                name = q.name or ""
-        except Exception as exc:
-            logger.warning(f"[agent/stocks/batch-profile] {code} quote failed: {exc}")
-            errors.append(
-                StockBatchAspectError(aspect="quote", error=type(exc).__name__, message=str(exc))
-            )
-
-        try:
-            df, _src = manager.get_kline_data(
-                code,
-                days=fetch_days,
-                frequency=profile.mgr_frequency,
-                adjust="qfq" if profile.mgr_frequency in ("d", "w", "m") else None,
-                asset="stock",
-            )
-            features = BatchFeatures(**build_features(df, frequency=payload.frequency, days=days))
-        except Exception as exc:
-            logger.warning(
-                f"[agent/stocks/batch-profile] {code} features failed: {exc}", exc_info=True
-            )
-            errors.append(
-                StockBatchAspectError(aspect="features", error=type(exc).__name__, message=str(exc))
-            )
-
-        try:
-            info_dict, info_src = manager.get_stock_info(code)
-            info = {"source": info_src, "data": info_dict}
-        except Exception as exc:
-            logger.warning(f"[agent/stocks/batch-profile] {code} info failed: {exc}")
-            errors.append(
-                StockBatchAspectError(aspect="info", error=type(exc).__name__, message=str(exc))
-            )
-
-        try:
-            entries, _cold, _origin = stock_board_cache.get_stock_memberships(
-                stock_code=code, sources=["ths"], manager=manager
-            )
-            fetcher_full_result, enrichment_by_code = (
-                stock_boards.fetch_stock_boards_quote_enrichment(code, manager)
-            )
-            ths_cached = [e for e in entries if e.get("source") == "ths"]
-            if ths_cached:
-                merged = []
-                for e in ths_cached:
-                    base = {k: e.get(k) for k in ("code", "name", "type", "subtype", "source")}
-                    base.update(enrichment_by_code.get(e["code"], {}))
-                    merged.append(base)
-                boards = {"source": "persistence", "data": merged}
-            elif fetcher_full_result:
-                boards = {"source": "ths", "data": fetcher_full_result}
-            else:
-                boards = {"source": "persistence", "data": entries}
-        except Exception as exc:
-            logger.warning(f"[agent/stocks/batch-profile] {code} boards failed: {exc}")
-            errors.append(
-                StockBatchAspectError(aspect="boards", error=type(exc).__name__, message=str(exc))
-            )
-
-        ok = any(v is not None for v in (quote, features, info, boards))
-        if ok:
+        if profile.quote is not None:
+            try:
+                q = manager.get_realtime_quote(code)
+                if q is not None:
+                    name = q.name or ""
+            except Exception:
+                pass
+        if profile.ok:
             n_ok += 1
         results.append(
             StockBatchProfileEntry(
                 code=code,
                 name=name,
-                ok=ok,
-                quote=quote,
-                features=features,
-                info=info,
-                boards=boards,
-                errors=errors,
+                ok=profile.ok,
+                quote=profile.quote,
+                features=profile.features,
+                info=profile.info,
+                boards=profile.boards,
+                errors=profile.errors,
             )
         )
 
@@ -1011,47 +959,6 @@ def post_stocks_batch_profile(
         summary=_batch_summary(len(payload.codes), n_ok, started),
     )
     return _render_agent("stocks/batch-profile", resp, format)
-
-
-def _build_minimal_quote_from_unified(q) -> MinimalQuote:
-    """Map a UnifiedRealtimeQuote to the expanded MinimalQuote.
-
-    Mirrors the field-mapping logic in StockQuote.from_unified_quote
-    (schemas.py:126) — same fallback rules for amplitude, same 1e8
-    division for mcap_yi / float_mcap_yi. Kept here (rather than
-    reusing StockQuote.from_unified_quote) to keep the nested-flag /
-    current_price-rename / _serialize semantics out of the agent
-    path: MinimalQuote is always top-level, never embedded, and the
-    helper returns the Pydantic instance directly.
-    """
-    amplitude = q.amplitude
-    if amplitude is None and q.high is not None and q.low is not None and q.pre_close:
-        amplitude = (q.high - q.low) / q.pre_close * 100
-
-    def _yi(v):
-        return None if v is None else v / 1e8
-
-    return MinimalQuote(
-        price=q.price,
-        change_pct=q.change_pct,
-        change_amount=q.change_amount,
-        open=q.open_price,
-        high=q.high,
-        low=q.low,
-        prev_close=q.pre_close,
-        volume=q.volume,
-        volume_unit=q.volume_unit or "share",
-        amount=q.amount,  # UnifiedRealtimeQuote.amount is 元; pass-through
-        turnover_pct=q.turnover_rate,
-        amplitude_pct=amplitude,
-        volume_ratio=q.volume_ratio,
-        pe_ratio=q.pe_ratio,
-        pb_ratio=q.pb_ratio,
-        mcap_yi=_yi(q.total_mv),
-        float_mcap_yi=_yi(q.circ_mv),
-        limit_up=q.limit_up,
-        limit_down=q.limit_down,
-    )
 
 
 def _index_quote_from_unified(code: str, q) -> IndexQuote | None:
@@ -2060,14 +1967,12 @@ def _md_limit_pools_block(out: list[str], pools) -> None:
         (
             "涨停池",
             "zt",
-            "| 代码 | 名称 | 涨跌幅 | 首次涨停时间 | 最后涨停时间 | "
-            "连板数 | 换手率 | 封单金额 |",
+            "| 代码 | 名称 | 涨跌幅 | 首次涨停时间 | 最后涨停时间 | 连板数 | 换手率 | 封单金额 |",
         ),
         (
             "跌停池",
             "dt",
-            "| 代码 | 名称 | 涨跌幅 | 首次跌停时间 | 最后跌停时间 | "
-            "连板数 | 换手率 |",
+            "| 代码 | 名称 | 涨跌幅 | 首次跌停时间 | 最后跌停时间 | 连板数 | 换手率 |",
         ),
     ]:
         rows = getattr(pools, key)
@@ -2090,14 +1995,10 @@ def _md_limit_pools_block(out: list[str], pools) -> None:
                 turnover = s.get("turnover_pct")
                 # 换手率始终为正，用无符号 2 位小数；上游已是百分比单位
                 # （如 0.85 代表 0.85%，不是 0.0085）。
-                turnover_cell = (
-                    f"{turnover:.2f}%" if turnover is not None else "—"
-                )
+                turnover_cell = f"{turnover:.2f}%" if turnover is not None else "—"
                 if key == "zt":
                     seal_amount = s.get("seal_amount")
-                    seal_cell = (
-                        f"{seal_amount:,.0f}" if seal_amount is not None else "—"
-                    )
+                    seal_cell = f"{seal_amount:,.0f}" if seal_amount is not None else "—"
                     lb_cell = str(lb) if lb is not None else "—"
                     out.append(
                         f"| {code} | {name} | {_md_pct(pct)} | "
@@ -2146,9 +2047,20 @@ def _render_recap_indices_table_md(indices: MarketRecapIndicesBlock) -> str:
     """
     lines: list[str] = ["## 指数快讯", ""]
     cols = [
-        "code", "name", "source", "current_price", "change_amount",
-        "change_pct", "open", "high", "low", "prev_close",
-        "volume", "volume_unit", "amount", "update_time",
+        "code",
+        "name",
+        "source",
+        "current_price",
+        "change_amount",
+        "change_pct",
+        "open",
+        "high",
+        "low",
+        "prev_close",
+        "volume",
+        "volume_unit",
+        "amount",
+        "update_time",
     ]
     lines.append("| " + " | ".join(cols) + " |")
     lines.append("| " + " | ".join("---" for _ in cols) + " |")
@@ -2161,6 +2073,7 @@ def _render_recap_indices_table_md(indices: MarketRecapIndicesBlock) -> str:
         if q is None:
             lines.append("| " + " | ".join(["—"] * len(cols)) + " |")
             continue
+
         # Helper: format a numeric field with `—` for None
         def _num(v, fmt: str) -> str:
             if v is None:
@@ -2175,11 +2088,7 @@ def _render_recap_indices_table_md(indices: MarketRecapIndicesBlock) -> str:
             q.source or "—",
             _num(q.current_price, ".2f"),
             _num(q.change_amount, ".2f"),
-            (
-                f"{q.change_pct:+.2f}%"
-                if isinstance(q.change_pct, (int, float))
-                else "—"
-            ),
+            (f"{q.change_pct:+.2f}%" if isinstance(q.change_pct, (int, float)) else "—"),
             _num(q.open, ".2f"),
             _num(q.high, ".2f"),
             _num(q.low, ".2f"),
@@ -2287,7 +2196,9 @@ async def get_market_recap(
         description="快讯条数上限 1-200;默认 20;透传给 market-context.",
     ),
     include_boards: bool = Query(default=True, description="是否包含板块块;透传给 market-stats."),
-    include_pools: bool = Query(default=True, description="是否包含涨跌停池块;透传给 market-stats."),
+    include_pools: bool = Query(
+        default=True, description="是否包含涨跌停池块;透传给 market-stats."
+    ),
     # NOTE: no `trade_date` query param — recap always targets the server-resolved
     # latest trade date. See spec §2.1 for the rationale.
     format: str = Query(
@@ -2310,9 +2221,7 @@ async def get_market_recap(
     """
     # 1. resolve target_date via trade_calendar (no user input — always latest)
     today_str = datetime.now(_CST).date().isoformat()
-    target_date = (
-        trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
-    )
+    target_date = trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
 
     # 2. top-level cache lookup
     cache_key = make_market_recap_cache_key(flash_limit, include_boards, include_pools)
