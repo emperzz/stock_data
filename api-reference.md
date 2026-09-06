@@ -2287,11 +2287,22 @@ The `quote` block renders as four sub-tables (价格 / 量价 / 估值 /
 
 ### GET /api/v1/agent/lead-stocks
 
-涨停龙头股服务端排名。按 `连板数 × 当日涨幅 → 最后涨停时间 → 封单金额`
+涨停龙头股服务端排名。按 `连板数 × limit band 涨幅 → 最后涨停时间 → 封单金额`
 三层链对 10cm/20cm 涨停股排序，附带涨停原因、完整 quote / info / boards
 profile（**不**包含 computed technical indicators——features 计算在
 2026-09-06 spec 修订中移除，避免 N+1 fetch 跨 `top_n=20` 顶端时的
 延迟膨胀）。替代 LLM agent 客户端手算排名 + N+1 拉数。
+
+**Limit band 分类**（2026-09-06 spec 修订）：
+
+| 区间 | band | `limit_pct` | 含义 |
+|---|---|---|---|
+| `9.0 ≤ change_pct ≤ 11.0` | **10cm** | `10.0` | 主板 / 中小板 / 创业板非注册制 |
+| `19.0 ≤ change_pct ≤ 22.0` | **20cm** | `20.0` | 创业板注册制 / 科创板 |
+| 其他（`< 9` / `(11, 19)` / `> 22` / `None`） | — | `0.0`（被排除） | ST / 上游噪声 / 北交所 30cm / 缺数据 |
+
+score 改用 `lb_count × limit_pct`（10 或 20）而非 `lb_count × change_pct` —
+消除上游浮点噪声（10.01% vs 9.85% 不再影响排名），让 20cm 同一连板数自然 2× 高于 10cm。
 
 #### Query 参数
 
@@ -2306,16 +2317,18 @@ profile（**不**包含 computed technical indicators——features 计算在
 
 1. 调 `manager.get_zt_pool("zt", date)` 取涨停池（失败 → 503）
 2. 若 `board_code` 提供：调 `stock_board_cache.get_board_stocks(source="ths")` 与成分股集合做交集（失败 → 503）
-3. **过滤** `change_pct`：None 视为 0；保留 `[9.0, 22.0]`（**包含边界**）
-   - `< 9.0` → 计入 `summary.excluded.below_9pct`（ST ~5% 在此桶）
-   - `> 22.0` → 计入 `summary.excluded.above_22pct`（北交所 30cm 在此桶）
+3. **Limit band 过滤**：保留 `[9.0, 11.0]` (10cm) 和 `[19.0, 22.0]` (20cm) 两段（**包含边界**）
+   - `< 9.0` → `summary.excluded.below_9pct`（ST ~5%）
+   - `(11.0, 19.0)` → `summary.excluded.neither_10_nor_20`（上游噪声，e.g. 15%）
+   - `> 22.0` → `summary.excluded.above_22pct`（北交所 30cm）
+   - `None` → 视为 0 → 落入 `below_9pct`
 4. **三层排名**：
-   - `score = lb_count × change_pct` 降序
+   - `score = lb_count × limit_pct` 降序（`limit_pct` ∈ {10.0, 20.0}）
    - `last_seal_time` 升序（None 视为 `99:99:99`）
    - `seal_amount` 降序（None 视为 `-1`）
 5. 取前 `top_n`
 6. 调 `manager.get_zt_reasons(date)` 拼 `reason`（失败 → 降级，`reason=null` + `errors[]`）
-7. 对每只 lead 调 `build_stock_profile(manager, code, frequency="d", days=60, include_features=False)` 拿 quote / info / boards（features 跳过）
+7. 对每只 lead 拿 quote / info / boards profile（features 跳过）
 
 #### 响应字段
 
@@ -2331,9 +2344,9 @@ profile（**不**包含 computed technical indicators——features 计算在
 | `board_code` | str \| null | 用户传入值或 null |
 | `top_n` | int | 上限回显 |
 | `leads[].rank` | int | 1-indexed |
-| `leads[].score` | float | `lb_count × change_pct` |
+| `leads[].score` | float | `lb_count × limit_pct`（10 或 20）— 由 limit band 决定，不是原始 change_pct |
 | `leads[].code` | str | 6 位裸代码 |
-| `leads[].change_pct` | float \| null | 当日涨幅 (%) |
+| `leads[].change_pct` | float \| null | 当日涨幅原始值（保留上游数据，便于客户端交叉验证 limit band 归类） |
 | `leads[].lb_count` | int \| null | 连板数 |
 | `leads[].zt_count` | str \| null | "首板"/"3连板" |
 | `leads[].last_seal_time` | str \| null | HH:MM:SS |
@@ -2346,7 +2359,7 @@ profile（**不**包含 computed technical indicators——features 计算在
 | `summary.requested` | int | 输入 `top_n` |
 | `summary.matched` | int | 实际返回数 |
 | `summary.elapsed_ms` | int | 处理耗时 |
-| `summary.excluded` | dict | `{below_9pct, above_22pct}` 分桶 |
+| `summary.excluded` | dict | `{below_9pct, neither_10_nor_20, above_22pct}` 分桶 |
 
 #### 示例
 

@@ -194,18 +194,48 @@ def _resolve_and_validate_days(frequency: str, days: int | None) -> int:
     return resolved
 
 
+def _classify_limit_band(change_pct: float | None) -> float | None:
+    """Map raw change_pct to its canonical limit band percentage (10 or 20).
+
+    Bands (per spec amendment 2026-09-06):
+      - 9.0 ≤ change_pct ≤ 11.0  →  10.0  (10cm 主板 / 中小板 / 创业板非注册制)
+      - 19.0 ≤ change_pct ≤ 22.0 →  20.0  (20cm 创业板注册制 / 科创板)
+      - everything else          →  None  (excluded — see apply_change_pct_filter)
+
+    The two intervals are disjoint; values in (11.0, 19.0) are deliberately
+    excluded as "neither clear 10cm nor clear 20cm" (e.g. 15% is upstream
+    data noise, not a real limit-up). None change_pct → None band.
+
+    Returns the limit percentage (10.0 / 20.0) or None when excluded.
+    """
+    if change_pct is None:
+        return None
+    pct = float(change_pct)
+    if 9.0 <= pct <= 11.0:
+        return 10.0
+    if 19.0 <= pct <= 22.0:
+        return 20.0
+    return None
+
+
 def apply_change_pct_filter(stocks: list[dict]) -> tuple[list[dict], dict]:
-    """Filter to keep only stocks with 9.0 ≤ change_pct ≤ 22.0 (inclusive).
+    """Filter to keep only stocks whose change_pct falls in a clear 10cm or
+    20cm band (see `_classify_limit_band` for the exact intervals).
 
-    Excludes 30cm (北交所, ~30%) and ST (~5%) stocks. None change_pct is
-    treated as 0 → falls into the below_9pct bucket.
+    Excludes:
+      - ST stocks (change_pct < 9.0)
+      - "Neither 10cm nor 20cm" stocks — change_pct in (11.0, 19.0), which
+        is upstream noise rather than a real limit-up
+      - 30cm 北交所 stocks (change_pct > 22.0)
+      - None change_pct (treated as 0 → falls into below_9pct)
 
-    Returns (kept, {"below_9pct": int, "above_22pct": int}).
+    Returns (kept, {"below_9pct": int, "neither_10_nor_20": int,
+                    "above_22pct": int}).
 
     Spec: docs/superpowers/specs/2026-09-06-agent-lead-stocks-design.md §3.3
     """
     kept: list[dict] = []
-    below = above = 0
+    below = middle = above = 0
     for s in stocks:
         pct_raw = s.get("change_pct")
         pct = 0.0 if pct_raw is None else float(pct_raw)
@@ -213,17 +243,30 @@ def apply_change_pct_filter(stocks: list[dict]) -> tuple[list[dict], dict]:
             below += 1
         elif pct > 22.0:
             above += 1
+        elif 11.0 < pct < 19.0:
+            middle += 1
         else:
             kept.append(s)
-    return kept, {"below_9pct": below, "above_22pct": above}
+    return kept, {
+        "below_9pct": below,
+        "neither_10_nor_20": middle,
+        "above_22pct": above,
+    }
 
 
 def rank_lead_stocks(stocks: list[dict]) -> list[dict]:
     """Three-tier sort: score DESC → seal_time ASC → seal_amount DESC.
 
+    Score uses the canonical limit band percentage (10cm / 20cm) rather than
+    the raw change_pct — see `_classify_limit_band`. This removes upstream
+    floating-point noise (e.g. 9.85% vs 10.01% no longer matters) and gives
+    20cm leads a 2× natural advantage over 10cm leads at the same 连板数
+    (per spec amendment 2026-09-06).
+
     None handling (None = worst value for that key):
       - lb_count=None → 1 (assume at least 首板)
-      - change_pct=None → 0 (score will push to bottom)
+      - change_pct=None → 0 (would push to bottom; in practice the filter
+        step already excludes these via below_9pct)
       - last_seal_time=None → "99:99:99" (push to bottom on time tier)
       - seal_amount=None → -1 (push to bottom on amount tier)
 
@@ -233,7 +276,8 @@ def rank_lead_stocks(stocks: list[dict]) -> list[dict]:
     def sort_key(s):
         lb = 1 if s.get("lb_count") is None else int(s["lb_count"])
         pct = 0.0 if s.get("change_pct") is None else float(s["change_pct"])
-        score = lb * pct
+        limit_pct = _classify_limit_band(pct) or 0.0
+        score = lb * limit_pct
         seal_time = s.get("last_seal_time") or "99:99:99"
         seal_amount = -1.0 if s.get("seal_amount") is None else float(s["seal_amount"])
         # negate score and seal_amount for descending; seal_time ascending as-is
@@ -1130,14 +1174,19 @@ def get_lead_stocks(
     # is quote / info / boards only. ``include_features=False`` skips the
     # kline fetch + build_features call entirely so latency stays bounded
     # under the top_n=20 cap.
+    # Score uses the canonical limit band (10 / 20) rather than raw change_pct
+    # — see _classify_limit_band. ``change_pct`` field itself is preserved as
+    # the raw upstream value for downstream transparency.
     leads: list[LeadStockEntry] = []
     for rank_idx, s in enumerate(ranked, start=1):
         code = s["code"]
         profile = build_stock_profile(manager, code, frequency="d", days=60, include_features=False)
+        lb = 1 if s.get("lb_count") is None else int(s.get("lb_count"))
+        limit_pct = _classify_limit_band(s.get("change_pct")) or 0.0
         leads.append(
             LeadStockEntry(
                 rank=rank_idx,
-                score=(s.get("lb_count") or 1) * (s.get("change_pct") or 0.0),
+                score=lb * limit_pct,
                 code=code,
                 name=s.get("name"),
                 change_pct=s.get("change_pct"),

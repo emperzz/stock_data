@@ -131,19 +131,22 @@ def _patch_manager_and_boards(monkeypatch, manager, *, board_stocks=None):
 
 
 class TestLeadStocksChangePctFilter:
-    """Pin the change_pct ∈ [9.0, 22.0] filter (inclusive)."""
+    """Pin the limit-band filter — keeps only stocks whose change_pct falls
+    in a clear 10cm [9.0, 11.0] or 20cm [19.0, 22.0] interval (post-2026-09-06
+    spec amendment; middle band (11, 19) is excluded as upstream noise).
+    """
 
     def test_boundary_9pct_inclusive(self):
         stocks = [{"code": "X", "change_pct": 9.0}]
         kept, exc = apply_change_pct_filter(stocks)
         assert len(kept) == 1
-        assert exc == {"below_9pct": 0, "above_22pct": 0}
+        assert exc == {"below_9pct": 0, "neither_10_nor_20": 0, "above_22pct": 0}
 
     def test_boundary_22pct_inclusive(self):
         stocks = [{"code": "X", "change_pct": 22.0}]
         kept, exc = apply_change_pct_filter(stocks)
         assert len(kept) == 1
-        assert exc == {"below_9pct": 0, "above_22pct": 0}
+        assert exc == {"below_9pct": 0, "neither_10_nor_20": 0, "above_22pct": 0}
 
     def test_just_below_9_excluded(self):
         stocks = [{"code": "X", "change_pct": 8.99}]
@@ -164,16 +167,39 @@ class TestLeadStocksChangePctFilter:
         assert kept == []
         assert exc["below_9pct"] == 1
 
+    def test_middle_band_neither_10_nor_20(self):
+        """11.0 < change_pct < 19.0 → neither_10_nor_20 桶（上游噪声）。"""
+        for pct in [11.01, 12.5, 15.0, 18.0, 18.99]:
+            kept, exc = apply_change_pct_filter([{"code": "X", "change_pct": pct}])
+            assert kept == [], f"{pct} should be excluded"
+            assert exc["neither_10_nor_20"] == 1
+
+    def test_band_boundary_11pct_exclusive_of_10cm(self):
+        """change_pct=11.01 刚超过 10cm 上限 → neither_10_nor_20。"""
+        kept, exc = apply_change_pct_filter([{"code": "X", "change_pct": 11.01}])
+        assert kept == []
+        assert exc["neither_10_nor_20"] == 1
+
+    def test_band_boundary_19pct_inclusive_of_20cm(self):
+        """change_pct=19.0 是 20cm 下限（含）→ kept。"""
+        kept, exc = apply_change_pct_filter([{"code": "X", "change_pct": 19.0}])
+        assert len(kept) == 1
+
     def test_excluded_buckets_sum_correctly(self):
         stocks = [
-            {"code": "A", "change_pct": 8.0},
-            {"code": "B", "change_pct": 23.0},
-            {"code": "C", "change_pct": 10.0},
-            {"code": "D", "change_pct": 20.0},
+            {"code": "A", "change_pct": 8.0},  # below_9pct
+            {"code": "B", "change_pct": 23.0},  # above_22pct
+            {"code": "C", "change_pct": 10.0},  # 10cm kept
+            {"code": "D", "change_pct": 20.0},  # 20cm kept
+            {"code": "E", "change_pct": 15.0},  # neither_10_nor_20
         ]
         kept, exc = apply_change_pct_filter(stocks)
         assert {s["code"] for s in kept} == {"C", "D"}
-        assert exc == {"below_9pct": 1, "above_22pct": 1}
+        assert exc == {
+            "below_9pct": 1,
+            "neither_10_nor_20": 1,
+            "above_22pct": 1,
+        }
 
     def test_mixed_pool_excludes_30cm_and_st(self):
         """典型 case：30cm (北交所, ~30%) + ST (~5%) 都被排除。"""
@@ -185,11 +211,49 @@ class TestLeadStocksChangePctFilter:
         ]
         kept, exc = apply_change_pct_filter(stocks)
         assert {s["code"] for s in kept} == {"300750", "600519"}
-        assert exc == {"below_9pct": 1, "above_22pct": 1}
+        assert exc == {"below_9pct": 1, "neither_10_nor_20": 0, "above_22pct": 1}
+
+
+class TestLeadStocksLimitBand:
+    """Pin the limit-band classification used by the new score formula."""
+
+    def test_10cm_band_full_range(self):
+        from stock_data.api.routes.agent import _classify_limit_band
+
+        for pct in [9.0, 9.5, 10.0, 10.01, 10.99, 11.0]:
+            assert _classify_limit_band(pct) == 10.0, f"{pct} → expected 10.0"
+
+    def test_20cm_band_full_range(self):
+        from stock_data.api.routes.agent import _classify_limit_band
+
+        for pct in [19.0, 19.5, 20.0, 20.02, 21.5, 22.0]:
+            assert _classify_limit_band(pct) == 20.0, f"{pct} → expected 20.0"
+
+    def test_middle_band_returns_none(self):
+        from stock_data.api.routes.agent import _classify_limit_band
+
+        for pct in [11.01, 12.0, 15.0, 18.0, 18.99]:
+            assert _classify_limit_band(pct) is None, f"{pct} → expected None"
+
+    def test_outside_band_returns_none(self):
+        from stock_data.api.routes.agent import _classify_limit_band
+
+        for pct in [8.99, 22.01, 30.0]:
+            assert _classify_limit_band(pct) is None, f"{pct} → expected None"
+
+    def test_none_input_returns_none(self):
+        from stock_data.api.routes.agent import _classify_limit_band
+
+        assert _classify_limit_band(None) is None
 
 
 class TestLeadStocksRanking:
-    """Pin the 3-tier sort chain: score DESC → seal_time ASC → seal_amount DESC."""
+    """Pin the 3-tier sort chain: score DESC → seal_time ASC → seal_amount DESC.
+
+    Post-2026-09-06 spec amendment: score = lb_count × limit_pct (10 or 20),
+    NOT lb_count × change_pct. This pins both the per-band stability and
+    the cross-band advantage (20cm naturally 2× higher than 10cm at same lb).
+    """
 
     def test_score_descending(self):
         s1 = {
@@ -213,9 +277,52 @@ class TestLeadStocksRanking:
             "last_seal_time": "10:00:00",
             "seal_amount": 1e9,
         }
-        # scores: A=10, B=30, C=40 → order C, B, A
+        # scores: A = 1*10 = 10, B = 3*10 = 30, C = 2*20 = 40 → order C, B, A
         ranked = rank_lead_stocks([s1, s2, s3])
         assert [s["code"] for s in ranked] == ["C", "B", "A"]
+
+    def test_score_uses_limit_band_not_raw_change_pct(self):
+        """change_pct=10.5 vs change_pct=9.5 — both are 10cm, should produce
+        the same score (10.0) under the new formula regardless of upstream
+        floating-point noise."""
+        s_low = {
+            "code": "L",
+            "lb_count": 2,
+            "change_pct": 9.5,
+            "last_seal_time": "10:00:00",
+            "seal_amount": 1e9,
+        }
+        s_high = {
+            "code": "H",
+            "lb_count": 2,
+            "change_pct": 10.5,
+            "last_seal_time": "10:00:00",
+            "seal_amount": 1e9,
+        }
+        ranked = rank_lead_stocks([s_low, s_high])
+        # Both score = 2 * 10 = 20; tie-break by seal_time (same) → stable
+        # order depends on sorted stability but both must appear.
+        assert {s["code"] for s in ranked} == {"L", "H"}
+
+    def test_20cm_2x_natural_advantage_over_10cm(self):
+        """20cm 的 lb=1 应该等于 10cm 的 lb=2（都是 score=20）。"""
+        s_20cm = {
+            "code": "X",
+            "lb_count": 1,
+            "change_pct": 20.0,
+            "last_seal_time": "10:00:00",
+            "seal_amount": 1e9,
+        }
+        s_10cm = {
+            "code": "Y",
+            "lb_count": 2,
+            "change_pct": 10.0,
+            "last_seal_time": "10:00:00",
+            "seal_amount": 1e9,
+        }
+        ranked = rank_lead_stocks([s_20cm, s_10cm])
+        # Both score = 20 → tie; both must be in output
+        assert {s["code"] for s in ranked} == {"X", "Y"}
 
     def test_seal_time_ascending_breaks_score_tie(self):
         s1 = {
@@ -232,7 +339,7 @@ class TestLeadStocksRanking:
             "last_seal_time": "09:30:00",
             "seal_amount": 1e9,
         }
-        # same score (10) — earlier time wins → B first
+        # both score = 1 * 10 = 10 — earlier time wins → B first
         ranked = rank_lead_stocks([s1, s2])
         assert [s["code"] for s in ranked] == ["B", "A"]
 
@@ -307,12 +414,14 @@ class TestLeadStocksRanking:
             "seal_amount": 1e9,
         }
         # both score = 1 * 10 = 10, same time, same amount → unspecified tie
-        # Pin: A and B both in output, no exception
         ranked = rank_lead_stocks([s1, s2])
         assert {s["code"] for s in ranked} == {"A", "B"}
 
     def test_none_change_pct_treated_as_zero(self):
-        """change_pct=None → score = lb * 0 = 0 → 排到末尾。"""
+        """change_pct=None → limit_band is None → score = lb * 0 = 0 → 排到末尾。
+
+        在生产路径上 None change_pct 会被 filter 排除，这里验证纯 ranking 函数的退化行为。
+        """
         s1 = {
             "code": "A",
             "lb_count": 1,
@@ -352,18 +461,24 @@ class TestLeadStocksHappyPath:
         codes = [l["code"] for l in body["leads"]]
         assert "830799" not in codes
         assert "600200" not in codes
-        # Order: score = lb * pct → 300750=60.06, 600519=20.02, 000001=9.99
+        # Order: score = lb * limit_pct → 300750=3*20=60, 600519=2*10=20, 000001=1*10=10
         assert codes == ["300750", "600519", "000001"]
-        # scores correctly computed
-        assert body["leads"][0]["score"] == 60.06
+        # scores correctly computed (limit band based)
+        assert body["leads"][0]["score"] == 60
+        assert body["leads"][1]["score"] == 20
+        assert body["leads"][2]["score"] == 10
         # ranking ranks 1-indexed
         assert [l["rank"] for l in body["leads"]] == [1, 2, 3]
         # reasons populated from zt-reasons
         assert body["leads"][0]["reason"] == "新能源车产业链"
-        # summary populated
+        # summary populated — excluded reflects the new neither_10_nor_20 bucket
         assert body["summary"]["requested"] == 3
         assert body["summary"]["matched"] == 3
-        assert body["summary"]["excluded"] == {"below_9pct": 1, "above_22pct": 1}
+        assert body["summary"]["excluded"] == {
+            "below_9pct": 1,
+            "neither_10_nor_20": 0,
+            "above_22pct": 1,
+        }
 
     def test_explicit_top_n_respected(self, client, monkeypatch):
         manager = _make_zt_pool_mock(_sample_zt_pool_stocks())

@@ -556,8 +556,8 @@ curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'
 
 涨停龙头股服务端排名。按 `连板数 × 当日涨幅 → 最后涨停时间 → 封单金额` 三层链对 10cm/20cm 涨停股排序；附带涨停原因（来自 `/zt-reasons`）、quote / info / boards 三块 profile（**不**包含 computed technical indicators——features 字段在 2026-09-06 spec 修订中移除，避免 N+1 fetch 在 `top_n=20` 顶端时的延迟膨胀）。替代 LLM agent 客户端手算排名 + 二次拉数。
 
-- **三层排名**（None 归一化见下）：`score = lb_count × change_pct` 降序 → `last_seal_time` 升序（None → `"99:99:99"`）→ `seal_amount` 降序（None → `-1`）
-- **change_pct 过滤**：`[9.0, 22.0]`（**包含边界**）排除 30cm（北交所 ~30%）与 ST（~5%）；None 视为 0 → `< 9` 桶
+- **三层排名**（None 归一化见下）：`score = lb_count × limit_pct` 降序 → `last_seal_time` 升序（None → `"99:99:99"`）→ `seal_amount` 降序（None → `-1`）。`limit_pct` 按 10cm/20cm 区间归一化（10cm → `10.0`，20cm → `20.0`），**不**直接用原始 `change_pct`
+- **Limit band 过滤**（2026-09-06 spec 修订）：保留 `[9.0, 11.0]`（10cm 主板/中小板/创业板非注册制）与 `[19.0, 22.0]`（20cm 创业板注册制/科创板）两段；中间 `(11.0, 19.0)` 与两端外部排除。None → 视为 0 → 落入 `below_9pct` 桶
 - **可选板块交集**：`board_code` 提供时与 `/boards/{code}/stocks` 成分股做交集，缩窄候选
 - **`zt-reasons` 失败降级**：非 503；`reason=null` + 顶层 `errors[]` 追加 `{block:"reasons", ...}`
 - **`top_n=20` 响应体积**：quote 23 + info ~10 + boards ~10 ≈ 43 字段（无 features），单次 ~80KB+
@@ -579,10 +579,10 @@ curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'
 | `board_code` | string \| null | — | 用户传入值或 `null` |
 | `top_n` | int | — | 上限回显 |
 | `leads[].rank` | int | — | 1-indexed |
-| `leads[].score` | float | — | `lb_count × change_pct` |
+| `leads[].score` | float | — | `lb_count × limit_pct`（10 或 20）— 由 limit band 决定，**不**是原始 change_pct |
 | `leads[].code` | string | — | 6 位裸代码 |
 | `leads[].name` | string \| null | — | 股票名 |
-| `leads[].change_pct` | float \| null | % | 当日涨幅 |
+| `leads[].change_pct` | float \| null | % | 当日涨幅原始值（保留上游数据，便于交叉验证 limit band 归类） |
 | `leads[].lb_count` | int \| null | — | 连板数 |
 | `leads[].zt_count` | string \| null | — | "首板" / "3连板" 等 |
 | `leads[].last_seal_time` | string \| null | HH:MM:SS | 最后封板时间 |
@@ -598,9 +598,9 @@ curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'
 | `summary.requested` | int | — | 输入 `top_n` |
 | `summary.matched` | int | — | 实际返回数（可能小于 `requested`，取决于上游池大小） |
 | `summary.elapsed_ms` | int | ms | 处理耗时 |
-| `summary.excluded` | object | — | `{below_9pct, above_22pct}` 过滤分桶计数 |
+| `summary.excluded` | object | — | `{below_9pct, neither_10_nor_20, above_22pct}` 过滤分桶计数 |
 
-> **无 `features` 字段**（2026-09-06 spec 修订）：继承自 `StockBatchProfileEntry` 的 `features` 字段被 `Field(exclude=True)` 排除序列化；`build_stock_profile` 在 lead-stocks 路径以 `include_features=False` 调用，跳过 kline fetch + `build_features` 计算。如需技术面形态特征，改用 `/agent/stocks/batch-profile` 端点。
+> **无 `features` 字段**（2026-09-06 spec 修订）：lead-stocks 不计算也不返回技术面形态特征，避免 N+1 拉数在 `top_n=20` 顶端时的延迟膨胀。如需技术面形态特征，改用 `/agent/stocks/batch-profile` 端点。
 
 ### 示例
 
