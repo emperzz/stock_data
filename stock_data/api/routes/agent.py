@@ -192,6 +192,54 @@ def _resolve_and_validate_days(frequency: str, days: int | None) -> int:
     return resolved
 
 
+def apply_change_pct_filter(stocks: list[dict]) -> tuple[list[dict], dict]:
+    """Filter to keep only stocks with 9.0 ≤ change_pct ≤ 22.0 (inclusive).
+
+    Excludes 30cm (北交所, ~30%) and ST (~5%) stocks. None change_pct is
+    treated as 0 → falls into the below_9pct bucket.
+
+    Returns (kept, {"below_9pct": int, "above_22pct": int}).
+
+    Spec: docs/superpowers/specs/2026-09-06-agent-lead-stocks-design.md §3.3
+    """
+    kept: list[dict] = []
+    below = above = 0
+    for s in stocks:
+        pct_raw = s.get("change_pct")
+        pct = 0.0 if pct_raw is None else float(pct_raw)
+        if pct < 9.0:
+            below += 1
+        elif pct > 22.0:
+            above += 1
+        else:
+            kept.append(s)
+    return kept, {"below_9pct": below, "above_22pct": above}
+
+
+def rank_lead_stocks(stocks: list[dict]) -> list[dict]:
+    """Three-tier sort: score DESC → seal_time ASC → seal_amount DESC.
+
+    None handling (None = worst value for that key):
+      - lb_count=None → 1 (assume at least 首板)
+      - change_pct=None → 0 (score will push to bottom)
+      - last_seal_time=None → "99:99:99" (push to bottom on time tier)
+      - seal_amount=None → -1 (push to bottom on amount tier)
+
+    Spec: docs/superpowers/specs/2026-09-06-agent-lead-stocks-design.md §3.3
+    """
+
+    def sort_key(s):
+        lb = 1 if s.get("lb_count") is None else int(s["lb_count"])
+        pct = 0.0 if s.get("change_pct") is None else float(s["change_pct"])
+        score = lb * pct
+        seal_time = s.get("last_seal_time") or "99:99:99"
+        seal_amount = -1.0 if s.get("seal_amount") is None else float(s["seal_amount"])
+        # negate score and seal_amount for descending; seal_time ascending as-is
+        return (-score, seal_time, -seal_amount)
+
+    return sorted(stocks, key=sort_key)
+
+
 @router.post(
     "/agent/boards/stock-overlap",
     response_model=BoardsOverlapResponse,
