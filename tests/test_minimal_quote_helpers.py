@@ -42,26 +42,56 @@ class TestMinimalQuoteSchema:
 
     def test_full_population_serializes_all_keys(self):
         q = MinimalQuote(
-            price=12.34, change_pct=1.23, change_amount=0.15,
-            open=12.20, high=12.40, low=12.10, prev_close=12.19,
-            volume=1_234_567, volume_unit="share",
+            price=12.34,
+            change_pct=1.23,
+            change_amount=0.15,
+            open=12.20,
+            high=12.40,
+            low=12.10,
+            prev_close=12.19,
+            volume=1_234_567,
+            volume_unit="share",
             amount=205_000_000.0,
-            turnover_pct=0.45, amplitude_pct=2.11, volume_ratio=1.20,
-            pe_ratio=25.3, pb_ratio=8.7,
-            mcap_yi=21_123.5, float_mcap_yi=21_000.1,
-            limit_up=13.41, limit_down=11.10,
-            up_count=None, down_count=None, net_inflow=None, rank=None,
+            turnover_pct=0.45,
+            amplitude_pct=2.11,
+            volume_ratio=1.20,
+            pe_ratio=25.3,
+            pb_ratio=8.7,
+            mcap_yi=21_123.5,
+            float_mcap_yi=21_000.1,
+            limit_up=13.41,
+            limit_down=11.10,
+            up_count=None,
+            down_count=None,
+            net_inflow=None,
+            rank=None,
         )
         dumped = q.model_dump()
         # every field the spec promises is present (even None)
         expected_keys = {
-            "price", "change_pct", "change_amount",
-            "open", "high", "low", "prev_close",
-            "volume", "volume_unit", "amount",
-            "turnover_pct", "amplitude_pct", "volume_ratio",
-            "pe_ratio", "pb_ratio", "mcap_yi", "float_mcap_yi",
-            "limit_up", "limit_down",
-            "up_count", "down_count", "net_inflow", "rank",
+            "price",
+            "change_pct",
+            "change_amount",
+            "open",
+            "high",
+            "low",
+            "prev_close",
+            "volume",
+            "volume_unit",
+            "amount",
+            "turnover_pct",
+            "amplitude_pct",
+            "volume_ratio",
+            "pe_ratio",
+            "pb_ratio",
+            "mcap_yi",
+            "float_mcap_yi",
+            "limit_up",
+            "limit_down",
+            "up_count",
+            "down_count",
+            "net_inflow",
+            "rank",
         }
         assert expected_keys <= dumped.keys()
 
@@ -98,9 +128,9 @@ def _mk_unified(**overrides) -> UnifiedRealtimeQuote:
 
 class TestBuildMinimalQuoteFromUnified:
     def test_all_fields_populated(self):
-        from stock_data.api.routes.agent import _build_minimal_quote_from_unified
+        from stock_data.api._helpers.agent_stock_profile import build_minimal_quote_from_unified
 
-        q = _build_minimal_quote_from_unified(_mk_unified())
+        q = build_minimal_quote_from_unified(_mk_unified())
         assert q.price == 1680.0
         assert q.change_pct == 1.23
         assert q.change_amount == 20.4
@@ -127,33 +157,33 @@ class TestBuildMinimalQuoteFromUnified:
         assert q.rank is None
 
     def test_amplitude_fallback_when_upstream_missing(self):
-        from stock_data.api.routes.agent import _build_minimal_quote_from_unified
+        from stock_data.api._helpers.agent_stock_profile import build_minimal_quote_from_unified
 
-        q = _build_minimal_quote_from_unified(_mk_unified(amplitude=None))
+        q = build_minimal_quote_from_unified(_mk_unified(amplitude=None))
         expected = (1690.0 - 1655.0) / 1659.6 * 100
         assert q.amplitude_pct == pytest.approx(expected, rel=1e-6)
 
     def test_amplitude_fallback_skipped_when_prev_close_zero(self):
         """Defense-in-depth: don't divide by zero."""
-        from stock_data.api.routes.agent import _build_minimal_quote_from_unified
+        from stock_data.api._helpers.agent_stock_profile import build_minimal_quote_from_unified
 
-        q = _build_minimal_quote_from_unified(_mk_unified(amplitude=None, pre_close=0.0))
+        q = build_minimal_quote_from_unified(_mk_unified(amplitude=None, pre_close=0.0))
         assert q.amplitude_pct is None
 
     def test_mcap_yi_divided_by_1e8(self):
-        from stock_data.api.routes.agent import _build_minimal_quote_from_unified
+        from stock_data.api._helpers.agent_stock_profile import build_minimal_quote_from_unified
 
-        q = _build_minimal_quote_from_unified(
+        q = build_minimal_quote_from_unified(
             _mk_unified(total_mv=123_456_789_012.0, circ_mv=987_654_321_098.0)
         )
         assert q.mcap_yi == pytest.approx(1234.56789012)
         assert q.float_mcap_yi == pytest.approx(9876.54321098)
 
     def test_none_fields_pass_through(self):
-        from stock_data.api.routes.agent import _build_minimal_quote_from_unified
+        from stock_data.api._helpers.agent_stock_profile import build_minimal_quote_from_unified
 
         bare = UnifiedRealtimeQuote(code="600519", source=RealtimeSource.AKSHARE)
-        q = _build_minimal_quote_from_unified(bare)
+        q = build_minimal_quote_from_unified(bare)
         assert q.price is None
         assert q.change_pct is None
         assert q.change_amount is None
@@ -175,9 +205,9 @@ class TestBuildMinimalQuoteFromUnified:
         assert q.limit_down is None
 
     def test_volume_unit_falls_back_to_share_when_empty(self):
-        from stock_data.api.routes.agent import _build_minimal_quote_from_unified
+        from stock_data.api._helpers.agent_stock_profile import build_minimal_quote_from_unified
 
-        q = _build_minimal_quote_from_unified(_mk_unified(volume_unit=""))
+        q = build_minimal_quote_from_unified(_mk_unified(volume_unit=""))
         assert q.volume_unit == "share"
 
 
@@ -283,14 +313,25 @@ class TestMdQuoteBlock:
 
     def test_stock_quote_renders_all_four_subgroups(self):
         q = MinimalQuote(
-            price=12.34, change_pct=1.23, change_amount=0.15,
-            open=12.20, high=12.40, low=12.10, prev_close=12.19,
-            volume=1_234_567, volume_unit="share",
+            price=12.34,
+            change_pct=1.23,
+            change_amount=0.15,
+            open=12.20,
+            high=12.40,
+            low=12.10,
+            prev_close=12.19,
+            volume=1_234_567,
+            volume_unit="share",
             amount=2_050_000_000.0,
-            turnover_pct=0.45, amplitude_pct=2.11, volume_ratio=1.20,
-            pe_ratio=25.3, pb_ratio=8.7,
-            mcap_yi=21_123.5, float_mcap_yi=21_000.1,
-            limit_up=13.41, limit_down=11.10,
+            turnover_pct=0.45,
+            amplitude_pct=2.11,
+            volume_ratio=1.20,
+            pe_ratio=25.3,
+            pb_ratio=8.7,
+            mcap_yi=21_123.5,
+            float_mcap_yi=21_000.1,
+            limit_up=13.41,
+            limit_down=11.10,
         )
         body = self._render(q)
         assert "### 行情" in body
@@ -308,8 +349,10 @@ class TestMdQuoteBlock:
         be skipped (not rendered with all-`—` cells — that's the
         'computed but blank' anti-pattern)."""
         q = MinimalQuote(
-            price=3000.0, change_pct=0.5,
-            volume=5_000_000, volume_unit="share",
+            price=3000.0,
+            change_pct=0.5,
+            volume=5_000_000,
+            volume_unit="share",
             amount=1e10,
             turnover_pct=0.3,
         )
@@ -321,11 +364,15 @@ class TestMdQuoteBlock:
 
     def test_board_quote_uses_wan_shou_and_omits_valuation(self):
         q = MinimalQuote(
-            price=1234.5, change_pct=1.23,
-            volume=15343, volume_unit="wan_shou",
+            price=1234.5,
+            change_pct=1.23,
+            volume=15343,
+            volume_unit="wan_shou",
             amount=1_250_000_000.0,
-            up_count=12, down_count=5,
-            net_inflow=1.23, rank="229/389",
+            up_count=12,
+            down_count=5,
+            net_inflow=1.23,
+            rank="229/389",
         )
         body = self._render(q)
         assert "### 行情" in body
@@ -353,9 +400,11 @@ class TestMdQuoteBlock:
         render the subgroup with None cells as '—' (NOT omit the
         subgroup, NOT 'omit the cell')."""
         q = MinimalQuote(
-            price=12.34, change_pct=1.23,
+            price=12.34,
+            change_pct=1.23,
             # all other 价格 fields None
-            volume=1_000_000, volume_unit="share",
+            volume=1_000_000,
+            volume_unit="share",
             amount=2_000_000_000.0,
             # turnover / amplitude / volume_ratio all None
         )
