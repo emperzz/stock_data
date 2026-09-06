@@ -969,9 +969,7 @@ class ZTReasonStock(BaseModel):
     turnover_rate: float | None = Field(
         default=None, description="Real turnover rate (%; upstream turnover_ration_real)"
     )
-    lb_count: int | None = Field(
-        default=None, description="Consecutive limit-up count (连板数)"
-    )
+    lb_count: int | None = Field(default=None, description="Consecutive limit-up count (连板数)")
     last_seal_time: str | None = Field(
         default=None,
         description=(
@@ -1950,6 +1948,55 @@ class StockBatchProfileResponse(BaseModel):
     summary: dict = Field(default_factory=dict)
 
 
+class LeadStockEntry(StockBatchProfileEntry):
+    """涨停池内股票按 score → seal_time → seal_amount 排名后的 entry。
+
+    Inherits StockBatchProfileEntry's quote/features/info/boards/errors. Adds
+    ranking-specific fields (lb_count / change_pct / last_seal_time /
+    seal_amount are duplicated from the upstream ZT-pool payload to surface
+    the ranking rationale without requiring a second round-trip; reason is
+    joined in from /api/v1/zt-reasons).
+
+    Spec: docs/superpowers/specs/2026-09-06-agent-lead-stocks-design.md §2.4
+    """
+
+    rank: int = Field(..., description="1-indexed ranking within this lead-stocks response.")
+    score: float = Field(..., description="lb_count × change_pct (composite ranking metric).")
+    change_pct: float | None = Field(default=None, description="When-from-open change percent.")
+    lb_count: int | None = Field(default=None, description="Consecutive limit-up count.")
+    zt_count: str | None = Field(
+        default=None, description="Limit-up statistics like '首板' / '3连板'."
+    )
+    last_seal_time: str | None = Field(default=None, description="HH:MM:SS — last seal time.")
+    seal_amount: float | None = Field(default=None, description="Seal amount (元).")
+    reason: str | None = Field(
+        default=None, description="涨停原因 (joined from /api/v1/zt-reasons)."
+    )
+
+
+class LeadStocksResponse(BaseModel):
+    """GET response for /api/v1/agent/lead-stocks."""
+
+    date: str = Field(..., description="YYYY-MM-DD — resolved date.")
+    board_code: str | None = Field(
+        default=None, description="User-supplied board filter (null = no filter)."
+    )
+    top_n: int = Field(..., description="Echo of the user-supplied cap.")
+    leads: list[LeadStockEntry] = Field(default_factory=list)
+    errors: list[dict] = Field(
+        default_factory=list,
+        description="Top-level errors; entries are {block: str, error: str, message: str}.",
+    )
+    warning: str | None = Field(
+        default=None,
+        description="Non-null on volatile date (today + is_trade_date + time < 16:00).",
+    )
+    summary: dict = Field(
+        default_factory=dict,
+        description="{requested, matched, elapsed_ms, excluded: {below_9pct, above_22pct}}.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/agent/correlation/matrix
 # ---------------------------------------------------------------------------
@@ -2212,21 +2259,15 @@ class MarketRecapIndicesBlock(BaseModel):
     """
 
     sh: IndexQuote | None = Field(default=None, description="上证综指 quote")
-    shenzhen_composite: IndexQuote | None = Field(
-        default=None, description="深证成指 quote"
-    )
+    shenzhen_composite: IndexQuote | None = Field(default=None, description="深证成指 quote")
     chinext: IndexQuote | None = Field(default=None, description="创业板指 quote")
 
 
 class MarketRecapResponse(BaseModel):
     """Aggregated recap: messages + quantitative + 3-index snapshot."""
 
-    context: MarketContextResponse = Field(
-        description="Verbatim /agent/market-context response"
-    )
-    stats: MarketStatsResponse = Field(
-        description="Verbatim /agent/market-stats response"
-    )
+    context: MarketContextResponse = Field(description="Verbatim /agent/market-context response")
+    stats: MarketStatsResponse = Field(description="Verbatim /agent/market-stats response")
     indices: MarketRecapIndicesBlock = Field(
         description="3-index quote block (上证 / 深成指 / 创业板)"
     )
