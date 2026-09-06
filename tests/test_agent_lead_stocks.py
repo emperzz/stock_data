@@ -637,3 +637,40 @@ class TestLeadStocksFormatMd:
         assert "### 公司画像" in body
         # boards 子表
         assert "### 板块归属" in body
+
+
+class TestLeadStocksManifest:
+    """Manifest inclusion — endpoint appears under sections[].id == 'agent'."""
+
+    def test_endpoint_in_manifest(self, client):
+        response = client.get("/control/api-manifest")
+        assert response.status_code == 200
+        manifest = response.json()
+        agent_section = next(
+            (s for s in manifest.get("sections", []) if s.get("id") == "agent"),
+            None,
+        )
+        assert agent_section is not None
+        paths = {ep.get("path") for ep in agent_section.get("endpoints", [])}
+        assert "/api/v1/agent/lead-stocks" in paths
+
+    def test_endpoint_meta_fields(self, client):
+        """@endpoint_meta 字段：markets=['csi'] / capabilities=[] / depends_on 含三条。"""
+        response = client.get("/control/api-manifest")
+        manifest = response.json()
+        agent_section = next(
+            (s for s in manifest.get("sections", []) if s.get("id") == "agent"),
+            None,
+        )
+        endpoint = next(
+            (e for e in agent_section.get("endpoints", []) if e.get("path") == "/api/v1/agent/lead-stocks"),
+            None,
+        )
+        assert endpoint is not None
+        assert endpoint.get("markets") == ["csi"]
+        assert endpoint.get("capabilities") == []
+        # depends_on items are dicts with 'target_path' / 'label' / 'kind'
+        dep_paths = [d.get("target_path") or d.get("label") for d in endpoint.get("depends_on", [])]
+        assert "/api/v1/zt-pools" in dep_paths
+        assert "/api/v1/zt-reasons" in dep_paths
+        assert "/api/v1/boards/{board_code}/stocks" in dep_paths

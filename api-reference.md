@@ -2285,6 +2285,87 @@ The `quote` block renders as four sub-tables (价格 / 量价 / 估值 /
 
 ---
 
+### GET /api/v1/agent/lead-stocks
+
+涨停龙头股服务端排名。按 `连板数 × 当日涨幅 → 最后涨停时间 → 封单金额`
+三层链对 10cm/20cm 涨停股排序，附带涨停原因与完整 feature profile。
+替代 LLM agent 客户端手算排名 + N+1 拉数。
+
+#### Query 参数
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `date` | `YYYY-MM-DD` | 否 | 最新交易日 | trade_calendar 解析 |
+| `board_code` | str | 否 | `null` | 传入则与板块成分股做交集 |
+| `top_n` | int | 否 | `3` | 范围 `[1, 20]`；超界 422 |
+| `format` | `json\|md` | 否 | `json` | md 输出 `text/markdown` |
+
+#### 排序算法（spec §3.4）
+
+1. 调 `manager.get_zt_pool("zt", date)` 取涨停池（失败 → 503）
+2. 若 `board_code` 提供：调 `stock_board_cache.get_board_stocks(source="ths")` 与成分股集合做交集（失败 → 503）
+3. **过滤** `change_pct`：None 视为 0；保留 `[9.0, 22.0]`（**包含边界**）
+   - `< 9.0` → 计入 `summary.excluded.below_9pct`（ST ~5% 在此桶）
+   - `> 22.0` → 计入 `summary.excluded.above_22pct`（北交所 30cm 在此桶）
+4. **三层排名**：
+   - `score = lb_count × change_pct` 降序
+   - `last_seal_time` 升序（None 视为 `99:99:99`）
+   - `seal_amount` 降序（None 视为 `-1`）
+5. 取前 `top_n`
+6. 调 `manager.get_zt_reasons(date)` 拼 `reason`（失败 → 降级，`reason=null` + `errors[]`）
+7. 对每只 lead 调 `build_stock_profile(manager, code, frequency="d", days=60)` 拿完整 profile
+
+#### 响应字段
+
+参见 `LeadStocksResponse` schema。`summary.excluded` 报告被过滤股票的分桶；
+`errors[]` 在 `zt-reasons` 失败时填充 `{block: "reasons", error, message}`；
+`warning` 在 volatile date 时透传 `zt-pools.warning`。
+
+**关键字段**：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `date` | str | 解析后的日期（YYYY-MM-DD） |
+| `board_code` | str \| null | 用户传入值或 null |
+| `top_n` | int | 上限回显 |
+| `leads[].rank` | int | 1-indexed |
+| `leads[].score` | float | `lb_count × change_pct` |
+| `leads[].code` | str | 6 位裸代码 |
+| `leads[].change_pct` | float \| null | 当日涨幅 (%) |
+| `leads[].lb_count` | int \| null | 连板数 |
+| `leads[].zt_count` | str \| null | "首板"/"3连板" |
+| `leads[].last_seal_time` | str \| null | HH:MM:SS |
+| `leads[].seal_amount` | float \| null | 元 |
+| `leads[].reason` | str \| null | 涨停原因（来自 zt-reasons）|
+| `leads[].quote` | MinimalQuote \| null | 完整报价 |
+| `leads[].features` | BatchFeatures \| null | 形态特征 |
+| `leads[].info` | dict \| null | `{source, data}` 公司画像 |
+| `leads[].boards` | dict \| null | `{source, data}` 板块归属 |
+| `leads[].errors` | list | per-aspect 失败 |
+| `summary.requested` | int | 输入 `top_n` |
+| `summary.matched` | int | 实际返回数 |
+| `summary.elapsed_ms` | int | 处理耗时 |
+| `summary.excluded` | dict | `{below_9pct, above_22pct}` 分桶 |
+
+#### 示例
+
+```bash
+curl 'http://localhost:8888/api/v1/agent/lead-stocks?top_n=3&format=md'
+```
+
+#### 错误码
+
+- `422 invalid_request`：`top_n` 越界 / `date` 格式错误
+- `503 upstream_unavailable`：`zt-pools` 或 `board-stocks` 不可达
+- `500 server_error`：内部错误
+
+`zt-reasons` 失败是**降级**而非错误：返回 200、`reason=null`、`errors[]`
+记录一条 `{block:"reasons", ...}`，其他字段照常填充。
+
+详见 `docs/superpowers/specs/2026-09-06-agent-lead-stocks-design.md`。
+
+---
+
 ### MinimalQuote field inventory
 
 The `quote` block on `/agent/{stocks,indices,boards}/batch-profile`
