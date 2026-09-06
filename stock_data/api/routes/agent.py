@@ -2339,6 +2339,117 @@ def render_market_recap_as_md(p: MarketRecapResponse) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def render_lead_stocks_as_md(payload: LeadStocksResponse) -> str:
+    """Render LeadStocksResponse as markdown.
+
+    Per CLAUDE.md 'No data is dropped' contract: every JSON field appears
+    in the MD output. Layout:
+      # <date> · board=<code or ALL> · top_n=<n>
+      ## 排序规则 — 3-tier chain + filter band disclosure
+      ## 排名表 — 1 row per lead (rank / code / name / score / pct / lb /
+              zt_count / last_seal_time / seal_amount / reason)
+      ## <rank>. <code> <name> — per-lead profile sub-sections (quote /
+              features / info / boards / errors)
+      ## 摘要 — summary + warning + top-level errors
+    """
+    out: list[str] = []
+    board_label = payload.board_code or "ALL"
+    out.append(f"# {payload.date} · board={board_label} · top_n={payload.top_n}")
+    out.append("")
+
+    out.append("## 排序规则")
+    out.append("按 `连板数 × 当日涨幅` 降序 → 最后涨停时间升序 → 封单金额降序。")
+    out.append("`change_pct ∈ [9.0, 22.0]` 之外的票（北交所 30cm / ST 5%）不参与排名。")
+    out.append("")
+
+    if not payload.leads:
+        out.append("（无数据）")
+        out.append("")
+
+    # Ranking table
+    out.append("## 排名表")
+    out.append(
+        "| 排名 | 代码 | 名称 | score | 涨幅 | 连板 | 涨停统计 | 最后封板 | 封单量(元) | 原因 |"
+    )
+    out.append("|---|---|---|---|---|---|---|---|---|---|")
+    for lead in payload.leads:
+        score_str = _md_num(lead.score, 2) if lead.score is not None else "—"
+        out.append(
+            f"| {lead.rank} | {lead.code} | {lead.name or ''} | "
+            f"{score_str} | {_md_pct(lead.change_pct)} | "
+            f"{_md_num(lead.lb_count, 0) if lead.lb_count is not None else '—'} | "
+            f"{lead.zt_count or '—'} | {lead.last_seal_time or '—'} | "
+            f"{_md_num(lead.seal_amount, 0) if lead.seal_amount is not None else '—'} | "
+            f"{lead.reason or '—'} |"
+        )
+    out.append("")
+
+    # Per-lead profile sub-sections (CLAUDE.md no-drop contract)
+    for lead in payload.leads:
+        out.append(f"## {lead.rank}. {lead.code} {lead.name or ''}")
+        if lead.quote is not None:
+            _md_quote_block(out, lead.quote)
+        if lead.features is not None:
+            _md_feature_block(out, lead.features)
+        # info: {source, data} → render source + data fields inline
+        if lead.info:
+            out.append("### 公司画像")
+            src = lead.info.get("source") if isinstance(lead.info, dict) else None
+            data = lead.info.get("data") if isinstance(lead.info, dict) else {}
+            if src:
+                out.append(f"- source: {src}")
+            if isinstance(data, dict) and data:
+                for k, v in data.items():
+                    out.append(f"- {k}: {v}")
+            else:
+                out.append("（无数据）")
+            out.append("")
+        # boards: {source, data: [...]} → render source + list items
+        if lead.boards:
+            out.append("### 板块归属")
+            src = lead.boards.get("source") if isinstance(lead.boards, dict) else None
+            data = lead.boards.get("data") if isinstance(lead.boards, dict) else []
+            if src:
+                out.append(f"- source: {src}")
+            if isinstance(data, list) and data:
+                out.append("")
+                out.append("| # | 代码 | 名称 | 类型 | 子类型 |")
+                out.append("|---|---|---|---|---|")
+                for i, entry in enumerate(data, 1):
+                    if not isinstance(entry, dict):
+                        continue
+                    out.append(
+                        f"| {i} | {entry.get('code') or entry.get('stock_code') or '—'} | "
+                        f"{entry.get('name') or entry.get('stock_name') or '—'} | "
+                        f"{entry.get('type') or '—'} | {entry.get('subtype') or '—'} |"
+                    )
+            else:
+                out.append("（无数据）")
+            out.append("")
+        # per-aspect errors
+        if lead.errors:
+            out.append("### aspect 错误")
+            for e in lead.errors:
+                out.append(f"- **{e.aspect}**: {e.error}: {e.message}")
+            out.append("")
+
+    # Summary block
+    out.append("## 摘要")
+    out.append(f"- requested: {payload.summary.get('requested')}")
+    out.append(f"- matched: {payload.summary.get('matched')}")
+    out.append(f"- elapsed_ms: {payload.summary.get('elapsed_ms')}")
+    out.append(f"- excluded: {payload.summary.get('excluded')}")
+    if payload.warning:
+        out.append(f"- warning: {payload.warning}")
+    if payload.errors:
+        out.append("- 顶层错误:")
+        for e in payload.errors:
+            out.append(f"  - {e.get('block')}: {e.get('error')}: {e.get('message')}")
+    out.append("")
+
+    return "\n".join(out)
+
+
 # Map route → MD template. Routes look this up in the handler.
 _MD_TEMPLATES: dict[str, Callable] = {
     "boards/stock-overlap": render_boards_overlap_as_md,
@@ -2350,6 +2461,7 @@ _MD_TEMPLATES: dict[str, Callable] = {
     "market-stats": render_market_stats_as_md,
     "market-recap": render_market_recap_as_md,
     "boards/batch-profile": render_boards_batch_profile_as_md,
+    "lead-stocks": render_lead_stocks_as_md,
 }
 
 

@@ -578,3 +578,62 @@ class TestLeadStocksProfileHelperReuse:
         assert response.status_code == 200
         assert mock_helper.call_count == 1
         assert mock_helper.call_args.args[1] == "300750"
+
+
+class TestLeadStocksFormatMd:
+    """?format=md contract — CLAUDE.md "No data is dropped" pinning."""
+
+    def test_md_content_type(self, client, monkeypatch):
+        manager = _make_zt_pool_mock(_sample_zt_pool_stocks()[:1])
+        manager.get_zt_reasons.return_value = (_sample_reasons()[:1], "zzshare", None)
+        manager.get_realtime_quote.return_value = _make_unified_quote()
+        manager.get_kline_data.return_value = (None, "akshare")
+        manager.get_stock_info.return_value = ({}, "zhitu")
+        _patch_manager_and_boards(monkeypatch, manager)
+
+        response = client.get("/api/v1/agent/lead-stocks?format=md&top_n=1")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/markdown")
+
+    def test_md_includes_ranking_table_and_sorting_rules(self, client, monkeypatch):
+        manager = _make_zt_pool_mock(_sample_zt_pool_stocks()[:2])
+        manager.get_zt_reasons.return_value = (_sample_reasons()[:2], "zzshare", None)
+        manager.get_realtime_quote.return_value = _make_unified_quote()
+        manager.get_kline_data.return_value = (None, "akshare")
+        manager.get_stock_info.return_value = ({}, "zhitu")
+        _patch_manager_and_boards(monkeypatch, manager)
+
+        response = client.get("/api/v1/agent/lead-stocks?format=md&top_n=2")
+        body = response.text
+        assert "排序规则" in body
+        assert "300750" in body
+        assert "宁德时代" in body
+        assert "新能源车产业链" in body  # reason
+        # Filter rule disclosed in MD
+        assert "9.0" in body and "22.0" in body
+
+    def test_md_no_drop_data_contract(self, client, monkeypatch):
+        """Per CLAUDE.md 'No data is dropped': quote / features / info / boards
+        子表全部出现在 MD 输出中。"""
+        manager = _make_zt_pool_mock(_sample_zt_pool_stocks()[:1])
+        manager.get_zt_reasons.return_value = (_sample_reasons()[:1], "zzshare", None)
+        manager.get_realtime_quote.return_value = _make_unified_quote()
+        manager.get_kline_data.return_value = (None, "akshare")
+        manager.get_stock_info.return_value = ({"industry": "新能源"}, "zhitu")
+        # boards: real shape so MD has something to render
+        _patch_manager_and_boards(
+            monkeypatch,
+            manager,
+            board_stocks=[{"code": "300750", "name": "宁德时代", "source": "ths"}],
+        )
+
+        response = client.get("/api/v1/agent/lead-stocks?format=md&top_n=1")
+        body = response.text
+        # quote 子表（_md_quote_block 输出 "### 行情" + 子块 "价格/量价/估值/板块统计"）
+        assert "### 行情" in body
+        # features 子表（_md_feature_block 用 "### 指标"）
+        assert "### 指标" in body
+        # info 子表
+        assert "### 公司画像" in body
+        # boards 子表
+        assert "### 板块归属" in body
