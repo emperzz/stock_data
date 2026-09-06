@@ -963,8 +963,11 @@ class DataFetcherManager:
             - ``warning`` is reserved (always ``None`` for now).
         """
         from datetime import date as date_cls
-        # Date default: today if omitted (and not a holiday-aware default —
-        # upstream treats an empty date param as "latest available").
+
+        # Manager-layer default only — the route resolves the date via the
+        # trade calendar before calling in (boards.py::get_reasons), so this
+        # bare today-fallback is reached only by direct callers. Mirrors
+        # get_zt_pool, which likewise carries its own layer-local default.
         query_date = date or date_cls.today().strftime("%Y-%m-%d")
         del refresh  # accepted for API symmetry; not threaded downstream
 

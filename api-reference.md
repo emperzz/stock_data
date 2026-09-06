@@ -837,12 +837,14 @@ GET /api/v1/zt-reasons?date=2026-05-20
 
 Routed via `STOCK_ZT_REASON` capability. ZzshareFetcher is the sole
 provider (`review_uplimit_reason` upstream). Cached in-process (TTL
-mirrors pools); 404 on empty date.
+mirrors pools). When every fetcher comes back empty the manager raises
+`DataFetchError` → **503 `data_unavailable`**; the route's 404 branch
+only fires if a fetcher returns a structurally-empty-but-present list.
 
 **Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `date` | string | today | `YYYY-MM-DD`; malformed dates return 422 |
+| `date` | string | `trade_calendar.get_latest_trade_date_on_or_before(today)` | `YYYY-MM-DD`; omitted → today when today is a trade day, else the latest cached trade date ≤ today (same resolution `/zt-pools` uses). An explicit non-trade date is passed through untouched. Malformed dates return 422 |
 
 **Field set (per stock):**
 - `code`, `name`, `price`, `change_pct`, `circ_mv`, `turnover_rate`

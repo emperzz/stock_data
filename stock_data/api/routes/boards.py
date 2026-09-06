@@ -1401,9 +1401,10 @@ def get_reasons(
         None,
         pattern=r"^\d{4}-\d{2}-\d{2}$",
         description=(
-            "Pool date (YYYY-MM-DD). If not provided, defaults to today "
-            "(zzshare upstream returns the latest available day's reasons "
-            "for an empty date param). Malformed dates return 422."
+            "Pool date (YYYY-MM-DD). If not provided, the server picks the most recent "
+            "trade date relative to today: today itself when today is a trade day, "
+            "otherwise the latest cached trade date <= today (same resolution "
+            "/zt-pools uses). Malformed dates return 422."
         ),
     ),
 ) -> ZTReasonResponse:
@@ -1418,11 +1419,24 @@ def get_reasons(
     """
     manager = get_manager()
 
+    today_str = date_cls.today().strftime("%Y-%m-%d")
+
+    # Resolve query_date the same way /zt-pools does (see get_pools above).
+    # A bare `date or today` would ask zzshare for a weekend/holiday date,
+    # get nothing back, and surface as 503 data_unavailable while
+    # /zt-pools returned the previous trade day for the same request.
+    if date:
+        query_date = date
+    elif trade_calendar.is_trade_date(today_str):
+        query_date = today_str
+    else:
+        # Edge case: trade_calendar table is empty. Fall back to today so
+        # the caller gets a clear upstream error rather than a silent 404.
+        query_date = trade_calendar.get_latest_trade_date_on_or_before(today_str) or today_str
+
     # Volatile-data toggle: same convention as /zt-pools — cache only
     # when the requested date is "today AND a trade day". Historical
     # dates bypass the cache because they're not recomputed.
-    today_str = date_cls.today().strftime("%Y-%m-%d")
-    query_date = date or today_str
     is_current_day = (query_date == today_str) and trade_calendar.is_trade_date(today_str)
 
     cache_key = make_reasons_cache_key(query_date)

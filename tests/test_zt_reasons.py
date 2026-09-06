@@ -15,11 +15,29 @@ from stock_data.api.routes import reset_manager
 
 @pytest.fixture(autouse=True)
 def reset_before_test():
+    from stock_data.api.cache import get_reasons_cache
+
     reset_manager()
+    get_reasons_cache().clear()
     yield
+    get_reasons_cache().clear()
 
 
 _MANAGER_GET_REASONS = "stock_data.data_provider.manager.DataFetcherManager.get_zt_reasons"
+
+_SAMPLE_STOCK = {
+    "code": "002115",
+    "name": "三维通信",
+    "price": 10.95,
+    "change_pct": 9.95,
+    "circ_mv": 7387130000.0,
+    "turnover_rate": 1.43,
+    "lb_count": 1,
+    "last_seal_time": "09:31:00",
+    "seal_amount": 246887000.0,
+    "zt_count": "首板",
+    "reason": "业绩增长+行业利好",
+}
 
 
 class TestZtReasonsRoute:
@@ -123,6 +141,93 @@ class TestZtReasonsRoute:
                 assert "zt-pools" in (getattr(route, "tags", None) or [])
                 return
         pytest.fail("Route not found")
+
+
+class TestZtReasonsDefaultDate:
+    """No ``?date=`` → same trade-calendar resolution ``/zt-pools`` uses.
+
+    Before this contract existed the route did a bare ``date or today``,
+    so a weekend/holiday request asked zzshare for a non-trade date,
+    got nothing back, and surfaced as 503 ``data_unavailable`` while
+    ``/zt-pools`` happily returned the previous trade day.
+    """
+
+    def test_omitted_date_on_non_trade_day_uses_latest_trade_date(self, client):
+        from stock_data.data_provider.persistence import trade_calendar
+
+        with (
+            patch.object(trade_calendar, "is_trade_date", return_value=False),
+            patch.object(
+                trade_calendar,
+                "get_latest_trade_date_on_or_before",
+                return_value="2026-09-04",
+            ),
+            patch(_MANAGER_GET_REASONS) as mock_get,
+        ):
+            mock_get.return_value = ([_SAMPLE_STOCK], "zzshare", None)
+            resp = client.get("/api/v1/zt-reasons")
+
+            assert resp.status_code == 200
+            assert resp.json()["date"] == "2026-09-04"
+            assert mock_get.call_args.kwargs["date"] == "2026-09-04"
+
+    def test_omitted_date_on_trade_day_uses_today(self, client):
+        from datetime import date as date_cls
+
+        from stock_data.data_provider.persistence import trade_calendar
+
+        today_str = date_cls.today().strftime("%Y-%m-%d")
+        with (
+            patch.object(trade_calendar, "is_trade_date", return_value=True),
+            patch(_MANAGER_GET_REASONS) as mock_get,
+        ):
+            mock_get.return_value = ([_SAMPLE_STOCK], "zzshare", None)
+            resp = client.get("/api/v1/zt-reasons")
+
+            assert resp.status_code == 200
+            assert resp.json()["date"] == today_str
+            assert mock_get.call_args.kwargs["date"] == today_str
+
+    def test_omitted_date_with_empty_calendar_falls_back_to_today(self, client):
+        """Empty trade_calendar table → today, so the caller gets a clear
+        upstream error instead of a silent 404 (same edge case /zt-pools
+        documents at boards.py:1325)."""
+        from datetime import date as date_cls
+
+        from stock_data.data_provider.persistence import trade_calendar
+
+        today_str = date_cls.today().strftime("%Y-%m-%d")
+        with (
+            patch.object(trade_calendar, "is_trade_date", return_value=False),
+            patch.object(trade_calendar, "get_latest_trade_date_on_or_before", return_value=None),
+            patch(_MANAGER_GET_REASONS) as mock_get,
+        ):
+            mock_get.return_value = ([_SAMPLE_STOCK], "zzshare", None)
+            resp = client.get("/api/v1/zt-reasons")
+
+            assert resp.status_code == 200
+            assert mock_get.call_args.kwargs["date"] == today_str
+
+    def test_explicit_date_bypasses_calendar_resolution(self, client):
+        """An explicit ?date= is passed through untouched — even a
+        non-trade date (the caller asked for it on purpose)."""
+        from stock_data.data_provider.persistence import trade_calendar
+
+        with (
+            patch.object(trade_calendar, "is_trade_date", return_value=False),
+            patch.object(
+                trade_calendar,
+                "get_latest_trade_date_on_or_before",
+                return_value="2026-09-04",
+            ),
+            patch(_MANAGER_GET_REASONS) as mock_get,
+        ):
+            mock_get.return_value = ([_SAMPLE_STOCK], "zzshare", None)
+            resp = client.get("/api/v1/zt-reasons?date=2026-09-06")
+
+            assert resp.status_code == 200
+            assert resp.json()["date"] == "2026-09-06"
+            assert mock_get.call_args.kwargs["date"] == "2026-09-06"
 
 
 class TestZtReasonResponseSchema:

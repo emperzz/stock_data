@@ -459,7 +459,7 @@ curl 'http://localhost:8888/api/v1/zt-pools?type=zbgc'
 
 | 参数名 | 类型 | 必填 | 默认值 | 约束 |
 |---|---|---|---|---|
-| `date`（query） | string | ❌ | 今日 | `YYYY-MM-DD`；非法格式 → 422 |
+| `date`（query） | string | ❌ | 今日或最近一个交易日 | `YYYY-MM-DD`；不传 → 今日是交易日取今日，否则取 ≤ 今日的最近交易日（与 `/zt-pools` 同一套解析）；显式传非交易日则原样透传；非法格式 → 422 |
 
 ### 返回参数
 
@@ -481,7 +481,7 @@ curl 'http://localhost:8888/api/v1/zt-pools?type=zbgc'
 ### 示例
 
 ```bash
-# 当日涨停原因
+# 当日涨停原因（周末 / 节假日自动回退到最近一个交易日）
 curl 'http://localhost:8888/api/v1/zt-reasons'
 
 # 历史日期
