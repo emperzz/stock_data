@@ -86,6 +86,8 @@ from ..schemas import (
     IndexProfile,
     IndexQuote,
     IndicesBatchProfileResponse,
+    LeadStockEntry,
+    LeadStocksResponse,
     MarketContextMessages,
     MarketContextResponse,
     MarketRecapErrorEntry,
@@ -1007,6 +1009,163 @@ def post_stocks_batch_profile(
         summary=_batch_summary(len(payload.codes), n_ok, started),
     )
     return _render_agent("stocks/batch-profile", resp, format)
+
+
+@router.get(
+    "/agent/lead-stocks",
+    response_model=LeadStocksResponse,
+    responses={
+        422: {
+            "model": ErrorResponse,
+            "description": "Invalid request (top_n out of range / bad date format)",
+        },
+        503: {"model": ErrorResponse, "description": "Upstream unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["agent"],
+)
+@endpoint_meta(
+    summary="涨停龙头股服务端排名（连板数×涨幅→最后涨停时间→封单金额；change_pct ∈ [9, 22] 排除 30cm/ST）",
+    markets=["csi"],
+    capabilities=[],
+    depends_on=[
+        "/api/v1/zt-pools",
+        "/api/v1/zt-reasons",
+        "/api/v1/boards/{board_code}/stocks",
+    ],
+)
+@map_errors
+def get_lead_stocks(
+    date: str | None = Query(
+        None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="交易日期（默认 trade_calendar.get_latest_trade_date_on_or_before(today)）",
+    ),
+    board_code: str | None = Query(
+        None,
+        description="可选板块代码；传入则只在该板块成分股范围内排名",
+    ),
+    top_n: int = Query(
+        3,
+        ge=1,
+        le=20,
+        description="返回数量上限；范围 [1, 20]",
+    ),
+    format: str = Query(
+        "json",
+        pattern="^(json|md)$",
+        description="Output format. json=application/json (default); md=text/markdown.",
+    ),
+) -> Response:
+    """GET /api/v1/agent/lead-stocks — three-tier ranking of today's ZT pool.
+
+    Algorithm (spec §3.4):
+      1. resolve date (default latest trade date)
+      2. fetch ZT pool (manager.get_zt_pool); raises → 503
+      3. if board_code: intersect with board members; raises → 503
+      4. apply change_pct filter [9.0, 22.0] (excludes 30cm / ST)
+      5. rank: score DESC → last_seal_time ASC → seal_amount DESC
+      6. fetch ZT reasons (failure → degrade: reason=null + errors[])
+      7. for each top_n lead, build full profile via build_stock_profile
+      8. assemble LeadStocksResponse + render
+    """
+    from ...data_provider.persistence.trade_calendar import (
+        get_latest_trade_date_on_or_before,
+    )
+
+    t0 = time.monotonic()
+    resolved_date = date or get_latest_trade_date_on_or_before(datetime.now().date().isoformat())
+    manager = get_manager()
+    errors: list[dict] = []
+
+    # 1. zt-pools
+    try:
+        pool_stocks, _origin, warning = manager.get_zt_pool(
+            pool_type="zt",
+            date=resolved_date,
+        )
+    except DataFetchError as exc:
+        logger.warning(f"[agent/lead-stocks] get_zt_pool failed: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "upstream_unavailable", "message": "zt-pools fetch failed"},
+        )
+
+    # 2. board_code filter
+    if board_code:
+        try:
+            board_stocks, _o, _es, _r, _qt, _t = stock_board_cache.get_board_stocks(
+                board_code,
+                source="ths",
+                include_quote=False,
+                manager=manager,
+            )
+            board_codes = {s.get("stock_code") for s in board_stocks if s.get("stock_code")}
+            pool_stocks = [s for s in pool_stocks if s.get("code") in board_codes]
+        except (DataFetchError, ValueError) as exc:
+            logger.warning(f"[agent/lead-stocks] get_board_stocks failed: {exc}")
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "upstream_unavailable", "message": "board-stocks fetch failed"},
+            )
+
+    # 3. change_pct filter
+    kept, excluded = apply_change_pct_filter(pool_stocks)
+
+    # 4. rank
+    ranked = rank_lead_stocks(kept)[:top_n]
+
+    # 5. reasons (failure → degrade)
+    reasons: dict[str, str | None] = {}
+    try:
+        reason_stocks, _src, _ = manager.get_zt_reasons(date=resolved_date)
+        reasons = {s.get("code"): s.get("reason") for s in reason_stocks}
+    except Exception as exc:
+        logger.warning(f"[agent/lead-stocks] get_zt_reasons failed: {exc}")
+        errors.append({"block": "reasons", "error": type(exc).__name__, "message": str(exc)})
+
+    # 6. per-lead profile
+    leads: list[LeadStockEntry] = []
+    for rank_idx, s in enumerate(ranked, start=1):
+        code = s["code"]
+        profile = build_stock_profile(manager, code, frequency="d", days=60)
+        leads.append(
+            LeadStockEntry(
+                rank=rank_idx,
+                score=(s.get("lb_count") or 1) * (s.get("change_pct") or 0.0),
+                code=code,
+                name=s.get("name"),
+                change_pct=s.get("change_pct"),
+                lb_count=s.get("lb_count"),
+                zt_count=s.get("zt_count"),
+                last_seal_time=s.get("last_seal_time"),
+                seal_amount=s.get("seal_amount"),
+                reason=reasons.get(code),
+                ok=profile.ok,
+                quote=profile.quote,
+                features=profile.features,
+                info=profile.info,
+                boards=profile.boards,
+                errors=profile.errors,
+            )
+        )
+
+    summary = {
+        "requested": top_n,
+        "matched": len(leads),
+        "elapsed_ms": int((time.monotonic() - t0) * 1000),
+        "excluded": excluded,
+    }
+    result = LeadStocksResponse(
+        date=resolved_date,
+        board_code=board_code,
+        top_n=top_n,
+        leads=leads,
+        errors=errors,
+        warning=warning,
+        summary=summary,
+    )
+    return _render_agent("lead-stocks", result, format)
 
 
 def _index_quote_from_unified(code: str, q) -> IndexQuote | None:
