@@ -208,6 +208,7 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | `GET /api/v1/agent/market-context` | 每日市场消息面快照（早报 + 复盘 + 快讯；slim contract：涨跌停池已迁至 `market-stats`，龙虎榜按需走 `/api/v1/dragon-tiger`） |
 | `GET /api/v1/agent/market-recap` | 一站式复盘端点：`market-context` (messages) + `market-stats` (stocks/boards/pools) + 3 指数 quote (上证 / 深成指 / 创业板) 的服务端聚合。复盘 skill `skills/market-recap.md` 工作流的唯一推荐取数入口；**无 `trade_date` 参数**（服务端固定解析为 ≤ today 的最新交易日） |
 | `POST /api/v1/agent/stocks/batch-profile` | 股票批量画像（1-5 股票；quote + features + info + boards；boards 块与 `/stocks/{code}/boards` 同契约，见 [agent-batch.md](market-data-obtain/agent-batch.md)） |
+| `GET /api/v1/agent/lead-stocks` | 涨停龙头股服务端排名（连板数×涨幅→最后涨停时间→封单金额；`change_pct ∈ [9, 22]` 排除 30cm/ST）；默认 `top_n=3`，范围 `[1, 20]`；可选 `board_code` 交集；**不**返回 computed technical indicators（features 字段于 2026-09-06 spec 修订中移除，response 仅含 quote / info / boards） |
 | `POST /api/v1/agent/boards/batch-profile` | 板块批量画像（1-5 THS platecode；单 frequency） |
 | `POST /api/v1/agent/correlation/matrix` | 跨资产 Pearson + Spearman 相关性矩阵（2-10 资产） |
 | `GET /api/v1/agent/market-stats` | 全市场涨幅统计（个股 + 板块 + 涨跌停池 zt/dt + 桶形数据） |

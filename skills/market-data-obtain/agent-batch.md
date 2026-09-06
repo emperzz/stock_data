@@ -7,7 +7,7 @@
 ## 通用行为
 
 - **逐项错误隔离**：单 `code` / 单 aspect 拉取失败**不**中断整体响应；失败项进入 `errors[]`（或 `errors{}`，按端点形态不同），成功的项仍正常出现
-- **`?format=md`**：9 个端点统一支持，默认 `json`；返回 `text/markdown; charset=utf-8`（**无数据丢失**——所有 JSON 字段都映射到 MD 表 / 列表项）。**例外**：`correlation/matrix` 走 `PlainTextResponse`，渲染失败 → 500（**无**自动回退 JSON + `X-MD-Render-Error` 响应头；其余 8 个端点 MD 渲染失败 → 自动回退 JSON + 响应头）
+- **`?format=md`**：10 个端点统一支持，默认 `json`；返回 `text/markdown; charset=utf-8`（**无数据丢失**——所有 JSON 字段都映射到 MD 表 / 列表项）。**例外**：`correlation/matrix` 走 `PlainTextResponse`，渲染失败 → 500（**无**自动回退 JSON + `X-MD-Render-Error` 响应头；其余 9 个端点 MD 渲染失败 → 自动回退 JSON + 响应头）
 - **不做判断**：本节端点只返回"事实型"算结果（集合运算 / 过滤后列表 / Jaccard 系数 / 数值字段），不输出"龙头 / 候选"等结论
 
 ## MinimalQuote 字段约定（post-2026-08-28）
@@ -547,3 +547,78 @@ curl 'http://localhost:8888/api/v1/agent/market-stats?trade_date=2026-09-01'
 # markdown 投影
 curl 'http://localhost:8888/api/v1/agent/market-stats?format=md'
 ```
+
+---
+
+## `GET /api/v1/agent/lead-stocks`
+
+### 功能
+
+涨停龙头股服务端排名。按 `连板数 × 当日涨幅 → 最后涨停时间 → 封单金额` 三层链对 10cm/20cm 涨停股排序；附带涨停原因（来自 `/zt-reasons`）、quote / info / boards 三块 profile（**不**包含 computed technical indicators——features 字段在 2026-09-06 spec 修订中移除，避免 N+1 fetch 在 `top_n=20` 顶端时的延迟膨胀）。替代 LLM agent 客户端手算排名 + 二次拉数。
+
+- **三层排名**（None 归一化见下）：`score = lb_count × change_pct` 降序 → `last_seal_time` 升序（None → `"99:99:99"`）→ `seal_amount` 降序（None → `-1`）
+- **change_pct 过滤**：`[9.0, 22.0]`（**包含边界**）排除 30cm（北交所 ~30%）与 ST（~5%）；None 视为 0 → `< 9` 桶
+- **可选板块交集**：`board_code` 提供时与 `/boards/{code}/stocks` 成分股做交集，缩窄候选
+- **`zt-reasons` 失败降级**：非 503；`reason=null` + 顶层 `errors[]` 追加 `{block:"reasons", ...}`
+- **`top_n=20` 响应体积**：quote 23 + info ~10 + boards ~10 ≈ 43 字段（无 features），单次 ~80KB+
+
+### 入参
+
+| 参数名 | 类型 | 必填 | 默认值 | 约束 |
+|---|---|---|---|---|
+| `date`（query） | string | ❌ | 最新一个交易日 | `YYYY-MM-DD`；`trade_calendar.get_latest_trade_date_on_or_before(today)` 解析；格式错 → 422 |
+| `board_code`（query） | string | ❌ | `null` | 板块代码（THS platecode）；传入则与成分股交集；不存在 → 422 |
+| `top_n`（query） | int | ❌ | `3` | 范围 `[1, 20]`；越界 → 422 |
+| `format`（query） | string | ❌ | `json` | `json` / `md` |
+
+### 返回参数
+
+| 字段 | 类型 | 单位 | 说明 |
+|---|---|---|---|
+| `date` | string | — | 解析后的交易日 `YYYY-MM-DD` |
+| `board_code` | string \| null | — | 用户传入值或 `null` |
+| `top_n` | int | — | 上限回显 |
+| `leads[].rank` | int | — | 1-indexed |
+| `leads[].score` | float | — | `lb_count × change_pct` |
+| `leads[].code` | string | — | 6 位裸代码 |
+| `leads[].name` | string \| null | — | 股票名 |
+| `leads[].change_pct` | float \| null | % | 当日涨幅 |
+| `leads[].lb_count` | int \| null | — | 连板数 |
+| `leads[].zt_count` | string \| null | — | "首板" / "3连板" 等 |
+| `leads[].last_seal_time` | string \| null | HH:MM:SS | 最后封板时间 |
+| `leads[].seal_amount` | float \| null | 元 | 封单金额 |
+| `leads[].reason` | string \| null | — | 涨停原因（来自 `/zt-reasons`） |
+| `leads[].quote` | MinimalQuote \| null | — | 完整报价（OHLV + 量价 + 估值 + 涨跌停价） |
+| `leads[].info` | object \| null | — | `{source, data}` 公司画像 |
+| `leads[].boards` | object \| null | — | `{source, data}` 板块归属 |
+| `leads[].errors` | array | — | per-aspect 失败（quote / info / boards 任一失败项） |
+| `leads[].ok` | bool | — | quote / info / boards 任一非空即 True |
+| `errors[]`（顶层） | array | — | `zt-reasons` 失败时 `{block:"reasons", error, message}`；其它上游失败直接转 HTTPException（503 / 422） |
+| `warning` | string \| null | — | volatile date 时透传 `zt-pools.warning` |
+| `summary.requested` | int | — | 输入 `top_n` |
+| `summary.matched` | int | — | 实际返回数（可能小于 `requested`，取决于上游池大小） |
+| `summary.elapsed_ms` | int | ms | 处理耗时 |
+| `summary.excluded` | object | — | `{below_9pct, above_22pct}` 过滤分桶计数 |
+
+> **无 `features` 字段**（2026-09-06 spec 修订）：继承自 `StockBatchProfileEntry` 的 `features` 字段被 `Field(exclude=True)` 排除序列化；`build_stock_profile` 在 lead-stocks 路径以 `include_features=False` 调用，跳过 kline fetch + `build_features` 计算。如需技术面形态特征，改用 `/agent/stocks/batch-profile` 端点。
+
+### 示例
+
+```bash
+# 默认 top_n=3，无 board 筛选
+curl 'http://localhost:8888/api/v1/agent/lead-stocks'
+
+# 显式 top_n + 板块交集 + markdown
+curl 'http://localhost:8888/api/v1/agent/lead-stocks?top_n=5&board_code=881270&format=md'
+
+# 指定日期
+curl 'http://localhost:8888/api/v1/agent/lead-stocks?date=2026-09-05'
+```
+
+### 错误码
+
+- `422 invalid_request`：`top_n` 越界 / `date` 格式错 / `board_code` 不存在
+- `503 upstream_unavailable`：`zt-pools` 或 `board-stocks` 上游不可达
+- `500 server_error`：内部错误
+
+`zt-reasons` 失败**降级**而非错误：返回 200、`reason=null`、`errors[]` 追加 `{block:"reasons", ...}`。
