@@ -379,6 +379,38 @@ class TestLeadStocksHappyPath:
         assert len(body["leads"]) == 1
         assert body["leads"][0]["code"] == "300750"
 
+    def test_features_field_not_serialized(self, client, monkeypatch):
+        """Post-2026-09-06 spec amendment: lead-stocks 不返回 features 字段。
+        Schema uses `Field(exclude=True)` on inherited `features` field。
+        """
+        manager = _make_zt_pool_mock(_sample_zt_pool_stocks()[:1])
+        manager.get_zt_reasons.return_value = (_sample_reasons()[:1], "zzshare", None)
+        manager.get_realtime_quote.return_value = _make_unified_quote()
+        manager.get_kline_data.return_value = (None, "akshare")
+        manager.get_stock_info.return_value = ({}, "zhitu")
+        _patch_manager_and_boards(monkeypatch, manager)
+
+        response = client.get("/api/v1/agent/lead-stocks?top_n=1")
+        assert response.status_code == 200
+        body = response.json()
+        # 每只 lead 都不应该出现 features key
+        for lead in body["leads"]:
+            assert "features" not in lead
+
+    def test_lead_stocks_does_not_call_get_kline_data(self, client, monkeypatch):
+        """Post-2026-09-06 spec amendment: lead-stocks 跳过 features 计算
+        (include_features=False),所以不调用 manager.get_kline_data。"""
+        manager = _make_zt_pool_mock(_sample_zt_pool_stocks()[:1])
+        manager.get_zt_reasons.return_value = (_sample_reasons()[:1], "zzshare", None)
+        manager.get_realtime_quote.return_value = _make_unified_quote()
+        manager.get_kline_data.return_value = (None, "akshare")
+        manager.get_stock_info.return_value = ({}, "zhitu")
+        _patch_manager_and_boards(monkeypatch, manager)
+
+        response = client.get("/api/v1/agent/lead-stocks?top_n=1")
+        assert response.status_code == 200
+        assert manager.get_kline_data.call_count == 0
+
 
 class TestLeadStocksBoardFilter:
     """board_code filter restricts leads to board members."""
@@ -613,8 +645,8 @@ class TestLeadStocksFormatMd:
         assert "9.0" in body and "22.0" in body
 
     def test_md_no_drop_data_contract(self, client, monkeypatch):
-        """Per CLAUDE.md 'No data is dropped': quote / features / info / boards
-        子表全部出现在 MD 输出中。"""
+        """Per CLAUDE.md 'No data is dropped': quote / info / boards
+        子表全部出现在 MD 输出中。features 字段不在 lead-stocks 范围。"""
         manager = _make_zt_pool_mock(_sample_zt_pool_stocks()[:1])
         manager.get_zt_reasons.return_value = (_sample_reasons()[:1], "zzshare", None)
         manager.get_realtime_quote.return_value = _make_unified_quote()
@@ -631,8 +663,8 @@ class TestLeadStocksFormatMd:
         body = response.text
         # quote 子表（_md_quote_block 输出 "### 行情" + 子块 "价格/量价/估值/板块统计"）
         assert "### 行情" in body
-        # features 子表（_md_feature_block 用 "### 指标"）
-        assert "### 指标" in body
+        # features 子表不应出现（lead-stocks 不返回 features）
+        assert "### 指标" not in body
         # info 子表
         assert "### 公司画像" in body
         # boards 子表

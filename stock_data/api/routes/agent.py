@@ -1125,10 +1125,15 @@ def get_lead_stocks(
         errors.append({"block": "reasons", "error": type(exc).__name__, "message": str(exc)})
 
     # 6. per-lead profile
+    # Post-2026-09-06 spec amendment: features (computed technical indicators)
+    # intentionally omitted from lead-stocks response — the endpoint surface
+    # is quote / info / boards only. ``include_features=False`` skips the
+    # kline fetch + build_features call entirely so latency stays bounded
+    # under the top_n=20 cap.
     leads: list[LeadStockEntry] = []
     for rank_idx, s in enumerate(ranked, start=1):
         code = s["code"]
-        profile = build_stock_profile(manager, code, frequency="d", days=60)
+        profile = build_stock_profile(manager, code, frequency="d", days=60, include_features=False)
         leads.append(
             LeadStockEntry(
                 rank=rank_idx,
@@ -1143,7 +1148,6 @@ def get_lead_stocks(
                 reason=reasons.get(code),
                 ok=profile.ok,
                 quote=profile.quote,
-                features=profile.features,
                 info=profile.info,
                 boards=profile.boards,
                 errors=profile.errors,
@@ -2349,8 +2353,12 @@ def render_lead_stocks_as_md(payload: LeadStocksResponse) -> str:
       ## 排名表 — 1 row per lead (rank / code / name / score / pct / lb /
               zt_count / last_seal_time / seal_amount / reason)
       ## <rank>. <code> <name> — per-lead profile sub-sections (quote /
-              features / info / boards / errors)
+              info / boards / errors)
       ## 摘要 — summary + warning + top-level errors
+
+    Post-2026-09-06 spec amendment: `features` (computed technical indicators)
+    is intentionally omitted from this endpoint — the per-lead sub-sections
+    render quote / info / boards only.
     """
     out: list[str] = []
     board_label = payload.board_code or "ALL"
@@ -2384,13 +2392,12 @@ def render_lead_stocks_as_md(payload: LeadStocksResponse) -> str:
         )
     out.append("")
 
-    # Per-lead profile sub-sections (CLAUDE.md no-drop contract)
+    # Per-lead profile sub-sections (CLAUDE.md no-drop contract).
+    # features intentionally omitted per 2026-09-06 spec amendment.
     for lead in payload.leads:
         out.append(f"## {lead.rank}. {lead.code} {lead.name or ''}")
         if lead.quote is not None:
             _md_quote_block(out, lead.quote)
-        if lead.features is not None:
-            _md_feature_block(out, lead.features)
         # info: {source, data} → render source + data fields inline
         if lead.info:
             out.append("### 公司画像")

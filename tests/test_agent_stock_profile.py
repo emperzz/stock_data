@@ -245,3 +245,33 @@ def test_helper_boards_failure_appends_error(monkeypatch):
     assert profile.boards is None
     aspects = [e for e in profile.errors if e.aspect == "boards"]
     assert len(aspects) == 1
+
+
+def test_helper_include_features_false_skips_kline(empty_memberships):
+    """include_features=False → 跳过 kline fetch + build_features,profile.features 为 None,
+    且不会 append features aspect error。"""
+    df = pd.DataFrame({"close": [10.0, 11.0]})
+    m = _make_manager(quote=_make_unified_quote(), kline_df=df)
+    profile = build_stock_profile(m, "300750", include_features=False)
+    # quote 仍然计算
+    assert profile.quote is not None
+    # features 跳过 → None
+    assert profile.features is None
+    # kline 没被调用
+    assert not m.get_kline_data.called
+    # errors 中没有 features aspect
+    aspects = [e.aspect for e in profile.errors]
+    assert "features" not in aspects
+    # ok 仍为 True（quote + info + boards 都有值）
+    assert profile.ok is True
+
+
+def test_helper_include_features_false_omits_features_error(empty_memberships):
+    """include_features=False 时即使 kline 上游坏掉也不报错（因为不调用）。"""
+    m = _make_manager(quote=_make_unified_quote())
+    m.get_kline_data.side_effect = Exception("kline would have failed")
+    profile = build_stock_profile(m, "300750", include_features=False)
+    assert profile.features is None
+    # 没有 features aspect error
+    aspects = [e.aspect for e in profile.errors]
+    assert "features" not in aspects

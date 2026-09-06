@@ -2288,8 +2288,10 @@ The `quote` block renders as four sub-tables (价格 / 量价 / 估值 /
 ### GET /api/v1/agent/lead-stocks
 
 涨停龙头股服务端排名。按 `连板数 × 当日涨幅 → 最后涨停时间 → 封单金额`
-三层链对 10cm/20cm 涨停股排序，附带涨停原因与完整 feature profile。
-替代 LLM agent 客户端手算排名 + N+1 拉数。
+三层链对 10cm/20cm 涨停股排序，附带涨停原因、完整 quote / info / boards
+profile（**不**包含 computed technical indicators——features 计算在
+2026-09-06 spec 修订中移除，避免 N+1 fetch 跨 `top_n=20` 顶端时的
+延迟膨胀）。替代 LLM agent 客户端手算排名 + N+1 拉数。
 
 #### Query 参数
 
@@ -2313,7 +2315,7 @@ The `quote` block renders as four sub-tables (价格 / 量价 / 估值 /
    - `seal_amount` 降序（None 视为 `-1`）
 5. 取前 `top_n`
 6. 调 `manager.get_zt_reasons(date)` 拼 `reason`（失败 → 降级，`reason=null` + `errors[]`）
-7. 对每只 lead 调 `build_stock_profile(manager, code, frequency="d", days=60)` 拿完整 profile
+7. 对每只 lead 调 `build_stock_profile(manager, code, frequency="d", days=60, include_features=False)` 拿 quote / info / boards（features 跳过）
 
 #### 响应字段
 
@@ -2338,7 +2340,6 @@ The `quote` block renders as four sub-tables (价格 / 量价 / 估值 /
 | `leads[].seal_amount` | float \| null | 元 |
 | `leads[].reason` | str \| null | 涨停原因（来自 zt-reasons）|
 | `leads[].quote` | MinimalQuote \| null | 完整报价 |
-| `leads[].features` | BatchFeatures \| null | 形态特征 |
 | `leads[].info` | dict \| null | `{source, data}` 公司画像 |
 | `leads[].boards` | dict \| null | `{source, data}` 板块归属 |
 | `leads[].errors` | list | per-aspect 失败 |

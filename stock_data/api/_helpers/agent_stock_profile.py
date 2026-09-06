@@ -4,6 +4,11 @@ Each aspect (quote / features / info / boards) is fetched independently with
 its own try/except; a failure surfaces as a StockBatchAspectError in the
 returned profile's errors[] but never aborts the whole fan-out.
 
+``include_features=False`` (used by /agent/lead-stocks post-2026-09-06 spec
+amendment) skips the kline fetch + ``build_features`` call entirely — the
+helper then exposes quote / info / boards only, matching
+``LeadStockEntry``'s serialized field set.
+
 Also re-homes `_build_minimal_quote_from_unified` (formerly at
 `stock_data/api/routes/agent.py:1016-1054`) so both endpoints can import it
 without a circular dependency on `agent.py`.
@@ -93,6 +98,7 @@ def build_stock_profile(
     *,
     frequency: str = "d",
     days: int | None = None,
+    include_features: bool = True,
 ) -> StockProfileData:
     """Pull quote + features + info + boards for `code`. Per-aspect isolation.
 
@@ -107,6 +113,11 @@ def build_stock_profile(
         frequency: kline frequency — one of d/w/m/1m/5m/15m/30m/60m.
         days: kline lookback days. If None, uses FreqProfile.default_days
             (60 for "d"). Used both for fetch window AND for build_features.
+        include_features: when False (lead-stocks), skip the kline fetch +
+            build_features call entirely. The ``features`` aspect is then
+            never attempted, so no ``StockBatchAspectError(aspect="features", ...)``
+            is appended and the response contract matches
+            ``LeadStockEntry``'s serialized field set.
 
     Returns:
         StockProfileData with whichever aspects succeeded and per-aspect errors.
@@ -117,9 +128,6 @@ def build_stock_profile(
     from ..routes.agent import _FEATURE_FREQS
 
     profile = StockProfileData(code=code)
-    freq_profile = _FEATURE_FREQS[frequency]
-    fetch_days = max(days or freq_profile.default_days, freq_profile.ma60_warmup_days or 0)
-    features_days = days if days is not None else freq_profile.default_days
 
     # 1. quote
     try:
@@ -131,22 +139,26 @@ def build_stock_profile(
             StockBatchAspectError(aspect="quote", error=type(exc).__name__, message=str(exc))
         )
 
-    # 2. features
-    try:
-        df, _src = manager.get_kline_data(
-            code,
-            days=fetch_days,
-            frequency=freq_profile.mgr_frequency,
-            adjust="qfq" if freq_profile.mgr_frequency in ("d", "w", "m") else None,
-            asset="stock",
-        )
-        profile.features = BatchFeatures(
-            **build_features(df, frequency=frequency, days=features_days)
-        )
-    except Exception as exc:
-        profile.errors.append(
-            StockBatchAspectError(aspect="features", error=type(exc).__name__, message=str(exc))
-        )
+    # 2. features (opt-in — skipped for lead-stocks per 2026-09-06 amendment)
+    if include_features:
+        freq_profile = _FEATURE_FREQS[frequency]
+        fetch_days = max(days or freq_profile.default_days, freq_profile.ma60_warmup_days or 0)
+        features_days = days if days is not None else freq_profile.default_days
+        try:
+            df, _src = manager.get_kline_data(
+                code,
+                days=fetch_days,
+                frequency=freq_profile.mgr_frequency,
+                adjust="qfq" if freq_profile.mgr_frequency in ("d", "w", "m") else None,
+                asset="stock",
+            )
+            profile.features = BatchFeatures(
+                **build_features(df, frequency=frequency, days=features_days)
+            )
+        except Exception as exc:
+            profile.errors.append(
+                StockBatchAspectError(aspect="features", error=type(exc).__name__, message=str(exc))
+            )
 
     # 3. info — always returns (dict, source); never None
     try:

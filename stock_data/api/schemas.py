@@ -1951,14 +1951,25 @@ class StockBatchProfileResponse(BaseModel):
 class LeadStockEntry(StockBatchProfileEntry):
     """涨停池内股票按 score → seal_time → seal_amount 排名后的 entry。
 
-    Inherits StockBatchProfileEntry's quote/features/info/boards/errors. Adds
-    ranking-specific fields (lb_count / change_pct / last_seal_time /
+    Inherits StockBatchProfileEntry's quote/info/boards/errors. The
+    inherited `features` field is explicitly excluded from serialization
+    (see below) — lead-stocks intentionally omits computed technical
+    indicators (per 2026-09-06 spec amendment: the user surface is
+    quote / info / boards only; features computation was dropped to keep
+    N+1 latency under the top_n=20 cap).
+
+    Adds ranking-specific fields (lb_count / change_pct / last_seal_time /
     seal_amount are duplicated from the upstream ZT-pool payload to surface
     the ranking rationale without requiring a second round-trip; reason is
     joined in from /api/v1/zt-reasons).
 
     Spec: docs/superpowers/specs/2026-09-06-agent-lead-stocks-design.md §2.4
     """
+
+    # Inherited from StockBatchProfileEntry — explicitly excluded from the
+    # JSON response. Pydantic v2 supports re-declaring a parent field with
+    # `exclude=True` to drop it from serialization.
+    features: BatchFeatures | None = Field(default=None, exclude=True)
 
     rank: int = Field(..., description="1-indexed ranking within this lead-stocks response.")
     score: float = Field(..., description="lb_count × change_pct (composite ranking metric).")
