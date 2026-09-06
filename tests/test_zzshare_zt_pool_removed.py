@@ -4,6 +4,7 @@ Per the 2026-09-03 refactor: ZzshareFetcher no longer serves /zt-pools.
 The upstream `review_uplimit_reason` endpoint is now exposed via a
 dedicated ``get_zt_reason`` method (DataCapability.STOCK_ZT_REASON).
 """
+
 from __future__ import annotations
 
 

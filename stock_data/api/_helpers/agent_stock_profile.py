@@ -43,7 +43,7 @@ class StockProfileData:
         return any(v is not None for v in (self.quote, self.features, self.info, self.boards))
 
 
-def _build_minimal_quote_from_unified(q) -> MinimalQuote:
+def build_minimal_quote_from_unified(q) -> MinimalQuote:
     """Map a UnifiedRealtimeQuote to the expanded MinimalQuote.
 
     Mirrors the field-mapping logic in StockQuote.from_unified_quote
@@ -55,6 +55,7 @@ def _build_minimal_quote_from_unified(q) -> MinimalQuote:
     helper returns the Pydantic instance directly.
 
     Re-homed from `agent.py:1016-1054`. Behavior preserved exactly.
+    Public (no underscore) since `agent.py` uses it directly.
     """
     amplitude = q.amplitude
     if amplitude is None and q.high is not None and q.low is not None and q.pre_close:
@@ -124,7 +125,7 @@ def build_stock_profile(
     try:
         q = manager.get_realtime_quote(code)
         if q is not None:
-            profile.quote = _build_minimal_quote_from_unified(q)
+            profile.quote = build_minimal_quote_from_unified(q)
     except Exception as exc:
         profile.errors.append(
             StockBatchAspectError(aspect="quote", error=type(exc).__name__, message=str(exc))

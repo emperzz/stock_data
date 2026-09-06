@@ -40,8 +40,8 @@ def compute_trend(df: pd.DataFrame) -> dict:
 
     spec = {
         "ma": {"periods": _MA_PERIODS, "type": "sma"},
-        "dmi": {},   # defaults: period 14, adxPeriod 14
-        "rsi": {},   # defaults: periods [6, 12, 24]
+        "dmi": {},  # defaults: period 14, adxPeriod 14
+        "rsi": {},  # defaults: periods [6, 12, 24]
         "boll": {},  # defaults: period 20, stdDev 2.0
     }
     out = indicator_service.compute(df, spec)
@@ -69,7 +69,13 @@ def compute_trend(df: pd.DataFrame) -> dict:
         key = f"ma{p}"
         cur, prev = last_row.get(key), prev_row.get(key)
         ma[key] = None if cur is None or pd.isna(cur) else float(cur)
-        if cur is not None and not pd.isna(cur) and prev is not None and not pd.isna(prev) and prev != 0:
+        if (
+            cur is not None
+            and not pd.isna(cur)
+            and prev is not None
+            and not pd.isna(prev)
+            and prev != 0
+        ):
             ma_change[key] = (float(cur) - float(prev)) / float(prev) * 100
         else:
             ma_change[key] = None

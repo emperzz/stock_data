@@ -3,6 +3,7 @@
 These cover the 10-case test list from
 docs/superpowers/specs/2026-08-12-correlation-matrix-design.md §6.
 """
+
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -25,22 +26,21 @@ def _reset_state():
     leak into the inner fetcher cache and silently make later tests green.
     """
     from stock_data.api import cache as _cache
+
     for name in ("get_quote_cache", "get_history_cache", "get_kline_cache"):
         c = getattr(_cache, name, None)
         if c is not None and hasattr(c, "clear"):
             c.clear()
     try:
         from stock_data.data_provider.manager import reset_manager
+
         reset_manager()
     except Exception:
         pass
     yield
 
 
-def _mgr_stub(stock_dfs=None,
-              board_rows=None,
-              stock_side_effect=None,
-              board_side_effect=None):
+def _mgr_stub(stock_dfs=None, board_rows=None, stock_side_effect=None, board_side_effect=None):
     """Build a MagicMock DataFetcherManager that returns canned stock/board data."""
     mgr = MagicMock()
     if stock_side_effect is not None:
@@ -72,17 +72,23 @@ def test_mixed_stock_board_pearson_diagonal_one(monkeypatch):
     # Two stocks + one board, 30 days; deterministic prices
     idx = pd.date_range("2026-04-01", periods=30, freq="D")
     s1 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})
-    s2 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 30)})   # bigger uptrend
-    brow = [{"date": str(d.date()), "close": float(v)}
-            for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)]
+    s2 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 30)})  # bigger uptrend
+    brow = [
+        {"date": str(d.date()), "close": float(v)}
+        for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)
+    ]
     mgr = _mgr_stub({"600519": s1, "000001": s2}, {("885595", "ths"): brow})
     _patch_manager(monkeypatch, mgr)
 
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": ["600519", "000001"],
-        "boards": [{"code": "885595", "source": "ths"}],
-        "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": ["600519", "000001"],
+            "boards": [{"code": "885595", "source": "ths"}],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 200, r.text
     body = r.json()
     assert len(body["labels"]) == 3
@@ -98,11 +104,16 @@ def test_methods_subset_returns_only_pearson(monkeypatch):
     s2 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 30)})
     mgr = _mgr_stub({"600519": s1, "000001": s2})
     _patch_manager(monkeypatch, mgr)
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": ["600519", "000001"], "boards": [],
-        "frequency": "d", "days": 30,
-        "methods": ["pearson"],
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": ["600519", "000001"],
+            "boards": [],
+            "frequency": "d",
+            "days": 30,
+            "methods": ["pearson"],
+        },
+    )
     assert r.status_code == 200
     assert r.json()["matrices"]["pearson"] is not None
     assert r.json()["matrices"]["spearman"] is None
@@ -111,10 +122,13 @@ def test_methods_subset_returns_only_pearson(monkeypatch):
 def test_per_item_failure_isolation(monkeypatch):
     """One stock fails; another stock + board succeed; matrix has 2 survivors."""
     from stock_data.data_provider.base import DataFetchError
+
     idx = pd.date_range("2026-04-01", periods=30, freq="D")
     good_stock = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})
-    board_rows = [{"date": str(d.date()), "close": float(v)}
-                  for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)]
+    board_rows = [
+        {"date": str(d.date()), "close": float(v)}
+        for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)
+    ]
     mgr = MagicMock()
 
     def kline_side_effect(**kw):
@@ -126,32 +140,44 @@ def test_per_item_failure_isolation(monkeypatch):
     mgr.get_board_history.return_value = (board_rows, "ths")
     _patch_manager(monkeypatch, mgr)
 
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": ["600519", "000001"],
-        "boards": [{"code": "885595", "source": "ths"}],
-        "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": ["600519", "000001"],
+            "boards": [{"code": "885595", "source": "ths"}],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 200
     body = r.json()
     # 600519 + 885595 succeed; 000001 fails
     assert any(e["code"] == "000001" for e in body["errors"])
-    assert len(body["labels"]) == 2   # 2 survivors
+    assert len(body["labels"]) == 2  # 2 survivors
 
 
 def test_all_fail_returns_422(monkeypatch):
     from stock_data.data_provider.base import DataFetchError
+
     mgr = MagicMock()
     mgr.get_kline_data.side_effect = lambda **kw: (_ for _ in ()).throw(DataFetchError("down"))
     mgr.get_board_history.side_effect = lambda **kw: (_ for _ in ()).throw(DataFetchError("down"))
     _patch_manager(monkeypatch, mgr)
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": ["600519", "000001"],
+            "boards": [],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 422
 
 
 def test_only_one_survives_returns_422(monkeypatch):
     from stock_data.data_provider.base import DataFetchError
+
     idx = pd.date_range("2026-04-01", periods=30, freq="D")
     good = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})
     mgr = MagicMock()
@@ -164,9 +190,15 @@ def test_only_one_survives_returns_422(monkeypatch):
     mgr.get_kline_data.side_effect = kline
     mgr.get_board_history.return_value = ([], "ths")
     _patch_manager(monkeypatch, mgr)
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": ["600519", "000001"],
+            "boards": [],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 422
 
 
@@ -177,9 +209,15 @@ def test_format_md_emits_top_pairs(monkeypatch):
     s2 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 30)})
     mgr = _mgr_stub({"600519": s1, "000001": s2})
     _patch_manager(monkeypatch, mgr)
-    r = client.post("/api/v1/agent/correlation/matrix?format=md", json={
-        "stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix?format=md",
+        json={
+            "stocks": ["600519", "000001"],
+            "boards": [],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/markdown")
     assert "## 相关性矩阵 — pearson" in r.text
@@ -188,10 +226,15 @@ def test_format_md_emits_top_pairs(monkeypatch):
 def test_too_many_assets_rejected(monkeypatch):
     mgr = MagicMock()
     _patch_manager(monkeypatch, mgr)
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": [str(i).zfill(6) for i in range(11)], "boards": [],
-        "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": [str(i).zfill(6) for i in range(11)],
+            "boards": [],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     # CorrelationMatrixRequest.stocks has no Pydantic max_length — the 422
     # fires in `_parse_and_validate`'s `len(stocks_raw) > 10` cap.
     assert r.status_code == 422
@@ -203,9 +246,15 @@ def test_normalize_strip_suffix(monkeypatch):
     s2 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 30)})
     mgr = _mgr_stub({"600519": s1, "000001": s2})
     _patch_manager(monkeypatch, mgr)
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": ["SH600519", "sz000001"], "boards": [], "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": ["SH600519", "sz000001"],
+            "boards": [],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 200
     codes = [L["code"] for L in r.json()["labels"]]
     assert codes == ["600519", "000001"]
@@ -215,15 +264,24 @@ def test_boards_only_mode(monkeypatch):
     """No stocks at all — boards-only correlation. stocks/boards are
     independent optional lists; any combination with >= 2 assets works."""
     idx = pd.date_range("2026-04-01", periods=30, freq="D")
-    brow1 = [{"date": str(d.date()), "close": float(v)}
-             for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)]
-    brow2 = [{"date": str(d.date()), "close": float(v)}
-             for d, v in zip(idx, np.linspace(300, 340, 30), strict=False)]
+    brow1 = [
+        {"date": str(d.date()), "close": float(v)}
+        for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)
+    ]
+    brow2 = [
+        {"date": str(d.date()), "close": float(v)}
+        for d, v in zip(idx, np.linspace(300, 340, 30), strict=False)
+    ]
     mgr = _mgr_stub({}, {("885595", "ths"): brow1, ("885584", "ths"): brow2})
     _patch_manager(monkeypatch, mgr)
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "boards": ["885595", "885584"], "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "boards": ["885595", "885584"],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 200
     body = r.json()
     assert [L["code"] for L in body["labels"]] == ["885595", "885584"]
@@ -236,14 +294,21 @@ def test_boards_as_strings_mixed_with_stocks(monkeypatch):
     idx = pd.date_range("2026-04-01", periods=30, freq="D")
     s1 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 110, 30)})
     s2 = pd.DataFrame({"trade_date": idx, "close": np.linspace(100, 130, 30)})
-    brow = [{"date": str(d.date()), "close": float(v)}
-            for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)]
+    brow = [
+        {"date": str(d.date()), "close": float(v)}
+        for d, v in zip(idx, np.linspace(200, 240, 30), strict=False)
+    ]
     mgr = _mgr_stub({"600519": s1, "000001": s2}, {("885595", "ths"): brow})
     _patch_manager(monkeypatch, mgr)
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": ["600519", "000001"], "boards": ["885595"],
-        "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": ["600519", "000001"],
+            "boards": ["885595"],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 200
     body = r.json()
     assert len(body["labels"]) == 3
@@ -255,9 +320,15 @@ def test_empty_assets_returns_clean_422(monkeypatch):
     serialization crash on the server 422 handler)."""
     mgr = MagicMock()
     _patch_manager(monkeypatch, mgr)
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": [], "boards": [], "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": [],
+            "boards": [],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 422
     body = r.json()
     assert body["detail"]["error"] == "bad_request"
@@ -278,8 +349,7 @@ def test_repeat_request_succeeds_without_state_corruption(monkeypatch):
     mgr.get_kline_data.side_effect = lambda **kw: (df, "tushare")
     _patch_manager(monkeypatch, mgr)
 
-    payload = {"stocks": ["600519", "000001"], "boards": [],
-               "frequency": "d", "days": 30}
+    payload = {"stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30}
     r1 = client.post("/api/v1/agent/correlation/matrix", json=payload)
     assert r1.status_code == 200
     first_calls = mgr.get_kline_data.call_count
@@ -316,8 +386,7 @@ def test_inner_cache_avoids_recomputation(monkeypatch):
     mgr.get_kline_data.side_effect = cached_kline
     _patch_manager(monkeypatch, mgr)
 
-    payload = {"stocks": ["600519", "000001"], "boards": [],
-               "frequency": "d", "days": 30}
+    payload = {"stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30}
     r1 = client.post("/api/v1/agent/correlation/matrix", json=payload)
     assert r1.status_code == 200
     assert fetch_calls["n"] == 2, (
@@ -346,9 +415,15 @@ def test_trailing_trim_fires_when_fetch_over_returns(monkeypatch):
     mgr = _mgr_stub({"600519": s1, "000001": s2})
     _patch_manager(monkeypatch, mgr)
 
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": ["600519", "000001"],
+            "boards": [],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 200
     # Fetcher was called with days + 1 (1 buffer for pct_change)
     called = mgr.get_kline_data.call_args.kwargs
@@ -380,6 +455,7 @@ def test_calendar_window_yields_real_trading_bars(monkeypatch):
     rows. trailing_window=days+1 is therefore a no-op and common_bars reflects
     the real bar count, NOT days. The 'exactly N returns' invariant holds only
     for dense minute bars; for d/w/m it does not (calendar > trading days)."""
+
     def kline(**kw):
         return (_kline_for_calendar_window(kw["days"]), "tushare")
 
@@ -387,18 +463,23 @@ def test_calendar_window_yields_real_trading_bars(monkeypatch):
     mgr.get_kline_data.side_effect = kline
     _patch_manager(monkeypatch, mgr)
 
-    r = client.post("/api/v1/agent/correlation/matrix", json={
-        "stocks": ["600519", "000001"], "boards": [], "frequency": "d", "days": 30,
-    })
+    r = client.post(
+        "/api/v1/agent/correlation/matrix",
+        json={
+            "stocks": ["600519", "000001"],
+            "boards": [],
+            "frequency": "d",
+            "days": 30,
+        },
+    )
     assert r.status_code == 200, r.text
     called = mgr.get_kline_data.call_args.kwargs
-    assert called["days"] == 30 + 1                      # route passes days+1
+    assert called["days"] == 30 + 1  # route passes days+1
     body = r.json()
     assert body["alignment"]["requested_days"] == 30
     expected_bars = len(_kline_for_calendar_window(31))  # 31 calendar days ≈ 22 weekdays
-    assert expected_bars < 31                            # calendar days > trading days
+    assert expected_bars < 31  # calendar days > trading days
     assert body["alignment"]["common_bars"] == expected_bars, (
-        f"expected real trading-bar count {expected_bars}, got "
-        f"{body['alignment']['common_bars']}"
+        f"expected real trading-bar count {expected_bars}, got {body['alignment']['common_bars']}"
     )
     assert body["alignment"]["missing_after_join"] == 0  # identical calendars → no join drop

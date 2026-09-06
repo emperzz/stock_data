@@ -40,6 +40,7 @@ def _to_baostock_stock_code(code: str) -> str:
         return f"sh.{normalized}"
     return f"sz.{normalized}"
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,12 +90,8 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
     # other minute buckets). The two constants below pin the contract
     # — keeping them at module-internal scope so the self-heal retry
     # path on line ~189 stays in sync with the primary call.
-    _KLINE_FIELDS_DAILY: str = (
-        "date,open,high,low,close,volume,amount,pctChg"
-    )
-    _KLINE_FIELDS_MINUTE: str = (
-        "date,open,high,low,close,volume,amount"
-    )
+    _KLINE_FIELDS_DAILY: str = "date,open,high,low,close,volume,amount,pctChg"
+    _KLINE_FIELDS_MINUTE: str = "date,open,high,low,close,volume,amount"
     _MINUTE_FREQUENCIES: frozenset[str] = frozenset({"5", "15", "30", "60"})
 
     def _kline_fields(self, frequency: str) -> str:
@@ -160,7 +157,9 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
         # Check if requesting minute frequency for an index (indices don't support minute data)
         if frequency in ("5", "15", "30", "60"):
             code = normalize_stock_code(stock_code)
-            if asset == "index" or (asset is None and is_index_code(code) and get_index_type(code) == "csi"):
+            if asset == "index" or (
+                asset is None and is_index_code(code) and get_index_type(code) == "csi"
+            ):
                 raise DataFetchError("Baostock does not support minute frequency for indices")
 
         try:
@@ -199,11 +198,7 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
             # signature. ``bs.logout()`` would re-use the same dead socket,
             # so we go through ``SocketUtil().connect()`` directly to replace
             # ``default_socket`` in-place.
-            if (
-                rs.error_code != "0"
-                and rs.error_msg
-                and "网络接收错误" in rs.error_msg
-            ):
+            if rs.error_code != "0" and rs.error_msg and "网络接收错误" in rs.error_msg:
                 try:
                     import baostock.common.context as _bs_conx
                     import baostock.util.socketutil as _bs_sock

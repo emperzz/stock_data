@@ -481,6 +481,7 @@ class TestToBaostockStockCode:
         from stock_data.data_provider.fetchers.baostock_fetcher import (
             _to_baostock_stock_code,
         )
+
         return _to_baostock_stock_code(code)
 
     def test_ambiguous_000001_routes_to_sz(self):

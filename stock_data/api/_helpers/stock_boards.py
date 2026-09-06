@@ -80,10 +80,7 @@ def fetch_stock_boards_quote_enrichment(
     except DataFetchError as e:
         # Circuit-breaker-open / upstream 5xx / business-level stock_concept_list
         # failure: log + skip enrichment. The 5 legacy fields still flow.
-        logger.warning(
-            f"[boards.get_stock_boards] live enrichment failed for "
-            f"{stock_code!r}: {e}"
-        )
+        logger.warning(f"[boards.get_stock_boards] live enrichment failed for {stock_code!r}: {e}")
         return None, {}
     except Exception as e:  # defensive: never break the response
         logger.warning(

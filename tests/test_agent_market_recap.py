@@ -31,9 +31,7 @@ def _ctx_stub():
         trade_date="2026-09-03",
         is_trade_day=True,
         market_session="intraday",
-        messages=MarketContextMessages(
-            morning_briefing=None, market_recap=None, flash_news=[]
-        ),
+        messages=MarketContextMessages(morning_briefing=None, market_recap=None, flash_news=[]),
         summary={"requested": 3, "ok": 3, "failed": 0, "elapsed_ms": 10},
     )
 
@@ -147,9 +145,7 @@ def test_market_recap_index_failure_isolated(monkeypatch):
     assert body["indices"]["sh"]["code"] == "000001"
     assert body["indices"]["shenzhen_composite"] is None
     assert body["indices"]["chinext"]["code"] == "399006"
-    assert any(
-        e["block"] == "indices.shenzhen_composite" for e in body["errors"]
-    )
+    assert any(e["block"] == "indices.shenzhen_composite" for e in body["errors"])
 
 
 def test_market_recap_cache_hit_skips_fanout(monkeypatch):
@@ -206,7 +202,9 @@ def test_market_recap_md_format_no_field_drop(monkeypatch):
         lambda mgr: (
             MarketRecapIndicesBlock(
                 sh=IndexQuote(code="000001", name="上证综指", change_pct=0.5, amount=1.0),
-                shenzhen_composite=IndexQuote(code="399001", name="深证成指", change_pct=1.2, amount=2.0),
+                shenzhen_composite=IndexQuote(
+                    code="399001", name="深证成指", change_pct=1.2, amount=2.0
+                ),
                 chinext=IndexQuote(code="399006", name="创业板指", change_pct=-0.3, amount=3.0),
             ),
             [],
@@ -227,15 +225,30 @@ def test_market_recap_md_format_no_field_drop(monkeypatch):
     # 2. The 3 index codes + Chinese names from the input.
     # 3. Section headings ("市场全景", "市场全量统计", "指数快讯") + summary keys.
     index_cols = [
-        "code", "name", "source", "current_price", "change_amount",
-        "change_pct", "open", "high", "low", "prev_close",
-        "volume", "volume_unit", "amount", "update_time",
+        "code",
+        "name",
+        "source",
+        "current_price",
+        "change_amount",
+        "change_pct",
+        "open",
+        "high",
+        "low",
+        "prev_close",
+        "volume",
+        "volume_unit",
+        "amount",
+        "update_time",
     ]
     section_markers = ["市场全景", "市场全量统计", "指数快讯"]
     summary_keys = ["requested", "ok", "failed", "elapsed"]
     data_values = [
-        "000001", "399001", "399006",
-        "上证综指", "深证成指", "创业板指",
+        "000001",
+        "399001",
+        "399006",
+        "上证综指",
+        "深证成指",
+        "创业板指",
     ]
 
     missing_cols = [c for c in index_cols if c not in md]

@@ -467,7 +467,7 @@ class TestZTFetcherManager:
         # otherwise make this test fail after-hours).
         class _FrozenDatetime(real_datetime):
             @classmethod
-            def now(cls, tz=None):  # noqa: ARG003
+            def now(cls, tz=None):
                 return real_datetime(2000, 1, 1, 10, 0, 0)
 
         monkeypatch.setattr(pool_daily, "datetime", _FrozenDatetime)

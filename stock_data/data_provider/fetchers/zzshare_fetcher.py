@@ -283,9 +283,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         df = df.rename(columns=rename)
         # Minute path: derive date from trade_time (full YYYYMMDDHHMM, preserve HH:MM)
         if "date" not in df.columns and "trade_time" in df.columns:
-            df["date"] = pd.to_datetime(
-                df["trade_time"].astype(str), format="%Y%m%d%H%M"
-            )
+            df["date"] = pd.to_datetime(df["trade_time"].astype(str), format="%Y%m%d%H%M")
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"])
         if "code" not in df.columns:
@@ -606,9 +604,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         try:
             rows = api.review_uplimit_reason(date1=date_yyyymmdd)
         except Exception as e:
-            logger.warning(
-                f"[ZzshareFetcher] review_uplimit_reason({date_yyyymmdd}) failed: {e}"
-            )
+            logger.warning(f"[ZzshareFetcher] review_uplimit_reason({date_yyyymmdd}) failed: {e}")
             return None
         if not rows:
             return None
@@ -630,9 +626,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
 
                 # upstream "HH:MM" → "HH:MM:SS". Only LAST seal exposed
                 # (up_limit_time); first_seal_time absent by contract.
-                last_seal_time = self._normalize_seal_time(
-                    str(row.get("up_limit_time", ""))
-                )
+                last_seal_time = self._normalize_seal_time(str(row.get("up_limit_time", "")))
 
                 out.append(
                     {

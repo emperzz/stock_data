@@ -211,14 +211,8 @@ class TestCacheKeyBuilders:
     def test_market_stats_cache_key_includes_include_boards(self):
         # Post-2026-09-02 redesign: signature is (include_boards, include_pools, trade_date).
         # All three knobs participate in the key.
-        assert (
-            make_market_stats_cache_key(True, True, "")
-            == "agent_market_stats:True:True:"
-        )
-        assert (
-            make_market_stats_cache_key(False, True, "")
-            == "agent_market_stats:False:True:"
-        )
+        assert make_market_stats_cache_key(True, True, "") == "agent_market_stats:True:True:"
+        assert make_market_stats_cache_key(False, True, "") == "agent_market_stats:False:True:"
 
     def test_market_stats_cache_keys_are_distinct(self):
         """Two calls with different include_boards produce different entries —

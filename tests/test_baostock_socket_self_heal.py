@@ -32,10 +32,10 @@ import pytest
 from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
 
-
 # ──────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────
+
 
 def _bs_result(error_code: str, error_msg: str = ""):
     rs = MagicMock()
@@ -75,7 +75,7 @@ def _install_sentinel_default_socket(conx, name="old_sock"):
     use setattr to register a sentinel.
     """
     sent = MagicMock(name=name)
-    setattr(conx, "default_socket", sent)
+    conx.default_socket = sent
     return sent
 
 
@@ -99,7 +99,6 @@ def _enable_fetcher_init():
 # masking the real assertion in a later test.
 @pytest.fixture(autouse=True)
 def _isolate_baostock_globals(request):
-    from unittest.mock import MagicMock as _MM
 
     # Snapshot original state
     orig_init_attempted = BaostockFetcher._init_attempted
@@ -111,9 +110,10 @@ def _isolate_baostock_globals(request):
     had_socket_attr = False
     try:
         import baostock.common.context as _conx
+
         had_socket_attr = hasattr(_conx, "default_socket")
         if had_socket_attr:
-            orig_socket = getattr(_conx, "default_socket")
+            orig_socket = _conx.default_socket
             delattr(_conx, "default_socket")
     except Exception:
         pass
@@ -126,8 +126,9 @@ def _isolate_baostock_globals(request):
 
     try:
         import baostock.common.context as _conx
+
         if had_socket_attr and orig_socket is not None:
-            setattr(_conx, "default_socket", orig_socket)
+            _conx.default_socket = orig_socket
         elif had_socket_attr and hasattr(_conx, "default_socket"):
             delattr(_conx, "default_socket")
     except Exception:
@@ -147,6 +148,7 @@ def test_self_heal_recovers_on_second_attempt():
     which is the observable contract of the self-heal retry.
     """
     import baostock.common.context as conx
+
     _enable_fetcher_init()
     old_sock = _install_sentinel_default_socket(conx)
 
@@ -156,23 +158,24 @@ def test_self_heal_recovers_on_second_attempt():
         call_count["n"] += 1
         if call_count["n"] == 1:
             return _bs_result("10002007", "网络接收错误。")
-        return _good_bs_result([
-            ["2026-07-30", "10.0", "11.0", "9.5", "10.5",
-             "1000", "10000", "0.0"],
-        ])
+        return _good_bs_result(
+            [
+                ["2026-07-30", "10.0", "11.0", "9.5", "10.5", "1000", "10000", "0.0"],
+            ]
+        )
 
     fetcher = BaostockFetcher()
 
-    with patch("baostock.query_history_k_data_plus", side_effect=side_effect), \
-         patch(
-             "baostock.util.socketutil.SocketUtil.connect",
-             side_effect=lambda *a, **kw: setattr(
-                 conx, "default_socket", MagicMock(name="new_sock")
-             ),
-         ) as mock_connect:
-        df = fetcher.get_kline_data(
-            "000001", days=1, frequency="d", asset="stock"
-        )
+    with (
+        patch("baostock.query_history_k_data_plus", side_effect=side_effect),
+        patch(
+            "baostock.util.socketutil.SocketUtil.connect",
+            side_effect=lambda *a, **kw: setattr(
+                conx, "default_socket", MagicMock(name="new_sock")
+            ),
+        ) as mock_connect,
+    ):
+        df = fetcher.get_kline_data("000001", days=1, frequency="d", asset="stock")
 
     assert not df.empty, "Expected non-empty DataFrame after self-heal"
     assert call_count["n"] == 2, (
@@ -181,7 +184,7 @@ def test_self_heal_recovers_on_second_attempt():
     assert mock_connect.call_count >= 1, (
         "Expected SocketUtil.connect to be invoked at least once during self-heal"
     )
-    assert getattr(conx, "default_socket") is not old_sock, (
+    assert conx.default_socket is not old_sock, (
         "Expected default_socket to be replaced post-self-heal"
     )
 
@@ -199,31 +202,33 @@ def test_self_heal_does_not_loop_when_both_attempts_fail():
     contract.
     """
     import baostock.common.context as conx
+
     _enable_fetcher_init()
     _install_sentinel_default_socket(conx)
 
     fetcher = BaostockFetcher()
 
-    with patch(
-        "baostock.query_history_k_data_plus",
-        side_effect=lambda *a, **kw: _bs_result("10002007", "网络接收错误。"),
-    ) as mock_query, \
-         patch(
-             "baostock.util.socketutil.SocketUtil.connect",
-             side_effect=lambda *a, **kw: setattr(
-                 conx, "default_socket", MagicMock(name="new_sock")
-             ),
-         ):
-        with pytest.raises(DataFetchError) as exc_info:
-            fetcher.get_kline_data("000001", days=1, frequency="d", asset="stock")
+    with (
+        patch(
+            "baostock.query_history_k_data_plus",
+            side_effect=lambda *a, **kw: _bs_result("10002007", "网络接收错误。"),
+        ) as mock_query,
+        patch(
+            "baostock.util.socketutil.SocketUtil.connect",
+            side_effect=lambda *a, **kw: setattr(
+                conx, "default_socket", MagicMock(name="new_sock")
+            ),
+        ),
+        pytest.raises(DataFetchError) as exc_info,
+    ):
+        fetcher.get_kline_data("000001", days=1, frequency="d", asset="stock")
 
     msg = exc_info.value.args[0] if exc_info.value.args else ""
     if isinstance(msg, bytes):
         msg = msg.decode("utf-8", errors="replace")
     assert "网络接收错误" in msg
     assert mock_query.call_count == 2, (
-        "Expected exactly 2 bs.query calls (1 original + 1 retry), "
-        f"got {mock_query.call_count}"
+        f"Expected exactly 2 bs.query calls (1 original + 1 retry), got {mock_query.call_count}"
     )
 
     # _init / default_socket restoration handled by autouse fixture.
@@ -242,13 +247,13 @@ def test_no_retry_on_unrelated_error_msg():
     _enable_fetcher_init()
     fetcher = BaostockFetcher()
 
-    with patch(
-        "baostock.query_history_k_data_plus",
-        side_effect=lambda *a, **kw: _bs_result(
-            "10002011", "访问频次超限，请稍后再试"
+    with (
+        patch(
+            "baostock.query_history_k_data_plus",
+            side_effect=lambda *a, **kw: _bs_result("10002011", "访问频次超限，请稍后再试"),
         ),
-    ), \
-         patch("baostock.util.socketutil.SocketUtil.connect") as mock_connect:
+        patch("baostock.util.socketutil.SocketUtil.connect") as mock_connect,
+    ):
         with pytest.raises(DataFetchError):
             fetcher.get_kline_data("000001", days=1, frequency="d", asset="stock")
 

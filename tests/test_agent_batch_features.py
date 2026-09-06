@@ -147,7 +147,9 @@ class TestTrendFeatures:
         closes = df["close"].tolist()
         ma5_cur = round(sum(closes[-5:]) / 5, 2)
         ma5_prev = round(sum(closes[-6:-1]) / 5, 2)
-        assert out["ma_change"]["ma5"] == pytest.approx((ma5_cur - ma5_prev) / ma5_prev * 100, rel=1e-6)
+        assert out["ma_change"]["ma5"] == pytest.approx(
+            (ma5_cur - ma5_prev) / ma5_prev * 100, rel=1e-6
+        )
 
     def test_adx_rsi_boll_present(self):
         out = compute_trend(_make_kline_df(120))
@@ -158,6 +160,7 @@ class TestTrendFeatures:
 
     def test_empty_df_returns_empty_blocks(self):
         import pandas as pd
+
         out = compute_trend(pd.DataFrame())
         assert out["ma"] == {}
         assert out["ma_change"] == {}
@@ -373,9 +376,18 @@ _BOARD_STOCKS_PATCH = "stock_data.data_provider.persistence.board.get_stock_memb
 
 def _make_unified_quote(code, price=100.0):
     return UnifiedRealtimeQuote(
-        code=code, name=code, source=RealtimeSource.AKSHARE, price=price,
-        change_pct=1.5, change_amount=1.5, open_price=99.0, high=101.0,
-        low=98.5, pre_close=98.5, volume=1_000_000, amount=1e8,
+        code=code,
+        name=code,
+        source=RealtimeSource.AKSHARE,
+        price=price,
+        change_pct=1.5,
+        change_amount=1.5,
+        open_price=99.0,
+        high=101.0,
+        low=98.5,
+        pre_close=98.5,
+        volume=1_000_000,
+        amount=1e8,
     )
 
 
@@ -398,7 +410,10 @@ class TestStocksBatchProfile:
         mock_manager.get_kline_data.return_value = (_make_kline_df(120, spike_idx=(80,)), "zzshare")
         mock_manager.get_stock_info.return_value = ({"industry": "白酒"}, "zhitu")
         _bind_manager(monkeypatch, mock_manager)
-        with patch(_BOARD_STOCKS_PATCH, return_value=([{"code": "885595", "name": "白酒"}], False, "persistence")):
+        with patch(
+            _BOARD_STOCKS_PATCH,
+            return_value=([{"code": "885595", "name": "白酒"}], False, "persistence"),
+        ):
             resp = client.post(
                 "/api/v1/agent/stocks/batch-profile",
                 json=_stock_request(["600519"], frequency="d", days=60),
@@ -479,9 +494,7 @@ class TestStocksBatchProfile:
             assert m_kwargs["asset"] == "stock"
             assert m_kwargs["frequency"] == "5"
 
-    def test_5m_features_uses_unadjusted_so_zzshare_is_in_candidates(
-        self, client, monkeypatch
-    ):
+    def test_5m_features_uses_unadjusted_so_zzshare_is_in_candidates(self, client, monkeypatch):
         """Pin the contract: 5m + adjust=None keeps Zzshare/Zhitu in the manager's
         candidate list so the primary P2/P5 chain is exercised; with the old
         hard-coded qfq they were filtered out by supports_kline and the call fell
@@ -546,9 +559,7 @@ class TestIndicesBatchProfile:
         mock_manager.get_index_realtime_quote.return_value = _make_unified_quote("000001")
         mock_manager.get_kline_data.return_value = (_make_kline_df(120), "akshare")
         _bind_manager(monkeypatch, mock_manager)
-        resp = client.get(
-            "/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3"
-        )
+        resp = client.get("/api/v1/agent/indices/batch-profile?codes=000001&frequency=5m&days=3")
         assert resp.status_code == 200
         data = resp.json()
         assert data["frequency"] == "5m" and data["days"] == 3
@@ -602,18 +613,45 @@ class TestFormatMdFeatures:
         from stock_data.api.schemas import BatchFeatures
 
         features = BatchFeatures(
-            trend={"ma": {"ma5": 1.0}, "ma_change": {"ma5": 0.1}, "adx": 20.0, "pdi": 10.0,
-                   "mdi": 8.0, "rsi": {"rsi_6": 50.0}, "boll": {"mid": 1.0, "upper": 2.0, "lower": 0.0, "bandwidth": 1.0}},
-            pivots={"window_high": {"price": 2.0, "date": "2026-08-10"}, "window_low": {"price": 1.0, "date": "2026-07-15"},
-                    "max_vol_bar": None,
-                    "swings": [{"date": "2026-07-15", "type": "low", "price": 1.0, "confirmed": True}],
-                    "pending": {"side": "high", "bars": 2, "price": 2.0, "date": "2026-08-10"},
-                    "params": {"pivot_window": 2, "reversal_atr_mult": 1.0,
-                              "atr_period": 14, "max_swings": 50}},
-            volume={"latest_volume": 100.0, "vol_ratio_5": 1.5,
-                    "z_anomalies": [{"date": "2026-08-10", "open": 1.0, "high": 2.0, "low": 0.5,
-                                     "close": 1.5, "volume": 100.0, "z_score": 3.0,
-                                     "direction": "up", "change_pct": 5.0}]},
+            trend={
+                "ma": {"ma5": 1.0},
+                "ma_change": {"ma5": 0.1},
+                "adx": 20.0,
+                "pdi": 10.0,
+                "mdi": 8.0,
+                "rsi": {"rsi_6": 50.0},
+                "boll": {"mid": 1.0, "upper": 2.0, "lower": 0.0, "bandwidth": 1.0},
+            },
+            pivots={
+                "window_high": {"price": 2.0, "date": "2026-08-10"},
+                "window_low": {"price": 1.0, "date": "2026-07-15"},
+                "max_vol_bar": None,
+                "swings": [{"date": "2026-07-15", "type": "low", "price": 1.0, "confirmed": True}],
+                "pending": {"side": "high", "bars": 2, "price": 2.0, "date": "2026-08-10"},
+                "params": {
+                    "pivot_window": 2,
+                    "reversal_atr_mult": 1.0,
+                    "atr_period": 14,
+                    "max_swings": 50,
+                },
+            },
+            volume={
+                "latest_volume": 100.0,
+                "vol_ratio_5": 1.5,
+                "z_anomalies": [
+                    {
+                        "date": "2026-08-10",
+                        "open": 1.0,
+                        "high": 2.0,
+                        "low": 0.5,
+                        "close": 1.5,
+                        "volume": 100.0,
+                        "z_score": 3.0,
+                        "direction": "up",
+                        "change_pct": 5.0,
+                    }
+                ],
+            },
         )
         return features
 
@@ -717,14 +755,28 @@ class TestFormatMdFeatureCompleteness:
         量价 + 估值 (no 板块统计)."""
         mock_manager = MagicMock()
         q = UnifiedRealtimeQuote(
-            code="600519", name="贵州茅台", source=RealtimeSource.ZZSHARE,
-            price=1680.0, change_pct=1.23, change_amount=20.4,
-            open_price=1660.0, high=1690.0, low=1655.0, pre_close=1659.6,
-            volume=12_345_678, volume_unit="share", amount=2_050_000_000.0,
-            turnover_rate=0.45, amplitude=2.11, volume_ratio=1.20,
-            pe_ratio=25.3, pb_ratio=8.7,
-            total_mv=2_112_350_000_000.0, circ_mv=2_100_010_000_000.0,
-            limit_up=1825.56, limit_down=1493.64,
+            code="600519",
+            name="贵州茅台",
+            source=RealtimeSource.ZZSHARE,
+            price=1680.0,
+            change_pct=1.23,
+            change_amount=20.4,
+            open_price=1660.0,
+            high=1690.0,
+            low=1655.0,
+            pre_close=1659.6,
+            volume=12_345_678,
+            volume_unit="share",
+            amount=2_050_000_000.0,
+            turnover_rate=0.45,
+            amplitude=2.11,
+            volume_ratio=1.20,
+            pe_ratio=25.3,
+            pb_ratio=8.7,
+            total_mv=2_112_350_000_000.0,
+            circ_mv=2_100_010_000_000.0,
+            limit_up=1825.56,
+            limit_down=1493.64,
         )
         mock_manager.get_realtime_quote.return_value = q
         mock_manager.get_kline_data.return_value = (_make_kline_df(120), "zzshare")
@@ -755,9 +807,14 @@ class TestFormatMdFeatureCompleteness:
         Only 价格 + 量价 subgroups render (when populated)."""
         mock_manager = MagicMock()
         q = UnifiedRealtimeQuote(
-            code="000300", name="沪深300", source=RealtimeSource.AKSHARE,
-            price=3000.0, change_pct=0.5,
-            volume=5_000_000, volume_unit="share", amount=1e10,
+            code="000300",
+            name="沪深300",
+            source=RealtimeSource.AKSHARE,
+            price=3000.0,
+            change_pct=0.5,
+            volume=5_000_000,
+            volume_unit="share",
+            amount=1e10,
             turnover_rate=0.3,
         )
         mock_manager.get_index_realtime_quote.return_value = q
@@ -777,18 +834,38 @@ class TestFormatMdFeatureCompleteness:
         Use THS-style board realtime dict shape."""
         mock_manager = MagicMock()
         board_quote = {
-            "board_code": "885595", "board_name": "人形机器人",
-            "price": 1234.5, "change_pct": 1.23, "change_amount": 15.0,
-            "open": 1230.0, "high": 1240.0, "low": 1225.0, "prev_close": 1219.5,
-            "volume": 15343, "amount": 12.5,  # 万手 / 亿元
-            "up_count": 12, "down_count": 5,
-            "net_inflow": 1.23, "rank": "229/389",
+            "board_code": "885595",
+            "board_name": "人形机器人",
+            "price": 1234.5,
+            "change_pct": 1.23,
+            "change_amount": 15.0,
+            "open": 1230.0,
+            "high": 1240.0,
+            "low": 1225.0,
+            "prev_close": 1219.5,
+            "volume": 15343,
+            "amount": 12.5,  # 万手 / 亿元
+            "up_count": 12,
+            "down_count": 5,
+            "net_inflow": 1.23,
+            "rank": "229/389",
         }
         mock_manager.get_board_realtime.return_value = (board_quote, "ths")
-        mock_manager.get_board_history.return_value = ([
-            {"date": "2026-08-01", "open": 1200, "high": 1210, "low": 1190,
-             "close": 1205, "volume": 100, "amount": 1_000_000, "pct_chg": 0.5},
-        ], "ths")
+        mock_manager.get_board_history.return_value = (
+            [
+                {
+                    "date": "2026-08-01",
+                    "open": 1200,
+                    "high": 1210,
+                    "low": 1190,
+                    "close": 1205,
+                    "volume": 100,
+                    "amount": 1_000_000,
+                    "pct_chg": 0.5,
+                },
+            ],
+            "ths",
+        )
         _bind_manager(monkeypatch, mock_manager)
         resp = client.post(
             "/api/v1/agent/boards/batch-profile?format=md",
@@ -811,14 +888,28 @@ def test_boards_enrichment_warm_cache_merge(client, monkeypatch):
     from stock_data.data_provider.persistence import board as stock_board_cache
 
     cached_entries = [
-        {"code": "881155", "name": "数据中心", "type": "concept",
-         "subtype": "concept", "source": "ths"},
+        {
+            "code": "881155",
+            "name": "数据中心",
+            "type": "concept",
+            "subtype": "concept",
+            "source": "ths",
+        },
     ]
     fetcher_result = [
-        {"code": "881155", "name": "数据中心", "type": "concept", "subtype": "concept",
-         "change_pct": 1.23, "up_count": 15, "down_count": 8,
-         "limit_up_count": 2, "limit_down_count": 0,
-         "explain": "...", "relevance": 2},
+        {
+            "code": "881155",
+            "name": "数据中心",
+            "type": "concept",
+            "subtype": "concept",
+            "change_pct": 1.23,
+            "up_count": 15,
+            "down_count": 8,
+            "limit_up_count": 2,
+            "limit_down_count": 0,
+            "explain": "...",
+            "relevance": 2,
+        },
     ]
 
     mock_manager = MagicMock()
@@ -829,12 +920,12 @@ def test_boards_enrichment_warm_cache_merge(client, monkeypatch):
     _bind_manager(monkeypatch, mock_manager)
 
     monkeypatch.setattr(
-        stock_board_cache, "get_stock_memberships",
+        stock_board_cache,
+        "get_stock_memberships",
         lambda stock_code, sources, manager: (cached_entries, [], "persistence"),
     )
 
-    r = client.post("/api/v1/agent/stocks/batch-profile",
-                    json=_stock_request(["600519"]))
+    r = client.post("/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"]))
     assert r.status_code == 200
     body = r.json()
     boards = body["results"][0]["boards"]
@@ -857,12 +948,32 @@ def test_boards_enrichment_cold_cache_fallback(client, monkeypatch):
     from stock_data.data_provider.persistence import board as stock_board_cache
 
     fetcher_result = [
-        {"code": "881155", "name": "数据中心", "type": "concept", "subtype": "concept",
-         "change_pct": 1.23, "up_count": 15, "down_count": 8,
-         "limit_up_count": 2, "limit_down_count": 0, "explain": "...", "relevance": 2},
-        {"code": "881166", "name": "算力", "type": "concept", "subtype": "concept",
-         "change_pct": 0.5, "up_count": 10, "down_count": 5,
-         "limit_up_count": 1, "limit_down_count": 0, "explain": None, "relevance": 0},
+        {
+            "code": "881155",
+            "name": "数据中心",
+            "type": "concept",
+            "subtype": "concept",
+            "change_pct": 1.23,
+            "up_count": 15,
+            "down_count": 8,
+            "limit_up_count": 2,
+            "limit_down_count": 0,
+            "explain": "...",
+            "relevance": 2,
+        },
+        {
+            "code": "881166",
+            "name": "算力",
+            "type": "concept",
+            "subtype": "concept",
+            "change_pct": 0.5,
+            "up_count": 10,
+            "down_count": 5,
+            "limit_up_count": 1,
+            "limit_down_count": 0,
+            "explain": None,
+            "relevance": 0,
+        },
     ]
 
     mock_manager = MagicMock()
@@ -873,12 +984,12 @@ def test_boards_enrichment_cold_cache_fallback(client, monkeypatch):
     _bind_manager(monkeypatch, mock_manager)
 
     monkeypatch.setattr(
-        stock_board_cache, "get_stock_memberships",
+        stock_board_cache,
+        "get_stock_memberships",
         lambda stock_code, sources, manager: ([], ["ths"], "persistence"),
     )
 
-    r = client.post("/api/v1/agent/stocks/batch-profile",
-                    json=_stock_request(["600519"]))
+    r = client.post("/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"]))
     assert r.status_code == 200
     body = r.json()
     boards = body["results"][0]["boards"]
@@ -896,8 +1007,13 @@ def test_boards_enrichment_fetcher_failure(client, monkeypatch):
     from stock_data.data_provider.persistence import board as stock_board_cache
 
     cached_entries = [
-        {"code": "881155", "name": "数据中心", "type": "concept",
-         "subtype": "concept", "source": "ths"},
+        {
+            "code": "881155",
+            "name": "数据中心",
+            "type": "concept",
+            "subtype": "concept",
+            "source": "ths",
+        },
     ]
 
     mock_manager = MagicMock()
@@ -908,12 +1024,12 @@ def test_boards_enrichment_fetcher_failure(client, monkeypatch):
     _bind_manager(monkeypatch, mock_manager)
 
     monkeypatch.setattr(
-        stock_board_cache, "get_stock_memberships",
+        stock_board_cache,
+        "get_stock_memberships",
         lambda stock_code, sources, manager: (cached_entries, [], "persistence"),
     )
 
-    r = client.post("/api/v1/agent/stocks/batch-profile",
-                    json=_stock_request(["600519"]))
+    r = client.post("/api/v1/agent/stocks/batch-profile", json=_stock_request(["600519"]))
     assert r.status_code == 200
     body = r.json()
     boards = body["results"][0]["boards"]
@@ -934,20 +1050,48 @@ def test_md_boards_block_full_field_table(client, monkeypatch):
     from stock_data.data_provider.persistence import board as stock_board_cache
 
     cached_entries = [
-        {"code": "881155", "name": "数据中心", "type": "concept",
-         "subtype": "concept", "source": "ths"},
-        {"code": "881166", "name": "算力", "type": "concept",
-         "subtype": "concept", "source": "ths"},
+        {
+            "code": "881155",
+            "name": "数据中心",
+            "type": "concept",
+            "subtype": "concept",
+            "source": "ths",
+        },
+        {
+            "code": "881166",
+            "name": "算力",
+            "type": "concept",
+            "subtype": "concept",
+            "source": "ths",
+        },
     ]
     fetcher_result = [
-        {"code": "881155", "name": "数据中心", "type": "concept", "subtype": "concept",
-         "change_pct": 1.23, "up_count": 15, "down_count": 8,
-         "limit_up_count": 2, "limit_down_count": 0,
-         "explain": "数据中心是新基建", "relevance": 2},
-        {"code": "881166", "name": "算力", "type": "concept", "subtype": "concept",
-         "change_pct": None, "up_count": None, "down_count": None,
-         "limit_up_count": None, "limit_down_count": None,
-         "explain": None, "relevance": None},
+        {
+            "code": "881155",
+            "name": "数据中心",
+            "type": "concept",
+            "subtype": "concept",
+            "change_pct": 1.23,
+            "up_count": 15,
+            "down_count": 8,
+            "limit_up_count": 2,
+            "limit_down_count": 0,
+            "explain": "数据中心是新基建",
+            "relevance": 2,
+        },
+        {
+            "code": "881166",
+            "name": "算力",
+            "type": "concept",
+            "subtype": "concept",
+            "change_pct": None,
+            "up_count": None,
+            "down_count": None,
+            "limit_up_count": None,
+            "limit_down_count": None,
+            "explain": None,
+            "relevance": None,
+        },
     ]
 
     mock_manager = MagicMock()
@@ -958,12 +1102,12 @@ def test_md_boards_block_full_field_table(client, monkeypatch):
     _bind_manager(monkeypatch, mock_manager)
 
     monkeypatch.setattr(
-        stock_board_cache, "get_stock_memberships",
+        stock_board_cache,
+        "get_stock_memberships",
         lambda stock_code, sources, manager: (cached_entries, [], "persistence"),
     )
 
-    r = client.post("/api/v1/agent/stocks/batch-profile?format=md",
-                    json=_stock_request(["600519"]))
+    r = client.post("/api/v1/agent/stocks/batch-profile?format=md", json=_stock_request(["600519"]))
     assert r.status_code == 200
     md = r.text
 

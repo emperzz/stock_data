@@ -116,23 +116,36 @@ def test_ths_source_enriches_change_pct_up_count_down_count(client):
     ]
     fetcher_result = [
         {
-            "code": "885909", "name": "辅助生殖",
-            "type": "concept", "subtype": "同花顺概念",
-            "change_pct": -0.4114, "up_count": 30, "down_count": 43,
-            "limit_up_count": 1, "limit_down_count": None,
-            "explain": "2022年8月23日公司互动回复：...", "relevance": 2,
+            "code": "885909",
+            "name": "辅助生殖",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "change_pct": -0.4114,
+            "up_count": 30,
+            "down_count": 43,
+            "limit_up_count": 1,
+            "limit_down_count": None,
+            "explain": "2022年8月23日公司互动回复：...",
+            "relevance": 2,
         },
     ]
     enrichment_by_code = {
         "885909": {
-            "change_pct": -0.4114, "up_count": 30, "down_count": 43,
-            "limit_up_count": 1, "limit_down_count": None,
-            "explain": "2022年8月23日公司互动回复：...", "relevance": 2,
+            "change_pct": -0.4114,
+            "up_count": 30,
+            "down_count": 43,
+            "limit_up_count": 1,
+            "limit_down_count": None,
+            "explain": "2022年8月23日公司互动回复：...",
+            "relevance": 2,
         },
     }
 
-    with _patch_persistence_with_ths_entries(cached_entries), _patch_enrichment_with(
-        fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+    with (
+        _patch_persistence_with_ths_entries(cached_entries),
+        _patch_enrichment_with(
+            fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+        ),
     ):
         r = client.get("/api/v1/stocks/300519/boards?source=ths")
 
@@ -179,8 +192,9 @@ def test_eastmoney_source_leaves_enrichment_fields_as_none(client):
     # Pass explicit (None, None) → stub raises (sentinel). If the
     # enrichment helper is incorrectly called for eastmoney, the test
     # fails with 500. We expect 200 + None fields.
-    with _patch_persistence_with_ths_entries(cached_entries), _patch_enrichment_with(
-        fetcher_result=None, enrichment_by_code=None
+    with (
+        _patch_persistence_with_ths_entries(cached_entries),
+        _patch_enrichment_with(fetcher_result=None, enrichment_by_code=None),
     ):
         r = client.get("/api/v1/stocks/600519/boards?source=eastmoney")
 
@@ -214,27 +228,52 @@ def test_ths_source_partial_overlap_enriches_only_matching_codes(client):
 
     cached_entries = [
         # Present in enrichment
-        {"code": "885909", "name": "辅助生殖", "type": "concept", "subtype": "同花顺概念", "source": "ths"},
+        {
+            "code": "885909",
+            "name": "辅助生殖",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "source": "ths",
+        },
         # Stale: not in enrichment (upstream dropped it)
-        {"code": "885OLD", "name": "已退市概念", "type": "concept", "subtype": "同花顺概念", "source": "ths"},
+        {
+            "code": "885OLD",
+            "name": "已退市概念",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "source": "ths",
+        },
     ]
     enrichment_by_code = {
         "885909": {
-            "change_pct": -0.4114, "up_count": 30, "down_count": 43,
-            "limit_up_count": 1, "limit_down_count": None,
-            "explain": "...", "relevance": 2,
+            "change_pct": -0.4114,
+            "up_count": 30,
+            "down_count": 43,
+            "limit_up_count": 1,
+            "limit_down_count": None,
+            "explain": "...",
+            "relevance": 2,
         },
         "885NEW": {  # Fetcher has 885NEW but cache doesn't — extra entries ignored
-            "change_pct": 1.5, "up_count": 5, "down_count": 2,
-            "limit_up_count": 0, "limit_down_count": 0,
-            "explain": "...", "relevance": 0,
+            "change_pct": 1.5,
+            "up_count": 5,
+            "down_count": 2,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "explain": "...",
+            "relevance": 0,
         },
     }
-    fetcher_result = [{"code": k, **v, "name": k, "type": "concept", "subtype": "同花顺概念"}
-                      for k, v in enrichment_by_code.items()]
+    fetcher_result = [
+        {"code": k, **v, "name": k, "type": "concept", "subtype": "同花顺概念"}
+        for k, v in enrichment_by_code.items()
+    ]
 
-    with _patch_persistence_with_ths_entries(cached_entries), _patch_enrichment_with(
-        fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+    with (
+        _patch_persistence_with_ths_entries(cached_entries),
+        _patch_enrichment_with(
+            fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+        ),
     ):
         r = client.get("/api/v1/stocks/300519/boards?source=ths")
 
@@ -271,33 +310,56 @@ def test_ths_cold_cache_falls_back_to_fetcher_result(client):
     persistence_empty = []
     fetcher_result = [
         {
-            "code": "885909", "name": "辅助生殖",
-            "type": "concept", "subtype": "同花顺概念",
-            "change_pct": -0.4114, "up_count": 30, "down_count": 43,
-            "limit_up_count": 1, "limit_down_count": None,
-            "explain": "...", "relevance": 2,
+            "code": "885909",
+            "name": "辅助生殖",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "change_pct": -0.4114,
+            "up_count": 30,
+            "down_count": 43,
+            "limit_up_count": 1,
+            "limit_down_count": None,
+            "explain": "...",
+            "relevance": 2,
         },
         {
-            "code": "885879", "name": "流感",
-            "type": "concept", "subtype": "同花顺概念",
-            "change_pct": -0.7418, "up_count": 66, "down_count": 114,
-            "limit_up_count": 4, "limit_down_count": 0,
-            "explain": "...", "relevance": 2,
+            "code": "885879",
+            "name": "流感",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "change_pct": -0.7418,
+            "up_count": 66,
+            "down_count": 114,
+            "limit_up_count": 4,
+            "limit_down_count": 0,
+            "explain": "...",
+            "relevance": 2,
         },
     ]
     enrichment_by_code = {
-        r["code"]: {k: r[k] for k in (
-            "change_pct", "up_count", "down_count",
-            "limit_up_count", "limit_down_count", "explain", "relevance",
-        )}
+        r["code"]: {
+            k: r[k]
+            for k in (
+                "change_pct",
+                "up_count",
+                "down_count",
+                "limit_up_count",
+                "limit_down_count",
+                "explain",
+                "relevance",
+            )
+        }
         for r in fetcher_result
     }
 
     # Persistence reports all 3 sources cold (typical first query scenario).
-    with _patch_persistence_with_ths_entries(
-        persistence_empty, cold_sources=["ths", "eastmoney", "zhitu"]
-    ), _patch_enrichment_with(
-        fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+    with (
+        _patch_persistence_with_ths_entries(
+            persistence_empty, cold_sources=["ths", "eastmoney", "zhitu"]
+        ),
+        _patch_enrichment_with(
+            fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+        ),
     ):
         r = client.get("/api/v1/stocks/300519/boards")
 
@@ -330,27 +392,54 @@ def test_ths_cold_cache_filters_by_type(client):
     _clear_stock_boards_quote_cache()
 
     fetcher_result = [
-        {"code": "885909", "name": "辅助生殖", "type": "concept", "subtype": "同花顺概念",
-         "change_pct": 0.0, "up_count": 0, "down_count": 0,
-         "limit_up_count": 0, "limit_down_count": 0,
-         "explain": None, "relevance": 0},
-        {"code": "881121", "name": "医药制造业", "type": "industry", "subtype": "同花顺行业",
-         "change_pct": 0.5, "up_count": 10, "down_count": 5,
-         "limit_up_count": 0, "limit_down_count": 0,
-         "explain": None, "relevance": 0},
+        {
+            "code": "885909",
+            "name": "辅助生殖",
+            "type": "concept",
+            "subtype": "同花顺概念",
+            "change_pct": 0.0,
+            "up_count": 0,
+            "down_count": 0,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "explain": None,
+            "relevance": 0,
+        },
+        {
+            "code": "881121",
+            "name": "医药制造业",
+            "type": "industry",
+            "subtype": "同花顺行业",
+            "change_pct": 0.5,
+            "up_count": 10,
+            "down_count": 5,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "explain": None,
+            "relevance": 0,
+        },
     ]
     enrichment_by_code = {
-        r["code"]: {k: r[k] for k in (
-            "change_pct", "up_count", "down_count",
-            "limit_up_count", "limit_down_count", "explain", "relevance",
-        )}
+        r["code"]: {
+            k: r[k]
+            for k in (
+                "change_pct",
+                "up_count",
+                "down_count",
+                "limit_up_count",
+                "limit_down_count",
+                "explain",
+                "relevance",
+            )
+        }
         for r in fetcher_result
     }
 
-    with _patch_persistence_with_ths_entries(
-        [], cold_sources=["ths", "eastmoney", "zhitu"]
-    ), _patch_enrichment_with(
-        fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+    with (
+        _patch_persistence_with_ths_entries([], cold_sources=["ths", "eastmoney", "zhitu"]),
+        _patch_enrichment_with(
+            fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+        ),
     ):
         r = client.get("/api/v1/stocks/300519/boards?source=ths&type=industry")
 
@@ -382,9 +471,7 @@ def test_ths_source_enrichment_helper_internal_try_except_swallows_fetcher_error
     from stock_data.data_provider.base import DataFetchError
 
     fake_mgr = MagicMock()
-    fake_mgr.get_stock_boards = MagicMock(
-        side_effect=DataFetchError("upstream timeout")
-    )
+    fake_mgr.get_stock_boards = MagicMock(side_effect=DataFetchError("upstream timeout"))
 
     fetcher_result, enrichment = fetch_stock_boards_quote_enrichment("300519", fake_mgr)
     assert fetcher_result is None
@@ -408,16 +495,23 @@ def test_ths_enrichment_helper_leak_surfaces_500_via_map_errors(client):
 
     cached_entries = [
         {
-            "code": "885909", "name": "辅助生殖",
-            "type": "concept", "subtype": "同花顺概念",
+            "code": "885909",
+            "name": "辅助生殖",
+            "type": "concept",
+            "subtype": "同花顺概念",
             "source": "ths",
         },
     ]
 
     from stock_data.api._helpers import stock_boards as stock_boards_helper
 
-    with _patch_persistence_with_ths_entries(cached_entries), patch.object(
-        stock_boards_helper, "fetch_stock_boards_quote_enrichment", side_effect=RuntimeError("boom")
+    with (
+        _patch_persistence_with_ths_entries(cached_entries),
+        patch.object(
+            stock_boards_helper,
+            "fetch_stock_boards_quote_enrichment",
+            side_effect=RuntimeError("boom"),
+        ),
     ):
         r = client.get("/api/v1/stocks/300519/boards?source=ths")
 
@@ -440,10 +534,9 @@ def test_ths_cold_cache_with_fetcher_failure_returns_empty(client):
 
     fetcher_result, enrichment = None, {}  # fetcher "failed" (helper returns this)
 
-    with _patch_persistence_with_ths_entries(
-        [], cold_sources=["ths", "eastmoney", "zhitu"]
-    ), _patch_enrichment_with(
-        fetcher_result=fetcher_result, enrichment_by_code=enrichment
+    with (
+        _patch_persistence_with_ths_entries([], cold_sources=["ths", "eastmoney", "zhitu"]),
+        _patch_enrichment_with(fetcher_result=fetcher_result, enrichment_by_code=enrichment),
     ):
         r = client.get("/api/v1/stocks/300519/boards?source=ths")
 

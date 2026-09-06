@@ -1,4 +1,5 @@
 """Tests for stock/board fetch wrappers."""
+
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -20,10 +21,12 @@ def _patch_manager(monkeypatch, mgr):
 
 
 def test_fetch_stock_series_returns_close_series(monkeypatch, mock_manager):
-    df = pd.DataFrame({
-        "trade_date": pd.date_range("2026-01-01", periods=5, freq="D"),
-        "close":      [100.0, 101.5, 102.0, 99.5, 100.5],
-    })
+    df = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2026-01-01", periods=5, freq="D"),
+            "close": [100.0, 101.5, 102.0, 99.5, 100.5],
+        }
+    )
     mock_manager.get_kline_data.return_value = (df, "tushare")
     _patch_manager(monkeypatch, mock_manager)
     s, name, reason = ac._fetch_stock_series("SH600519", days=5, frequency="d")
@@ -42,22 +45,25 @@ def test_fetch_stock_series_returns_close_series(monkeypatch, mock_manager):
 def test_fetch_stock_series_reads_canonical_date_column(monkeypatch, mock_manager):
     # Real manager output standardizes on `date` (STANDARD_COLUMNS — Baostock
     # serves stock K-line here). A RangeIndex must never be misread as dates.
-    df = pd.DataFrame({
-        "code": ["600519"] * 3,
-        "date": ["2026-01-02", "2026-01-03", "2026-01-06"],
-        "close": [100.0, 101.5, 102.0],
-    })
+    df = pd.DataFrame(
+        {
+            "code": ["600519"] * 3,
+            "date": ["2026-01-02", "2026-01-03", "2026-01-06"],
+            "close": [100.0, 101.5, 102.0],
+        }
+    )
     mock_manager.get_kline_data.return_value = (df, "baostock")
     _patch_manager(monkeypatch, mock_manager)
     s, name, reason = ac._fetch_stock_series("600519", days=3, frequency="d")
     assert reason is None
     assert s is not None and len(s) == 3
-    assert s.index[0] == pd.Timestamp("2026-01-02")   # real dates, not 1970
+    assert s.index[0] == pd.Timestamp("2026-01-02")  # real dates, not 1970
     assert s.index.is_unique
 
 
 def test_fetch_stock_series_returns_none_on_data_fetch_error(monkeypatch, mock_manager):
     from stock_data.data_provider.base import DataFetchError
+
     mock_manager.get_kline_data.side_effect = DataFetchError("upstream down")
     _patch_manager(monkeypatch, mock_manager)
     s, name, reason = ac._fetch_stock_series("600519", days=5, frequency="d")
@@ -75,10 +81,12 @@ def test_fetch_stock_series_returns_none_on_empty_df(monkeypatch, mock_manager):
 
 def test_fetch_stock_series_returns_none_on_too_short(monkeypatch, mock_manager):
     # 1 bar → spec §3.4 "fewer than 2 rows" per-item failure
-    df = pd.DataFrame({
-        "trade_date": pd.date_range("2026-01-01", periods=1, freq="D"),
-        "close":      [100.0],
-    })
+    df = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2026-01-01", periods=1, freq="D"),
+            "close": [100.0],
+        }
+    )
     mock_manager.get_kline_data.return_value = (df, "tushare")
     _patch_manager(monkeypatch, mock_manager)
     s, name, reason = ac._fetch_stock_series("600519", days=5, frequency="d")
@@ -117,6 +125,7 @@ def test_fetch_board_series_returns_empty_when_no_date_column(monkeypatch, mock_
 
 def test_fetch_board_series_returns_none_on_data_fetch_error(monkeypatch, mock_manager):
     from stock_data.data_provider.base import DataFetchError
+
     mock_manager.get_board_history.side_effect = DataFetchError("ths timeout")
     _patch_manager(monkeypatch, mock_manager)
     s, name, reason = ac._fetch_board_series("885595", "ths", days=3, frequency="d")

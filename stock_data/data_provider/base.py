@@ -560,9 +560,7 @@ class BaseFetcher(ABC):
             DataFetchError: when the fetcher does not support all-market
                 realtime quote (default behavior).
         """
-        raise DataFetchError(
-            f"{type(self).__name__} does not support all-market realtime quote"
-        )
+        raise DataFetchError(f"{type(self).__name__} does not support all-market realtime quote")
 
     def get_stock_name(self, stock_code: str) -> str | None:
         """Get stock name. Override in subclass if supported."""

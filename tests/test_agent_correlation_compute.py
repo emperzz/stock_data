@@ -1,4 +1,5 @@
 """Tests for the pure-compute helpers in stock_data.api.routes.agent_correlation."""
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -33,7 +34,7 @@ def test_align_strips_time_of_day():
     b = _make_series([200, 201, 202])
     b.index = b.index + pd.Timedelta(hours=15)
     df, common, _ = _align_series({"a": a, "b": b})
-    assert common == 3   # would be 0 if time-of-day weren't stripped
+    assert common == 3  # would be 0 if time-of-day weren't stripped
 
 
 def test_align_dedupes_duplicate_dates():
@@ -84,10 +85,7 @@ def test_compute_spearman_is_robust_to_outliers():
     s = np.array(out["spearman"])[0, 1]
 
     # Pearson drops due to the outlier; Spearman barely moves (rank preserved)
-    assert s > p, (
-        f"expected Spearman={s} > Pearson={p} under one-rank outlier; "
-        "got the opposite"
-    )
+    assert s > p, f"expected Spearman={s} > Pearson={p} under one-rank outlier; got the opposite"
     # Magnitudes: Spearman ≈ 1, Pearson < 0.9
     assert s > 0.9
     assert p < 0.9

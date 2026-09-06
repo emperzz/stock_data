@@ -1,4 +1,5 @@
 """Schema validation tests for POST /api/v1/agent/correlation/matrix."""
+
 import pytest
 
 from stock_data.api.schemas import (
@@ -28,7 +29,10 @@ def test_method_enum_values():
 def test_label_stock_round_trip():
     label = CorrelationLabel(type="stock", code="600519", name="贵州茅台")
     assert label.model_dump() == {
-        "type": "stock", "code": "600519", "name": "贵州茅台", "source": None
+        "type": "stock",
+        "code": "600519",
+        "name": "贵州茅台",
+        "source": None,
     }
 
 

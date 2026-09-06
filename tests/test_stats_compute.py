@@ -2,6 +2,7 @@
 
 No I/O, no fetcher. The whole file is fast (< 100ms total).
 """
+
 import math
 
 from stock_data.data_provider.utils.stats import (
@@ -64,24 +65,24 @@ def test_compute_aggregate_basic_distribution():
     )
     assert agg.sample_size == 6
     assert math.isclose(agg.mean_pct, (-12.0 - 3.0 + 0.0 + 3.0 + 12.0 + 13.0) / 6, rel_tol=1e-9)
-    assert agg.median_pct == 1.5       # median of [-12, -3, 0, 3, 12, 13] = (0 + 3) / 2
+    assert agg.median_pct == 1.5  # median of [-12, -3, 0, 3, 12, 13] = (0 + 3) / 2
     assert agg.max_pct == 13.0
     assert agg.min_pct == -12.0
-    assert agg.up_count == 3           # 3.0, 12.0, 13.0
-    assert agg.down_count == 2         # -12.0, -3.0
-    assert agg.flat_count == 1         # 0.0
+    assert agg.up_count == 3  # 3.0, 12.0, 13.0
+    assert agg.down_count == 2  # -12.0, -3.0
+    assert agg.flat_count == 1  # 0.0
     assert agg.bin_width == 3.0
     # Bucket counts (by index in template):
     # Left-open right-closed convention: v belongs to bucket whose
     # `lower < v <= upper`. So -3.0 → (-6%, -3%] (index 3, right-closed
     # at -3%); 0.0 → {0} flat bucket (index 5); 3.0 → (0, +3%]
     # (index 6, right-closed at +3%).
-    assert agg.buckets[0].count == 1   # (-∞,-12]   catches -12.0
-    assert agg.buckets[3].count == 1   # (-6,-3]    catches -3.0
-    assert agg.buckets[4].count == 0   # (-3,0)     catches nothing in this test
-    assert agg.buckets[5].count == 1   # {0}        catches 0.0
-    assert agg.buckets[6].count == 1   # (0,+3]     catches 3.0
-    assert agg.buckets[9].count == 1   # (+9,+12]   catches 12.0
+    assert agg.buckets[0].count == 1  # (-∞,-12]   catches -12.0
+    assert agg.buckets[3].count == 1  # (-6,-3]    catches -3.0
+    assert agg.buckets[4].count == 0  # (-3,0)     catches nothing in this test
+    assert agg.buckets[5].count == 1  # {0}        catches 0.0
+    assert agg.buckets[6].count == 1  # (0,+3]     catches 3.0
+    assert agg.buckets[9].count == 1  # (+9,+12]   catches 12.0
     assert agg.buckets[10].count == 1  # (+12,+∞)   catches 13.0
 
 
@@ -105,14 +106,14 @@ def test_compute_aggregate_bucket_assignment_edges():
     agg = compute_aggregate(
         values, bin_width=STOCK_BUCKET_BIN_WIDTH, buckets_template=build_stock_buckets()
     )
-    assert agg.buckets[0].count == 1   # (-∞,-12]    : -12.0
-    assert agg.buckets[1].count == 2   # (-12,-9]    : -11.999 + -9.0 (right-closed)
-    assert agg.buckets[2].count == 0   # (-9,-6]     : nothing in this test
-    assert agg.buckets[3].count == 1   # (-6,-3]     : -3.0 (right-closed)
-    assert agg.buckets[4].count == 0   # (-3,0)
-    assert agg.buckets[5].count == 2   # {0}         : 0.0 + 1e-10
-    assert agg.buckets[6].count == 2   # (0,+3]      : 0.001 + 3.0 (right-closed)
-    assert agg.buckets[9].count == 1   # (+9,+12]    : 12.0
+    assert agg.buckets[0].count == 1  # (-∞,-12]    : -12.0
+    assert agg.buckets[1].count == 2  # (-12,-9]    : -11.999 + -9.0 (right-closed)
+    assert agg.buckets[2].count == 0  # (-9,-6]     : nothing in this test
+    assert agg.buckets[3].count == 1  # (-6,-3]     : -3.0 (right-closed)
+    assert agg.buckets[4].count == 0  # (-3,0)
+    assert agg.buckets[5].count == 2  # {0}         : 0.0 + 1e-10
+    assert agg.buckets[6].count == 2  # (0,+3]      : 0.001 + 3.0 (right-closed)
+    assert agg.buckets[9].count == 1  # (+9,+12]    : 12.0
     assert agg.buckets[10].count == 1  # (+12,+∞)    : 12.001
 
 
@@ -180,13 +181,13 @@ def test_compute_aggregate_board_distribution():
         values, bin_width=BOARD_BUCKET_BIN_WIDTH, buckets_template=build_board_buckets()
     )
     assert agg.sample_size == 7
-    assert agg.buckets[0].count == 1   # (-∞,-3]   : -3.5
-    assert agg.buckets[2].count == 1   # (-2,-1]   : -1.5
-    assert agg.buckets[3].count == 1   # (-1,0)    : -0.5
-    assert agg.buckets[4].count == 1   # {0}       : 0.0
-    assert agg.buckets[5].count == 1   # (0,+1]    : 0.5
-    assert agg.buckets[6].count == 1   # (+1,+2]   : 1.5
-    assert agg.buckets[8].count == 1   # (+3,+∞)   : 3.5
+    assert agg.buckets[0].count == 1  # (-∞,-3]   : -3.5
+    assert agg.buckets[2].count == 1  # (-2,-1]   : -1.5
+    assert agg.buckets[3].count == 1  # (-1,0)    : -0.5
+    assert agg.buckets[4].count == 1  # {0}       : 0.0
+    assert agg.buckets[5].count == 1  # (0,+1]    : 0.5
+    assert agg.buckets[6].count == 1  # (+1,+2]   : 1.5
+    assert agg.buckets[8].count == 1  # (+3,+∞)   : 3.5
 
 
 def test_compute_aggregate_constant_input():

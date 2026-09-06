@@ -70,19 +70,23 @@ def _at(now: _dt.datetime, *, is_trade_day: bool, prev_trade_date: _dt.date):
     def _ctx():
         with patch.object(stocks_mod, "datetime") as mock_dt:
             mock_dt.now.return_value = now
-            with patch.object(stocks_mod.trade_calendar, "is_trade_date", return_value=is_trade_day), \
-                 patch.object(
-                     stocks_mod.trade_calendar,
-                     "get_latest_trade_date_on_or_before",
-                     return_value=prev_trade_date.isoformat(),
-                 ):
+            with (
+                patch.object(stocks_mod.trade_calendar, "is_trade_date", return_value=is_trade_day),
+                patch.object(
+                    stocks_mod.trade_calendar,
+                    "get_latest_trade_date_on_or_before",
+                    return_value=prev_trade_date.isoformat(),
+                ),
+            ):
                 yield
+
     return _ctx()
 
 
 # ---------------------------------------------------------------------------
 # (date, session) helper
 # ---------------------------------------------------------------------------
+
 
 class TestLatestPastClose:
     """_latest_past_close() returns (date, session) for the most recent close."""
@@ -138,12 +142,14 @@ class TestLatestPastClose:
         now = _dt.datetime(FRIDAY.year, FRIDAY.month, FRIDAY.day, 9, 0, tzinfo=CST)
         with patch.object(stocks_mod, "datetime") as mock_dt:
             mock_dt.now.return_value = now
-            with patch.object(stocks_mod.trade_calendar, "is_trade_date", return_value=False), \
-                 patch.object(
-                     stocks_mod.trade_calendar,
-                     "get_latest_trade_date_on_or_before",
-                     return_value=None,
-                 ):
+            with (
+                patch.object(stocks_mod.trade_calendar, "is_trade_date", return_value=False),
+                patch.object(
+                    stocks_mod.trade_calendar,
+                    "get_latest_trade_date_on_or_before",
+                    return_value=None,
+                ),
+            ):
                 d, s = stocks_mod._latest_past_close()
         assert (d, s) == (FRIDAY, "afternoon")
 
@@ -151,6 +157,7 @@ class TestLatestPastClose:
 # ---------------------------------------------------------------------------
 # Intraday path: fast cache (60s TTL), 1 upstream call per window
 # ---------------------------------------------------------------------------
+
 
 class TestIntradayFastCache:
     def test_repeated_intraday_calls_only_fetch_once(self):
@@ -173,6 +180,7 @@ class TestIntradayFastCache:
 # ---------------------------------------------------------------------------
 # Non-intraday path: slow cache with (date, session) tag
 # ---------------------------------------------------------------------------
+
 
 class TestSlowCacheFreshness:
     def test_first_non_intraday_call_populates_slow_with_4_tuple(self):
@@ -245,7 +253,11 @@ class TestSlowCacheFreshness:
         mgr = _make_manager()
         moments = [
             (_dt.datetime(FRIDAY.year, FRIDAY.month, FRIDAY.day, 15, 30, tzinfo=CST), True, FRIDAY),
-            (_dt.datetime(SATURDAY.year, SATURDAY.month, SATURDAY.day, 12, 0, tzinfo=CST), False, FRIDAY),
+            (
+                _dt.datetime(SATURDAY.year, SATURDAY.month, SATURDAY.day, 12, 0, tzinfo=CST),
+                False,
+                FRIDAY,
+            ),
             (_dt.datetime(SUNDAY.year, SUNDAY.month, SUNDAY.day, 12, 0, tzinfo=CST), False, FRIDAY),
             (_dt.datetime(MONDAY.year, MONDAY.month, MONDAY.day, 9, 0, tzinfo=CST), True, FRIDAY),
         ]
@@ -259,6 +271,7 @@ class TestSlowCacheFreshness:
 # ---------------------------------------------------------------------------
 # Cross-path: intraday does not write to slow, non-intraday does not pollute fast
 # ---------------------------------------------------------------------------
+
 
 class TestCacheSeparation:
     def test_intraday_does_not_touch_slow(self):
@@ -303,6 +316,7 @@ class TestCacheSeparation:
 # ---------------------------------------------------------------------------
 # 503 contract when upstream returns empty
 # ---------------------------------------------------------------------------
+
 
 class TestFetchQuoteError:
     def test_empty_list_raises_503(self):

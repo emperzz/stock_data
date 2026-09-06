@@ -924,8 +924,8 @@ def get_stock_boards(
     enrichment_by_code: dict[str, dict] = {}
     ths_in_source_list = "ths" in normalized_sources
     if ths_in_source_list:
-        fetcher_full_result, enrichment_by_code = (
-            stock_boards.fetch_stock_boards_quote_enrichment(stock_code, get_manager())
+        fetcher_full_result, enrichment_by_code = stock_boards.fetch_stock_boards_quote_enrichment(
+            stock_code, get_manager()
         )
 
     # Identify the THS subset of persistence entries (if any).
@@ -978,20 +978,22 @@ def get_stock_boards(
         # safe_float coercion (in ThsFetcher.get_stock_boards) so the 11
         # fields per entry are already typed correctly.
         for r in fetcher_full_result:
-            data.append(StockBoardInfo(
-                code=r.get("code", ""),
-                name=r.get("name", ""),
-                type=r.get("type", ""),
-                subtype=r.get("subtype", ""),
-                source="ths",
-                change_pct=r.get("change_pct"),
-                up_count=r.get("up_count"),
-                down_count=r.get("down_count"),
-                limit_up_count=r.get("limit_up_count"),
-                limit_down_count=r.get("limit_down_count"),
-                explain=r.get("explain"),
-                relevance=r.get("relevance"),
-            ))
+            data.append(
+                StockBoardInfo(
+                    code=r.get("code", ""),
+                    name=r.get("name", ""),
+                    type=r.get("type", ""),
+                    subtype=r.get("subtype", ""),
+                    source="ths",
+                    change_pct=r.get("change_pct"),
+                    up_count=r.get("up_count"),
+                    down_count=r.get("down_count"),
+                    limit_up_count=r.get("limit_up_count"),
+                    limit_down_count=r.get("limit_down_count"),
+                    explain=r.get("explain"),
+                    relevance=r.get("relevance"),
+                )
+            )
         # THS was effectively served via enrichment (not persistence),
         # so it should NOT be reported as a cold source. Other cold
         # sources stay in cold_sources as-is.
@@ -1002,13 +1004,15 @@ def get_stock_boards(
         # either impossible (ths not requested) or unavailable (fetcher
         # exception / empty upstream). New enrichment fields stay None.
         for e in entries:
-            data.append(StockBoardInfo(
-                code=e["code"],
-                name=e["name"],
-                type=e.get("type", ""),
-                subtype=e.get("subtype", ""),
-                source=e["source"],
-            ))
+            data.append(
+                StockBoardInfo(
+                    code=e["code"],
+                    name=e["name"],
+                    type=e.get("type", ""),
+                    subtype=e.get("subtype", ""),
+                    source=e["source"],
+                )
+            )
 
     # Apply type / subtype filters (post-merge, in-memory). The persistence
     # helper already filtered the cache-side entries; enrichment-derived
@@ -1024,7 +1028,6 @@ def get_stock_boards(
         data=data,
         cold_sources=cold_sources,
     )
-
 
 
 @router.get(

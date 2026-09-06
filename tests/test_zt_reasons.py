@@ -4,6 +4,7 @@ Mirrors ``/api/v1/zt-pools`` ergonomics (date-default to latest trade
 date; source = zzshare); distinct schema fields (no amount/total_mv/
 seal_count/first_seal_time, plus the new ``reason`` field).
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch

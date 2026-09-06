@@ -8,9 +8,10 @@ Hosts every route under ``/stocks/...``:
   per-stock data surfaces
 """
 
-from typing import Literal
 from datetime import date as _date
-from datetime import datetime, time as dt_time, timedelta
+from datetime import datetime, timedelta
+from datetime import time as dt_time
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Path, Query, Request
@@ -116,7 +117,8 @@ def list_stocks(
     request: Request,
     market: str = Query(..., pattern="^(csi|hk|us)$", description="Market: csi/hk/us"),
     include_quote: bool = Query(False, description="Include realtime quote for csi"),
-    sort_by: Literal["change_pct", "amount", "turnover_rate", "price", "total_mv", "volume"] | None = Query(None),
+    sort_by: Literal["change_pct", "amount", "turnover_rate", "price", "total_mv", "volume"]
+    | None = Query(None),
     sort_order: Literal["asc", "desc"] = Query("desc"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(100, ge=1, le=10000, description="Pagination limit"),
@@ -133,16 +135,22 @@ def list_stocks(
     manager = get_manager()
 
     if include_quote and market != "csi":
-        raise HTTPException(422, detail={
-            "error": "include_quote_unsupported",
-            "message": "include_quote=true only supports market=csi; hk/us have no all-market realtime source.",
-        })
+        raise HTTPException(
+            422,
+            detail={
+                "error": "include_quote_unsupported",
+                "message": "include_quote=true only supports market=csi; hk/us have no all-market realtime source.",
+            },
+        )
 
     if sort_by is not None and not include_quote:
-        raise HTTPException(400, detail={
-            "error": "sort_requires_quote",
-            "message": "sort_by requires include_quote=true (sortable fields are quote-only).",
-        })
+        raise HTTPException(
+            400,
+            detail={
+                "error": "sort_requires_quote",
+                "message": "sort_by requires include_quote=true (sortable fields are quote-only).",
+            },
+        )
 
     # FastAPI silently ignores unknown query params, so `?refresh=true`
     # (removed in this change, BREAKING) would otherwise return a silent 200
@@ -153,10 +161,13 @@ def list_stocks(
     _allowed_query_params = {"market", "include_quote", "sort_by", "sort_order", "offset", "limit"}
     unknown = set(request.query_params.keys()) - _allowed_query_params
     if unknown:
-        raise HTTPException(422, detail={
-            "error": "unknown_query_param",
-            "message": f"Unknown query param(s): {sorted(unknown)}",
-        })
+        raise HTTPException(
+            422,
+            detail={
+                "error": "unknown_query_param",
+                "message": f"Unknown query param(s): {sorted(unknown)}",
+            },
+        )
 
     # Determine execution path
     use_quote_path = include_quote or sort_by is not None
@@ -187,10 +198,7 @@ def _is_intraday(is_trade_day: bool) -> bool:
     if not is_trade_day:
         return False
     now = datetime.now(_CST).time()
-    return (
-        (_MORNING_OPEN <= now < _MORNING_CLOSE)
-        or (_AFTERNOON_OPEN <= now < _AFTERNOON_CLOSE)
-    )
+    return (_MORNING_OPEN <= now < _MORNING_CLOSE) or (_AFTERNOON_OPEN <= now < _AFTERNOON_CLOSE)
 
 
 def _latest_past_close() -> tuple[_date, str]:
@@ -228,10 +236,13 @@ def _fetch_quote(manager) -> tuple[list, str]:
     """
     quotes, quote_source = manager.get_realtime_quotes("csi")
     if not quotes:
-        raise HTTPException(503, detail={
-            "error": "quote_unavailable",
-            "message": "All realtime fetchers failed or returned empty for market=csi",
-        })
+        raise HTTPException(
+            503,
+            detail={
+                "error": "quote_unavailable",
+                "message": "All realtime fetchers failed or returned empty for market=csi",
+            },
+        )
     return quotes, quote_source
 
 
@@ -294,14 +305,16 @@ def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
             exchange = code_to_exchange(q.code)
         except Exception:
             exchange = None
-        rows.append(StockInfo(
-            code=q.code,
-            name=q.name,
-            market=market,
-            exchange=exchange,
-            quote=StockQuote.from_unified_quote(q, nested=True),
-            source=quote_source,
-        ))
+        rows.append(
+            StockInfo(
+                code=q.code,
+                name=q.name,
+                market=market,
+                exchange=exchange,
+                quote=StockQuote.from_unified_quote(q, nested=True),
+                source=quote_source,
+            )
+        )
 
     # Sort (path B never has quote=null entries — every row came from quote data,
     # so r.quote is always set; individual quote FIELDS can still be None when
@@ -313,9 +326,7 @@ def _list_stocks_with_quote(manager, offset, limit, sort_by, sort_order):
     if sort_by is not None:
         rows.sort(
             key=lambda r: (
-                float("-inf")
-                if getattr(r.quote, sort_by) is None
-                else getattr(r.quote, sort_by)
+                float("-inf") if getattr(r.quote, sort_by) is None else getattr(r.quote, sort_by)
             ),
             reverse=(sort_order == "desc"),
         )
@@ -657,10 +668,7 @@ def get_block_trade(
     # Upstream (EastMoney fetcher) emits ``vol`` for BlockTradeRecord's
     # renamed ``volume`` field; pre-translate the dict key so Pydantic
     # v2's extra='ignore' doesn't silently drop it.
-    records = [
-        BlockTradeRecord(**{**r, "volume": r.get("vol", r.get("volume", 0))})
-        for r in data
-    ]
+    records = [BlockTradeRecord(**{**r, "volume": r.get("vol", r.get("volume", 0))}) for r in data]
     return BlockTradeResponse(
         code=stock_code,
         name=stock_name or "",

@@ -7,6 +7,7 @@ from stock_data.data_provider.base import BaseFetcher, DataFetchError
 
 class _MinimalFetcher(BaseFetcher):
     """Subclass that does not override get_realtime_quotes."""
+
     name = "MinimalFetcher"
     priority = 99
 

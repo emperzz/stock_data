@@ -7,6 +7,7 @@ helper ``_build_board_stock_info`` no longer accepts those kwargs.
 These tests pin the post-removal contract; before the refactor they must
 FAIL (proving the parameter / fields still exist).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -69,10 +70,9 @@ class TestRouteSignatureNoWithZtFlags:
         # Find the GET /boards/{board_code}/stocks handler.
         stocks_route = None
         for route in router.routes:
-            if (
-                getattr(route, "path", "").endswith("/boards/{board_code}/stocks")
-                and "GET" in getattr(route, "methods", set())
-            ):
+            if getattr(route, "path", "").endswith(
+                "/boards/{board_code}/stocks"
+            ) and "GET" in getattr(route, "methods", set()):
                 stocks_route = route
                 break
         assert stocks_route is not None, "GET /boards/{board_code}/stocks route not found"

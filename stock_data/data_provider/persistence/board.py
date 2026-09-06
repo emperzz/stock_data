@@ -62,20 +62,15 @@ def get_cached_market_quotes(manager) -> list | None:
     is_trade_day = trade_calendar.is_trade_date(today.isoformat())
     # Inlined: intraday = 09:15-11:30 or 13:00-15:00 on a trade day.
     in_intraday = is_trade_day and (
-        (_dt_time(9, 15) <= t < _dt_time(11, 30))
-        or (_dt_time(13, 0) <= t < _dt_time(15, 0))
+        (_dt_time(9, 15) <= t < _dt_time(11, 30)) or (_dt_time(13, 0) <= t < _dt_time(15, 0))
     )
 
     if in_intraday:
-        hit = cached_lookup(
-            get_stock_list_quote_cache, cache_key, "stock_list_quote"
-        )
+        hit = cached_lookup(get_stock_list_quote_cache, cache_key, "stock_list_quote")
         if hit is not None:
             return hit[0]
     else:
-        hit = cached_lookup(
-            get_stock_list_quote_slow, cache_key, "stock_list_quote"
-        )
+        hit = cached_lookup(get_stock_list_quote_slow, cache_key, "stock_list_quote")
         if hit is not None:
             _, _, cached_quotes, _ = hit
             if cached_quotes is not None:
@@ -87,9 +82,7 @@ def get_cached_market_quotes(manager) -> list | None:
         return None
 
     if in_intraday:
-        cached_store(
-            get_stock_list_quote_cache, cache_key, (quotes, source)
-        )
+        cached_store(get_stock_list_quote_cache, cache_key, (quotes, source))
     else:
         # Inlined: pick (date, session) for the slow-cache tag — mirrors
         # /stocks route's _latest_past_close. Falls back to (today,
@@ -105,10 +98,12 @@ def get_cached_market_quotes(manager) -> list | None:
         else:
             target_date, target_session = today, "afternoon"
         cached_store(
-            get_stock_list_quote_slow, cache_key,
+            get_stock_list_quote_slow,
+            cache_key,
             (target_date, target_session, quotes, source),
         )
     return quotes
+
 
 _refresh_tracker = DailyRefreshTracker()
 _schema_initialized_paths: set[str] = set()
@@ -1224,7 +1219,8 @@ def fetch_board_stocks_with_zzshare_fallback(
 
 
 def _enrich_rows_with_market_quote(
-    rows: list[dict], market_quotes: list,
+    rows: list[dict],
+    market_quotes: list,
 ) -> list[dict]:
     """Union semantics: for each row, fill in any quote-shaped field
     whose value is None or missing by looking up the row's stock_code
@@ -1316,7 +1312,6 @@ def _enrich_rows_with_market_quote(
 
         out.append(new_row)
     return out
-
 
 
 def get_board_stocks(
@@ -1539,11 +1534,10 @@ def get_board_stocks(
         stocks = _enrich_rows_with_market_quote(stocks, cached_quotes)
         # Then enrich suffix rows (all-None → all filled)
         suffix_no_quote = _enrich_rows_with_market_quote(
-            suffix_no_quote, cached_quotes,
+            suffix_no_quote,
+            cached_quotes,
         )
-        n_filled = sum(
-            1 for r in (stocks + suffix_no_quote) if r.get("price") is not None
-        )
+        n_filled = sum(1 for r in (stocks + suffix_no_quote) if r.get("price") is not None)
         logger.info(
             f"[BoardCache] union fill: {n_filled}/{before} "
             f"rows enriched from /stocks quote cache for "

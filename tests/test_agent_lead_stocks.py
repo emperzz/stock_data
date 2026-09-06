@@ -663,7 +663,11 @@ class TestLeadStocksManifest:
             None,
         )
         endpoint = next(
-            (e for e in agent_section.get("endpoints", []) if e.get("path") == "/api/v1/agent/lead-stocks"),
+            (
+                e
+                for e in agent_section.get("endpoints", [])
+                if e.get("path") == "/api/v1/agent/lead-stocks"
+            ),
             None,
         )
         assert endpoint is not None

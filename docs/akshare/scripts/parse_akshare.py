@@ -37,9 +37,8 @@ AKShare 数据字典解析器
 """
 
 import re
-import json
-from pathlib import Path
 from collections import OrderedDict
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = ROOT / "raw"
@@ -55,6 +54,7 @@ def _clean_sphinx_tail(s):
     # 零宽字符 / 双向控制符 / 连接符
     s = re.sub(r"[​-‍﻿⁠-⁩‌‍⁪-⁯‎‏‪-‮]", "", s)
     return s.strip()
+
 
 # ---------- 解析单个接口块 ----------
 
@@ -105,8 +105,12 @@ def _read_table(lines, start):
     return rows, i
 
 
-def _read_contiguous(lines, start, hard_end=None,
-                     stop_markers=("接口:", "数据示例", "输入参数", "输出参数", "接口示例")):
+def _read_contiguous(
+    lines,
+    start,
+    hard_end=None,
+    stop_markers=("接口:", "数据示例", "输入参数", "输出参数", "接口示例"),
+):
     """从 start 跳过前导空行, 读取连续非空行 (dataframe 风格) 直到空行/stop_marker/hard_end.
     与 _read_block_until_blank 的区别: 遇到空行就停, 不保留内部空行.
     """
@@ -128,8 +132,12 @@ def _read_contiguous(lines, start, hard_end=None,
     return "\n".join(buf), i
 
 
-def _read_block_until_blank(lines, start, hard_end=None,
-                            stop_markers=("接口:", "数据示例", "输入参数", "输出参数", "接口示例")):
+def _read_block_until_blank(
+    lines,
+    start,
+    hard_end=None,
+    stop_markers=("接口:", "数据示例", "输入参数", "输出参数", "接口示例"),
+):
     """从 start 读取直到遇到 stop_marker 或 hard_end.
     与 _read_block_until_blank 不同: 保留空行 (代码块内部有合法空行).
     到达 hard_end 时强制停止 (用于 data_example 这种可能在末尾掺杂下一节标题的情况).
@@ -162,8 +170,8 @@ def parse_interface(name, lines, i, hard_end):
     iface["target_url"] = ""
     iface["description"] = ""
     iface["limit"] = ""
-    iface["input_params"] = []          # list of (header, rows)
-    iface["output_params"] = []         # list of (variant, header, rows)
+    iface["input_params"] = []  # list of (header, rows)
+    iface["output_params"] = []  # list of (variant, header, rows)
     iface["example_code"] = ""
     iface["data_example"] = ""
 
@@ -177,11 +185,11 @@ def parse_interface(name, lines, i, hard_end):
             continue
         if line.startswith(METADATA_LABELS):
             if line.startswith("目标地址:"):
-                iface["target_url"] = line[len("目标地址:"):].strip()
+                iface["target_url"] = line[len("目标地址:") :].strip()
             elif line.startswith("描述:"):
-                iface["description"] = line[len("描述:"):].strip()
+                iface["description"] = line[len("描述:") :].strip()
             elif line.startswith("限量:"):
-                iface["limit"] = line[len("限量:"):].strip()
+                iface["limit"] = line[len("限量:") :].strip()
             i += 1
             continue
         break  # 离开元数据区
@@ -198,19 +206,24 @@ def parse_interface(name, lines, i, hard_end):
             iface["input_params"] = rows
             continue
         if line.startswith("输出参数"):
-            variant = line[len("输出参数"):].lstrip("-").strip()
+            variant = line[len("输出参数") :].lstrip("-").strip()
             rows, i = _read_table(lines, i + 1)
             iface["output_params"].append((variant, rows))
             continue
         if line.startswith("接口示例"):
-            code, i = _read_block_until_blank(lines, i + 1, hard_end=hard_end,
-                                              stop_markers=("接口:", "数据示例", "输入参数", "输出参数"))
+            code, i = _read_block_until_blank(
+                lines,
+                i + 1,
+                hard_end=hard_end,
+                stop_markers=("接口:", "数据示例", "输入参数", "输出参数"),
+            )
             iface["example_code"] = code
             continue
         if line.startswith("数据示例"):
             # data_example 是一个 dataframe 文本表, 连续非空行, 遇到空行就停
-            data, i = _read_contiguous(lines, i + 1, hard_end=hard_end,
-                                       stop_markers=("接口:", "输入参数", "输出参数"))
+            data, i = _read_contiguous(
+                lines, i + 1, hard_end=hard_end, stop_markers=("接口:", "输入参数", "输出参数")
+            )
             iface["data_example"] = data
             continue
         i += 1
@@ -232,14 +245,49 @@ def _is_heading(line):
         return False
     if "\t" in s or s.endswith(":"):
         return False
-    if s.startswith(("接口", "目标地址", "描述", "限量", "输入参数", "输出参数",
-                     "接口示例", "数据示例", "名称")):
+    if s.startswith(
+        ("接口", "目标地址", "描述", "限量", "输入参数", "输出参数", "接口示例", "数据示例", "名称")
+    ):
         return False
-    if s.startswith(("import", "print", "ak.", "stock_", "bond_", "futures_",
-                     "index_", "option_", "macro_", "currency_", "fx_", "spot_",
-                     "interest_rate_", "fund_", "qhkc_", "tool_", "dc_", "bank_",
-                     "article_", "energy_", "event_", "hf_", "nlp_", "qdii_",
-                     "others_", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9")):
+    if s.startswith(
+        (
+            "import",
+            "print",
+            "ak.",
+            "stock_",
+            "bond_",
+            "futures_",
+            "index_",
+            "option_",
+            "macro_",
+            "currency_",
+            "fx_",
+            "spot_",
+            "interest_rate_",
+            "fund_",
+            "qhkc_",
+            "tool_",
+            "dc_",
+            "bank_",
+            "article_",
+            "energy_",
+            "event_",
+            "hf_",
+            "nlp_",
+            "qdii_",
+            "others_",
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+        )
+    ):
         return False
     # 排除 dataframe 数据行 (有数字或 NaN)
     if re.search(r"\d", s):
@@ -286,7 +334,7 @@ def extract_sections(text):
             ctx["sub"] = headings[2]
         if len(headings) >= 4:
             ctx["section"] = headings[3]
-        name = lines[start].strip()[len("接口:"):].strip()
+        name = lines[start].strip()[len("接口:") :].strip()
         blocks.append((start, end, name, ctx))
     return blocks, lines
 
@@ -313,7 +361,7 @@ def _md_table(header, rows):
         # pad to header length
         while len(cells) < len(header):
             cells.append("")
-        cells = cells[:len(header)]
+        cells = cells[: len(header)]
         out += "| " + " | ".join(cells) + " |\n"
     return out
 
@@ -410,7 +458,7 @@ def process_category(label, raw_file, out_subdir):
         text = text[1:-2]  # 去掉首尾的 \"
     elif text.startswith('"') and text.endswith('"'):
         text = text[1:-1]
-    text = text.replace('\\n', '\n').replace('\\t', '\t')
+    text = text.replace("\\n", "\n").replace("\\t", "\t")
 
     blocks, lines = extract_sections(text)
     interfaces = []
@@ -432,43 +480,45 @@ def process_category(label, raw_file, out_subdir):
     overview = render_category_overview(label, out_subdir, interfaces)
     (OUT_DIR / f"{out_subdir}.md").write_text(overview, encoding="utf-8")
 
-    print(f"[{label}] {len(interfaces)} interfaces, "
-          f"{len(list(out_dir.iterdir()))} md files written to {out_dir}/")
+    print(
+        f"[{label}] {len(interfaces)} interfaces, "
+        f"{len(list(out_dir.iterdir()))} md files written to {out_dir}/"
+    )
     return interfaces
 
 
 def main():
     # (label, raw_file, out_subdir)
     cats = [
-        ("股票",       "stock.txt",          "stock"),
-        ("指数",       "index.txt",          "index"),
-        ("期货",       "futures.txt",        "futures"),
-        ("债券",       "bond.txt",           "bond"),
-        ("期权",       "option.txt",         "option"),
-        ("外汇",       "fx.txt",             "fx"),
-        ("货币",       "currency.txt",       "currency"),
-        ("现货",       "spot.txt",           "spot"),
-        ("利率",       "interest_rate.txt",  "interest_rate"),
-        ("私募基金",   "fund_private.txt",   "fund_private"),
-        ("公募基金",   "fund_public.txt",    "fund_public"),
-        ("宏观",       "macro.txt",          "macro"),
-        ("加密货币",   "dc.txt",             "dc"),
-        ("银行",       "bank.txt",           "bank"),
-        ("波动率",     "article.txt",        "article"),
-        ("能源",       "energy.txt",         "energy"),
-        ("迁徙",       "event.txt",          "event"),
-        ("高频",       "hf.txt",             "hf"),
-        ("自然语言处理", "nlp.txt",           "nlp"),
-        ("QDII",      "qdii.txt",           "qdii"),
-        ("另类",       "others.txt",         "others"),
-        ("工具箱",     "tool.txt",           "tool"),
-        ("奇货首页",   "qhkc_index.txt",     "qhkc_index"),
-        ("奇货商品",   "qhkc_commodity.txt", "qhkc_commodity"),
-        ("奇货席位",   "qhkc_broker.txt",    "qhkc_broker"),
-        ("奇货指数",   "qhkc_index_data.txt","qhkc_index_data"),
-        ("奇货基本面", "qhkc_fundamental.txt","qhkc_fundamental"),
-        ("奇货工具",   "qhkc_tools.txt",     "qhkc_tools"),
-        ("奇货资金",   "qhkc_fund.txt",      "qhkc_fund"),
+        ("股票", "stock.txt", "stock"),
+        ("指数", "index.txt", "index"),
+        ("期货", "futures.txt", "futures"),
+        ("债券", "bond.txt", "bond"),
+        ("期权", "option.txt", "option"),
+        ("外汇", "fx.txt", "fx"),
+        ("货币", "currency.txt", "currency"),
+        ("现货", "spot.txt", "spot"),
+        ("利率", "interest_rate.txt", "interest_rate"),
+        ("私募基金", "fund_private.txt", "fund_private"),
+        ("公募基金", "fund_public.txt", "fund_public"),
+        ("宏观", "macro.txt", "macro"),
+        ("加密货币", "dc.txt", "dc"),
+        ("银行", "bank.txt", "bank"),
+        ("波动率", "article.txt", "article"),
+        ("能源", "energy.txt", "energy"),
+        ("迁徙", "event.txt", "event"),
+        ("高频", "hf.txt", "hf"),
+        ("自然语言处理", "nlp.txt", "nlp"),
+        ("QDII", "qdii.txt", "qdii"),
+        ("另类", "others.txt", "others"),
+        ("工具箱", "tool.txt", "tool"),
+        ("奇货首页", "qhkc_index.txt", "qhkc_index"),
+        ("奇货商品", "qhkc_commodity.txt", "qhkc_commodity"),
+        ("奇货席位", "qhkc_broker.txt", "qhkc_broker"),
+        ("奇货指数", "qhkc_index_data.txt", "qhkc_index_data"),
+        ("奇货基本面", "qhkc_fundamental.txt", "qhkc_fundamental"),
+        ("奇货工具", "qhkc_tools.txt", "qhkc_tools"),
+        ("奇货资金", "qhkc_fund.txt", "qhkc_fund"),
     ]
 
     results = {}
@@ -478,12 +528,16 @@ def main():
     # 写 README
     total = sum(len(v) for v in results.values())
     readme = ["# AKShare 数据字典\n"]
-    readme.append("本目录收录 AKShare 官方数据字典(原始文档: <https://akshare.akfamily.xyz/data/index.html>)。\n")
+    readme.append(
+        "本目录收录 AKShare 官方数据字典(原始文档: <https://akshare.akfamily.xyz/data/index.html>)。\n"
+    )
     readme.append(f"**总计 {sum(1 for v in results.values() if v)} 个分类, {total} 个接口。**\n")
     readme.append("## 分类索引\n")
     for label, raw, sub in cats:
         cnt = len(results.get(sub, []))
-        readme.append(f"- **{label}** ([`{sub}.md`](./{sub}.md), [`{sub}/`](./{sub}/)): 共 {cnt} 个接口")
+        readme.append(
+            f"- **{label}** ([`{sub}.md`](./{sub}.md), [`{sub}/`](./{sub}/)): 共 {cnt} 个接口"
+        )
     readme.append("")
     readme.append("## 目录结构\n")
     readme.append("```\ndocs/akshare/\n├── README.md           # 本文件\n")
@@ -494,14 +548,18 @@ def main():
     readme.append("└── scripts/            # 解析脚本\n")
     readme.append("```\n")
     readme.append("## 重新生成\n")
-    readme.append("```bash\n"
-                  "# 1. 抓 raw (urllib 批量, 不经 LLM 上下文)\n"
-                  "python docs/akshare/scripts/fetch_categories.py\n\n"
-                  "# 2. 跑解析脚本\n"
-                  "python docs/akshare/scripts/parse_akshare.py\n"
-                  "```\n")
+    readme.append(
+        "```bash\n"
+        "# 1. 抓 raw (urllib 批量, 不经 LLM 上下文)\n"
+        "python docs/akshare/scripts/fetch_categories.py\n\n"
+        "# 2. 跑解析脚本\n"
+        "python docs/akshare/scripts/parse_akshare.py\n"
+        "```\n"
+    )
     (OUT_DIR / "README.md").write_text("\n".join(readme), encoding="utf-8")
-    print(f"README.md written. Total: {total} interfaces across {sum(1 for v in results.values() if v)} categories.")
+    print(
+        f"README.md written. Total: {total} interfaces across {sum(1 for v in results.values() if v)} categories."
+    )
 
 
 if __name__ == "__main__":

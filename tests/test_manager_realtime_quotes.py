@@ -13,7 +13,10 @@ from stock_data.data_provider.manager import DataFetcherManager
 
 def _make_quote(code: str = "600519", name: str = "贵州茅台") -> UnifiedRealtimeQuote:
     return UnifiedRealtimeQuote(
-        code=code, name=name, source=RealtimeSource.AKSHARE, price=1680.5,
+        code=code,
+        name=name,
+        source=RealtimeSource.AKSHARE,
+        price=1680.5,
     )
 
 
@@ -21,8 +24,15 @@ class TestManagerGetRealtimeQuotes:
     def _manager(self):
         return DataFetcherManager()
 
-    def _add_fetcher(self, manager, name, priority, supported_data_types,
-                     get_realtime_quotes_return=None, raises=None):
+    def _add_fetcher(
+        self,
+        manager,
+        name,
+        priority,
+        supported_data_types,
+        get_realtime_quotes_return=None,
+        raises=None,
+    ):
         fetcher = MagicMock()
         fetcher.name = name
         fetcher.priority = priority
@@ -31,16 +41,16 @@ class TestManagerGetRealtimeQuotes:
         if raises is not None:
             fetcher.get_realtime_quotes = MagicMock(side_effect=raises)
         else:
-            fetcher.get_realtime_quotes = MagicMock(
-                return_value=get_realtime_quotes_return
-            )
+            fetcher.get_realtime_quotes = MagicMock(return_value=get_realtime_quotes_return)
         manager._fetchers.append(fetcher)
         return fetcher
 
     def test_akshare_succeeds_returns_akshare_source(self):
         mgr = self._manager()
         akshare = self._add_fetcher(
-            mgr, "AkshareFetcher", 3,
+            mgr,
+            "AkshareFetcher",
+            3,
             DataCapability.STOCK_REALTIME_QUOTE,
             get_realtime_quotes_return=[_make_quote()],
         )
@@ -60,12 +70,16 @@ class TestManagerGetRealtimeQuotes:
         """
         mgr = self._manager()
         akshare = self._add_fetcher(
-            mgr, "AkshareFetcher", 1,  # P1 < P2 — tried first
+            mgr,
+            "AkshareFetcher",
+            1,  # P1 < P2 — tried first
             DataCapability.STOCK_REALTIME_QUOTE,
             raises=DataFetchError("akshare timeout"),
         )
         zzshare = self._add_fetcher(
-            mgr, "ZzshareFetcher", 2,
+            mgr,
+            "ZzshareFetcher",
+            2,
             DataCapability.STOCK_REALTIME_QUOTE,
             get_realtime_quotes_return=[_make_quote()],
         )
@@ -83,12 +97,16 @@ class TestManagerGetRealtimeQuotes:
         mgr = self._manager()
         # Tencent-style: has capability but raises on get_realtime_quotes
         self._add_fetcher(
-            mgr, "TencentFetcher", 5,
+            mgr,
+            "TencentFetcher",
+            5,
             DataCapability.STOCK_REALTIME_QUOTE,
             raises=DataFetchError("TencentFetcher does not support all-market realtime quote"),
         )
         akshare = self._add_fetcher(
-            mgr, "AkshareFetcher", 3,
+            mgr,
+            "AkshareFetcher",
+            3,
             DataCapability.STOCK_REALTIME_QUOTE,
             get_realtime_quotes_return=[_make_quote()],
         )
@@ -99,12 +117,16 @@ class TestManagerGetRealtimeQuotes:
     def test_all_fetchers_fail_returns_none_empty_source(self):
         mgr = self._manager()
         self._add_fetcher(
-            mgr, "AkshareFetcher", 3,
+            mgr,
+            "AkshareFetcher",
+            3,
             DataCapability.STOCK_REALTIME_QUOTE,
             raises=DataFetchError("akshare down"),
         )
         self._add_fetcher(
-            mgr, "ZzshareFetcher", 2,
+            mgr,
+            "ZzshareFetcher",
+            2,
             DataCapability.STOCK_REALTIME_QUOTE,
             raises=DataFetchError("zzshare down"),
         )
@@ -123,12 +145,16 @@ class TestManagerGetRealtimeQuotes:
         mgr = self._manager()
         # Akshare P1 (higher precedence than Zzshare P2) returns empty → fall through
         akshare = self._add_fetcher(
-            mgr, "AkshareFetcher", 1,  # P1 < P2
+            mgr,
+            "AkshareFetcher",
+            1,  # P1 < P2
             DataCapability.STOCK_REALTIME_QUOTE,
-            get_realtime_quotes_return=[],   # empty → not meaningful
+            get_realtime_quotes_return=[],  # empty → not meaningful
         )
         zzshare = self._add_fetcher(
-            mgr, "ZzshareFetcher", 2,
+            mgr,
+            "ZzshareFetcher",
+            2,
             DataCapability.STOCK_REALTIME_QUOTE,
             get_realtime_quotes_return=[_make_quote()],
         )
@@ -147,8 +173,8 @@ class TestManagerGetRealtimeQuotes:
         """
         from stock_data.data_provider.core.types import (
             QUOTE_LIST_CIRCUIT_BREAKER,
-            REALTIME_CIRCUIT_BREAKER,
         )
+
         # The two breakers must be distinct singletons.
         assert QUOTE_LIST_CIRCUIT_BREAKER is not REALTIME_CIRCUIT_BREAKER
 
@@ -158,7 +184,9 @@ class TestManagerGetRealtimeQuotes:
         # TushareFetcher-equivalent: has capability, raises DataFetchError
         # (the ABC default behavior — simulates Tencent/Zhitu/Tushare/Myquant)
         tushare_like = self._add_fetcher(
-            mgr, "TushareFetcher", 0,
+            mgr,
+            "TushareFetcher",
+            0,
             DataCapability.STOCK_REALTIME_QUOTE,
             raises=DataFetchError("does not support all-market realtime quote"),
         )
@@ -166,7 +194,9 @@ class TestManagerGetRealtimeQuotes:
         # Tushare is P0 (lower priority number = tried first per _with_failover).
         # So Tushare is tried first, raises, then Akshare succeeds.
         self._add_fetcher(
-            mgr, "AkshareFetcher", 3,
+            mgr,
+            "AkshareFetcher",
+            3,
             DataCapability.STOCK_REALTIME_QUOTE,
             get_realtime_quotes_return=[_make_quote()],
         )

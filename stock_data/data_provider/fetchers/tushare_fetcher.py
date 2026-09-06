@@ -107,6 +107,7 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
                     # of CSI_INDEX_MAP classification. 000001 → 000001.SZ
                     # (Ping An Bank) not 000001.SH (SH composite index).
                     from ..utils.code_converter import to_tushare_stock_format
+
                     ts_code = to_tushare_stock_format(stock_code)
                 else:
                     ts_code = to_tushare_format(stock_code)

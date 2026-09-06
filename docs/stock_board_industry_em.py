@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding:utf-8 -*-
 """
 Date: 2025/3/10 19:30
 Desc: 东方财富-沪深板块-行业板块
@@ -11,11 +10,10 @@ from functools import lru_cache
 
 import pandas as pd
 import requests
-
 from akshare.utils.func import fetch_paginated_data
 
 
-@lru_cache()
+@lru_cache
 def __stock_board_industry_name_em() -> pd.DataFrame:
     """
     东方财富网-沪深板块-行业板块-名称
@@ -106,9 +104,7 @@ def __stock_board_industry_name_em() -> pd.DataFrame:
     temp_df["换手率"] = pd.to_numeric(temp_df["换手率"], errors="coerce")
     temp_df["上涨家数"] = pd.to_numeric(temp_df["上涨家数"], errors="coerce")
     temp_df["下跌家数"] = pd.to_numeric(temp_df["下跌家数"], errors="coerce")
-    temp_df["领涨股票-涨跌幅"] = pd.to_numeric(
-        temp_df["领涨股票-涨跌幅"], errors="coerce"
-    )
+    temp_df["领涨股票-涨跌幅"] = pd.to_numeric(temp_df["领涨股票-涨跌幅"], errors="coerce")
     return temp_df
 
 
@@ -202,9 +198,7 @@ def stock_board_industry_name_em() -> pd.DataFrame:
     temp_df["换手率"] = pd.to_numeric(temp_df["换手率"], errors="coerce")
     temp_df["上涨家数"] = pd.to_numeric(temp_df["上涨家数"], errors="coerce")
     temp_df["下跌家数"] = pd.to_numeric(temp_df["下跌家数"], errors="coerce")
-    temp_df["领涨股票-涨跌幅"] = pd.to_numeric(
-        temp_df["领涨股票-涨跌幅"], errors="coerce"
-    )
+    temp_df["领涨股票-涨跌幅"] = pd.to_numeric(temp_df["领涨股票-涨跌幅"], errors="coerce")
     return temp_df
 
 
@@ -348,9 +342,7 @@ def stock_board_industry_hist_em(
     return temp_df
 
 
-def stock_board_industry_hist_min_em(
-    symbol: str = "小金属", period: str = "5"
-) -> pd.DataFrame:
+def stock_board_industry_hist_min_em(symbol: str = "小金属", period: str = "5") -> pd.DataFrame:
     """
     东方财富网-沪深板块-行业板块-分时历史行情
     https://quote.eastmoney.com/bk/90.BK1027.html
@@ -377,9 +369,7 @@ def stock_board_industry_hist_min_em(
         }
         r = requests.get(url, params=params)
         data_json = r.json()
-        temp_df = pd.DataFrame(
-            [item.split(",") for item in data_json["data"]["trends"]]
-        )
+        temp_df = pd.DataFrame([item.split(",") for item in data_json["data"]["trends"]])
         temp_df.columns = [
             "日期时间",
             "开盘",
@@ -414,9 +404,7 @@ def stock_board_industry_hist_min_em(
         }
         r = requests.get(url, params=params)
         data_json = r.json()
-        temp_df = pd.DataFrame(
-            [item.split(",") for item in data_json["data"]["klines"]]
-        )
+        temp_df = pd.DataFrame([item.split(",") for item in data_json["data"]["klines"]])
         temp_df.columns = [
             "日期时间",
             "开盘",

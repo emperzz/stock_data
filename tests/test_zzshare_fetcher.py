@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from stock_data.data_provider.base import DataCapability, DataFetchError
+from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
 
 
@@ -904,6 +904,7 @@ class TestRealtimeQuote:
 class TestNormalizeRtKRow:
     def test_normalize_rt_k_row_basic_fields(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
         fetcher = ZzshareFetcher()
         row = {
             "ts_code": "600519.SH",
@@ -922,6 +923,7 @@ class TestNormalizeRtKRow:
             "ttm_pe_rate": 25.5,
         }
         from stock_data.data_provider.core.types import RealtimeSource
+
         quote = fetcher._normalize_rt_k_row(row, "600519")
         assert quote.code == "600519"
         assert quote.name == "贵州茅台"
@@ -942,6 +944,7 @@ class TestNormalizeRtKRow:
 
     def test_normalize_rt_k_row_missing_change_amount_when_pre_close_none(self):
         from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
         fetcher = ZzshareFetcher()
         row = {"ts_code": "000001.SZ", "name": "平安银行", "close": 12.5, "pre_close": None}
         quote = fetcher._normalize_rt_k_row(row, "000001")
@@ -960,6 +963,7 @@ class TestNormalizeRtKRow:
         probe at the project root); we just weren't mapping them.
         """
         from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
         fetcher = ZzshareFetcher()
         row = {
             "ts_code": "600519.SH",
@@ -981,6 +985,7 @@ class TestNormalizeRtKRow:
         normalizer must not synthesize values from pre_close.
         """
         from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
         fetcher = ZzshareFetcher()
         row = {"ts_code": "600519.SH", "name": "贵州茅台", "close": 1720.0, "pre_close": 1700.0}
         quote = fetcher._normalize_rt_k_row(row, "600519")
@@ -996,6 +1001,7 @@ class TestNormalizeRtKRow:
         ``is_limit_up`` derivation in the boards route.
         """
         from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
         fetcher = ZzshareFetcher()
         row = {
             "ts_code": "600519.SH",
@@ -1023,13 +1029,26 @@ class TestRealtimeQuotes:
 
     def test_realtime_quotes_uses_wildcard(self):
         """Pin the rt_k(ts_code=wildcard, fields='all') call shape."""
-        raw = pd.DataFrame([
-            {"ts_code": "600519.SH", "name": "贵州茅台", "close": 1720.0,
-             "pre_close": 1700.0, "open": 1710.0, "high": 1725.0,
-             "low": 1695.0, "vol": 1e6, "amount": 1e9, "quote_rate": 1.18,
-             "turnover_rate": 0.5, "market_value": 2.16e12,
-             "circulation_value": 2.16e12, "ttm_pe_rate": 25.5},
-        ])
+        raw = pd.DataFrame(
+            [
+                {
+                    "ts_code": "600519.SH",
+                    "name": "贵州茅台",
+                    "close": 1720.0,
+                    "pre_close": 1700.0,
+                    "open": 1710.0,
+                    "high": 1725.0,
+                    "low": 1695.0,
+                    "vol": 1e6,
+                    "amount": 1e9,
+                    "quote_rate": 1.18,
+                    "turnover_rate": 0.5,
+                    "market_value": 2.16e12,
+                    "circulation_value": 2.16e12,
+                    "ttm_pe_rate": 25.5,
+                },
+            ]
+        )
         fetcher = self._fetcher_with_api(raw)
         fetcher.get_realtime_quotes("csi")
         call = ZzshareFetcher._api.rt_k.call_args
@@ -1055,14 +1074,13 @@ class TestRealtimeQuotes:
         assert "60*.SH" not in call.kwargs["ts_code"]
 
     def test_realtime_quotes_returns_all_rows(self):
-        raw = pd.DataFrame([
-            {"ts_code": "600519.SH", "name": "贵州茅台", "close": 1720.0,
-             "pre_close": 1700.0},
-            {"ts_code": "000001.SZ", "name": "平安银行", "close": 12.5,
-             "pre_close": 12.56},
-            {"ts_code": "300750.SZ", "name": "宁德时代", "close": 200.0,
-             "pre_close": 198.0},
-        ])
+        raw = pd.DataFrame(
+            [
+                {"ts_code": "600519.SH", "name": "贵州茅台", "close": 1720.0, "pre_close": 1700.0},
+                {"ts_code": "000001.SZ", "name": "平安银行", "close": 12.5, "pre_close": 12.56},
+                {"ts_code": "300750.SZ", "name": "宁德时代", "close": 200.0, "pre_close": 198.0},
+            ]
+        )
         fetcher = self._fetcher_with_api(raw)
         quotes = fetcher.get_realtime_quotes("csi")
         assert quotes is not None

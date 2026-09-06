@@ -78,9 +78,20 @@ class TestStockQuoteNestedFlag:
         d = sq.model_dump()
         # Spot-check a representative slice of the remaining fields
         for key in (
-            "current_price", "open", "high", "low", "prev_close",
-            "volume", "volume_unit", "amount", "pe_ttm", "pb",
-            "mcap_yi", "float_mcap_yi", "turnover_pct", "volume_ratio",
+            "current_price",
+            "open",
+            "high",
+            "low",
+            "prev_close",
+            "volume",
+            "volume_unit",
+            "amount",
+            "pe_ttm",
+            "pb",
+            "mcap_yi",
+            "float_mcap_yi",
+            "turnover_pct",
+            "volume_ratio",
         ):
             assert key in d, f"nested quote must keep {key}"
 
@@ -229,18 +240,24 @@ class TestRouteLevelNested:
 
         fake_quotes = [
             UnifiedRealtimeQuote(
-                code="600519", name="贵州茅台",
-                source=RealtimeSource.AKSHARE, price=1680.5,
-                change_pct=1.23, amount=2.07e8,
-                turnover_rate=0.5, total_mv=2.16e12,
-                high=1700.0, low=1660.0, pre_close=1650.0,
+                code="600519",
+                name="贵州茅台",
+                source=RealtimeSource.AKSHARE,
+                price=1680.5,
+                change_pct=1.23,
+                amount=2.07e8,
+                turnover_rate=0.5,
+                total_mv=2.16e12,
+                high=1700.0,
+                low=1660.0,
+                pre_close=1650.0,
             ),
         ]
 
         from stock_data.api.routes.helpers import get_manager
+
         mgr = get_manager()
-        monkeypatch.setattr(mgr, "get_realtime_quotes",
-                            lambda market: (fake_quotes, "akshare"))
+        monkeypatch.setattr(mgr, "get_realtime_quotes", lambda market: (fake_quotes, "akshare"))
 
         client = TestClient(app)
         response = client.get("/api/v1/stocks?market=csi&include_quote=true&limit=10")

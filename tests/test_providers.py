@@ -185,6 +185,7 @@ class TestAkshareSpotRowNormalize:
     def _fetcher(self):
         # Lazy import to avoid loading akshare at test collection time
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         return AkshareFetcher()
 
     def test_normalize_spot_row_basic_fields(self):
@@ -195,7 +196,7 @@ class TestAkshareSpotRowNormalize:
             "最新价": 1680.5,
             "涨跌幅": 1.23,
             "涨跌额": 20.5,
-            "成交量": 12345,        # 手
+            "成交量": 12345,  # 手
             "成交额": 2.07e8,
             "今开": 1680.0,
             "最高": 1685.0,
@@ -208,6 +209,7 @@ class TestAkshareSpotRowNormalize:
             "市净率": 9.1,
         }
         from stock_data.data_provider.core.types import RealtimeSource
+
         quote = fetcher._normalize_spot_row(row, "600519")
         assert quote.code == "600519"
         assert quote.name == "贵州茅台"
@@ -215,7 +217,7 @@ class TestAkshareSpotRowNormalize:
         assert quote.price == 1680.5
         assert quote.change_pct == 1.23
         assert quote.change_amount == 20.5
-        assert quote.volume == 12345 * 100     # 手 → 股 (spec §3.4)
+        assert quote.volume == 12345 * 100  # 手 → 股 (spec §3.4)
         assert quote.amount == 2.07e8
         assert quote.open_price == 1680.0
         assert quote.high == 1685.0
@@ -244,26 +246,59 @@ class TestAkshareGetRealtimeQuotes:
 
     def _fetcher(self):
         from stock_data.data_provider.fetchers.akshare.fetcher import AkshareFetcher
+
         return AkshareFetcher()
 
     def test_get_realtime_quotes_csi(self, monkeypatch):
         """Single ak.stock_zh_a_spot_em() call → list of UnifiedRealtimeQuote."""
         import pandas as pd
 
-        fake_df = pd.DataFrame([
-            {"代码": "600519", "名称": "贵州茅台", "最新价": 1680.5, "涨跌幅": 1.23,
-             "涨跌额": 20.5, "成交量": 12345, "成交额": 2.07e8, "今开": 1680.0,
-             "最高": 1685.0, "最低": 1678.0, "昨收": 1660.0, "振幅": 0.4,
-             "换手率": 0.5, "量比": 1.2, "市盈率": 28.5, "市净率": 9.1},
-            {"代码": "000001", "名称": "平安银行", "最新价": 12.5, "涨跌幅": -0.5,
-             "涨跌额": -0.06, "成交量": 80000, "成交额": 1.0e8, "今开": 12.6,
-             "最高": 12.7, "最低": 12.4, "昨收": 12.56, "振幅": 2.4,
-             "换手率": 0.3, "量比": 0.8, "市盈率": 5.2, "市净率": 0.6},
-        ])
+        fake_df = pd.DataFrame(
+            [
+                {
+                    "代码": "600519",
+                    "名称": "贵州茅台",
+                    "最新价": 1680.5,
+                    "涨跌幅": 1.23,
+                    "涨跌额": 20.5,
+                    "成交量": 12345,
+                    "成交额": 2.07e8,
+                    "今开": 1680.0,
+                    "最高": 1685.0,
+                    "最低": 1678.0,
+                    "昨收": 1660.0,
+                    "振幅": 0.4,
+                    "换手率": 0.5,
+                    "量比": 1.2,
+                    "市盈率": 28.5,
+                    "市净率": 9.1,
+                },
+                {
+                    "代码": "000001",
+                    "名称": "平安银行",
+                    "最新价": 12.5,
+                    "涨跌幅": -0.5,
+                    "涨跌额": -0.06,
+                    "成交量": 80000,
+                    "成交额": 1.0e8,
+                    "今开": 12.6,
+                    "最高": 12.7,
+                    "最低": 12.4,
+                    "昨收": 12.56,
+                    "振幅": 2.4,
+                    "换手率": 0.3,
+                    "量比": 0.8,
+                    "市盈率": 5.2,
+                    "市净率": 0.6,
+                },
+            ]
+        )
 
         def fake_spot_em():
             return fake_df
+
         import akshare
+
         monkeypatch.setattr(akshare, "stock_zh_a_spot_em", fake_spot_em)
 
         fetcher = self._fetcher()
@@ -278,9 +313,12 @@ class TestAkshareGetRealtimeQuotes:
 
     def test_get_realtime_quotes_returns_none_on_failure(self, monkeypatch):
         """Upstream exception → None (not raise)."""
+
         def fake_spot_em():
             raise ConnectionError("akshare network down")
+
         import akshare
+
         monkeypatch.setattr(akshare, "stock_zh_a_spot_em", fake_spot_em)
 
         fetcher = self._fetcher()
@@ -288,8 +326,9 @@ class TestAkshareGetRealtimeQuotes:
 
     def test_get_realtime_quotes_returns_none_on_empty_df(self, monkeypatch):
         """Empty upstream response → None."""
-        import pandas as pd
         import akshare
+        import pandas as pd
+
         monkeypatch.setattr(akshare, "stock_zh_a_spot_em", lambda: pd.DataFrame())
 
         fetcher = self._fetcher()

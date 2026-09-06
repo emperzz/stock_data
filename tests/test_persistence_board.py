@@ -3,6 +3,7 @@
 Added 2026-07-30: union-semantic _enrich_rows_with_market_quote helper
 unit tests + E2E (spec 2026-07-30, plan task 4).
 """
+
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -68,17 +69,37 @@ class TestEnrichRowsWithMarketQuote:
         ]
         market_quotes = [
             _q(
-                code="600000", name="浦发银行", price=8.0, change_pct=0.0,
-                change_amount=0.0, volume=5000000, amount=4.0e7,
-                turnover_rate=0.3, volume_ratio=1.1, amplitude=1.5,
-                open_price=7.95, high=8.05, low=7.90, pre_close=8.0,
+                code="600000",
+                name="浦发银行",
+                price=8.0,
+                change_pct=0.0,
+                change_amount=0.0,
+                volume=5000000,
+                amount=4.0e7,
+                turnover_rate=0.3,
+                volume_ratio=1.1,
+                amplitude=1.5,
+                open_price=7.95,
+                high=8.05,
+                low=7.90,
+                pre_close=8.0,
                 pe_ratio=5.0,
             ),
             _q(
-                code="601318", name="中国平安", price=50.0, change_pct=2.0,
-                change_amount=1.0, volume=10000000, amount=5.0e8,
-                turnover_rate=0.4, volume_ratio=1.2, amplitude=2.5,
-                open_price=49.5, high=50.5, low=49.0, pre_close=49.0,
+                code="601318",
+                name="中国平安",
+                price=50.0,
+                change_pct=2.0,
+                change_amount=1.0,
+                volume=10000000,
+                amount=5.0e8,
+                turnover_rate=0.4,
+                volume_ratio=1.2,
+                amplitude=2.5,
+                open_price=49.5,
+                high=50.5,
+                low=49.0,
+                pre_close=49.0,
                 pe_ratio=8.0,
             ),
         ]
@@ -94,9 +115,21 @@ class TestEnrichRowsWithMarketQuote:
         assert row_600000["amplitude"] == 1.5
         assert row_600000["turnover_rate"] == 0.3
         # 13 fillable fields populated
-        for f in ("price", "change_pct", "change_amount", "volume", "amount",
-                  "turnover_rate", "amplitude", "volume_ratio", "pe_ratio",
-                  "open", "high", "low", "prev_close"):
+        for f in (
+            "price",
+            "change_pct",
+            "change_amount",
+            "volume",
+            "amount",
+            "turnover_rate",
+            "amplitude",
+            "volume_ratio",
+            "pe_ratio",
+            "open",
+            "high",
+            "low",
+            "prev_close",
+        ):
             assert row_600000.get(f) is not None, f"{f} should be filled"
         # THS-only fields stay absent
         assert "change_speed" not in row_600000
@@ -118,7 +151,8 @@ class TestEnrichRowsWithMarketQuote:
         # open/high/low/prev_close/volume/amplitude are None (THS 14
         # columns don't include them).
         ths_row = {
-            "stock_code": "300469", "stock_name": "信息发展",
+            "stock_code": "300469",
+            "stock_name": "信息发展",
             "price": 51.4,
             "change_pct": 6.71,
             "change_amount": 3.23,
@@ -133,7 +167,8 @@ class TestEnrichRowsWithMarketQuote:
             # open / high / low / prev_close / volume are None (THS missing)
         }
         market_quote = _q(
-            code="300469", name="信息发展",
+            code="300469",
+            name="信息发展",
             # /stocks has different values (cache could be 0-60s old)
             price=99.9,  # DIFFERENT from THS
             change_pct=99.9,  # DIFFERENT
@@ -221,8 +256,12 @@ class TestEnrichRowsWithMarketQuote:
 
         row = {"stock_code": "600000", "stock_name": "x", "amplitude": None}
         q = _q(
-            code="600000", name="x", amplitude=None,
-            high=10.5, low=10.0, pre_close=10.0,
+            code="600000",
+            name="x",
+            amplitude=None,
+            high=10.5,
+            low=10.0,
+            pre_close=10.0,
         )
         enriched = pb._enrich_rows_with_market_quote([row], [q])
         # (10.5 - 10.0) / 10.0 * 100 = 5.0
@@ -278,12 +317,15 @@ class TestGetCachedMarketQuotes:
             lambda d: True,
         )
         import datetime as _dt
+
         fake_now = _dt.datetime(2026, 7, 30, 10, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         real_datetime = _dt.datetime
+
         class _Frozen(real_datetime):
             @classmethod
             def now(cls, tz=None):
                 return fake_now if tz else fake_now.replace(tzinfo=None)
+
         monkeypatch.setattr(
             "stock_data.data_provider.persistence.board.datetime",
             _Frozen,
@@ -291,12 +333,14 @@ class TestGetCachedMarketQuotes:
 
         cached = [object(), object()]
         cache_mod._stock_list_quote_cache["stock_list_quote:csi"] = (
-            cached, "zzshare",
+            cached,
+            "zzshare",
         )
 
         class _Mgr:
             def __init__(self):
                 self.called = False
+
             def get_realtime_quotes(self, market):
                 self.called = True
                 return None, ""
@@ -325,10 +369,12 @@ class TestGetCachedMarketQuotes:
         )
         fake_now = _dt.datetime(2026, 7, 30, 10, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         real_datetime = _dt.datetime
+
         class _Frozen(real_datetime):
             @classmethod
             def now(cls, tz=None):
                 return fake_now if tz else fake_now.replace(tzinfo=None)
+
         monkeypatch.setattr(
             "stock_data.data_provider.persistence.board.datetime",
             _Frozen,
@@ -344,7 +390,8 @@ class TestGetCachedMarketQuotes:
         assert result is fetched
         # Cache was written back.
         assert cache_mod._stock_list_quote_cache.get("stock_list_quote:csi") == (
-            fetched, "zzshare",
+            fetched,
+            "zzshare",
         )
         # Cleanup
         cache_mod._stock_list_quote_cache.clear()
@@ -366,12 +413,16 @@ class TestGetCachedMarketQuotes:
         )
         cached = [object()]
         cache_mod._stock_list_quote_slow["stock_list_quote:csi"] = (
-            date(2026, 7, 30), "afternoon", cached, "akshare",
+            date(2026, 7, 30),
+            "afternoon",
+            cached,
+            "akshare",
         )
 
         class _Mgr:
             def __init__(self):
                 self.called = False
+
             def get_realtime_quotes(self, market):
                 self.called = True
                 return None, ""
@@ -406,11 +457,18 @@ class TestGetBoardStocksUnionFillupE2E:
         # Set up: 1 THS top-50 row (has price/change_pct/etc, missing
         # open/high/low/prev_close/volume) + 1 suffix row (only code/name).
         ths_top_row = {
-            "stock_code": "300469", "stock_name": "信息发展",
-            "price": 51.4, "change_pct": 6.71, "change_amount": 3.23,
-            "amount": 425000000.0, "turnover_rate": 3.57,
-            "amplitude": 11.31, "change_speed": -0.04, "volume_ratio": 0.95,
-            "free_float_shares": 248000000, "float_market_cap": 12753000000.0,
+            "stock_code": "300469",
+            "stock_name": "信息发展",
+            "price": 51.4,
+            "change_pct": 6.71,
+            "change_amount": 3.23,
+            "amount": 425000000.0,
+            "turnover_rate": 3.57,
+            "amplitude": 11.31,
+            "change_speed": -0.04,
+            "volume_ratio": 0.95,
+            "free_float_shares": 248000000,
+            "float_market_cap": 12753000000.0,
             "pe_ratio": None,
             # open / high / low / prev_close / volume all None
         }
@@ -421,17 +479,31 @@ class TestGetBoardStocksUnionFillupE2E:
         # /stocks cache has data for both codes.
         market_quotes = [
             _q(
-                code="300469", name="信息发展",
+                code="300469",
+                name="信息发展",
                 volume=1234567,
-                open_price=50.5, high=52.0, low=50.0, pre_close=48.17,
+                open_price=50.5,
+                high=52.0,
+                low=50.0,
+                pre_close=48.17,
                 pe_ratio=42.0,
             ),
             _q(
-                code="688999", name="新股A", price=10.0, change_pct=0.0,
-                change_amount=0.0, volume=500000, amount=5e6,
-                turnover_rate=0.5, volume_ratio=1.0,
-                open_price=9.9, high=10.1, low=9.8, pre_close=9.85,
-                pe_ratio=15.0, amplitude=2.5,
+                code="688999",
+                name="新股A",
+                price=10.0,
+                change_pct=0.0,
+                change_amount=0.0,
+                volume=500000,
+                amount=5e6,
+                turnover_rate=0.5,
+                volume_ratio=1.0,
+                open_price=9.9,
+                high=10.1,
+                low=9.8,
+                pre_close=9.85,
+                pe_ratio=15.0,
+                amplitude=2.5,
             ),
         ]
 
@@ -450,6 +522,7 @@ class TestGetBoardStocksUnionFillupE2E:
                 if kwargs.get("include_quote"):
                     return [ths_top_row], "ths"
                 return [suffix_row], "zzshare"
+
             def get_realtime_quotes(self, market):
                 return market_quotes, "zzshare"
 

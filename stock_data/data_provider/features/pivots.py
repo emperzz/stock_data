@@ -90,14 +90,28 @@ def _detect_swings(df: pd.DataFrame, pivot_window: int, atr_mult: float, atr_val
                 if price >= extreme_price:
                     extreme_i, extreme_price = i, price
             elif price <= extreme_price - atr_mult * atr_value:
-                swings.append({"date": dates[extreme_i], "type": "high", "price": extreme_price, "confirmed": True})
+                swings.append(
+                    {
+                        "date": dates[extreme_i],
+                        "type": "high",
+                        "price": extreme_price,
+                        "confirmed": True,
+                    }
+                )
                 direction, extreme_i, extreme_price = "down", i, price
         else:  # direction == "down"
             if kind == "low":
                 if price <= extreme_price:
                     extreme_i, extreme_price = i, price
             elif price >= extreme_price + atr_mult * atr_value:
-                swings.append({"date": dates[extreme_i], "type": "low", "price": extreme_price, "confirmed": True})
+                swings.append(
+                    {
+                        "date": dates[extreme_i],
+                        "type": "low",
+                        "price": extreme_price,
+                        "confirmed": True,
+                    }
+                )
                 direction, extreme_i, extreme_price = "up", i, price
 
     pending = None
@@ -123,7 +137,11 @@ def _window_stats(window_df: pd.DataFrame) -> dict:
         "window_high": {"price": float(hi["high"]), "date": str(hi["date"])},
         "window_low": {"price": float(lo["low"]), "date": str(lo["date"])},
         # max_vol_bar.price is the max-volume bar's close (spec §3.2).
-        "max_vol_bar": {"price": float(mv["close"]), "volume": float(mv["volume"]), "date": str(mv["date"])},
+        "max_vol_bar": {
+            "price": float(mv["close"]),
+            "volume": float(mv["volume"]),
+            "date": str(mv["date"]),
+        },
     }
 
 

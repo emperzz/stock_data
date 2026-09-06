@@ -23,11 +23,5 @@ class TestStockListCacheKeys:
         assert make_stock_list_quote_cache_key("csi") == "stock_list_quote:csi"
 
     def test_stock_list_quote_cache_key_per_market(self):
-        assert (
-            make_stock_list_quote_cache_key("csi")
-            != make_stock_list_quote_cache_key("hk")
-        )
-        assert (
-            make_stock_list_quote_cache_key("hk")
-            != make_stock_list_quote_cache_key("us")
-        )
+        assert make_stock_list_quote_cache_key("csi") != make_stock_list_quote_cache_key("hk")
+        assert make_stock_list_quote_cache_key("hk") != make_stock_list_quote_cache_key("us")

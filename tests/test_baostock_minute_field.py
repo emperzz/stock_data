@@ -29,10 +29,10 @@ import pytest
 
 from stock_data.data_provider.fetchers.baostock_fetcher import BaostockFetcher
 
-
 # ──────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────
+
 
 def _enable_fetcher_init():
     """Mark BaostockFetcher._init_ok = True so _fetch_raw_data's
@@ -54,6 +54,7 @@ def _capture_fields(call_log: list):
     can build a frame if any caller reads the return value; this test
     only inspects ``call_log``, not the DataFrame.
     """
+
     def side_effect(*args, **kwargs):
         # bs.query_history_k_data_plus(bs_code, fields, start_date=..., ...)
         # — fields is the 2nd positional arg.
@@ -129,20 +130,15 @@ def test_minute_frequency_omits_pct_chg_in_fields_string():
             asset="stock",
         )
 
-    assert len(call_log) == 1, (
-        f"Expected exactly 1 bs.query call, got {len(call_log)}"
-    )
+    assert len(call_log) == 1, f"Expected exactly 1 bs.query call, got {len(call_log)}"
     fields = call_log[0]["fields"]
     assert isinstance(fields, str)
     assert "pctChg" not in fields.split(","), (
-        f"Baostock SDK rejects pctChg for minute K-line; "
-        f"got fields={fields!r}"
+        f"Baostock SDK rejects pctChg for minute K-line; got fields={fields!r}"
     )
     # Sanity: the standard OHLCV+amount columns must still be requested.
     for required in ("date", "open", "high", "low", "close", "volume", "amount"):
-        assert required in fields.split(","), (
-            f"Expected {required!r} in fields={fields!r}"
-        )
+        assert required in fields.split(","), f"Expected {required!r} in fields={fields!r}"
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -175,8 +171,7 @@ def test_daily_frequency_still_includes_pct_chg():
     assert len(call_log) == 1
     fields = call_log[0]["fields"]
     assert "pctChg" in fields.split(","), (
-        f"Daily K-line MUST include pctChg (legacy contract); "
-        f"got fields={fields!r}"
+        f"Daily K-line MUST include pctChg (legacy contract); got fields={fields!r}"
     )
 
 

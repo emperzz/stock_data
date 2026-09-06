@@ -12,6 +12,7 @@ from the deprecated ``STOCK_ZT_POOL``. The new method:
 - reads ``up_limit_time`` as ``last_seal_time`` (NOT ``first_seal_time`` —
   zzshare's up_limit_time is the LAST seal, per 2026-09-03 clarification).
 """
+
 from __future__ import annotations
 
 import pytest

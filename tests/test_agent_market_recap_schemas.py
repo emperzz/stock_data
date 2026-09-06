@@ -1,5 +1,12 @@
 """Schema smoke tests for the new MarketRecap response models."""
 
+from stock_data.api.cache import make_market_recap_cache_key
+from stock_data.api.routes.agent import (
+    _index_quote_from_unified,
+    build_market_context_response,
+    build_market_stats_response,
+    render_market_recap_as_md,
+)
 from stock_data.api.schemas import (
     IndexQuote,
     MarketContextMessages,
@@ -8,14 +15,6 @@ from stock_data.api.schemas import (
     MarketRecapIndicesBlock,
     MarketRecapResponse,
     MarketStatsResponse,
-)
-
-from stock_data.api.cache import make_market_recap_cache_key
-from stock_data.api.routes.agent import (
-    _index_quote_from_unified,
-    build_market_context_response,
-    build_market_stats_response,
-    render_market_recap_as_md,
 )
 from stock_data.data_provider.core.types import RealtimeSource, UnifiedRealtimeQuote
 
@@ -133,9 +132,7 @@ def test_build_market_stats_response_returns_model(monkeypatch):
     # Patch the `stock_board_cache` symbol as bound on agent_mod (it's
     # imported into agent.py's namespace at module load; the helper resolves
     # it as a free variable via the module globals).
-    monkeypatch.setattr(
-        agent_mod.stock_board_cache, "get_board_list", lambda **kwargs: ([], "ths")
-    )
+    monkeypatch.setattr(agent_mod.stock_board_cache, "get_board_list", lambda **kwargs: ([], "ths"))
 
     result = build_market_stats_response(
         include_boards=True, include_pools=False, target_date="2026-09-03"
@@ -260,9 +257,20 @@ def test_render_market_recap_as_md_includes_all_14_indexquote_columns():
     to satisfy the CLAUDE.md `?format=md` 'no field dropped' contract."""
     md = render_market_recap_as_md(_stub_response())
     expected_cols = [
-        "code", "name", "source", "current_price", "change_amount",
-        "change_pct", "open", "high", "low", "prev_close",
-        "volume", "volume_unit", "amount", "update_time",
+        "code",
+        "name",
+        "source",
+        "current_price",
+        "change_amount",
+        "change_pct",
+        "open",
+        "high",
+        "low",
+        "prev_close",
+        "volume",
+        "volume_unit",
+        "amount",
+        "update_time",
     ]
     missing = [c for c in expected_cols if c not in md]
     assert not missing, f"IndexQuote columns missing from MD: {missing}"

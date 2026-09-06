@@ -254,12 +254,11 @@ class MyquantFetcher(SDKFetcherMixin, BaseFetcher):
                 # is_index_code. 000001 → SZSE.000001 (Ping An Bank) instead
                 # of raising ValueError like to_myquant_format does.
                 from ..utils.code_converter import to_myquant_stock_format
+
                 try:
                     symbol = to_myquant_stock_format(stock_code)
                 except ValueError as e:
-                    raise DataFetchError(
-                        f"Myquant does not support code {stock_code}: {e}"
-                    ) from e
+                    raise DataFetchError(f"Myquant does not support code {stock_code}: {e}") from e
             else:
                 symbol = self._convert_code(stock_code)
             df = history(

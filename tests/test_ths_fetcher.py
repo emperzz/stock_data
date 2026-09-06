@@ -1020,8 +1020,7 @@ class TestGetStockBoards:
         assert first["limit_up_count"] == 1
         assert first["limit_down_count"] is None
         assert first["explain"] == (
-            "2022年8月23日公司互动回复：公司产品中辅助生殖类的"
-            "产品有：阳春口服液、男宝胶囊。"
+            "2022年8月23日公司互动回复：公司产品中辅助生殖类的产品有：阳春口服液、男宝胶囊。"
         )
         assert first["relevance"] == 2
 

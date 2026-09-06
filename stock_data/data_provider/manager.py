@@ -755,9 +755,7 @@ class DataFetcherManager:
             candidates=sorted(candidates, key=lambda f: f.priority),
         )
 
-    def get_realtime_quotes(
-        self, market: str
-    ) -> tuple[list[UnifiedRealtimeQuote] | None, str]:
+    def get_realtime_quotes(self, market: str) -> tuple[list[UnifiedRealtimeQuote] | None, str]:
         """All-market realtime quote with priority-based failover + circuit breaker.
 
         Routes via existing STOCK_REALTIME_QUOTE capability — no new flag.

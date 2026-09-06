@@ -73,8 +73,8 @@ def _label(left: float | None, right: float | None) -> str:
         hi = "+∞"
         bracket = "]"
     elif right == 0.0:
-        hi = "0"     # no '+' sign; spec example shows "(-3%, 0)"
-        bracket = ")" # right-open (flat bucket absorbs 0)
+        hi = "0"  # no '+' sign; spec example shows "(-3%, 0)"
+        bracket = ")"  # right-open (flat bucket absorbs 0)
     else:
         hi = f"{right:+.0f}%"
         bracket = "]"

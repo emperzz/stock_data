@@ -6,13 +6,13 @@ SAMPLE = {
     "labels": [
         {"type": "stock", "code": "600519", "name": "贵州茅台", "source": None},
         {"type": "stock", "code": "000001", "name": "平安银行", "source": None},
-        {"type": "board", "code": "885595", "name": "白酒",   "source": "ths"},
+        {"type": "board", "code": "885595", "name": "白酒", "source": "ths"},
     ],
     "frequency": "d",
     "days": 90,
     "alignment": {"requested_days": 90, "common_bars": 87, "missing_after_join": 3},
     "matrices": {
-        "pearson":  [[1.0, 0.87, 0.23], [0.87, 1.0, 0.41], [0.23, 0.41, 1.0]],
+        "pearson": [[1.0, 0.87, 0.23], [0.87, 1.0, 0.41], [0.23, 0.41, 1.0]],
         "spearman": [[1.0, 0.79, 0.18], [0.79, 1.0, 0.39], [0.18, 0.39, 1.0]],
     },
     "errors": [],
@@ -56,9 +56,10 @@ def test_methods_subset_omits_section():
 
 
 def test_errors_section_only_when_present():
-    spec = {**SAMPLE, "errors": [
-        {"type": "stock", "code": "000001", "source": None, "reason": "empty"}
-    ]}
+    spec = {
+        **SAMPLE,
+        "errors": [{"type": "stock", "code": "000001", "source": None, "reason": "empty"}],
+    }
     md = render_correlation_matrix_as_md(spec)
     assert "### 数据缺失" in md
     assert "000001" in md

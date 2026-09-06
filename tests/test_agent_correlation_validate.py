@@ -1,4 +1,5 @@
 """Tests for _parse_and_validate."""
+
 import pytest
 from fastapi import HTTPException
 
@@ -6,12 +7,14 @@ from stock_data.api.routes.agent_correlation import _parse_and_validate
 
 
 def test_happy_path():
-    labels, stocks, boards = _parse_and_validate({
-        "stocks": ["SH600519", "000001"],   # SH prefix must be stripped
-        "boards": [{"code": "885595"}],       # source defaulted to "ths"
-        "frequency": "d",
-        "days": 90,
-    })
+    labels, stocks, boards = _parse_and_validate(
+        {
+            "stocks": ["SH600519", "000001"],  # SH prefix must be stripped
+            "boards": [{"code": "885595"}],  # source defaulted to "ths"
+            "frequency": "d",
+            "days": 90,
+        }
+    )
     assert [lbl["code"] for lbl in labels] == ["600519", "000001", "885595"]
     assert stocks == ["600519", "000001"]
     assert boards[0]["source"] == "ths"
@@ -31,29 +34,41 @@ def test_max_assets_ten():
 
 def test_days_above_cap_rejected():
     with pytest.raises(HTTPException) as ei:
-        _parse_and_validate({
-            "stocks": ["600519", "000001"], "boards": [],
-            "frequency": "d", "days": 500,
-        })
+        _parse_and_validate(
+            {
+                "stocks": ["600519", "000001"],
+                "boards": [],
+                "frequency": "d",
+                "days": 500,
+            }
+        )
     assert ei.value.status_code == 422
     assert "days must be" in ei.value.detail["message"]
 
 
 def test_frequency_1m_eastmoney_rejected():
     with pytest.raises(HTTPException) as ei:
-        _parse_and_validate({
-            "stocks": ["600519"], "boards": [{"code": "885595", "source": "eastmoney"}],
-            "frequency": "1m", "days": 2,
-        })
+        _parse_and_validate(
+            {
+                "stocks": ["600519"],
+                "boards": [{"code": "885595", "source": "eastmoney"}],
+                "frequency": "1m",
+                "days": 2,
+            }
+        )
     assert ei.value.status_code == 422
     assert "not supported for board source" in ei.value.detail["message"]
 
 
 def test_frequency_1m_ths_ok():
-    labels, _, _ = _parse_and_validate({
-        "stocks": ["600519", "000001"], "boards": [{"code": "885595", "source": "ths"}],
-        "frequency": "1m", "days": 2,
-    })
+    labels, _, _ = _parse_and_validate(
+        {
+            "stocks": ["600519", "000001"],
+            "boards": [{"code": "885595", "source": "ths"}],
+            "frequency": "1m",
+            "days": 2,
+        }
+    )
     assert len(labels) == 3
 
 
@@ -69,12 +84,14 @@ def test_methods_subset_only_pearson_passes():
 
 
 def test_boards_as_plain_strings_default_to_ths():
-    labels, stocks, boards = _parse_and_validate({
-        "stocks": ["600519", "000001"],
-        "boards": ["885595", "885584"],   # bare codes → source defaults to "ths"
-        "frequency": "d",
-        "days": 30,
-    })
+    labels, stocks, boards = _parse_and_validate(
+        {
+            "stocks": ["600519", "000001"],
+            "boards": ["885595", "885584"],  # bare codes → source defaults to "ths"
+            "frequency": "d",
+            "days": 30,
+        }
+    )
     assert [lbl["code"] for lbl in labels] == ["600519", "000001", "885595", "885584"]
     assert stocks == ["600519", "000001"]
     assert [b["source"] for b in boards] == ["ths", "ths"]
@@ -83,9 +100,14 @@ def test_boards_as_plain_strings_default_to_ths():
 
 def test_board_invalid_entry_rejected():
     with pytest.raises(HTTPException) as ei:
-        _parse_and_validate({
-            "stocks": ["600519", "000001"], "boards": [12345], "frequency": "d", "days": 30,
-        })
+        _parse_and_validate(
+            {
+                "stocks": ["600519", "000001"],
+                "boards": [12345],
+                "frequency": "d",
+                "days": 30,
+            }
+        )
     assert ei.value.status_code == 422
     assert "each board must be" in ei.value.detail["message"]
 

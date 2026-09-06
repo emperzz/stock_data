@@ -18,8 +18,6 @@ This is a sentinel-level config change — no business logic changes.
 Source: ``stock_data/data_provider/core/types.py:CircuitBreaker.__init__``
 """
 
-import os
-
 import pytest
 
 from stock_data.data_provider.core.types import CircuitBreaker
@@ -69,8 +67,7 @@ def test_4_failures_stay_closed_5th_opens():
         for i in range(4):
             cb.record_failure("TestFetcher")
             assert cb.is_available("TestFetcher"), (
-                f"CB should still be CLOSED after {i+1} failures "
-                "(threshold=5 default)"
+                f"CB should still be CLOSED after {i + 1} failures (threshold=5 default)"
             )
 
         cb.record_failure("TestFetcher")
@@ -109,6 +106,4 @@ def test_explicit_kwarg_used_when_env_unset():
     with pytest.MonkeyPatch.context() as m:
         m.delenv("CB_FAILURE_THRESHOLD", raising=False)
         cb = CircuitBreaker(failure_threshold=11)
-        assert cb.failure_threshold == 11, (
-            "kwarg should win when env is unset"
-        )
+        assert cb.failure_threshold == 11, "kwarg should win when env is unset"
