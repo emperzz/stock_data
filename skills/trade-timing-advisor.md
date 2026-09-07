@@ -61,7 +61,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 | 板块行情 + 板块涨幅相对位置 | market-data-obtain agent 端点 | `agent/boards/batch-profile`（板块）+ `agent/market-stats.boards.buckets`（市场桶位） |
 | 全市场情绪 + 涨跌停池 + 消息面 | market-data-obtain agent 端点 | `agent/market-stats`（情绪桶 + `limit_pools`）+ `agent/market-context`（消息面）。**龙虎榜**按需归因时单独走 `/api/v1/dragon-tiger`，不进常规流程 |
 | 跨资产重合度 / 相关性 | market-data-obtain agent 端点 | `agent/{stocks,boards}-overlap` + `agent/correlation/matrix` |
-| 个股公司画像（业务重合度对比用） | market-data-obtain agent 端点 | `agent/stocks/batch-profile` 的 `info.data` 块（`business_scope` + `concepts`） |
+| 个股公司画像（业务重合度对比用） | market-data-obtain agent 端点 | `agent/stocks/batch-profile` 的 `info.data` 块（`business_scope`） |
 
 > **不重复端点目录**：每个端点的字段、单位、调用约束以 `market-data-obtain` 对应 detail 文件为准，**调用前必读**。本表只回答"取什么 / 从哪取"。
 
@@ -114,7 +114,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 | 5 | 板块 | 板块长期 + 当日分时 features | `agent/boards/batch-profile` | THS platecodes，`frequency=d&days=365` 与 `frequency=5m&days=5` 各一次 |
 | 6 | 板块 | 成分股龙头 / 前 3 | `GET /boards/{code}/stocks` | `source=ths&include_quote=true`（龙头 / 前 3 = 列表按涨幅倒序的前几行）；触板判定按 `market-principles §12` 优先级 1 走 `/zt-pools?type=zt` |
 | 7 | 个股 | 用户当前请求的每只 X 的长期 + 当日分时 features | `agent/stocks/batch-profile` | `frequency=d&days=365` 与 `frequency=5m&days=5` 各一次；`codes` = 用户本次请求涉及的股票集合（watchlist 子集 / 全集 / 或 watchlist 之外的临时指定） |
-| 8 | 重合度 | X 与板块龙头的重合度（业务 + 板块 + 走势） | `agent/stocks/board-overlap` + `agent/correlation/matrix` + `info.data.business_scope/concepts` | 详见 §5.4 |
+| 8 | 重合度 | X 与板块龙头的重合度（业务 + 板块 + 走势） | `agent/stocks/board-overlap` + `agent/correlation/matrix` + `info.data.business_scope` | 详见 §5.4 |
 | 9 | 备查 | X 精确 K 线（仅在论据翻译规则需"近 N 日累计涨幅"等 batch-profile 不含字段时） | `GET /stocks/{code}/kline` 或 `GET /indices/{code}/kline` | 按需单拉，默认不调 |
 
 > **个股层覆盖范围**：第 7 行的 codes 由 §2.2 入口分流后确定：
@@ -244,7 +244,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 
 | 数据 | 论据 |
 |---|---|
-| `info.data.business_scope`（经营范围）+ `info.data.concepts` 双方对比 | "业务重合度高 / 中 / 低" |
+| `info.data.business_scope`（经营范围）对比 | "业务重合度高 / 中 / 低" |
 | `board-overlap.pairs[X↔leader].jaccard > 0.5` | "共同板块占比高（Jaccard X）" |
 | `correlation/matrix` Pearson `ρ > 0.7` | "走势强相关（ρ=X）" |
 | `0.4 < ρ < 0.7` | "走势中度相关（ρ=X）" |
@@ -296,7 +296,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 - `agent/stocks/batch-profile (d, days=365)` 的 `features.trend / pivots / volume`
 - `agent/stocks/batch-profile (5m, days=5)` 的 `features.pivots.swings + features.volume.z_anomalies`
 - `agent/stocks/batch-profile.quote` 的 extended `MinimalQuote`（`price/change_pct/open/high/low/volume/turnover_pct/amplitude_pct` 等，字段与单位见 agent-batch.md）
-- `agent/stocks/batch-profile.info` 的主营近似（`business_scope` + `concepts`）
+- `agent/stocks/batch-profile.info` 的主营近似（`business_scope`）
 - `agent/stocks/batch-profile.boards` 的所属板块（用于和 portfolio.json 对照；与 `/stocks/{code}/boards` 同契约，见 `market-data-obtain/boards.md`）
 
 **每只 code 的个股层论据**：
@@ -306,7 +306,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 - 当前价 vs 顶底（pivots.window_high / low vs quote.price）
 - 连续上涨后空间评估（§4.5）
 - 当日涨幅 vs 涨停空间（§4.6）
-- 主营近似（`info.data.business_scope` / `concepts`）
+- 主营近似（`info.data.business_scope`）
 - 所属板块与 portfolio.json watch.board 是否一致（不一致提示用户复核 §2.2 路径 A）
 
 ### 5.4 重合度（vs 板块龙头 / 前 3）
@@ -323,7 +323,7 @@ A 股个股买卖时机判断 skill。**论据呈现器**——输出支持买�
 
 - `agent/correlation/matrix`（`stocks=[X, 对比目标...]`，`boards=[X 所在板块]`，`frequency=d&days=90` 默认 Pearson + Spearman）
 - `agent/stocks/board-overlap`（`codes=[X, 对比目标...]`）
-- 双方 `info.data.business_scope` + `concepts`
+- 双方 `info.data.business_scope`
 
 **每只 code 的重合度论据**：
 

@@ -1331,9 +1331,6 @@ class StockInfoResponse(BaseModel):
     total_shares: float | None = Field(default=None, description="总股本 (万股)")
     float_shares: float | None = Field(default=None, description="流通股本 (万股)")
 
-    # 概念
-    concepts: list[str] = Field(default_factory=list, description="概念标签 (Zhitu)")
-
     # 公司画像
     registered_address: str = Field(default="", description="注册地址 (Zhitu)")
     registered_capital: str = Field(

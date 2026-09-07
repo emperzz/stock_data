@@ -14,7 +14,6 @@ __all__ = [
     "is_a_share_stock_code",
     "A_SHARE_STOCK_PREFIXES",
     "code_to_exchange",
-    "split_concepts",
 ]
 
 # A-share stock code prefixes (used to distinguish real stocks from
@@ -233,22 +232,3 @@ def index_market_tag(code: str) -> str | None:
     this returns the specific index market type for routing purposes.
     """
     return get_index_type(code)
-
-
-def split_concepts(raw: object) -> list[str]:
-    """Split a comma-separated concept string into a deduplicated list.
-
-    Returns ``[]`` for empty/None input. Items are stripped; empty items dropped.
-    Used by fetcher company-profile normalizers to convert a single
-    ``idea`` / ``concepts`` field into a clean list.
-    """
-    if not raw:
-        return []
-    parts = [p.strip() for p in str(raw).split(",")]
-    seen: set[str] = set()
-    out: list[str] = []
-    for p in parts:
-        if p and p not in seen:
-            seen.add(p)
-            out.append(p)
-    return out

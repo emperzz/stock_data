@@ -140,7 +140,6 @@ curl 'http://localhost:8888/api/v1/stocks/600519/kline?period=daily&start_date=2
 | `delisted_date` | string | — | 退市日 `YYYY-MM-DD`（多数情况下为空字符串） |
 | `total_shares` | number \| null | **万股** | 总股本 |
 | `float_shares` | number \| null | **万股** | 流通股本 |
-| `concepts` | string[] | — | 概念标签列表 |
 | `registered_address` | string | — | 注册地址 |
 | `registered_capital` | **string** | — | 注册资本（如 `"9.82亿"`，**字符串**，不是 number） |
 | `legal_representative` | string | — | 法人代表 |

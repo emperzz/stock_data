@@ -78,7 +78,6 @@ class TestGetStockInfo:
         # Free tier doesn't provide these
         assert result["total_shares"] is None
         assert result["float_shares"] is None
-        assert result["concepts"] == []
         # All Zhitu-specific fields are blank
         assert result["registered_address"] == ""
         assert result["secretary"] == ""

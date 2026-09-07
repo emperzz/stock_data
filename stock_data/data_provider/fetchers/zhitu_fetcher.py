@@ -19,7 +19,6 @@ from ..utils.code_converter import (
     to_zhitu_index_market_suffix,
     to_zhitu_market_suffix,
 )
-from ..utils.normalize import split_concepts as _split_concepts
 
 logger = logging.getLogger(__name__)
 
@@ -419,7 +418,6 @@ class ZhituFetcher(BaseFetcher):
             "delisted_date": "",
             "total_shares": None,  # Zhitu gsjj 不暴露总股本
             "float_shares": None,  # Zhitu gsjj 不暴露流通股本
-            "concepts": _split_concepts(data.get("idea", "")),
             "registered_address": data.get("addr", "") or "",
             "registered_capital": data.get("rprice", "") or "",
             # Zhitu 不暴露法人代表 — `principal` 是 IPO 主承销商，不要错填。

@@ -82,9 +82,6 @@ class TestGetStockInfo:
         # Zhitu upstream does NOT expose share counts → None
         assert result["total_shares"] is None
         assert result["float_shares"] is None
-        # Concepts parsed from comma-separated `idea`
-        assert "白酒" in result["concepts"]
-        assert "MSCI中国" in result["concepts"]
         # Real field-name mappings (addr/rprice/secre/sphone/semail)
         assert result["registered_address"] == "贵州省仁怀市茅台镇"
         assert result["registered_capital"] == "125008万元(CNY)"
@@ -207,7 +204,6 @@ class TestGetStockInfo:
         assert result["listed_date"] == ""
         assert result["total_shares"] is None
         assert result["float_shares"] is None
-        assert result["concepts"] == []
         assert result["registered_address"] == ""
         assert result["registered_capital"] == ""
         assert result["legal_representative"] == ""

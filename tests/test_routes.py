@@ -814,7 +814,7 @@ class TestStockInfoRoute:
         response = client.get("/api/v1/stocks/600519/info")
         if response.status_code == 200:
             data = response.json()
-            # All 19 fields present (incl. `exchange` added by route layer
+            # All 18 fields present (incl. `exchange` added by route layer
             # via code_to_exchange() — the fetcher payload itself does not
             # carry it).
             expected_fields = {
@@ -826,7 +826,6 @@ class TestStockInfoRoute:
                 "delisted_date",
                 "total_shares",
                 "float_shares",
-                "concepts",
                 "registered_address",
                 "registered_capital",
                 "legal_representative",
@@ -841,7 +840,6 @@ class TestStockInfoRoute:
             assert set(data.keys()) == expected_fields
             assert data["code"] == "600519"
             assert data["market"] == "csi"
-            assert isinstance(data["concepts"], list)
             assert data["exchange"] in ("SH", "SZ", "BJ", None)
             assert data["source"] in ("ZhituFetcher", "MyquantFetcher", "")
         else:
