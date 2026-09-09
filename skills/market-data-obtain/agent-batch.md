@@ -494,6 +494,8 @@ curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
 
 全市场涨幅统计：**个股 + 板块 + 涨跌停池（zt/dt）** 三块。buckets 与 source-tracking 详见 `api-reference.md` §`/api/v1/agent/market-stats`；涨跌停池 zt/dt 系从 `market-context` 迁出（2026-09-02 slim）后的统一入口，**字段集走 `ZTPoolStock`（`first_seal_time` / `last_seal_time` / `lb_count` / `turnover_pct` / `seal_amount` 等）**——字段表见 [boards.md §涨跌停池](./boards.md#涨跌停池-ztdt-zbgc) 的 zt / dt 子段。
 
+**`boards` 块额外含 top-3 movers**（2026-09-09 新增）：`top_gainers` + `top_losers` 各 ≤3 条 `BoardMoverEntry`（含 `MinimalQuote`），按 change_pct DESC/ASC 排序、tie-break = code ASC、None change_pct 排除。复用了板块块已经取到的 dict，**零额外上游调用**。
+
 - **A 股 only**
 - per-block 错误隔离（个股 / 板块 / zt_pool / dt_pool）；失败的块为 `null`，失败原因进入 `errors[]`
 - `?include_boards=false` 时**板块上游根本不被调用**；`?include_pools=false` 时涨跌停池上游不被调用
@@ -523,6 +525,8 @@ curl -X POST http://localhost:8888/api/v1/agent/correlation/matrix \
 | `boards` | object / null | — | 板块块；`include_boards=false` 或上游失败时为 `null` |
 | `boards.sample_size` / `mean_pct` / `median_pct` / `max_pct` / `min_pct` / `up_count` / `down_count` / `flat_count` / `bin_width` / `buckets[]` | 同 `stocks` | — | 9 个 1% 宽桶 [-3%, +3%]，0% 单独成桶；`bin_width` 固定 1；多一个 `source` 字段标记 fetcher |
 | `boards.source` | string | — | 服务本次数据的 fetcher（ths / persistence） |
+| `boards.top_gainers` | array | — | **新增（2026-09-09）**涨幅前三板块，每条 `BoardMoverEntry`（`code` / `name` / `type` / `subtype` / `source` / `platecode` / `quote: MinimalQuote`）；按 change_pct DESC 排序、tie-break = code ASC；最多 3 条，N<3 时按实际数；`include_boards=false` 或上游失败时该字段不存在；空上游 → `[]`。MD 投影见下文 |
+| `boards.top_losers` | array | — | **新增（2026-09-09）**跌幅前三板块，shape 同 `top_gainers`；按 change_pct ASC 排序 |
 | `limit_pools.zt` | array / null | — | 涨停股池；`pre-market` 时为 `null`；字段同 `ZTPoolStock`（见 boards.md） |
 | `limit_pools.dt` | array / null | — | 跌停股池；`pre-market` 时为 `null`；字段同 `ZTPoolStock` |
 | `errors[]` | array | — | 失败的块：`{block, error, message}`（`block` ∈ `stocks` / `boards` / `zt_pool` / `dt_pool`） |

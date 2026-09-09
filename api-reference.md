@@ -2609,6 +2609,14 @@ surfaces the exception in `errors[]`; the other blocks continue
 normally. Use case: "give me a full-market dashboard — distribution +
 pools — in one call" without an N+1 fetch + client-side bucket loop.
 
+**Post-2026-09-09**, the `boards` block also surfaces
+`top_gainers` / `top_losers` — each a list of up to 3 `BoardMoverEntry`
+rows (with `MinimalQuote` quote) sorted by `change_pct` DESC/ASC.
+These are computed in-memory from the same THS board list the
+aggregate stats already consume; no extra upstream call. Use case:
+"which boards drove today's move" without a separate
+`/boards/{code}/quote` fan-out.
+
 ```bash
 GET /api/v1/agent/market-stats
 GET /api/v1/agent/market-stats?include_boards=false
@@ -2674,6 +2682,18 @@ GET /api/v1/agent/market-stats?format=md
       {"label":"(+1%, +2%]", "lower": 1.0, "upper": 2.0, "count": 56},
       {"label":"(+2%, +3%]", "lower": 2.0, "upper": 3.0, "count": 22},
       {"label":"(+3%, +∞)",  "lower": 3.0, "upper":null, "count":  6}
+    ],
+    "top_gainers": [
+      {"code": "881154", "name": "半导体", "type": "industry", "subtype": "881",
+       "source": "ths", "platecode": "881154",
+       "quote": {"change_pct": 5.40, "volume": 2345678, "volume_unit": "wan_shou",
+                 "amount": 1.2e9, "up_count": 23, "down_count": 5, "net_inflow": 4.5}}
+    ],
+    "top_losers": [
+      {"code": "881127", "name": "煤炭", "type": "industry", "subtype": "881",
+       "source": "ths", "platecode": "881127",
+       "quote": {"change_pct": -3.20, "volume": 1000000, "volume_unit": "wan_shou",
+                 "amount": 5.0e8, "up_count": 2, "down_count": 18, "net_inflow": -2.1}}
     ]
   },
   "limit_pools": {
@@ -2707,6 +2727,8 @@ GET /api/v1/agent/market-stats?format=md
 | `stocks.buckets[i].{label,lower,upper}` | str / float \| null | Bucket label and edges. `lower == upper == 0` for the flat bucket; one of `{lower, upper}` is `null` for ±∞ boundary buckets; otherwise left-open right-closed `[lower, upper]` (e.g. `(-3%, 0)` for the right-open bucket adjacent to the flat bucket — see bucket convention note below). |
 | `stocks.buckets[i].count` | int | Number of values falling in this bucket. |
 | `boards.source` | str | `"ths"` (or `"persistence"` if served from cache without a refresh). Mirrors the `effective_source` semantics of `/boards/{code}/stocks`. |
+| `boards.top_gainers` | object[] | **Post-2026-09-09.** Up to 3 boards with the highest `change_pct`. Each entry follows the [`BoardMoverEntry`](#boardmoverentry-field-inventory) contract. Absent when `boards` is null (`include_boards=false` or upstream raised). Empty `[]` when the upstream returned 0 rows with non-None `change_pct`. |
+| `boards.top_losers` | object[] | **Post-2026-09-09.** Same shape as `top_gainers` but sorted by `change_pct` ASC. |
 | `limit_pools.zt` | object[] \| null | ZT pool list. **`null` in pre-market** (池子未成形) OR when the upstream call failed OR `include_pools=false`. Empty list `[]` is distinct from `null` (means "fetch succeeded, 0 stocks"). Each item follows the `ZTPoolStock` contract — see the [field inventory below](#limit_pools-field-inventory). |
 | `limit_pools.dt` | object[] \| null | DT pool list. Same null semantics. Same field inventory as `zt`. |
 | `errors[]` | object[] | Per-block failures: `{block, error, message}` where `block` ∈ `stocks` \| `boards` \| `zt_pool` \| `dt_pool`. Empty on success. See error isolation matrix below. |
@@ -2736,6 +2758,74 @@ caller can rely on across all upstream fetchers:
 > 行业 on zt/dt pool items, and `ZTPoolStock` does not declare it.
 >  zzshare's `area/industry_left empty` upstream contract carries
 >  through unchanged. A backfill path is a separate spec item.
+
+#### `BoardMoverEntry` field inventory
+
+Each item in `boards.top_gainers[]` / `boards.top_losers[]` follows
+the `BoardMoverEntry` schema (`stock_data/api/schemas.py`). This is
+the same shape `BatchProfile` uses to identify a board plus a quote
+block; fields are sparse (most `quote` fields stay `null` because
+`stock_board_cache.get_board_list(source="ths", include_quote=True)`
+returns only 6 of the 23 quote fields).
+
+| Field | Type | Description |
+|---|---|---|
+| `code` | string | Bare code / THS platecode (e.g. `881154` for industry, `BK0xxx` for concept). |
+| `name` | string | Board name (Chinese). |
+| `type` | string | `"concept"` / `"industry"` / `"index"` / `"special"`. |
+| `subtype` | string | Source-specific subtype (e.g. `"881"` for industry prefix). |
+| `source` | string | `"ths"` — the upstream served the row. |
+| `platecode` | string \| null | THS platecode (885xxx for concept; same as `code` for industry). `null` for sidebar-only concept rows where the upstream didn't supply one (see `ths_fetcher.py:1784-1788`). |
+| `quote` | object \| null | `MinimalQuote` (shared with stock / index / board `BatchProfile`). **Sparse** — only 6 fields populated; see quote-fill table below. |
+
+##### Quote fill semantics (board movers only)
+
+`stock_board_cache.get_board_list(source="ths", include_quote=True)`
+returns a richer row than the bare list (it includes 10 quote-ish
+columns), but a strict subset of what `get_board_realtime` returns.
+The helper `_build_minimal_quote_from_list_row_dict`
+(`stock_data/api/routes/agent.py`) maps those rows into
+`MinimalQuote` and leaves the rest `null`. Same precedent as
+`/agent/boards/batch-profile`, which also returns `MinimalQuote`
+sparse when upstream is sparse.
+
+| `MinimalQuote` field | Source | Conversion |
+|---|---|---|
+| `change_pct` | upstream `change_pct` | pass-through |
+| `volume` | upstream `volume` | pass-through (THS 万手) |
+| `volume_unit` | const | `"wan_shou"` (board convention) |
+| `amount` | upstream `amount` | × 1e8 (THS upstream 亿元 → 元), |
+| `up_count` | upstream `up_count` | pass-through |
+| `down_count` | upstream `down_count` | pass-through |
+| `net_inflow` | upstream `net_inflow` | pass-through (THS upstream 亿元, **not** ×1e8 — see unit note) |
+| (other 16 MinimalQuote fields) | — | `null` |
+
+**Unit convention**: `amount` is converted to 元 to match the rest of
+the server's API surface (same conversion as `/boards/{code}/quote` at
+`routes/boards.py:857`). `net_inflow` is left as 亿元 (the upstream's
+native scale); consumers who want 元 divide by `1e8`. The MD
+projection's `资金净流入(亿)` column header makes the unit explicit.
+
+**Algorithm** (top movers selection):
+
+1. Filter rows to those with finite numeric `change_pct` (excludes
+   `None` / non-numeric — same predicate the aggregate stats use at
+   `agent.py:1547`).
+2. `top_gainers` = sorted DESC → first 3.
+3. `top_losers` = **same eligible set** sorted ASC → first 3.
+4. **Tie-break**: `code` ASC for determinism.
+5. If fewer than 3 rows qualify, emit the available rows; do NOT pad.
+
+**Both lists mirror the same eligible set** — there is **no sign
+ filter**. With N eligible rows + top_n=3, `len(top_gainers) ==
+ len(top_losers) == min(N, 3)`. The two lists may contain the same
+ board at different ranks if `change_pct == 0.0`.
+
+**Cache impact**: none. The boards block already makes ONE upstream
+call site (`stock_board_cache.get_board_list` → ths+zzshare merge);
+top movers are pure in-memory sort over the rows already in cache.
+`make_market_stats_cache_key` signature and value are unchanged;
+60s TTL via `get_quote_cache` covers the new fields automatically.
 
 **Error isolation matrix** (per `block` field of `errors[]`):
 
