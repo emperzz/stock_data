@@ -71,6 +71,7 @@ from ..cache import (
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
     BatchFeatures,
+    BoardMoverEntry,
     BoardProfile,
     BoardsBatchProfileRequest,
     BoardsBatchProfileResponse,
@@ -1339,6 +1340,85 @@ def _build_minimal_quote_from_board_dict(q: dict) -> MinimalQuote:
     )
 
 
+def _build_minimal_quote_from_list_row_dict(row: dict) -> MinimalQuote:
+    """Map a ``stock_board_cache.get_board_list`` row to ``MinimalQuote``.
+
+    The ``get_board_list`` row shape (with ``include_quote=True``) is
+    sparser than ``get_board_realtime``'s — only 6 of the board-relevant
+    ``MinimalQuote`` fields have upstream values: ``change_pct`` /
+    ``volume`` / ``amount`` / ``net_inflow`` / ``up_count`` /
+    ``down_count``. The other 7 board-relevant fields (``price`` /
+    ``change_amount`` / ``OHLC`` / ``prev_close`` / ``rank``) and the 8
+    stock-only fields stay ``None``. This matches the
+    ``/agent/boards/batch-profile`` precedent where "field present in
+    schema, ``None`` upstream" is the documented contract.
+
+    ``amount`` is multiplied by ``1e8`` to convert THS upstream 亿元 →
+    元, matching the conversion already applied at
+    ``routes/boards.py:857`` and inside ``_build_minimal_quote_from_board_dict``
+    for the realtime path. ``net_inflow`` stays as-is (board upstream
+    is already 亿元; consumers divide by ``1e8`` if they want 元).
+    Spec: docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.2
+    """
+    raw_amount = row.get("amount")
+    return MinimalQuote(
+        change_pct=row.get("change_pct"),
+        volume=row.get("volume"),
+        volume_unit="wan_shou",
+        amount=(raw_amount * 1e8) if raw_amount is not None else None,
+        up_count=row.get("up_count"),
+        down_count=row.get("down_count"),
+        net_inflow=row.get("net_inflow"),
+    )
+
+
+def _select_top_board_movers(
+    rows: list[dict] | None, *, top_n: int = 3
+) -> tuple[list[BoardMoverEntry], list[BoardMoverEntry]]:
+    """Pick top-N gainers and losers from the ``get_board_list`` rows.
+
+    Filters out rows with non-finite ``change_pct`` (``None`` / ``bool``
+    / non-numeric — same predicate the aggregate stats use at
+    ``agent.py:1547``). Tie-breaker = ``code`` ASC for determinism.
+    Returns two independent lists — both may contain the same row if
+    its ``change_pct == 0.0`` and a tie emerges at the boundary.
+
+    Per spec §3.1 — NO sign filter. Both lists mirror the same
+    eligible set, so with N eligible rows + top_n, both have length
+    ``min(N, top_n)`` (NOT a pos/neg split).
+
+    Pure function: no upstream calls, no side effects.
+    Spec: docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.1
+    """
+
+    def _pct(r):
+        v = r.get("change_pct")
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    eligible = [(r, _pct(r)) for r in (rows or [])]
+    eligible = [(r, p) for r, p in eligible if p is not None]
+
+    def _code(r):
+        return r.get("code") or ""
+
+    gainers_sorted = sorted(eligible, key=lambda rp: (-rp[1], _code(rp[0])))[:top_n]
+    losers_sorted = sorted(eligible, key=lambda rp: (rp[1], _code(rp[0])))[:top_n]
+
+    def _to_entry(rp):
+        r, _ = rp
+        return BoardMoverEntry(
+            code=r.get("code") or "",
+            name=r.get("name") or "",
+            type=r.get("type") or "",
+            subtype=r.get("subtype") or "",
+            source=r.get("source") or "ths",
+            platecode=r.get("platecode"),  # None for sidebar-only concept rows
+            quote=_build_minimal_quote_from_list_row_dict(r),
+        )
+
+    return [_to_entry(rp) for rp in gainers_sorted], [_to_entry(rp) for rp in losers_sorted]
+
+
 @router.post(
     "/agent/boards/batch-profile",
     response_model=BoardsBatchProfileResponse,
@@ -1553,6 +1633,14 @@ def build_market_stats_response(
                 buckets_template=build_board_buckets(),
             )
             boards_stats = _board_stats_from_aggregate(agg, src or "ths")
+            # NEW (2026-09-09): top-3 gainers + top-3 losers derived from
+            # the same upstream rows. Pure in-memory sort; no extra
+            # upstream call, no cache-key change. Defaults to [] when
+            # upstream returns 0 rows with non-None change_pct.
+            # Spec: docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.1
+            top_gainers, top_losers = _select_top_board_movers(boards, top_n=3)
+            boards_stats.top_gainers = top_gainers
+            boards_stats.top_losers = top_losers
             ok += 1
         except Exception as exc:
             logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
@@ -2180,8 +2268,64 @@ def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
     return "\n".join(out)
 
 
+def _md_top_movers(out: list[str], title: str, entries: list[BoardMoverEntry]) -> None:
+    """Render one BoardMoverEntry list as an MD table (or empty marker).
+
+    Same empty-table rule as ``_render_dict_block``: a bare heading +
+    separator + zero rows reads as "computed, but blank", which is the
+    opposite of the truth when upstream returned 0 rows. Emit an
+    explicit ``（无数据）`` marker instead.
+
+    Projects 8 columns per spec §5.2:
+        代码 / 名称 / 涨跌幅 / 成交额(亿) / 成交量(万手) / 上涨 / 下跌 / 资金净流入(亿)
+    The full 23-field MinimalQuote is unchanged in JSON — agents that
+    need it read JSON, not MD. This is an intentional projection, not a
+    data drop. The 8-column header is pinned by
+    ``test_market_stats_md_includes_top_movers_sections`` to prevent
+    silent regressions where a column is added/removed.
+
+    `amount_yi` divides the 元 value by 1e8 to surface 亿元 (matches the
+    units THS upstream reports natively, easier to scan in a recap).
+    `net_inflow_yi` is pass-through (THS upstream 亿元; the helper does
+    NOT multiply by 1e8 — see spec §3.2 unit convention note; the
+    `(亿)` column header makes the unit explicit). `volume` is already
+    万手 in the THS upstream `get_board_list` payload — pass-through,
+    just formatted with thousands separator.
+    """
+    out.append(f"### {title}")
+    if not entries:
+        out.append("（无数据）")
+        out.append("")
+        return
+    out.append(
+        "| 代码 | 名称 | 涨跌幅 | 成交额(亿) | 成交量(万手) | 上涨 | 下跌 | 资金净流入(亿) |"
+    )
+    out.append("|---|---|---|---|---|---|---|---|")
+    for entry in entries:
+        q = entry.quote
+        amount_yi = (q.amount / 1e8) if (q is not None and q.amount is not None) else None
+        net_inflow_yi = (q.net_inflow) if (q is not None and q.net_inflow is not None) else None
+        # net_inflow is already 亿元 from THS upstream; _md_num formats it.
+        volume_str = _md_num(q.volume, 0) if (q is not None and q.volume is not None) else "—"
+        up_str = _md_num(q.up_count, 0) if (q is not None and q.up_count is not None) else "—"
+        down_str = _md_num(q.down_count, 0) if (q is not None and q.down_count is not None) else "—"
+        out.append(
+            f"| {entry.code} | {entry.name or ''} | "
+            f"{_md_pct(q.change_pct if q is not None else None)} | "
+            f"{_md_num(amount_yi, 2)} | {volume_str} | {up_str} | {down_str} | "
+            f"{_md_num(net_inflow_yi, 2)} |"
+        )
+    out.append("")
+
+
 def _md_stats_block(title: str, stats, *, total_universe_label: str) -> list[str]:
-    """Render one stats block (个股 or 板块) to MD table rows."""
+    """Render one stats block (个股 or 板块) to MD table rows.
+
+    When ``stats`` is a ``BoardStats`` instance, also render the
+    top-3 gainers / top-3 losers after the buckets table (added
+    2026-09-09; spec §5.2). ``StockStats`` has no equivalent field —
+    those calls pass through unchanged.
+    """
     out: list[str] = [f"## {title}"]
     if stats is None:
         out.append("（失败 — 详见 errors）")
@@ -2204,6 +2348,12 @@ def _md_stats_block(title: str, stats, *, total_universe_label: str) -> list[str
     else:
         for b in stats.buckets:
             out.append(f"| {b.label} | 0 | — |")
+    # NEW (2026-09-09): boards block exposes top-3 movers (StockStats
+    # doesn't have these fields — guard with hasattr so the helper stays
+    # usable for both endpoints).
+    if hasattr(stats, "top_gainers"):
+        _md_top_movers(out, "涨幅前三", stats.top_gainers)
+        _md_top_movers(out, "跌幅前三", stats.top_losers)
     return out
 
 
