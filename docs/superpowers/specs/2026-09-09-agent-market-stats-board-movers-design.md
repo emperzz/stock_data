@@ -94,14 +94,16 @@ upstream call — the rows exist; we just don't surface them today.
           "limit_down": null,
           "up_count": 23,           // ✓ populated
           "down_count": 5,          // ✓ populated
-          "net_inflow": 4.5e8,      // ✓ populated
+          "net_inflow": 4.5,        // ✓ populated, 亿元 (pass-through, see §3.2)
           "rank": null
         }
       },
-      // ... up to 3
+      // ... up to 3, sorted by change_pct DESC
     ],
     "top_losers": [
-      // same shape; sorted by change_pct ASC
+      // same shape; sorted by change_pct ASC. NOT a sign-filter —
+      // losers is gainers re-sorted, so both mirror every eligible row.
+      // With 3 eligible rows + top_n=3, both lists have length 3.
     ]
   },
   "limit_pools": {...},
@@ -129,12 +131,18 @@ class BoardMoverEntry(BaseModel):
     type: str                                  # "concept" | "industry" | "index" | "special"
     subtype: str                               # e.g. "881" (industry prefix)
     source: str                                # "ths" — always "ths" today
+    platecode: str | None = None               # THS platecode (885xxx for concept; 881xxx for industry; same as `code` for industries)
     quote: MinimalQuote | None                 # see §2.1 fill semantics
 ```
 
 `BoardMoverEntry` is a new schema. It reuses the existing `MinimalQuote`
 defined at `schemas.py:1694` (shared across all three batch-profile
-endpoints — stock / index / board). **No new quote schema.**
+endpoints — stock / index / board). **No new quote schema.** `platecode`
+is preserved as `Optional[str]` because the upstream row dict carries it
+(per `fetch_boards_with_zzshare_backfill` docstring at
+`persistence/board.py:911`) and downstream consumers already expect to
+find it on board-shaped entries (matches
+`/api/v1/boards/{board_code}/stocks` precedent).
 
 ---
 
@@ -149,18 +157,29 @@ succeeds):
    (excludes `None` — same predicate already used at `agent.py:1547`
    for the aggregate stats, so the mover set is consistent with the
    `sample_size` count).
-2. `top_gainers` = rows sorted by `change_pct` **DESC** → take first 3.
-3. `top_losers` = rows sorted by `change_pct` **ASC** → take first 3.
+2. `top_gainers` = all eligible rows sorted by `change_pct` **DESC** →
+   take first `top_n` (default 3).
+3. `top_losers` = **same eligible set** sorted by `change_pct` **ASC** →
+   take first `top_n` (default 3).
 4. **Tie-breaker**: when `change_pct` ties, sort by `code` **ASC** so
    the result is deterministic across calls (no random ordering on a hot
    tie).
-5. If fewer than 3 rows qualify (e.g. market just opened, only 5 boards
-   have quotes yet), emit the available rows; do NOT pad with `None`
-   entries or with boards that have `change_pct=None`.
+5. If fewer than `top_n` rows qualify (e.g. market just opened, only 5
+   boards have quotes yet), emit the available rows; do NOT pad with
+   `None` entries or with boards that have `change_pct=None`.
 
-The two lists are **independent** — they may contain the same board if
-its `change_pct == 0.0`. With finite floats this is rare but the
-behavior is intentionally simple: no overlap-dedup.
+**Both lists mirror the same eligible set** — there is **no sign
+filter** (no `change_pct >= 0` for gainers, no `change_pct < 0` for
+losers). With `top_n=3` and N eligible rows, `len(top_gainers) ==
+len(top_losers) == min(top_n, N)`. If only 2 rows are eligible, both
+lists have length 2 (NOT 1 gainer + 1 loser); the 2 rows appear in
+both lists at different ranks. This is intentional: it keeps the
+algorithm trivial (pure sort) and lets the consumer decide which list
+to surface ("涨幅三甲" / "跌幅三甲"). A future iteration can add sign
+filters if a consumer explicitly asks.
+
+The two lists may contain the same board at different ranks if its
+`change_pct == 0.0` or a tie emerges at the boundary. No overlap-dedup.
 
 ### 3.2 Quote fill semantics
 
@@ -184,7 +203,7 @@ get_board_list row shape:
 | `amount` | `amount` | `× 1e8` (THS upstream 亿元 → 元) |
 | `up_count` | `up_count` | pass-through |
 | `down_count` | `down_count` | pass-through |
-| `net_inflow` | `net_inflow` | pass-through |
+| `net_inflow` | `net_inflow` | pass-through (THS upstream 亿元, see §3.2 note) |
 | `rank` | — | `None` |
 | 8 stock-only fields | — | `None` |
 
@@ -193,6 +212,16 @@ populates (the latter sees `get_board_realtime` rows which carry the
 missing 7 fields). The sparse fill is the documented behavior — same
 precedent as `/agent/boards/batch-profile`, which returns `MinimalQuote`
 with `None` for fields the upstream didn't return.
+
+**Unit convention** (carry-over from `_build_minimal_quote_from_board_dict`
+at `agent.py:1337`): `amount` upstream is 亿元, helper multiplies by
+`1e8` to surface 元 in the JSON wire format (consistent with the
+rest of the server's API surface — `/boards/{code}/quote` does the
+same conversion at `routes/boards.py:857`). `net_inflow` upstream is
+also 亿元 but is **not** multiplied — left as-is in 亿元 units so the
+field carries the upstream-native scale. Consumers who want 元 divide
+by `1e8`. MD projection formats net_inflow with the `(亿)` column
+header to make the unit explicit.
 
 ### 3.3 Boards block — partial / total upstream failure
 
@@ -419,14 +448,13 @@ Layout:
   table.
 - The full `BoardMoverEntry.quote` (23 `MinimalQuote` fields, sparse
   per §3.2) is surfaced in the JSON unchanged. The MD table projects
-  only the 7 most-relevant fields (code / name / change_pct / amount /
-  volume / up_count / down_count / net_inflow) — agents that need the
-  full 23-field quote read JSON. This is an intentional MD projection
-  choice, not a CLAUDE.md "no field dropped" violation, because the
-  contract is "MD omits Nothing the JSON carries"; here JSON still
-  carries every field (the MD just doesn't render them all in tabular
-  form). A future iteration can project the full quote per-row if the
-  consumer signals demand.
+  8 columns (code / name / change_pct / amount / volume / up_count /
+  down_count / net_inflow) — agents that need the full 23-field quote
+  read JSON. This is an intentional MD projection choice, not a CLAUDE.md
+  "no field dropped" violation, because the contract is "MD omits
+  Nothing the JSON carries"; here JSON still carries every field (the
+  MD just doesn't render them all in tabular form). A future iteration
+  can project the full quote per-row if the consumer signals demand.
 
 ### 5.3 CLAUDE.md
 
