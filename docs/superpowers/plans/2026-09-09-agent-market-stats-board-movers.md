@@ -142,7 +142,7 @@ def test_board_mover_entry_sparse_minimal_quote():
         amount=1.2e9,
         up_count=23,
         down_count=5,
-        net_inflow=4.5e8,
+        net_inflow=4.5,        # pass-through (亿元), NOT ×1e8
     )
     entry = BoardMoverEntry(
         code="881154",
@@ -150,6 +150,7 @@ def test_board_mover_entry_sparse_minimal_quote():
         type="industry",
         subtype="881",
         source="ths",
+        platecode="881154",
         quote=sparse_quote,
     )
     # populated fields
@@ -158,12 +159,22 @@ def test_board_mover_entry_sparse_minimal_quote():
     assert entry.quote.amount == 1.2e9
     assert entry.quote.up_count == 23
     assert entry.quote.down_count == 5
-    assert entry.quote.net_inflow == 4.5e8
+    assert entry.quote.net_inflow == 4.5            # pass-through (亿元)
+    # platecode round-trips
+    assert entry.platecode == "881154"
     # sparse fields
     assert entry.quote.price is None
     assert entry.quote.open is None
     assert entry.quote.rank is None
     assert entry.quote.pe_ratio is None  # stock-only
+
+
+def test_board_mover_entry_platecode_optional():
+    """platecode defaults to None (some upstream rows may not carry it)."""
+    entry = BoardMoverEntry(
+        code="881154", name="半导体", type="industry", subtype="881", source="ths",
+    )
+    assert entry.platecode is None
 ```
 
 - [ ] **Step 1.2: Run tests to verify they fail**
@@ -185,6 +196,13 @@ class BoardMoverEntry(BaseModel):
     / index / board batch-profile endpoints. Sparse fields stay None
     when upstream doesn't populate them (matches the precedent set by
     /agent/boards/batch-profile).
+
+    `platecode` is preserved as Optional[str] because the upstream row
+    dict carries it (per fetch_boards_with_zzshare_backfill at
+    persistence/board.py:911) and downstream consumers already expect
+    to find it on board-shaped entries (matches the
+    /api/v1/boards/{board_code}/stocks precedent). Concept boards may
+    have None (sidebar-only rows — see ths_fetcher.py:1784-1788).
     """
 
     code: str
@@ -192,6 +210,7 @@ class BoardMoverEntry(BaseModel):
     type: str
     subtype: str
     source: str
+    platecode: str | None = None
     quote: MinimalQuote | None = None
 ```
 
@@ -224,13 +243,13 @@ class BoardStats(BaseModel):
 - [ ] **Step 1.5: Run tests to verify they pass**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_agent_market_stats_schemas.py -v`
-Expected: PASS (4 new tests + all existing tests).
+Expected: PASS (5 new tests + all existing tests).
 
 - [ ] **Step 1.6: Commit**
 
 ```bash
 git add stock_data/api/schemas.py tests/test_agent_market_stats_schemas.py
-git commit -m "feat(schemas): add BoardMoverEntry + top_gainers/top_losers on BoardStats" -m "Adds the BoardMoverEntry shape and two new nested list fields on BoardStats. Purely additive; existing MarketStatsResponse consumers see extra JSON keys (Pydantic default is permissive)." -m "Co-Authored-By: Claude <noreply@anthropic.com>"
+git commit -m "feat(schemas): add BoardMoverEntry + top_gainers/top_losers on BoardStats" -m "Adds the BoardMoverEntry shape (incl. platecode Optional, matching persistence/board.py:911 precedent) and two new nested list fields on BoardStats. Purely additive; existing MarketStatsResponse consumers see extra JSON keys (Pydantic default is permissive)." -m "Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 ---
@@ -298,7 +317,13 @@ def test_build_minimal_quote_handles_missing_fields():
 
 
 def test_select_top_board_movers_sorts_correctly():
-    """Top 3 by change_pct DESC, bottom 3 by ASC."""
+    """Top 3 by change_pct DESC, bottom 3 by ASC.
+
+    Per spec §3.1 — BOTH lists mirror the same eligible set. With 6
+    eligible rows and top_n=3, both lists have length 3 (NOT a sign
+    filter that would yield 3 gainers + 3 losers from a pos/neg split).
+    This test pins that invariant.
+    """
     from stock_data.api.routes.agent import _select_top_board_movers
 
     rows = [
@@ -310,8 +335,12 @@ def test_select_top_board_movers_sorts_correctly():
         {"code": "BK0006", "name": "F", "type": "industry", "subtype": "881", "source": "ths", "change_pct": 2.0},
     ]
     gainers, losers = _select_top_board_movers(rows, top_n=3)
-    assert [g.code for g in gainers] == ["BK0002", "BK0004", "BK0006"]   # 5.0, 3.0, 2.0
-    assert [l.code for l in losers] == ["BK0005", "BK0003", "BK0001"]    # -5.0, -2.0, 1.0
+    assert len(gainers) == 3
+    assert len(losers) == 3
+    # gainers sorted DESC: BK0002 (5.0), BK0004 (3.0), BK0006 (2.0)
+    assert [g.code for g in gainers] == ["BK0002", "BK0004", "BK0006"]
+    # losers sorted ASC: BK0005 (-5.0), BK0003 (-2.0), BK0001 (1.0)
+    assert [l.code for l in losers] == ["BK0005", "BK0003", "BK0001"]
 
 
 def test_select_top_board_movers_excludes_none_change_pct():
@@ -346,7 +375,13 @@ def test_select_top_board_movers_tie_break_code_asc():
 
 
 def test_select_top_board_movers_fewer_than_three():
-    """When fewer than 3 rows qualify, emit only the available rows."""
+    """When fewer than 3 rows qualify, both lists mirror the available rows.
+
+    Per spec §3.1 — there is NO sign filter. With 2 eligible rows and
+    top_n=3, both lists have length 2 (NOT 1 gainer + 1 loser); the 2
+    rows appear in both lists at different ranks. This test pins that
+    invariant.
+    """
     from stock_data.api.routes.agent import _select_top_board_movers
 
     rows = [
@@ -354,10 +389,12 @@ def test_select_top_board_movers_fewer_than_three():
         {"code": "BK0002", "change_pct": -1.0},
     ]
     gainers, losers = _select_top_board_movers(rows, top_n=3)
-    assert len(gainers) == 1
-    assert len(losers) == 1
-    assert gainers[0].code == "BK0001"
-    assert losers[0].code == "BK0002"
+    assert len(gainers) == 2
+    assert len(losers) == 2
+    # gainers sorted DESC: BK0001 (+2.0), BK0002 (-1.0)
+    assert [g.code for g in gainers] == ["BK0001", "BK0002"]
+    # losers sorted ASC: BK0002 (-1.0), BK0001 (+2.0) — same set, reversed order
+    assert [l.code for l in losers] == ["BK0002", "BK0001"]
 
 
 def test_select_top_board_movers_empty_input():
@@ -394,7 +431,7 @@ Expected: FAIL — `ImportError: cannot import name '_build_minimal_quote_from_l
 
 In `stock_data/api/routes/agent.py`, add immediately after `_build_minimal_quote_from_board_dict` (which ends at line 1339). Also add the `BoardMoverEntry` import to the schema import block at line 72-108.
 
-Add to imports (line 72-108 area, alphabetical placement — find where `BatchFeatures, BoardProfile, BoardsBatchProfileRequest,` block starts; insert `BoardMoverEntry,` after `BoardProfile`):
+Add to imports (line 72-108 area, alphabetical placement — find where `BatchFeatures, BoardProfile, BoardsBatchProfileRequest,` block starts; insert `BoardMoverEntry,` **before** `BoardProfile` (alphabetical: M < P)):
 
 ```python
     BoardMoverEntry,
@@ -471,6 +508,7 @@ def _select_top_board_movers(
             type=r.get("type") or "",
             subtype=r.get("subtype") or "",
             source=r.get("source") or "ths",
+            platecode=r.get("platecode"),  # None for sidebar-only concept rows
             quote=_build_minimal_quote_from_list_row_dict(r),
         )
 
@@ -484,7 +522,7 @@ Expected: PASS (8 new tests).
 
 Also run the full schema test file to ensure imports didn't break anything:
 Run: `.venv/Scripts/python.exe -m pytest tests/test_agent_market_stats_schemas.py -v`
-Expected: PASS (4 new + existing).
+Expected: PASS (5 new + existing — added platecode optional test in Task 1).
 
 - [ ] **Step 2.5: Commit**
 
@@ -507,11 +545,69 @@ git commit -m "feat(agent): add pure helpers for board top movers" -m "Adds _bui
 
 - [ ] **Step 3.1: Write failing tests for boards block integration**
 
-Append to `tests/test_agent_market_stats.py`:
+**Before writing tests**, update the `_patch_manager` helper in
+`tests/test_agent_market_stats.py` (around line 69) to ALSO stub
+`get_zt_pool`, otherwise the `include_pools=True` (default) code path
+will hit an unstubbed MagicMock and the test will spuriously fail /
+inject a `zt_pool` errors[] entry that the new assertions don't check
+for. Existing tests rely on the route's try/except absorbing the
+failure (verified in `agent.py:683-705`); making the helper complete
+removes that brittleness for both old and new tests.
+
+Replace `_patch_manager`:
+
+```python
+def _patch_manager(monkeypatch, *, quotes):
+    """Patch the manager method the route uses.
+
+    NOTE: the route calls ``manager.get_realtime_quotes`` (stocks
+    block) AND ``manager.get_zt_pool`` (limit_pools block, when
+    ``include_pools=True`` — the default). The boards block goes
+    through ``stock_board_cache.get_board_list`` (see
+    ``_patch_board_cache``), so no ``get_all_boards`` stub is needed.
+    """
+    fake_manager = MagicMock()
+    fake_manager.get_realtime_quotes.return_value = (quotes, "akshare")
+    # zt/dt pools: default to empty pool (route treats this as success).
+    # Tuple shape matches manager.get_zt_pool: (pool, source, warning).
+    fake_manager.get_zt_pool.return_value = ([], "akshare", None)
+    monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
+    return fake_manager
+```
+
+**Verify all existing tests still pass** after this change:
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_agent_market_stats.py -v`
+Expected: PASS (no regression — the new `return_value` simply makes
+the helper more thorough).
+
+**Commit this helper update as its own commit** (so the new behavior is
+attributable, not lost in a feature commit):
+
+```bash
+git add tests/test_agent_market_stats.py
+git commit -m "test(agent): make _patch_manager stub get_zt_pool (default empty pool)
+
+The route's include_pools=True (default) calls manager.get_zt_pool.
+Previously the helper only stubbed get_realtime_quotes, so the zt/dt
+calls hit unstubbed MagicMock — the route's try/except in
+_compute_limit_pools_block (agent.py:683-705) absorbed the failure,
+which masked the brittleness. Stubbing the default makes every
+existing + future test more robust without changing observable
+behavior." -m "Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+Then append the new tests:
 
 ```python
 def test_boards_top_gainers_top_losers_in_response(client, monkeypatch):
-    """Happy path: top_gainers and top_losers appear on the boards block."""
+    """Happy path: top_gainers and top_losers appear on the boards block.
+
+    Per spec §3.1 — both lists mirror the same eligible set. With 3
+    eligible rows + top_n=3, BOTH lists have length 3 (NOT a sign
+    filter that would yield 3 gainers + 1 loser). This test pins that
+    invariant.
+    """
     boards_payload = (
         [
             {"code": "BK0001", "name": "A", "type": "industry", "subtype": "881",
@@ -533,12 +629,18 @@ def test_boards_top_gainers_top_losers_in_response(client, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()
     assert data["boards"] is not None
-    assert len(data["boards"]["top_gainers"]) == 2       # 2 boards with non-None pct
-    assert len(data["boards"]["top_losers"]) == 1
-    assert data["boards"]["top_gainers"][0]["code"] == "BK0001"
-    assert data["boards"]["top_gainers"][0]["quote"]["change_pct"] == 5.82
-    assert data["boards"]["top_gainers"][0]["quote"]["amount"] == 1.0 * 1e8
-    assert data["boards"]["top_losers"][0]["code"] == "BK0002"
+    assert len(data["boards"]["top_gainers"]) == 3       # mirrors all 3 eligible rows
+    assert len(data["boards"]["top_losers"]) == 3
+    # gainers sorted DESC: BK0001 (5.82), BK0003 (2.0), BK0002 (-3.0)
+    assert [g["code"] for g in data["boards"]["top_gainers"]] == ["BK0001", "BK0003", "BK0002"]
+    # losers sorted ASC: BK0002 (-3.0), BK0003 (2.0), BK0001 (5.82)
+    assert [l["code"] for l in data["boards"]["top_losers"]] == ["BK0002", "BK0003", "BK0001"]
+    # quote fields populated correctly
+    top1 = data["boards"]["top_gainers"][0]
+    assert top1["code"] == "BK0001"
+    assert top1["quote"]["change_pct"] == 5.82
+    assert top1["quote"]["amount"] == 1.0 * 1e8
+    assert top1["quote"]["net_inflow"] == 0.5           # ×1e8 conversion only applies to `amount`
 
 
 def test_boards_top_movers_absent_when_upstream_raises(client, monkeypatch):
@@ -711,7 +813,12 @@ Append to `tests/test_agent_market_stats.py`:
 
 ```python
 def test_market_stats_md_includes_top_movers_sections(client, monkeypatch):
-    """MD output contains ### 涨幅前三 + ### 跌幅前三 with data rows."""
+    """MD output contains ### 涨幅前三 + ### 跌幅前三 with data rows.
+
+    Pins the 8-column table contract per spec §5.2 — a regression that
+    emits 7 or 9 columns would silently pass the loose substring
+    checks, so we pin the exact header row + separator row.
+    """
     from stock_data.api.schemas import BoardMoverEntry, MinimalQuote
     boards_payload = (
         [
@@ -738,8 +845,17 @@ def test_market_stats_md_includes_top_movers_sections(client, monkeypatch):
     assert "BK0002" in md
     assert "煤炭" in md
     assert "-3.15%" in md
-    # 7+1 column header row present
-    assert "代码" in md and "名称" in md and "涨跌幅" in md
+    # 8-column contract pin: exact header + separator row.
+    # CLAUDE.md no-data-dropped invariant is enforced via the literal
+    # header string match (not just `"| 代码 |" in md` which would also
+    # match 7- or 9-column variants).
+    expected_header = "| 代码 | 名称 | 涨跌幅 | 成交额(亿) | 成交量(万手) | 上涨 | 下跌 | 资金净流入(亿) |"
+    expected_sep = "|---|---|---|---|---|---|---|---|"
+    assert expected_header in md
+    assert expected_sep in md
+    # net_inflow unit clarification: pass-through 亿元 (NOT ×1e8 to 元)
+    assert "4.50" in md                                     # upstream 4.5 → "4.50" via _md_num(2)
+    assert "-2.10" in md
 
 
 def test_market_stats_md_empty_movers_emits_explicit_marker(client, monkeypatch):
@@ -789,17 +905,21 @@ def _md_top_movers(out: list[str], title: str, entries: list[BoardMoverEntry]) -
     opposite of the truth when upstream returned 0 rows. Emit an
     explicit ``（无数据）`` marker instead.
 
-    Projects 7 columns per spec §5.2:
+    Projects 8 columns per spec §5.2:
         代码 / 名称 / 涨跌幅 / 成交额(亿) / 成交量(万手) / 上涨 / 下跌 / 资金净流入(亿)
     The full 23-field MinimalQuote is unchanged in JSON — agents that
     need it read JSON, not MD. This is an intentional projection, not a
-    data drop.
+    data drop. The 8-column header is pinned by
+    ``test_market_stats_md_includes_top_movers_sections`` to prevent
+    silent regressions where a column is added/removed.
 
     `amount_yi` divides the 元 value by 1e8 to surface 亿元 (matches the
     units THS upstream reports natively, easier to scan in a recap).
-    `net_inflow_yi` does the same. `volume` is already 万手 in the
-    THS upstream `get_board_list` payload — pass-through, just
-    formatted with thousands separator.
+    `net_inflow_yi` is pass-through (THS upstream 亿元; the helper does
+    NOT multiply by 1e8 — see spec §3.2 unit convention note; the
+    `(亿)` column header makes the unit explicit). `volume` is already
+    万手 in the THS upstream `get_board_list` payload — pass-through,
+    just formatted with thousands separator.
     """
     out.append(f"### {title}")
     if not entries:
@@ -1005,4 +1125,34 @@ All sections covered.
 - `top_gainers` / `top_losers` — used consistently across Task 1 (schema), 3 (assignment), 4 (MD access via `stats.top_gainers`)
 - `_md_top_movers(out, title, entries)` — defined Task 4 with that exact signature, called in Task 4 same shape. ✓
 
-**Self-review result**: plan is internally consistent and spec-complete. Proceeding.
+**4. Assertion tracing** (added after subagent review surfaced B1/B2):
+For each test in the plan, explicitly trace the assertion against the
+spec algorithm in §3.1 (no sign filter; mirror full eligible set):
+
+| Test | Assertion | Spec trace |
+|---|---|---|
+| `test_select_top_board_movers_sorts_correctly` | `len(gainers)==3, len(losers)==3` | 6 eligible rows × top_n=3 → both lists 3 entries (not sign-split). ✓ |
+| `test_select_top_board_movers_fewer_than_three` | `len(gainers)==2, len(losers)==2` | 2 eligible rows × top_n=3 → both lists 2 entries (the 2 rows appear in BOTH at different ranks). ✓ |
+| `test_select_top_board_movers_excludes_none_change_pct` | `{g.code for g in gainers} == {"BK0001", "BK0004"}` | 2 eligible rows → both lists contain {BK0001, BK0004}. ✓ |
+| `test_select_top_board_movers_tie_break_code_asc` | gainers codes == ["BK0001", "BK0003", "BK0005"] | tie on 2.0 → sort by code ASC. ✓ |
+| `test_select_top_board_movers_empty_input` | `([], [])` for `[]` and `None` | pure function; no exception. ✓ |
+| `test_select_top_board_movers_entry_carries_minimal_quote` | entry.quote is non-None, amount × 1e8 | pure conversion from row dict. ✓ |
+| `test_boards_top_gainers_top_losers_in_response` | `len(gainers)==3, len(losers)==3`, exact code order | 3 eligible rows × top_n=3 → both lists 3 entries at expected ranks. ✓ |
+| `test_boards_top_movers_absent_when_upstream_raises` | boards=None, no top_gainers key | boards failure path leaves boards None; field absent. ✓ |
+| `test_boards_top_movers_empty_when_upstream_returns_empty` | `top_gainers==[], top_losers==[]` | 0 eligible rows → both lists empty. ✓ |
+| `test_boards_top_movers_skipped_when_include_boards_false` | upstream not called | include_boards=False skips the whole block. ✓ |
+| `test_market_stats_md_includes_top_movers_sections` | exact 8-column header + separator pinned | spec §5.2 layout; CLAUDE.md no-data-dropped invariant. ✓ |
+| `test_market_stats_md_empty_movers_emits_explicit_marker` | `（无数据）` marker, NOT bare table skeleton | empty-list rule from `_render_dict_block` precedent. ✓ |
+| `test_market_stats_md_no_top_movers_when_include_boards_false` | no `### 涨幅前三` heading | include_boards=False skips. ✓ |
+| `test_board_stats_top_movers_default_empty_list` | `top_gainers==[]`, `top_losers==[]` | `default_factory=list` (Task 1 schema). ✓ |
+| `test_board_stats_top_movers_can_be_populated` | explicit lists accepted | schema field accepts `list[BoardMoverEntry]`. ✓ |
+| `test_board_mover_entry_quote_none_default` | `quote is None` | default `None` (Task 1). ✓ |
+| `test_board_mover_entry_sparse_minimal_quote` | 6 fields populated, 17 None | helper fills 6, rest None (spec §3.2). ✓ |
+| `test_board_mover_entry_platecode_optional` | `platecode is None` by default | Optional[str] = None (Task 1). ✓ |
+| `test_build_minimal_quote_from_list_row_dict_populates_six_fields` | amount × 1e8, net_inflow pass-through | helper field mapping (Task 2 / spec §3.2). ✓ |
+| `test_build_minimal_quote_handles_missing_fields` | all-None quote when row has no quote | helper handles missing keys. ✓ |
+
+All 20 tests traced. No future B1/B2-style drift.
+
+**Self-review result**: plan is internally consistent, spec-complete,
+and every test assertion is traced to its spec source. Proceeding.
