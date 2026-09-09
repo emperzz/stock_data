@@ -67,14 +67,19 @@ def _make_quote(code: str, change_pct, name: str = "—"):
 
 
 def _patch_manager(monkeypatch, *, quotes):
-    """Patch the manager method the stocks block uses.
+    """Patch the manager method the route uses.
 
-    NOTE: the route only calls ``manager.get_realtime_quotes`` here; the
-    boards block goes through ``stock_board_cache.get_board_list`` (see
+    NOTE: the route calls ``manager.get_realtime_quotes`` (stocks
+    block) AND ``manager.get_zt_pool`` (limit_pools block, when
+    ``include_pools=True`` — the default). The boards block goes
+    through ``stock_board_cache.get_board_list`` (see
     ``_patch_board_cache``), so no ``get_all_boards`` stub is needed.
     """
     fake_manager = MagicMock()
     fake_manager.get_realtime_quotes.return_value = (quotes, "akshare")
+    # zt/dt pools: default to empty pool (route treats this as success).
+    # Tuple shape matches manager.get_zt_pool: (pool, source, warning).
+    fake_manager.get_zt_pool.return_value = ([], "akshare", None)
     monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
     return fake_manager
 
