@@ -152,7 +152,7 @@ def test_board_mover_entry_sparse_minimal_quote():
         amount=1.2e9,
         up_count=23,
         down_count=5,
-        net_inflow=4.5,        # pass-through (亿元), NOT ×1e8
+        net_inflow=4.5,  # pass-through (亿元), NOT ×1e8
     )
     entry = BoardMoverEntry(
         code="881154",
@@ -169,7 +169,7 @@ def test_board_mover_entry_sparse_minimal_quote():
     assert entry.quote.amount == 1.2e9
     assert entry.quote.up_count == 23
     assert entry.quote.down_count == 5
-    assert entry.quote.net_inflow == 4.5            # pass-through (亿元)
+    assert entry.quote.net_inflow == 4.5  # pass-through (亿元)
     # platecode round-trips
     assert entry.platecode == "881154"
     # sparse fields
@@ -182,7 +182,11 @@ def test_board_mover_entry_sparse_minimal_quote():
 def test_board_mover_entry_platecode_optional():
     """platecode defaults to None (some upstream rows may not carry it)."""
     entry = BoardMoverEntry(
-        code="881154", name="半导体", type="industry", subtype="881", source="ths",
+        code="881154",
+        name="半导体",
+        type="industry",
+        subtype="881",
+        source="ths",
     )
     assert entry.platecode is None
 

@@ -610,8 +610,8 @@ def test_build_minimal_quote_from_list_row_dict_populates_six_fields():
         "name": "半导体",
         "change_pct": 5.82,
         "volume": 2345678,
-        "amount": 12.0,           # THS upstream in 亿元
-        "net_inflow": 4.5,        # upstream in 亿元
+        "amount": 12.0,  # THS upstream in 亿元
+        "net_inflow": 4.5,  # upstream in 亿元
         "up_count": 23,
         "down_count": 5,
     }
@@ -619,10 +619,10 @@ def test_build_minimal_quote_from_list_row_dict_populates_six_fields():
     assert quote.change_pct == 5.82
     assert quote.volume == 2345678
     assert quote.volume_unit == "wan_shou"
-    assert quote.amount == 12.0 * 1e8            # ×1e8 conversion
+    assert quote.amount == 12.0 * 1e8  # ×1e8 conversion
     assert quote.up_count == 23
     assert quote.down_count == 5
-    assert quote.net_inflow == 4.5               # pass-through (NOT ×1e8)
+    assert quote.net_inflow == 4.5  # pass-through (NOT ×1e8)
     # sparse fields stay None
     assert quote.price is None
     assert quote.open is None
@@ -656,12 +656,54 @@ def test_select_top_board_movers_sorts_correctly():
     from stock_data.api.routes.agent import _select_top_board_movers
 
     rows = [
-        {"code": "BK0001", "name": "A", "type": "industry", "subtype": "881", "source": "ths", "change_pct": 1.0},
-        {"code": "BK0002", "name": "B", "type": "industry", "subtype": "881", "source": "ths", "change_pct": 5.0},
-        {"code": "BK0003", "name": "C", "type": "industry", "subtype": "881", "source": "ths", "change_pct": -2.0},
-        {"code": "BK0004", "name": "D", "type": "industry", "subtype": "881", "source": "ths", "change_pct": 3.0},
-        {"code": "BK0005", "name": "E", "type": "industry", "subtype": "881", "source": "ths", "change_pct": -5.0},
-        {"code": "BK0006", "name": "F", "type": "industry", "subtype": "881", "source": "ths", "change_pct": 2.0},
+        {
+            "code": "BK0001",
+            "name": "A",
+            "type": "industry",
+            "subtype": "881",
+            "source": "ths",
+            "change_pct": 1.0,
+        },
+        {
+            "code": "BK0002",
+            "name": "B",
+            "type": "industry",
+            "subtype": "881",
+            "source": "ths",
+            "change_pct": 5.0,
+        },
+        {
+            "code": "BK0003",
+            "name": "C",
+            "type": "industry",
+            "subtype": "881",
+            "source": "ths",
+            "change_pct": -2.0,
+        },
+        {
+            "code": "BK0004",
+            "name": "D",
+            "type": "industry",
+            "subtype": "881",
+            "source": "ths",
+            "change_pct": 3.0,
+        },
+        {
+            "code": "BK0005",
+            "name": "E",
+            "type": "industry",
+            "subtype": "881",
+            "source": "ths",
+            "change_pct": -5.0,
+        },
+        {
+            "code": "BK0006",
+            "name": "F",
+            "type": "industry",
+            "subtype": "881",
+            "source": "ths",
+            "change_pct": 2.0,
+        },
     ]
     gainers, losers = _select_top_board_movers(rows, top_n=3)
     assert len(gainers) == 3
@@ -669,7 +711,7 @@ def test_select_top_board_movers_sorts_correctly():
     # gainers sorted DESC: BK0002 (5.0), BK0004 (3.0), BK0006 (2.0)
     assert [g.code for g in gainers] == ["BK0002", "BK0004", "BK0006"]
     # losers sorted ASC: BK0005 (-5.0), BK0003 (-2.0), BK0001 (1.0)
-    assert [l.code for l in losers] == ["BK0005", "BK0003", "BK0001"]
+    assert [loser.code for loser in losers] == ["BK0005", "BK0003", "BK0001"]
 
 
 def test_select_top_board_movers_excludes_none_change_pct():
@@ -679,14 +721,14 @@ def test_select_top_board_movers_excludes_none_change_pct():
     rows = [
         {"code": "BK0001", "change_pct": 2.0},
         {"code": "BK0002", "change_pct": None},
-        {"code": "BK0003", "change_pct": "—"},        # upstream sentinel
+        {"code": "BK0003", "change_pct": "—"},  # upstream sentinel
         {"code": "BK0004", "change_pct": 1.0},
-        {"code": "BK0005"},                          # missing key
+        {"code": "BK0005"},  # missing key
     ]
     gainers, losers = _select_top_board_movers(rows, top_n=3)
     codes = {g.code for g in gainers}
-    assert codes == {"BK0001", "BK0004"}            # only 2 valid rows
-    assert all(l.code in {"BK0001", "BK0004"} for l in losers)
+    assert codes == {"BK0001", "BK0004"}  # only 2 valid rows
+    assert all(loser.code in {"BK0001", "BK0004"} for loser in losers)
 
 
 def test_select_top_board_movers_tie_break_code_asc():
@@ -723,7 +765,7 @@ def test_select_top_board_movers_fewer_than_three():
     # gainers sorted DESC: BK0001 (+2.0), BK0002 (-1.0)
     assert [g.code for g in gainers] == ["BK0001", "BK0002"]
     # losers sorted ASC: BK0002 (-1.0), BK0001 (+2.0) — same set, reversed order
-    assert [l.code for l in losers] == ["BK0002", "BK0001"]
+    assert [loser.code for loser in losers] == ["BK0002", "BK0001"]
 
 
 def test_select_top_board_movers_empty_input():
@@ -738,9 +780,21 @@ def test_select_top_board_movers_entry_carries_minimal_quote():
     """Each BoardMoverEntry.quote is built via the quote helper."""
     from stock_data.api.routes.agent import _select_top_board_movers
 
-    rows = [{"code": "BK0001", "name": "半导体", "type": "industry", "subtype": "881",
-             "source": "ths", "change_pct": 5.82, "volume": 2345678, "amount": 12.0,
-             "up_count": 23, "down_count": 5, "net_inflow": 4.5}]
+    rows = [
+        {
+            "code": "BK0001",
+            "name": "半导体",
+            "type": "industry",
+            "subtype": "881",
+            "source": "ths",
+            "change_pct": 5.82,
+            "volume": 2345678,
+            "amount": 12.0,
+            "up_count": 23,
+            "down_count": 5,
+            "net_inflow": 4.5,
+        }
+    ]
     gainers, _ = _select_top_board_movers(rows, top_n=3)
     assert gainers[0].code == "BK0001"
     assert gainers[0].name == "半导体"
@@ -766,15 +820,45 @@ def test_boards_top_gainers_top_losers_in_response(client, monkeypatch):
     """
     boards_payload = (
         [
-            {"code": "BK0001", "name": "A", "type": "industry", "subtype": "881",
-             "source": "ths", "change_pct": 5.82, "volume": 100, "amount": 1.0,
-             "up_count": 10, "down_count": 2, "net_inflow": 0.5},
-            {"code": "BK0002", "name": "B", "type": "industry", "subtype": "881",
-             "source": "ths", "change_pct": -3.0, "volume": 50, "amount": 0.5,
-             "up_count": 2, "down_count": 8, "net_inflow": -0.3},
-            {"code": "BK0003", "name": "C", "type": "industry", "subtype": "881",
-             "source": "ths", "change_pct": 2.0, "volume": 80, "amount": 0.8,
-             "up_count": 8, "down_count": 4, "net_inflow": 0.2},
+            {
+                "code": "BK0001",
+                "name": "A",
+                "type": "industry",
+                "subtype": "881",
+                "source": "ths",
+                "change_pct": 5.82,
+                "volume": 100,
+                "amount": 1.0,
+                "up_count": 10,
+                "down_count": 2,
+                "net_inflow": 0.5,
+            },
+            {
+                "code": "BK0002",
+                "name": "B",
+                "type": "industry",
+                "subtype": "881",
+                "source": "ths",
+                "change_pct": -3.0,
+                "volume": 50,
+                "amount": 0.5,
+                "up_count": 2,
+                "down_count": 8,
+                "net_inflow": -0.3,
+            },
+            {
+                "code": "BK0003",
+                "name": "C",
+                "type": "industry",
+                "subtype": "881",
+                "source": "ths",
+                "change_pct": 2.0,
+                "volume": 80,
+                "amount": 0.8,
+                "up_count": 8,
+                "down_count": 4,
+                "net_inflow": 0.2,
+            },
         ],
         "ths",
     )
@@ -785,18 +869,18 @@ def test_boards_top_gainers_top_losers_in_response(client, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()
     assert data["boards"] is not None
-    assert len(data["boards"]["top_gainers"]) == 3       # mirrors all 3 eligible rows
+    assert len(data["boards"]["top_gainers"]) == 3  # mirrors all 3 eligible rows
     assert len(data["boards"]["top_losers"]) == 3
     # gainers sorted DESC: BK0001 (5.82), BK0003 (2.0), BK0002 (-3.0)
     assert [g["code"] for g in data["boards"]["top_gainers"]] == ["BK0001", "BK0003", "BK0002"]
     # losers sorted ASC: BK0002 (-3.0), BK0003 (2.0), BK0001 (5.82)
-    assert [l["code"] for l in data["boards"]["top_losers"]] == ["BK0002", "BK0003", "BK0001"]
+    assert [loser["code"] for loser in data["boards"]["top_losers"]] == ["BK0002", "BK0003", "BK0001"]
     # quote fields populated correctly
     top1 = data["boards"]["top_gainers"][0]
     assert top1["code"] == "BK0001"
     assert top1["quote"]["change_pct"] == 5.82
     assert top1["quote"]["amount"] == 1.0 * 1e8
-    assert top1["quote"]["net_inflow"] == 0.5           # ×1e8 conversion only applies to `amount`
+    assert top1["quote"]["net_inflow"] == 0.5  # ×1e8 conversion only applies to `amount`
 
 
 def test_boards_top_movers_absent_when_upstream_raises(client, monkeypatch):
@@ -810,7 +894,7 @@ def test_boards_top_movers_absent_when_upstream_raises(client, monkeypatch):
     assert resp.status_code == 200
     body_text = resp.text
     assert '"boards": null' in body_text or '"boards":null' in body_text
-    assert "top_gainers" not in body_text               # field absent because parent is absent
+    assert "top_gainers" not in body_text  # field absent because parent is absent
     assert any(e["block"] == "boards" for e in resp.json()["errors"])
 
 
@@ -825,7 +909,7 @@ def test_boards_top_movers_empty_when_upstream_returns_empty(client, monkeypatch
     assert data["boards"] is not None
     assert data["boards"]["top_gainers"] == []
     assert data["boards"]["top_losers"] == []
-    assert data["boards"]["sample_size"] == 0           # existing aggregate still works
+    assert data["boards"]["sample_size"] == 0  # existing aggregate still works
     assert not any(e["block"] == "boards" for e in data["errors"])  # empty != error
 
 
@@ -841,7 +925,7 @@ def test_boards_top_movers_skipped_when_include_boards_false(client, monkeypatch
     body_text = resp.text
     assert "top_gainers" not in body_text
     assert "top_losers" not in body_text
-    fake_cache.get_board_list.assert_not_called()       # upstream must be skipped
+    fake_cache.get_board_list.assert_not_called()  # upstream must be skipped
 
 
 # ============================================================================
@@ -856,15 +940,34 @@ def test_market_stats_md_includes_top_movers_sections(client, monkeypatch):
     emits 7 or 9 columns would silently pass the loose substring
     checks, so we pin the exact header row + separator row.
     """
-    from stock_data.api.schemas import BoardMoverEntry, MinimalQuote
     boards_payload = (
         [
-            {"code": "BK0001", "name": "半导体", "type": "industry", "subtype": "881",
-             "source": "ths", "change_pct": 5.82, "volume": 2345678, "amount": 12.0,
-             "up_count": 23, "down_count": 5, "net_inflow": 4.5},
-            {"code": "BK0002", "name": "煤炭", "type": "industry", "subtype": "881",
-             "source": "ths", "change_pct": -3.15, "volume": 1000000, "amount": 5.0,
-             "up_count": 2, "down_count": 18, "net_inflow": -2.1},
+            {
+                "code": "BK0001",
+                "name": "半导体",
+                "type": "industry",
+                "subtype": "881",
+                "source": "ths",
+                "change_pct": 5.82,
+                "volume": 2345678,
+                "amount": 12.0,
+                "up_count": 23,
+                "down_count": 5,
+                "net_inflow": 4.5,
+            },
+            {
+                "code": "BK0002",
+                "name": "煤炭",
+                "type": "industry",
+                "subtype": "881",
+                "source": "ths",
+                "change_pct": -3.15,
+                "volume": 1000000,
+                "amount": 5.0,
+                "up_count": 2,
+                "down_count": 18,
+                "net_inflow": -2.1,
+            },
         ],
         "ths",
     )
@@ -878,7 +981,7 @@ def test_market_stats_md_includes_top_movers_sections(client, monkeypatch):
     assert "### 跌幅前三" in md
     assert "BK0001" in md
     assert "半导体" in md
-    assert "+5.82%" in md                                  # signed pct
+    assert "+5.82%" in md  # signed pct
     assert "BK0002" in md
     assert "煤炭" in md
     assert "-3.15%" in md
@@ -886,12 +989,14 @@ def test_market_stats_md_includes_top_movers_sections(client, monkeypatch):
     # CLAUDE.md no-data-dropped invariant is enforced via the literal
     # header string match (not just `"| 代码 |" in md` which would also
     # match 7- or 9-column variants).
-    expected_header = "| 代码 | 名称 | 涨跌幅 | 成交额(亿) | 成交量(万手) | 上涨 | 下跌 | 资金净流入(亿) |"
+    expected_header = (
+        "| 代码 | 名称 | 涨跌幅 | 成交额(亿) | 成交量(万手) | 上涨 | 下跌 | 资金净流入(亿) |"
+    )
     expected_sep = "|---|---|---|---|---|---|---|---|"
     assert expected_header in md
     assert expected_sep in md
     # net_inflow unit clarification: pass-through 亿元 (NOT ×1e8 to 元)
-    assert "4.50" in md                                     # upstream 4.5 → "4.50" via _md_num(2)
+    assert "4.50" in md  # upstream 4.5 → "4.50" via _md_num(2)
     assert "-2.10" in md
 
 

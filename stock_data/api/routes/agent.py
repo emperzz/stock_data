@@ -1390,6 +1390,7 @@ def _select_top_board_movers(
     Pure function: no upstream calls, no side effects.
     Spec: docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.1
     """
+
     def _pct(r):
         v = r.get("change_pct")
         return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
@@ -2296,22 +2297,18 @@ def _md_top_movers(out: list[str], title: str, entries: list[BoardMoverEntry]) -
         out.append("（无数据）")
         out.append("")
         return
-    out.append("| 代码 | 名称 | 涨跌幅 | 成交额(亿) | 成交量(万手) | 上涨 | 下跌 | 资金净流入(亿) |")
+    out.append(
+        "| 代码 | 名称 | 涨跌幅 | 成交额(亿) | 成交量(万手) | 上涨 | 下跌 | 资金净流入(亿) |"
+    )
     out.append("|---|---|---|---|---|---|---|---|")
     for entry in entries:
         q = entry.quote
         amount_yi = (q.amount / 1e8) if (q is not None and q.amount is not None) else None
         net_inflow_yi = (q.net_inflow) if (q is not None and q.net_inflow is not None) else None
         # net_inflow is already 亿元 from THS upstream; _md_num formats it.
-        volume_str = (
-            _md_num(q.volume, 0) if (q is not None and q.volume is not None) else "—"
-        )
-        up_str = (
-            _md_num(q.up_count, 0) if (q is not None and q.up_count is not None) else "—"
-        )
-        down_str = (
-            _md_num(q.down_count, 0) if (q is not None and q.down_count is not None) else "—"
-        )
+        volume_str = _md_num(q.volume, 0) if (q is not None and q.volume is not None) else "—"
+        up_str = _md_num(q.up_count, 0) if (q is not None and q.up_count is not None) else "—"
+        down_str = _md_num(q.down_count, 0) if (q is not None and q.down_count is not None) else "—"
         out.append(
             f"| {entry.code} | {entry.name or ''} | "
             f"{_md_pct(q.change_pct if q is not None else None)} | "
