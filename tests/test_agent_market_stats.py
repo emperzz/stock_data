@@ -749,3 +749,96 @@ def test_select_top_board_movers_entry_carries_minimal_quote():
     assert gainers[0].quote is not None
     assert gainers[0].quote.change_pct == 5.82
     assert gainers[0].quote.amount == 12.0 * 1e8
+
+
+# ============================================================================
+# 2026-09-09: boards block integration tests for top_gainers / top_losers
+# ============================================================================
+
+
+def test_boards_top_gainers_top_losers_in_response(client, monkeypatch):
+    """Happy path: top_gainers and top_losers appear on the boards block.
+
+    Per spec §3.1 — both lists mirror the same eligible set. With 3
+    eligible rows + top_n=3, BOTH lists have length 3 (NOT a sign
+    filter that would yield 3 gainers + 1 loser). This test pins that
+    invariant.
+    """
+    boards_payload = (
+        [
+            {"code": "BK0001", "name": "A", "type": "industry", "subtype": "881",
+             "source": "ths", "change_pct": 5.82, "volume": 100, "amount": 1.0,
+             "up_count": 10, "down_count": 2, "net_inflow": 0.5},
+            {"code": "BK0002", "name": "B", "type": "industry", "subtype": "881",
+             "source": "ths", "change_pct": -3.0, "volume": 50, "amount": 0.5,
+             "up_count": 2, "down_count": 8, "net_inflow": -0.3},
+            {"code": "BK0003", "name": "C", "type": "industry", "subtype": "881",
+             "source": "ths", "change_pct": 2.0, "volume": 80, "amount": 0.8,
+             "up_count": 8, "down_count": 4, "net_inflow": 0.2},
+        ],
+        "ths",
+    )
+    _patch_manager(monkeypatch, quotes=[_make_quote("600519", 1.0)])
+    _patch_board_cache(monkeypatch, all_boards_payload=boards_payload)
+
+    resp = client.get("/api/v1/agent/market-stats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["boards"] is not None
+    assert len(data["boards"]["top_gainers"]) == 3       # mirrors all 3 eligible rows
+    assert len(data["boards"]["top_losers"]) == 3
+    # gainers sorted DESC: BK0001 (5.82), BK0003 (2.0), BK0002 (-3.0)
+    assert [g["code"] for g in data["boards"]["top_gainers"]] == ["BK0001", "BK0003", "BK0002"]
+    # losers sorted ASC: BK0002 (-3.0), BK0003 (2.0), BK0001 (5.82)
+    assert [l["code"] for l in data["boards"]["top_losers"]] == ["BK0002", "BK0003", "BK0001"]
+    # quote fields populated correctly
+    top1 = data["boards"]["top_gainers"][0]
+    assert top1["code"] == "BK0001"
+    assert top1["quote"]["change_pct"] == 5.82
+    assert top1["quote"]["amount"] == 1.0 * 1e8
+    assert top1["quote"]["net_inflow"] == 0.5           # ×1e8 conversion only applies to `amount`
+
+
+def test_boards_top_movers_absent_when_upstream_raises(client, monkeypatch):
+    """Boards block fails → boards=None → top_gainers field absent in JSON."""
+    _patch_manager(monkeypatch, quotes=[_make_quote("600519", 1.0)])
+    fake_cache = MagicMock()
+    fake_cache.get_board_list.side_effect = DataFetchError("ths down")
+    monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
+
+    resp = client.get("/api/v1/agent/market-stats")
+    assert resp.status_code == 200
+    body_text = resp.text
+    assert '"boards": null' in body_text or '"boards":null' in body_text
+    assert "top_gainers" not in body_text               # field absent because parent is absent
+    assert any(e["block"] == "boards" for e in resp.json()["errors"])
+
+
+def test_boards_top_movers_empty_when_upstream_returns_empty(client, monkeypatch):
+    """Boards upstream returns [] → boards block present but top_* empty."""
+    _patch_manager(monkeypatch, quotes=[_make_quote("600519", 1.0)])
+    _patch_board_cache(monkeypatch, all_boards_payload=([], "ths"))
+
+    resp = client.get("/api/v1/agent/market-stats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["boards"] is not None
+    assert data["boards"]["top_gainers"] == []
+    assert data["boards"]["top_losers"] == []
+    assert data["boards"]["sample_size"] == 0           # existing aggregate still works
+    assert not any(e["block"] == "boards" for e in data["errors"])  # empty != error
+
+
+def test_boards_top_movers_skipped_when_include_boards_false(client, monkeypatch):
+    """include_boards=False → no boards block, no top_movers, no upstream call."""
+    _patch_manager(monkeypatch, quotes=[_make_quote("600519", 1.0)])
+    fake_cache = MagicMock()
+    fake_cache.get_board_list.return_value = ([], "ths")
+    monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
+
+    resp = client.get("/api/v1/agent/market-stats?include_boards=false")
+    assert resp.status_code == 200
+    body_text = resp.text
+    assert "top_gainers" not in body_text
+    assert "top_losers" not in body_text
+    fake_cache.get_board_list.assert_not_called()       # upstream must be skipped

@@ -1632,6 +1632,14 @@ def build_market_stats_response(
                 buckets_template=build_board_buckets(),
             )
             boards_stats = _board_stats_from_aggregate(agg, src or "ths")
+            # NEW (2026-09-09): top-3 gainers + top-3 losers derived from
+            # the same upstream rows. Pure in-memory sort; no extra
+            # upstream call, no cache-key change. Defaults to [] when
+            # upstream returns 0 rows with non-None change_pct.
+            # Spec: docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.1
+            top_gainers, top_losers = _select_top_board_movers(boards, top_n=3)
+            boards_stats.top_gainers = top_gainers
+            boards_stats.top_losers = top_losers
             ok += 1
         except Exception as exc:
             logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
