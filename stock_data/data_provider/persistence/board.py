@@ -883,6 +883,33 @@ def _merge_ths_zzshare_by_name(
     return out
 
 
+def _normalize_zzshare_list_quote_units(rows: list[dict]) -> None:
+    """Convert ZZSHARE ``plates_rank`` monetary fields to THS board-list semantics (in place).
+
+    ZZSHARE's ``plates_rank`` emits ``trade_money`` → ``amount`` and
+    ``market_cap_cir`` → ``total_mv`` as raw **元** (verified live
+    2026-09-09: 有色冶炼加工 amount = 1.03e11). The THS industry-rank rows
+    merged against it emit ``amount`` in **亿元** (半导体 = 1738.4). Left
+    unnormalized, a single ``get_board_list(source='ths')`` response mixes
+    two 1e8-apart scales, making ``amount`` non-comparable across rows (and
+    every downstream ×1e8 conversion double-blows the ZZSHARE rows).
+
+    Canonical merged-row unit (documented contract): ``amount`` 亿元.
+    ``total_mv`` has no THS counterpart column in the merged list, so it
+    keeps its native 元 value (a per-row market cap, not comparable to any
+    other row's ``amount``). ``change_pct`` is unit-free on both sources.
+
+    No-op when the rows carry no quote fields (``include_quote=False``
+    rows are bare ``{code, name, type, subtype}``), and when zzshare maps a
+    non-numeric value to ``None`` via ``safe_float``.
+    """
+
+    for r in rows:
+        amt = r.get("amount")
+        if isinstance(amt, (int, float)) and not isinstance(amt, bool):
+            r["amount"] = amt / 1e8  # 元 → 亿元
+
+
 def fetch_boards_with_zzshare_backfill(
     board_type: str | None,
     refresh: bool,
@@ -902,7 +929,9 @@ def fetch_boards_with_zzshare_backfill(
     - When include_quote=True, the include_quote flag is forwarded to both
       ThsFetcher and ZzshareFetcher; zzshare's quote fields are sparse
       (only change_pct/amount/total_mv) so post-merge rows may have None
-      for fields THS doesn't supply either.
+      for fields THS doesn't supply either. zzshare's ``amount`` (raw 元)
+      is normalized to 亿元 before merge so every merged row shares the
+      THS board-list amount scale (see _normalize_zzshare_list_quote_units).
     - ``refresh`` is accepted for call-site symmetry with the surrounding
       ``get_board_list`` wrapper (which decides cache vs. fresh fetch);
       this helper always fetches fresh data and ignores the value.
@@ -960,6 +989,11 @@ def fetch_boards_with_zzshare_backfill(
                 f"zzshare({bt}) failed (best-effort): {e}"
             )
             zz_rows = []
+
+        # ZZSHARE plates_rank quotes are 元-native; THS list quotes are
+        # 亿元-native. Normalize before merge so every merged row shares
+        # one amount scale (see _normalize_zzshare_list_quote_units).
+        _normalize_zzshare_list_quote_units(zz_rows)
 
         merged = _merge_ths_zzshare_by_name(ths_rows, zz_rows)
         # Subtype filter is applied per-type post-merge (in-memory).

@@ -579,6 +579,17 @@ GET /api/v1/boards/881270/history?source=ths&frequency=1m&board_type=industry
 + ZzshareFetcher platecode backfill but the public surface tags both
 as `source="ths"`.
 
+> **`source=ths` quote unit (post-2026-09-09):** the THS/ZZSHARE merge
+> used to mix two 1e8-apart `amount` scales — THS industry-rank rows
+> reported 亿元 while zzshare-appended rows reported raw 元. Merged rows
+> are now normalized to the **THS board-list semantics** (amount 亿元,
+> volume 万手, net_inflow 亿元) at `persistence/board.py`
+> (`_normalize_zzshare_list_quote_units` ÷1e8), so every row in one
+> `?source=ths` response is comparable. Note this differs per-source:
+> `eastmoney`/`zhitu` list rows keep their own native units (e.g. the
+> eastmoney example below is 元), and the quote endpoints' `amount`
+> (`/boards/{code}/quote`, batch-profile) remains 元.
+
 **Response (with `include_quote=true`):**
 ```json
 {
@@ -2611,11 +2622,19 @@ pools — in one call" without an N+1 fetch + client-side bucket loop.
 
 **Post-2026-09-09**, the `boards` block also surfaces
 `top_gainers` / `top_losers` — each a list of up to 3 `BoardMoverEntry`
-rows (with `MinimalQuote` quote) sorted by `change_pct` DESC/ASC.
-These are computed in-memory from the same THS board list the
-aggregate stats already consume; no extra upstream call. Use case:
-"which boards drove today's move" without a separate
-`/boards/{code}/quote` fan-out.
+rows sorted by `change_pct` DESC/ASC. These are computed in-memory
+from the same THS board list the aggregate stats already consume; no
+extra upstream call. Use case: "which boards drove today's move"
+without a separate `/boards/{code}/quote` fan-out.
+
+**2026-09-09 (amended):** `BoardMoverEntry` is **flattened** — the
+nested 23-field `MinimalQuote` (and the `subtype` / `source` /
+`platecode` identity fields) were dropped. Each entry is now
+`code` / `name` / `type` plus the quote fields flat. Unit semantics =
+the **THS board-list surface** (amount 亿元 / volume 万手 / net_inflow
+亿元) — **not** the quote endpoints' 元 convention (see the field
+inventory below). Sparse board types still leave fields `null`
+(concept movers typically carry only `change_pct` + `net_inflow`).
 
 ```bash
 GET /api/v1/agent/market-stats
@@ -2684,16 +2703,14 @@ GET /api/v1/agent/market-stats?format=md
       {"label":"(+3%, +∞)",  "lower": 3.0, "upper":null, "count":  6}
     ],
     "top_gainers": [
-      {"code": "881154", "name": "半导体", "type": "industry", "subtype": "881",
-       "source": "ths", "platecode": "881154",
-       "quote": {"change_pct": 5.40, "volume": 2345678, "volume_unit": "wan_shou",
-                 "amount": 1.2e9, "up_count": 23, "down_count": 5, "net_inflow": 4.5}}
+      {"code": "881154", "name": "半导体", "type": "industry",
+       "change_pct": 5.40, "amount": 12.0, "volume": 2345678,
+       "up_count": 23, "down_count": 5, "net_inflow": 4.5}
     ],
     "top_losers": [
-      {"code": "881127", "name": "煤炭", "type": "industry", "subtype": "881",
-       "source": "ths", "platecode": "881127",
-       "quote": {"change_pct": -3.20, "volume": 1000000, "volume_unit": "wan_shou",
-                 "amount": 5.0e8, "up_count": 2, "down_count": 18, "net_inflow": -2.1}}
+      {"code": "881127", "name": "煤炭", "type": "industry",
+       "change_pct": -3.20, "amount": 5.0, "volume": 1000000,
+       "up_count": 2, "down_count": 18, "net_inflow": -2.1}
     ]
   },
   "limit_pools": {
@@ -2762,49 +2779,41 @@ caller can rely on across all upstream fetchers:
 #### `BoardMoverEntry` field inventory
 
 Each item in `boards.top_gainers[]` / `boards.top_losers[]` follows
-the `BoardMoverEntry` schema (`stock_data/api/schemas.py`). This is
-the same shape `BatchProfile` uses to identify a board plus a quote
-block; fields are sparse (most `quote` fields stay `null` because
-`stock_board_cache.get_board_list(source="ths", include_quote=True)`
-returns only 6 of the 23 quote fields).
+the `BoardMoverEntry` schema (`stock_data/api/schemas.py`).
+**Post-2026-09-09 amendment: flattened** — the quote fields sit
+directly on the entry (no nested `MinimalQuote`, and the `subtype` /
+`source` / `platecode` identity fields were dropped). Each field maps
+1:1 from a `stock_board_cache.get_board_list(source="ths",
+include_quote=True)` row.
 
-| Field | Type | Description |
-|---|---|---|
-| `code` | string | Bare code / THS platecode (e.g. `881154` for industry, `BK0xxx` for concept). |
-| `name` | string | Board name (Chinese). |
-| `type` | string | `"concept"` / `"industry"` / `"index"` / `"special"`. |
-| `subtype` | string | Source-specific subtype (e.g. `"881"` for industry prefix). |
-| `source` | string | `"ths"` — the upstream served the row. |
-| `platecode` | string \| null | THS platecode (885xxx for concept; same as `code` for industry). `null` for sidebar-only concept rows where the upstream didn't supply one (see `ths_fetcher.py:1784-1788`). |
-| `quote` | object \| null | `MinimalQuote` (shared with stock / index / board `BatchProfile`). **Sparse** — only 6 fields populated; see quote-fill table below. |
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `code` | string | | Board code (THS platecode; e.g. `881154` industry, `885642` / `801xxx` concept). |
+| `name` | string | | Board name (Chinese). |
+| `type` | string | | `"concept"` / `"industry"` (always `"ths"`-sourced rows). |
+| `change_pct` | float \| null | % | Day change. Always non-null on emitted entries (it is the sort key). |
+| `amount` | float \| null | 亿元 | Board turnover. **THS board-list native units** — NOT the quote endpoints' 元 convention. zzshare-appended rows are ÷1e8 at the persistence merge (`persistence/board.py::_normalize_zzshare_list_quote_units`) so all rows in a response share one scale. |
+| `volume` | int \| null | 万手 | Board volume. THS industry-rank rows only. |
+| `up_count` / `down_count` | int \| null | | Rising / falling member counts. THS industry-rank rows only. |
+| `net_inflow` | float \| null | 亿元 | Net capital inflow (pass-through, NOT ×1e8). |
 
-##### Quote fill semantics (board movers only)
+**Sparseness by row origin** — fields are `null` (not absent) when the
+upstream didn't supply them:
 
-`stock_board_cache.get_board_list(source="ths", include_quote=True)`
-returns a richer row than the bare list (it includes 10 quote-ish
-columns), but a strict subset of what `get_board_realtime` returns.
-The helper `_build_minimal_quote_from_list_row_dict`
-(`stock_data/api/routes/agent.py`) maps those rows into
-`MinimalQuote` and leaves the rest `null`. Same precedent as
-`/agent/boards/batch-profile`, which also returns `MinimalQuote`
-sparse when upstream is sparse.
+| Row origin | `change_pct` | `amount` | `volume` | `up_count`/`down_count` | `net_inflow` |
+|---|---|---|---|---|---|
+| THS concept (gnSection) | ✓ | — | — | — | ✓ |
+| THS industry (rank table) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| zzshare-appended (board THS pages miss) | ✓ | ✓ | — | — | — |
 
-| `MinimalQuote` field | Source | Conversion |
-|---|---|---|
-| `change_pct` | upstream `change_pct` | pass-through |
-| `volume` | upstream `volume` | pass-through (THS 万手) |
-| `volume_unit` | const | `"wan_shou"` (board convention) |
-| `amount` | upstream `amount` | × 1e8 (THS upstream 亿元 → 元), |
-| `up_count` | upstream `up_count` | pass-through |
-| `down_count` | upstream `down_count` | pass-through |
-| `net_inflow` | upstream `net_inflow` | pass-through (THS upstream 亿元, **not** ×1e8 — see unit note) |
-| (other 16 MinimalQuote fields) | — | `null` |
+So concept movers — which dominate most days' top lists — typically
+carry only `change_pct` + `net_inflow`; `amount` / `volume` /
+`up_count` / `down_count` are `null` for them. This is an upstream
+constraint, not a projection.
 
-**Unit convention**: `amount` is converted to 元 to match the rest of
-the server's API surface (same conversion as `/boards/{code}/quote` at
-`routes/boards.py:857`). `net_inflow` is left as 亿元 (the upstream's
-native scale); consumers who want 元 divide by `1e8`. The MD
-projection's `资金净流入(亿)` column header makes the unit explicit.
+The MD projection renders the same fields in an 8-column table
+(`成交额(亿)` / `成交量(万手)` / `资金净流入(亿)` headers make the
+亿元/万手 units explicit; no division — the JSON already carries 亿元).
 
 **Algorithm** (top movers selection):
 

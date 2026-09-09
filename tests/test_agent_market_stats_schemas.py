@@ -6,7 +6,6 @@ from stock_data.api.schemas import (
     DistributionBucket,
     MarketStatsErrorEntry,
     MarketStatsResponse,
-    MinimalQuote,
     StockStats,
 )
 
@@ -108,9 +107,12 @@ def test_board_stats_top_movers_can_be_populated():
         code="881154",
         name="半导体",
         type="industry",
-        subtype="881",
-        source="ths",
-        quote=MinimalQuote(change_pct=5.82),
+        change_pct=5.82,
+        amount=1738.4,  # 亿元 (board-list native units)
+        volume=2282,  # 万手
+        up_count=56,
+        down_count=128,
+        net_inflow=-123.99,  # 亿元 (pass-through)
     )
     bs = BoardStats(
         sample_size=383,
@@ -127,68 +129,51 @@ def test_board_stats_top_movers_can_be_populated():
     )
     assert len(bs.top_gainers) == 1
     assert bs.top_gainers[0].code == "881154"
-    assert bs.top_gainers[0].quote.change_pct == 5.82
+    assert bs.top_gainers[0].change_pct == 5.82
 
 
-def test_board_mover_entry_quote_none_default():
-    """BoardMoverEntry.quote defaults to None (not required)."""
+def test_board_mover_entry_is_flat():
+    """BoardMoverEntry is flattened — identity + 6 quote fields, no nesting.
+
+    Post-2026-09-09 amendment: the nested 23-field MinimalQuote (and the
+    subtype/source/platecode identity fields) were dropped. Each field
+    maps 1:1 from a get_board_list row; sparse board types leave the
+    unpopulated numeric fields None.
+    """
     entry = BoardMoverEntry(
         code="881154",
         name="半导体",
         type="industry",
-        subtype="881",
-        source="ths",
-    )
-    assert entry.quote is None
-
-
-def test_board_mover_entry_sparse_minimal_quote():
-    """A quote built from a sparse get_board_list row has most fields None."""
-    # Mimic what the upstream returns in practice — only 6 fields populated
-    sparse_quote = MinimalQuote(
         change_pct=5.82,
-        volume=2345678,
-        volume_unit="wan_shou",
-        amount=1.2e9,
-        up_count=23,
-        down_count=5,
-        net_inflow=4.5,  # pass-through (亿元), NOT ×1e8
+        amount=1738.4,
+        volume=2282,
+        up_count=56,
+        down_count=128,
+        net_inflow=-123.99,
     )
-    entry = BoardMoverEntry(
-        code="881154",
-        name="半导体",
-        type="industry",
-        subtype="881",
-        source="ths",
-        platecode="881154",
-        quote=sparse_quote,
-    )
-    # populated fields
-    assert entry.quote.change_pct == 5.82
-    assert entry.quote.volume == 2345678
-    assert entry.quote.amount == 1.2e9
-    assert entry.quote.up_count == 23
-    assert entry.quote.down_count == 5
-    assert entry.quote.net_inflow == 4.5  # pass-through (亿元)
-    # platecode round-trips
-    assert entry.platecode == "881154"
-    # sparse fields
-    assert entry.quote.price is None
-    assert entry.quote.open is None
-    assert entry.quote.rank is None
-    assert entry.quote.pe_ratio is None  # stock-only
+    # numeric fields flat on the entry
+    assert entry.change_pct == 5.82
+    assert entry.amount == 1738.4  # 亿元, NOT ×1e8
+    assert entry.volume == 2282  # 万手
+    assert entry.up_count == 56
+    assert entry.down_count == 128
+    assert entry.net_inflow == -123.99  # 亿元 (pass-through)
+    # no nested quote / removed identity fields
+    assert not hasattr(entry, "quote")
+    assert not hasattr(entry, "subtype")
+    assert not hasattr(entry, "source")
+    assert not hasattr(entry, "platecode")
 
 
-def test_board_mover_entry_platecode_optional():
-    """platecode defaults to None (some upstream rows may not carry it)."""
-    entry = BoardMoverEntry(
-        code="881154",
-        name="半导体",
-        type="industry",
-        subtype="881",
-        source="ths",
-    )
-    assert entry.platecode is None
+def test_board_mover_entry_optional_fields_default_none():
+    """All numeric fields optional — sparse concept rows carry only change_pct."""
+    entry = BoardMoverEntry(code="308774", name="培育钻石", type="concept")
+    assert entry.change_pct is None
+    assert entry.amount is None
+    assert entry.volume is None
+    assert entry.up_count is None
+    assert entry.down_count is None
+    assert entry.net_inflow is None
 
 
 # ----- Post-2026-09-02: pools block (NEW) -----

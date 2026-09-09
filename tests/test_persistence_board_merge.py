@@ -355,6 +355,86 @@ class TestFetchBoardsWithZzshareBackfill:
         # 5. All rows tagged source='ths'
         assert all(r["source"] == "ths" for r in out)
 
+    def test_include_quote_normalizes_zzshare_amount_to_yi(self):
+        """ZZSHARE plates_rank amount (raw 元) → 亿元 when include_quote=True.
+
+        Merged source='ths' rows must share ONE amount scale. THS industry
+        rows emit 亿元 (半导体 = 1738.4); ZZSHARE-appended rows emit raw 元
+        (有色冶炼加工 = 1.03e11). Regression: pre-fix the two 1e8-apart
+        scales coexisted in one /boards response. ``total_mv`` (zzshare-only,
+        no THS counterpart column) keeps its native 元 value.
+        """
+        from unittest.mock import MagicMock
+
+        ths_rows = [
+            {
+                "code": "881121",
+                "name": "半导体",
+                "platecode": "881121",
+                "type": "industry",
+                "subtype": "881",
+                "source": "ths",
+                "change_pct": 3.5,
+                "amount": 1738.4,  # THS native 亿元
+                "volume": 2282,
+            }
+        ]
+        zz_rows = [
+            {
+                "code": "881113",
+                "name": "有色冶炼加工",  # zzshare-only (no THS match)
+                "type": "industry",
+                "subtype": "881",
+                "source": "zzshare",
+                "change_pct": 1.59,
+                "amount": 103171000000.0,  # plates_rank trade_money, raw 元
+                "total_mv": 4121080000000.0,  # market_cap_cir, raw 元
+            }
+        ]
+        mgr = MagicMock()
+        mgr.get_all_boards.side_effect = [(ths_rows, "ths"), (zz_rows, "zzshare")]
+
+        out = board_mod.fetch_boards_with_zzshare_backfill(
+            board_type="industry",
+            refresh=True,
+            include_quote=True,
+            subtype=None,
+            manager=mgr,
+        )
+        by_code = {r["code"]: r for r in out}
+        # zzshare-appended row amount normalized 元 → 亿元
+        assert by_code["881113"]["amount"] == pytest.approx(1031.71)
+        # total_mv keeps native 元 (no THS counterpart to unify against)
+        assert by_code["881113"]["total_mv"] == pytest.approx(4121080000000.0)
+        # THS row amount untouched (already 亿元)
+        assert by_code["881121"]["amount"] == pytest.approx(1738.4)
+
+    def test_include_quote_amount_normalization_only_affects_quotes(self):
+        """include_quote=False rows (bare metadata) are untouched by the normalizer."""
+        from unittest.mock import MagicMock
+
+        zz_rows = [
+            {
+                "code": "885888",
+                "name": "独此一家",
+                "type": "concept",
+                "subtype": "同花顺概念",
+                "source": "zzshare",
+            }
+        ]
+        mgr = MagicMock()
+        mgr.get_all_boards.side_effect = [([], "ths"), (zz_rows, "zzshare")]
+
+        out = board_mod.fetch_boards_with_zzshare_backfill(
+            board_type="concept",
+            refresh=True,
+            include_quote=False,
+            subtype=None,
+            manager=mgr,
+        )
+        assert len(out) == 1
+        assert out[0].get("amount") is None  # never set for include_quote=False
+
     def test_zzshare_failure_does_not_break(self):
         """ZZSHARE upstream fails → still return THS rows + WARNING log."""
         from unittest.mock import MagicMock

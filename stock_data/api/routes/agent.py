@@ -1340,38 +1340,6 @@ def _build_minimal_quote_from_board_dict(q: dict) -> MinimalQuote:
     )
 
 
-def _build_minimal_quote_from_list_row_dict(row: dict) -> MinimalQuote:
-    """Map a ``stock_board_cache.get_board_list`` row to ``MinimalQuote``.
-
-    The ``get_board_list`` row shape (with ``include_quote=True``) is
-    sparser than ``get_board_realtime``'s — only 6 of the board-relevant
-    ``MinimalQuote`` fields have upstream values: ``change_pct`` /
-    ``volume`` / ``amount`` / ``net_inflow`` / ``up_count`` /
-    ``down_count``. The other 7 board-relevant fields (``price`` /
-    ``change_amount`` / ``OHLC`` / ``prev_close`` / ``rank``) and the 8
-    stock-only fields stay ``None``. This matches the
-    ``/agent/boards/batch-profile`` precedent where "field present in
-    schema, ``None`` upstream" is the documented contract.
-
-    ``amount`` is multiplied by ``1e8`` to convert THS upstream 亿元 →
-    元, matching the conversion already applied at
-    ``routes/boards.py:857`` and inside ``_build_minimal_quote_from_board_dict``
-    for the realtime path. ``net_inflow`` stays as-is (board upstream
-    is already 亿元; consumers divide by ``1e8`` if they want 元).
-    Spec: docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.2
-    """
-    raw_amount = row.get("amount")
-    return MinimalQuote(
-        change_pct=row.get("change_pct"),
-        volume=row.get("volume"),
-        volume_unit="wan_shou",
-        amount=(raw_amount * 1e8) if raw_amount is not None else None,
-        up_count=row.get("up_count"),
-        down_count=row.get("down_count"),
-        net_inflow=row.get("net_inflow"),
-    )
-
-
 def _select_top_board_movers(
     rows: list[dict] | None, *, top_n: int = 3
 ) -> tuple[list[BoardMoverEntry], list[BoardMoverEntry]]:
@@ -1406,14 +1374,22 @@ def _select_top_board_movers(
 
     def _to_entry(rp):
         r, _ = rp
+        # Flat fields map 1:1 from the merged get_board_list row — already
+        # canonical board-list units after the persistence merge
+        # (persistence/board.py::_normalize_zzshare_list_quote_units):
+        # amount 亿元, volume 万手, net_inflow 亿元. No ×1e8: the nested
+        # MinimalQuote layer this used to build was removed 2026-09-09
+        # (it double-converted zzshare rows' already-元 amount to ~1e18).
         return BoardMoverEntry(
             code=r.get("code") or "",
             name=r.get("name") or "",
             type=r.get("type") or "",
-            subtype=r.get("subtype") or "",
-            source=r.get("source") or "ths",
-            platecode=r.get("platecode"),  # None for sidebar-only concept rows
-            quote=_build_minimal_quote_from_list_row_dict(r),
+            change_pct=r.get("change_pct"),
+            amount=r.get("amount"),
+            volume=r.get("volume"),
+            up_count=r.get("up_count"),
+            down_count=r.get("down_count"),
+            net_inflow=r.get("net_inflow"),
         )
 
     return [_to_entry(rp) for rp in gainers_sorted], [_to_entry(rp) for rp in losers_sorted]
@@ -2276,21 +2252,17 @@ def _md_top_movers(out: list[str], title: str, entries: list[BoardMoverEntry]) -
     opposite of the truth when upstream returned 0 rows. Emit an
     explicit ``（无数据）`` marker instead.
 
-    Projects 8 columns per spec §5.2:
+    Projects 8 columns:
         代码 / 名称 / 涨跌幅 / 成交额(亿) / 成交量(万手) / 上涨 / 下跌 / 资金净流入(亿)
-    The full 23-field MinimalQuote is unchanged in JSON — agents that
-    need it read JSON, not MD. This is an intentional projection, not a
-    data drop. The 8-column header is pinned by
+    The 8-column header is pinned by
     ``test_market_stats_md_includes_top_movers_sections`` to prevent
     silent regressions where a column is added/removed.
 
-    `amount_yi` divides the 元 value by 1e8 to surface 亿元 (matches the
-    units THS upstream reports natively, easier to scan in a recap).
-    `net_inflow_yi` is pass-through (THS upstream 亿元; the helper does
-    NOT multiply by 1e8 — see spec §3.2 unit convention note; the
-    `(亿)` column header makes the unit explicit). `volume` is already
-    万手 in the THS upstream `get_board_list` payload — pass-through,
-    just formatted with thousands separator.
+    Post-2026-09-09 flattening: entries carry the quote fields flat (no
+    nested MinimalQuote). ``amount`` is already 亿元 (board-list native
+    units — the JSON carries 亿元, unlike the quote endpoints' 元; no
+    ÷1e8 here). ``net_inflow`` is pass-through 亿元. ``volume`` is 万手.
+    ``up_count`` / ``down_count`` are raw counts. Sparse rows render ``—``.
     """
     out.append(f"### {title}")
     if not entries:
@@ -2302,18 +2274,14 @@ def _md_top_movers(out: list[str], title: str, entries: list[BoardMoverEntry]) -
     )
     out.append("|---|---|---|---|---|---|---|---|")
     for entry in entries:
-        q = entry.quote
-        amount_yi = (q.amount / 1e8) if (q is not None and q.amount is not None) else None
-        net_inflow_yi = (q.net_inflow) if (q is not None and q.net_inflow is not None) else None
-        # net_inflow is already 亿元 from THS upstream; _md_num formats it.
-        volume_str = _md_num(q.volume, 0) if (q is not None and q.volume is not None) else "—"
-        up_str = _md_num(q.up_count, 0) if (q is not None and q.up_count is not None) else "—"
-        down_str = _md_num(q.down_count, 0) if (q is not None and q.down_count is not None) else "—"
+        volume_str = _md_num(entry.volume, 0) if entry.volume is not None else "—"
+        up_str = _md_num(entry.up_count, 0) if entry.up_count is not None else "—"
+        down_str = _md_num(entry.down_count, 0) if entry.down_count is not None else "—"
         out.append(
             f"| {entry.code} | {entry.name or ''} | "
-            f"{_md_pct(q.change_pct if q is not None else None)} | "
-            f"{_md_num(amount_yi, 2)} | {volume_str} | {up_str} | {down_str} | "
-            f"{_md_num(net_inflow_yi, 2)} |"
+            f"{_md_pct(entry.change_pct)} | "
+            f"{_md_num(entry.amount, 2)} | {volume_str} | {up_str} | {down_str} | "
+            f"{_md_num(entry.net_inflow, 2)} |"
         )
     out.append("")
 

@@ -601,50 +601,6 @@ class TestMarketStatsPoolsBlock:
 # ============================================================================
 
 
-def test_build_minimal_quote_from_list_row_dict_populates_six_fields():
-    """Only the 6 board-relevant fields present in upstream are filled."""
-    from stock_data.api.routes.agent import _build_minimal_quote_from_list_row_dict
-
-    row = {
-        "code": "881154",
-        "name": "半导体",
-        "change_pct": 5.82,
-        "volume": 2345678,
-        "amount": 12.0,  # THS upstream in 亿元
-        "net_inflow": 4.5,  # upstream in 亿元
-        "up_count": 23,
-        "down_count": 5,
-    }
-    quote = _build_minimal_quote_from_list_row_dict(row)
-    assert quote.change_pct == 5.82
-    assert quote.volume == 2345678
-    assert quote.volume_unit == "wan_shou"
-    assert quote.amount == 12.0 * 1e8  # ×1e8 conversion
-    assert quote.up_count == 23
-    assert quote.down_count == 5
-    assert quote.net_inflow == 4.5  # pass-through (NOT ×1e8)
-    # sparse fields stay None
-    assert quote.price is None
-    assert quote.open is None
-    assert quote.high is None
-    assert quote.low is None
-    assert quote.prev_close is None
-    assert quote.change_amount is None
-    assert quote.rank is None
-
-
-def test_build_minimal_quote_handles_missing_fields():
-    """All-None quote when row has no quote fields at all."""
-    from stock_data.api.routes.agent import _build_minimal_quote_from_list_row_dict
-
-    row = {"code": "BK0001", "name": "X"}  # no quote fields
-    quote = _build_minimal_quote_from_list_row_dict(row)
-    assert quote.change_pct is None
-    assert quote.amount is None
-    assert quote.up_count is None
-    assert quote.volume_unit == "wan_shou"  # always set
-
-
 def test_select_top_board_movers_sorts_correctly():
     """Top 3 by change_pct DESC, bottom 3 by ASC.
 
@@ -776,8 +732,14 @@ def test_select_top_board_movers_empty_input():
     assert _select_top_board_movers(None, top_n=3) == ([], [])
 
 
-def test_select_top_board_movers_entry_carries_minimal_quote():
-    """Each BoardMoverEntry.quote is built via the quote helper."""
+def test_select_top_board_movers_entry_is_flat():
+    """Each BoardMoverEntry carries the row's quote fields flat (no ×1e8).
+
+    amount maps through as 亿元 (board-list native unit) — NOT ×1e8.
+    Regression: the removed nested-MinimalQuote helper multiplied every
+    row's amount by 1e8, turning zzshare rows (whose amount was already
+    元 pre-normalization) into ~1e18 garbage.
+    """
     from stock_data.api.routes.agent import _select_top_board_movers
 
     rows = [
@@ -785,11 +747,9 @@ def test_select_top_board_movers_entry_carries_minimal_quote():
             "code": "BK0001",
             "name": "半导体",
             "type": "industry",
-            "subtype": "881",
-            "source": "ths",
             "change_pct": 5.82,
             "volume": 2345678,
-            "amount": 12.0,
+            "amount": 12.0,  # 亿元 (post-merge canonical unit)
             "up_count": 23,
             "down_count": 5,
             "net_inflow": 4.5,
@@ -799,10 +759,13 @@ def test_select_top_board_movers_entry_carries_minimal_quote():
     assert gainers[0].code == "BK0001"
     assert gainers[0].name == "半导体"
     assert gainers[0].type == "industry"
-    assert gainers[0].source == "ths"
-    assert gainers[0].quote is not None
-    assert gainers[0].quote.change_pct == 5.82
-    assert gainers[0].quote.amount == 12.0 * 1e8
+    assert not hasattr(gainers[0], "quote")  # flattened — no nested quote
+    assert gainers[0].change_pct == 5.82
+    assert gainers[0].amount == 12.0  # 亿元, NOT ×1e8
+    assert gainers[0].volume == 2345678  # 万手
+    assert gainers[0].up_count == 23
+    assert gainers[0].down_count == 5
+    assert gainers[0].net_inflow == 4.5  # 亿元 (pass-through)
 
 
 # ============================================================================
@@ -874,13 +837,21 @@ def test_boards_top_gainers_top_losers_in_response(client, monkeypatch):
     # gainers sorted DESC: BK0001 (5.82), BK0003 (2.0), BK0002 (-3.0)
     assert [g["code"] for g in data["boards"]["top_gainers"]] == ["BK0001", "BK0003", "BK0002"]
     # losers sorted ASC: BK0002 (-3.0), BK0003 (2.0), BK0001 (5.82)
-    assert [loser["code"] for loser in data["boards"]["top_losers"]] == ["BK0002", "BK0003", "BK0001"]
-    # quote fields populated correctly
+    assert [loser["code"] for loser in data["boards"]["top_losers"]] == [
+        "BK0002",
+        "BK0003",
+        "BK0001",
+    ]
+    # quote fields populated correctly — flat on the entry (no nested quote)
     top1 = data["boards"]["top_gainers"][0]
     assert top1["code"] == "BK0001"
-    assert top1["quote"]["change_pct"] == 5.82
-    assert top1["quote"]["amount"] == 1.0 * 1e8
-    assert top1["quote"]["net_inflow"] == 0.5  # ×1e8 conversion only applies to `amount`
+    assert "quote" not in top1  # flattened post-2026-09-09
+    assert top1["change_pct"] == 5.82
+    assert top1["amount"] == 1.0  # 亿元, NOT ×1e8
+    assert top1["volume"] == 100
+    assert top1["up_count"] == 10
+    assert top1["down_count"] == 2
+    assert top1["net_inflow"] == 0.5  # 亿元 (pass-through)
 
 
 def test_boards_top_movers_absent_when_upstream_raises(client, monkeypatch):

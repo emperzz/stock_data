@@ -2123,28 +2123,34 @@ class StockStats(BaseModel):
 class BoardMoverEntry(BaseModel):
     """One board in /agent/market-stats top_gainers / top_losers.
 
-    Added 2026-09-09 alongside the spec amendment that adds top-3
-    gainers / top-3 losers to the boards block. `quote` reuses the
-    shared MinimalQuote schema (defined above) — same one across stock
-    / index / board batch-profile endpoints. Sparse fields stay None
-    when upstream doesn't populate them (matches the precedent set by
-    /agent/boards/batch-profile).
+    Post-2026-09-09 amendment: **flattened** — no nested MinimalQuote.
+    The old shape nested a 23-field quote of which most were None for
+    the sparse get_board_list rows; this carries the fields that are
+    actually populated, flat, alongside the identity fields.
 
-    `platecode` is preserved as Optional[str] because the upstream row
-    dict carries it (per fetch_boards_with_zzshare_backfill at
-    persistence/board.py:911) and downstream consumers already expect
-    to find it on board-shaped entries (matches the
-    /api/v1/boards/{board_code}/stocks precedent). Concept boards may
-    have None (sidebar-only rows — see ths_fetcher.py:1784-1788).
+    Each field maps 1:1 from a
+    ``stock_board_cache.get_board_list(source='ths', include_quote=True)``
+    row. **Unit semantics = the THS board-list surface, NOT the quote
+    endpoints' 元 convention**: ``amount`` is 亿元 (THS native; zzshare
+    rows ÷1e8 at the persistence merge — see
+    persistence/board.py::_normalize_zzshare_list_quote_units), ``volume``
+    is 万手, ``net_inflow`` is 亿元.
+
+    Sparse board types leave fields None: THS concept (gnSection) rows
+    carry only ``change_pct`` + ``net_inflow``; zzshare-appended rows
+    carry only ``change_pct`` + ``amount``. THS industry-rank rows carry
+    the full set.
     """
 
     code: str
     name: str
     type: str
-    subtype: str
-    source: str
-    platecode: str | None = None
-    quote: MinimalQuote | None = None
+    change_pct: float | None = None
+    amount: float | None = None  # 亿元 (THS board-list native)
+    volume: int | None = None  # 万手
+    up_count: int | None = None
+    down_count: int | None = None
+    net_inflow: float | None = None  # 亿元 (pass-through, NOT ×1e8)
 
 
 class BoardStats(BaseModel):
