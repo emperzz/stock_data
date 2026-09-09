@@ -1,10 +1,12 @@
 """Schema validation tests for GET /api/v1/agent/market-stats."""
 
 from stock_data.api.schemas import (
+    BoardMoverEntry,
     BoardStats,
     DistributionBucket,
     MarketStatsErrorEntry,
     MarketStatsResponse,
+    MinimalQuote,
     StockStats,
 )
 
@@ -78,6 +80,111 @@ def test_market_stats_response_summary_is_dict():
     in IndicesBatchProfileResponse / MarketContextResponse)."""
     r = MarketStatsResponse(stocks=None, boards=None, errors=[], summary={})
     assert r.summary == {}
+
+
+# --- 2026-09-09: BoardMoverEntry + BoardStats.top_gainers/top_losers ---
+
+
+def test_board_stats_top_movers_default_empty_list():
+    """BoardStats without explicit top_movers defaults to empty lists."""
+    bs = BoardStats(
+        sample_size=383,
+        mean_pct=0.52,
+        median_pct=0.31,
+        max_pct=5.82,
+        min_pct=-3.15,
+        up_count=187,
+        down_count=162,
+        flat_count=34,
+        buckets=[],
+    )
+    assert bs.top_gainers == []
+    assert bs.top_losers == []
+
+
+def test_board_stats_top_movers_can_be_populated():
+    """BoardStats accepts explicit top_gainers / top_losers lists."""
+    entry = BoardMoverEntry(
+        code="881154",
+        name="半导体",
+        type="industry",
+        subtype="881",
+        source="ths",
+        quote=MinimalQuote(change_pct=5.82),
+    )
+    bs = BoardStats(
+        sample_size=383,
+        mean_pct=0.52,
+        median_pct=0.31,
+        max_pct=5.82,
+        min_pct=-3.15,
+        up_count=187,
+        down_count=162,
+        flat_count=34,
+        buckets=[],
+        top_gainers=[entry],
+        top_losers=[entry],
+    )
+    assert len(bs.top_gainers) == 1
+    assert bs.top_gainers[0].code == "881154"
+    assert bs.top_gainers[0].quote.change_pct == 5.82
+
+
+def test_board_mover_entry_quote_none_default():
+    """BoardMoverEntry.quote defaults to None (not required)."""
+    entry = BoardMoverEntry(
+        code="881154",
+        name="半导体",
+        type="industry",
+        subtype="881",
+        source="ths",
+    )
+    assert entry.quote is None
+
+
+def test_board_mover_entry_sparse_minimal_quote():
+    """A quote built from a sparse get_board_list row has most fields None."""
+    # Mimic what the upstream returns in practice — only 6 fields populated
+    sparse_quote = MinimalQuote(
+        change_pct=5.82,
+        volume=2345678,
+        volume_unit="wan_shou",
+        amount=1.2e9,
+        up_count=23,
+        down_count=5,
+        net_inflow=4.5,        # pass-through (亿元), NOT ×1e8
+    )
+    entry = BoardMoverEntry(
+        code="881154",
+        name="半导体",
+        type="industry",
+        subtype="881",
+        source="ths",
+        platecode="881154",
+        quote=sparse_quote,
+    )
+    # populated fields
+    assert entry.quote.change_pct == 5.82
+    assert entry.quote.volume == 2345678
+    assert entry.quote.amount == 1.2e9
+    assert entry.quote.up_count == 23
+    assert entry.quote.down_count == 5
+    assert entry.quote.net_inflow == 4.5            # pass-through (亿元)
+    # platecode round-trips
+    assert entry.platecode == "881154"
+    # sparse fields
+    assert entry.quote.price is None
+    assert entry.quote.open is None
+    assert entry.quote.rank is None
+    assert entry.quote.pe_ratio is None  # stock-only
+
+
+def test_board_mover_entry_platecode_optional():
+    """platecode defaults to None (some upstream rows may not carry it)."""
+    entry = BoardMoverEntry(
+        code="881154", name="半导体", type="industry", subtype="881", source="ths",
+    )
+    assert entry.platecode is None
 
 
 # ----- Post-2026-09-02: pools block (NEW) -----

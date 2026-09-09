@@ -2120,6 +2120,33 @@ class StockStats(BaseModel):
     buckets: list[DistributionBucket]
 
 
+class BoardMoverEntry(BaseModel):
+    """One board in /agent/market-stats top_gainers / top_losers.
+
+    Added 2026-09-09 alongside the spec amendment that adds top-3
+    gainers / top-3 losers to the boards block. `quote` reuses the
+    shared MinimalQuote schema (defined above) — same one across stock
+    / index / board batch-profile endpoints. Sparse fields stay None
+    when upstream doesn't populate them (matches the precedent set by
+    /agent/boards/batch-profile).
+
+    `platecode` is preserved as Optional[str] because the upstream row
+    dict carries it (per fetch_boards_with_zzshare_backfill at
+    persistence/board.py:911) and downstream consumers already expect
+    to find it on board-shaped entries (matches the
+    /api/v1/boards/{board_code}/stocks precedent). Concept boards may
+    have None (sidebar-only rows — see ths_fetcher.py:1784-1788).
+    """
+
+    code: str
+    name: str
+    type: str
+    subtype: str
+    source: str
+    platecode: str | None = None
+    quote: MinimalQuote | None = None
+
+
 class BoardStats(BaseModel):
     """Full-market board statistics (THS source)."""
 
@@ -2134,6 +2161,11 @@ class BoardStats(BaseModel):
     bin_width: float = 1.0
     source: str = ""
     buckets: list[DistributionBucket]
+    # Added 2026-09-09: top movers for client dashboards. Always list
+    # (never None) so consumers can iterate without null checks; list
+    # may be empty when upstream returned 0 rows with non-None change_pct.
+    top_gainers: list[BoardMoverEntry] = Field(default_factory=list)
+    top_losers: list[BoardMoverEntry] = Field(default_factory=list)
 
 
 class MarketStatsErrorEntry(BaseModel):
