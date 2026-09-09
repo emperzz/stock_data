@@ -71,6 +71,7 @@ from ..cache import (
 from ..endpoint_meta import endpoint_meta
 from ..schemas import (
     BatchFeatures,
+    BoardMoverEntry,
     BoardProfile,
     BoardsBatchProfileRequest,
     BoardsBatchProfileResponse,
@@ -1337,6 +1338,84 @@ def _build_minimal_quote_from_board_dict(q: dict) -> MinimalQuote:
         net_inflow=q.get("net_inflow"),  # board upstream already 亿元; pass-through
         rank=q.get("rank"),
     )
+
+
+def _build_minimal_quote_from_list_row_dict(row: dict) -> MinimalQuote:
+    """Map a ``stock_board_cache.get_board_list`` row to ``MinimalQuote``.
+
+    The ``get_board_list`` row shape (with ``include_quote=True``) is
+    sparser than ``get_board_realtime``'s — only 6 of the board-relevant
+    ``MinimalQuote`` fields have upstream values: ``change_pct`` /
+    ``volume`` / ``amount`` / ``net_inflow`` / ``up_count`` /
+    ``down_count``. The other 7 board-relevant fields (``price`` /
+    ``change_amount`` / ``OHLC`` / ``prev_close`` / ``rank``) and the 8
+    stock-only fields stay ``None``. This matches the
+    ``/agent/boards/batch-profile`` precedent where "field present in
+    schema, ``None`` upstream" is the documented contract.
+
+    ``amount`` is multiplied by ``1e8`` to convert THS upstream 亿元 →
+    元, matching the conversion already applied at
+    ``routes/boards.py:857`` and inside ``_build_minimal_quote_from_board_dict``
+    for the realtime path. ``net_inflow`` stays as-is (board upstream
+    is already 亿元; consumers divide by ``1e8`` if they want 元).
+    Spec: docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.2
+    """
+    raw_amount = row.get("amount")
+    return MinimalQuote(
+        change_pct=row.get("change_pct"),
+        volume=row.get("volume"),
+        volume_unit="wan_shou",
+        amount=(raw_amount * 1e8) if raw_amount is not None else None,
+        up_count=row.get("up_count"),
+        down_count=row.get("down_count"),
+        net_inflow=row.get("net_inflow"),
+    )
+
+
+def _select_top_board_movers(
+    rows: list[dict] | None, *, top_n: int = 3
+) -> tuple[list[BoardMoverEntry], list[BoardMoverEntry]]:
+    """Pick top-N gainers and losers from the ``get_board_list`` rows.
+
+    Filters out rows with non-finite ``change_pct`` (``None`` / ``bool``
+    / non-numeric — same predicate the aggregate stats use at
+    ``agent.py:1547``). Tie-breaker = ``code`` ASC for determinism.
+    Returns two independent lists — both may contain the same row if
+    its ``change_pct == 0.0`` and a tie emerges at the boundary.
+
+    Per spec §3.1 — NO sign filter. Both lists mirror the same
+    eligible set, so with N eligible rows + top_n, both have length
+    ``min(N, top_n)`` (NOT a pos/neg split).
+
+    Pure function: no upstream calls, no side effects.
+    Spec: docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.1
+    """
+    def _pct(r):
+        v = r.get("change_pct")
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    eligible = [(r, _pct(r)) for r in (rows or [])]
+    eligible = [(r, p) for r, p in eligible if p is not None]
+
+    def _code(r):
+        return r.get("code") or ""
+
+    gainers_sorted = sorted(eligible, key=lambda rp: (-rp[1], _code(rp[0])))[:top_n]
+    losers_sorted = sorted(eligible, key=lambda rp: (rp[1], _code(rp[0])))[:top_n]
+
+    def _to_entry(rp):
+        r, _ = rp
+        return BoardMoverEntry(
+            code=r.get("code") or "",
+            name=r.get("name") or "",
+            type=r.get("type") or "",
+            subtype=r.get("subtype") or "",
+            source=r.get("source") or "ths",
+            platecode=r.get("platecode"),  # None for sidebar-only concept rows
+            quote=_build_minimal_quote_from_list_row_dict(r),
+        )
+
+    return [_to_entry(rp) for rp in gainers_sorted], [_to_entry(rp) for rp in losers_sorted]
 
 
 @router.post(

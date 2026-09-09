@@ -589,3 +589,158 @@ class TestMarketStatsPoolsBlock:
         assert "## 涨跌停" in body
         assert "**涨停池**: null" in body
         assert "**跌停池**: null" in body
+
+
+# ============================================================================
+# 2026-09-09: top-3 gainers / top-3 losers helpers
+# ============================================================================
+
+
+def test_build_minimal_quote_from_list_row_dict_populates_six_fields():
+    """Only the 6 board-relevant fields present in upstream are filled."""
+    from stock_data.api.routes.agent import _build_minimal_quote_from_list_row_dict
+
+    row = {
+        "code": "881154",
+        "name": "半导体",
+        "change_pct": 5.82,
+        "volume": 2345678,
+        "amount": 12.0,           # THS upstream in 亿元
+        "net_inflow": 4.5,        # upstream in 亿元
+        "up_count": 23,
+        "down_count": 5,
+    }
+    quote = _build_minimal_quote_from_list_row_dict(row)
+    assert quote.change_pct == 5.82
+    assert quote.volume == 2345678
+    assert quote.volume_unit == "wan_shou"
+    assert quote.amount == 12.0 * 1e8            # ×1e8 conversion
+    assert quote.up_count == 23
+    assert quote.down_count == 5
+    assert quote.net_inflow == 4.5               # pass-through (NOT ×1e8)
+    # sparse fields stay None
+    assert quote.price is None
+    assert quote.open is None
+    assert quote.high is None
+    assert quote.low is None
+    assert quote.prev_close is None
+    assert quote.change_amount is None
+    assert quote.rank is None
+
+
+def test_build_minimal_quote_handles_missing_fields():
+    """All-None quote when row has no quote fields at all."""
+    from stock_data.api.routes.agent import _build_minimal_quote_from_list_row_dict
+
+    row = {"code": "BK0001", "name": "X"}  # no quote fields
+    quote = _build_minimal_quote_from_list_row_dict(row)
+    assert quote.change_pct is None
+    assert quote.amount is None
+    assert quote.up_count is None
+    assert quote.volume_unit == "wan_shou"  # always set
+
+
+def test_select_top_board_movers_sorts_correctly():
+    """Top 3 by change_pct DESC, bottom 3 by ASC.
+
+    Per spec §3.1 — BOTH lists mirror the same eligible set. With 6
+    eligible rows and top_n=3, both lists have length 3 (NOT a sign
+    filter that would yield 3 gainers + 3 losers from a pos/neg split).
+    This test pins that invariant.
+    """
+    from stock_data.api.routes.agent import _select_top_board_movers
+
+    rows = [
+        {"code": "BK0001", "name": "A", "type": "industry", "subtype": "881", "source": "ths", "change_pct": 1.0},
+        {"code": "BK0002", "name": "B", "type": "industry", "subtype": "881", "source": "ths", "change_pct": 5.0},
+        {"code": "BK0003", "name": "C", "type": "industry", "subtype": "881", "source": "ths", "change_pct": -2.0},
+        {"code": "BK0004", "name": "D", "type": "industry", "subtype": "881", "source": "ths", "change_pct": 3.0},
+        {"code": "BK0005", "name": "E", "type": "industry", "subtype": "881", "source": "ths", "change_pct": -5.0},
+        {"code": "BK0006", "name": "F", "type": "industry", "subtype": "881", "source": "ths", "change_pct": 2.0},
+    ]
+    gainers, losers = _select_top_board_movers(rows, top_n=3)
+    assert len(gainers) == 3
+    assert len(losers) == 3
+    # gainers sorted DESC: BK0002 (5.0), BK0004 (3.0), BK0006 (2.0)
+    assert [g.code for g in gainers] == ["BK0002", "BK0004", "BK0006"]
+    # losers sorted ASC: BK0005 (-5.0), BK0003 (-2.0), BK0001 (1.0)
+    assert [l.code for l in losers] == ["BK0005", "BK0003", "BK0001"]
+
+
+def test_select_top_board_movers_excludes_none_change_pct():
+    """Rows with None / non-numeric change_pct are skipped."""
+    from stock_data.api.routes.agent import _select_top_board_movers
+
+    rows = [
+        {"code": "BK0001", "change_pct": 2.0},
+        {"code": "BK0002", "change_pct": None},
+        {"code": "BK0003", "change_pct": "—"},        # upstream sentinel
+        {"code": "BK0004", "change_pct": 1.0},
+        {"code": "BK0005"},                          # missing key
+    ]
+    gainers, losers = _select_top_board_movers(rows, top_n=3)
+    codes = {g.code for g in gainers}
+    assert codes == {"BK0001", "BK0004"}            # only 2 valid rows
+    assert all(l.code in {"BK0001", "BK0004"} for l in losers)
+
+
+def test_select_top_board_movers_tie_break_code_asc():
+    """Identical change_pct → sorted by code ASC (deterministic)."""
+    from stock_data.api.routes.agent import _select_top_board_movers
+
+    rows = [
+        {"code": "BK0009", "change_pct": 2.0},
+        {"code": "BK0001", "change_pct": 2.0},
+        {"code": "BK0005", "change_pct": 2.0},
+        {"code": "BK0003", "change_pct": 2.0},
+    ]
+    gainers, _ = _select_top_board_movers(rows, top_n=3)
+    assert [g.code for g in gainers] == ["BK0001", "BK0003", "BK0005"]
+
+
+def test_select_top_board_movers_fewer_than_three():
+    """When fewer than 3 rows qualify, both lists mirror the available rows.
+
+    Per spec §3.1 — there is NO sign filter. With 2 eligible rows and
+    top_n=3, both lists have length 2 (NOT 1 gainer + 1 loser); the 2
+    rows appear in both lists at different ranks. This test pins that
+    invariant.
+    """
+    from stock_data.api.routes.agent import _select_top_board_movers
+
+    rows = [
+        {"code": "BK0001", "change_pct": 2.0},
+        {"code": "BK0002", "change_pct": -1.0},
+    ]
+    gainers, losers = _select_top_board_movers(rows, top_n=3)
+    assert len(gainers) == 2
+    assert len(losers) == 2
+    # gainers sorted DESC: BK0001 (+2.0), BK0002 (-1.0)
+    assert [g.code for g in gainers] == ["BK0001", "BK0002"]
+    # losers sorted ASC: BK0002 (-1.0), BK0001 (+2.0) — same set, reversed order
+    assert [l.code for l in losers] == ["BK0002", "BK0001"]
+
+
+def test_select_top_board_movers_empty_input():
+    """Empty / None input → two empty lists (no exception)."""
+    from stock_data.api.routes.agent import _select_top_board_movers
+
+    assert _select_top_board_movers([], top_n=3) == ([], [])
+    assert _select_top_board_movers(None, top_n=3) == ([], [])
+
+
+def test_select_top_board_movers_entry_carries_minimal_quote():
+    """Each BoardMoverEntry.quote is built via the quote helper."""
+    from stock_data.api.routes.agent import _select_top_board_movers
+
+    rows = [{"code": "BK0001", "name": "半导体", "type": "industry", "subtype": "881",
+             "source": "ths", "change_pct": 5.82, "volume": 2345678, "amount": 12.0,
+             "up_count": 23, "down_count": 5, "net_inflow": 4.5}]
+    gainers, _ = _select_top_board_movers(rows, top_n=3)
+    assert gainers[0].code == "BK0001"
+    assert gainers[0].name == "半导体"
+    assert gainers[0].type == "industry"
+    assert gainers[0].source == "ths"
+    assert gainers[0].quote is not None
+    assert gainers[0].quote.change_pct == 5.82
+    assert gainers[0].quote.amount == 12.0 * 1e8
