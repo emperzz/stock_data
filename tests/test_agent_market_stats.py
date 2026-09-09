@@ -842,3 +842,83 @@ def test_boards_top_movers_skipped_when_include_boards_false(client, monkeypatch
     assert "top_gainers" not in body_text
     assert "top_losers" not in body_text
     fake_cache.get_board_list.assert_not_called()       # upstream must be skipped
+
+
+# ============================================================================
+# 2026-09-09: MD renderer for top movers
+# ============================================================================
+
+
+def test_market_stats_md_includes_top_movers_sections(client, monkeypatch):
+    """MD output contains ### 涨幅前三 + ### 跌幅前三 with data rows.
+
+    Pins the 8-column table contract per spec §5.2 — a regression that
+    emits 7 or 9 columns would silently pass the loose substring
+    checks, so we pin the exact header row + separator row.
+    """
+    from stock_data.api.schemas import BoardMoverEntry, MinimalQuote
+    boards_payload = (
+        [
+            {"code": "BK0001", "name": "半导体", "type": "industry", "subtype": "881",
+             "source": "ths", "change_pct": 5.82, "volume": 2345678, "amount": 12.0,
+             "up_count": 23, "down_count": 5, "net_inflow": 4.5},
+            {"code": "BK0002", "name": "煤炭", "type": "industry", "subtype": "881",
+             "source": "ths", "change_pct": -3.15, "volume": 1000000, "amount": 5.0,
+             "up_count": 2, "down_count": 18, "net_inflow": -2.1},
+        ],
+        "ths",
+    )
+    _patch_manager(monkeypatch, quotes=[_make_quote("600519", 1.0)])
+    _patch_board_cache(monkeypatch, all_boards_payload=boards_payload)
+
+    resp = client.get("/api/v1/agent/market-stats?format=md")
+    assert resp.status_code == 200
+    md = resp.text
+    assert "### 涨幅前三" in md
+    assert "### 跌幅前三" in md
+    assert "BK0001" in md
+    assert "半导体" in md
+    assert "+5.82%" in md                                  # signed pct
+    assert "BK0002" in md
+    assert "煤炭" in md
+    assert "-3.15%" in md
+    # 8-column contract pin: exact header + separator row.
+    # CLAUDE.md no-data-dropped invariant is enforced via the literal
+    # header string match (not just `"| 代码 |" in md` which would also
+    # match 7- or 9-column variants).
+    expected_header = "| 代码 | 名称 | 涨跌幅 | 成交额(亿) | 成交量(万手) | 上涨 | 下跌 | 资金净流入(亿) |"
+    expected_sep = "|---|---|---|---|---|---|---|---|"
+    assert expected_header in md
+    assert expected_sep in md
+    # net_inflow unit clarification: pass-through 亿元 (NOT ×1e8 to 元)
+    assert "4.50" in md                                     # upstream 4.5 → "4.50" via _md_num(2)
+    assert "-2.10" in md
+
+
+def test_market_stats_md_empty_movers_emits_explicit_marker(client, monkeypatch):
+    """MD output emits ### 涨幅前三 + （无数据）, NOT a bare empty table skeleton."""
+    _patch_manager(monkeypatch, quotes=[_make_quote("600519", 1.0)])
+    _patch_board_cache(monkeypatch, all_boards_payload=([], "ths"))
+
+    resp = client.get("/api/v1/agent/market-stats?format=md")
+    assert resp.status_code == 200
+    md = resp.text
+    assert "### 涨幅前三" in md
+    assert "### 跌幅前三" in md
+    # Two explicit empty markers (one per heading) — NOT a bare "| 代码 |..." header
+    # followed by zero data rows.
+    assert md.count("（无数据）") >= 2
+
+
+def test_market_stats_md_no_top_movers_when_include_boards_false(client, monkeypatch):
+    """include_boards=false → no boards MD section, no top_movers headings."""
+    _patch_manager(monkeypatch, quotes=[_make_quote("600519", 1.0)])
+    fake_cache = MagicMock()
+    fake_cache.get_board_list.return_value = ([], "ths")
+    monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
+
+    resp = client.get("/api/v1/agent/market-stats?include_boards=false&format=md")
+    assert resp.status_code == 200
+    md = resp.text
+    assert "### 涨幅前三" not in md
+    assert "### 跌幅前三" not in md

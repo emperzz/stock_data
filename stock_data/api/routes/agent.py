@@ -2267,8 +2267,68 @@ def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
     return "\n".join(out)
 
 
+def _md_top_movers(out: list[str], title: str, entries: list[BoardMoverEntry]) -> None:
+    """Render one BoardMoverEntry list as an MD table (or empty marker).
+
+    Same empty-table rule as ``_render_dict_block``: a bare heading +
+    separator + zero rows reads as "computed, but blank", which is the
+    opposite of the truth when upstream returned 0 rows. Emit an
+    explicit ``（无数据）`` marker instead.
+
+    Projects 8 columns per spec §5.2:
+        代码 / 名称 / 涨跌幅 / 成交额(亿) / 成交量(万手) / 上涨 / 下跌 / 资金净流入(亿)
+    The full 23-field MinimalQuote is unchanged in JSON — agents that
+    need it read JSON, not MD. This is an intentional projection, not a
+    data drop. The 8-column header is pinned by
+    ``test_market_stats_md_includes_top_movers_sections`` to prevent
+    silent regressions where a column is added/removed.
+
+    `amount_yi` divides the 元 value by 1e8 to surface 亿元 (matches the
+    units THS upstream reports natively, easier to scan in a recap).
+    `net_inflow_yi` is pass-through (THS upstream 亿元; the helper does
+    NOT multiply by 1e8 — see spec §3.2 unit convention note; the
+    `(亿)` column header makes the unit explicit). `volume` is already
+    万手 in the THS upstream `get_board_list` payload — pass-through,
+    just formatted with thousands separator.
+    """
+    out.append(f"### {title}")
+    if not entries:
+        out.append("（无数据）")
+        out.append("")
+        return
+    out.append("| 代码 | 名称 | 涨跌幅 | 成交额(亿) | 成交量(万手) | 上涨 | 下跌 | 资金净流入(亿) |")
+    out.append("|---|---|---|---|---|---|---|---|")
+    for entry in entries:
+        q = entry.quote
+        amount_yi = (q.amount / 1e8) if (q is not None and q.amount is not None) else None
+        net_inflow_yi = (q.net_inflow) if (q is not None and q.net_inflow is not None) else None
+        # net_inflow is already 亿元 from THS upstream; _md_num formats it.
+        volume_str = (
+            _md_num(q.volume, 0) if (q is not None and q.volume is not None) else "—"
+        )
+        up_str = (
+            _md_num(q.up_count, 0) if (q is not None and q.up_count is not None) else "—"
+        )
+        down_str = (
+            _md_num(q.down_count, 0) if (q is not None and q.down_count is not None) else "—"
+        )
+        out.append(
+            f"| {entry.code} | {entry.name or ''} | "
+            f"{_md_pct(q.change_pct if q is not None else None)} | "
+            f"{_md_num(amount_yi, 2)} | {volume_str} | {up_str} | {down_str} | "
+            f"{_md_num(net_inflow_yi, 2)} |"
+        )
+    out.append("")
+
+
 def _md_stats_block(title: str, stats, *, total_universe_label: str) -> list[str]:
-    """Render one stats block (个股 or 板块) to MD table rows."""
+    """Render one stats block (个股 or 板块) to MD table rows.
+
+    When ``stats`` is a ``BoardStats`` instance, also render the
+    top-3 gainers / top-3 losers after the buckets table (added
+    2026-09-09; spec §5.2). ``StockStats`` has no equivalent field —
+    those calls pass through unchanged.
+    """
     out: list[str] = [f"## {title}"]
     if stats is None:
         out.append("（失败 — 详见 errors）")
@@ -2291,6 +2351,12 @@ def _md_stats_block(title: str, stats, *, total_universe_label: str) -> list[str
     else:
         for b in stats.buckets:
             out.append(f"| {b.label} | 0 | — |")
+    # NEW (2026-09-09): boards block exposes top-3 movers (StockStats
+    # doesn't have these fields — guard with hasattr so the helper stays
+    # usable for both endpoints).
+    if hasattr(stats, "top_gainers"):
+        _md_top_movers(out, "涨幅前三", stats.top_gainers)
+        _md_top_movers(out, "跌幅前三", stats.top_losers)
     return out
 
 
