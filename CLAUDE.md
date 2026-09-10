@@ -463,6 +463,34 @@ The non-obvious knobs worth memorizing here:
 - `STOCK_CACHE_DB_PATH` — SQLite persistence file. Default: `<repo>/stock_data/stock_cache.db`.
 - `ENABLE_API_CACHE` — toggle the in-memory `TTLCache` layer (default: `true`).
 - `*_PRIORITY` env vars — override any fetcher's default priority at startup. The lower the number, the earlier the fetcher is tried.
+- `*_ENABLED` env vars — per-fetcher on/off switch, default `true`
+  (`ZHITU_ENABLED=false` / `0` / `no` / `off`). Read once at
+  `create_default_manager()`; requires a restart, like `*_PRIORITY`. A
+  disabled fetcher is not instantiated and not registered, so it leaves
+  both capability routing (`_filter_by_capability`) and source routing
+  (`_slug_index` → `_with_source`) at once; `?source=<disabled>` reports
+  400 `source 'x' is disabled by X_ENABLED=false`, and the explorer
+  manifest + `/healthz` keep the row with `available: false` + that reason.
+  **`unavailable_reason()` is final on `BaseFetcher`** — subclasses
+  implement `_subclass_unavailable_reason()` so the switch cannot be
+  bypassed by an override.
+  **`THS_ENABLED=false` breaks all board endpoints** (the board cache is
+  keyed `source='ths'` and `zzshare` is aliased to `ths` there);
+  **`ZZSHARE_ENABLED=false`** removes the internal primary of the board
+  `include_quote=false` chain. `/control/fetcher-test` still probes
+  disabled fetchers by design.
+  **Known test noise (not a bug):** with `AKSHARE_ENABLED=false`, a full
+  `pytest` run fails exactly 2 unrelated tests —
+  `test_quote_param_reject.py::test_stocks_quote_accepts_no_params` and
+  `test_utf8_charset_response.py::test_kline_serves_utf8_charset` — both
+  400ing with "Stock code 600519 was not found in the stock list". They
+  pass in isolation and pass in a full run when akshare is enabled. The
+  root cause is a test-order interaction with the session-scoped DB, not
+  the switch; production is unaffected because `get_stock_list("csi")`
+  does populate via Zzshare under this same config (verified). Related
+  operational note: disabling akshare leaves `STOCK_LIST` depending on
+  Zzshare + Zhitu alone, so they become a single point of failure for
+  every `/stocks/{code}/*` endpoint.
 - `TRADE_CALENDAR_START_YEAR` — start year for `get_trade_calendar` (zzshare + myquant); legacy `MYQUANT_CALENDAR_START_YEAR` still honored. Default: `1990` (matches akshare upstream's empirical min).
 - `TRADE_CALENDAR_END_YEAR` — end year for `get_trade_calendar` (zzshare + myquant); defaults to current year.
 - `CACHE_TTL_STOCK_INTRADAY` — minute-line cache TTL in seconds (default: `30`).

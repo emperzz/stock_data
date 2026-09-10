@@ -56,6 +56,16 @@ class TestZzshareFetcherMetadata:
         monkeypatch.delenv("ZZSHARE_PRIORITY", raising=False)
         assert ZzshareFetcher.priority == 2
 
+    def test_is_enabled_default(self, monkeypatch):
+        """The <SLUG>_ENABLED switch defaults to enabled.
+
+        Sits next to test_priority_default because both are metadata
+        switches read the same way from the env; unlike ``priority`` this
+        one re-reads per call, so it needs no source-inspection dance.
+        """
+        monkeypatch.delenv("ZZSHARE_ENABLED", raising=False)
+        assert ZzshareFetcher.is_enabled() is True
+
     def test_priority_env_override(self, monkeypatch):
         """``priority`` reads ``ZZSHARE_PRIORITY`` at module-import time.
 

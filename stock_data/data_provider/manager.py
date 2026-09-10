@@ -17,7 +17,7 @@ from .core.types import (
     CircuitBreaker,
     UnifiedRealtimeQuote,
 )
-from .utils.normalize import index_market_tag, market_tag, normalize_stock_code
+from .utils.normalize import index_market_tag, market_tag, normalize_stock_code, source_slug
 
 logger = logging.getLogger(__name__)
 
@@ -161,20 +161,17 @@ class DataFetcherManager:
     def _derive_slug(fetcher_name: str) -> str:
         """Derive source slug from fetcher class name.
 
-        Strips trailing "Fetcher" (case-insensitive) and lowercases.
+        Delegates to :func:`source_slug` so the slug a caller passes as
+        ``?source=`` and the ``<SLUG>_ENABLED`` env var name can never
+        disagree — both come from one rule.
+
         Examples:
             "ZhituFetcher" → "zhitu"
             "EastMoneyFetcher" → "eastmoney"
             "Zhitu" → "zhitu"  # already bare
             "MyquantFetcher" → "myquant"
         """
-        if not fetcher_name:
-            return ""
-        # Strip "Fetcher" suffix (case-insensitive)
-        name = fetcher_name
-        if name.lower().endswith("fetcher"):
-            name = name[:-7]
-        return name.lower()
+        return source_slug(fetcher_name)
 
     def get_fetcher(self, source: str) -> BaseFetcher:
         """Look up a fetcher instance by its source slug (or full class name).
@@ -208,6 +205,7 @@ class DataFetcherManager:
                         target = f
                         break
         if target is None:
+            _raise_if_disabled(source)
             raise ValueError(f"No fetcher with name {source!r} is registered")
         return target
 
@@ -273,6 +271,7 @@ class DataFetcherManager:
                         target = f
                         break
         if target is None:
+            _raise_if_disabled(source)
             raise ValueError(f"No fetcher with name {source!r} is registered")
         if market not in target.supported_markets:
             raise ValueError(
@@ -1486,19 +1485,62 @@ class DataFetcherManager:
         return list(self._fetchers)
 
 
-def create_default_manager() -> DataFetcherManager:
-    """Create a DataFetcherManager with all available fetchers registered.
+def _find_disabled_fetcher_class(source: str) -> type[BaseFetcher] | None:
+    """Return the ``BaseFetcher`` subclass matching ``source`` that is disabled.
 
-    Each fetcher is instantiated and tested via ``is_available()``; only
-    available fetchers are registered. This is the single source of truth
-    for fetcher registration — callers in ``routes.py`` and ``persistence/``
-    should use this factory instead of constructing their own manager.
+    ``source`` matches either the derived slug ("zhitu") or the class name
+    ("ZhituFetcher"), case-insensitively — the same two forms
+    :meth:`DataFetcherManager.get_fetcher` accepts.
 
-    Returns:
-        A fully configured DataFetcherManager with available fetchers
-        registered in priority order.
+    Only classes reporting ``is_enabled() == False`` are returned. A class
+    that is enabled but simply not registered (missing token, SDK absent) is
+    NOT a "disabled" answer and must fall through to the caller's generic
+    "not registered" error — otherwise every missing-token source would
+    claim to be config-disabled.
+
+    Walks subclasses rather than the manager's registered list by necessity:
+    a disabled fetcher is precisely the one that is not in that list.
     """
-    # Lazy imports to avoid circular dependencies at module level
+    wanted = source.lower()
+    stack: list[type[BaseFetcher]] = list(BaseFetcher.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        name = getattr(cls, "name", None)
+        if (
+            name
+            and (name.lower() == wanted or source_slug(name) == wanted)
+            and not cls.is_enabled()
+        ):
+            return cls
+        stack.extend(cls.__subclasses__())
+    return None
+
+
+def _raise_if_disabled(source: str) -> None:
+    """Raise a distinguishable ValueError when ``source`` is config-disabled.
+
+    The message names the env var so an operator can tell "this source is
+    turned off in config" from "I misspelled ?source=". Reaches the client as
+    HTTP 400 via ``api/routes/errors.py::map_errors``.
+    """
+    cls = _find_disabled_fetcher_class(source)
+    if cls is not None:
+        raise ValueError(
+            f"source {source_slug(cls.name)!r} is disabled by {cls.enabled_env_var()}=false"
+        )
+
+
+def _all_fetcher_classes() -> list[type[BaseFetcher]]:
+    """The fetcher classes ``create_default_manager()`` considers, in order.
+
+    Returned rather than inlined so tests can assert against the same list
+    production iterates — a fetcher added here is automatically covered by
+    the "no _ENABLED var set drops nobody" regression test.
+
+    Import is local: importing the fetcher modules at manager-module import
+    time would create a circular import (fetchers import from ``base``, which
+    ``manager`` imports first).
+    """
     from .fetchers.akshare import AkshareFetcher
     from .fetchers.baidu_fetcher import BaiduFetcher
     from .fetchers.baostock_fetcher import BaostockFetcher
@@ -1511,17 +1553,16 @@ def create_default_manager() -> DataFetcherManager:
     from .fetchers.tushare_fetcher import TushareFetcher
     from .fetchers.yfinance_fetcher import YfinanceFetcher
     from .fetchers.zhitu_fetcher import ZhituFetcher
-    from .fetchers.zzshare_fetcher import ZzshareFetcher  # NEW
+    from .fetchers.zzshare_fetcher import ZzshareFetcher
 
-    manager = DataFetcherManager()
-    fetcher_classes = [
+    return [
         TushareFetcher,
         BaostockFetcher,
         MyquantFetcher,
         AkshareFetcher,
         YfinanceFetcher,
         ZhituFetcher,
-        ZzshareFetcher,  # NEW (P5; placed after Zhitu for human-readable order)
+        ZzshareFetcher,
         TencentFetcher,
         EastMoneyFetcher,
         BaiduFetcher,
@@ -1529,7 +1570,31 @@ def create_default_manager() -> DataFetcherManager:
         CninfoFetcher,
         ClsFetcher,
     ]
-    for cls in fetcher_classes:
+
+
+def create_default_manager() -> DataFetcherManager:
+    """Create a DataFetcherManager with all enabled, available fetchers registered.
+
+    Each fetcher is skipped when ``is_enabled()`` is False (its
+    ``<SLUG>_ENABLED`` env var is explicitly falsy) or when
+    ``is_available()`` is False. This is the single source of truth for
+    fetcher registration — callers in ``routes.py`` and ``persistence/``
+    should use this factory instead of constructing their own manager.
+
+    The enable check runs BEFORE instantiation: a disabled fetcher is never
+    constructed, so its class-level SDK init never fires. The switch is read
+    per call, but this factory runs once at startup — changing a
+    ``*_ENABLED`` var requires a process restart, same as ``*_PRIORITY``.
+
+    Returns:
+        A fully configured DataFetcherManager with the enabled + available
+        fetchers registered in priority order.
+    """
+    manager = DataFetcherManager()
+    for cls in _all_fetcher_classes():
+        if not cls.is_enabled():
+            logger.info(f"{cls.__name__} disabled by {cls.enabled_env_var()}")
+            continue
         instance = cls()
         if instance.is_available():
             manager.add_fetcher(instance)

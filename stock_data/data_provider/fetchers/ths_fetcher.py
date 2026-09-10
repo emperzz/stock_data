@@ -832,7 +832,7 @@ class ThsFetcher(BaseFetcher):
         """Single source of truth for THS board-K-line dependency status.
 
         Returns ``(is_available, reason_if_not)``. Used by both
-        :meth:`is_available` and :meth:`unavailable_reason` so the two
+        :meth:`is_available` and :meth:`_subclass_unavailable_reason` so the two
         methods cannot drift. Mirrors the pattern in ``yfinance_fetcher``
         / ``eastmoney._boards_mixin`` where availability is a single
         tuple-returning helper.
@@ -900,7 +900,7 @@ class ThsFetcher(BaseFetcher):
         """
         return self._check_ths_deps()[0]
 
-    def unavailable_reason(self) -> str | None:
+    def _subclass_unavailable_reason(self) -> str | None:
         """Specific reason string when board K-line path is unavailable."""
         available, reason = self._check_ths_deps()
         if available:

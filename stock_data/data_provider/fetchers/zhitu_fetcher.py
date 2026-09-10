@@ -99,7 +99,7 @@ class ZhituFetcher(BaseFetcher):
         # stock
         return period in ("5", "15", "30", "60") and adjust in ("", None)
 
-    def unavailable_reason(self) -> str | None:
+    def _subclass_unavailable_reason(self) -> str | None:
         """Return a human-readable reason this fetcher is unavailable, or None.
 
         Mirrors the actual availability check so the explorer's docs can

@@ -173,7 +173,7 @@ class BaiduFetcher(BaseFetcher):
     def is_available(self) -> bool:
         return bool(os.getenv(API_KEY_ENV, "").strip())
 
-    def unavailable_reason(self) -> str | None:
+    def _subclass_unavailable_reason(self) -> str | None:
         if self.is_available():
             return None
         return f"BaiduFetcher unavailable: {API_KEY_ENV} env var is empty"
