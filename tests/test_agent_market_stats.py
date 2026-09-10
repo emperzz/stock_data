@@ -4,6 +4,7 @@ All tests mock at the FastAPI route layer (manager + stock_board_cache)
 so they're fast and don't touch the network.
 """
 
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from stock_data.api.cache import make_market_stats_cache_key
 from stock_data.api.routes import agent as agent_module
+from stock_data.api.schemas import MarketStatsResponse
 from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.core.types import UnifiedRealtimeQuote
 
@@ -998,3 +1000,178 @@ def test_market_stats_md_no_top_movers_when_include_boards_false(client, monkeyp
     md = resp.text
     assert "### 涨幅前三" not in md
     assert "### 跌幅前三" not in md
+
+
+# ----- parallel fan-out (spec §5.2) -----
+
+
+class TestParallelFanout:
+    """The 3 blocks must overlap on the cold path.
+
+    Spec §5.2 asks for a wall-clock assertion (`< 700ms` against a 750ms
+    serial baseline). These tests use `threading.Barrier` instead: each
+    instrumented builder blocks until all three have arrived, so "did they
+    run concurrently?" becomes a deterministic question. If the fan-out ever
+    regresses to sequential execution, the first arrival times out and the
+    `BrokenBarrierError` surfaces in that block's `errors[]` entry — the test
+    fails on the response body, not on a load-sensitive timing threshold.
+    Same idiom as `tests/test_db_concurrency_pragma.py`.
+    """
+
+    @staticmethod
+    def _instrument_builders(monkeypatch, barrier, calls, state, lock):
+        """Wrap the 3 real builders so each waits at the barrier mid-flight.
+
+        The wrapped builder is what runs inside `asyncio.to_thread`, so a
+        barrier timeout lands in the calling `_gather_*` handler's
+        `except Exception` and becomes an `errors[]` entry.
+        """
+        for name in (
+            "_build_stocks_block",
+            "_build_boards_block",
+            "_build_limit_pools_block",
+        ):
+            real = getattr(agent_module, name)
+
+            def make_inner(real, name):
+                def inner(*args, **kwargs):
+                    with lock:
+                        state["in_flight"] += 1
+                        state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+                    calls.append(name)
+                    try:
+                        barrier.wait()
+                        return real(*args, **kwargs)
+                    finally:
+                        with lock:
+                            state["in_flight"] -= 1
+
+                return inner
+
+            monkeypatch.setattr(agent_module, name, make_inner(real, name))
+
+    def test_three_blocks_fan_out_concurrently(self, client, monkeypatch):
+        barrier = threading.Barrier(3, timeout=2.0)
+        calls: list[str] = []
+        state = {"in_flight": 0, "max_in_flight": 0}
+        self._instrument_builders(monkeypatch, barrier, calls, state, threading.Lock())
+        _patch_manager(monkeypatch, quotes=[_make_quote("600000", 1.0)])
+        _patch_board_cache(
+            monkeypatch,
+            all_boards_payload=([{"code": "BK0001", "name": "X", "change_pct": 0.5}], "ths"),
+        )
+
+        resp = client.get("/api/v1/agent/market-stats")
+
+        assert resp.status_code == 200
+        assert state["max_in_flight"] == 3, (
+            "the 3 blocks never overlapped (max in flight = "
+            f"{state['max_in_flight']}) — the asyncio.gather fan-out has "
+            "regressed to sequential execution"
+        )
+        assert sorted(calls) == [
+            "_build_boards_block",
+            "_build_limit_pools_block",
+            "_build_stocks_block",
+        ]
+        body = resp.json()
+        assert not body["errors"]
+        assert body["stocks"] is not None
+        assert body["boards"] is not None
+        assert body["limit_pools"] is not None
+        assert body["summary"] == {
+            "requested": 3,
+            "ok": 3,
+            "failed": 0,
+            "elapsed_ms": body["summary"]["elapsed_ms"],
+        }
+
+    def test_skipped_block_does_not_block_fan_out(self, client, monkeypatch):
+        """include_boards=false + include_pools=false → those builders are never
+        invoked (patching them to raise proves it — the raise would otherwise
+        land in errors[])."""
+
+        def _must_not_be_called(*args, **kwargs):
+            raise AssertionError("builder invoked despite include_*=false")
+
+        monkeypatch.setattr(agent_module, "_build_boards_block", _must_not_be_called)
+        monkeypatch.setattr(agent_module, "_build_limit_pools_block", _must_not_be_called)
+        _patch_manager(monkeypatch, quotes=[_make_quote("600000", 1.0)])
+
+        resp = client.get("/api/v1/agent/market-stats?include_boards=false&include_pools=false")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert not body["errors"], "a skipped block was still invoked"
+        assert body["boards"] is None
+        assert body["limit_pools"] == {"zt": None, "dt": None}
+        assert body["summary"]["requested"] == 1
+        assert body["summary"]["ok"] == 1
+
+    def test_one_block_failure_does_not_break_others(self, client, monkeypatch):
+        def _boom(manager):
+            raise RuntimeError("stocks upstream exploded")
+
+        monkeypatch.setattr(agent_module, "_build_stocks_block", _boom)
+        _patch_manager(monkeypatch, quotes=[])
+        _patch_board_cache(
+            monkeypatch,
+            all_boards_payload=([{"code": "BK0001", "name": "X", "change_pct": 0.5}], "ths"),
+        )
+
+        resp = client.get("/api/v1/agent/market-stats")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["stocks"] is None
+        assert body["boards"] is not None
+        assert body["limit_pools"] is not None
+        assert [(e["block"], e["error"]) for e in body["errors"]] == [("stocks", "RuntimeError")]
+        assert body["summary"]["ok"] == 2
+        assert body["summary"]["failed"] == 1
+
+
+# ----- the two orchestration paths must agree -----
+
+
+class TestSyncAndAsyncPathsAssembleIdentically:
+    """`build_market_stats_response` (sync, used by /agent/market-recap) and the
+    async route fan the blocks out separately, then share
+    `_assemble_market_stats_response`. These cases pin the two paths together so
+    a future field or `ok`-accounting change cannot land in one and miss the
+    other. Only `summary.elapsed_ms` is allowed to differ.
+    """
+
+    @pytest.mark.parametrize(
+        "include_boards, include_pools",
+        [(True, True), (True, False), (False, True), (False, False)],
+    )
+    def test_same_inputs_same_response(self, client, monkeypatch, include_boards, include_pools):
+        quotes = [_make_quote("600000", 1.0), _make_quote("600001", -0.5)]
+        boards = [
+            {"code": "BK0001", "name": "X", "change_pct": 2.5},
+            {"code": "BK0002", "name": "Y", "change_pct": -1.5},
+        ]
+        _patch_manager(monkeypatch, quotes=quotes)
+        _patch_board_cache(monkeypatch, all_boards_payload=(boards, "ths"))
+
+        sync_result = agent_module.build_market_stats_response(
+            include_boards=include_boards,
+            include_pools=include_pools,
+            target_date="2026-09-10",
+        )
+
+        resp = client.get(
+            "/api/v1/agent/market-stats"
+            f"?include_boards={str(include_boards).lower()}"
+            f"&include_pools={str(include_pools).lower()}"
+            "&trade_date=2026-09-10"
+        )
+        assert resp.status_code == 200
+        async_result = MarketStatsResponse(**resp.json()).model_dump()
+
+        expected = sync_result.model_dump()
+        expected["summary"].pop("elapsed_ms")
+        async_result["summary"].pop("elapsed_ms")
+
+        assert async_result == expected
