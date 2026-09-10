@@ -1483,19 +1483,17 @@ class DataFetcherManager:
         return list(self._fetchers)
 
 
-def create_default_manager() -> DataFetcherManager:
-    """Create a DataFetcherManager with all available fetchers registered.
+def _all_fetcher_classes() -> list[type[BaseFetcher]]:
+    """The fetcher classes ``create_default_manager()`` considers, in order.
 
-    Each fetcher is instantiated and tested via ``is_available()``; only
-    available fetchers are registered. This is the single source of truth
-    for fetcher registration — callers in ``routes.py`` and ``persistence/``
-    should use this factory instead of constructing their own manager.
+    Returned rather than inlined so tests can assert against the same list
+    production iterates — a fetcher added here is automatically covered by
+    the "no _ENABLED var set drops nobody" regression test.
 
-    Returns:
-        A fully configured DataFetcherManager with available fetchers
-        registered in priority order.
+    Import is local: importing the fetcher modules at manager-module import
+    time would create a circular import (fetchers import from ``base``, which
+    ``manager`` imports first).
     """
-    # Lazy imports to avoid circular dependencies at module level
     from .fetchers.akshare import AkshareFetcher
     from .fetchers.baidu_fetcher import BaiduFetcher
     from .fetchers.baostock_fetcher import BaostockFetcher
@@ -1508,17 +1506,16 @@ def create_default_manager() -> DataFetcherManager:
     from .fetchers.tushare_fetcher import TushareFetcher
     from .fetchers.yfinance_fetcher import YfinanceFetcher
     from .fetchers.zhitu_fetcher import ZhituFetcher
-    from .fetchers.zzshare_fetcher import ZzshareFetcher  # NEW
+    from .fetchers.zzshare_fetcher import ZzshareFetcher
 
-    manager = DataFetcherManager()
-    fetcher_classes = [
+    return [
         TushareFetcher,
         BaostockFetcher,
         MyquantFetcher,
         AkshareFetcher,
         YfinanceFetcher,
         ZhituFetcher,
-        ZzshareFetcher,  # NEW (P5; placed after Zhitu for human-readable order)
+        ZzshareFetcher,
         TencentFetcher,
         EastMoneyFetcher,
         BaiduFetcher,
@@ -1526,7 +1523,31 @@ def create_default_manager() -> DataFetcherManager:
         CninfoFetcher,
         ClsFetcher,
     ]
-    for cls in fetcher_classes:
+
+
+def create_default_manager() -> DataFetcherManager:
+    """Create a DataFetcherManager with all enabled, available fetchers registered.
+
+    Each fetcher is skipped when ``is_enabled()`` is False (its
+    ``<SLUG>_ENABLED`` env var is explicitly falsy) or when
+    ``is_available()`` is False. This is the single source of truth for
+    fetcher registration — callers in ``routes.py`` and ``persistence/``
+    should use this factory instead of constructing their own manager.
+
+    The enable check runs BEFORE instantiation: a disabled fetcher is never
+    constructed, so its class-level SDK init never fires. The switch is read
+    per call, but this factory runs once at startup — changing a
+    ``*_ENABLED`` var requires a process restart, same as ``*_PRIORITY``.
+
+    Returns:
+        A fully configured DataFetcherManager with the enabled + available
+        fetchers registered in priority order.
+    """
+    manager = DataFetcherManager()
+    for cls in _all_fetcher_classes():
+        if not cls.is_enabled():
+            logger.info(f"{cls.__name__} disabled by {cls.enabled_env_var()}")
+            continue
         instance = cls()
         if instance.is_available():
             manager.add_fetcher(instance)

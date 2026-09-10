@@ -99,3 +99,81 @@ class TestIsEnabled:
         monkeypatch.delenv("THS_ENABLED", raising=False)
         assert ZhituFetcher.is_enabled() is False
         assert ThsFetcher.is_enabled() is True
+
+
+class TestRegistrationGate:
+    def test_disabled_fetcher_is_not_registered(self, monkeypatch):
+        """ZHITU_ENABLED=false keeps ZhituFetcher out of the manager entirely.
+
+        is_available is forced True and the token is set so the assertion
+        isolates the enable switch: without the gate, this fetcher would
+        register, so a failure here is unambiguously "the gate didn't fire",
+        not "the token happened to be missing".
+        """
+        from stock_data.data_provider.manager import create_default_manager
+
+        monkeypatch.setenv("ZHITU_TOKEN", "fake-token-for-test")
+        monkeypatch.setattr(ZhituFetcher, "is_available", lambda self: True)
+        monkeypatch.setenv("ZHITU_ENABLED", "true")
+        assert "ZhituFetcher" in [f.name for f in create_default_manager().fetchers]
+
+        monkeypatch.setenv("ZHITU_ENABLED", "false")
+        manager = create_default_manager()
+        assert "ZhituFetcher" not in [f.name for f in manager.fetchers]
+
+    def test_disabled_fetcher_leaves_the_slug_index(self, monkeypatch):
+        """Source-routed endpoints must not resolve a disabled source.
+
+        _slug_index is built by _refresh_index() from the registered list, so
+        this is the property that removes the fetcher from the board
+        endpoints — where _with_source() bypasses priority-based failover and
+        there is no ordering to manipulate.
+        """
+        from stock_data.data_provider.manager import create_default_manager
+
+        monkeypatch.setenv("THS_ENABLED", "false")
+        manager = create_default_manager()
+        assert "ths" not in manager._slug_index, (
+            "disabled fetcher still reachable via _slug_index — board "
+            "endpoints (?source=ths) would keep serving it"
+        )
+
+    def test_disabled_fetcher_is_never_instantiated(self, monkeypatch):
+        """The gate runs before cls(), so a disabled fetcher is not constructed.
+
+        If the check were placed after instantiation, a disabled SDK fetcher
+        would still run its class-level init (reading a token, possibly
+        touching the network) on every process start.
+        """
+        from stock_data.data_provider.manager import create_default_manager
+
+        instantiated: list[str] = []
+        real_init = ZhituFetcher.__init__
+
+        def spy_init(self, *args, **kwargs):
+            instantiated.append(type(self).name)
+            return real_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(ZhituFetcher, "__init__", spy_init)
+        monkeypatch.setenv("ZHITU_ENABLED", "false")
+        create_default_manager()
+        assert "ZhituFetcher" not in instantiated
+
+    def test_no_enabled_var_set_drops_nobody(self, monkeypatch):
+        """Regression: the default must be enabled for all 13 fetchers.
+
+        Asserted against each class's own is_available() rather than a
+        hardcoded name list, because which fetchers are available depends on
+        tokens and installed SDKs in the environment — a name list would be
+        flaky. This still catches a wrong default: if "true" parsed as falsy,
+        create_default_manager() would register zero fetchers and fail here.
+        """
+        from stock_data.data_provider.manager import _all_fetcher_classes, create_default_manager
+
+        for cls in _all_fetcher_classes():
+            monkeypatch.delenv(cls.enabled_env_var(), raising=False)
+
+        manager = create_default_manager()
+        registered = {f.name for f in manager.fetchers}
+        expected = {cls.name for cls in _all_fetcher_classes() if cls().is_available()}
+        assert registered == expected
