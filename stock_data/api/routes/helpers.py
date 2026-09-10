@@ -32,7 +32,7 @@ from ...data_provider.indicators.registry import estimate_lookback
 from ...data_provider.indicators.types import IndicatorKey
 from ...data_provider.persistence import stock_list
 from ...data_provider.persistence.trade_calendar import is_trade_date
-from ...data_provider.utils.normalize import is_index_code
+from ...data_provider.utils.normalize import is_index_code, market_tag
 from ..schemas import IndexQuote, KLineData
 
 if TYPE_CHECKING:
@@ -255,7 +255,7 @@ def _expand_indicator_lookback(requested_indicators: list[str], days: int) -> in
 
     If no indicators are requested, returns ``days`` unchanged. Otherwise
     returns ``max(days, lookback)`` so the orchestrator has enough history
-    to compute the first valid indicator row, then ``_apply_indicators``
+    to compute the first valid indicator row, then ``_finalize_kline``
     truncates back to ``days``.
 
     Used by both ``/stocks/{code}/kline`` and ``/indices/{code}/kline``.
@@ -266,38 +266,47 @@ def _expand_indicator_lookback(requested_indicators: list[str], days: int) -> in
     return max(days, extra) if extra > 0 else days
 
 
-def _apply_indicators(
+def _finalize_kline(
     df: pd.DataFrame,
     requested_indicators: list[str],
     days: int,
-    actual_days: int,
+    merged: bool,
 ) -> pd.DataFrame:
-    """Run the indicator orchestrator on ``df`` if requested, then truncate
-    back to the user-requested bar count.
+    """Compute the requested indicators over ``df``, then trim to the
+    user-facing bar count.
+
+    Called AFTER ``_maybe_merge_today_bar`` so that today's partial bar
+    participates in the indicator window (its moving averages etc. reflect
+    the realtime price). Trading indicators are forward-recursive
+    (SMA/EMA/SAR/OBV), so appending one bar at the tail leaves every
+    already-closed row's values bit-for-bit unchanged.
 
     Args:
-        df: K-line DataFrame already fetched with ``actual_days`` rows.
-        requested_indicators: empty list → no-op (returns df unchanged).
-        days: the user-requested bar count.
-        actual_days: how many rows were actually fetched (>= days when
-            lookback expansion was needed).
+        df: K-line DataFrame, already merged (fetch rows + today's partial
+            bar when ``merged`` is True).
+        requested_indicators: empty list → indicators skipped.
+        days: the user-requested bar count. The extra lookback rows fetched
+            to warm the indicators are trimmed off here.
+        merged: whether ``_maybe_merge_today_bar`` appended today's bar.
+            When True the output keeps ``days`` closed bars PLUS that one
+            partial bar (``days + 1`` total) — matching the long-standing
+            "``?days=5`` returns 6 bars intraday" contract.
 
     Returns:
-        A DataFrame with the ``indicators`` column populated and at most
-        ``days`` rows (the most recent ones).
+        A DataFrame with the ``indicators`` column populated (when
+        requested) and ``days`` or ``days + 1`` rows.
     """
-    if not requested_indicators:
-        return df
-    df = compute(df, requested_indicators)
-    if actual_days > days and len(df) > days:
-        df = df.tail(days).reset_index(drop=True)
-    return df
+    if requested_indicators:
+        df = compute(df, requested_indicators)
+    return df.tail(days + (1 if merged else 0)).reset_index(drop=True)
 
 
-# Minute frequencies (1m/5m/15m/30m/60m) — see _MINUTE_FREQS. We don't
-# inject a single quote tick into an intraday-aggregate bar because the
-# semantics are wrong (a 5m bar is a 5-minute aggregate, not a single tick).
-_MINUTE_FREQS: frozenset[str] = frozenset({"1", "5", "15", "30", "60"})
+# Only the daily bar can be completed by a single realtime tick. Higher
+# frequencies are excluded because the semantics are wrong:
+#   - 1m/5m/15m/30m/60m: a 5m bar is a 5-minute aggregate, not one tick.
+#   - w/m: a weekly/monthly bar is an aggregate of the whole period — a
+#     single day's tick injected as a "week" bar corrupts the series.
+_MERGE_TODAY_FREQS: frozenset[str] = frozenset({"d"})
 
 
 def _maybe_merge_today_bar(
@@ -308,46 +317,70 @@ def _maybe_merge_today_bar(
     manager: DataFetcherManager,
     *,
     asset: str = "stock",
-) -> pd.DataFrame:
+    adjust: str | None = None,
+) -> tuple[pd.DataFrame, bool]:
     """If end_date includes today AND today is a trading day AND the K-line
     doesn't already contain today's bar, best-effort fetch realtime quote
     and append today's partial bar.
 
-    Only triggers for daily/weekly/monthly frequency; minute bars are
-    intraday aggregates and a single quote tick is semantically wrong to
-    inject as a 5m/15m bar.
+    Returns ``(df, merged)``. ``merged`` is the authoritative signal that
+    the trailing row was synthesized here rather than returned by a fetcher
+    — the caller needs it to preserve the extra row when trimming, and a
+    date comparison cannot substitute (after the upstream backfill, a
+    fetcher-provided today bar carries the same date but IS a settled bar).
+
+    Only daily frequency triggers; see ``_MERGE_TODAY_FREQS``.
 
     See docs/kline-today-bar-merge-spec-2026-07-24.md §3 for contract.
     """
-    # 0. minute freq → skip (semantically wrong)
-    if frequency in _MINUTE_FREQS:
-        return df
+    # 0. non-daily freq → skip (aggregate semantics, see _MERGE_TODAY_FREQS)
+    if frequency not in _MERGE_TODAY_FREQS:
+        return df, False
+
+    # 1. hfq anchors on the OLDEST bar, so historical rows are scaled but a
+    # realtime raw-price tick is not — splicing it in would mix two price
+    # bases. (qfq anchors on the latest bar, so today's raw price already
+    # equals today's qfq price; no adjustment → likewise safe.)
+    if adjust == "hfq":
+        return df, False
 
     if df is None or df.empty:
-        return df
+        return df, False
+
+    # 2. the A-share calendar decides "is today a trading day", so it is only
+    # valid for A-share codes. HK/US trade on different calendars and would
+    # otherwise get a fabricated bar on A-share holidays (and none on theirs).
+    if asset == "stock" and market_tag(code) != "csi":
+        return df, False
 
     today_str = date.today().isoformat()
     effective_end = end_date or today_str
 
-    # 1. end_date must include today
+    # 3. end_date must include today
     if effective_end < today_str:
-        return df
+        return df, False
 
-    # 2. today must be a trading day (fail-closed on DB error)
+    # 4. today must be a trading day (fail-closed on DB error)
     try:
         trade_day = is_trade_date(today_str)
     except Exception as e:
         logger.debug(f"[maybe_merge_today_bar] is_trade_date failed for {today_str}: {e}")
-        return df
+        return df, False
     if not trade_day:
-        return df
+        return df, False
 
-    # 3. df already has today's bar → no-op (avoid quote call)
-    last_date = str(df.iloc[-1]["date"])[:10]
-    if last_date == today_str:
-        return df
+    # 5. df already covers today → no-op (avoid quote call). ``>=`` also
+    # swallows a future-dated last bar (fetcher / timezone anomaly) instead
+    # of appending a today bar *before* it, which would reorder the series.
+    try:
+        last_date = str(df.iloc[-1]["date"])[:10]
+    except Exception as e:
+        logger.debug(f"[maybe_merge_today_bar] last-date read failed for {code}: {e}")
+        return df, False
+    if last_date >= today_str:
+        return df, False
 
-    # 4. best-effort fetch realtime quote. Broadly catching Exception
+    # 6. best-effort fetch realtime quote. Broadly catching Exception
     # because a quote outage must NEVER break the K-line response.
     try:
         quote = (
@@ -357,30 +390,55 @@ def _maybe_merge_today_bar(
         )
     except Exception as e:
         logger.debug(f"[maybe_merge_today_bar] quote fetch failed for {code}: {e}")
-        return df
+        return df, False
 
-    if quote is None or quote.price is None:
-        return df
+    if quote is None:
+        return df, False
 
-    # 5. construct today's partial bar (safe_float/safe_int per project
+    # 7. Reject a degenerate OHLC rather than padding it with zeros. This bar
+    # feeds the indicator window (see _finalize_kline), where a zeroed
+    # open/high/low distorts ATR/TR/KC/CCI by 6-64x — far worse than simply
+    # not publishing today's bar (e.g. during pre-open, when the upstream
+    # quote has a price but no traded range yet).
+    close = safe_float(quote.price)
+    open_p = safe_float(quote.open_price)
+    high = safe_float(quote.high)
+    low = safe_float(quote.low)
+    if close is None or close <= 0:
+        return df, False
+    if open_p is None or high is None or low is None:
+        return df, False
+    if low > high or not (low <= close <= high):
+        return df, False
+
+    # 8. construct today's partial bar (safe_float/safe_int per project
     # invariant: NaN/inf/-inf must never leak into numeric fields; nullable
-    # fields retain None).
+    # fields retain None). volume stays raw shares — both zzshare ``daily.vol``
+    # and ``rt_k.vol`` are documented in shares (docs/zzshare/01-kline.md:42,
+    # docs/zzshare/02-realtime.md:42), so no unit conversion is needed.
     today_bar = {
         "date": today_str,
-        "open": safe_float(quote.open_price, 0.0),
-        "high": safe_float(quote.high, 0.0),
-        "low": safe_float(quote.low, 0.0),
-        "close": safe_float(quote.price, 0.0),
+        "open": open_p,
+        "high": high,
+        "low": low,
+        "close": close,
         "volume": safe_int(quote.volume, 0),
         "amount": safe_float(quote.amount, None),
         "pct_chg": safe_float(quote.change_pct, None),
     }
-    return pd.concat([df, pd.DataFrame([today_bar])], ignore_index=True)
+    return pd.concat([df, pd.DataFrame([today_bar])], ignore_index=True), True
 
 
 def _build_kline_data(row: dict, format_date) -> KLineData:
     """Build a :class:`KLineData` from a DataFrame row dict."""
-    ind = row.get("indicators") or {}
+    # Defensive invariant, not a workaround: the ``indicators`` column is
+    # object-dtype, so any row that did not go through ``compute()`` (a row
+    # spliced in by ``pd.concat``, a short per-bar result, a future caller)
+    # carries ``NaN`` — a *truthy* float that would otherwise reach
+    # ``KLineData.indicators`` and 400 the whole response. Anything that is
+    # not a dict means "no indicators for this bar".
+    ind = row.get("indicators")
+    ind = ind if isinstance(ind, dict) else None
     return KLineData(
         date=format_date(row.get("date")),
         open=safe_float(row.get("open"), 0.0),

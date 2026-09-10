@@ -315,12 +315,21 @@ are the same as stocks (see [Standardized Data Schema](#standardized-data-schema
 
 K 线 routes (`/stocks/{code}/kline` + `/indices/{code}/kline`) 默认在以下条件全部满足时合并今日 partial bar：
 
-1. `frequency ∈ {"d", "w", "m"}`（minute 频段不触发——单点 tick 不能混入聚合 bar）
-2. `end_date`（显式或默认）包含今天
-3. 今天在 A 股交易日历中（`is_trade_date(today)` 为 True）
-4. K 线响应末根日期 ≠ 今天
+1. `frequency == "d"`（minute 频段不触发——单点 tick 不能混入聚合 bar；`w`/`m` 同样不触发——单日 tick 冒充一根周/月 bar 会污染整条序列）
+2. 非 `adjust="hfq"`（后复权锚定最早 bar，实时原价与历史序列口径不同；`qfq` / 不复权安全）
+3. 股票路径下 `market_tag(code) == "csi"`（HK/US 交易日历不同，用 A 股日历判定会误判）
+4. `end_date`（显式或默认）包含今天
+5. 今天在 A 股交易日历中（`is_trade_date(today)` 为 True）
+6. K 线末根日期 `< today`（`>=` 即不合并，顺带吞掉未来日期这一 fetcher/时区异常）
+7. quote 的 OHLC 有效（`price > 0`、`open/high/low` 均非 None、`low <= close <= high`）——缺失时**不合并**而非填 0
 
-合并 source：`manager.get_realtime_quote(code)` (stock) 或 `manager.get_index_realtime_quote(code)` (index)，best-effort，失败时回退到原 K 线。今日 partial bar **不**带 `?indicators=` 计算结果（指标只对已收盘数据计算）。详见 `docs/kline-today-bar-merge-spec-2026-07-24.md`。
+合并 source：`manager.get_realtime_quote(code)` (stock) 或 `manager.get_index_realtime_quote(code)` (index)，best-effort，失败时回退到原 K 线。
+
+**执行顺序**：merge 在 `compute()` **之前**，因此今日实时数据**参与** `?indicators=` 计算（今日那根的 `ma5` 是含今日的值）。已收盘行的指标值逐位不变——SMA/EMA/SAR/OBV 等均为前向递推，尾部追加不影响前面。输出行数为 `days` 根已收盘 + 1 根今日（`_finalize_kline` 用 helper 返回的 `merged` 标志决定是否多保留一行；**不可**用日期比较替代——fetcher 盘后 backfill 的今日 bar 日期相同但是已结算 bar）。
+
+**`_build_kline_data` 的 `isinstance(ind, dict)` 守卫是永久不变量**，不是临时补丁：`indicators` 列是 object dtype，任何未经 `compute()` 的行（`pd.concat` 拼接、per-bar 结果偏短）都会带 `NaN`——而 `nan` 是**真值**，会绕过 `or {}` 直接 400 掉整个响应。
+
+详见 `docs/kline-today-bar-merge-spec-2026-07-24.md`。
 
 **时区假设**：server 跑在 CST（Asia/Shanghai）；非 CST 环境下 `date.today()` 与 A 股交易日可能错位（晚 8h 才跨日）。
 
@@ -481,6 +490,8 @@ The non-obvious knobs worth memorizing here:
 - **Don't** trust `stocks.length == top_n` as evidence that the board has exactly N members — it could mean truncation (THS upstream 50-stock login wall). Always read `quote_truncated` and `quote_total_in_board` together. (2026-07-13)
 - **Don't** reintroduce `manager.get_stock_list(market, refresh=False)` in `persistence/stock_list.py::get_stock_name`'s cold-cache auto-warm branch. That method does NOT exist on `DataFetcherManager` (the public name is `get_all_stocks`); the `AttributeError` is silently swallowed by `except Exception: pass`, so the DB stays empty and every cold-cache request 400s. Use the persistence-level `get_stock_list(market, manager=manager)` (same file, line 105), which already wires fetch + `update_cached_stocks`. Likewise **don't** collapse `_reject_invalid_stock_code`'s two message branches into one template — the "Index X is not supported..." wording is correct ONLY when `is_index_code(code)` is true; for genuinely-unknown codes the helper emits "Stock code X was not found..." (see Standardized Data Schema → "/stocks/{code}/* 400 contract"). (2026-07-23)
 - **Don't** 在 fetcher 层 hardcode "今日 partial bar" 合并逻辑；统一在 K-line route 层 helper 走。Fetcher 层的"今日 bar"逻辑会跨 fetcher 行为不一致，并绕过 manager 的短路与熔断保护。统一在 `api/routes/helpers.py::_maybe_merge_today_bar` 触发（见 [K-line today's partial bar](#k-line-todays-partial-bar)）。
+- **Don't** 把 `_maybe_merge_today_bar` 挪回 `compute()` 之后。顺序错了会有两个后果：今日实时数据不参与指标计算（与契约冲突），且拼接行产生的 `NaN` 会 400 掉整个响应。同理 **Don't** 用 `row.get("indicators") or {}` —— `nan` 是真值，必须 `isinstance(ind, dict)`。
+- **Don't** 用「`df` 末根日期 == today」来判断要不要多保留一行。合成 bar 与 fetcher 盘后 backfill 的 bar 日期相同，但前者需要额外保留、后者本就是 `days` 根之一。用 `_maybe_merge_today_bar` 返回的 `merged` 标志。
 
 ## Skill Discipline
 

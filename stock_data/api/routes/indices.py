@@ -27,9 +27,9 @@ from ..schemas import (
 from ._router import router
 from .errors import map_errors
 from .helpers import (
-    _apply_indicators,
     _build_kline_data,
     _expand_indicator_lookback,
+    _finalize_kline,
     _forbid_quote_params,
     _format_date,
     _index_quote_from,
@@ -180,8 +180,10 @@ def get_index_kline(
         adjust=None,  # adjust already rejected above
         asset="index",
     )
-    df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
-    df = _maybe_merge_today_bar(df, index_code, end_date, freq, manager, asset="index")
+    # Merge BEFORE computing indicators (see _finalize_kline docstring).
+    # adjust is always None here — qfq/hfq are rejected above.
+    df, merged = _maybe_merge_today_bar(df, index_code, end_date, freq, manager, asset="index")
+    df = _finalize_kline(df, requested_indicators, days=days, merged=merged)
     index_name = _resolve_index_name(index_code)
 
     records = df.to_dict("records")

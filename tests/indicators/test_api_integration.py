@@ -6,6 +6,8 @@ system is irrelevant for these tests — we only care that the API layer
 plumbs `?indicators=` through to the indicator orchestrator correctly.
 """
 
+from datetime import date
+
 import pandas as pd
 import pytest
 
@@ -43,6 +45,24 @@ def client(monkeypatch):
     monkeypatch.setattr(
         "stock_data.data_provider.DataFetcherManager.get_kline_data",
         fake_get_kline_data,
+    )
+
+    # Pin today-bar merging out of these tests. The /kline routes
+    # best-effort merge today's realtime bar when the trade calendar is
+    # warm, which (a) would make the row count depend on the wall clock and
+    # the session DB contents, and (b) would hit the real network here.
+    # Returning None is the documented "no today bar" path.
+    monkeypatch.setattr(
+        "stock_data.data_provider.DataFetcherManager.get_realtime_quote",
+        lambda self, stock_code: None,
+    )
+    monkeypatch.setattr(
+        "stock_data.data_provider.DataFetcherManager.get_index_realtime_quote",
+        lambda self, index_code: None,
+    )
+    monkeypatch.setattr(
+        "stock_data.api.routes.helpers.is_trade_date",
+        lambda day: False,
     )
 
     # Also stub the stock-name lookup so /kline doesn't try a network call
@@ -195,3 +215,107 @@ def test_index_history_unknown_indicator_rejected(client):
     body = r.json()
     assert body["detail"]["error"] == "invalid_indicator"
     assert "nope" in body["detail"]["message"]
+
+
+# ============================================================================
+# Regression: today's partial bar must feed the indicator window
+# ============================================================================
+#
+# Before the fix these two routes raised:
+#   400 | 1 validation error for KLineData
+#       | indicators  Input should be a valid dictionary
+#       |   [type=dict_type, input_value=nan, input_type=float]
+# because _maybe_merge_today_bar appended today's row AFTER `compute()`,
+# leaving the spliced row's object-dtype `indicators` cell as NaN — and
+# `nan` is truthy, so it reached Pydantic instead of being treated as
+# "no indicators".
+
+
+@pytest.fixture
+def merging_client(monkeypatch):
+    """Like `client`, but with today-bar merging ACTIVE (warm calendar)."""
+    from stock_data.data_provider.core.types import UnifiedRealtimeQuote
+
+    fake_kline = _synthetic_kline(300)
+
+    def fake_get_kline_data(self, stock_code, **kwargs):
+        requested = int(kwargs.get("days") or 30)
+        return fake_kline.tail(requested).reset_index(drop=True), "StubFetcher"
+
+    from stock_data.server import app
+
+    monkeypatch.setattr(
+        "stock_data.data_provider.DataFetcherManager.get_kline_data",
+        fake_get_kline_data,
+    )
+    # Warm calendar: today IS a trading day → merge runs.
+    monkeypatch.setattr("stock_data.api.routes.helpers.is_trade_date", lambda day: True)
+    # Deterministic realtime quote for the synthesized today bar.
+    quote = UnifiedRealtimeQuote(
+        code="600519",
+        name="",
+        price=200.0,
+        open_price=198.0,
+        high=201.0,
+        low=197.5,
+        volume=12345,
+        amount=2_400_000.0,
+        change_pct=1.0,
+    )
+    monkeypatch.setattr(
+        "stock_data.data_provider.DataFetcherManager.get_realtime_quote",
+        lambda self, stock_code: quote,
+    )
+    monkeypatch.setattr(
+        "stock_data.data_provider.DataFetcherManager.get_index_realtime_quote",
+        lambda self, index_code: quote,
+    )
+    monkeypatch.setattr(
+        "stock_data.data_provider.persistence.stock_list.get_stock_name",
+        lambda code, manager=None: "贵州茅台",
+    )
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(app)
+
+
+def test_kline_with_indicators_and_today_merge_returns_200(merging_client):
+    """The exact original failure: indicators + today bar must not 400."""
+    r = merging_client.get("/api/v1/stocks/600519/kline?period=daily&days=285&indicators=ma")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["data"]) == 286  # 285 closed + today's partial bar
+
+
+def test_today_bar_indicators_include_realtime_price(merging_client):
+    """Today's realtime close participates: ma5 reflects the 200.0 quote."""
+    r = merging_client.get("/api/v1/stocks/600519/kline?days=10&indicators=ma")
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert len(data) == 11
+
+    # Every row carries an indicators dict — no NaN, no missing key.
+    assert all(isinstance(row.get("indicators"), dict) for row in data)
+
+    today = data[-1]
+    assert today["date"] == date.today().isoformat()
+    assert today["close"] == 200.0
+
+    # ma5 must be the mean of the last 5 closes INCLUDING today's realtime
+    # 200.0 — i.e. the merged bar is genuinely inside the indicator window,
+    # not appended to an already-finished series.
+    last5 = [row["close"] for row in data[-5:]]
+    assert today["indicators"]["ma5"] == pytest.approx(sum(last5) / 5)
+
+    # ...and that is strictly higher than a window that excludes today.
+    assert today["indicators"]["ma5"] > sum(last5[:-1]) / 4
+
+
+def test_index_kline_with_indicators_and_today_merge_returns_200(merging_client):
+    """Index route shares the helpers — same regression coverage."""
+    r = merging_client.get("/api/v1/indices/000300/kline?days=10&indicators=ma")
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert len(data) == 11
+    assert all(isinstance(row.get("indicators"), dict) for row in data)

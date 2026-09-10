@@ -83,9 +83,9 @@ from ..schemas import (
 from ._router import router
 from .errors import map_errors
 from .helpers import (
-    _apply_indicators,
     _build_kline_data,
     _expand_indicator_lookback,
+    _finalize_kline,
     _forbid_quote_params,
     _format_date,
     _maybe_merge_today_bar,
@@ -522,8 +522,12 @@ def get_kline(
         adjust=adjust or None,
         asset="stock",
     )
-    df = _apply_indicators(df, requested_indicators, days=days, actual_days=actual_days)
-    df = _maybe_merge_today_bar(df, code, end_date, freq, manager, asset="stock")
+    # Merge BEFORE computing indicators: today's realtime bar must be part
+    # of the indicator window, not appended to an already-finished series.
+    df, merged = _maybe_merge_today_bar(
+        df, code, end_date, freq, manager, asset="stock", adjust=adjust or None
+    )
+    df = _finalize_kline(df, requested_indicators, days=days, merged=merged)
     name = stock_list.get_stock_name(code, manager=manager)
 
     records = df.to_dict("records")
