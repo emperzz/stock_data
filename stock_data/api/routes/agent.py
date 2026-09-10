@@ -665,6 +665,40 @@ def _batch_summary(requested: int, ok: int, started: float) -> dict:
     }
 
 
+def _assemble_market_stats_response(
+    *,
+    stocks_block: "StockStats | None",
+    boards_block: "BoardStats | None",
+    pools_block: "MarketStatsLimitPools | None",
+    errors: list["MarketStatsErrorEntry"],
+    requested: int,
+    ok: int,
+    started: float,
+) -> "MarketStatsResponse":
+    """Single assembly point for the two market-stats orchestration paths.
+
+    Both the async ``/agent/market-stats`` route (which fans the 3 block
+    builders out via ``asyncio.gather``) and the sync
+    ``build_market_stats_response`` wrapper (still called by
+    ``get_market_recap``'s stats sub-call) funnel their block results
+    through here, so a new response field or a change to the ``ok``
+    accounting cannot land in one path and silently miss the other.
+
+    ``limit_pools`` is ALWAYS present on the wire (spec §4), even when
+    pools were not queried — a ``None`` block is normalized to
+    ``MarketStatsLimitPools(zt=None, dt=None)`` so consumers see a stable
+    shape. Field presence is NOT a signal that pools were attempted;
+    that signal is ``summary.requested``.
+    """
+    return MarketStatsResponse(
+        stocks=stocks_block,
+        boards=boards_block,
+        limit_pools=pools_block or MarketStatsLimitPools(zt=None, dt=None),
+        errors=errors,
+        summary=_batch_summary(requested, ok, started),
+    )
+
+
 def _build_stocks_block(manager) -> tuple["StockStats | None", list["MarketStatsErrorEntry"]]:
     """Stocks block: one upstream call (manager.get_realtime_quotes('csi'))
     + change_pct aggregation.
@@ -1430,8 +1464,8 @@ def _select_top_board_movers(
     """Pick top-N gainers and losers from the ``get_board_list`` rows.
 
     Filters out rows with non-finite ``change_pct`` (``None`` / ``bool``
-    / non-numeric — same predicate the aggregate stats use at
-    ``agent.py:1547``). Tie-breaker = ``code`` ASC for determinism.
+    / non-numeric — same predicate the aggregate stats use in
+    ``_build_boards_block``). Tie-breaker = ``code`` ASC for determinism.
     Returns two independent lists — both may contain the same row if
     its ``change_pct == 0.0`` and a tie emerges at the boundary.
 
@@ -1624,11 +1658,12 @@ def build_market_stats_response(
 ) -> MarketStatsResponse:
     """Sync orchestrator — calls the 3 block helpers in order.
 
-    Preserves the sequential behavior for /agent/market-recap's stats
-    sub-call (`agent.py:2747-2760`), which already runs this function
-    inside its own `asyncio.to_thread(...)` boundary. The async
-    `/agent/market-stats` route (added 2026-09-10) does NOT call this
-    wrapper — it invokes the 3 helpers via `asyncio.gather` directly.
+    Preserves the sequential behavior for `get_market_recap`'s stats
+    sub-call, which already runs this function inside its own
+    `asyncio.to_thread(...)` boundary. The async `/agent/market-stats`
+    route (added 2026-09-10) does NOT call this wrapper — it invokes the
+    3 helpers via `asyncio.gather` directly. Both paths finish in
+    `_assemble_market_stats_response`.
 
     Per-block fan-out with per-block error isolation:
     - stocks block: `_build_stocks_block(manager)`
@@ -1678,9 +1713,12 @@ def build_market_stats_response(
             # count as success (caller distinguishes via inner [] vs null).
             ok += 1
         except Exception as exc:
-            # Dead branch in practice — _build_limit_pools_block catches
-            # all exceptions internally. block='zt_pool' is the closest
-            # semantic match in MarketStatsErrorEntry's Literal.
+            # Reachable, not dead (2026-09-10 review): _build_limit_pools_block
+            # wraps the two fetches in their own try/except, but its final
+            # `MarketStatsLimitPools(zt=zt, dt=dt)` construction sits OUTSIDE
+            # them — a pool payload that is not `list[dict] | None` escapes as
+            # a ValidationError. block='zt_pool' is the closest match in
+            # MarketStatsErrorEntry's Literal for "the pools block failed".
             logger.warning(f"[agent/market-stats] pools failed: {exc}", exc_info=True)
             errors.append(
                 MarketStatsErrorEntry(
@@ -1690,12 +1728,14 @@ def build_market_stats_response(
                 )
             )
 
-    return MarketStatsResponse(
-        stocks=stocks_stats,
-        boards=boards_stats,
-        limit_pools=limit_pools_block or MarketStatsLimitPools(zt=None, dt=None),
+    return _assemble_market_stats_response(
+        stocks_block=stocks_stats,
+        boards_block=boards_stats,
+        pools_block=limit_pools_block,
         errors=errors,
-        summary=_batch_summary(requested, ok, started),
+        requested=requested,
+        ok=ok,
+        started=started,
     )
 
 
@@ -1783,8 +1823,8 @@ async def get_market_stats(
         return _render_agent("market-stats", hit, format)
 
     # Parallel fan-out — each block runs in its own asyncio.to_thread so
-    # the sync upstream calls don't block the event loop. mirrors the
-    # pattern at /agent/market-recap (agent.py:2725-2769).
+    # the sync upstream calls don't block the event loop. Mirrors the
+    # pattern in `get_market_recap`.
     started = time.monotonic()
     manager = get_manager()
     requested = 1 + (1 if include_boards else 0) + (1 if include_pools else 0)
@@ -1829,14 +1869,15 @@ async def get_market_stats(
             # Per-pool failures don't decrement ok — the block DID run
             # (with partial data). Empty upstream results also count as
             # success (caller distinguishes via inner [] vs null). Mirrors
-            # the original sync wrapper's `ok += 1` accounting at
-            # agent.py:1638-1644. _build_limit_pools_block catches all
-            # exceptions internally so the outer catch is defensive.
+            # `build_market_stats_response`'s `ok += 1` accounting.
             return block, errs, True
         except Exception as exc:
-            # Dead branch in practice — _build_limit_pools_block catches
-            # all exceptions internally. block='zt_pool' is the closest
-            # semantic match in MarketStatsErrorEntry's Literal.
+            # Reachable, not dead (2026-09-10 review): the final
+            # `MarketStatsLimitPools(zt=zt, dt=dt)` inside
+            # _build_limit_pools_block sits outside its per-pool try/except,
+            # so a payload that is not `list[dict] | None` escapes as a
+            # ValidationError. block='zt_pool' is the closest match in
+            # MarketStatsErrorEntry's Literal for "the pools block failed".
             logger.warning(f"[agent/market-stats] pools failed: {exc}", exc_info=True)
             return None, [
                 MarketStatsErrorEntry(
@@ -1851,13 +1892,14 @@ async def get_market_stats(
     ) = await asyncio.gather(_gather_stocks(), _gather_boards(), _gather_pools())
 
     ok = int(stocks_ok) + int(boards_ok) + int(pools_ok)
-    errors: list[MarketStatsErrorEntry] = stocks_errs + boards_errs + pools_errs
-    result = MarketStatsResponse(
-        stocks=stocks_block,
-        boards=boards_block,
-        limit_pools=pools_block or MarketStatsLimitPools(zt=None, dt=None),
-        errors=errors,
-        summary=_batch_summary(requested, ok, started),
+    result = _assemble_market_stats_response(
+        stocks_block=stocks_block,
+        boards_block=boards_block,
+        pools_block=pools_block,
+        errors=stocks_errs + boards_errs + pools_errs,
+        requested=requested,
+        ok=ok,
+        started=started,
     )
     cached_store(get_quote_cache, cache_key, result)
     return _render_agent("market-stats", result, format)
