@@ -1506,9 +1506,12 @@ def _find_disabled_fetcher_class(source: str) -> type[BaseFetcher] | None:
     while stack:
         cls = stack.pop()
         name = getattr(cls, "name", None)
-        if name and (name.lower() == wanted or source_slug(name) == wanted):
-            if not cls.is_enabled():
-                return cls
+        if (
+            name
+            and (name.lower() == wanted or source_slug(name) == wanted)
+            and not cls.is_enabled()
+        ):
+            return cls
         stack.extend(cls.__subclasses__())
     return None
 

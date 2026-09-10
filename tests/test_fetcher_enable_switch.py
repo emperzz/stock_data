@@ -324,4 +324,3 @@ class TestUnavailableReasonReportsDisabled:
             f"<SLUG>_ENABLED switch: {offenders}. Rename to "
             f"_subclass_unavailable_reason()."
         )
-
