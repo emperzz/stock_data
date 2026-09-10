@@ -1235,8 +1235,15 @@ GET /api/v1/news/flash?limit=50
 | `limit` | int | 50 | Item count (1-200) |
 
 Routed via `NEWS_FLASH` capability. **EastMoney** (P6) is primary,
-**THS** (P7) is the failover. Cached 60s. `code` in each item is the
-**article ID**, not the stock code.
+**THS** (P7) is the failover. Cached 60s. Each item carries a `snippet`
+summary alongside the headline; the article ID is not a field — it only
+appears inside the detail-page `url` (`.../a/{code}.html`).
+
+> Corrected 2026-09-10: this section previously documented a `code` field
+> on each item and omitted `snippet`. No such field exists —
+> `FlashNewsItem` (`api/schemas.py`) declares exactly
+> `title`/`url`/`source_domain`/`publish_time`/`snippet`, and the
+> `response_model=` strips anything undeclared.
 
 ```json
 {
@@ -1245,8 +1252,8 @@ Routed via `NEWS_FLASH` capability. **EastMoney** (P6) is primary,
       "title": "央行宣布降准0.5个百分点",
       "publish_time": "2026-05-20 09:31:00",
       "url": "https://finance.eastmoney.com/news/...",
-      "code": "202605200931000123",
-      "source_domain": "finance.eastmoney.com"
+      "source_domain": "finance.eastmoney.com",
+      "snippet": "央行宣布下调存款准备金率0.5个百分点，释放长期资金约1万亿元。"
     }
   ],
   "total": 50,
