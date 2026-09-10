@@ -857,8 +857,15 @@ Then add a manifest-side test to `tests/test_explorer_manifest_endpoint.py`, ins
         from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
 
         monkeypatch.setattr(ZhituFetcher, "is_available", lambda self: True)
-        monkeypatch.setenv("ZHITU_ENABLED", "false")
+        # Build the manifest (which triggers lifespan and memoises the
+        # manager) BEFORE setting the env var. get_manager() is a memoised
+        # module global, so if this test were the first in a session to
+        # trigger lifespan — e.g. run alone with -k — the cached manager
+        # would be built without ZhituFetcher, and the earlier
+        # test_unavailable_fetcher_surfaces_... would then hit Task 4's
+        # ValueError instead of the None it guards for.
         m = self._manifest()
+        monkeypatch.setenv("ZHITU_ENABLED", "false")
         ep = self._endpoint(m, "GET", "/stocks/{code}/info")
         zhitu = next((f for f in ep["fetchers"] if f["name"] == "ZhituFetcher"), None)
         assert zhitu is not None
