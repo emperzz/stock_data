@@ -479,6 +479,18 @@ The non-obvious knobs worth memorizing here:
   **`ZZSHARE_ENABLED=false`** removes the internal primary of the board
   `include_quote=false` chain. `/control/fetcher-test` still probes
   disabled fetchers by design.
+  **Known test noise (not a bug):** with `AKSHARE_ENABLED=false`, a full
+  `pytest` run fails exactly 2 unrelated tests —
+  `test_quote_param_reject.py::test_stocks_quote_accepts_no_params` and
+  `test_utf8_charset_response.py::test_kline_serves_utf8_charset` — both
+  400ing with "Stock code 600519 was not found in the stock list". They
+  pass in isolation and pass in a full run when akshare is enabled. The
+  root cause is a test-order interaction with the session-scoped DB, not
+  the switch; production is unaffected because `get_stock_list("csi")`
+  does populate via Zzshare under this same config (verified). Related
+  operational note: disabling akshare leaves `STOCK_LIST` depending on
+  Zzshare + Zhitu alone, so they become a single point of failure for
+  every `/stocks/{code}/*` endpoint.
 - `TRADE_CALENDAR_START_YEAR` — start year for `get_trade_calendar` (zzshare + myquant); legacy `MYQUANT_CALENDAR_START_YEAR` still honored. Default: `1990` (matches akshare upstream's empirical min).
 - `TRADE_CALENDAR_END_YEAR` — end year for `get_trade_calendar` (zzshare + myquant); defaults to current year.
 - `CACHE_TTL_STOCK_INTRADAY` — minute-line cache TTL in seconds (default: `30`).
