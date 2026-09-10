@@ -665,7 +665,91 @@ def _batch_summary(requested: int, ok: int, started: float) -> dict:
     }
 
 
-def _compute_limit_pools_block(
+def _build_stocks_block(manager) -> tuple["StockStats | None", list["MarketStatsErrorEntry"]]:
+    """Stocks block: one upstream call (manager.get_realtime_quotes('csi'))
+    + change_pct aggregation.
+
+    Returns ``(block_or_None, errors)``. On failure the block is None
+    and the exception is wrapped in a MarketStatsErrorEntry. Extracted
+    from build_market_stats_response on 2026-09-10 so the 3 blocks can
+    be invoked concurrently via asyncio.gather from the async route.
+    The sync wrapper still calls this directly in sequence, so the
+    behavior is preserved for /agent/market-recap's stats sub-call.
+    """
+    errors: list[MarketStatsErrorEntry] = []
+    try:
+        quotes, _src = manager.get_realtime_quotes("csi")
+        values = [
+            q.change_pct
+            for q in (quotes or [])
+            if getattr(q, "change_pct", None) is not None
+        ]
+        agg = compute_aggregate(
+            values,
+            bin_width=STOCK_BUCKET_BIN_WIDTH,
+            buckets_template=build_stock_buckets(),
+        )
+        return _stock_stats_from_aggregate(agg), errors
+    except Exception as exc:
+        logger.warning(f"[agent/market-stats] stocks failed: {exc}", exc_info=True)
+        errors.append(
+            MarketStatsErrorEntry(
+                block="stocks",
+                error=type(exc).__name__,
+                message=str(exc),
+            )
+        )
+        return None, errors
+
+
+def _build_boards_block(manager) -> tuple["BoardStats | None", list["MarketStatsErrorEntry"]]:
+    """Boards block: one upstream call (stock_board_cache.get_board_list(
+    board_type=None, source='ths', include_quote=True, manager=manager))
+    + change_pct aggregation + top_gainers / top_losers derivation.
+
+    Returns ``(block_or_None, errors)``. Extracted from
+    build_market_stats_response on 2026-09-10 for parallel fan-out.
+    Top movers are derived in-memory from the same upstream rows
+    (zero extra upstream calls); see
+    docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.1.
+    """
+    errors: list[MarketStatsErrorEntry] = []
+    try:
+        boards, src = stock_board_cache.get_board_list(
+            board_type=None,
+            source="ths",
+            include_quote=True,
+            manager=manager,
+        )
+        values = [
+            b.get("change_pct")
+            for b in (boards or [])
+            if isinstance(b.get("change_pct"), (int, float))
+            and not isinstance(b.get("change_pct"), bool)
+        ]
+        agg = compute_aggregate(
+            values,
+            bin_width=BOARD_BUCKET_BIN_WIDTH,
+            buckets_template=build_board_buckets(),
+        )
+        boards_stats = _board_stats_from_aggregate(agg, src or "ths")
+        top_gainers, top_losers = _select_top_board_movers(boards, top_n=3)
+        boards_stats.top_gainers = top_gainers
+        boards_stats.top_losers = top_losers
+        return boards_stats, errors
+    except Exception as exc:
+        logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
+        errors.append(
+            MarketStatsErrorEntry(
+                block="boards",
+                error=type(exc).__name__,
+                message=str(exc),
+            )
+        )
+        return None, errors
+
+
+def _build_limit_pools_block(
     manager, target_date: str
 ) -> tuple["MarketStatsLimitPools", list["MarketStatsErrorEntry"]]:
     """Compute the limit_pools block for market-stats.
@@ -1538,19 +1622,20 @@ def build_market_stats_response(
     include_pools: bool,
     target_date: str,
 ) -> MarketStatsResponse:
-    """Build the Pydantic model for /agent/market-stats.
+    """Sync orchestrator — calls the 3 block helpers in order.
 
-    Pure logic — cache lookup/store lives in the caller. Per-block
-    fan-out with per-block error isolation:
-    - stocks block: manager.get_realtime_quotes('csi') (one upstream call)
-    - boards block: stock_board_cache.get_board_list(...) (one upstream call)
-    - pools block: delegated to the existing module-level helper
-      `_compute_limit_pools_block(manager, target_date)` (defined at
-      `agent.py:568`) so the 3-tuple unpack
-      (`zt_pool`, `dt_pool`, `_src`, `_warn`) and the per-pool
-      `MarketStatsErrorEntry` literals live in one place. `ok += 1`
-      is incremented **once** for the whole pools block (not per pool),
-      matching the original handler's accounting at `agent.py:1346`.
+    Preserves the sequential behavior for /agent/market-recap's stats
+    sub-call (`agent.py:2747-2760`), which already runs this function
+    inside its own `asyncio.to_thread(...)` boundary. The async
+    `/agent/market-stats` route (added 2026-09-10) does NOT call this
+    wrapper — it invokes the 3 helpers via `asyncio.gather` directly.
+
+    Per-block fan-out with per-block error isolation:
+    - stocks block: `_build_stocks_block(manager)`
+    - boards block: `_build_boards_block(manager)` (skipped when
+      ``include_boards=False``)
+    - pools block: `_build_limit_pools_block(manager, target_date)`
+      (skipped when ``include_pools=False``)
 
     A single upstream failure sets that block to null and appends to
     `errors[]`; the rest continue.
@@ -1566,67 +1651,17 @@ def build_market_stats_response(
     ok = 0
 
     # --- stocks block (always attempted) ---
-    try:
-        quotes, _src = manager.get_realtime_quotes("csi")
-        values = [
-            q.change_pct for q in (quotes or []) if getattr(q, "change_pct", None) is not None
-        ]
-        agg = compute_aggregate(
-            values,
-            bin_width=STOCK_BUCKET_BIN_WIDTH,
-            buckets_template=build_stock_buckets(),
-        )
-        stocks_stats = _stock_stats_from_aggregate(agg)
+    stocks_stats, stock_errors = _build_stocks_block(manager)
+    errors.extend(stock_errors)
+    if stocks_stats is not None:
         ok += 1
-    except Exception as exc:
-        logger.warning(f"[agent/market-stats] stocks failed: {exc}", exc_info=True)
-        errors.append(
-            MarketStatsErrorEntry(
-                block="stocks",
-                error=type(exc).__name__,
-                message=str(exc),
-            )
-        )
 
     # --- boards block (skipped when include_boards=false) ---
     if include_boards:
-        try:
-            boards, src = stock_board_cache.get_board_list(
-                board_type=None,
-                source="ths",
-                include_quote=True,
-                manager=manager,
-            )
-            values = [
-                b.get("change_pct")
-                for b in (boards or [])
-                if isinstance(b.get("change_pct"), (int, float))
-                and not isinstance(b.get("change_pct"), bool)
-            ]
-            agg = compute_aggregate(
-                values,
-                bin_width=BOARD_BUCKET_BIN_WIDTH,
-                buckets_template=build_board_buckets(),
-            )
-            boards_stats = _board_stats_from_aggregate(agg, src or "ths")
-            # NEW (2026-09-09): top-3 gainers + top-3 losers derived from
-            # the same upstream rows. Pure in-memory sort; no extra
-            # upstream call, no cache-key change. Defaults to [] when
-            # upstream returns 0 rows with non-None change_pct.
-            # Spec: docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md §3.1
-            top_gainers, top_losers = _select_top_board_movers(boards, top_n=3)
-            boards_stats.top_gainers = top_gainers
-            boards_stats.top_losers = top_losers
+        boards_stats, board_errors = _build_boards_block(manager)
+        errors.extend(board_errors)
+        if boards_stats is not None:
             ok += 1
-        except Exception as exc:
-            logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
-            errors.append(
-                MarketStatsErrorEntry(
-                    block="boards",
-                    error=type(exc).__name__,
-                    message=str(exc),
-                )
-            )
 
     # --- limit_pools block ---
     # The field is ALWAYS present in the JSON response (per spec §4 wire
@@ -1636,17 +1671,20 @@ def build_market_stats_response(
     # pools were attempted. (That signal is in `summary.requested`.)
     if include_pools:
         try:
-            limit_pools_block, pool_errors = _compute_limit_pools_block(manager, target_date)
+            limit_pools_block, pool_errors = _build_limit_pools_block(manager, target_date)
             errors.extend(pool_errors)
             # Per-pool failures don't decrement ok — the block call DID
             # complete (with partial data). Empty upstream results also
             # count as success (caller distinguishes via inner [] vs null).
             ok += 1
         except Exception as exc:
+            # Dead branch in practice — _build_limit_pools_block catches
+            # all exceptions internally. block='zt_pool' is the closest
+            # semantic match in MarketStatsErrorEntry's Literal.
             logger.warning(f"[agent/market-stats] pools failed: {exc}", exc_info=True)
             errors.append(
                 MarketStatsErrorEntry(
-                    block="pools",
+                    block="zt_pool",
                     error=type(exc).__name__,
                     message=str(exc),
                 )
@@ -1682,7 +1720,7 @@ def build_market_stats_response(
     ],
 )
 @map_errors
-def get_market_stats(
+async def get_market_stats(
     include_boards: bool = Query(
         default=True,
         description="是否包含板块块;false 时只返回个股块 (无板块上游调用)",
@@ -1706,6 +1744,10 @@ def get_market_stats(
 ) -> Response:
     """Per-block fan-out with per-block error isolation.
 
+    Cold-path runs stocks / boards / pools blocks concurrently via
+    asyncio.gather + asyncio.to_thread (per spec §2.2). Hot-path
+    returns the cached entry unchanged.
+
     stocks block:  manager.get_realtime_quotes('csi') (single upstream call)
     boards block:  stock_board_cache.get_board_list(board_type=None, source='ths',
                    include_quote=True, manager=manager) (single upstream call,
@@ -1716,6 +1758,8 @@ def get_market_stats(
     A single upstream failure sets that block to ``null`` and surfaces
     the exception in ``errors[]``; the other blocks continue normally.
     Cached 60s via ``get_quote_cache`` (one entry shared between json/md).
+
+    Spec: docs/superpowers/specs/2026-09-10-agent-market-stats-parallel-fanout-design.md
     """
     if trade_date is not None and not _TRADE_DATE_RE.match(trade_date):
         raise HTTPException(
@@ -1738,10 +1782,82 @@ def get_market_stats(
     if hit is not None:
         return _render_agent("market-stats", hit, format)
 
-    result = build_market_stats_response(
-        include_boards=include_boards,
-        include_pools=include_pools,
-        target_date=target_date,
+    # Parallel fan-out — each block runs in its own asyncio.to_thread so
+    # the sync upstream calls don't block the event loop. mirrors the
+    # pattern at /agent/market-recap (agent.py:2725-2769).
+    started = time.monotonic()
+    manager = get_manager()
+    requested = 1 + (1 if include_boards else 0) + (1 if include_pools else 0)
+
+    async def _gather_stocks():
+        # The sync helper catches its own exceptions and returns
+        # (None, [err]) on failure. So the only way _gather_stocks sees
+        # an exception is a non-Exception BaseException (CancelledError,
+        # KeyboardInterrupt) — same accounting as the sync wrapper.
+        try:
+            block, errs = await asyncio.to_thread(_build_stocks_block, manager)
+            return block, errs, block is not None
+        except Exception as exc:
+            logger.warning(f"[agent/market-stats] stocks failed: {exc}", exc_info=True)
+            return None, [
+                MarketStatsErrorEntry(
+                    block="stocks", error=type(exc).__name__, message=str(exc)
+                )
+            ], False
+
+    async def _gather_boards():
+        if not include_boards:
+            return None, [], False
+        try:
+            block, errs = await asyncio.to_thread(_build_boards_block, manager)
+            return block, errs, block is not None
+        except Exception as exc:
+            logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
+            return None, [
+                MarketStatsErrorEntry(
+                    block="boards", error=type(exc).__name__, message=str(exc)
+                )
+            ], False
+
+    async def _gather_pools():
+        if not include_pools:
+            return None, [], False
+        try:
+            block, errs = await asyncio.to_thread(
+                _build_limit_pools_block, manager, target_date
+            )
+            # Per-pool failures don't decrement ok — the block DID run
+            # (with partial data). Empty upstream results also count as
+            # success (caller distinguishes via inner [] vs null). Mirrors
+            # the original sync wrapper's `ok += 1` accounting at
+            # agent.py:1638-1644. _build_limit_pools_block catches all
+            # exceptions internally so the outer catch is defensive.
+            return block, errs, True
+        except Exception as exc:
+            # Dead branch in practice — _build_limit_pools_block catches
+            # all exceptions internally. block='zt_pool' is the closest
+            # semantic match in MarketStatsErrorEntry's Literal.
+            logger.warning(f"[agent/market-stats] pools failed: {exc}", exc_info=True)
+            return None, [
+                MarketStatsErrorEntry(
+                    block="zt_pool", error=type(exc).__name__, message=str(exc)
+                )
+            ], False
+
+    (stocks_block, stocks_errs, stocks_ok), (boards_block, boards_errs, boards_ok), (
+        pools_block,
+        pools_errs,
+        pools_ok,
+    ) = await asyncio.gather(_gather_stocks(), _gather_boards(), _gather_pools())
+
+    ok = int(stocks_ok) + int(boards_ok) + int(pools_ok)
+    errors: list[MarketStatsErrorEntry] = stocks_errs + boards_errs + pools_errs
+    result = MarketStatsResponse(
+        stocks=stocks_block,
+        boards=boards_block,
+        limit_pools=pools_block or MarketStatsLimitPools(zt=None, dt=None),
+        errors=errors,
+        summary=_batch_summary(requested, ok, started),
     )
     cached_store(get_quote_cache, cache_key, result)
     return _render_agent("market-stats", result, format)
