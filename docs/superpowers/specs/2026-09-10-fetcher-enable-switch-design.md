@@ -157,13 +157,31 @@ source 'zhitu' is disabled by ZHITU_ENABLED=false
 needs no new HTTP plumbing. This is the whole reason for choosing a
 distinguishable error: "disabled" and "typo" must be separable in the logs.
 
-**c. `/healthz` (`api/routes/health.py:113`).** The on-demand branch computes
-`available = bool(instance.is_available())` and then
-`reason = None if available else ...`. A disabled fetcher would report
-`available: true` here while the manifest reports `false` for the same
-fetcher — two endpoints disagreeing, and `/healthz` claiming a source is
-usable that the manager cannot route to. Guard it:
-`available = bool(instance.is_available()) and instance.is_enabled()`.
+**c. `/healthz` (`api/routes/health.py:113`) and the manifest
+(`explorer/manifest.py:389`) — both compute the same wrong thing.** Both read
+
+```python
+available = bool(instance.is_available())
+reason = None if available else instance.unavailable_reason()
+```
+
+`available` comes from `is_available()` alone, so a disabled fetcher with a
+valid token reports `available: true, reason: null` on **both** surfaces — and
+because `reason` is only evaluated when `available` is already False, the new
+`"disabled by …"` string never surfaces at all. Guard both:
+
+```python
+available = bool(instance.is_available()) and instance.is_enabled()
+```
+
+The `and enabled` half matters on its own: without it, `available` could be
+`True` for a disabled fetcher while `reason` is `None`, which is the same
+contradiction in a different shape. Fixing only one of the two would swap
+which endpoint lies rather than making them agree.
+
+The registered-fetcher branch of `/healthz` (health.py:75-95) needs no guard:
+its `available` comes from the circuit-breaker snapshot, and a disabled
+fetcher can never be registered, so it cannot appear there.
 
 **d. Manifest presentation.** The row stays, with `available: false` and the
 reason from (a)/(c). Hiding it would remove the only UI surface where "why did
@@ -251,8 +269,12 @@ New `tests/test_fetcher_enable_switch.py`:
    against all four overriding subclasses (Zhitu / Ths / Baidu / Zzshare), not
    just the two base implementations, since a guard placed only in the bases
    would be invisible to them.
-8. `/healthz?details=true` reports `available: false` with the disabled reason
-   for a disabled fetcher, agreeing with the manifest.
+8. `/healthz?details=true` **and** `/control/api-manifest` both report
+   `available: false` with the disabled reason for a disabled fetcher whose
+   token **is** present (so the assertion isolates the switch, not the token).
+   The manifest half needs its own test: the existing
+   `test_unavailable_fetcher_surfaces_with_available_false_and_reason` blanks
+   `_token` and so only ever exercises the token-absent path.
 9. `POST /control/fetcher-test` returns 200 (`ok: false`, non-`UnknownFetcher`)
    for a disabled fetcher, and 200 with `UnknownFetcher` for a name no class
    has — driven **without** mocking `get_fetcher`, which is how the existing

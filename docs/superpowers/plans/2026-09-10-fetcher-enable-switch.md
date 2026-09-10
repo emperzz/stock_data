@@ -739,17 +739,35 @@ git commit -m "feat: distinguish 'disabled by config' from 'unknown source' on l
 
 **Required, not cosmetic.** `explorer/manifest.py:255 _resolve_fetchers` enumerates **all** `BaseFetcher` subclasses — not the registered instances — and fills each row's `reason` from `unavailable_reason()`. Without this branch, a disabled source renders in the explorer as "ZHITU_TOKEN environment variable not set", pointing the reader at the wrong cause.
 
-**Second gap, same root cause.** `/healthz?details=true` computes its `available` flag from `is_available()` alone (`api/routes/health.py:113`), never consulting the switch, then sets `unavailable_reason = None if available else ...`. So a disabled source would report `available: true` in `/healthz` while the manifest reports `available: false` for the same fetcher — two endpoints disagreeing, and `/healthz` claiming a source is usable when it is not registered at all. This task fixes both.
+**Second gap, same root cause — and it is on BOTH reading endpoints.**
+`/healthz` (`api/routes/health.py:113`) and the manifest
+(`explorer/manifest.py:389`) each compute
+
+```python
+available = bool(instance.is_available())
+reason = None if available else instance.unavailable_reason()
+```
+
+from `is_available()` alone, never consulting the switch. So a disabled
+fetcher **with a valid token** reports `available: true, reason: null` on both
+surfaces — and since `reason` is only evaluated once `available` is False, the
+new `"disabled by …"` string never appears anywhere. Fixing only one of the
+two would swap which endpoint lies. Both are in scope here.
+
+The registered branch of `/healthz` (health.py:75-95) needs no guard: its
+`available` comes from the circuit-breaker snapshot, and a disabled fetcher can
+never be registered, so it cannot appear in that branch.
 
 **Files:**
 - Modify: `stock_data/data_provider/base.py` (split `unavailable_reason` into a final wrapper + `_subclass_unavailable_reason`, in both `SDKFetcherMixin` ~line 139 and `BaseFetcher` ~line 285)
 - Modify: `stock_data/data_provider/fetchers/{zhitu,ths,baidu,zzshare}_fetcher.py` (rename their overrides)
-- Modify: `stock_data/api/routes/health.py:113` (consult the switch for the on-demand branch)
-- Test: `tests/test_fetcher_enable_switch.py` (append)
+- Modify: `stock_data/api/routes/health.py:113` (consult the switch on the on-demand branch)
+- Modify: `stock_data/explorer/manifest.py:389` (consult the switch when computing `available`)
+- Test: `tests/test_fetcher_enable_switch.py` (append), `tests/test_explorer_manifest_endpoint.py` (append)
 
 **Interfaces:**
 - Consumes: `is_enabled()` / `enabled_env_var()` (Task 2).
-- Produces: `unavailable_reason()` returns `"disabled by <VAR>=false"` when disabled, ahead of any token/SDK reason, and is **final** (no subclass may override it). Consumed by `explorer/manifest.py::_resolve_fetchers` (manifest row stays present with `available: false`) and `/healthz` (reports `available: false`). Subclasses now implement `_subclass_unavailable_reason()`.
+- Produces: `unavailable_reason()` returns `"disabled by <VAR>=false"` when disabled, ahead of any token/SDK reason, and is **final** (no subclass may override it). The manifest row and the `/healthz` entry both stay present with `available: false` + that reason. Subclasses now implement `_subclass_unavailable_reason()`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -821,6 +839,36 @@ class TestUnavailableReasonReportsDisabled:
                 f"enable guard; got {reason!r}"
             )
             monkeypatch.delenv(cls.enabled_env_var(), raising=False)
+```
+
+Then add a manifest-side test to `tests/test_explorer_manifest_endpoint.py`, inside `class TestManifestFetchersField` (which already has the `_manifest()` / `_endpoint()` helpers). This is the only test that catches the reading-endpoint gap, because the existing `test_unavailable_fetcher_surfaces_with_available_false_and_reason` blanks `_token` and therefore only ever exercises the token-absent path:
+
+```python
+    def test_disabled_fetcher_reports_unavailable_in_manifest(self, monkeypatch):
+        """A disabled fetcher must NOT report available=true in the manifest.
+
+        The manifest computes `available` from is_available() alone, so a
+        disabled fetcher whose token IS set would otherwise appear as a
+        usable source with reason=null — and the "disabled by …" string
+        would never surface, since `reason` is only evaluated when
+        `available` is already False. is_available is forced True here so
+        this asserts the enable switch specifically, not the token.
+        """
+        from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
+
+        monkeypatch.setattr(ZhituFetcher, "is_available", lambda self: True)
+        monkeypatch.setenv("ZHITU_ENABLED", "false")
+        m = self._manifest()
+        ep = self._endpoint(m, "GET", "/stocks/{code}/info")
+        zhitu = next((f for f in ep["fetchers"] if f["name"] == "ZhituFetcher"), None)
+        assert zhitu is not None
+        assert zhitu["available"] is False, (
+            "disabled fetcher reported available=true — the manifest ignored "
+            "<SLUG>_ENABLED and claims a source the manager cannot route to"
+        )
+        assert "ZHITU_ENABLED" in (zhitu["reason"] or ""), (
+            f"expected the disabled reason in the manifest row; got {zhitu['reason']!r}"
+        )
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -926,27 +974,49 @@ grep -rn "def unavailable_reason" stock_data/ --include=*.py
 
 Expected: exactly one hit, `base.py` (the public wrapper). A second hit means an override was renamed incompletely and would shadow the switch — the `test_every_override_is_covered` test is what pins this.
 
-**4. Make `/healthz` agree with the manifest** — in `stock_data/api/routes/health.py`, the on-demand branch currently reads (line ~113):
+**5. Fix the two now-stale docstring cross-references.** Two docstrings name the pre-rename method; leaving them makes the "override this instead" contract grep-hostile:
+
+- `stock_data/data_provider/base.py:59` — the `SDKFetcherMixin` class docstring says "the human-readable ``unavailable_reason()``"; change to ``_subclass_unavailable_reason()``.
+- `stock_data/data_provider/fetchers/ths_fetcher.py:835` — `:meth:`is_available` and :meth:`unavailable_reason` so the two`; change `:meth:`unavailable_reason`` to `:meth:`_subclass_unavailable_reason``.
+
+Do not touch `base.py:139`'s and `base.py:285`'s own docstrings beyond what step 3 already specifies.
+
+**4. Make the two reading endpoints agree** — both compute `available` from
+`is_available()` alone, so both need the same guard. Fixing only one would
+swap which surface lies instead of making them agree.
+
+In `stock_data/api/routes/health.py`, the on-demand branch currently reads
+(line ~113):
 
 ```python
             available = bool(instance.is_available())
             reason = None if available else instance.unavailable_reason()
 ```
 
-Replace with:
+In `stock_data/explorer/manifest.py`, `_resolve_fetchers` currently reads
+(line ~389, inside the `for fetcher_cls in candidate_classes:` loop):
 
 ```python
-            # The <SLUG>_ENABLED switch is authoritative — a config-disabled
-            # fetcher is not registered, so reporting available=True here
-            # would contradict /control/api-manifest (which reads the same
-            # unavailable_reason()) and claim a source is usable that the
-            # manager cannot route to.
-            enabled = instance.is_enabled()
-            available = bool(instance.is_available()) and enabled
+            available = bool(instance.is_available())
             reason = None if available else instance.unavailable_reason()
 ```
 
-Note the `and enabled` guard: without it, `available` could be True for a disabled fetcher while `reason` is None, which is the same contradiction in a different shape.
+Replace **both** with:
+
+```python
+            # The <SLUG>_ENABLED switch is authoritative — a config-disabled
+            # fetcher is not registered, so reporting available=True would
+            # claim a source is usable that the manager cannot route to. The
+            # `and enabled` half also keeps `available` and `reason`
+            # consistent: without it, `available` could be True for a
+            # disabled fetcher while `reason` is None.
+            available = bool(instance.is_available()) and instance.is_enabled()
+            reason = None if available else instance.unavailable_reason()
+```
+
+Leave the registered branch of `health.py` (lines ~75-95) alone: its
+`available` comes from `REALTIME_CIRCUIT_BREAKER.snapshot_state(...)`, and a
+disabled fetcher can never be registered, so it cannot reach that branch.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -961,7 +1031,7 @@ Expected: PASS — `test_unavailable_fetcher_surfaces_with_available_false_and_r
 - [ ] **Step 6: Commit**
 
 ```bash
-git add stock_data/data_provider/base.py stock_data/data_provider/fetchers/zhitu_fetcher.py stock_data/data_provider/fetchers/ths_fetcher.py stock_data/data_provider/fetchers/baidu_fetcher.py stock_data/data_provider/fetchers/zzshare_fetcher.py stock_data/api/routes/health.py tests/test_fetcher_enable_switch.py
+git add stock_data/data_provider/base.py stock_data/data_provider/fetchers/zhitu_fetcher.py stock_data/data_provider/fetchers/ths_fetcher.py stock_data/data_provider/fetchers/baidu_fetcher.py stock_data/data_provider/fetchers/zzshare_fetcher.py stock_data/api/routes/health.py stock_data/explorer/manifest.py tests/test_fetcher_enable_switch.py
 git commit -m "feat: make unavailable_reason() final so the enable switch cannot be bypassed"
 ```
 
