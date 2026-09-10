@@ -4,7 +4,7 @@
 
 **Goal:** Add a per-fetcher `<SLUG>_ENABLED` env switch (default `true`) that, when false, keeps the fetcher from being registered with the manager — removing it from every routing surface — while still reporting "disabled" rather than "unknown source" to callers.
 
-**Architecture:** A single `is_enabled()` classmethod on `BaseFetcher` derives its env var name from the class name (`ZhituFetcher` → `ZHITU_ENABLED`), re-reading the env on every call. One gate in `create_default_manager()` — the only production registration site — drops disabled fetchers before instantiation. Because `_filter_by_capability` and `_slug_index` both read the registered list, that one gate removes the source from capability routing and source routing together. Three co-readers consult the same `is_enabled()` so the failure surfaces as a diagnosable "disabled by <VAR>=false" instead of an anonymous "no such source".
+**Architecture:** A single `is_enabled()` classmethod on `BaseFetcher` derives its env var name from the class name (`ZhituFetcher` → `ZHITU_ENABLED`), re-reading the env on every call. One gate in `create_default_manager()` — the only production registration site — drops disabled fetchers before instantiation. Because `_filter_by_capability` and `_slug_index` both read the registered list, that one gate removes the source from capability routing and source routing together. Four co-readers consult the same `is_enabled()` so the failure surfaces as a diagnosable "disabled by <VAR>=false" instead of an anonymous "no such source": `unavailable_reason()` (made final, so no override can bypass the switch), `get_fetcher()`/`_with_source()`, `/healthz`, and the manifest row.
 
 **Tech Stack:** Python 3.12, pytest, FastAPI (unchanged), no new dependencies.
 
@@ -16,7 +16,7 @@
 - **"Disabled" means not instantiated and not registered.** It does NOT mean "module not imported" — `data_provider/__init__.py` eagerly re-exports all 12 fetcher classes and `explorer/manifest.py:255` needs those class objects. Do not attempt to make `_ENABLED=false` skip an import.
 - **`/control/fetcher-test` stays ungated.** It bypasses manager routing by documented design; an operator must be able to probe a disabled source before enabling it.
 - **Default must be `true`.** A regression test pins that no fetcher is dropped when no `*_ENABLED` var is set.
-- Test command: `.venv/Scripts/python.exe -m pytest` (see CLAUDE.md — system `python` silently disables akshare-routed fetchers).
+- Test command: `python -m pytest` (see CLAUDE.md — system `python` silently disables akshare-routed fetchers).
 
 ---
 
@@ -74,7 +74,7 @@ class TestSourceSlug:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v`
+Run: `python -m pytest tests/test_fetcher_enable_switch.py -v`
 Expected: FAIL — `ImportError: cannot import name 'source_slug' from 'stock_data.data_provider.utils.normalize'`
 
 - [ ] **Step 3: Add the helper to normalize.py**
@@ -109,7 +109,7 @@ Add `"source_slug",` to the `__all__` list at the top of the same file (keep alp
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v`
+Run: `python -m pytest tests/test_fetcher_enable_switch.py -v`
 Expected: PASS (5 tests)
 
 - [ ] **Step 5: Point `_derive_slug` at the shared helper**
@@ -138,7 +138,7 @@ Add `source_slug` to the existing `from .utils.normalize import ...` line at the
 
 - [ ] **Step 6: Run the source-routing regression tests**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_board_source_routing.py tests/test_fetcher_enable_switch.py -v`
+Run: `python -m pytest tests/test_board_source_routing.py tests/test_fetcher_enable_switch.py -v`
 Expected: PASS — `_derive_slug` is behavior-identical, so board source routing is unaffected.
 
 - [ ] **Step 7: Commit**
@@ -158,7 +158,7 @@ git commit -m "refactor: extract source_slug() so env names and ?source= share o
 
 **Interfaces:**
 - Consumes: `source_slug` from Task 1.
-- Produces: `BaseFetcher.enabled_env_var() -> str` and `BaseFetcher.is_enabled() -> bool`, both classmethods. Available on every subclass (all 13 fetchers, plus test fakes) with no per-fetcher change. Tasks 3–5 call `cls.is_enabled()` / `cls.enabled_env_var()`.
+- Produces: `BaseFetcher.enabled_env_var() -> str` and `BaseFetcher.is_enabled() -> bool`, both classmethods. Available on every subclass (all 13 fetchers, plus test fakes) with no per-fetcher declaration. Tasks 3–5 call `cls.is_enabled()` / `cls.enabled_env_var()`; Task 5 additionally renames the four `unavailable_reason()` overrides so this switch cannot be bypassed.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -238,7 +238,7 @@ class TestIsEnabled:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v -k "Enabled or IsEnabled"`
+Run: `python -m pytest tests/test_fetcher_enable_switch.py -v -k "Enabled or IsEnabled"`
 Expected: FAIL — `AttributeError: type object 'ZhituFetcher' has no attribute 'enabled_env_var'`
 
 - [ ] **Step 3: Add the classmethods to BaseFetcher**
@@ -280,7 +280,7 @@ Note: `os` is already imported in `base.py` (line 5), so no new stdlib import is
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v`
+Run: `python -m pytest tests/test_fetcher_enable_switch.py -v`
 Expected: PASS (all tests, including Task 1's)
 
 - [ ] **Step 5: Commit**
@@ -392,7 +392,7 @@ Note: `_all_fetcher_classes()` is the private helper introduced in Step 3 below;
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v -k Registration`
+Run: `python -m pytest tests/test_fetcher_enable_switch.py -v -k Registration`
 Expected: FAIL — `test_disabled_fetcher_is_not_registered` asserts ZhituFetcher is absent but it is still registered; `test_no_enabled_var_set_drops_nobody` fails on `ImportError: cannot import name '_all_fetcher_classes'`.
 
 - [ ] **Step 3: Add the gate**
@@ -479,12 +479,12 @@ def create_default_manager() -> DataFetcherManager:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v`
+Run: `python -m pytest tests/test_fetcher_enable_switch.py -v`
 Expected: PASS (all tests)
 
 - [ ] **Step 5: Run the registration-dependent regression tests**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_board_source_routing.py tests/test_manager_stock_news.py tests/test_manager_announcements_backup_ths.py tests/test_announcements_eastmoney_failover.py tests/test_build_membership_index.py -v`
+Run: `python -m pytest tests/test_board_source_routing.py tests/test_manager_stock_news.py tests/test_manager_announcements_backup_ths.py tests/test_announcements_eastmoney_failover.py tests/test_build_membership_index.py -v`
 Expected: PASS — these all call `create_default_manager()` and assert on the registered set; with no `*_ENABLED` set, the set is unchanged.
 
 - [ ] **Step 6: Commit**
@@ -502,11 +502,27 @@ Without this, `?source=zhitu` against a disabled zhitu reports "No fetcher with 
 
 **Files:**
 - Modify: `stock_data/data_provider/manager.py` (add `_find_disabled_fetcher_class` + `_raise_if_disabled`; call from `get_fetcher` ~line 210 and `_with_source` ~line 275)
+- Modify: `stock_data/explorer/routes.py:270` (guard `manager.get_fetcher` against the new `ValueError`)
+- Modify: `tests/test_fetcher_test_endpoint.py` (pin the guard with a non-mocked test)
 - Test: `tests/test_fetcher_enable_switch.py` (append)
 
 **Interfaces:**
 - Consumes: `source_slug` (Task 1), `BaseFetcher.is_enabled()` / `enabled_env_var()` (Task 2).
-- Produces: `ValueError` with message `source '<slug>' is disabled by <VAR>=false`. The `ValueError` → 400 mapping already exists in `api/routes/errors.py::map_errors`, and `api/routes/boards.py` already catches `ValueError` at several sites, so no HTTP-layer change is needed.
+- Produces: `ValueError` with message `source '<slug>' is disabled by <VAR>=false`. The `ValueError` → 400 mapping already exists in `api/routes/errors.py::map_errors`, and `api/routes/boards.py` already catches `ValueError` at several sites, so the public API needs no HTTP-layer change.
+
+**Why `explorer/routes.py` must change too.** `/control/*` is mounted on a bare `APIRouter` and carries **no** `@map_errors`; the app-level handlers in `server.py:214/229` cover `RequestValidationError` and `StarletteHTTPException` only, so a raw `ValueError` becomes a 500. `POST /control/fetcher-test` calls `manager.get_fetcher(req.fetcher)` at `explorer/routes.py:270` with no try/except, and its `if fetcher is None:` branch is *precisely* how an unregistered class reaches `_instantiate_unregistered_fetcher` — the on-demand instantiation that makes probing a disabled source work. Raising instead of returning `None` would turn that branch into dead code for the exact classes it exists to serve, and would 500 the probe, contradicting the Global Constraint that `/control/fetcher-test` stays ungated. Because that branch is unreachable with a registered manager, no existing test catches it — hence the non-mocked test in Step 4.
+
+**A pre-existing bug this same guard fixes (verified, not hypothetical).** A genuinely unknown name already 500s on this endpoint today. Confirmed traceback:
+
+```
+File "stock_data/explorer/routes.py", line 270, in control_fetcher_test
+    fetcher = manager.get_fetcher(req.fetcher)
+File "stock_data/data_provider/manager.py", line 211, in get_fetcher
+    raise ValueError(f"No fetcher with name {source!r} is registered")
+ValueError: No fetcher with name 'ghost' is registered
+```
+
+So the `if fetcher is None:` branch — and with it `_instantiate_unregistered_fetcher` — has been **unreachable in production all along**; `tests/test_fetcher_test_endpoint.py::test_unknown_fetcher_returns_ok_false_http_200` only passes because it patches `get_fetcher` to return `None`. The one `try/except ValueError: fetcher = None` in Step 4 restores both the disabled-source probe and the unknown-name path, and lets the existing mocked test be backed by a real one.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -566,9 +582,50 @@ class TestDisabledSourceError:
 
 Add `from stock_data.data_provider.manager import DataFetcherManager` to the test file's imports.
 
+Then append this second class — it tests the *control endpoint* guard, in a separate file because it needs an app/TestClient fixture, and deliberately does **not** mock `get_fetcher` (the existing `test_unknown_fetcher_returns_ok_false_http_200` does mock it, which is exactly why the 500 went unnoticed).
+
+Append to `tests/test_fetcher_test_endpoint.py`:
+
+```python
+def test_unknown_fetcher_real_lookup_returns_ok_false_http_200(client):
+    """Unmocked: a name no fetcher class has must return UnknownFetcher, not 500.
+
+    The sibling test_unknown_fetcher_returns_ok_false_http_200 patches
+    get_fetcher to return None, so it never exercised the route's real
+    lookup — the route raised ValueError before reaching the None check.
+    This test drives the real path.
+    """
+    r = _post(client, {"fetcher": "ghost", "method": "get_realtime_quote", "kwargs": {}})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"]["type"] == "UnknownFetcher"
+
+
+def test_disabled_fetcher_is_still_probeable(client, monkeypatch):
+    """A config-disabled fetcher must still be testable.
+
+    /control/fetcher-test intentionally bypasses manager routing so an
+    operator can verify an upstream source before enabling it. The disabled
+    fetcher is absent from the manager, so this exercises the on-demand
+    instantiation path (_instantiate_unregistered_fetcher) — which only
+    runs if the route tolerates the lookup failure instead of 500ing.
+    """
+    monkeypatch.setenv("ZHITU_ENABLED", "false")
+    r = _post(client, {"fetcher": "ZhituFetcher", "method": "get_stock_info",
+                       "kwargs": {"stock_code": "600519"}})
+    assert r.status_code == 200, "disabled fetcher probe 500'd"
+    body = r.json()
+    # The probe is allowed to fail upstream (no token / network in tests) —
+    # what it must NOT do is die at the lookup step.
+    assert body["error"] is None or body["error"]["type"] != "UnknownFetcher", (
+        f"disabled fetcher was reported as UnknownFetcher: {body['error']}"
+    )
+```
+
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v -k DisabledSourceError`
+Run: `python -m pytest tests/test_fetcher_enable_switch.py -v -k DisabledSourceError`
 Expected: FAIL — `test_get_fetcher_names_the_env_var` gets "No fetcher with name 'zhitu' is registered" (no `ZHITU_ENABLED`); `test_accepts_class_name_form` and `test_with_source_reports_disabled` fail the same way.
 
 - [ ] **Step 3: Add the helpers and wire them in**
@@ -637,20 +694,42 @@ In `_with_source`, make the identical change at its lookup raise (~line 276):
         if market not in target.supported_markets:
 ```
 
+Finally, guard the control endpoint in `stock_data/explorer/routes.py`. Replace the line at 270:
+
+```python
+        fetcher = manager.get_fetcher(req.fetcher)
+```
+
+with:
+
+```python
+        # get_fetcher raises ValueError for (a) a genuinely unknown name and
+        # (b) a name that is config-disabled. Both must fall through to the
+        # on-demand instantiation below — this endpoint's contract is to
+        # probe any fetcher, including one the manager didn't register
+        # (unavailable, or turned off with <SLUG>_ENABLED=false). /control/*
+        # has no @map_errors and the app-level handlers don't cover
+        # ValueError, so letting it propagate would 500 the probe.
+        try:
+            fetcher = manager.get_fetcher(req.fetcher)
+        except ValueError:
+            fetcher = None
+```
+
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v`
-Expected: PASS (all tests)
+Run: `python -m pytest tests/test_fetcher_enable_switch.py tests/test_fetcher_test_endpoint.py -v`
+Expected: PASS (all tests) — including the two new unmocked control-endpoint tests, and the 20 pre-existing `test_fetcher_test_endpoint.py` tests unchanged.
 
 - [ ] **Step 5: Run the source-routing and error-contract regressions**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_board_source_routing.py tests/test_routes.py -v`
+Run: `python -m pytest tests/test_board_source_routing.py tests/test_routes.py -v`
 Expected: PASS — the generic "no fetcher" path is unchanged for enabled-but-missing sources, which is what these cover.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add stock_data/data_provider/manager.py tests/test_fetcher_enable_switch.py
+git add stock_data/data_provider/manager.py stock_data/explorer/routes.py tests/test_fetcher_enable_switch.py tests/test_fetcher_test_endpoint.py
 git commit -m "feat: distinguish 'disabled by config' from 'unknown source' on lookup"
 ```
 
@@ -660,13 +739,17 @@ git commit -m "feat: distinguish 'disabled by config' from 'unknown source' on l
 
 **Required, not cosmetic.** `explorer/manifest.py:255 _resolve_fetchers` enumerates **all** `BaseFetcher` subclasses — not the registered instances — and fills each row's `reason` from `unavailable_reason()`. Without this branch, a disabled source renders in the explorer as "ZHITU_TOKEN environment variable not set", pointing the reader at the wrong cause.
 
+**Second gap, same root cause.** `/healthz?details=true` computes its `available` flag from `is_available()` alone (`api/routes/health.py:113`), never consulting the switch, then sets `unavailable_reason = None if available else ...`. So a disabled source would report `available: true` in `/healthz` while the manifest reports `available: false` for the same fetcher — two endpoints disagreeing, and `/healthz` claiming a source is usable when it is not registered at all. This task fixes both.
+
 **Files:**
-- Modify: `stock_data/data_provider/base.py` (`unavailable_reason`, in `SDKFetcherMixin` ~line 139 and `BaseFetcher` ~line 292)
+- Modify: `stock_data/data_provider/base.py` (split `unavailable_reason` into a final wrapper + `_subclass_unavailable_reason`, in both `SDKFetcherMixin` ~line 139 and `BaseFetcher` ~line 285)
+- Modify: `stock_data/data_provider/fetchers/{zhitu,ths,baidu,zzshare}_fetcher.py` (rename their overrides)
+- Modify: `stock_data/api/routes/health.py:113` (consult the switch for the on-demand branch)
 - Test: `tests/test_fetcher_enable_switch.py` (append)
 
 **Interfaces:**
 - Consumes: `is_enabled()` / `enabled_env_var()` (Task 2).
-- Produces: `unavailable_reason()` returns `"disabled by <VAR>=false"` when disabled, ahead of any token/SDK reason. Consumed by `explorer/manifest.py::_resolve_fetchers` as the manifest row's `reason` string; the row itself stays present with `available: false`.
+- Produces: `unavailable_reason()` returns `"disabled by <VAR>=false"` when disabled, ahead of any token/SDK reason, and is **final** (no subclass may override it). Consumed by `explorer/manifest.py::_resolve_fetchers` (manifest row stays present with `available: false`) and `/healthz` (reports `available: false`). Subclasses now implement `_subclass_unavailable_reason()`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -674,12 +757,21 @@ Append to `tests/test_fetcher_enable_switch.py`:
 
 ```python
 class TestUnavailableReasonReportsDisabled:
-    def test_disabled_reason_wins_over_token_reason(self, monkeypatch):
-        """The disabled branch must come first.
+    """The reason string is what the explorer shows, so "disabled" must win.
 
-        Without ordering, a disabled SDK fetcher reports "ZHITU_TOKEN not
-        set" and the explorer tells the user to set a token for a source
-        they deliberately turned off.
+    These assert against the OVERRIDING subclasses on purpose. ZhituFetcher,
+    ThsFetcher, BaiduFetcher and ZzshareFetcher each replace
+    unavailable_reason() outright, so a guard placed only in the two base
+    implementations is invisible to them — which is where the switch matters
+    most, since those are the token-gated sources people turn off.
+    """
+
+    def test_disabled_reason_wins_over_token_reason(self, monkeypatch):
+        """A disabled source must not be described as missing its token.
+
+        Without the guard ahead of the override, the explorer tells the
+        operator to set ZHITU_TOKEN for a source they deliberately turned
+        off — sending them to the wrong fix.
         """
         monkeypatch.setenv("ZHITU_ENABLED", "false")
         reason = ZhituFetcher().unavailable_reason()
@@ -687,54 +779,88 @@ class TestUnavailableReasonReportsDisabled:
         assert "ZHITU_TOKEN" not in reason
 
     def test_enabled_fetcher_keeps_existing_reason(self, monkeypatch):
-        """No behavior change for the non-disabled path."""
+        """No behavior change for the non-disabled path.
+
+        The token is set explicitly on the instance instead of via the env:
+        stock_data.server calls load_dotenv(), so on a machine whose real
+        .env has ZHITU_TOKEN the fetcher would report available and this
+        assertion would prove nothing.
+        """
         monkeypatch.delenv("ZHITU_ENABLED", raising=False)
-        monkeypatch.setattr(ZhituFetcher, "is_available", lambda self: False)
-        reason = ZhituFetcher().unavailable_reason()
+        fetcher = ZhituFetcher()
+        monkeypatch.setattr(fetcher, "_token", "", raising=False)
+        reason = fetcher.unavailable_reason()
         assert reason is not None
         assert "disabled" not in reason
+        assert "ZHITU_TOKEN" in reason
 
     def test_enabled_and_available_returns_none(self, monkeypatch):
         monkeypatch.delenv("ZHITU_ENABLED", raising=False)
-        monkeypatch.setattr(ZhituFetcher, "is_available", lambda self: True)
-        assert ZhituFetcher().unavailable_reason() is None
+        fetcher = ZhituFetcher()
+        monkeypatch.setattr(fetcher, "_token", "tok", raising=False)
+        assert fetcher.unavailable_reason() is None
+
+    def test_every_override_is_covered(self, monkeypatch):
+        """All four overriding subclasses must honour the switch.
+
+        A guard added to the two base implementations only would leave
+        Zhitu/Ths/Baidu/Zzshare reporting token or SDK reasons when disabled.
+        Parametrising over the overriders is what makes that a test failure
+        instead of a code-review catch.
+        """
+        from stock_data.data_provider.fetchers.baidu_fetcher import BaiduFetcher
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
+        for cls in (ZhituFetcher, ThsFetcher, BaiduFetcher, ZzshareFetcher):
+            monkeypatch.setenv(cls.enabled_env_var(), "false")
+        for cls in (ZhituFetcher, ThsFetcher, BaiduFetcher, ZzshareFetcher):
+            reason = cls().unavailable_reason()
+            assert reason == f"disabled by {cls.enabled_env_var()}=false", (
+                f"{cls.__name__} overrides unavailable_reason() without the "
+                f"enable guard; got {reason!r}"
+            )
+            monkeypatch.delenv(cls.enabled_env_var(), raising=False)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v -k UnavailableReason`
-Expected: FAIL — `test_disabled_reason_wins_over_token_reason` gets a token/SDK message, not `"disabled by ZHITU_ENABLED=false"`.
+Run: `python -m pytest tests/test_fetcher_enable_switch.py -v -k UnavailableReason`
+Expected: FAIL — `test_disabled_reason_wins_over_token_reason` gets a token/SDK message, not `"disabled by ZHITU_ENABLED=false"`; `test_every_override_is_covered` fails on the first override.
 
-- [ ] **Step 3: Add the branch to both implementations**
+- [ ] **Step 3: Make `unavailable_reason()` final on `BaseFetcher`**
 
-There are two `unavailable_reason()` implementations — `SDKFetcherMixin` (covers Tushare / Baostock / Myquant / Zzshare, ~line 139) and `BaseFetcher` (~line 292, covers the rest). Add the identical guard as the **first** statement of each, before the `if self.is_available(): return None` line:
+**Do not add the guard to each override.** There are **six** `unavailable_reason()` definitions today, not two:
+
+| File:line | Class | Shape |
+|---|---|---|
+| `base.py:139` | `SDKFetcherMixin` | disabled → token → SDK-init |
+| `base.py:285` | `BaseFetcher` | `is_available()` → generic message |
+| `fetchers/zhitu_fetcher.py:102` | `ZhituFetcher` | `not self._token` → message, else `None` |
+| `fetchers/ths_fetcher.py:903` | `ThsFetcher` | `_check_ths_deps()` |
+| `fetchers/baidu_fetcher.py:176` | `BaiduFetcher` | `is_available()` → message |
+| `fetchers/zzshare_fetcher.py:189` | `ZzshareFetcher` | `is_available()` → SDK message |
+
+Adding the guard to the two base bodies fixes only the two classes that inherit them — precisely not the four sources an operator is most likely to disable. Editing all six leaves the same trap for the next fetcher someone adds. Instead, rename the subclasses' implementations.
+
+**1. In `base.py`, rename `SDKFetcherMixin.unavailable_reason` → `_subclass_unavailable_reason`** (same body, minus the new guard — it needs no guard, since the public method now checks first):
 
 ```python
-        if not self.is_enabled():
-            return f"disabled by {self.enabled_env_var()}=false"
-```
+    def _subclass_unavailable_reason(self) -> str | None:
+        """Subclass-specific unavailability reason.
 
-In `SDKFetcherMixin.unavailable_reason`, the method then reads:
+        Never override ``unavailable_reason()`` — override this instead. The
+        public wrapper applies the ``<SLUG>_ENABLED`` check first, and a
+        subclass that replaced the wrapper outright would silently bypass the
+        enable switch (that is exactly the bug this split prevents).
 
-```python
-    def unavailable_reason(self) -> str | None:
-        """Return a human-readable reason this fetcher is unavailable.
-
-        Checks the ``<SLUG>_ENABLED`` switch first: a config-disabled
-        fetcher must report that, not a token/SDK reason, since the
-        explorer surfaces this string as the manifest row's ``reason``
-        (explorer/manifest.py enumerates all subclasses, so disabled
-        fetchers appear there with available=false).
-
-        Then distinguishes "token env var missing" (user fixable) from "SDK
-        init failed" (likely transient or package not installed). When
-        the subclass declared token as OPTIONAL (``_TOKEN_REQUIRED=False``),
-        an empty env var is not by itself an unavailability reason —
-        the anonymous init may have succeeded or failed on its own
-        merits; we surface that init error instead.
+        Distinguishes "token env var missing" (user fixable) from "SDK init
+        failed" (likely transient or package not installed). When the
+        subclass declared token as OPTIONAL (``_TOKEN_REQUIRED=False``), an
+        empty env var is not by itself an unavailability reason — the
+        anonymous init may have succeeded or failed on its own merits; we
+        surface that init error instead.
         """
-        if not self.is_enabled():
-            return f"disabled by {self.enabled_env_var()}=false"
         if self.is_available():
             return None
         env_var = getattr(self, "_TOKEN_ENV_VAR", None)
@@ -748,23 +874,95 @@ In `SDKFetcherMixin.unavailable_reason`, the method then reads:
         )
 ```
 
-For `BaseFetcher.unavailable_reason` (~line 292), add the same two lines at the top of the method body, ahead of its existing `if self.is_available(): return f"{self.name} unavailable (is_available() returned False)"` line.
+**2. In `base.py`, replace `BaseFetcher.unavailable_reason`** (line 285) with the split pair. `BaseFetcher` is the base of every fetcher, so defining the public method here makes it inherited — and therefore consulted — by all 13 regardless of mixin ordering (MRO reaches `SDKFetcherMixin` only after `BaseFetcher` for the SDK fetchers, so putting the public method on `BaseFetcher` is what guarantees it always runs):
+
+```python
+    def unavailable_reason(self) -> str | None:
+        """Return a human-readable reason this fetcher is unavailable.
+
+        The ``<SLUG>_ENABLED`` switch is authoritative: a config-disabled
+        fetcher reports that and nothing else, so the explorer manifest (whose
+        `_resolve_fetchers` enumerates all subclasses, disabled ones included)
+        never tells an operator to set a token for a source they turned off.
+
+        This method is intentionally NOT overridden by subclasses — they
+        implement ``_subclass_unavailable_reason()`` instead. Keeping the
+        enable check on the single public entry point means a new fetcher
+        cannot forget it.
+        """
+        if not self.is_enabled():
+            return f"disabled by {self.enabled_env_var()}=false"
+        return self._subclass_unavailable_reason()
+
+    def _subclass_unavailable_reason(self) -> str | None:
+        """Default unavailability reason; override this, never the wrapper.
+
+        If the fetcher reports available, no reason is needed; otherwise
+        return a generic message naming this fetcher. Token-gated fetchers
+        (Zhitu, Tushare, Myquant) override with a more specific message
+        derived from their actual gating logic (env var / SDK state). The
+        explorer's manifest calls this only when is_available() returns
+        False, so the "always None" path is hit for fetchers that pass.
+        """
+        if self.is_available():
+            return None
+        return f"{self.name} unavailable (is_available() returned False)"
+```
+
+**3. Rename the four per-fetcher overrides** from `unavailable_reason` to `_subclass_unavailable_reason`, bodies unchanged:
+
+- `fetchers/zhitu_fetcher.py:102`
+- `fetchers/ths_fetcher.py:903`
+- `fetchers/baidu_fetcher.py:176`
+- `fetchers/zzshare_fetcher.py:189`
+
+Change only the `def` line in each. Do **not** remove the guard from the bodies — they never had one; the wrapper supplies it.
+
+Verify no override was missed:
+
+```bash
+grep -rn "def unavailable_reason" stock_data/ --include=*.py
+```
+
+Expected: exactly one hit, `base.py` (the public wrapper). A second hit means an override was renamed incompletely and would shadow the switch — the `test_every_override_is_covered` test is what pins this.
+
+**4. Make `/healthz` agree with the manifest** — in `stock_data/api/routes/health.py`, the on-demand branch currently reads (line ~113):
+
+```python
+            available = bool(instance.is_available())
+            reason = None if available else instance.unavailable_reason()
+```
+
+Replace with:
+
+```python
+            # The <SLUG>_ENABLED switch is authoritative — a config-disabled
+            # fetcher is not registered, so reporting available=True here
+            # would contradict /control/api-manifest (which reads the same
+            # unavailable_reason()) and claim a source is usable that the
+            # manager cannot route to.
+            enabled = instance.is_enabled()
+            available = bool(instance.is_available()) and enabled
+            reason = None if available else instance.unavailable_reason()
+```
+
+Note the `and enabled` guard: without it, `available` could be True for a disabled fetcher while `reason` is None, which is the same contradiction in a different shape.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_fetcher_enable_switch.py -v`
+Run: `python -m pytest tests/test_fetcher_enable_switch.py -v`
 Expected: PASS (all tests)
 
-- [ ] **Step 5: Run the manifest regressions**
+- [ ] **Step 5: Run the manifest, health and per-fetcher regressions**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_explorer_manifest_endpoint.py -v`
-Expected: PASS — `test_unavailable_fetcher_surfaces_with_available_false_and_reason` still finds `ZHITU_TOKEN` in the reason when `ZHITU_ENABLED` is unset.
+Run: `python -m pytest tests/test_explorer_manifest_endpoint.py tests/test_routes.py tests/test_ths_board_kline.py tests/test_zzshare_fetcher.py tests/test_baidu_search_news.py -v`
+Expected: PASS — `test_unavailable_fetcher_surfaces_with_available_false_and_reason` still finds `ZHITU_TOKEN` in the reason when `ZHITU_ENABLED` is unset, and the per-fetcher reason tests still see their own messages (they call `unavailable_reason()`, which now routes through the wrapper to the renamed override — same string out). `tests/test_routes.py::test_health_unavailable_fetchers_have_logic_driven_reason` asserts each reason contains the fetcher's name with `FETCHER` stripped, which still holds for messages the wrapper does not intercept.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add stock_data/data_provider/base.py tests/test_fetcher_enable_switch.py
-git commit -m "feat: report config-disabled in unavailable_reason() for the manifest"
+git add stock_data/data_provider/base.py stock_data/data_provider/fetchers/zhitu_fetcher.py stock_data/data_provider/fetchers/ths_fetcher.py stock_data/data_provider/fetchers/baidu_fetcher.py stock_data/data_provider/fetchers/zzshare_fetcher.py stock_data/api/routes/health.py tests/test_fetcher_enable_switch.py
+git commit -m "feat: make unavailable_reason() final so the enable switch cannot be bypassed"
 ```
 
 ---
@@ -795,7 +993,7 @@ In `tests/test_zzshare_fetcher.py`, inside `class TestZzshareFetcherMetadata`, a
         assert ZzshareFetcher.is_enabled() is True
 ```
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_zzshare_fetcher.py -v -k metadata`
+Run: `python -m pytest tests/test_zzshare_fetcher.py -v -k metadata`
 Expected: PASS
 
 - [ ] **Step 2: Document the switch in `.env.example`**
@@ -861,7 +1059,10 @@ In `CLAUDE.md`, in the `## Configuration` section, add a bullet after the `*_PRI
   both capability routing (`_filter_by_capability`) and source routing
   (`_slug_index` → `_with_source`) at once; `?source=<disabled>` reports
   400 `source 'x' is disabled by X_ENABLED=false`, and the explorer
-  manifest keeps the row with `available: false` + that reason.
+  manifest + `/healthz` keep the row with `available: false` + that reason.
+  **`unavailable_reason()` is final on `BaseFetcher`** — subclasses
+  implement `_subclass_unavailable_reason()` so the switch cannot be
+  bypassed by an override.
   **`THS_ENABLED=false` breaks all board endpoints** (the board cache is
   keyed `source='ths'` and `zzshare` is aliased to `ths` there);
   **`ZZSHARE_ENABLED=false`** removes the internal primary of the board
@@ -871,7 +1072,7 @@ In `CLAUDE.md`, in the `## Configuration` section, add a bullet after the `*_PRI
 
 - [ ] **Step 4: Run the full default test suite**
 
-Run: `.venv/Scripts/python.exe -m pytest`
+Run: `python -m pytest`
 Expected: PASS. This is the widest safety net for a change that touches the registration path every test session depends on. Default run skips `live_network`/`requires_token` (~1 min).
 
 - [ ] **Step 5: Run lint**
@@ -894,7 +1095,7 @@ After the plan is implemented, verify the switch end-to-end (not just via unit t
 
 - [ ] Start the server with one source disabled and confirm the log line:
   ```bash
-  ZHITU_ENABLED=false .venv/Scripts/python.exe -m stock_data.server
+  ZHITU_ENABLED=false python -m stock_data.server
   ```
   Expected: `ZhituFetcher disabled by ZHITU_ENABLED` in the startup log, and no `ZhituFetcher added`. Note: per the memory note on orphaned servers, check `netstat -ano | grep LISTENING` before launching rather than killing an unknown PID on port 8888.
 
@@ -910,11 +1111,23 @@ After the plan is implemented, verify the switch end-to-end (not just via unit t
   ```
   Expected: `ZhituFetcher False disabled by ZHITU_ENABLED=false`.
 
+- [ ] Confirm `/healthz` agrees with the manifest (must not say available=true for a disabled source):
+  ```bash
+  curl -s "http://127.0.0.1:8888/healthz?details=true" | python -c "import json,sys; d=json.load(sys.stdin); [print(s['name'], s['available'], s.get('unavailable_reason')) for s in d['sources'] if s['name']=='ZhituFetcher']"
+  ```
+  Expected: `ZhituFetcher False disabled by ZHITU_ENABLED=false` — the same verdict the manifest gave.
+
 - [ ] Confirm `/control/fetcher-test` still probes the disabled fetcher (the intentional bypass):
   ```bash
   curl -s -X POST http://127.0.0.1:8888/control/fetcher-test -H "Content-Type: application/json" -d '{"fetcher":"ZhituFetcher","method":"get_stock_info","params":{}}' | head -c 200
   ```
-  Expected: a normal result or a `FetcherUnavailable` classification — not a crash.
+  Expected: a normal result or a `FetcherUnavailable` classification — not a crash and not `UnknownFetcher`.
+
+- [ ] Confirm the same endpoint returns 200 (not 500) for a genuinely unknown name — the pre-existing bug this plan's route guard fixes:
+  ```bash
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8888/control/fetcher-test -H "Content-Type: application/json" -d '{"fetcher":"ghost","method":"get_stock_info","params":{}}'
+  ```
+  Expected: `200`.
 
 - [ ] Delete the docs-only spec/plan pair or leave them in place per repo convention (previous plans under `docs/superpowers/plans/` are kept).
 

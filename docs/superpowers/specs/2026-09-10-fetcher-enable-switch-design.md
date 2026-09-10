@@ -102,20 +102,44 @@ One gate therefore removes the source from every routing surface at once. Order
 matters: the `is_enabled()` check comes **before** `cls()` instantiation, so a
 disabled source is never constructed (no SDK init side effect, no token read).
 
-### 3. Three co-readers of `is_enabled()`
+### 3. Four co-readers of `is_enabled()`
 
-**a. `unavailable_reason()` (`base.py:139`) — required, not optional.**
+**a. `unavailable_reason()` — required, not optional, and it must be final.**
 `explorer/manifest.py:255 _resolve_fetchers` enumerates **all `BaseFetcher`
 subclasses**, not the registered instances, and fills each row's `reason` from
-`unavailable_reason()`. Add a branch ahead of the token check:
+`unavailable_reason()`. Without a branch, a disabled source renders as
+"ZHITU_TOKEN not set", sending whoever is debugging to the wrong file.
+
+There are **six** `unavailable_reason()` definitions today, four of which are
+per-fetcher overrides that never call the base:
+
+| File:line | Class |
+|---|---|
+| `base.py:139` | `SDKFetcherMixin` |
+| `base.py:285` | `BaseFetcher` |
+| `fetchers/zhitu_fetcher.py:102` | `ZhituFetcher` |
+| `fetchers/ths_fetcher.py:903` | `ThsFetcher` |
+| `fetchers/baidu_fetcher.py:176` | `BaiduFetcher` |
+| `fetchers/zzshare_fetcher.py:189` | `ZzshareFetcher` |
+
+Patching the two base bodies therefore fixes only the classes that inherit
+them — not Zhitu / Ths / Baidu / Zzshare, which are exactly the token-gated
+sources an operator is most likely to disable. Patching all six leaves the
+trap armed for the next fetcher. Instead: rename every subclass
+implementation to `_subclass_unavailable_reason()`, and make the public
+`unavailable_reason()` a final wrapper on `BaseFetcher` that checks the switch
+first:
 
 ```python
-if not self.is_enabled():
-    return f"disabled by {self.enabled_env_var()}=false"
+def unavailable_reason(self) -> str | None:
+    if not self.is_enabled():
+        return f"disabled by {self.enabled_env_var()}=false"
+    return self._subclass_unavailable_reason()
 ```
 
-Without it, a disabled source renders in the explorer as "ZHITU_TOKEN not set",
-sending whoever is debugging to the wrong file.
+Defining the wrapper on `BaseFetcher` (not on the mixin) is what makes it
+consulted for all 13 fetchers regardless of mixin ordering. No override can
+shadow the switch.
 
 **b. `get_fetcher()` / `_with_source()` (`manager.py:179` / `:214`).**
 A slug lookup for a disabled source currently falls through to the generic
@@ -129,13 +153,21 @@ source 'zhitu' is disabled by ZHITU_ENABLED=false
 ```
 
 `api/routes/errors.py::map_errors` already maps `ValueError` → 400, and
-`boards.py` already catches `ValueError` at several sites, so no new HTTP
-plumbing is needed. This is the whole reason for choosing a distinguishable
-error: "disabled" and "typo" must be separable in the logs.
+`boards.py` already catches `ValueError` at several sites, so the public API
+needs no new HTTP plumbing. This is the whole reason for choosing a
+distinguishable error: "disabled" and "typo" must be separable in the logs.
 
-**c. Manifest presentation.** The row stays, with `available: false` and the
-reason from (a). Hiding it would remove the only UI surface where "why did my
-source disappear" can be answered.
+**c. `/healthz` (`api/routes/health.py:113`).** The on-demand branch computes
+`available = bool(instance.is_available())` and then
+`reason = None if available else ...`. A disabled fetcher would report
+`available: true` here while the manifest reports `false` for the same
+fetcher — two endpoints disagreeing, and `/healthz` claiming a source is
+usable that the manager cannot route to. Guard it:
+`available = bool(instance.is_available()) and instance.is_enabled()`.
+
+**d. Manifest presentation.** The row stays, with `available: false` and the
+reason from (a)/(c). Hiding it would remove the only UI surface where "why did
+my source disappear" can be answered.
 
 ### 4. Explicit boundary: `/control/fetcher-test` is NOT gated
 
@@ -143,6 +175,40 @@ source disappear" can be answered.
 manager routing — this is documented, intentional behavior. Keeping the bypass
 is a feature: an operator can verify an upstream source works *before* deciding
 to enable it. The probe path must keep working for a disabled source.
+
+It does not work today. `/control/*` is mounted on a bare `APIRouter` with no
+`@map_errors`, and the app-level handlers (`server.py:214/229`) cover
+`RequestValidationError` and `StarletteHTTPException` only — so a raw
+`ValueError` becomes a 500. `explorer/routes.py:270` calls
+`manager.get_fetcher(req.fetcher)` unguarded, and its `if fetcher is None:`
+branch is precisely the path to `_instantiate_unregistered_fetcher`. Therefore
+(3b) must be paired with a guard there:
+
+```python
+try:
+    fetcher = manager.get_fetcher(req.fetcher)
+except ValueError:
+    fetcher = None
+```
+
+Without it the disabled-source probe 500s, and the on-demand instantiation
+branch is dead code for the exact classes it exists to serve.
+
+**Pre-existing bug, same fix.** A genuinely unknown name already 500s on this
+endpoint. Verified traceback:
+
+```
+File "stock_data/explorer/routes.py", line 270, in control_fetcher_test
+    fetcher = manager.get_fetcher(req.fetcher)
+File "stock_data/data_provider/manager.py", line 211, in get_fetcher
+    raise ValueError(f"No fetcher with name {source!r} is registered")
+ValueError: No fetcher with name 'ghost' is registered
+```
+
+`_instantiate_unregistered_fetcher` has been unreachable in production all
+along; `tests/test_fetcher_test_endpoint.py::test_unknown_fetcher_returns_ok_false_http_200`
+passes only because it patches `get_fetcher` to return `None`. The same
+try/except restores both paths, so this plan fixes a live 500 as a side effect.
 
 ## Coupling warnings that must land in `.env.example`
 
@@ -181,8 +247,17 @@ New `tests/test_fetcher_enable_switch.py`:
    whether `ZHITU_TOKEN` happens to be present in the test environment.
 6. `manager.get_fetcher("zhitu")` raises `ValueError` whose message contains
    `ZHITU_ENABLED`.
-7. `unavailable_reason()` distinguishes disabled from token-missing.
-8. **Regression (the important one):** with no `*_ENABLED` var set,
+7. `unavailable_reason()` distinguishes disabled from token-missing — asserted
+   against all four overriding subclasses (Zhitu / Ths / Baidu / Zzshare), not
+   just the two base implementations, since a guard placed only in the bases
+   would be invisible to them.
+8. `/healthz?details=true` reports `available: false` with the disabled reason
+   for a disabled fetcher, agreeing with the manifest.
+9. `POST /control/fetcher-test` returns 200 (`ok: false`, non-`UnknownFetcher`)
+   for a disabled fetcher, and 200 with `UnknownFetcher` for a name no class
+   has — driven **without** mocking `get_fetcher`, which is how the existing
+   test masked the 500.
+10. **Regression (the important one):** with no `*_ENABLED` var set,
    `create_default_manager()` registers exactly the fetchers whose
    `is_available()` is `True` — i.e. the new gate drops nobody. Phrasing it
    against `is_available()` rather than against a hardcoded name list keeps the
