@@ -17,7 +17,7 @@ from .core.types import (
     CircuitBreaker,
     UnifiedRealtimeQuote,
 )
-from .utils.normalize import index_market_tag, market_tag, normalize_stock_code
+from .utils.normalize import index_market_tag, market_tag, normalize_stock_code, source_slug
 
 logger = logging.getLogger(__name__)
 
@@ -161,20 +161,17 @@ class DataFetcherManager:
     def _derive_slug(fetcher_name: str) -> str:
         """Derive source slug from fetcher class name.
 
-        Strips trailing "Fetcher" (case-insensitive) and lowercases.
+        Delegates to :func:`source_slug` so the slug a caller passes as
+        ``?source=`` and the ``<SLUG>_ENABLED`` env var name can never
+        disagree — both come from one rule.
+
         Examples:
             "ZhituFetcher" → "zhitu"
             "EastMoneyFetcher" → "eastmoney"
             "Zhitu" → "zhitu"  # already bare
             "MyquantFetcher" → "myquant"
         """
-        if not fetcher_name:
-            return ""
-        # Strip "Fetcher" suffix (case-insensitive)
-        name = fetcher_name
-        if name.lower().endswith("fetcher"):
-            name = name[:-7]
-        return name.lower()
+        return source_slug(fetcher_name)
 
     def get_fetcher(self, source: str) -> BaseFetcher:
         """Look up a fetcher instance by its source slug (or full class name).

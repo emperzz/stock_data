@@ -14,6 +14,7 @@ __all__ = [
     "is_a_share_stock_code",
     "A_SHARE_STOCK_PREFIXES",
     "code_to_exchange",
+    "source_slug",
 ]
 
 # A-share stock code prefixes (used to distinguish real stocks from
@@ -232,3 +233,26 @@ def index_market_tag(code: str) -> str | None:
     this returns the specific index market type for routing purposes.
     """
     return get_index_type(code)
+
+
+def source_slug(fetcher_name: str) -> str:
+    """Derive the source slug used by env-var names and source routing.
+
+    Strips a trailing "Fetcher" (case-insensitive) and lowercases. Examples:
+        "ZhituFetcher"      → "zhitu"       (→ ZHITU_PRIORITY / ZHITU_ENABLED)
+        "EastMoneyFetcher"  → "eastmoney"
+        "ZzshareFetcher"    → "zzshare"
+        "Zhitu"             → "zhitu"       (already bare)
+        ""                  → ""
+
+    Single source of truth for the slug rule: ``DataFetcherManager._derive_slug``
+    (source-routing lookups) and ``BaseFetcher.enabled_env_var`` (the
+    <SLUG>_ENABLED switch) both call this, so an env var name can never
+    disagree with the slug a caller passes as ``?source=``.
+    """
+    if not fetcher_name:
+        return ""
+    name = fetcher_name
+    if name.lower().endswith("fetcher"):
+        name = name[:-7]
+    return name.lower()
