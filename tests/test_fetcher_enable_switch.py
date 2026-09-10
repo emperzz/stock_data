@@ -236,3 +236,92 @@ class TestDisabledSourceError:
             )
         assert "THS_ENABLED" in str(exc.value)
 
+
+class TestUnavailableReasonReportsDisabled:
+    """The reason string is what the explorer shows, so "disabled" must win.
+
+    These assert against the OVERRIDING subclasses on purpose. ZhituFetcher,
+    ThsFetcher, BaiduFetcher and ZzshareFetcher each replace
+    unavailable_reason() outright, so a guard placed only in the two base
+    implementations is invisible to them — which is where the switch matters
+    most, since those are the token-gated sources people turn off.
+    """
+
+    def test_disabled_reason_wins_over_token_reason(self, monkeypatch):
+        """A disabled source must not be described as missing its token.
+
+        Without the guard ahead of the override, the explorer tells the
+        operator to set ZHITU_TOKEN for a source they deliberately turned
+        off — sending them to the wrong fix.
+        """
+        monkeypatch.setenv("ZHITU_ENABLED", "false")
+        reason = ZhituFetcher().unavailable_reason()
+        assert reason == "disabled by ZHITU_ENABLED=false"
+        assert "ZHITU_TOKEN" not in reason
+
+    def test_enabled_fetcher_keeps_existing_reason(self, monkeypatch):
+        """No behavior change for the non-disabled path.
+
+        The token is set explicitly on the instance instead of via the env:
+        stock_data.server calls load_dotenv(), so on a machine whose real
+        .env has ZHITU_TOKEN the fetcher would report available and this
+        assertion would prove nothing.
+        """
+        monkeypatch.delenv("ZHITU_ENABLED", raising=False)
+        fetcher = ZhituFetcher()
+        monkeypatch.setattr(fetcher, "_token", "", raising=False)
+        reason = fetcher.unavailable_reason()
+        assert reason is not None
+        assert "disabled" not in reason
+        assert "ZHITU_TOKEN" in reason
+
+    def test_enabled_and_available_returns_none(self, monkeypatch):
+        monkeypatch.delenv("ZHITU_ENABLED", raising=False)
+        fetcher = ZhituFetcher()
+        monkeypatch.setattr(fetcher, "_token", "tok", raising=False)
+        assert fetcher.unavailable_reason() is None
+
+    def test_every_override_is_covered(self, monkeypatch):
+        """All four overriding subclasses must honour the switch.
+
+        A guard added to the two base implementations only would leave
+        Zhitu/Ths/Baidu/Zzshare reporting token or SDK reasons when disabled.
+        Parametrising over the overriders is what makes that a test failure
+        instead of a code-review catch.
+        """
+        from stock_data.data_provider.fetchers.baidu_fetcher import BaiduFetcher
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
+        classes = (ZhituFetcher, ThsFetcher, BaiduFetcher, ZzshareFetcher)
+        for cls in classes:
+            monkeypatch.setenv(cls.enabled_env_var(), "false")
+        for cls in classes:
+            reason = cls().unavailable_reason()
+            assert reason == f"disabled by {cls.enabled_env_var()}=false", (
+                f"{cls.__name__} overrides unavailable_reason() without the "
+                f"enable guard; got {reason!r}"
+            )
+            monkeypatch.delenv(cls.enabled_env_var(), raising=False)
+
+    def test_no_subclass_overrides_the_public_method(self):
+        """unavailable_reason() must be final — only BaseFetcher defines it.
+
+        An override would shadow the switch exactly the way the four
+        pre-existing ones did. This is the structural guard: if someone adds
+        `def unavailable_reason` to a fetcher, this fails and tells them to
+        implement _subclass_unavailable_reason() instead.
+        """
+        offenders: list[str] = []
+        stack: list[type] = list(BaseFetcher.__subclasses__())
+        while stack:
+            cls = stack.pop()
+            if "unavailable_reason" in cls.__dict__ and cls is not BaseFetcher:
+                offenders.append(cls.__name__)
+            stack.extend(cls.__subclasses__())
+        assert not offenders, (
+            f"these classes override unavailable_reason() and would bypass the "
+            f"<SLUG>_ENABLED switch: {offenders}. Rename to "
+            f"_subclass_unavailable_reason()."
+        )
+

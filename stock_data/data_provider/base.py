@@ -57,7 +57,7 @@ class SDKFetcherMixin:
 
     The mixin handles double-checked locking, class-level init cache
     (success / failure sticky across instances and page reloads), the
-    standard env-var read, and the human-readable ``unavailable_reason()``
+    standard env-var read, and the human-readable ``_subclass_unavailable_reason()``
     message that distinguishes "token not set" from "SDK init failed".
 
     The init-cache behaviour is preserved verbatim from the original
@@ -137,15 +137,20 @@ class SDKFetcherMixin:
         self._ensure_api()
         return self.__class__._init_ok
 
-    def unavailable_reason(self) -> str | None:
-        """Return a human-readable reason this fetcher is unavailable.
+    def _subclass_unavailable_reason(self) -> str | None:
+        """Subclass-specific unavailability reason.
 
-        Distinguishes "token env var missing" (user fixable) from "SDK
-        init failed" (likely transient or package not installed). When
-        the subclass declared token as OPTIONAL (``_TOKEN_REQUIRED=False``),
-        an empty env var is not by itself an unavailability reason —
-        the anonymous init may have succeeded or failed on its own
-        merits; we surface that init error instead.
+        Never override ``unavailable_reason()`` — override this instead. The
+        public wrapper applies the ``<SLUG>_ENABLED`` check first, and a
+        subclass that replaced the wrapper outright would silently bypass the
+        enable switch (that is exactly the bug this split prevents).
+
+        Distinguishes "token env var missing" (user fixable) from "SDK init
+        failed" (likely transient or package not installed). When the
+        subclass declared token as OPTIONAL (``_TOKEN_REQUIRED=False``), an
+        empty env var is not by itself an unavailability reason — the
+        anonymous init may have succeeded or failed on its own merits; we
+        surface that init error instead.
         """
         if self.is_available():
             return None
@@ -284,13 +289,32 @@ class BaseFetcher(ABC):
     supported_data_types: DataCapability = DataCapability(0)  # empty by default
 
     def unavailable_reason(self) -> str | None:
-        """Return a human-readable reason this fetcher is unavailable, or None.
+        """Return a human-readable reason this fetcher is unavailable.
 
-        Default impl: if the fetcher reports available, no reason is needed;
-        otherwise return a generic message naming this fetcher. Token-gated
-        fetchers (Zhitu, Tushare, Myquant) override with a more specific
-        message derived from their actual gating logic (env var / SDK state).
-        The explorer's manifest calls this only when is_available() returns
+        The ``<SLUG>_ENABLED`` switch is authoritative: a config-disabled
+        fetcher reports that and nothing else, so the explorer manifest (whose
+        `_resolve_fetchers` enumerates all subclasses, disabled ones included)
+        never tells an operator to set a token for a source they turned off.
+
+        This method is intentionally NOT overridden by subclasses — they
+        implement ``_subclass_unavailable_reason()`` instead. Keeping the
+        enable check on the single public entry point means a new fetcher
+        cannot forget it. Defining the wrapper here (on ``BaseFetcher``, not
+        on the mixin) is what makes it consulted for every fetcher regardless
+        of mixin ordering.
+        """
+        if not self.is_enabled():
+            return f"disabled by {self.enabled_env_var()}=false"
+        return self._subclass_unavailable_reason()
+
+    def _subclass_unavailable_reason(self) -> str | None:
+        """Default unavailability reason; override this, never the wrapper.
+
+        If the fetcher reports available, no reason is needed; otherwise
+        return a generic message naming this fetcher. Token-gated fetchers
+        (Zhitu, Tushare, Myquant) override with a more specific message
+        derived from their actual gating logic (env var / SDK state). The
+        explorer's manifest calls this only when is_available() returns
         False, so the "always None" path is hit for fetchers that pass.
         """
         if self.is_available():

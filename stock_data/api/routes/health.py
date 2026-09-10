@@ -109,7 +109,13 @@ def health_check(details: bool = False) -> HealthResponse:
                     )
                 )
                 continue
-            available = bool(instance.is_available())
+            # The <SLUG>_ENABLED switch is authoritative — a config-disabled
+            # fetcher is not registered, so reporting available=True would
+            # claim a source is usable that the manager cannot route to. The
+            # `and enabled` half also keeps `available` and `reason`
+            # consistent: without it, `available` could be True for a
+            # disabled fetcher while `reason` is None.
+            available = bool(instance.is_available()) and instance.is_enabled()
             reason = None if available else instance.unavailable_reason()
             source_states.append(
                 SourceHealth(

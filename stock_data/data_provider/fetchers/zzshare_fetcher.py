@@ -186,7 +186,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             return adjust in ("", None)
         return False  # no weekly/monthly
 
-    def unavailable_reason(self) -> str | None:
+    def _subclass_unavailable_reason(self) -> str | None:
         if self.is_available():
             return None
         return f"{self.name} unavailable: zzshare SDK not installed (pip install zzshare)"

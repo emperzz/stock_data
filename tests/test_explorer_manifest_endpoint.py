@@ -107,6 +107,44 @@ class TestManifestFetchersField:
             resp.raise_for_status()
             return resp.json()
 
+    def test_disabled_fetcher_reports_unavailable_in_manifest(self, monkeypatch):
+        """A disabled fetcher must NOT report available=true in the manifest.
+
+        The manifest computes `available` from is_available() alone, so a
+        disabled fetcher whose token IS set would otherwise appear as a
+        usable source with reason=null — and the "disabled by …" string
+        would never surface, since `reason` is only evaluated when
+        `available` is already False. is_available is forced True here so
+        this asserts the enable switch specifically, not the token.
+        """
+        from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
+
+        monkeypatch.setattr(ZhituFetcher, "is_available", lambda self: True)
+        # Trigger lifespan FIRST — but do not fetch the manifest yet. The
+        # manifest is a snapshot of _resolve_fetchers() at request time, so
+        # env vars must be in place before the request. Lifespan is what
+        # memoises the manager (get_manager() is a module global), and it
+        # must run while the switch is still on: otherwise, if this test
+        # were the first in a session to trigger it (e.g. run alone with
+        # -k), the cached manager would be built without ZhituFetcher and
+        # the earlier test_unavailable_fetcher_surfaces_... would hit
+        # Task 4's ValueError instead of the None it guards for.
+        with TestClient(app) as _client:
+            _client.get("/control/server/status")
+
+        monkeypatch.setenv("ZHITU_ENABLED", "false")
+        m = self._manifest()
+        ep = self._endpoint(m, "GET", "/stocks/{code}/info")
+        zhitu = next((f for f in ep["fetchers"] if f["name"] == "ZhituFetcher"), None)
+        assert zhitu is not None
+        assert zhitu["available"] is False, (
+            "disabled fetcher reported available=true — the manifest ignored "
+            "<SLUG>_ENABLED and claims a source the manager cannot route to"
+        )
+        assert "ZHITU_ENABLED" in (zhitu["reason"] or ""), (
+            f"expected the disabled reason in the manifest row; got {zhitu['reason']!r}"
+        )
+
     def _endpoint(self, manifest: dict, method: str, path: str) -> dict:
         for sec in manifest["sections"]:
             for ep in sec["endpoints"]:
