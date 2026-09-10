@@ -255,11 +255,16 @@ class TestManifestFetchersField:
         )
         assert zhitu["method"] == "get_stock_info"
         # Myquant is currently the registered fallback for this endpoint —
-        # confirm it shows up as available and that the manifest order
-        # reflects the priority chain (Zhitu's 4 must come before Myquant's 9).
-        # Asserting on the fetcher's own ``priority`` field is more durable
-        # than an index check — it doesn't break if a third fetcher is
-        # inserted in between.
+        # confirm the manifest order reflects the priority chain (Zhitu's 5
+        # must come before Myquant's 9). Asserting on the fetcher's own
+        # ``priority`` field is more durable than an index check — it doesn't
+        # break if a third fetcher is inserted in between.
+        #
+        # Deliberately NOT asserting myquant["available"] is True: that was an
+        # environment assumption (Myquant registered ⇒ its token is set and no
+        # <SLUG>_ENABLED switch is off) masquerading as a contract. With
+        # MYQUANT_ENABLED=false — or simply no MYQUANT_TOKEN — the row is
+        # correctly available=false, and the old assertion failed for the
+        # right reason. Only the stable ordering invariant is pinned here.
         myquant = next(f for f in ep["fetchers"] if f["name"] == "MyquantFetcher")
-        assert myquant.get("available") is True
         assert zhitu["priority"] < myquant["priority"]
