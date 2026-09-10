@@ -267,7 +267,17 @@ def build_control_router() -> APIRouter:
             }
 
         # 1. Unknown fetcher
-        fetcher = manager.get_fetcher(req.fetcher)
+        # get_fetcher raises ValueError for (a) a genuinely unknown name and
+        # (b) a name that is config-disabled. Both must fall through to the
+        # on-demand instantiation below — this endpoint's contract is to
+        # probe any fetcher, including one the manager didn't register
+        # (unavailable, or turned off with <SLUG>_ENABLED=false). /control/*
+        # has no @map_errors and the app-level handlers don't cover
+        # ValueError, so letting it propagate would 500 the probe.
+        try:
+            fetcher = manager.get_fetcher(req.fetcher)
+        except ValueError:
+            fetcher = None
         if fetcher is None:
             # The manifest now surfaces unregistered fetchers too (with
             # available: false), so the user may legitimately Test a class

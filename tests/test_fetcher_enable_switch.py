@@ -177,3 +177,62 @@ class TestRegistrationGate:
         registered = {f.name for f in manager.fetchers}
         expected = {cls.name for cls in _all_fetcher_classes() if cls().is_available()}
         assert registered == expected
+
+
+class TestDisabledSourceError:
+    def test_get_fetcher_names_the_env_var(self, monkeypatch):
+        """The error must say "disabled", not "not registered".
+
+        A caller reading the log needs to know whether to check the spelling
+        of ?source= or the value of an env var — those are different files.
+        """
+        from stock_data.data_provider.manager import DataFetcherManager
+
+        manager = DataFetcherManager()  # empty: nothing registered
+        monkeypatch.setenv("ZHITU_ENABLED", "false")
+        with pytest.raises(ValueError) as exc:
+            manager.get_fetcher("zhitu")
+        assert "ZHITU_ENABLED" in str(exc.value)
+        assert "disabled" in str(exc.value)
+
+    def test_unknown_source_still_says_not_registered(self):
+        """Only genuinely-disabled sources get the new message."""
+        from stock_data.data_provider.manager import DataFetcherManager
+
+        manager = DataFetcherManager()
+        with pytest.raises(ValueError) as exc:
+            manager.get_fetcher("nosuchfetcher")
+        assert "No fetcher with name" in str(exc.value)
+
+    def test_accepts_class_name_form(self, monkeypatch):
+        """get_fetcher accepts "ZhituFetcher" and "zhitu" — both must report
+        the disabled reason, or the class-name form leaks the old message."""
+        from stock_data.data_provider.manager import DataFetcherManager
+
+        manager = DataFetcherManager()
+        monkeypatch.setenv("ZHITU_ENABLED", "false")
+        with pytest.raises(ValueError) as exc:
+            manager.get_fetcher("ZhituFetcher")
+        assert "ZHITU_ENABLED" in str(exc.value)
+
+    def test_with_source_reports_disabled(self, monkeypatch):
+        """Board routing goes through _with_source, which has its own lookup.
+
+        Board endpoints are where this matters most: they ignore priority
+        entirely, so "disabled" is the only signal available.
+        """
+        from stock_data.data_provider.base import DataCapability
+        from stock_data.data_provider.manager import DataFetcherManager
+
+        manager = DataFetcherManager()
+        monkeypatch.setenv("THS_ENABLED", "false")
+        with pytest.raises(ValueError) as exc:
+            manager._with_source(
+                "ths",
+                DataCapability.STOCK_BOARD,
+                "csi",
+                "test op",
+                lambda f: None,
+            )
+        assert "THS_ENABLED" in str(exc.value)
+

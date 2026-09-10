@@ -205,6 +205,7 @@ class DataFetcherManager:
                         target = f
                         break
         if target is None:
+            _raise_if_disabled(source)
             raise ValueError(f"No fetcher with name {source!r} is registered")
         return target
 
@@ -270,6 +271,7 @@ class DataFetcherManager:
                         target = f
                         break
         if target is None:
+            _raise_if_disabled(source)
             raise ValueError(f"No fetcher with name {source!r} is registered")
         if market not in target.supported_markets:
             raise ValueError(
@@ -1481,6 +1483,48 @@ class DataFetcherManager:
     def fetchers(self) -> list["BaseFetcher"]:  # type: ignore[misc]
         """List all fetchers. Prefer get_fetcher() for single fetcher lookup."""
         return list(self._fetchers)
+
+
+def _find_disabled_fetcher_class(source: str) -> type[BaseFetcher] | None:
+    """Return the ``BaseFetcher`` subclass matching ``source`` that is disabled.
+
+    ``source`` matches either the derived slug ("zhitu") or the class name
+    ("ZhituFetcher"), case-insensitively — the same two forms
+    :meth:`DataFetcherManager.get_fetcher` accepts.
+
+    Only classes reporting ``is_enabled() == False`` are returned. A class
+    that is enabled but simply not registered (missing token, SDK absent) is
+    NOT a "disabled" answer and must fall through to the caller's generic
+    "not registered" error — otherwise every missing-token source would
+    claim to be config-disabled.
+
+    Walks subclasses rather than the manager's registered list by necessity:
+    a disabled fetcher is precisely the one that is not in that list.
+    """
+    wanted = source.lower()
+    stack: list[type[BaseFetcher]] = list(BaseFetcher.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        name = getattr(cls, "name", None)
+        if name and (name.lower() == wanted or source_slug(name) == wanted):
+            if not cls.is_enabled():
+                return cls
+        stack.extend(cls.__subclasses__())
+    return None
+
+
+def _raise_if_disabled(source: str) -> None:
+    """Raise a distinguishable ValueError when ``source`` is config-disabled.
+
+    The message names the env var so an operator can tell "this source is
+    turned off in config" from "I misspelled ?source=". Reaches the client as
+    HTTP 400 via ``api/routes/errors.py::map_errors``.
+    """
+    cls = _find_disabled_fetcher_class(source)
+    if cls is not None:
+        raise ValueError(
+            f"source {source_slug(cls.name)!r} is disabled by {cls.enabled_env_var()}=false"
+        )
 
 
 def _all_fetcher_classes() -> list[type[BaseFetcher]]:

@@ -382,3 +382,59 @@ class TestFetcherTestCoercesKwargs:
         assert call["stock_code"] == "600519"
         assert call["include_quote"] is True  # coerced from "true"
         assert isinstance(call["include_quote"], bool)
+
+
+def test_unknown_fetcher_real_lookup_returns_ok_false_http_200(client):
+    """Unmocked: a name no fetcher class has must return UnknownFetcher, not 500.
+
+    The sibling test_unknown_fetcher_returns_ok_false_http_200 patches
+    get_fetcher to return None, so it never exercised the route's real
+    lookup — the route raised ValueError before reaching the None check.
+    This test drives the real path.
+    """
+    r = _post(client, {"fetcher": "ghost", "method": "get_realtime_quote", "kwargs": {}})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"]["type"] == "UnknownFetcher"
+
+
+def test_disabled_fetcher_is_still_probeable(client, monkeypatch):
+    """A config-disabled fetcher must still be testable.
+
+    /control/fetcher-test intentionally bypasses manager routing so an
+    operator can verify an upstream source before enabling it. A disabled
+    fetcher is absent from the manager, so this exercises the on-demand
+    instantiation path (_instantiate_unregistered_fetcher) — which only runs
+    if the route tolerates the lookup ValueError instead of 500ing.
+
+    app.state.manager is memoised at lifespan, so flipping ZHITU_ENABLED here
+    would NOT unregister ZhituFetcher (all 13 register when tokens are
+    present). Instead build a real manager with the switch off — the actual
+    production factory — and install it, so no mocking of get_fetcher is
+    involved (mocking it is what hid the 500 in the sibling test).
+    """
+    from stock_data.data_provider.manager import create_default_manager
+
+    monkeypatch.setenv("ZHITU_ENABLED", "false")
+    real = create_default_manager()
+    assert "ZhituFetcher" not in [f.name for f in real.fetchers], (
+        "precondition: the switch must keep ZhituFetcher out of this manager"
+    )
+    monkeypatch.setattr(client.app.state, "manager", real)
+
+    r = _post(
+        client,
+        {
+            "fetcher": "ZhituFetcher",
+            "method": "get_stock_info",
+            "kwargs": {"stock_code": "600519"},
+        },
+    )
+    assert r.status_code == 200, "disabled fetcher probe 500'd"
+    body = r.json()
+    # The probe is allowed to fail upstream (no token / network in tests) —
+    # what it must NOT do is die at the lookup step.
+    assert body["error"] is None or body["error"]["type"] != "UnknownFetcher", (
+        f"disabled fetcher was reported as UnknownFetcher: {body['error']}"
+    )
