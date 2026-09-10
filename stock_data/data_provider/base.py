@@ -18,6 +18,7 @@ from .utils.normalize import (
     is_hk_market,  # noqa: F401 — re-exported for fetchers
     is_us_market,  # noqa: F401 — re-exported for fetchers
     normalize_stock_code,
+    source_slug,
 )
 
 logger = logging.getLogger(__name__)
@@ -295,6 +296,33 @@ class BaseFetcher(ABC):
         if self.is_available():
             return None
         return f"{self.name} unavailable (is_available() returned False)"
+
+    @classmethod
+    def enabled_env_var(cls) -> str:
+        """Env var that enables/disables this fetcher, e.g. "ZHITU_ENABLED".
+
+        Derived from the class name via ``source_slug`` so it is always the
+        sibling of the fetcher's ``<SLUG>_PRIORITY`` var and matches the slug
+        callers pass as ``?source=``. Fetchers therefore need no per-class
+        declaration — a new fetcher gets its switch for free.
+        """
+        return f"{source_slug(cls.name).upper()}_ENABLED"
+
+    @classmethod
+    def is_enabled(cls) -> bool:
+        """True unless ``<SLUG>_ENABLED`` is explicitly falsy.
+
+        Falsy: "false" / "0" / "no" / "off" (case-insensitive, whitespace
+        stripped). Everything else — unset, empty, "true", garbage — is
+        enabled, matching the "default true" contract.
+
+        Read on EVERY call rather than at class-definition time, so tests can
+        ``monkeypatch.setenv`` and observe the change without
+        ``importlib.reload`` (which would rebind the class and desync the
+        class-level SDK init cache).
+        """
+        raw = os.getenv(cls.enabled_env_var(), "true").strip().lower()
+        return raw not in ("false", "0", "no", "off")
 
     def is_available(self) -> bool:
         """Default: the fetcher is unconditionally available.
