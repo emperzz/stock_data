@@ -128,7 +128,9 @@ async def get_market_stats(  # was: def get_market_stats
     """Per-block fan-out with per-block error isolation.
     Cold-path runs stocks / boards / pools blocks concurrently via
     asyncio.gather (see spec §2.2). Hot-path returns cached entry
-    unchanged."""
+    unchanged. Cached 60s via ``get_quote_cache`` (one entry shared
+    between json/md). [docstring note preserved verbatim from the
+    pre-refactor sync version.]"""
     # 1. resolve target_date (unchanged)
     if trade_date is not None and not _TRADE_DATE_RE.match(trade_date):
         raise HTTPException(...)
@@ -180,9 +182,19 @@ async def get_market_stats(  # was: def get_market_stats
             )
             return block, errs, True
         except Exception as exc:
+            # NOTE: this branch is dead code in practice — _build_limit_pools_block
+            # catches all exceptions internally per-pool (its try/excepts are
+            # bare `except Exception`), so the only ways this catch can fire are
+            # (a) a non-Exception BaseException (e.g. asyncio.CancelledError)
+            # or (b) a Pydantic construct failure on `MarketStatsLimitPools(...)`.
+            # We use `block="zt_pool"` (closest semantic match in the
+            # MarketStatsErrorEntry Literal) rather than `"pools"`, which
+            # would violate the schema and trigger a 500 if ever fired.
+            # Preserved from the existing build_market_stats_response but
+            # with the literal corrected.
             logger.warning(f"[agent/market-stats] pools failed: {exc}", exc_info=True)
             return None, [
-                MarketStatsErrorEntry(block="pools", error=type(exc).__name__, message=str(exc))
+                MarketStatsErrorEntry(block="zt_pool", error=type(exc).__name__, message=str(exc))
             ], False
 
     (stocks_block, stocks_errs, stocks_ok), (boards_block, boards_errs, boards_ok), (
@@ -236,7 +248,7 @@ separate change, not part of this spec.
 | Response schema | `MarketStatsResponse` | unchanged |
 | `summary.requested` | `1 + (include_boards?1:0) + (include_pools?1:0)` | unchanged |
 | `summary.ok` | count of blocks that succeeded | unchanged |
-| `summary.elapsed_ms` | int(time.monotonic() - started)*1000 | unchanged (wall time still measured at route entry; **decreases** under cold-path) |
+| `summary.elapsed_ms` | int(time.monotonic() - started)*1000 | **measurement-point shifts** from `build_market_stats_response` (existing, measures inside the wrapper) to the new `async def get_market_stats` (measures at route handler entry, before `manager = get_manager()` and `asyncio.gather`). Sub-ms difference (cache lookup + manager import); no test asserts `elapsed_ms` values, so no functional change. The wall time itself **decreases** under cold-path as the headline goal. |
 | `errors[]` shape | `{block, error, message}` | unchanged |
 | `stocks/boards/limit_pools` field semantics | null on per-block failure | unchanged |
 | MD output | `render_market_stats_as_md` | unchanged (called from `_render_agent`) |
@@ -271,11 +283,15 @@ market-recap, because the 3 blocks touch **separate circuit breakers**:
   ("Board endpoints route through `_with_source`, which is **not**
   CircuitBreaker-integrated").
 - **`pools` block** uses `manager.get_zt_pool(...)`, which routes
-  through `_with_failover` with the default singleton `CIRCUIT_BREAKER`
-  (Akshare primary → Zhitu fallback). This breaker is **not the same
-  instance** as `QUOTE_LIST_CIRCUIT_BREAKER` (used by the stocks block)
-  nor as `REALTIME_CIRCUIT_BREAKER` (used by single-stock paths), so a
-  stocks-block failure cannot trip the pools breaker.
+  through `_with_failover` with **no circuit breaker** at all. Verified
+  at `manager.py:888-894`: `get_zt_pool_raw` calls
+  `self._with_failover(...)` without a `circuit_breaker=` argument,
+  and `_with_failover`'s signature defaults `circuit_breaker=None`
+  with all CB interactions guarded by `if circuit_breaker is not None`
+  (`manager.py:318, 371-404`). The pools block is therefore CB-less:
+  a stocks-block failure cannot trip it, and a pools-block failure
+  cannot affect any other breaker. The cross-block contamination
+  conclusion in the lead paragraph holds *a fortiori*.
 
 None of the three blocks share a circuit-breaker instance. Cross-block
 CB-state contamination is therefore impossible.
@@ -283,39 +299,26 @@ CB-state contamination is therefore impossible.
 ### 4.1 `_refresh_tracker` (persistence/board.py) shared state
 
 `stock_board_cache.get_board_list` internally calls
-`_refresh_tracker.is_first_call(f"{board_type}:{source}")`. This is
-module-level state in `stock_data/data_provider/persistence/board.py`.
-Concurrent threads reading `is_first_call` for the same key would each
-see "first call" and trigger a parallel upstream fetch — a *duplicate*
-fetch (not a correctness bug, just wasted bandwidth).
+`_refresh_tracker.is_first_call(f"{board_type}:{source}")`. The
+review (2026-09-10) verified that **the race the original brainstorm
+   flagged does not exist**:
 
-**Mitigation chosen (post-brainstorm)**: **no code change**. Rationale:
+- `DailyRefreshTracker.__init__` (in
+  `stock_data/data_provider/persistence/_refresh.py:26`) constructs
+  `self._lock = threading.Lock()`.
+- `is_first_call` wraps its read-modify-write of `self._dates[key]`
+  inside `with self._lock:` (`_refresh.py:33`).
 
-   - The race only fires when 3+ threads happen to call
-     `get_board_list` for the same `(board_type, source)` **on the
-     same calendar day, before the cache is populated**. In production
-     the `stocks_list_cache` and the persistence board cache get
-     populated by other endpoints (`/stocks?include_quote=true`,
-     `/boards/{code}/stocks`, `/agent/stocks/batch-profile`) long
-     before `/agent/market-stats` is hit; the practical concurrency
-     window is microseconds at the first agent request of the day.
-   - Even in the worst case, the second thread's redundant fetch
-     produces a fresh `update_cached_boards(...)` write — idempotent on
-     the (board_code, source) UNIQUE constraint; no data corruption,
-     just one wasted upstream call.
-   - Adding a `threading.Lock` to `_refresh_tracker` would add
-     coupling from the persistence layer to the route layer's threading
-     model, which `CLAUDE.md` "Anti-Patterns" discourages.
-   - Market-recap's 5-block fan-out already accepts this same kind of
-     shared-state micro-race for its single-threaded stats inner call;
-     extending the same philosophy is consistent.
+Concurrent threads calling `is_first_call(key)` for the same key are
+serialized by `_lock`: the first thread records `today`, subsequent
+threads see `today` already set and return False. The "duplicate
+fetch on first concurrent cold-path request of the day" scenario is
+**structurally impossible**.
 
-   **Risk log entry**: document in the spec that
-   `persistence.board._refresh_tracker` is *technically* not
-   thread-safe for `is_first_call` under the new concurrent
-   `get_board_list` invocation, and that the practical impact is at
-   most one duplicate upstream fetch on the first concurrent
-   cold-path request of the day.
+**Implication**: no mitigation needed. The original brainstorm's
+"accept the risk" paragraph is preserved here as a record of the
+reasoning trail but the conclusion is that this entry should be
+removed from any future risk register.
 
 ### 4.2 `asyncio.to_thread` and the default executor
 
@@ -347,10 +350,14 @@ change needed**. The cache key signature is unchanged.
 
 1. `test_three_blocks_fan_out_concurrently`
    Mock the 3 sync builders (`_build_stocks_block`, `_build_boards_block`,
-   `_build_limit_pools_block`) to sleep for 100ms each. Hit the
+   `_build_limit_pools_block`) to sleep for **250ms** each. Hit the
    endpoint with `include_boards=true, include_pools=true`. Assert the
-   total wall time is `< 250ms` (would be ~300ms+ serially). Assert
-   each builder was called exactly once.
+   total wall time is `< 700ms` (serial baseline = 750ms; 50ms
+   headroom against asyncio dispatch + GC pauses + executor scheduling
+   under CI load). Assert each builder was called exactly once. The
+   250ms mock duration was chosen over the original 100ms because the
+   100ms / 250ms threshold combination leaves insufficient headroom
+   for slow CI machines (only 50ms over a 300ms serial baseline).
 
 2. `test_skipped_block_does_not_block_fan_out`
    Hit with `include_boards=false, include_pools=false`. Mock the
@@ -364,10 +371,13 @@ change needed**. The cache key signature is unchanged.
    and `pools` are populated, `errors[]` has exactly one
    `{block: "stocks", ...}` entry.
 
-4. `test_market_recap_stats_subpath_still_works`
-   Regression: market-recap calls `build_market_stats_response`
-   (sync) — assert it still works after the refactor (it should, the
-   signature is unchanged; the body is just split into helpers).
+(Note: a 4th test for `test_market_recap_stats_subpath_still_works`
+was considered but **deleted** during spec review — the existing
+  `tests/test_agent_market_recap.py::test_market_recap_happy_path`
+  already covers market-recap's call into `build_market_stats_response`
+  end-to-end via stubbing. Adding a near-duplicate test would only
+  catch a NameError/ImportError from a broken rename, which the test
+  suite's collection phase catches earlier and more reliably.)
 
 ### 5.3 Out-of-scope tests
 
@@ -410,15 +420,33 @@ Track as a separate change once this one ships.
 
 ## 7. Roll-out
 
-- Single PR: refactor `build_market_stats_response` → 3 helpers + sync
-  wrapper; convert `get_market_stats` to async + add `asyncio.gather`;
-  add `TestParallelFanout` (4 tests); update `CLAUDE.md` agent-batch
-  section to note the parallelism (one-paragraph addition to the
-  `/agent/market-stats` row in the routes table).
+Single PR with the following checklist:
+
+- [ ] Add `_build_stocks_block(manager)` helper in `agent.py` (extracted
+  from current `build_market_stats_response`'s stocks try/except).
+- [ ] Add `_build_boards_block(manager)` helper in `agent.py` (extracted
+  from current `build_market_stats_response`'s boards try/except).
+- [ ] Rename `_compute_limit_pools_block` → `_build_limit_pools_block`
+  in `agent.py` (touch only the definition at agent.py:668 + the single
+  in-file call site at agent.py:1639). Also fix the stale line-number
+  reference at agent.py:1548 (currently says "defined at agent.py:568"
+  but the definition is at agent.py:668) — bundled with the rename.
+- [ ] Refactor `build_market_stats_response` to call the 3 helpers in
+  sequence (preserves the existing sync behavior; called by market-recap).
+- [ ] Convert `get_market_stats` to `async def`, add `asyncio.gather`
+  + `asyncio.to_thread` per §2.2. Preserve the existing 60s
+  `get_quote_cache` note verbatim in the updated docstring.
+- [ ] Add `TestParallelFanout` class to `tests/test_agent_market_stats.py`
+  (3 tests per §5.2).
+- [ ] Update `CLAUDE.md` agent-batch table — `/agent/market-stats` row
+  gains one sentence noting "stocks/boards/pools blocks fan out via
+  asyncio.gather on cold-path; 60s composite cache unchanged."
+- [ ] Run full test suite (`pytest -m ""`); confirm 0 regressions.
+
 - No feature flag, no canary: the change is bounded to a single route
   handler; the cache + response shape are unchanged; the worst-case
   regression is "blocks run serially again" (the old behavior) which
-  is caught by the §5.2 wall-time assertion.
+  is caught by the §5.2.1 wall-time assertion.
 - Expected user-visible change: cold-path p50 latency drops from
   ~6-10s to ~3-5s; p95 from ~15-20s to ~5-10s. Hot-path (within 60s
   cache window) unchanged at sub-ms.
@@ -429,24 +457,29 @@ Track as a separate change once this one ships.
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| `_refresh_tracker` duplicate fetch on cold-path concurrent first-call | very low (microsecond window, once per day) | 1 wasted upstream call, no data corruption | Accept; document in §4.1 |
+| `_refresh_tracker` duplicate fetch on cold-path concurrent first-call | **none** (verified thread-safe — see §4.1) | n/a | No mitigation needed; the original concern was based on a false premise. The 2026-09-10 review verified `DailyRefreshTracker._lock` serializes `is_first_call` for the same key. |
 | asyncio.to_thread default executor saturation under heavy load | low (1 extra concurrent sync helper per request) | added queue latency | Out of scope; default executor is sized for the rest of the server's sync helpers; re-evaluate if logs show saturation |
-| market-recap's stats sub-call regression | low | market-recap stats block reverts to slower path | §5.2.4 regression test |
+| market-recap's stats sub-call regression | low | market-recap stats block reverts to slower path | Covered by existing `tests/test_agent_market_recap.py::test_market_recap_happy_path` which stubs `build_market_stats_response` and asserts the recap response carries the stats block. The new TestParallelFanout deliberately omits a duplicate test per §5.2.4 note. |
 | Future refactor of `build_market_stats_response` accidentally calls the helpers AND the wrapper | low | double-fetch in market-recap path | The 3 helpers are private (underscore prefix); wrapper is the only public surface |
-| `_build_limit_pools_block` raises an exception type the wrapper doesn't catch | very low | 500 instead of structured `errors[]` entry | Both wrappers catch `Exception` (broadest base); mirrors existing behavior |
+| `_build_limit_pools_block` outer catch fires (dead code path) | extremely low (only via BaseException or Pydantic construct failure) | would have constructed `MarketStatsErrorEntry(block="zt_pool", ...)` which is now schema-valid per the §2.2 fix | Outer catch constructs `block="zt_pool"` (closest semantic match in the Literal); mirrors existing behavior with a corrected literal |
 
 ---
 
 ## 9. Spec metadata
 
 - **Spec author**: brainstorm session 2026-09-10
-- **Implementation plan**: to be generated via `superpowers:writing-plans`
-  after spec approval.
+- **Spec review**: subagent verification 2026-09-10; 11 findings, all applied
+  inline (2 HIGH factual corrections to §4 + §4.1, 4 MEDIUM including a
+  latent dead-code bug fix, 4 LOW verification-positive findings).
+- **Implementation plan**: derived directly from §7 Roll-out checklist
+  (no separate `superpowers:writing-plans` document — change is single-route
+  bounded and the checklist is the actionable plan).
 - **Related specs**:
   - `docs/superpowers/specs/2026-09-03-market-recap-design.md` — pattern source for `asyncio.gather` + `asyncio.to_thread` fan-out
   - `docs/superpowers/specs/2026-09-02-market-context-and-market-stats-redesign-design.md` — defines the current 3-block shape
   - `docs/superpowers/specs/2026-09-09-agent-market-stats-board-movers-design.md` — adds the `top_gainers` / `top_losers` board fields that this spec preserves
 - **Anti-patterns audited** (CLAUDE.md):
-  - "Don't reorder decorators on a route" — checked; `@router.get` outermost, `@endpoint_meta` next, `@map_errors` innermost, `async def`. No change vs current order.
+  - "Don't reorder decorators on a route" — verified against existing market-recap decorator stack (agent.py:2664-2684); preserved.
   - "Don't add a `DataCapability` flag without declaring intent" — N/A, no new flag.
-  - "Don't call `manager.get_board_stocks(...)` directly from agent code" — N/A, boards block goes through `stock_board_cache`.
+  - "Don't call `manager.get_board_stocks(...)` directly from agent code" — verified; the new `_build_boards_block` goes through `stock_board_cache.get_board_list(...)` (Persistence-Only Routing rule).
+  - "Don't hardcode `adjust="qfq"` in `/agent/stocks/batch-profile` for minute frequencies" — N/A, this spec touches only `/agent/market-stats`.
