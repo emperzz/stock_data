@@ -1,15 +1,18 @@
 """Tests for P3-a1 (H4): board upstream-fail → fall back to stale SQLite cache.
 
 The non-quote path of ``get_board_stocks`` previously raised DataFetchError
-up to the route layer (503) when both ZZSHARE and THS failed upstream, even
-when ``stock_board_membership`` already contained a usable snapshot from a
-prior refresh. Compare with ``pool_daily.get_pool:325-336`` which already
-does the right thing.
+up to the route layer (503) when the upstream failed, even when
+``stock_board_membership`` already contained a usable snapshot from a prior
+refresh. Compare with ``pool_daily.get_pool:325-336`` which already does the
+right thing.
 
-These tests pin the fallback contract: on upstream DataFetchError the
-helper must (a) return the cached rows, (b) tag origin='persistence',
-(c) tag effective_source='ths' (the unified cache key), and (d) leave
-``reason`` set so the route layer can surface the staleness in the response.
+Post-2026-09-11 the ``include_quote=False`` tier is the THS F10 page only
+(``manager.get_board_stocks_full``); the old ZZSHARE→THS chain is gone
+(spec §2 D2). These tests pin the fallback contract: on upstream
+DataFetchError the helper must (a) return the cached rows, (b) tag
+origin='persistence', (c) tag effective_source to the routed source, and
+(d) tag ``reason="stale_after_upstream_failure"`` so the route layer can
+surface the staleness in the response.
 """
 
 from __future__ import annotations
@@ -53,6 +56,16 @@ def _seed_membership(board_code: str, stock_code: str, stock_name: str) -> None:
     conn.commit()
 
 
+class _FailingManager:
+    """Manager whose F10 leg raises; any other call is a contract violation."""
+
+    def get_board_stocks_full(self, board_code, source="ths", **_):
+        raise DataFetchError("simulated upstream outage")
+
+    def get_board_stocks(self, *a, **kw):
+        raise AssertionError("the AJAX tier must not fire for include_quote=False")
+
+
 def test_upstream_failure_falls_back_to_cached_stocks(fresh_db, monkeypatch):
     """When upstream DataFetchError fires, the helper must return cached rows
     with origin='persistence' instead of raising a 503."""
@@ -62,12 +75,6 @@ def test_upstream_failure_falls_back_to_cached_stocks(fresh_db, monkeypatch):
 
     # Force needs_refresh by setting the tracker to first-call
     monkeypatch.setattr(board_mod._refresh_tracker, "is_first_call", lambda key: True)
-    # Simulate both ZZSHARE and THS failing
-    monkeypatch.setattr(
-        board_mod,
-        "fetch_board_stocks_with_zzshare_fallback",
-        lambda **kwargs: (_ for _ in ()).throw(DataFetchError("simulated upstream outage")),
-    )
 
     (
         stocks,
@@ -79,7 +86,7 @@ def test_upstream_failure_falls_back_to_cached_stocks(fresh_db, monkeypatch):
     ) = board_mod.get_board_stocks(
         board_code="BK2001",
         source="ths",
-        manager=object(),  # not reached because fallback fires first
+        manager=_FailingManager(),
         include_quote=False,
     )
 
@@ -97,16 +104,11 @@ def test_upstream_failure_without_cache_raises(fresh_db, monkeypatch):
     still bubble up — we never silently return an empty list."""
     # No cache seed → cached_full is []
     monkeypatch.setattr(board_mod._refresh_tracker, "is_first_call", lambda key: True)
-    monkeypatch.setattr(
-        board_mod,
-        "fetch_board_stocks_with_zzshare_fallback",
-        lambda **kwargs: (_ for _ in ()).throw(DataFetchError("simulated upstream outage")),
-    )
 
     with pytest.raises(DataFetchError, match="simulated upstream outage"):
         board_mod.get_board_stocks(
             board_code="BK2002",
             source="ths",
-            manager=object(),
+            manager=_FailingManager(),
             include_quote=False,
         )

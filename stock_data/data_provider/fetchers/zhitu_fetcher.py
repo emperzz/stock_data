@@ -692,10 +692,12 @@ class ZhituFetcher(BaseFetcher):
                 continue
             out.append(
                 {
-                    "code": str(row.get("code", "")),
+                    "board_code": str(row.get("code", "")),
                     "name": str(row.get("name", "")),
-                    "type": row_type,
+                    "board_type": row_type,
                     "subtype": row_subtype,
+                    # Zhitu boards are sw_xxx — no THS cid exists for them.
+                    "ths_cid": None,
                 }
             )
         return out
@@ -756,10 +758,11 @@ class ZhituFetcher(BaseFetcher):
             row_type = self._infer_type_from_subtype(subtype)
             out.append(
                 {
-                    "code": code,
+                    "board_code": code,
                     "name": name,
-                    "type": row_type,
+                    "board_type": row_type,
                     "subtype": subtype,
+                    "ths_cid": None,
                 }
             )
         return out

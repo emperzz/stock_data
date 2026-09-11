@@ -2131,15 +2131,15 @@ class BoardMoverEntry(BaseModel):
     Each field maps 1:1 from a
     ``stock_board_cache.get_board_list(source='ths', include_quote=True)``
     row. **Unit semantics = the THS board-list surface, NOT the quote
-    endpoints' 元 convention**: ``amount`` is 亿元 (THS native; zzshare
-    rows ÷1e8 at the persistence merge — see
-    persistence/board.py::_normalize_zzshare_list_quote_units), ``volume``
-    is 万手, ``net_inflow`` is 亿元.
+    endpoints' 元 convention**: ``amount`` is 亿元 for every source —
+    zzshare's native 元 is converted in its own fetcher (D7/B,
+    2026-09-11) and declared via ``amount_unit``; ``volume`` is 万手,
+    ``net_inflow`` is 亿元.
 
     Sparse board types leave fields None: THS concept (gnSection) rows
-    carry only ``change_pct`` + ``net_inflow``; zzshare-appended rows
-    carry only ``change_pct`` + ``amount``. THS industry-rank rows carry
-    the full set.
+    carry only ``change_pct`` + ``net_inflow``; zzshare rows carry only
+    ``change_pct`` + ``amount``. THS industry-rank rows carry the full
+    set.
     """
 
     code: str

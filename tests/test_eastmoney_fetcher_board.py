@@ -163,7 +163,7 @@ def test_get_all_concept_boards_parses_response():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp) as mock_get:
         boards = fetcher.get_all_concept_boards(source="eastmoney", include_quote=False)
-    assert boards == [{"code": "BK0001", "name": "人形机器人"}]
+    assert boards == [{"board_code": "BK0001", "name": "人形机器人", "ths_cid": None}]
     # 不带 quote 时不要污染输出 (仅在 include_quote=True 时附加 quote 字段)
     assert all("price" not in b for b in boards)
     # 确认调用了正确的 push2 clist URL. 2026-07-03: 默认优先 akshare 的
@@ -184,7 +184,7 @@ def test_get_all_concept_boards_with_quote_includes_quote_fields():
         boards = fetcher.get_all_concept_boards(source="eastmoney", include_quote=True)
     assert len(boards) == 1
     b = boards[0]
-    assert b["code"] == "BK0001"
+    assert b["board_code"] == "BK0001"
     assert b["name"] == "人形机器人"
     assert b["price"] == 1234.56
     assert b["change_pct"] == 2.35
@@ -207,7 +207,7 @@ def test_get_all_concept_boards_skips_rows_with_empty_code():
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_concept_boards(source="eastmoney")
     assert len(boards) == 1
-    assert boards[0]["code"] == "BK0001"
+    assert boards[0]["board_code"] == "BK0001"
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ def test_get_all_industry_boards_parses_response():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp) as mock_get:
         boards = fetcher.get_all_industry_boards(source="eastmoney")
-    assert boards == [{"code": "BK1001", "name": "小金属"}]
+    assert boards == [{"board_code": "BK1001", "name": "小金属", "ths_cid": None}]
     # 关键: 验证 fs 用了 industry 的 (m:90+t:2), 不是 concept 的 (m:90+t:3)
     assert mock_get.call_args.args[1]["fs"] == "m:90+t:2+f:!50"
 
@@ -272,7 +272,9 @@ def test_get_all_concept_boards_uses_f12_as_code_not_f14():
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_concept_boards(source="eastmoney")
     assert len(boards) == 1
-    assert boards[0]["code"] == "BK0438", f"code should be f12, got {boards[0]['code']!r}"
+    assert boards[0]["board_code"] == "BK0438", (
+        f"code should be f12, got {boards[0]['board_code']!r}"
+    )
     assert boards[0]["name"] == "食品饮料", f"name should be f14, got {boards[0]['name']!r}"
 
 
@@ -288,7 +290,7 @@ def test_get_all_industry_boards_uses_f12_as_code_not_f14():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_industry_boards(source="eastmoney")
-    assert boards[0]["code"] == "BK1001"
+    assert boards[0]["board_code"] == "BK1001"
     assert boards[0]["name"] == "小金属"
 
 
@@ -304,7 +306,7 @@ def test_get_all_concept_boards_handles_dict_format_rows():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_concept_boards(source="eastmoney", include_quote=False)
-    assert boards == [{"code": "BK0001", "name": "人形机器人"}]
+    assert boards == [{"board_code": "BK0001", "name": "人形机器人", "ths_cid": None}]
 
 
 def test_get_all_concept_boards_dict_format_with_quote():
@@ -315,7 +317,7 @@ def test_get_all_concept_boards_dict_format_with_quote():
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_concept_boards(source="eastmoney", include_quote=True)
     b = boards[0]
-    assert b["code"] == "BK0001"
+    assert b["board_code"] == "BK0001"
     assert b["name"] == "人形机器人"
     assert b["price"] == 1234.56
     assert b["change_pct"] == 2.35
@@ -330,7 +332,7 @@ def test_get_all_industry_boards_handles_dict_format_rows():
     mock_resp = _make_session_mock([row], total=1)
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_industry_boards(source="eastmoney")
-    assert boards == [{"code": "BK1001", "name": "小金属"}]
+    assert boards == [{"board_code": "BK1001", "name": "小金属", "ths_cid": None}]
 
 
 def test_get_concept_board_stocks_handles_dict_format_rows():
@@ -370,7 +372,13 @@ def test_get_all_boards_concept_dict_format_with_subtype():
     # type is now also tagged (mirrors the per-type tag the all-types
     # branch uses, so the persistence layer's write sees a uniform shape).
     assert boards == [
-        {"code": "BK0001", "name": "人形机器人", "type": "concept", "subtype": "concept"}
+        {
+            "board_code": "BK0001",
+            "name": "人形机器人",
+            "ths_cid": None,
+            "board_type": "concept",
+            "subtype": "concept",
+        }
     ]
 
 
@@ -524,7 +532,13 @@ def test_get_all_boards_concept_delegates():
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_boards(board_type="concept", source="eastmoney")
     assert boards == [
-        {"code": "BK0001", "name": "人形机器人", "type": "concept", "subtype": "concept"}
+        {
+            "board_code": "BK0001",
+            "name": "人形机器人",
+            "ths_cid": None,
+            "board_type": "concept",
+            "subtype": "concept",
+        }
     ]
 
 
@@ -535,7 +549,13 @@ def test_get_all_boards_industry_delegates():
     with patch.object(fetcher, "_fetch_one_clist_page", return_value=mock_resp):
         boards = fetcher.get_all_boards(board_type="industry", source="eastmoney")
     assert boards == [
-        {"code": "BK1001", "name": "小金属", "type": "industry", "subtype": "industry"}
+        {
+            "board_code": "BK1001",
+            "name": "小金属",
+            "ths_cid": None,
+            "board_type": "industry",
+            "subtype": "industry",
+        }
     ]
 
 
@@ -678,8 +698,8 @@ def test_handles_pagination_across_multiple_pages():
     with patch.object(fetcher, "_fetch_one_clist_page", side_effect=[r1, r2, r3]) as mock_get:
         boards = fetcher.get_all_concept_boards(source="eastmoney")
     assert len(boards) == 250
-    assert boards[0]["code"] == "BK0001"
-    assert boards[-1]["code"] == "BK0250"
+    assert boards[0]["board_code"] == "BK0001"
+    assert boards[-1]["board_code"] == "BK0250"
     # 确认翻页: pn=1, 2, 3
     pn_values = [c.args[1]["pn"] for c in mock_get.call_args_list]
     assert pn_values == [1, 2, 3]

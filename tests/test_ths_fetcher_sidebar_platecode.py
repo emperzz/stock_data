@@ -49,15 +49,15 @@ class TestMergeConceptSources:
         board_mod.upsert_ths_board_id_map(
             [{"cid": "308614", "platecode": "886056", "name": "阿尔茨海默概念", "board_type": "concept"}]
         )
-        gn = [{"code": "309121", "name": "AI PC", "platecode": "886071", "source": "ths"}]
+        gn = [{"ths_cid": "309121", "name": "AI PC", "board_code": "886071", "source": "ths"}]
         sidebar = [
-            {"code": "309121", "name": "AI PC", "source": "ths"},
-            {"code": "308614", "name": "阿尔茨海默概念", "source": "ths"},
+            {"ths_cid": "309121", "name": "AI PC", "source": "ths"},
+            {"ths_cid": "308614", "name": "阿尔茨海默概念", "source": "ths"},
         ]
         merged = ThsFetcher._merge_concept_sources(gn, sidebar)
-        by_cid = {r["code"]: r for r in merged}
-        assert by_cid["309121"]["platecode"] == "886071"  # gnSection wins
-        assert by_cid["308614"]["platecode"] == "886056"  # resolved from the map
+        by_cid = {r["ths_cid"]: r for r in merged}
+        assert by_cid["309121"]["board_code"] == "886071"  # gnSection wins
+        assert by_cid["308614"]["board_code"] == "886056"  # resolved from the map
 
     def test_unmapped_sidebar_row_keeps_none(self, fresh_db, monkeypatch):
         """No map entry, no detail-page candidate — None, never a guess."""
@@ -65,28 +65,28 @@ class TestMergeConceptSources:
             ThsFetcher, "_http_get_ths_board_index", lambda self, url: "<html>没有代码</html>"
         )
         merged = ThsFetcher._merge_concept_sources(
-            [], [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+            [], [{"ths_cid": "309999", "name": "未收录概念", "source": "ths"}]
         )
-        assert merged[0]["platecode"] is None
+        assert merged[0]["board_code"] is None
 
     def test_gn_section_platecode_not_overwritten_by_map(self, fresh_db):
         board_mod.upsert_ths_board_id_map(
             [{"cid": "309121", "platecode": "886999", "name": "AI PC", "board_type": "concept"}]
         )
-        gn = [{"code": "309121", "name": "AI PC", "platecode": "886071", "source": "ths"}]
+        gn = [{"ths_cid": "309121", "name": "AI PC", "board_code": "886071", "source": "ths"}]
         merged = ThsFetcher._merge_concept_sources(gn, [])
-        assert merged[0]["platecode"] == "886071"
+        assert merged[0]["board_code"] == "886071"
 
     def test_name_backfilled_from_sidebar(self, fresh_db):
-        gn = [{"code": "309121", "name": "", "platecode": "886071", "source": "ths"}]
-        sidebar = [{"code": "309121", "name": "AI PC", "source": "ths"}]
+        gn = [{"ths_cid": "309121", "name": "", "board_code": "886071", "source": "ths"}]
+        sidebar = [{"ths_cid": "309121", "name": "AI PC", "source": "ths"}]
         merged = ThsFetcher._merge_concept_sources(gn, sidebar)
         assert merged[0]["name"] == "AI PC"
 
     def test_duplicate_cids_deduped(self, fresh_db):
         gn = [
-            {"code": "309121", "name": "AI PC", "platecode": "886071", "source": "ths"},
-            {"code": "309121", "name": "AI PC", "platecode": "886071", "source": "ths"},
+            {"ths_cid": "309121", "name": "AI PC", "board_code": "886071", "source": "ths"},
+            {"ths_cid": "309121", "name": "AI PC", "board_code": "886071", "source": "ths"},
         ]
         assert len(ThsFetcher._merge_concept_sources(gn, [])) == 1
 
@@ -107,15 +107,15 @@ class TestRuntimeDetailFallback:
         monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", fake_get)
 
         gn: list[dict] = []
-        sidebar = [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+        sidebar = [{"ths_cid": "309999", "name": "未收录概念", "source": "ths"}]
         merged = ThsFetcher._merge_concept_sources(gn, sidebar)
 
-        assert merged[0]["platecode"] == "886123"
+        assert merged[0]["board_code"] == "886123"
         assert len(calls) == 1 and "309999" in calls[0]
         # write-back: the next call must not hit the network again
         calls.clear()
         merged2 = ThsFetcher._merge_concept_sources(gn, sidebar)
-        assert merged2[0]["platecode"] == "886123"
+        assert merged2[0]["board_code"] == "886123"
         assert calls == [], "resolved platecode must be persisted to ths_board_id_map"
 
     def test_detail_fetch_failure_keeps_none(self, fresh_db, monkeypatch):
@@ -126,18 +126,18 @@ class TestRuntimeDetailFallback:
 
         monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", boom)
         merged = ThsFetcher._merge_concept_sources(
-            [], [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+            [], [{"ths_cid": "309999", "name": "未收录概念", "source": "ths"}]
         )
-        assert merged[0]["platecode"] is None
+        assert merged[0]["board_code"] is None
 
     def test_unparsable_detail_page_keeps_none_and_does_not_write(self, fresh_db, monkeypatch):
         monkeypatch.setattr(
             ThsFetcher, "_http_get_ths_board_index", lambda self, url: "<html>没有代码</html>"
         )
         merged = ThsFetcher._merge_concept_sources(
-            [], [{"code": "309998", "name": "待定", "source": "ths"}]
+            [], [{"ths_cid": "309998", "name": "待定", "source": "ths"}]
         )
-        assert merged[0]["platecode"] is None
+        assert merged[0]["board_code"] is None
         assert board_mod.resolve_ths_platecode("309998") is None
 
     def test_gnsection_row_never_triggers_a_fetch(self, fresh_db, monkeypatch):
@@ -145,5 +145,5 @@ class TestRuntimeDetailFallback:
             raise AssertionError("gnSection rows must not fetch a detail page")
 
         monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", boom)
-        gn = [{"code": "309121", "name": "AI PC", "platecode": "886071", "source": "ths"}]
-        assert ThsFetcher._merge_concept_sources(gn, [])[0]["platecode"] == "886071"
+        gn = [{"ths_cid": "309121", "name": "AI PC", "board_code": "886071", "source": "ths"}]
+        assert ThsFetcher._merge_concept_sources(gn, [])[0]["board_code"] == "886071"

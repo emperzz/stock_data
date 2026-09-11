@@ -428,15 +428,15 @@ def post_stocks_board_overlap(
             continue
         boards = [
             {
-                "code": e["code"],
+                "code": e["board_code"],
                 "name": e.get("name", ""),
-                "type": e.get("type", ""),
+                "type": e.get("board_type", ""),
                 "subtype": e.get("subtype", ""),
                 "source": e.get("source", ""),
             }
             for e in entries
         ]
-        sets_index[code] = {(b["code"], b["name"]) for b in boards}
+        sets_index[code] = {(b["code"], b["name"]) for b in boards}  # response-boundary keys
         sets_out.append(StocksBoardOverlapStockSet(code=code, boards=boards))
 
     pairs: list[StocksBoardOverlapPair] = []
@@ -1485,23 +1485,23 @@ def _select_top_board_movers(
     eligible = [(r, p) for r, p in eligible if p is not None]
 
     def _code(r):
-        return r.get("code") or ""
+        return r.get("board_code") or ""
 
     gainers_sorted = sorted(eligible, key=lambda rp: (-rp[1], _code(rp[0])))[:top_n]
     losers_sorted = sorted(eligible, key=lambda rp: (rp[1], _code(rp[0])))[:top_n]
 
     def _to_entry(rp):
         r, _ = rp
-        # Flat fields map 1:1 from the merged get_board_list row — already
-        # canonical board-list units after the persistence merge
-        # (persistence/board.py::_normalize_zzshare_list_quote_units):
-        # amount 亿元, volume 万手, net_inflow 亿元. No ×1e8: the nested
-        # MinimalQuote layer this used to build was removed 2026-09-09
-        # (it double-converted zzshare rows' already-元 amount to ~1e18).
+        # Flat fields map 1:1 from the get_board_list row — already
+        # canonical board-list units: amount 亿元, volume 万手, net_inflow
+        # 亿元. zzshare's native 元 is converted at the zzshare fetcher
+        # boundary (D7/B, 2026-09-11), not at a persistence merge — that
+        # merge no longer exists. No ×1e8: the nested MinimalQuote layer this
+        # used to build was removed 2026-09-09.
         return BoardMoverEntry(
-            code=r.get("code") or "",
+            code=r.get("board_code") or "",
             name=r.get("name") or "",
-            type=r.get("type") or "",
+            type=r.get("board_type") or "",
             change_pct=r.get("change_pct"),
             amount=r.get("amount"),
             volume=r.get("volume"),
@@ -2012,6 +2012,8 @@ def render_stocks_board_overlap_as_md(p: StocksBoardOverlapResponse) -> str:
         out.append(f"### {s.code}")
         if s.boards:
             for b in s.boards:
+                # Response-boundary dict: StocksBoardOverlapStockSet.boards
+                # carries the PUBLIC keys (code/name/type/subtype/source).
                 t = b.get("type") or "-"
                 sub = b.get("subtype") or "-"
                 out.append(
@@ -2378,6 +2380,8 @@ def render_stocks_batch_profile_as_md(p: StockBatchProfileResponse) -> str:
             out.append("| 板块 | 涨跌幅 | 上涨/下跌 | 涨停/跌停 | 关联度 | 解析 |")
             out.append("|---|---|---|---|---|---|")
             for b in entry.boards["data"]:
+                # Response-boundary dict: agent_stock_profile._public() maps
+                # board_code/board_type back to the public code/type.
                 code = b.get("code", "?")
                 name = b.get("name", "")
                 type_ = b.get("type", "") or "—"

@@ -114,7 +114,15 @@ def test_no_source_aggregates_all(fresh_db):
     """Omitting ?source= aggregates (ths, eastmoney, zhitu) — no zzshare."""
     with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
         mock.return_value = (
-            [{"code": "x", "name": "x", "type": "concept", "subtype": "", "source": "zhitu"}],
+            [
+                {
+                    "board_code": "x",
+                    "name": "x",
+                    "board_type": "concept",
+                    "subtype": "",
+                    "source": "zhitu",
+                }
+            ],
             [],
             "mixed",
         )

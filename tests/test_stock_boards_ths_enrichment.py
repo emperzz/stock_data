@@ -107,18 +107,18 @@ def test_ths_source_enriches_change_pct_up_count_down_count(client):
 
     cached_entries = [
         {
-            "code": "885909",
+            "board_code": "885909",
             "name": "辅助生殖",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
             "source": "ths",
         },
     ]
     fetcher_result = [
         {
-            "code": "885909",
+            "board_code": "885909",
             "name": "辅助生殖",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
             "change_pct": -0.4114,
             "up_count": 30,
@@ -181,9 +181,9 @@ def test_eastmoney_source_leaves_enrichment_fields_as_none(client):
 
     cached_entries = [
         {
-            "code": "BK0001",
+            "board_code": "BK0001",
             "name": "测试板块",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "industry",
             "source": "eastmoney",
         },
@@ -229,17 +229,17 @@ def test_ths_source_partial_overlap_enriches_only_matching_codes(client):
     cached_entries = [
         # Present in enrichment
         {
-            "code": "885909",
+            "board_code": "885909",
             "name": "辅助生殖",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
             "source": "ths",
         },
         # Stale: not in enrichment (upstream dropped it)
         {
-            "code": "885OLD",
+            "board_code": "885OLD",
             "name": "已退市概念",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
             "source": "ths",
         },
@@ -265,7 +265,7 @@ def test_ths_source_partial_overlap_enriches_only_matching_codes(client):
         },
     }
     fetcher_result = [
-        {"code": k, **v, "name": k, "type": "concept", "subtype": "同花顺概念"}
+        {"board_code": k, **v, "name": k, "board_type": "concept", "subtype": "同花顺概念"}
         for k, v in enrichment_by_code.items()
     ]
 
@@ -310,9 +310,9 @@ def test_ths_cold_cache_falls_back_to_fetcher_result(client):
     persistence_empty = []
     fetcher_result = [
         {
-            "code": "885909",
+            "board_code": "885909",
             "name": "辅助生殖",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
             "change_pct": -0.4114,
             "up_count": 30,
@@ -323,9 +323,9 @@ def test_ths_cold_cache_falls_back_to_fetcher_result(client):
             "relevance": 2,
         },
         {
-            "code": "885879",
+            "board_code": "885879",
             "name": "流感",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
             "change_pct": -0.7418,
             "up_count": 66,
@@ -337,7 +337,7 @@ def test_ths_cold_cache_falls_back_to_fetcher_result(client):
         },
     ]
     enrichment_by_code = {
-        r["code"]: {
+        r["board_code"]: {
             k: r[k]
             for k in (
                 "change_pct",
@@ -393,9 +393,9 @@ def test_ths_cold_cache_filters_by_type(client):
 
     fetcher_result = [
         {
-            "code": "885909",
+            "board_code": "885909",
             "name": "辅助生殖",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
             "change_pct": 0.0,
             "up_count": 0,
@@ -406,9 +406,9 @@ def test_ths_cold_cache_filters_by_type(client):
             "relevance": 0,
         },
         {
-            "code": "881121",
+            "board_code": "881121",
             "name": "医药制造业",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "同花顺行业",
             "change_pct": 0.5,
             "up_count": 10,
@@ -420,7 +420,7 @@ def test_ths_cold_cache_filters_by_type(client):
         },
     ]
     enrichment_by_code = {
-        r["code"]: {
+        r["board_code"]: {
             k: r[k]
             for k in (
                 "change_pct",
@@ -495,9 +495,9 @@ def test_ths_enrichment_helper_leak_surfaces_500_via_map_errors(client):
 
     cached_entries = [
         {
-            "code": "885909",
+            "board_code": "885909",
             "name": "辅助生殖",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
             "source": "ths",
         },

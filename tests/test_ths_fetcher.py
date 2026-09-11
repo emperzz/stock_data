@@ -937,9 +937,10 @@ class TestGetStockBoards:
         # Response normalized
         assert len(result) == 2
         assert result[0] == {
-            "code": "885642",
+            "board_code": "885642",
             "name": "跨境电商",
-            "type": "concept",
+            "board_type": "concept",
+            "ths_cid": None,
             "subtype": "同花顺概念",
             # New fields, all None because the fake_payload only has the
             # minimal simple=1-style subset; safe_int / safe_float / str
@@ -952,7 +953,7 @@ class TestGetStockBoards:
             "explain": None,
             "relevance": None,
         }
-        assert result[1]["code"] == "885910"
+        assert result[1]["board_code"] == "885910"
 
     def test_extracts_quote_envelope_fields(self):
         """Real-shape payload: every quote / 解析 field roundtrips with safe coercion.
@@ -1009,9 +1010,9 @@ class TestGetStockBoards:
 
         # First concept: all numeric fields coerce; null limit_down_count → None.
         first = result[0]
-        assert first["code"] == "885909"
+        assert first["board_code"] == "885909"
         assert first["name"] == "辅助生殖"
-        assert first["type"] == "concept"
+        assert first["board_type"] == "concept"
         assert first["subtype"] == "同花顺概念"
         assert first["change_pct"] == -0.4114
         assert isinstance(first["change_pct"], float)
@@ -1026,7 +1027,7 @@ class TestGetStockBoards:
 
         # Second concept: limit_down_count is "0" (string), should coerce to 0.
         second = result[1]
-        assert second["code"] == "885879"
+        assert second["board_code"] == "885879"
         assert second["change_pct"] == -0.7418
         assert second["up_count"] == 66
         assert second["limit_up_count"] == 4
@@ -1068,9 +1069,9 @@ class TestGetStockBoards:
         assert e["explain"] is None  # empty string → None
         assert e["relevance"] is None
         # The legacy fields still flow.
-        assert e["code"] == "885111"
+        assert e["board_code"] == "885111"
         assert e["name"] == "测试概念"
-        assert e["type"] == "concept"
+        assert e["board_type"] == "concept"
         assert e["subtype"] == "同花顺概念"
 
     def test_market_id_mapping(self):

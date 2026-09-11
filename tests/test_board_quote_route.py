@@ -53,7 +53,13 @@ def test_board_quote_no_source_param_works(client):
         patch.object(
             board_mod,
             "get_board_metadata",
-            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+            return_value={
+                "name": "央企国企改革",
+                "board_type": "concept",
+                "subtype": "同花顺概念",
+                "board_code": "885595",
+                "ths_cid": "301546",
+            },
         ),
         patch.object(
             mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(_QUOTE, "ths")
@@ -88,7 +94,13 @@ def test_board_quote_extra_source_query_ignored(client):
         patch.object(
             board_mod,
             "get_board_metadata",
-            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+            return_value={
+                "name": "央企国企改革",
+                "board_type": "concept",
+                "subtype": "同花顺概念",
+                "board_code": "885595",
+                "ths_cid": "301546",
+            },
         ),
         patch.object(
             mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(_QUOTE, "ths")
@@ -109,7 +121,13 @@ def test_board_quote_upstream_error_returns_503(client):
         patch.object(
             board_mod,
             "get_board_metadata",
-            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+            return_value={
+                "name": "央企国企改革",
+                "board_type": "concept",
+                "subtype": "同花顺概念",
+                "board_code": "885595",
+                "ths_cid": "301546",
+            },
         ),
         patch.object(
             mgr_mod.DataFetcherManager,

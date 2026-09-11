@@ -771,7 +771,15 @@ class TestLeadStocksFormatMd:
         _patch_manager_and_boards(
             monkeypatch,
             manager,
-            board_stocks=[{"code": "300750", "name": "宁德时代", "source": "ths"}],
+            board_stocks=[
+                {
+                    "board_code": "300750",
+                    "name": "宁德时代",
+                    "board_type": "concept",
+                    "subtype": "",
+                    "source": "ths",
+                }
+            ],
         )
 
         response = client.get("/api/v1/agent/lead-stocks?format=md&top_n=1")

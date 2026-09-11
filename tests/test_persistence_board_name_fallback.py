@@ -37,7 +37,7 @@ def test_get_board_name_with_fallback_returns_cached_when_present():
     board_mod.update_cached_boards(
         "concept",
         "eastmoney",
-        [{"code": "BK0996", "name": "人形机器人", "type": "concept", "subtype": "concept"}],
+        [{"board_code": "BK0996", "name": "人形机器人", "subtype": "concept"}],
     )
     manager = MagicMock()
     name = board_mod.get_board_name_with_fallback("BK0996", "eastmoney", manager=manager)
@@ -60,7 +60,7 @@ def test_get_board_name_with_fallback_queries_manager_on_cache_miss():
     manager = MagicMock()
     # First call (concept) returns the target board; industry never reached.
     manager.get_all_boards.return_value = (
-        [{"code": "BK0996", "name": "人形机器人", "type": "concept"}],
+        [{"board_code": "BK0996", "name": "人形机器人"}],
         "EastMoneyFetcher",
     )
     name = board_mod.get_board_name_with_fallback("BK0996", "eastmoney", manager=manager)
@@ -102,7 +102,7 @@ def test_get_board_name_with_fallback_returns_none_when_no_match_in_boards():
     """Cache miss + fetcher returns boards but none match the code → None."""
     manager = MagicMock()
     manager.get_all_boards.return_value = (
-        [{"code": "BK_OTHER", "name": "其他概念"}],
+        [{"board_code": "BK_OTHER", "name": "其他概念"}],
         "EastMoneyFetcher",
     )
     name = board_mod.get_board_name_with_fallback("BK0996", "eastmoney", manager=manager)
@@ -121,14 +121,15 @@ def test_get_board_name_matches_ths_concept_by_code():
     board_mod.update_cached_boards(
         "concept",
         "ths",
-        [{"code": "301546", "name": "央企国企改革", "platecode": "885595"}],
+        [{"board_code": "885595", "name": "央企国企改革", "ths_cid": "301546"}],
     )
     # Client addresses the board by public code (885595). The update helper
-    # promotes ``platecode`` → ``code`` (the new cross-source public key).
+    # stores the cross-source public key in the ``code`` column and THS's
+    # internal cid in the ``cid`` column.
     assert board_mod.get_board_name("885595", "ths") == "央企国企改革"
     # Direct cid lookup is no longer supported via get_board_name — the
     # column-name mapping moved cid out of the searchable key. Callers that
-    # only know the cid must use _resolve_ths_cid_from_code (not this helper).
+    # only know the cid must use resolve_ths_cid (not this helper).
 
 
 def test_get_board_name_no_false_match_for_eastmoney():
@@ -136,19 +137,24 @@ def test_get_board_name_no_false_match_for_eastmoney():
     board_mod.update_cached_boards(
         "concept",
         "eastmoney",
-        [{"code": "BK0996", "name": "人形机器人"}],
+        [{"board_code": "BK0996", "name": "人形机器人"}],
     )
     assert board_mod.get_board_name("BK0996", "eastmoney") == "人形机器人"
     assert board_mod.get_board_name("885595", "eastmoney") is None
 
 
-def test_get_board_name_with_fallback_matches_platecode_in_slow_path():
-    """Slow path (manager.get_all_boards) must also compare platecode."""
+def test_get_board_name_with_fallback_matches_public_code_in_slow_path():
+    """Slow path (manager.get_all_boards) matches on the public ``board_code``.
+
+    Fetcher rows carry the public platecode under ``board_code`` (the THS
+    internal cid lives in ``ths_cid`` and is never the search key), so a
+    caller passing ``885595`` resolves without any cid translation.
+    """
     from unittest.mock import MagicMock
 
     manager = MagicMock()
     manager.get_all_boards.return_value = (
-        [{"code": "301546", "name": "央企国企改革", "platecode": "885595"}],
+        [{"board_code": "885595", "name": "央企国企改革", "ths_cid": "301546"}],
         "ThsFetcher",
     )
     name = board_mod.get_board_name_with_fallback("885595", "ths", manager=manager)

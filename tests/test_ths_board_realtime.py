@@ -86,7 +86,7 @@ def test_get_board_realtime_resolves_cid_and_hits_detail_url():
 
     with (
         patch(
-            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            "stock_data.data_provider.persistence.board.resolve_ths_cid",
             return_value="301546",
         ),
         patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
@@ -117,7 +117,7 @@ def test_get_board_realtime_falls_back_to_input_when_cid_unresolved():
 
     with (
         patch(
-            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            "stock_data.data_provider.persistence.board.resolve_ths_cid",
             return_value=None,
         ),
         patch.object(ThsFetcher, "_http_get") as http_get,
@@ -153,7 +153,7 @@ def test_get_board_realtime_industry_board_type_uses_platecode_as_cid():
 
     with (
         patch(
-            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            "stock_data.data_provider.persistence.board.resolve_ths_cid",
             return_value=None,  # industry doesn't even call this
         ) as cid_resolver,
         patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
@@ -173,7 +173,7 @@ def test_get_board_realtime_falls_back_to_cache_for_board_type():
     The cache is the source of truth for board classification. When the
     caller doesn't pass ``board_type``, the fetcher does a one-shot
     ``get_board_metadata(board_code, 'ths')`` lookup; if that returns a
-    row with a non-empty ``type``, it's used as the board_type.
+    row with a non-empty ``board_type``, it's used as the board_type.
     """
     f = ThsFetcher.__new__(ThsFetcher)
     captured = {}
@@ -190,10 +190,16 @@ def test_get_board_realtime_falls_back_to_cache_for_board_type():
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_metadata",
-            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+            return_value={
+                "name": "央企国企改革",
+                "board_type": "concept",
+                "subtype": "同花顺概念",
+                "board_code": "885595",
+                "ths_cid": "301546",
+            },
         ),
         patch(
-            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            "stock_data.data_provider.persistence.board.resolve_ths_cid",
             return_value="301546",
         ),
         patch.object(ThsFetcher, "_http_get", side_effect=fake_get),
@@ -237,7 +243,7 @@ def test_get_board_realtime_raises_when_cache_row_missing_type():
     """Cache hit but board_type column is None → fail with same message.
 
     Mirrors the legacy-row case: a stock_board row exists but its
-    ``type`` field is NULL (e.g. pre-migration). The fetcher treats
+    ``board_type`` field is NULL (e.g. pre-migration). The fetcher treats
     this the same as a cache miss.
     """
     import pytest
@@ -249,7 +255,13 @@ def test_get_board_realtime_raises_when_cache_row_missing_type():
     with (
         patch(
             "stock_data.data_provider.persistence.board.get_board_metadata",
-            return_value={"name": "x", "type": None, "subtype": ""},
+            return_value={
+                "name": "x",
+                "board_type": None,
+                "subtype": "",
+                "board_code": "885595",
+                "ths_cid": None,
+            },
         ),
         patch.object(ThsFetcher, "_http_get") as http_get,
         patch.object(ThsFetcher, "_v_token", return_value="tok"),
@@ -275,7 +287,7 @@ def test_get_board_realtime_raises_on_http_error():
 
     with (
         patch(
-            "stock_data.data_provider.persistence.board._resolve_ths_cid_from_platecode",
+            "stock_data.data_provider.persistence.board.resolve_ths_cid",
             return_value="301546",
         ),
         patch.object(ThsFetcher, "_http_get", side_effect=fake_get),

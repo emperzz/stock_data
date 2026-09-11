@@ -49,9 +49,9 @@ def test_eastmoney_source_routes_through_persistence_layer(client):
 
     fake_entries = [
         {
-            "code": "BK0001",
+            "board_code": "BK0001",
             "name": "测试板块",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "industry",
             "source": "eastmoney",
         },

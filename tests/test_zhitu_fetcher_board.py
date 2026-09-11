@@ -70,7 +70,13 @@ def test_get_all_boards_filters_by_type_and_subtype(mock_get):
     fetcher = _make_fetcher()
     boards = fetcher.get_all_boards(board_type="industry", subtype="申万行业")
     assert boards == [
-        {"code": "sw_mt", "name": "A股-申万行业-煤炭", "type": "industry", "subtype": "申万行业"}
+        {
+            "board_code": "sw_mt",
+            "name": "A股-申万行业-煤炭",
+            "board_type": "industry",
+            "subtype": "申万行业",
+            "ths_cid": None,
+        }
     ]
 
 
@@ -105,7 +111,7 @@ def test_get_all_boards_returns_all_subtypes_when_none(mock_get):
     fetcher = _make_fetcher()
     boards = fetcher.get_all_boards(board_type="industry", subtype=None)
     assert len(boards) == 2
-    codes = {b["code"] for b in boards}
+    codes = {b["board_code"] for b in boards}
     assert codes == {"sw_mt", "csrc_jr"}
 
 
@@ -141,18 +147,26 @@ def test_get_stock_boards_calls_index_index_endpoint(mock_get):
     fetcher = _make_fetcher()
     boards = fetcher.get_stock_boards("000001")
     assert boards == [
-        {"code": "sw_yx", "name": "A股-申万行业-银行", "type": "industry", "subtype": "申万行业"},
         {
-            "code": "chgn_700532",
-            "name": "A股-热门概念-MSCI中国",
-            "type": "concept",
-            "subtype": "热门概念",
+            "board_code": "sw_yx",
+            "name": "A股-申万行业-银行",
+            "board_type": "industry",
+            "subtype": "申万行业",
+            "ths_cid": None,
         },
         {
-            "code": "gn_rzrq",
+            "board_code": "chgn_700532",
+            "name": "A股-热门概念-MSCI中国",
+            "board_type": "concept",
+            "subtype": "热门概念",
+            "ths_cid": None,
+        },
+        {
+            "board_code": "gn_rzrq",
             "name": "A股-概念板块-融资融券",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "概念板块",
+            "ths_cid": None,
         },
     ]
 

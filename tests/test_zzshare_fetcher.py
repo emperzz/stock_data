@@ -1373,9 +1373,9 @@ class TestBoards:
             board_type="concept", subtype="同花顺概念", source="zzshare"
         )
         assert len(boards) == 2
-        assert boards[0]["code"] == "801001"
+        assert boards[0]["board_code"] == "801001"
         assert boards[0]["name"] == "芯片"
-        assert boards[0]["type"] == "concept"
+        assert boards[0]["board_type"] == "concept"
         assert boards[0]["subtype"] == "同花顺概念"
 
     def test_get_all_boards_subtype_mismatch_returns_empty(self):
@@ -1400,7 +1400,7 @@ class TestBoards:
             board_type="industry", subtype="同花顺行业", source="zzshare"
         )
         assert len(boards) == 1
-        assert boards[0]["type"] == "industry"
+        assert boards[0]["board_type"] == "industry"
 
     def test_get_all_boards_17_unified_to_concept(self):
         # zzshare plate_type=17 (题材) is unified with plate=15 under type=concept
@@ -1421,7 +1421,7 @@ class TestBoards:
         # type=concept with subtype="同花顺题材" preserved.
         boards = fetcher.get_all_boards(board_type="concept", subtype=None, source="zzshare")
         assert len(boards) == 1
-        assert boards[0]["type"] == "concept"
+        assert boards[0]["board_type"] == "concept"
         assert boards[0]["subtype"] == "同花顺题材"
         # Subtype-filtered path: querying subtype="同花顺题材" still works and
         # returns the plate=17 row tagged as concept.
@@ -1429,7 +1429,7 @@ class TestBoards:
             board_type="concept", subtype="同花顺题材", source="zzshare"
         )
         assert len(boards_by_subtype) == 1
-        assert boards_by_subtype[0]["type"] == "concept"
+        assert boards_by_subtype[0]["board_type"] == "concept"
         assert boards_by_subtype[0]["subtype"] == "同花顺题材"
         # board_type="special" is no longer a valid entry for zzshare —
         # _BOARD_TYPE_BY_PLATE_TYPE has no key that maps back to "special",
@@ -1459,16 +1459,16 @@ class TestBoards:
         # All 概念 + 题材 rows come back, tagged with their per-row subtype.
         # No quote fields without include_quote.
         assert len(boards) == 3
-        assert {b["code"] for b in boards} == {"801001", "801002", "881999"}
+        assert {b["board_code"] for b in boards} == {"801001", "801002", "881999"}
         assert {b["subtype"] for b in boards} == {"同花顺概念", "同花顺题材"}
-        assert set(boards[0].keys()) == {"code", "name", "type", "subtype"}
+        assert set(boards[0].keys()) == {"board_code", "name", "board_type", "subtype", "ths_cid"}
 
     def test_get_all_boards_without_quote_is_bare(self):
         # include_quote=False must not leak raw plates_rank columns.
         rows = [dict(self._RANK_ROW)]
         fetcher = self._fetcher_with_api(plates_rank=rows)
         boards = fetcher.get_all_boards(board_type="concept", source="zzshare", include_quote=False)
-        assert boards[0].keys() == {"code", "name", "type", "subtype"}
+        assert boards[0].keys() == {"board_code", "name", "board_type", "subtype", "ths_cid"}
         assert "change_pct" not in boards[0]
         assert "score" not in boards[0]
 
@@ -1516,9 +1516,9 @@ class TestBoards:
         assert len(boards) == 1
         b = boards[0]
         # schema keys
-        assert b["code"] == "885796"
+        assert b["board_code"] == "885796"
         assert b["name"] == "送转填权"
-        assert b["type"] == "concept"
+        assert b["board_type"] == "concept"
         assert b["change_pct"] == pytest.approx(8.178)
         assert b["amount"] == pytest.approx(68171800.0)
         assert b["total_mv"] == pytest.approx(2783750000.0)

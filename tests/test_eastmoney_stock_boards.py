@@ -73,7 +73,7 @@ def test_returns_normalized_list():
     assert result is not None
     assert len(result) == 3
     first = result[0]
-    assert first["code"] == "BK0438"
+    assert first["board_code"] == "BK0438"
     assert first["name"] == "食品饮料"
     assert first["change_pct"] == pytest.approx(0.34)
     assert first["leading_stock_code"] == "600872"
@@ -157,8 +157,8 @@ class TestGetStockBoardsTypeOverride:
         fetcher = EastMoneyFetcher()
         with patch.object(fetcher._session, "get", return_value=_mock_resp(SAMPLE_RESPONSE)):
             result = fetcher.get_stock_boards("600519", source="eastmoney")
-        by_code = {b["code"]: b for b in result}
-        assert by_code["BK0477"]["type"] == "concept"
+        by_code = {b["board_code"]: b for b in result}
+        assert by_code["BK0477"]["board_type"] == "concept"
         assert by_code["BK0477"]["subtype"] == "concept"
 
     def test_known_industry_keeps_industry_tag(
@@ -169,8 +169,8 @@ class TestGetStockBoardsTypeOverride:
         fetcher = EastMoneyFetcher()
         with patch.object(fetcher._session, "get", return_value=_mock_resp(SAMPLE_RESPONSE)):
             result = fetcher.get_stock_boards("600519", source="eastmoney")
-        by_code = {b["code"]: b for b in result}
-        assert by_code["BK0438"]["type"] == "industry"
+        by_code = {b["board_code"]: b for b in result}
+        assert by_code["BK0438"]["board_type"] == "industry"
         assert by_code["BK0438"]["subtype"] == "industry"
 
     def test_unknown_board_keeps_fetcher_fallback(
@@ -181,8 +181,8 @@ class TestGetStockBoardsTypeOverride:
         fetcher = EastMoneyFetcher()
         with patch.object(fetcher._session, "get", return_value=_mock_resp(SAMPLE_RESPONSE)):
             result = fetcher.get_stock_boards("600519", source="eastmoney")
-        by_code = {b["code"]: b for b in result}
-        assert by_code["BK1277"]["type"] == "industry"
+        by_code = {b["board_code"]: b for b in result}
+        assert by_code["BK1277"]["board_type"] == "industry"
         assert by_code["BK1277"]["subtype"] == "industry"
 
     def test_enrichment_falls_back_gracefully_when_persistence_unavailable(self):
@@ -201,7 +201,7 @@ class TestGetStockBoardsTypeOverride:
         ):
             result = fetcher.get_stock_boards("600519", source="eastmoney")
         # No exception; all entries keep the fetcher's hardcoded fallback.
-        assert all(b["type"] == "industry" for b in result)
+        assert all(b["board_type"] == "industry" for b in result)
         assert all(b["subtype"] == "industry" for b in result)
 
 
@@ -221,7 +221,7 @@ class TestGetStockBoardsLive:
         result = fetcher.get_stock_boards("600519", source="eastmoney")
         assert result is not None, "Should not return None for valid SH code"
         assert len(result) > 0, "贵州茅台 should belong to multiple boards"
-        codes = {b["code"] for b in result}
+        codes = {b["board_code"] for b in result}
         names = {b["name"] for b in result}
         # BK1277 = 白酒Ⅱ, BK0438 = 食品饮料 — both should appear
         assert "BK1277" in codes, f"Expected BK1277 in {codes}"

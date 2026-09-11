@@ -48,19 +48,32 @@ def test_list_boards_invalid_source_returns_400(client):
 
 
 def test_list_boards_source_ths_passes_ths_to_persistence(client):
-    """?source=ths reaches persistence; source hardcoded to 'ths' inside helper."""
-    from unittest.mock import patch
+    """?source=ths routes to the ths leg only — one fetcher call, no zzshare blend.
+
+    ``fetch_boards_with_zzshare_backfill`` was the ths-leg merge helper and
+    was deleted 2026-09-11 (spec §2 D2). The surviving invariant is that a
+    ths list request reaches ``manager.get_all_boards`` exactly once with
+    ``source='ths'`` — a sibling slug would mean the removed cross-source
+    blend came back.
+    """
+    from unittest.mock import MagicMock
+    from unittest.mock import patch as _patch
 
     from stock_data.data_provider.persistence import board as board_mod
 
-    with patch.object(
-        board_mod, "fetch_boards_with_zzshare_backfill", return_value=[]
-    ) as mock_fetch:
+    mgr = MagicMock()
+    mgr.get_all_boards.return_value = ([], "ths")
+    forced_refresh = type("T", (), {"is_first_call": lambda *a: True})()
+
+    with (
+        _patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+        _patch.object(board_mod, "update_cached_boards", return_value=0),
+        _patch.object(board_mod, "_refresh_tracker", forced_refresh),
+    ):
         r = client.get("/api/v1/boards?type=concept&source=ths")
     assert r.status_code == 200
-    # After unification, get_board_list doesn't take 'source' kwarg
-    for call in mock_fetch.call_args_list:
-        assert "source" not in call.kwargs
+    assert mgr.get_all_boards.call_count == 1
+    assert mgr.get_all_boards.call_args.kwargs["source"] == "ths"
 
 
 def test_list_boards_source_zzshare_returns_422(client):
@@ -80,7 +93,12 @@ def test_list_boards_zhitu_returns_zhitu_boards(client):
     "Source Tracking" section.
     """
     fake_boards = [
-        {"code": "sw_mt", "name": "A股-申万行业-煤炭", "type": "industry", "subtype": "申万行业"},
+        {
+            "board_code": "sw_mt",
+            "name": "A股-申万行业-煤炭",
+            "board_type": "industry",
+            "subtype": "申万行业",
+        },
     ]
     with patch(
         _PERSISTENCE_LIST_PATCH,
@@ -122,7 +140,7 @@ def test_list_boards_eastmoney_unsupported_type_returns_400(client):
 
 def test_list_boards_eastmoney_default_subtype_ok(client):
     """source=eastmoney&type=concept&subtype=concept is valid (mirrored)."""
-    fake = [{"code": "BK0001", "name": "测试"}]
+    fake = [{"board_code": "BK0001", "name": "测试"}]
     with patch(
         _PERSISTENCE_LIST_PATCH,
         return_value=(fake, "EastMoneyFetcher"),
@@ -139,7 +157,7 @@ def test_list_boards_sort_by_without_include_quote_returns_400(client):
 
 def test_list_boards_limit_truncates_results(client):
     """limit=2 truncates the data array to 2 items."""
-    fake = [{"code": f"BK{i:04d}", "name": f"测试{i}"} for i in range(5)]
+    fake = [{"board_code": f"BK{i:04d}", "name": f"测试{i}"} for i in range(5)]
     with patch(
         _PERSISTENCE_LIST_PATCH,
         return_value=(fake, "EastMoneyFetcher"),
@@ -165,9 +183,9 @@ def test_list_boards_cache_hit_returns_persistence(client):
     """Second call with same (type, source) → origin='persistence'."""
     fake_boards = [
         {
-            "code": "BK0001",
+            "board_code": "BK0001",
             "name": "测试",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
             "source": "ths",
         },
@@ -191,7 +209,7 @@ def test_list_boards_cache_hit_returns_persistence(client):
 
 def test_list_boards_refresh_forces_fetcher_call(client):
     """refresh=true → persistence is called with refresh=True (forces upstream)."""
-    fake = [{"code": "BK0001", "name": "测试"}]
+    fake = [{"board_code": "BK0001", "name": "测试"}]
     with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ths")) as mock_get:
         r = client.get("/api/v1/boards?type=concept&source=ths&refresh=true")
     assert r.status_code == 200
@@ -204,7 +222,7 @@ def test_list_boards_refresh_forces_fetcher_call(client):
 
 def test_list_boards_include_quote_forces_fetcher_call(client):
     """include_quote=true → persistence is called with include_quote=True."""
-    fake = [{"code": "BK0001", "name": "测试"}]
+    fake = [{"board_code": "BK0001", "name": "测试"}]
     with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ths")) as mock_get:
         r = client.get("/api/v1/boards?type=concept&source=ths&include_quote=true")
     assert r.status_code == 200
@@ -214,7 +232,7 @@ def test_list_boards_include_quote_forces_fetcher_call(client):
 
 def test_list_boards_subtype_passed_to_persistence(client):
     """subtype param is forwarded to persistence layer (validation + filter)."""
-    fake = [{"code": "BK0001", "name": "测试"}]
+    fake = [{"board_code": "BK0001", "name": "测试"}]
     with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake, "ths")) as mock_get:
         r = client.get("/api/v1/boards?type=concept&source=ths&subtype=同花顺概念")
     assert r.status_code == 200
@@ -258,8 +276,18 @@ def test_list_boards_no_type_response_carries_type_field(client):
     tell concept / industry / special apart.
     """
     fake_boards = [
-        {"code": "BK_C1", "name": "概念1", "type": "concept", "subtype": "同花顺概念"},
-        {"code": "BK_I1", "name": "行业1", "type": "industry", "subtype": "同花顺行业"},
+        {
+            "board_code": "BK_C1",
+            "name": "概念1",
+            "board_type": "concept",
+            "subtype": "同花顺概念",
+        },
+        {
+            "board_code": "BK_I1",
+            "name": "行业1",
+            "board_type": "industry",
+            "subtype": "同花顺行业",
+        },
     ]
     with patch(_PERSISTENCE_LIST_PATCH, return_value=(fake_boards, "mixed")):
         r = client.get("/api/v1/boards?source=ths")
@@ -301,9 +329,9 @@ def test_list_boards_no_type_eastmoney_iterates_only_concept_industry(client):
         return (
             [
                 {
-                    "code": f"BK_{board_type}",
+                    "board_code": f"BK_{board_type}",
                     "name": f"{board_type} test",
-                    "type": board_type,
+                    "board_type": board_type,
                     "subtype": board_type,
                     "source": source,
                 }
@@ -360,9 +388,9 @@ def test_list_boards_no_type_zhitu_iterates_all_four_types(client):
         return (
             [
                 {
-                    "code": f"ZH_{board_type}",
+                    "board_code": f"ZH_{board_type}",
                     "name": f"{board_type} test",
-                    "type": board_type,
+                    "board_type": board_type,
                     "subtype": board_type,
                     "source": source,
                 }
@@ -495,33 +523,36 @@ def test_get_board_stocks_refresh_forces_persistence_refresh(client):
 
 
 def test_get_board_stocks_source_ths_passes_ths_to_persistence(client):
-    """?source=ths reaches persistence; fetch helper receives source='ths'.
+    """?source=ths reaches the ths fetcher; zzshare is never a leg.
 
-    Strict source-routing: the user's ``?source=`` is forwarded all the
-    way down to ``fetch_board_stocks_with_zzshare_fallback`` so that the
-    helper can route to the requested fetcher without ever silently
-    falling back to a sibling source.
+    ``fetch_board_stocks_with_zzshare_fallback`` was the two-leg helper and
+    was deleted 2026-09-11 (spec §2 D2 — strict isolation). The surviving
+    invariant is that the user's ``?source=`` is forwarded to the single
+    fetcher call: ``include_quote=False`` reaches the THS F10 tier with
+    ``source='ths'``, and the AJAX/zzshare method is never invoked.
 
     ``?refresh=true`` forces the cold-path branch: without it, both
     ``persistence.board._refresh_tracker`` (module-level singleton that
-    marks per-day) and the on-disk SQLite cache can short-circuit the
-    call before it ever reaches the helper under test. The test is
-    asserting that the helper IS called, so the call site must be the
-    cold-path branch.
+    marks per-day) and the on-disk SQLite cache can short-circuit the call
+    before it ever reaches the fetcher.
     """
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
 
     from stock_data.data_provider.persistence import board as board_mod
 
-    with patch.object(
-        board_mod, "fetch_board_stocks_with_zzshare_fallback", return_value=([], "ths", "ths", None)
-    ) as mock_fetch:
+    mgr = MagicMock()
+    mgr.get_board_stocks_full.return_value = ([], "ths")
+    with (
+        patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+        patch.object(board_mod, "update_cached_board_stocks", return_value=0),
+    ):
         r = client.get("/api/v1/boards/885642/stocks?source=ths&refresh=true")
     assert r.status_code in (200, 404)  # empty may 404
-    assert mock_fetch.call_count >= 1
-    # Strict routing: the helper MUST receive source='ths'.
-    first_call = mock_fetch.call_args_list[0]
-    assert first_call.kwargs.get("source") == "ths"
+    # Strict routing: the one fetcher call MUST receive source='ths'.
+    assert mgr.get_board_stocks_full.call_count == 1
+    assert mgr.get_board_stocks_full.call_args.kwargs["source"] == "ths"
+    # ... and no sibling source is consulted.
+    assert mgr.get_board_stocks.call_count == 0
 
 
 def test_get_board_stocks_source_zzshare_returns_422(client):

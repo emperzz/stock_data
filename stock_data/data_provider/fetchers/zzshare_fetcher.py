@@ -722,10 +722,13 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
                 if not isinstance(row, dict):
                     continue
                 board = dict(row) if include_quote else {}
-                board["code"] = str(row.get("plate_code", ""))
+                board["board_code"] = str(row.get("plate_code", ""))
                 board["name"] = str(row.get("plate_name", ""))
-                board["type"] = mapped_type
+                board["board_type"] = mapped_type
                 board["subtype"] = mapped_subtype
+                # spec §4 hard rule 3: a zzshare row never carries a THS cid.
+                # Uniform shape with the other three fetchers.
+                board["ths_cid"] = None
                 if include_quote:
                     for src_key, schema_key in self._PLATES_RANK_SCHEMA_MAP.items():
                         board[schema_key] = safe_float(row.get(src_key))

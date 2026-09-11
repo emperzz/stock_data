@@ -438,24 +438,27 @@ class TestGetCachedMarketQuotes:
 class TestGetBoardStocksUnionFillupE2E:
     """End-to-end test for /boards/{code}/stocks union fillup behavior.
 
-    Verifies the new spec union semantics: include_quote=true returns
-    THS top-50 rows with the 5 fields THS upstream doesn't have
-    (open/high/low/prev_close/volume) filled from /stocks quote cache.
-    Suffix rows (members beyond THS 50-cap) get all 13 fillable
-    fields from /stocks cache.
+    Verifies the union semantics: include_quote=True returns THS AJAX
+    rows with the 5 fields THS upstream doesn't have
+    (open/high/low/prev_close/volume) filled from /stocks quote cache,
+    while a thin row (code/name only) gets all 13 fillable fields.
+
+    Post-2026-09-11 there is no zzshare suffix leg — the AJAX tier is
+    single-source (spec §2 D2), so every returned row is a THS row.
 
     Uses monkeypatch to mock all upstream calls; no real network.
     """
 
     def test_ths_top50_row_gets_missing_fields_filled(self, monkeypatch, tmp_path):
-        """THS top-50 row: 11 quote fields from THS, 5 missing fields
+        """THS row: 11 quote fields from THS, 5 missing fields
         (open/high/low/prev_close/volume) filled from /stocks cache.
-        THS existing values are NOT overwritten.
+        THS existing values are NOT overwritten. A thin THS row (only
+        code/name) gets every fillable field from the cache.
         """
         from stock_data.data_provider.persistence import board as pb
 
-        # Set up: 1 THS top-50 row (has price/change_pct/etc, missing
-        # open/high/low/prev_close/volume) + 1 suffix row (only code/name).
+        # Set up: 1 THS row (has price/change_pct/etc, missing
+        # open/high/low/prev_close/volume) + 1 thin row (only code/name).
         ths_top_row = {
             "stock_code": "300469",
             "stock_name": "信息发展",
@@ -472,11 +475,10 @@ class TestGetBoardStocksUnionFillupE2E:
             "pe_ratio": None,
             # open / high / low / prev_close / volume all None
         }
-        suffix_row = {"stock_code": "688999", "stock_name": "新股A"}
+        thin_row = {"stock_code": "688999", "stock_name": "新股A"}
 
-        # THS upstream returns 1 row (the top-50 row).
-        # ZZSHARE returns the suffix row.
-        # /stocks cache has data for both codes.
+        # THS AJAX upstream returns both rows. /stocks cache has data
+        # for both codes.
         market_quotes = [
             _q(
                 code="300469",
@@ -510,18 +512,18 @@ class TestGetBoardStocksUnionFillupE2E:
         # Stub the DB to be empty so the cache branch is taken.
         monkeypatch.setattr(pb, "_read_board_stocks_from_db", lambda *a, **kw: [])
         monkeypatch.setattr(pb, "update_cached_board_stocks", lambda *a, **kw: 0)
-        # CID resolution returns a valid CID so THS branch proceeds.
-        monkeypatch.setattr(pb, "_resolve_ths_cid_from_platecode", lambda code: "301558")
+        # CID resolution returns a valid CID so the AJAX branch proceeds.
+        monkeypatch.setattr(pb, "resolve_ths_cid", lambda code: "301558")
 
         # Stub get_cached_market_quotes to return our market quotes.
         monkeypatch.setattr(pb, "get_cached_market_quotes", lambda mgr: market_quotes)
 
-        # Stub the upstream fetcher calls.
+        # Stub the upstream fetcher call (AJAX tier, cid-addressed).
         class _Mgr:
             def get_board_stocks(self, board_code, source, **kwargs):
-                if kwargs.get("include_quote"):
-                    return [ths_top_row], "ths"
-                return [suffix_row], "zzshare"
+                assert kwargs.get("include_quote") is True
+                assert board_code == "301558"  # cid, not the public 885406
+                return [ths_top_row, thin_row], "ths"
 
             def get_realtime_quotes(self, market):
                 return market_quotes, "zzshare"
@@ -536,12 +538,14 @@ class TestGetBoardStocksUnionFillupE2E:
         # 6-tuple return
         assert len(result) == 6
         stocks, origin, es, reason, quote_truncated, total_in_board = result
-        # Order: THS top-50 first, suffix after
+        assert origin == "ths"
+        assert es == "ths"
+        assert reason is None
         assert len(stocks) == 2
         assert stocks[0]["stock_code"] == "300469"
         assert stocks[1]["stock_code"] == "688999"
 
-        # THS top-50 row: existing fields preserved, 5 missing filled
+        # THS row: existing fields preserved, 5 missing filled
         ths_row = stocks[0]
         assert ths_row["price"] == 51.4  # THS preserved
         assert ths_row["change_pct"] == 6.71  # THS preserved
@@ -558,16 +562,17 @@ class TestGetBoardStocksUnionFillupE2E:
         # pe_ratio was None in THS, filled from /stocks
         assert ths_row["pe_ratio"] == 42.0
 
-        # Suffix row: all 13 fillable fields filled
-        suf_row = stocks[1]
-        assert suf_row["price"] == 10.0
-        assert suf_row["volume"] == 500000
-        assert suf_row["open"] == 9.9
-        assert suf_row["high"] == 10.1
-        assert suf_row["low"] == 9.8
-        assert suf_row["prev_close"] == 9.85
-        assert suf_row["amplitude"] == 2.5
-        assert suf_row["pe_ratio"] == 15.0
+        # Thin row: all 13 fillable fields filled
+        thin = stocks[1]
+        assert thin["price"] == 10.0
+        assert thin["volume"] == 500000
+        assert thin["open"] == 9.9
+        assert thin["high"] == 10.1
+        assert thin["low"] == 9.8
+        assert thin["prev_close"] == 9.85
+        assert thin["amplitude"] == 2.5
+        assert thin["pe_ratio"] == 15.0
 
-        # quote_truncated: suffix was non-empty → True
-        assert quote_truncated is True
+        # 2 rows returned, default top_n=50 → not at the upstream cap.
+        assert quote_truncated is False
+        assert total_in_board == 2

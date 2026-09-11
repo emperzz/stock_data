@@ -83,14 +83,14 @@ class TestParseGnSectionFixture:
         rows = self.fetcher._parse_gn_section(_GN_FIXTURE)
         assert len(rows) == 2
         for r in rows:
-            assert r["code"] in ("300188", "300382")
-            assert r["platecode"] in ("885333", "885343")
+            assert r["ths_cid"] in ("300188", "300382")
+            assert r["board_code"] in ("885333", "885343")
             assert r["name"]
             assert r["source"] == "ths"
 
     def test_carries_change_pct_and_net_inflow(self):
         rows = self.fetcher._parse_gn_section(_GN_FIXTURE)
-        by_cid = {r["code"]: r for r in rows}
+        by_cid = {r["ths_cid"]: r for r in rows}
         assert by_cid["300188"]["change_pct"] == 1.39
         assert by_cid["300188"]["net_inflow"] == 8.91
         assert by_cid["300382"]["change_pct"] == -1.73
@@ -126,7 +126,7 @@ class TestParseGnSidebarFixture:
 
     def test_extracts_cid_name_pairs(self):
         rows = self.fetcher._parse_ths_gn_sidebar(_GN_FIXTURE)
-        cids = {r["code"] for r in rows}
+        cids = {r["ths_cid"] for r in rows}
         names = {r["name"] for r in rows}
         assert cids == {"300188", "300382", "301558"}
         assert "移动支付" in names
@@ -146,14 +146,14 @@ class TestParseIndustrySidebarFixture:
     def test_extracts_industry_codes(self):
         rows = self.fetcher._parse_ths_thshy_sidebar(_THSHY_FIXTURE)
         assert len(rows) == 2
-        codes = {r["code"] for r in rows}
+        codes = {r["ths_cid"] for r in rows}
         assert codes == {"881121", "881273"}
 
     def test_industry_code_is_881_prefix(self):
         rows = self.fetcher._parse_ths_thshy_sidebar(_THSHY_FIXTURE)
         for r in rows:
-            assert r["code"].startswith("881"), (
-                f"industry code {r['code']!r} should start with '881'"
+            assert r["ths_cid"].startswith("881"), (
+                f"industry code {r['ths_cid']!r} should start with '881'"
             )
 
 
@@ -185,12 +185,12 @@ class TestMergeConceptSources:
         self.fetcher = ThsFetcher()
 
     def test_gnsection_wins(self):
-        gn = [{"code": "300188", "name": "移动支付", "platecode": "885333", "source": "ths"}]
-        sb = [{"code": "300188", "name": "OVERRIDDEN", "source": "ths"}]
+        gn = [{"ths_cid": "300188", "name": "移动支付", "board_code": "885333", "source": "ths"}]
+        sb = [{"ths_cid": "300188", "name": "OVERRIDDEN", "source": "ths"}]
         merged = self.fetcher._merge_concept_sources(gn, sb)
         assert len(merged) == 1
         assert merged[0]["name"] == "移动支付"
-        assert merged[0]["platecode"] == "885333"
+        assert merged[0]["board_code"] == "885333"
 
     def test_sidebar_only_gets_null_platecode_when_unresolvable(self, monkeypatch):
         # Both the map (empty, see the fixture) and the detail-page fallback
@@ -201,11 +201,11 @@ class TestMergeConceptSources:
             "_http_get_ths_board_index",
             lambda self, url: "<html>没有代码</html>",
         )
-        gn = [{"code": "300188", "name": "移动支付", "platecode": "885333", "source": "ths"}]
-        sb = [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+        gn = [{"ths_cid": "300188", "name": "移动支付", "board_code": "885333", "source": "ths"}]
+        sb = [{"ths_cid": "309999", "name": "未收录概念", "source": "ths"}]
         merged = self.fetcher._merge_concept_sources(gn, sb)
-        by_cid = {r["code"]: r for r in merged}
-        assert by_cid["309999"]["platecode"] is None
+        by_cid = {r["ths_cid"]: r for r in merged}
+        assert by_cid["309999"]["board_code"] is None
         assert by_cid["309999"]["name"] == "未收录概念"
 
     def test_sidebar_only_resolved_from_map(self, monkeypatch):
@@ -220,16 +220,16 @@ class TestMergeConceptSources:
             raise AssertionError("a seeded cid must not trigger a detail fetch")
 
         monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", boom)
-        gn = [{"code": "300188", "name": "移动支付", "platecode": "885333", "source": "ths"}]
-        sb = [{"code": "301558", "name": "阿里巴巴概念", "source": "ths"}]
+        gn = [{"ths_cid": "300188", "name": "移动支付", "board_code": "885333", "source": "ths"}]
+        sb = [{"ths_cid": "301558", "name": "阿里巴巴概念", "source": "ths"}]
         merged = self.fetcher._merge_concept_sources(gn, sb)
-        by_cid = {r["code"]: r for r in merged}
-        assert by_cid["301558"]["platecode"] == "885611"
+        by_cid = {r["ths_cid"]: r for r in merged}
+        assert by_cid["301558"]["board_code"] == "885611"
 
     def test_sidebar_fills_missing_name(self):
         # gnSection row with empty name; sidebar should fill it
-        gn = [{"code": "300188", "name": "", "platecode": "885333", "source": "ths"}]
-        sb = [{"code": "300188", "name": "移动支付", "source": "ths"}]
+        gn = [{"ths_cid": "300188", "name": "", "board_code": "885333", "source": "ths"}]
+        sb = [{"ths_cid": "300188", "name": "移动支付", "source": "ths"}]
         merged = self.fetcher._merge_concept_sources(gn, sb)
         assert merged[0]["name"] == "移动支付"
 
@@ -294,7 +294,7 @@ class TestUniformResponseShape:
         realtime field, not omitted keys."""
         gn_section: list[dict] = []  # no gnSection data
         sidebar = [
-            {"code": "301558", "name": "阿里巴巴概念", "source": "ths"},
+            {"ths_cid": "301558", "name": "阿里巴巴概念", "source": "ths"},
         ]
         merged = self.fetcher._merge_concept_sources(gn_section, sidebar)
         row = merged[0]
@@ -313,9 +313,9 @@ class TestUniformResponseShape:
         expectation that get_all_boards does NOT clobber them)."""
         gn_section = [
             {
-                "code": "300188",
+                "ths_cid": "300188",
                 "name": "移动支付",
-                "platecode": "885333",
+                "board_code": "885333",
                 "source": "ths",
                 "change_pct": 1.39,
                 "net_inflow": 8.91,
@@ -349,28 +349,28 @@ def test_ths_get_all_boards_concept(ths):
 
     # All rows tagged correctly
     for r in rows:
-        assert r["type"] == "concept"
+        assert r["board_type"] == "concept"
         assert r["subtype"] == THS_CONCEPT_SUBTYPE
         assert r["source"] == "ths"
-        assert r["code"], f"row missing code: {r}"
+        assert r["ths_cid"], f"row missing code: {r}"
         assert r["name"], f"row missing name: {r}"
         # platecode may be None for sidebar-only entries — that's
         # expected (documented in the docstring). What MUST be true:
         # every platecode is 6 digits starting with 88x.
-        if r["platecode"] is not None:
-            assert r["platecode"].isdigit() and len(r["platecode"]) == 6
-            assert r["platecode"].startswith("88"), (
-                f"concept platecode should start with 88, got {r['platecode']!r}"
+        if r["board_code"] is not None:
+            assert r["board_code"].isdigit() and len(r["board_code"]) == 6
+            assert r["board_code"].startswith("88"), (
+                f"concept platecode should start with 88, got {r['board_code']!r}"
             )
 
     # Spot-check a known board: 移动支付 is always present
     move_payment = next((r for r in rows if r["name"] == "移动支付"), None)
     assert move_payment is not None, "移动支付 should be in the concept board list"
-    assert move_payment["code"] == "300188"
-    assert move_payment["platecode"] == "885333"
+    assert move_payment["ths_cid"] == "300188"
+    assert move_payment["board_code"] == "885333"
 
     # No duplicate codes (UNIQUE(code, source) constraint compliance)
-    codes = [r["code"] for r in rows]
+    codes = [r["ths_cid"] for r in rows]
     assert len(codes) == len(set(codes)), "duplicate codes in concept list"
 
 
@@ -382,18 +382,20 @@ def test_ths_get_all_boards_industry(ths):
     assert len(rows) > 60, f"expected >60 industry boards, got {len(rows)}"
 
     for r in rows:
-        assert r["type"] == "industry"
+        assert r["board_type"] == "industry"
         assert r["subtype"] == THS_INDUSTRY_SUBTYPE
         assert r["source"] == "ths"
-        # For industry, code == platecode (no separate cid).
-        assert r["code"] == r["platecode"]
-        assert r["code"].startswith("881"), f"industry code {r['code']!r} should start with '881'"
+        # For industry, ths_cid == board_code (no separate cid).
+        assert r["ths_cid"] == r["board_code"]
+        assert r["board_code"].startswith("881"), (
+            f"industry code {r['board_code']!r} should start with '881'"
+        )
 
     # Spot-check: 半导体 should be present
     semi = next((r for r in rows if r["name"] == "半导体"), None)
     assert semi is not None, "半导体 should be in the industry board list"
-    assert semi["code"] == "881121"
-    assert semi["platecode"] == "881121"
+    assert semi["ths_cid"] == "881121"
+    assert semi["board_code"] == "881121"
 
 
 @pytest.mark.live_network
@@ -401,14 +403,14 @@ def test_ths_get_all_boards_combined(ths):
     """board_type=None returns both concept and industry."""
     rows = ths.get_all_boards(board_type=None)
     assert isinstance(rows, list)
-    types_present = {r["type"] for r in rows}
+    types_present = {r["board_type"] for r in rows}
     assert "concept" in types_present
     assert "industry" in types_present
 
     # No duplicate (code, type) within a source.
     seen = set()
     for r in rows:
-        key = (r["code"], r["type"], r["source"])
+        key = (r["ths_cid"], r["board_type"], r["source"])
         assert key not in seen, f"duplicate (code, type, source): {key}"
         seen.add(key)
 
@@ -442,7 +444,7 @@ def test_ths_get_all_boards_industry_with_quote_enrichment(ths):
     for r in rows:
         for k in ThsFetcher._REALTIME_BOARD_FIELDS:
             assert k in r, f"industry row missing realtime key: {k}"
-        assert r["type"] == "industry"
+        assert r["board_type"] == "industry"
 
     # Verify a known board is enriched with the FULL field set
     semi = next((r for r in rows if r["name"] == "半导体"), None)
@@ -482,12 +484,12 @@ def test_ths_get_all_boards_uniform_shape(ths):
     industry_rows = ths.get_all_boards(board_type="industry", include_quote=True)
 
     required_keys = {
-        "code",
+        "ths_cid",
         "name",
-        "type",
+        "board_type",
         "subtype",
         "source",
-        "platecode",
+        "board_code",
         *ThsFetcher._REALTIME_BOARD_FIELDS,
     }
     for r in concept_rows:

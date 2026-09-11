@@ -412,7 +412,7 @@ class TestStocksBatchProfile:
         _bind_manager(monkeypatch, mock_manager)
         with patch(
             _BOARD_STOCKS_PATCH,
-            return_value=([{"code": "885595", "name": "白酒"}], False, "persistence"),
+            return_value=([{"board_code": "885595", "name": "白酒"}], False, "persistence"),
         ):
             resp = client.post(
                 "/api/v1/agent/stocks/batch-profile",
@@ -889,18 +889,18 @@ def test_boards_enrichment_warm_cache_merge(client, monkeypatch):
 
     cached_entries = [
         {
-            "code": "881155",
+            "board_code": "881155",
             "name": "数据中心",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
             "source": "ths",
         },
     ]
     fetcher_result = [
         {
-            "code": "881155",
+            "board_code": "881155",
             "name": "数据中心",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
             "change_pct": 1.23,
             "up_count": 15,
@@ -949,9 +949,9 @@ def test_boards_enrichment_cold_cache_fallback(client, monkeypatch):
 
     fetcher_result = [
         {
-            "code": "881155",
+            "board_code": "881155",
             "name": "数据中心",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
             "change_pct": 1.23,
             "up_count": 15,
@@ -962,9 +962,9 @@ def test_boards_enrichment_cold_cache_fallback(client, monkeypatch):
             "relevance": 2,
         },
         {
-            "code": "881166",
+            "board_code": "881166",
             "name": "算力",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
             "change_pct": 0.5,
             "up_count": 10,
@@ -1008,9 +1008,9 @@ def test_boards_enrichment_fetcher_failure(client, monkeypatch):
 
     cached_entries = [
         {
-            "code": "881155",
+            "board_code": "881155",
             "name": "数据中心",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
             "source": "ths",
         },
@@ -1051,25 +1051,25 @@ def test_md_boards_block_full_field_table(client, monkeypatch):
 
     cached_entries = [
         {
-            "code": "881155",
+            "board_code": "881155",
             "name": "数据中心",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
             "source": "ths",
         },
         {
-            "code": "881166",
+            "board_code": "881166",
             "name": "算力",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
             "source": "ths",
         },
     ]
     fetcher_result = [
         {
-            "code": "881155",
+            "board_code": "881155",
             "name": "数据中心",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
             "change_pct": 1.23,
             "up_count": 15,
@@ -1080,9 +1080,9 @@ def test_md_boards_block_full_field_table(client, monkeypatch):
             "relevance": 2,
         },
         {
-            "code": "881166",
+            "board_code": "881166",
             "name": "算力",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
             "change_pct": None,
             "up_count": None,

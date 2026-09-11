@@ -1275,10 +1275,11 @@ class DataFetcherManager:
         No failover: only ThsFetcher implements
         :meth:`ThsFetcher.get_board_stocks_full` (the F10 page is THS-only).
 
-        Invoked by ``persistence/board.py::fetch_board_stocks_with_zzshare_fallback``
-        (leg 3 of the include_quote=False path, added 2026-07-20 per
-        spec §3.5.1). Distinct from ``get_board_stocks`` (q.10jqka AJAX
-        path with hard cap 50).
+        Since 2026-09-11 this is the ONLY leg of the include_quote=False
+        path (spec §2 D2) and of ``backfill.py`` phase 2 — the
+        ZZSHARE-primary chain it used to sit behind was deleted. Distinct
+        from ``get_board_stocks`` (q.10jqka AJAX path, hard cap 50, and
+        cid-addressed rather than platecode-addressed).
         """
         return self._with_source(
             source=source,
