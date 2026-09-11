@@ -76,10 +76,32 @@ def test_list_boards_source_ths_passes_ths_to_persistence(client):
     assert mgr.get_all_boards.call_args.kwargs["source"] == "ths"
 
 
-def test_list_boards_source_zzshare_returns_422(client):
-    """?source=zzshare on /boards returns 422 (FastAPI Literal validation)."""
-    r = client.get("/api/v1/boards?type=concept&source=zzshare")
-    assert r.status_code == 422
+def test_list_boards_source_zzshare_passes_zzshare_to_persistence(client):
+    """?source=zzshare is a first-class label on /boards — no alias (2026-09-11).
+
+    It used to 422 at the FastAPI Literal (zzshare was not a public label).
+    Post-split, ``zzshare`` is IN ``VALID_SOURCES`` and the Literal gained it,
+    so the request reaches persistence with the user's label unchanged: one
+    ``manager.get_all_boards`` call with ``source='zzshare'`` — not 'ths'.
+    """
+    from unittest.mock import MagicMock
+    from unittest.mock import patch as _patch
+
+    from stock_data.data_provider.persistence import board as board_mod
+
+    mgr = MagicMock()
+    mgr.get_all_boards.return_value = ([], "zzshare")
+    forced_refresh = type("T", (), {"is_first_call": lambda *a: True})()
+
+    with (
+        _patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+        _patch.object(board_mod, "update_cached_boards", return_value=0),
+        _patch.object(board_mod, "_refresh_tracker", forced_refresh),
+    ):
+        r = client.get("/api/v1/boards?type=concept&source=zzshare")
+    assert r.status_code == 200
+    assert mgr.get_all_boards.call_count == 1
+    assert mgr.get_all_boards.call_args.kwargs["source"] == "zzshare"
 
 
 def test_list_boards_zhitu_returns_zhitu_boards(client):
@@ -255,10 +277,19 @@ def test_list_boards_persistence_validation_error_propagates(client):
     assert "No fetcher" in str(body)
 
 
-def test_list_boards_source_zzshare_type_special_returns_422(client):
-    """?source=zzshare&type=special returns 422 (Literal check fires before type check)."""
+def test_list_boards_source_zzshare_type_special_returns_400(client):
+    """?source=zzshare&type=special → 400 (zzshare dropped the 'special' slot).
+
+    The Literal no longer rejects ``zzshare`` (it is a legal source now), so
+    validation reaches the per-(source, type) guard: zzshare declares only
+    concept + industry subtypes, so ``type=special`` is a 400 — not a silent
+    200 with an empty data array.
+    """
     r = client.get("/api/v1/boards?type=special&source=zzshare")
-    assert r.status_code == 422
+    assert r.status_code == 400
+    body = r.json()
+    assert "zzshare" in str(body)
+    assert "special" in str(body)
 
 
 def test_list_boards_no_type_subtype_returns_400(client):
@@ -555,10 +586,29 @@ def test_get_board_stocks_source_ths_passes_ths_to_persistence(client):
     assert mgr.get_board_stocks.call_count == 0
 
 
-def test_get_board_stocks_source_zzshare_returns_422(client):
-    """?source=zzshare on /boards/{code}/stocks returns 422."""
-    r = client.get("/api/v1/boards/308709/stocks?source=zzshare")
-    assert r.status_code == 422
+def test_get_board_stocks_source_zzshare_passes_zzshare_to_persistence(client):
+    """?source=zzshare on /boards/{code}/stocks is legal and strictly routed.
+
+    It used to 422 at the Literal. Post-split (2026-09-11), zzshare is IN
+    ``_BOARD_STOCKS_VALID_SOURCES`` and the route's Literal accepts it, so the
+    request reaches the persistence helper with the user's label unchanged —
+    the response echoes ``query_source='zzshare'`` / ``effective_source='zzshare'``
+    (no zzshare→ths alias). The persistence call is mocked so the assertion is
+    on the source the helper *received*, not on upstream availability.
+    """
+    fake = [{"stock_code": "000034", "stock_name": "神州数码"}]
+    with patch(
+        "stock_data.data_provider.persistence.board.get_board_stocks",
+        return_value=(fake, "persistence", "zzshare", None, False, 1),
+    ) as spy:
+        r = client.get("/api/v1/boards/308709/stocks?source=zzshare")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["query_source"] == "zzshare"
+    assert body["effective_source"] == "zzshare"
+    assert body["data_source"] == "persistence"
+    assert [s["code"] for s in body["stocks"]] == ["000034"]
+    assert spy.call_args.kwargs["source"] == "zzshare"
 
 
 def test_get_board_stocks_unknown_source_returns_400_or_422(client):
@@ -779,16 +829,17 @@ def test_get_stock_boards_eastmoney_returns_200_with_cold_sources_when_empty(cli
 
 
 def test_get_stock_boards_zzshare_returns_200_with_cold_sources_when_empty(client):
-    """No zzshare data -> 200 + cold_sources contains the post-alias source.
+    """No zzshare data -> 200 + cold_sources=['zzshare'] (no ths alias).
 
-    source=zzshare aliases to ths (data is THS upstream), so the cold source
-    label in the response is "ths" (the canonical key), not "zzshare".
+    The zzshare→ths alias was removed 2026-09-11 (spec §2 D1/D2), so a
+    request for one source is no longer relabelled as another: the cold
+    label in the response is the user's own source, "zzshare".
     """
     r = client.get("/api/v1/stocks/800997/boards?source=zzshare")
     assert r.status_code == 200
     body = r.json()
     assert body["data"] == []
-    assert "ths" in body["cold_sources"]
+    assert body["cold_sources"] == ["zzshare"]
 
 
 def test_get_stock_boards_zzshare_type_special_returns_400(client):
@@ -964,14 +1015,15 @@ def test_get_board_history_per_row_frequency_distinct_from_top_period(client):
     assert body["data"][0]["frequency"] == "w"  # mismatch is exposed
 
 
-def test_get_board_history_zzshare_aliases_to_ths(client):
-    """Backward compat: `source=zzshare` is accepted and aliased to `ths`.
+def test_get_board_history_zzshare_returns_400_invalid_source(client):
+    """`source=zzshare` on the board-history route is a 400, NOT an alias to ths.
 
-    ZzshareFetcher has no K-line implementation (upstream `plate_kline`
-    only supports 883957 同花顺全A). The route layer must therefore alias
-    `zzshare` → `ths` so the same source label continues to work without
-    400 on unknown source. ThsFetcher then receives the request and
-    surfaces a real upstream error (e.g. board_type missing).
+    ZzshareFetcher has no board K-line implementation (upstream `plate_kline`
+    only supports 883957 同花顺全A), and the route's ``_resolve_board_history_source``
+    no longer maps zzshare→ths: serving THS data under the zzshare label would
+    violate the strict source isolation of spec §2 D2. The route raises
+    ``HTTPException(400)`` with ``error='invalid_source'`` before the manager
+    is reached, so the fetcher must never be called.
     """
     with patch(
         "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
@@ -981,27 +1033,33 @@ def test_get_board_history_zzshare_aliases_to_ths(client):
             "/api/v1/boards/881270/history",
             params={"source": "zzshare", "frequency": "d", "board_type": "industry"},
         )
-    # Validation must pass (NOT 400); upstream is patched so route returns 200.
-    assert r.status_code == 200, r.text
-    # Confirm the manager was called with source='ths' (alias applied).
-    assert spy.call_args.kwargs.get("source") == "ths"
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "invalid_source"
+    assert "zzshare" in detail["message"]
+    # Rejected at validation time: no upstream call, no ths substitution.
+    assert spy.call_count == 0
 
 
-def test_boards_valid_sources_excludes_zzshare():
-    """After unification, VALID_SOURCES must not include 'zzshare'."""
+def test_boards_valid_sources_includes_zzshare():
+    """VALID_SOURCES must include 'zzshare' — it is a first-class source (2026-09-11)."""
     from stock_data.data_provider.persistence import board as board_mod
 
-    assert "zzshare" not in board_mod.VALID_SOURCES
+    assert "zzshare" in board_mod.VALID_SOURCES
     assert "ths" in board_mod.VALID_SOURCES
     assert "eastmoney" in board_mod.VALID_SOURCES
     assert "zhitu" in board_mod.VALID_SOURCES
 
 
-def test_boards_stocks_valid_sources_excludes_zzshare():
-    """_BOARD_STOCKS_VALID_SOURCES must not include 'zzshare' either."""
+def test_boards_stocks_valid_sources_includes_zzshare():
+    """_BOARD_STOCKS_VALID_SOURCES must include 'zzshare' too.
+
+    Both per-endpoint allowlists are aliases of ``VALID_SOURCES`` post-split,
+    so zzshare is in every one of them.
+    """
     from stock_data.data_provider.persistence import board as board_mod
 
-    assert "zzshare" not in board_mod._BOARD_STOCKS_VALID_SOURCES
+    assert "zzshare" in board_mod._BOARD_STOCKS_VALID_SOURCES
     assert "ths" in board_mod._BOARD_STOCKS_VALID_SOURCES
     assert "eastmoney" in board_mod._BOARD_STOCKS_VALID_SOURCES
     assert "zhitu" in board_mod._BOARD_STOCKS_VALID_SOURCES

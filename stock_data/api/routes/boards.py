@@ -142,12 +142,13 @@ _BOARD_HISTORY_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney")
 
 
 def _resolve_board_history_source(source: str) -> str:
-    """Validate `source` for the board-history route — aliases ``zzshare``→``ths``.
+    """Validate `source` for the board-history route. No aliasing.
 
     zzshare's ``plate_kline`` upstream only supports 883957 (同花顺全A); all
     concept / industry / special codes return empty. ZzshareFetcher therefore
-    has no `get_board_history` implementation, so this route aliases the
-    ``zzshare`` label to ``ths`` and dispatches to ThsFetcher.
+    has no `get_board_history` implementation, so ``?source=zzshare`` is a
+    400 — it must NOT be aliased to ``ths``, which would silently serve one
+    source's data under another source's label (spec §2 D2).
 
     Raises HTTPException(400) on invalid source. The set of valid sources
     is intentionally narrower than `_SOURCES` (board-list): THS is exposed
@@ -155,8 +156,6 @@ def _resolve_board_history_source(source: str) -> str:
     is exposed because EastMoneyFetcher has a multi-frequency implementation.
     Zhitu does not expose a board K-line endpoint and is therefore excluded.
     """
-    if source == "zzshare":
-        source = "ths"
     if source not in _BOARD_HISTORY_VALID_SOURCES:
         raise HTTPException(
             status_code=400,
@@ -248,30 +247,28 @@ def _resolve_type_optional(board_type: str | None) -> str | None:
 
 
 def _parse_stock_boards_source_csv(raw: str | None) -> list[str]:
-    """Parse ?source= for /stocks/{code}/boards — alias zzshare → ths.
+    """Parse ?source= for /stocks/{code}/boards. No aliasing.
 
-    THS basic API is the stock→boards reverse-lookup upstream; zzshare
-    SDK has no such endpoint (returns stub None), so we alias
-    zzshare → ths here (same source data).
+    ``zzshare`` is a first-class label here (spec §2 D1). It used to be
+    aliased to ``ths`` on the grounds that "zzshare has no reverse-lookup
+    upstream" — true, but the alias meant every entry came back labelled
+    ``source='ths'``, and the 115k zzshare membership rows were unreachable
+    through the very label that names them.
 
-    The board-list endpoint does NOT alias in either direction (both
-    ``ths`` and ``zzshare`` are first-class labels as of 2026-07-08).
-    The two helpers' valid_set and default-when-blank differ, so we
-    keep them separate rather than force a config-driven merge
-    (rule-of-three not yet met).
+    Omitting ``?source=`` now aggregates EVERY source in ``VALID_SOURCES``
+    (4), so zzshare's membership is included by default (spec §13 #7).
 
     Args:
         raw: User-supplied ?source= value (may be None or comma-separated).
 
     Returns:
-        List of normalized source names in user-requested order, deduplicated.
+        List of source names in user-requested order, deduplicated.
 
     Raises:
-        HTTPException(400): any source (after aliasing) is not in the valid set.
-            Error detail lists valid sources + accepted alias.
+        HTTPException(400): any source is not in the valid set. Error detail
+            lists the valid sources.
     """
-    valid_set = stock_board_cache._STOCK_BOARDS_VALID_SOURCES
-    alias_map = stock_board_cache._STOCK_BOARDS_SOURCE_ALIAS
+    valid_set = stock_board_cache.VALID_SOURCES
     if not raw:
         return list(valid_set)
     out: list[str] = []
@@ -279,7 +276,6 @@ def _parse_stock_boards_source_csv(raw: str | None) -> list[str]:
         s = s.strip()
         if not s:
             continue
-        s = alias_map.get(s, s)
         if s not in valid_set:
             raise HTTPException(
                 status_code=400,
@@ -287,8 +283,7 @@ def _parse_stock_boards_source_csv(raw: str | None) -> list[str]:
                     "error": "invalid_source",
                     "message": (
                         f"Unknown stock-boards source {s!r}. "
-                        f"Valid sources: {list(valid_set)} "
-                        f"(alias 'zzshare' accepted)"
+                        f"Valid sources: {list(valid_set)}"
                     ),
                 },
             )
@@ -320,7 +315,7 @@ def list_boards(
             "(concept / industry / index / special) for the given source."
         ),
     ),
-    source: Literal["ths", "eastmoney", "zhitu"] = Query(
+    source: Literal["ths", "zzshare", "eastmoney", "zhitu"] = Query(
         ..., description="Data source (REQUIRED). 'zzshare' was unified under 'ths' on 2026-07-08."
     ),
     subtype: str | None = Query(
@@ -462,7 +457,7 @@ def list_boards(
 @map_errors
 def get_board_stocks(
     board_code: str = Path(max_length=30, description="Board code"),
-    source: Literal["ths", "eastmoney", "zhitu"] = Query(
+    source: Literal["ths", "zzshare", "eastmoney", "zhitu"] = Query(
         ...,
         description=(
             "Data source (REQUIRED). 'zzshare' was unified under 'ths' "

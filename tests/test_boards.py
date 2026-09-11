@@ -332,22 +332,37 @@ class TestBoardAPIRoutes:
 
 
 class TestBoardsSourceUnification:
-    """Boards endpoints after ths+zzshare unification (2026-07-08).
+    """Boards endpoints after the board-source split (2026-09-11).
 
-    Covers two surfaces of the same change:
-    - /boards: source=zzshare returns 422 (Literal rejects); source=ths
-      routes to the persistence helper that internally merges zzshare
-      for platecode backfill.
-    - /boards/{code}/stocks: ths and zzshare are no longer public
-      sources on the Literal but ZzshareFetcher still serves as the
-      include_quote=False primary with ThsFetcher as fallback (and
-      vice versa for include_quote=True).
+    zzshare is a first-class source on both surfaces: the Literal on
+    /boards and /boards/{code}/stocks accepts it, and each request is
+    strictly routed to its own fetcher with no cross-source blend.
     """
 
-    def test_boards_list_source_zzshare_returns_422(self, client):
-        """/api/v1/boards?source=zzshare returns 422 (FastAPI Literal rejects)."""
-        response = client.get("/api/v1/boards?type=concept&source=zzshare")
-        assert response.status_code == 422
+    def test_boards_list_source_zzshare_passes_through(self, client):
+        """/api/v1/boards?source=zzshare reaches persistence as 'zzshare'.
+
+        It used to 422 at the Literal (zzshare was not a public label).
+        Post-split it is IN ``VALID_SOURCES``, so exactly one
+        ``manager.get_all_boards`` call fires with the user's label —
+        unchanged, not aliased to 'ths'.
+        """
+        from stock_data.data_provider.persistence import board as board_mod
+
+        mgr = MagicMock()
+        mgr.get_all_boards.return_value = ([], "zzshare")
+        forced_refresh = type("T", (), {"is_first_call": lambda *a: True})()
+
+        with (
+            patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+            patch.object(board_mod, "update_cached_boards", return_value=0),
+            patch.object(board_mod, "_refresh_tracker", forced_refresh),
+        ):
+            response = client.get("/api/v1/boards?type=concept&source=zzshare")
+        assert response.status_code == 200
+        assert mgr.get_all_boards.call_count == 1
+        assert mgr.get_all_boards.call_args.kwargs["source"] == "zzshare"
+        assert mgr.get_all_boards.call_args.kwargs["board_type"] == "concept"
 
     def test_boards_list_source_ths_passes_through(self, client):
         """/api/v1/boards?source=ths routes to the ths leg ONLY — no cross-source blend.
@@ -377,10 +392,26 @@ class TestBoardsSourceUnification:
         assert mgr.get_all_boards.call_args.kwargs["source"] == "ths"
         assert mgr.get_all_boards.call_args.kwargs["board_type"] == "concept"
 
-    def test_board_stocks_source_zzshare_returns_422(self, client):
-        """/api/v1/boards/885642/stocks?source=zzshare returns 422."""
-        response = client.get("/api/v1/boards/885642/stocks?source=zzshare")
-        assert response.status_code == 422
+    def test_board_stocks_source_zzshare_passes_through(self, client):
+        """/api/v1/boards/885642/stocks?source=zzshare reaches persistence as 'zzshare'.
+
+        It used to 422 at the Literal. Post-split, zzshare is a legal label on
+        this route too and is strictly routed: the persistence helper receives
+        the user's own source (no zzshare→ths alias), and the response echoes
+        it in ``query_source`` / ``effective_source``.
+        """
+        fake = [{"stock_code": "300740", "stock_name": "皇台酒业"}]
+        with patch(
+            "stock_data.data_provider.persistence.board.get_board_stocks",
+            return_value=(fake, "persistence", "zzshare", None, False, 1),
+        ) as spy:
+            response = client.get("/api/v1/boards/885642/stocks?source=zzshare")
+        assert response.status_code == 200
+        body = response.json()
+        assert spy.call_args.kwargs["source"] == "zzshare"
+        assert body["query_source"] == "zzshare"
+        assert body["effective_source"] == "zzshare"
+        assert [s["code"] for s in body["stocks"]] == ["300740"]
 
     def test_board_stocks_strict_source_routing_include_quote_false(self, client):
         """?source=ths&include_quote=false: THS F10 tier is the ONLY leg.

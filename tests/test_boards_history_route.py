@@ -14,20 +14,20 @@ def client():
 
 
 class TestSourceExpansion:
-    def test_zzshare_source_accepted(self, client):
-        """Backward compat: `source=zzshare` is accepted and aliased to `ths`.
+    def test_zzshare_source_rejected_with_400(self, client):
+        """`source=zzshare` is REJECTED — no alias to `ths`.
 
-        ZzshareFetcher has no K-line implementation (upstream `plate_kline`
-        only supports 883957 同花顺全A), so the route layer aliases
-        `zzshare` → `ths` instead of 400-ing on unknown source.
+        ZzshareFetcher has no board-K-line implementation (upstream
+        `plate_kline` only supports 883957 同花顺全A), so zzshare is not in
+        `_BOARD_HISTORY_VALID_SOURCES`. Aliasing `zzshare` → `ths` would
+        serve one source's data under another source's label (spec §2 D2).
         """
         r = client.get(
             "/api/v1/boards/881270/history",
             params={"source": "zzshare", "frequency": "d", "board_type": "industry"},
         )
-        # Either 200 (upstream works) or 502/500 (upstream down) — NOT 400/422 (validation)
-        assert r.status_code != 422, r.text
-        assert r.status_code != 400, r.text
+        assert r.status_code == 400, r.text
+        assert r.json()["detail"]["error"] == "invalid_source"
 
     def test_eastmoney_source_accepted(self, client):
         r = client.get(
@@ -62,13 +62,11 @@ class TestSourceExpansion:
         )
         assert r.status_code == 400, r.text
 
-    def test_zzshare_alias_to_ths(self, client):
-        """`source=zzshare` on /boards/.../history aliases to `ths`.
+    def test_ths_source_not_remapped(self, client):
+        """`source=ths` reaches the manager as `ths` — never aliased away.
 
-        Reversed direction from `_resolve_source` (which aliases
-        `ths→zzshare` for board-list endpoints). Here `ths` MUST stay
-        canonical (different upstream from zzshare's plates_list), and
-        `zzshare` is the label that gets remapped.
+        The manager must not receive any other label (in particular, not
+        `zzshare`): board K-line for ths routes to ThsFetcher's own upstream.
         """
         with patch(
             "stock_data.data_provider.manager.DataFetcherManager.get_board_history",
@@ -76,10 +74,9 @@ class TestSourceExpansion:
         ) as spy:
             r = client.get(
                 "/api/v1/boards/881270/history",
-                params={"source": "zzshare", "frequency": "d", "board_type": "industry"},
+                params={"source": "ths", "frequency": "d", "board_type": "industry"},
             )
         assert r.status_code == 200, r.text
-        # Manager must have received source='ths' (alias applied before dispatch)
         assert spy.call_args.kwargs.get("source") == "ths"
 
 

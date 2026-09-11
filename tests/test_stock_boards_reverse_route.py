@@ -99,19 +99,24 @@ def test_ths_canonical_in_csv(fresh_db):
         assert "zhitu" in called
 
 
-def test_zzshare_aliases_to_ths(fresh_db):
-    """?source=zzshare now aliases to ths (data is THS upstream)."""
+def test_zzshare_served_as_its_own_source(fresh_db):
+    """?source=zzshare is a first-class label — NO alias to ths.
+
+    The reverse lookup is served by zzshare's own membership rows; the
+    persistence layer must receive ``["zzshare"]`` (not ``["ths"]``),
+    otherwise the entries come back mislabelled as ths (spec §2 D1).
+    """
     with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
-        mock.return_value = ([], ["ths"], "")
+        mock.return_value = ([], ["zzshare"], "")
         with TestClient(_app_for_test) as client:
             r = client.get("/api/v1/stocks/600519/boards?source=zzshare")
         assert r.status_code == 200
         called = mock.call_args.kwargs["sources"]
-        assert called == ["ths"]
+        assert called == ["zzshare"]
 
 
 def test_no_source_aggregates_all(fresh_db):
-    """Omitting ?source= aggregates (ths, eastmoney, zhitu) — no zzshare."""
+    """Omitting ?source= aggregates all four sources, zzshare included."""
     with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
         mock.return_value = (
             [
@@ -130,7 +135,7 @@ def test_no_source_aggregates_all(fresh_db):
             r = client.get("/api/v1/stocks/600519/boards")
         assert r.status_code == 200
         called = mock.call_args.kwargs["sources"]
-        assert set(called) == {"ths", "eastmoney", "zhitu"}
+        assert set(called) == {"ths", "zzshare", "eastmoney", "zhitu"}
 
 
 def test_ths_industry_filter_returns_400(fresh_db):
@@ -155,40 +160,45 @@ def test_invalid_source_in_csv_returns_400(fresh_db):
     assert r.json()["detail"]["error"] == "invalid_source"
 
 
-# --- normalize_stock_board_source -----------------------------------
+# --- normalize_board_stocks_source ----------------------------------
+#
+# `normalize_stock_board_source` was deleted 2026-09-11 (zero production
+# callers; its only job was the zzshare→ths alias). `normalize_board_stocks_source`
+# survives with ONE production caller (routes/boards.py) and now validates
+# against `VALID_SOURCES` without aliasing.
 
 
-def test_normalize_stock_board_source_canonical():
-    """ths / eastmoney / zhitu pass through unchanged."""
-    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+def test_normalize_board_stocks_source_canonical():
+    """ths / zzshare / eastmoney / zhitu pass through unchanged."""
+    from stock_data.data_provider.persistence.board import normalize_board_stocks_source
 
-    assert normalize_stock_board_source("ths") == "ths"
-    assert normalize_stock_board_source("eastmoney") == "eastmoney"
-    assert normalize_stock_board_source("zhitu") == "zhitu"
-
-
-def test_normalize_stock_board_source_zzshare_alias():
-    """zzshare aliases to ths (data is THS upstream)."""
-    from stock_data.data_provider.persistence.board import normalize_stock_board_source
-
-    assert normalize_stock_board_source("zzshare") == "ths"
+    assert normalize_board_stocks_source("ths") == "ths"
+    assert normalize_board_stocks_source("eastmoney") == "eastmoney"
+    assert normalize_board_stocks_source("zhitu") == "zhitu"
 
 
-def test_normalize_stock_board_source_invalid_raises():
+def test_normalize_board_stocks_source_zzshare_not_aliased():
+    """zzshare is first-class — it does NOT alias to ths."""
+    from stock_data.data_provider.persistence.board import normalize_board_stocks_source
+
+    assert normalize_board_stocks_source("zzshare") == "zzshare"
+
+
+def test_normalize_board_stocks_source_invalid_raises():
     """Unknown source raises ValueError."""
-    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+    from stock_data.data_provider.persistence.board import normalize_board_stocks_source
 
-    with pytest.raises(ValueError, match="Unknown stock-boards source"):
-        normalize_stock_board_source("bogus")
-    with pytest.raises(ValueError, match="Unknown stock-boards source"):
-        normalize_stock_board_source("")
+    with pytest.raises(ValueError, match="Unknown board-stocks source"):
+        normalize_board_stocks_source("bogus")
+    with pytest.raises(ValueError, match="Unknown board-stocks source"):
+        normalize_board_stocks_source("")
 
 
-def test_normalize_stock_board_source_does_not_alias_other_directions():
+def test_normalize_board_stocks_source_does_not_alias_other_directions():
     """ths is canonical (does NOT alias to zzshare)."""
-    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+    from stock_data.data_provider.persistence.board import normalize_board_stocks_source
 
-    assert normalize_stock_board_source("ths") != "zzshare"
+    assert normalize_board_stocks_source("ths") != "zzshare"
 
 
 # Lazy import — keeps this module cheap to collect when only the persistence

@@ -63,10 +63,25 @@
 
 `stock_data/stock_data_backup/`（`server.py:93` 硬编码路径，CSV 已 force-add 进版本库）：
 
-- `stock_board_membership_ths.csv`：115,081 行全部标 `source='ths'`，但生成方式是 `manager.get_board_stocks(source="zzshare")` → `upsert_membership_bulk(source="ths")`（见 `docs/superpowers/specs/2026-07-10-ths-board-backfill-on-startup-design.md:69-71`）。其中 **52,010 行 board_code 是 801xxx**（zzshare pt=17 区间）。
+- `stock_board_membership_ths.csv`：115,081 行全部标 `source='ths'`。**它不是单一来源的数据** —— 2026-09-11 复算（见下）证明它来自**两个 fetcher**，按 `board_code` 前缀一分为二：
+
+  | 前缀 | 行数 | distinct code | 真实来源 | subtype 词汇 |
+  |---|---|---|---|---|
+  | 801 / 803 / 710 / 883 | **55,301** | 230 | zzshare | 同花顺概念 + **同花顺题材** |
+  | 881 / 885 / 886 | **59,780** | 558 | THS | 同花顺概念 + **同花顺行业** |
+
+  三项独立证据（任一单独都不够，三条合起来可判定）：
+  1. **code space 不相交**（交集 0），且各组 code 落在对应的 board CSV 里：zzshare 组 230 个 code 中 186 个在 `stock_board_zzshare.csv`；THS 组 558 个 code **全部**在 `stock_board_ths.csv`（558/588 = 95%）。
+  2. **subtype 词汇各说各话**：`同花顺题材` 是 zzshare `plate_type=17` 的产物，THS 自身的概念清单从不产生它（THS 概念 subtype 只有 `同花顺概念`）；`同花顺行业` 只出现在 881xxx（THS 行业码）上。
+  3. `refreshed_at` 两个分组的区间重叠（都在 2026-07-12 09:54–10:12），即同一次批量生成里两个 fetcher 各跑了一遍。
+
+  > **早期版本的结论「这些数据本来就是 zzshare 数据，只是被贴了 `ths` 标签」是错的。** 它只核实了 801xxx 那 52,010 行（45%）就外推到全部 115,081 行。实际上一半以上是 THS 数据；整表 relabel 成任何一个 source 都会错误标注另一半。
+
 - `stock_board_ths.csv`：797 行，混有 885/886/881（THS 原生）与 801/803/710（zzshare）。`tools/fix_stock_board_ths_csv.py:144-145` 明确以 zzshare 为准：`pc = zz_truth.get(nm) or ths_pc.get(nm)`。
 
-**结论：这些数据本来就是 zzshare 数据，只是被贴了 `ths` 标签。** 改为 `source='zzshare'` 不是重新分类，而是还原身份。
+**结论：两个 CSV 都必须按 code space 拆成「THS 一份 + zzshare 一份」，而不是整表 relabel。** 对 board CSV 是"把混进来的 zzshare 行分出去"，对 membership CSV 是"把两个来源的行分开" —— 两者都不是重新分类，而是还原身份。
+
+**完整性（2026-09-11 实测）**：两侧都**不完整**，但都可用 —— zzshare 侧 186/186 块板有成分清单（100%），另有 44 个 membership code 没有 board 元数据行；THS 侧 558/588 块板有成分清单（95%），30 块板缺。CSV 是快照，缺失部分由运行期 lazy fill 与 `BOARD_BACKFILL_ON_STARTUP` 补齐。
 
 ### 1.5 THS 两套 id 的正确用法
 

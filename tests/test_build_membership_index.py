@@ -112,17 +112,17 @@ def test_per_board_failure_does_not_abort_build(fresh_db, monkeypatch):
 def test_all_sources_single_call(fresh_db, monkeypatch):
     """source=None should iterate all VALID_SOURCES and return one report per source.
 
-    `ths` is in VALID_SOURCES but has no `get_all_boards` (cold-fill only),
-    so it walks 0 boards — a zero-board report is still expected.
-
-    Post-unification (2026-07-08): VALID_SOURCES = ("ths", "eastmoney", "zhitu");
-    "zzshare" is no longer in the source set.
+    Sources absent from the mock walk 0 boards — a zero-board report is
+    still expected, so the expectations below are derived from
+    VALID_SOURCES rather than hardcoded (they went stale twice as the
+    source set changed: zzshare left it on 2026-07-08 and re-joined
+    2026-09-11 as a first-class source).
     """
     mock = _make_manager_mock(
         {
             "eastmoney": ["BK1"],
             "zhitu": ["sw1"],
-            # 'ths' is not in the mock: 0 boards → 0 success_count.
+            # 'ths' / 'zzshare' are not in the mock: 0 boards → 0 success_count.
         }
     )
     monkeypatch.setattr(cli_mod.time, "sleep", lambda *a, **kw: None)
@@ -134,8 +134,16 @@ def test_all_sources_single_call(fresh_db, monkeypatch):
         manager=mock,
     )
     assert {r.source for r in reports} == set(cli_mod.VALID_SOURCES)
-    # eastmoney/zhitu each have 1 board → 1 success; ths has 0.
-    expected_success = {"eastmoney": 1, "zhitu": 1, "ths": 0}
+    # eastmoney/zhitu each have 1 board → 1 success; everything else 0.
+    expected_success = {
+        "eastmoney": 1,
+        "zhitu": 1,
+        "ths": 0,
+        "zzshare": 0,
+    }
+    assert set(expected_success) == set(cli_mod.VALID_SOURCES), (
+        "expected_success must cover every source; update it when the set changes"
+    )
     for r in reports:
         assert r.success_count == expected_success[r.source]
     # 2 sources with 1 board × 3 stocks (ths contributes 0 rows).
@@ -169,7 +177,9 @@ def test_cross_source_parallelism(fresh_db, monkeypatch):
 
     monkeypatch.setattr(cli_mod, "_build_one_source", spy)
 
-    mock = _make_manager_mock({"ths": ["BK1"], "eastmoney": ["BK1"], "zhitu": ["sw1"]})
+    mock = _make_manager_mock(
+        {"ths": ["BK1"], "eastmoney": ["BK1"], "zhitu": ["sw1"], "zzshare": ["801001"]}
+    )
     reports = cli_mod.build_membership_index(source=None, manager=mock)
 
     assert len(reports) == len(cli_mod.VALID_SOURCES)

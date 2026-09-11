@@ -161,28 +161,26 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
 # implementation.
 VALID_BOARD_TYPES: tuple[str, ...] = ("concept", "industry", "index", "special")
 # Forward-board sources: each must have BOTH get_all_boards AND
-# get_board_stocks implementations. 'ths' satisfies both since
-# ThsFetcher.get_all_boards landed (2026-07-08).
-VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
+# get_board_stocks implementations.
+#
+# `zzshare` became a first-class source on 2026-09-11 (spec §2 D1). It used
+# to be one of four textually-identical-but-separately-maintained
+# allowlists with two different alias behaviours, which is how
+# `?source=zzshare` ended up 422 on two routes, 200-with-ths-data on a
+# third, and 400 on a fourth (spec §9). There is now ONE tuple; the
+# per-endpoint names below are aliases of it so existing imports keep
+# working and cannot drift.
+VALID_SOURCES: tuple[str, ...] = ("ths", "zzshare", "eastmoney", "zhitu")
 
+# stock-boards reverse lookup. Same set, no alias: the old
+# `_STOCK_BOARDS_SOURCE_ALIAS = {"zzshare": "ths"}` mapped a request for one
+# source onto a different source's data, which is exactly what the split
+# removes.
+_STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = VALID_SOURCES
 
-# Stock-boards 专用 source 集合 + alias (仿照 _BOARD_HISTORY_VALID_SOURCES 模式).
-# stock-boards 端点 alias zzshare→ths: THS basic API 是真正的 stock→boards 上游;
-# zzshare SDK 没有这个端点. (board-list 端点 2026-07-08 后 zzshare 不再合法 —
-# source=zzshare 由 FastAPI Literal 校验返回 422,不再 alias;reverse-lookup
-# 的 zzshare→ths alias 继续生效.)
-# 注意: 'ths' 在 VALID_SUBTYPES_BY_SOURCE 里有 concept subtype (用于 stock-boards
-# 端点的 subtype 验证), 但不在 VALID_SOURCES 里 (因为它没有 get_all_boards).
-_STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
-_STOCK_BOARDS_SOURCE_ALIAS: dict[str, str] = {"zzshare": "ths"}
-
-
-# Board-stocks source 集合 (3 sources — ths/eastmoney/zhitu).
-# `zzshare` is not in the public surface yet (Literal returns 422). It is
-# NOT used internally by any cross-source fallback any more — the
-# ZZSHARE-primary include_quote=False chain was deleted 2026-09-11
-# (spec §2 D2); that path is now THS F10 only.
-_BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
+# Board-stocks constituent lookup. Same set — `?source=zzshare` serves
+# zzshare's own constituents via ZzshareFetcher.plates_stocks.
+_BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = VALID_SOURCES
 
 
 def normalize_board_stocks_source(source: str) -> str:
@@ -216,34 +214,6 @@ def normalize_board_stocks_source(source: str) -> str:
             f"Valid sources: {list(_BOARD_STOCKS_VALID_SOURCES)}"
         )
     return source
-
-
-def normalize_stock_board_source(source: str) -> str:
-    """Alias + validate a source name for the stock-boards endpoint.
-
-    Applies the stock-boards alias map (zzshare → ths) and validates
-    against _STOCK_BOARDS_VALID_SOURCES. The board-list endpoint
-    has no aliasing in either direction (both ``ths`` and ``zzshare``
-    are first-class labels as of 2026-07-08).
-
-    Args:
-        source: User-supplied source name (e.g. ``"ths"``, ``"zzshare"``).
-
-    Returns:
-        Canonical source name accepted by the persistence layer.
-
-    Raises:
-        ValueError: ``source`` is not in the valid set after aliasing.
-            Caller (route layer) maps this to ``HTTPException(400)``.
-    """
-    s = _STOCK_BOARDS_SOURCE_ALIAS.get(source, source)
-    if s not in _STOCK_BOARDS_VALID_SOURCES:
-        raise ValueError(
-            f"Unknown stock-boards source {source!r}. "
-            f"Valid sources: {list(_STOCK_BOARDS_VALID_SOURCES)} "
-            f"(alias 'zzshare' accepted)"
-        )
-    return s
 
 
 def _validate_subtype(source: str, board_type: str, subtype: str | None) -> None:
