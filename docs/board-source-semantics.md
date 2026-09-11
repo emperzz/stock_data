@@ -66,3 +66,30 @@ only if someone swaps SQLite for another backend:
 - Five fetchers also reach down into persistence for table lookup helpers: `baostock_fetcher.py:219` (cached calendar), `zzshare_fetcher.py:74-75` (`THS_CONCEPT_SUBTYPE` constants + `get_latest_trade_date_on_or_before`), `ths_fetcher.py:63, 849, 907, 1332, 1351` (`THS_CONCEPT_SUBTYPE` + `get_board_metadata` + `_resolve_ths_cid_from_platecode`), `zhitu_fetcher.py:218, 970` (`get_latest_cached_trade_date`), `eastmoney/_boards_mixin.py:674` (`resolve_board_types`).
 
 If a future change swaps SQLite for another backend (Postgres / Redis), all six of those import sites need to move with it — they're not abstracted behind a port interface today. Track as future tech debt; not blocking under the local-personal-project premise (SQLite + `backfill.py` rebuild keeps the risk low).
+
+## THS cid ↔ platecode (2026-09-11)
+
+THS gives every concept board two identifiers: a public `platecode`
+(885xxx / 886xxx) and an internal `cid` (3xxxxx). They are NOT
+interchangeable — the gn AJAX constituent endpoint takes the cid, the F10
+page and board K-line take the platecode. Industry boards use one value
+(881xxx) for both.
+
+`ths_board_id_map` (SQLite) is the single cid → platecode lookup. It is
+seeded at startup from `stock_data/stock_data_backup/ths_board_id_map.csv`
+and refreshed by
+`.venv/Scripts/python.exe -m stock_data.tools.refresh_ths_board_id_map --apply`,
+which sweeps THS's own `GET /gn/` (gnSection pair) and falls back to one
+`/gn/detail/code/{cid}/` request per unresolved board. The runtime board
+path additionally resolves an individual miss on demand and writes the
+result back, so each board costs at most one detail-page request ever.
+
+**The CSV is a snapshot, never authoritative.** It only contains pairs THS
+has shown us at some point; live observations must always overwrite it, or
+a THS renumbering would go unnoticed until a fetch 404s. The refresh tool
+prints an added / changed / removed diff for exactly that reason.
+
+A `ths_cid` value is always a real cid or NULL — never a platecode. The
+110 legacy rows that had `cid == code == 885xxx/886xxx` (the pre-2026-07-20
+layout wrote a platecode into the cid column) had their `cid` cleared
+during the 2026-09-11 CSV split.
