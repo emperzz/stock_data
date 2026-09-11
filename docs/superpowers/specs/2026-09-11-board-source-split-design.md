@@ -323,6 +323,8 @@ CREATE TABLE IF NOT EXISTS ths_board_id_map (
 | 4 | `data_source='persistence'` 之外，`effective_source` 不再表示跨源 fallback | 文档与客户端解析逻辑需更新 |
 | 5 | 缓存 key 含 source | 旧行（全 `source='ths'`）在重建后失效，**必须重建**，不可只发代码 |
 | 6 | zzshare 板块 `amount` 单位由隐式换算改为显式声明 | 客户端需读 `amount_unit` |
+| 7 | `/stocks/{code}/boards` 省略 `?source=` 时的默认集合由 3 源扩到 4 源（含 zzshare） | 默认响应内容变化；否则会静默丢弃 11.5 万行 zzshare membership（D1 已定 zzshare 为一等公民） |
+| 8 | `/boards/{code}/stocks` 的 `top_n` 上限由 50 放宽到 800 | `>50` 走 F10 层，该层 `change_speed` / `free_float_shares` / `float_market_cap` 恒为 `None`（§8） |
 
 ---
 
@@ -352,6 +354,18 @@ CREATE TABLE IF NOT EXISTS ths_board_id_map (
 | 7 | 测试重写 + 新增五类测试 | 3-6 |
 | 8 | 文档更新（4 份） | 5-6 |
 | 9 | `STOCK_DB_INIT=true` 重建 + 端到端验证（含 422/200 回归清单） | 全部 |
+
+### 实施计划（3 份，每份可独立交付、每次 commit 后测试为绿）
+
+| 计划 | 覆盖阶段 | 交付物 | 公开影响 |
+|---|---|---|---|
+| `docs/superpowers/plans/2026-09-11-board-id-map-plan.md` | 阶段 1（映射部分）+ 阶段 2（侧栏解析半部分） | `ths_board_id_map` 表 + seed CSV + 刷新工具 + ThsFetcher 侧栏解析 | **无** |
+| `docs/superpowers/plans/2026-09-11-board-source-split-plan-2-internal.md` | 阶段 3-4 | id/命名契约、删 merge/fallback、cache key per-source、`update_cached_boards` purge、`backfill.py` ths-only | 公开**行为**变化（breaking #1），API 参数面不变 |
+| `docs/superpowers/plans/2026-09-11-board-source-split-plan-3-cutover.md` | 阶段 5-9 | zzshare 转正、include_quote 两层、5 类新测试、4 份文档、重建验收 | 公开**接口**变化（breaking #2-#8） |
+
+两处切分调整（相对上面的阶段表）：
+- **阶段 1 的"CSV 拆三份"**移到 Plan 3 的 Task 3 —— CSV 拆分必须与 zzshare 转正同批落地，否则中间态会出现 `source='zzshare'` 的 CSV 行而 CSV loader 尚不认 zzshare。
+- **被测代码一旦被删，它的测试必须在同一份计划里删掉**，否则该 commit 后测试是红的。因此 Plan 2 内联了 24 个 DELETE，Plan 3 内联了其余 REWRITE。
 
 ---
 
