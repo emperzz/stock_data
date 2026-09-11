@@ -99,19 +99,24 @@ def test_ths_canonical_in_csv(fresh_db):
         assert "zhitu" in called
 
 
-def test_zzshare_aliases_to_ths(fresh_db):
-    """?source=zzshare now aliases to ths (data is THS upstream)."""
+def test_zzshare_served_as_its_own_source(fresh_db):
+    """?source=zzshare is a first-class label — NO alias to ths.
+
+    The reverse lookup is served by zzshare's own membership rows; the
+    persistence layer must receive ``["zzshare"]`` (not ``["ths"]``),
+    otherwise the entries come back mislabelled as ths (spec §2 D1).
+    """
     with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
-        mock.return_value = ([], ["ths"], "")
+        mock.return_value = ([], ["zzshare"], "")
         with TestClient(_app_for_test) as client:
             r = client.get("/api/v1/stocks/600519/boards?source=zzshare")
         assert r.status_code == 200
         called = mock.call_args.kwargs["sources"]
-        assert called == ["ths"]
+        assert called == ["zzshare"]
 
 
 def test_no_source_aggregates_all(fresh_db):
-    """Omitting ?source= aggregates (ths, eastmoney, zhitu) — no zzshare."""
+    """Omitting ?source= aggregates all four sources, zzshare included."""
     with patch("stock_data.data_provider.persistence.board.get_stock_memberships") as mock:
         mock.return_value = (
             [
@@ -130,7 +135,7 @@ def test_no_source_aggregates_all(fresh_db):
             r = client.get("/api/v1/stocks/600519/boards")
         assert r.status_code == 200
         called = mock.call_args.kwargs["sources"]
-        assert set(called) == {"ths", "eastmoney", "zhitu"}
+        assert set(called) == {"ths", "zzshare", "eastmoney", "zhitu"}
 
 
 def test_ths_industry_filter_returns_400(fresh_db):
@@ -155,42 +160,101 @@ def test_invalid_source_in_csv_returns_400(fresh_db):
     assert r.json()["detail"]["error"] == "invalid_source"
 
 
-# --- normalize_stock_board_source -----------------------------------
+# --- normalize_board_stocks_source ----------------------------------
+#
+# `normalize_stock_board_source` was deleted 2026-09-11 (zero production
+# callers; its only job was the zzshare→ths alias). `normalize_board_stocks_source`
+# survives with ONE production caller (routes/boards.py) and now validates
+# against `VALID_SOURCES` without aliasing.
 
 
-def test_normalize_stock_board_source_canonical():
-    """ths / eastmoney / zhitu pass through unchanged."""
-    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+def test_normalize_board_stocks_source_canonical():
+    """ths / zzshare / eastmoney / zhitu pass through unchanged."""
+    from stock_data.data_provider.persistence.board import normalize_board_stocks_source
 
-    assert normalize_stock_board_source("ths") == "ths"
-    assert normalize_stock_board_source("eastmoney") == "eastmoney"
-    assert normalize_stock_board_source("zhitu") == "zhitu"
-
-
-def test_normalize_stock_board_source_zzshare_alias():
-    """zzshare aliases to ths (data is THS upstream)."""
-    from stock_data.data_provider.persistence.board import normalize_stock_board_source
-
-    assert normalize_stock_board_source("zzshare") == "ths"
+    assert normalize_board_stocks_source("ths") == "ths"
+    assert normalize_board_stocks_source("eastmoney") == "eastmoney"
+    assert normalize_board_stocks_source("zhitu") == "zhitu"
 
 
-def test_normalize_stock_board_source_invalid_raises():
+def test_normalize_board_stocks_source_zzshare_not_aliased():
+    """zzshare is first-class — it does NOT alias to ths."""
+    from stock_data.data_provider.persistence.board import normalize_board_stocks_source
+
+    assert normalize_board_stocks_source("zzshare") == "zzshare"
+
+
+def test_normalize_board_stocks_source_invalid_raises():
     """Unknown source raises ValueError."""
-    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+    from stock_data.data_provider.persistence.board import normalize_board_stocks_source
 
-    with pytest.raises(ValueError, match="Unknown stock-boards source"):
-        normalize_stock_board_source("bogus")
-    with pytest.raises(ValueError, match="Unknown stock-boards source"):
-        normalize_stock_board_source("")
+    with pytest.raises(ValueError, match="Unknown board-stocks source"):
+        normalize_board_stocks_source("bogus")
+    with pytest.raises(ValueError, match="Unknown board-stocks source"):
+        normalize_board_stocks_source("")
 
 
-def test_normalize_stock_board_source_does_not_alias_other_directions():
+def test_normalize_board_stocks_source_does_not_alias_other_directions():
     """ths is canonical (does NOT alias to zzshare)."""
-    from stock_data.data_provider.persistence.board import normalize_stock_board_source
+    from stock_data.data_provider.persistence.board import normalize_board_stocks_source
 
-    assert normalize_stock_board_source("ths") != "zzshare"
+    assert normalize_board_stocks_source("ths") != "zzshare"
 
 
 # Lazy import — keeps this module cheap to collect when only the persistence
 # tests above are being run via -k "not stock_boards_reverse_route".
 from stock_data.server import app as _app_for_test  # noqa: E402
+
+
+def test_ths_cold_cache_does_not_drop_non_ths_entries(fresh_db):
+    """The THS cold-cache fallback must not REPLACE the whole data list.
+
+    Regression (2026-09-11, found by the post-split acceptance checklist):
+    with no ths membership seed, `?source=` omitted took the "THS cold cache"
+    branch for every stock, which built the response purely from the live
+    THS fetcher result — so a stock with zzshare membership but no ths rows
+    lost its zzshare boards entirely. The endpoint returned 8 ths entries
+    for 600519 while the persistence layer held 10 zzshare ones.
+    """
+    # zzshare rows in persistence...
+    board_mod.upsert_membership_bulk(
+        source="zzshare",
+        stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
+        board_code="801001",
+        board_name="芯片",
+        board_type="concept",
+        subtype="同花顺概念",
+    )
+    # ...and a live THS result for the ths half.
+    with (
+        patch(
+            "stock_data.api._helpers.stock_boards.fetch_stock_boards_quote_enrichment",
+            return_value=(
+                [
+                    {
+                        "board_code": "885333",
+                        "name": "移动支付",
+                        "board_type": "concept",
+                        "subtype": "同花顺概念",
+                    }
+                ],
+                {},
+            ),
+        ),
+        TestClient(_app()) as client,
+    ):
+        r = client.get("/api/v1/stocks/600519/boards")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    sources = {e["source"] for e in body["data"]}
+    assert sources == {"ths", "zzshare"}, body["data"]
+    codes = {e["code"] for e in body["data"]}
+    assert "801001" in codes, f"zzshare entry was dropped: {body['data']}"
+    assert "885333" in codes, f"ths entry missing: {body['data']}"
+
+
+def _app():
+    """Import the app lazily so the fixture's env vars land first."""
+    from stock_data.server import app
+
+    return app

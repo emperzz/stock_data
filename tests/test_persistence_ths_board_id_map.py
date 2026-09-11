@@ -67,6 +67,19 @@ class TestUpsertAndResolve:
         assert written == 0
         assert board_mod.resolve_ths_platecode("710002") is None
 
+    def test_zzshare_platecode_rejected_on_write(self, fresh_db):
+        """The platecode half is guarded too, not just the cid half.
+
+        `cid=300066` + `platecode=803014` was a real row in the legacy CSV:
+        a genuine THS cid paired with a zzshare code. Accepting it made the
+        board list advertise 803014 under source='ths'.
+        """
+        written = board_mod.upsert_ths_board_id_map(
+            [{"cid": "300066", "platecode": "803014", "name": "海峡两岸", "board_type": "concept"}]
+        )
+        assert written == 0
+        assert board_mod.resolve_ths_platecode("300066") is None
+
     def test_row_without_platecode_skipped(self, fresh_db):
         written = board_mod.upsert_ths_board_id_map([{"cid": "309121", "platecode": ""}])
         assert written == 0

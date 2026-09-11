@@ -95,7 +95,7 @@ The non-obvious behaviors worth memorizing here are:
 - **`/agent/stocks/batch-profile.boards.data[]`** — 与 `/stocks/{code}/boards` 共享同一份 11 字段 entry 契约 (5 legacy + 7 THS enrichment)。enrichment helper 在 `stock_data/api/_helpers/stock_boards.py::fetch_stock_boards_quote_enrichment`,60s in-process TTLCache (`_stock_boards_quote_cache`,shared with boards route)。`boards.source` 三态: `"persistence"` (warm-cache merge) / `"ths"` (cold-cache fallback) / `"persistence"` (fetcher 失败, enrichment 字段全 None)。`ok` flag 在 fetcher 失败时不变 `True`(仅 persistence 异常才 append `boards` aspect error)。
 - **Historical K-line** uses `STANDARD_COLUMNS` (`date, open, high, low, close, volume, amount, pct_chg`).
 - **`StockInfo.exchange`** is `"SH"` / `"SZ"` / `"BJ"` when known, else `null` (Zhitu / Myquant populate it; Baostock / Akshare do not).
-- **`BoardStocksResponse.effective_source`** (post-2026-07-10): always populated to the fetcher slug that actually served the upstream call (`ths` / `zzshare` / `eastmoney` / `zhitu`). Compare against `query_source` (the user's `?source=`) to detect whether the internal ZZSHARE primary + THS fallback chain fired for `?source=ths&include_quote=false` (see "Board Cache Source-Normalization" below).
+- **`BoardStocksResponse.effective_source`**: always populated to the fetcher slug that actually served the upstream call. Since the 2026-09-11 split there is **no cross-source fallback**, so it always equals `query_source` — it only distinguishes legs *within* one source (the THS AJAX ≤50 / F10 >50 tiers). Compare against `data_source` for cache hits, not against `query_source`.
 - **`/stocks/{code}/{kline,quote}` 400 contract (post-2026-07-23)** — `_reject_invalid_stock_code` (`api/routes/helpers.py`) raises 400 with `{"error":"invalid_request", ...}` and a message that branches on `is_index_code(code)`:
   - `True` (code in `CSI_INDEX_MAP`, e.g. `000001`, `000300`): `"Index {code} is not supported via this endpoint. Use /indices/{code}/{kline,quote} instead."` — caller likely wanted the index endpoint; the redirect hint points there.
   - `False` (typo / delisted / unsupported market tag): `"Stock code {code} was not found in the stock list."` — genuine not-found; no redirect.
@@ -126,7 +126,7 @@ default isn't right:
 
 | Endpoint | Capability | Override method |
 |----------|------------|-----------------|
-| `/boards/{board_code}/stocks` | `STOCK_BOARD` | `get_board_stocks` |
+| `/boards/{board_code}/stocks` | `STOCK_BOARD` | `get_board_stocks` — and internally `get_board_stocks_full` when `top_n>50` (that leg is a tier of this endpoint, not a separate one, so it cannot have its own `fetcher_method` entry: `EndpointMeta.fetcher_method` is a single scalar) |
 | `/stocks/{stock_code}/boards` | `STOCK_BOARD` | `get_stock_boards` |
 | `/boards/{board_code}/history` | `STOCK_BOARD` | `get_board_history` |
 | `/boards/{board_code}/quote` | `STOCK_BOARD` | `get_board_realtime` |
@@ -165,7 +165,7 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 |---|---|---|---|---|---|
 | `TushareFetcher` | 0 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` | `TUSHARE_TOKEN` | |
 | `BaostockFetcher` | 1 | csi | `STOCK_KLINE` `INDEX_KLINE` `DIVIDEND` | none | |
-| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_REASON` `DRAGON_TIGER` `HOT_TOPICS` | `ZZSHARE_TOKEN` (optional) | Board endpoints: not a public source label (unified under `ths`). `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. `STOCK_ZT_POOL` removed 2026-09-03 — Zzshare no longer serves `/zt-pools`; the upstream `review_uplimit_reason` is exposed via dedicated capability `STOCK_ZT_REASON` + `/api/v1/zt-reasons` (only provider). `get_realtime_quotes(csi) via rt_k(ts_code='60*.SH,68*.SH,0*.SZ,3*.SZ,9*.BJ', fields='all')` (single call; rate-limited 20/min). |
+| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_REASON` `DRAGON_TIGER` `HOT_TOPICS` | `ZZSHARE_TOKEN` (optional) | Board endpoints: a first-class source (`?source=zzshare`), whose board_code space OVERLAPS THS's (885/886 via plate_type 15, 881 via 14, 801/803/710/883 via 17) so `board_code` alone never identifies the source; it owns the 115k-row membership seed. Its board-list `amount` is converted 元→亿元 at this fetcher's boundary and declared via `amount_unit="yi"`. `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. `STOCK_ZT_POOL` removed 2026-09-03 — Zzshare no longer serves `/zt-pools`; the upstream `review_uplimit_reason` is exposed via dedicated capability `STOCK_ZT_REASON` + `/api/v1/zt-reasons` (only provider). `get_realtime_quotes(csi) via rt_k(ts_code='60*.SH,68*.SH,0*.SZ,3*.SZ,9*.BJ', fields='all')` (single call; rate-limited 20/min). |
 | `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` `STOCK_ZT_POOL` | none | `get_realtime_quotes(csi) via ak.stock_zh_a_spot_em()` (single call). |
 | `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` `INDEX_REALTIME_QUOTE` | none | |
 | `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE` `STOCK_ZT_POOL` `STOCK_INFO` `STOCK_KLINE` (minute fallback) `STOCK_LIST` `STOCK_BOARD` `DIVIDEND` `FUND_FLOW` `HOLDER_NUM` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` | `ZHITU_TOKEN` | Index K-line via `/hz/` prefix |
@@ -220,10 +220,10 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 
 | API Method | Valid sources | Notes |
 |---|---|---|
-| `get_all_boards` | `ths` `eastmoney` `zhitu` | `zzshare` unified under `ths` |
-| `get_board_stocks` | `ths` `eastmoney` `zhitu` | `zzshare` returns 422. `source=ths` + `include_quote=False` → ZZSHARE primary + THS fallback; `effective_source` exposes which served. |
-| `get_stock_boards` | `ths` `eastmoney` `zhitu` | `zzshare` aliased to `ths` |
-| `get_board_history` | `ths` (d/w/m/1m/5m/15m/30m/60m) `eastmoney` (d/w/m/5m/15m/30m/60m) | `zzshare` aliased to `ths`; `board_type` auto-detected from cache for `ths` (pass platecode); 800-day cap |
+| `get_all_boards` | `ths` `zzshare` `eastmoney` `zhitu` | One call per source; no merge, no alias. |
+| `get_board_stocks` | `ths` `zzshare` `eastmoney` `zhitu` | Strictly source-routed, no cross-source fallback. `source=ths`: `include_quote=False` → the F10 page (platecode-addressed); `include_quote=True` → AJAX (cid-addressed) at `top_n<=50`, F10 + quote-cache union at `top_n>50`. |
+| `get_stock_boards` | `ths` `zzshare` `eastmoney` `zhitu` | zzshare reads the persistence layer only (it has no reverse-lookup upstream), so a cold zzshare source surfaces in `cold_sources`. |
+| `get_board_history` | `ths` (d/w/m/1m/5m/15m/30m/60m) `eastmoney` (d/w/m/5m/15m/30m/60m) | `?source=zzshare` → **400** (no zzshare board-K-line upstream; it used to be aliased to ths); `board_type` auto-detected from cache for `ths` (pass platecode); 800-day cap |
 | `get_board_realtime` | `ths` | Board realtime quote via q.10jqka |
 
 ### Index routing notes
@@ -277,22 +277,26 @@ when swapping the SQLite backend — sites listed in `docs/board-source-semantic
 
 Anti-pattern: `manager.get_board_stocks(...)` in `api/routes/boards.py`. Add a new method to `stock_board_cache` instead.
 
-### Board response source fields — read `effective_source`
+### Board response source fields
 
 `/boards/{code}/stocks` carries three source fields: `query_source` (the
 user's `?source=`), `data_source` (`'persistence'` on cache hit, else the
 requested slug), and **`effective_source`** (the fetcher that actually
-served). **`data_source` is NOT the user's fetcher choice** — the cache is
-keyed on `source='ths'` regardless of who served, and `source='ths'` +
-`include_quote=false` runs an internal ZZSHARE-primary/THS-fallback chain.
-Compare `effective_source` vs `query_source` to detect fallback.
+served). Since the 2026-09-11 split the cache is keyed `(board_code,
+source)`, so **`data_source='persistence'` is no longer ambiguous about
+which source's rows you got** — and there is no cross-source fallback left,
+so `effective_source` always equals `query_source`. It now only
+distinguishes legs *within* one source (the THS AJAX ≤50 / F10 >50 tiers).
+The cache-hit early return used to hardcode `effective_source='ths'`; it
+reports the row's own source.
 
 Board endpoints route through `_with_source`, which is **not**
 CircuitBreaker-integrated — THS board outages surface as 5xx rate, never as
 CB state changes.
 
-Full semantics (cache-key normalization, cache-hit caveat, fallback side
-effects, persistence↔manager coupling sites): `docs/board-source-semantics.md`.
+Full semantics (per-source cache keys, the snapshot replace, the province
+split of the seed CSVs, persistence↔manager coupling sites):
+`docs/board-source-semantics.md`.
 
 ### Indicator Computation
 Pure DataFrame transformer at the orchestration boundary:
@@ -375,7 +379,7 @@ All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. 
 - **Cache key is `(payload-hash, label)`.** The label is the user-facing route name (`agent_boards_stock_overlap` / `agent_stocks_board_overlap` / `agent_filter_stocks`). Keys reuse `get_quote_cache` as a generic 60s TTLCache slot; this is the documented layering exception to "don't reuse quote cache for non-quote data" — if a future change introduces a dedicated `agent_cache`, the `make_*_cache_key` signatures stay stable.
 - **`filter-stocks` cache key MUST include `limit`.** `limit` is forwarded to the upstream `get_board_stocks(..., top_n=limit)`, so two requests with identical board/source/filters but different `limit` MUST use different cache entries. `make_filter_stocks_cache_key(board_code, source, filters, limit)` hashes `{filters, limit}` together. Do not remove `limit` from the signature; do not cache the *post-truncation* `matched_stocks` (upstream is already size-bounded, so a "cache full + truncate at response" optimization is not worth the cache-stale risk).
 - **Default `top_n` when `limit` is omitted is 50** — matches the historical `stock_board_cache.get_board_stocks` default and keeps the response within THS's hard cap (5 pages × 10 rows).
-- **422 on cid_unresolved.** `post_filter_stocks` calls the persistence helper which can return `reason='cid_unresolved'` when the THS platecode→cid index is cold; the route MUST translate that into a 422 (not a 200 with empty `matched_stocks`). Pinned by `tests/test_agent_endpoints.py::test_cid_unresolved_returns_422`. The shared `fetch_board_stocks_with_zzshare_fallback` helper handles this for `/boards/{code}/stocks` already; agent reuses the same path.
+- **422 on cid_unresolved.** `post_filter_stocks` calls the persistence helper which can return `reason='cid_unresolved'` when the THS platecode→cid index is cold; the route MUST translate that into a 422 (not a 200 with empty `matched_stocks`). Pinned by `tests/test_agent_endpoints.py::test_cid_unresolved_returns_422`. `get_board_stocks` produces it on the THS AJAX tier (`top_n<=50`) for `/boards/{code}/stocks`; agent reuses the same path. On the F10 tier (`top_n>50`) the board is platecode-addressed, so no cid resolution is involved and the reason cannot fire.
 - **No agent-level composite cache (`correlation/matrix`).** Unlike the other agent routes, this endpoint deliberately relies on inner fetcher-level TTLs (`CACHE_TTL_STOCK_KLINE`, `manager.get_board_history` caching, persistence board cache). The composite-cache contract in CLAUDE.md exists to hide N+1 fetch latency; for N=2..10 within the inner TTL window, the inner caches already solve the problem without an additional layer. Tracked as a deliberate deviation; revert by adding `cached_lookup` / `cached_store` around the handler if cold-path latency becomes a complaint.
 - **`?format=md` MUST NOT drop a field the JSON carries.** The contract is stated in `api-reference.md` ("No data is dropped — every JSON field appears in the MD output") and is pinned from two sides: `tests/test_agent_endpoints.py::TestFormatMdDataCompleteness` (overlap + market-context) and `tests/test_agent_batch_features.py::TestFormatMdFeatureCompleteness` (the batch-profile feature blocks). When adding a field to a response model, add it to the MD renderer in the SAME change. Two real regressions came from skipping this: `pivots.params` (which pins the ZigZag settings the swings were computed under — swings are uncalibratable without it) and `z_anomalies.open/high/low` (close alone can't separate a 放量长上影 from a 光头阳线, and `direction` is itself derived from `open`).
 - **An empty feature block MUST render an explicit no-data marker, never a bare table skeleton.** `features.build_features()` returns `{"trend": {}, "pivots": {}, "volume": {}}` for a 0-bar DataFrame **without raising**, so `errors` stays `null` and the marker is the only signal the agent gets. `_render_dict_block` emits `（无数据）`; the hand-written swings table emits `（无确认摆动点）`. A heading followed by `| 字段 | 值 |` + separator + zero rows reads as "computed, but blank" — the opposite of the truth.
@@ -385,7 +389,7 @@ All endpoints under `/api/v1/agent/*` live in `stock_data/api/routes/agent.py`. 
 
 - **Don't** add a new `DataCapability` flag "just to give agent endpoints a non-empty `@endpoint_meta(capabilities=...)` list" — the empty list is the documented signal that the endpoint is an aggregation, not a fetcher-routed one.
 - **Don't** skip writing the response to the cache on success even when `is_cache_enabled()` is True. The cache is the only thing that makes the route usable from agents under fan-out (N+1 board fetches otherwise dominate latency).
-- **Don't** call `manager.get_board_stocks(...)` directly from agent code. Always go through `stock_board_cache` (the persistence layer), which handles the ZZSHARE↔THS fallback chain and the `effective_source` plumbing. This is the same rule `/boards/{code}/stocks` follows.
+- **Don't** call `manager.get_board_stocks(...)` directly from agent code. Always go through `stock_board_cache` (the persistence layer), which owns the tier selection and the `effective_source` plumbing. This is the same rule `/boards/{code}/stocks` follows.
 - **Don't** truncate `matched_stocks` before caching in `post_filter_stocks`; truncate in the response path only. Cached entry must reflect the upstream-bounded, un-truncated result, so a later `?limit=200` request (still within upstream cap) doesn't have to re-fetch.
 - **Don't** collapse the three `make_*_cache_key` builders into a single generic helper — the keys live in a shared namespace and a typo or hash-input change here would silently invalidate *all* agent caches.
 - **Don't** re-introduce parallel `frequency`-keyed dicts in `api/routes/agent.py`. The per-frequency knobs (manager frequency code, days range, default days, MA60 warm-up) live in ONE `FreqProfile` frozen dataclass registry (`_FEATURE_FREQS`). Four parallel dicts is how a missing MA60 warm-up entry silently degraded to `.get(freq, days)` — every MA60 value `None`, no error anywhere. With the dataclass, an omitted field is a construction-time `TypeError`.
@@ -474,10 +478,11 @@ The non-obvious knobs worth memorizing here:
   **`unavailable_reason()` is final on `BaseFetcher`** — subclasses
   implement `_subclass_unavailable_reason()` so the switch cannot be
   bypassed by an override.
-  **`THS_ENABLED=false` breaks all board endpoints** (the board cache is
-  keyed `source='ths'` and `zzshare` is aliased to `ths` there);
-  **`ZZSHARE_ENABLED=false`** removes the internal primary of the board
-  `include_quote=false` chain. `/control/fetcher-test` still probes
+  **`THS_ENABLED=false`** breaks the ths-side board endpoints (the whole
+  ths board path: list, stocks, history, backfill) — but **zzshare-style
+  requests keep working**, because the two sources no longer depend on each
+  other; **`ZZSHARE_ENABLED=false`** only removes zzshare's own board
+  endpoints and its membership lazy-fill. `/control/fetcher-test` still probes
   disabled fetchers by design.
   **Known test noise (not a bug):** with `AKSHARE_ENABLED=false`, a full
   `pytest` run fails exactly 2 unrelated tests —
@@ -515,7 +520,10 @@ The non-obvious knobs worth memorizing here:
 - **Don't** leak the outbound `ts_code` / `_to_xxx_ts_code` suffix into an inbound API response. The server's canonical stock_code format is **bare 6-digit** (e.g. `000034`, `600519`), enforced by `normalize_stock_code()`. Per-upstream protocol formats (Tushare `000034.SZ`, Baostock `sh.600519`, Yfinance `600519.SS`, Zhitu `600519.SH`) are an **outbound-only** concern — they live in helpers like `_to_zzshare_ts_code` / `to_tushare_format` / `to_baostock_code` that are called RIGHT BEFORE the SDK call. On the response side, always return the bare 6-digit (e.g. `ts_code.split(".")[0]`). Forgetting the inbound/outbound boundary is exactly how `ZzshareFetcher.get_board_stocks` / `get_daily_dragon_tiger` / `get_hot_topics` ended up returning `000034.SZ` instead of `000034` (fixed 2026-06-25). Same rule applies to HK (`HK00700`) and US (`AAPL`) codes — they keep their canonical form, never get re-suffixed.
 - **Don't** let a fetcher reach into a peer fetcher's package internals — even clean imports like `from akshare.datasets import get_ths_js` or `from akshare.utils import demjson` invert the dependency direction between fetchers (they're peers, not a utility layer). If fetcher X needs to vendor an upstream asset (e.g. THS's `ths.js` JS blob), copy it into `stock_data/data_provider/fetchers/<x>_assets/` (a sub-package under X's directory, must have `__init__.py`) and bundle via `[tool.hatch.build.targets.wheel.force-include]` in `pyproject.toml`. Build-time helpers (e.g. `tools/vendor_ths_js.py`) are the only place allowed to touch a peer fetcher's vendored assets to refresh them; server runtime MUST stay peer-decoupled. See [[extend-not-spawn-fetcher]] + [[vendor-not-peer-import]].
 - **Don't** invoke any OpenSpec skill in this project (`openspec-explore` / `opsx:explore`, `openspec-propose` / `opsx:propose`, `openspec-apply-change` / `opsx:apply`, `openspec-archive-change` / `opsx:archive`, `openspec-sync-specs` / `opsx:sync`). The project uses Superpowers + CLAUDE.md + `/control/api-manifest` as its spec substrate; OpenSpec is reserved for new projects. See **Skill Discipline** below for scope, rationale, and enforcement.
-- **Don't** treat `data_source` on `/boards/{code}/stocks` as the user's fetcher choice — read `effective_source` instead. As of 2026-07-10 the helper transparently falls back from THS to ZZSHARE (or vice-versa) for `include_quote=false` requests on `source='ths'`; clients that compare `query_source` vs `data_source` to detect fallback will get false positives (cache hit reports `'persistence'`, real upstream serving reports `'ths'`/`'zzshare'`). The `effective_source` field is the only reliable fallback detector; `data_source=='persistence'` means "from cache" regardless of which fetcher originally wrote the row.
+- **Don't** treat `data_source` on `/boards/{code}/stocks` as the user's fetcher choice — it is `'persistence'` on any cache hit. That is now an unambiguous statement about *content* (the cache is keyed per source), but it still says nothing about which fetcher served. Use `effective_source` for that; since the 2026-09-11 split it always equals `query_source`, so it is only informative about the THS tier.
+- **Don't** use a bare `code` / `type` / `cid` key for a **board row dict** on the board path. Rows use `board_code` / `board_type` / `ths_cid` (spec §5.1); the same `code` key meant `cid` in ThsFetcher and `platecode` in `update_cached_boards`, which is how the two code spaces got conflated. `code` / `type` remain correct **only** as the public response field names (`BoardInfo`, `StockBoardInfo`, and dicts built at the response boundary) — `tests/test_board_naming_contract.py` pins the row side.
+- **Don't** put a THS platecode into `ths_cid`, or any non-cid value at all. `_is_ths_cid` guards every write; the legacy 110 rows with `cid == code == 885xxx/886xxx` were nulled in the 2026-09-11 CSV split.
+- **Don't** re-introduce a `zzshare ↔ ths` alias on any board endpoint. `?source=zzshare` is a first-class source serving zzshare's own rows; aliasing it served one source's data under another source's label and made the 55k zzshare membership rows unreachable.
 - **Don't** trust `stocks.length == top_n` as evidence that the board has exactly N members — it could mean truncation (THS upstream 50-stock login wall). Always read `quote_truncated` and `quote_total_in_board` together. (2026-07-13)
 - **Don't** reintroduce `manager.get_stock_list(market, refresh=False)` in `persistence/stock_list.py::get_stock_name`'s cold-cache auto-warm branch. That method does NOT exist on `DataFetcherManager` (the public name is `get_all_stocks`); the `AttributeError` is silently swallowed by `except Exception: pass`, so the DB stays empty and every cold-cache request 400s. Use the persistence-level `get_stock_list(market, manager=manager)` (same file, line 105), which already wires fetch + `update_cached_stocks`. Likewise **don't** collapse `_reject_invalid_stock_code`'s two message branches into one template — the "Index X is not supported..." wording is correct ONLY when `is_index_code(code)` is true; for genuinely-unknown codes the helper emits "Stock code X was not found..." (see Standardized Data Schema → "/stocks/{code}/* 400 contract"). (2026-07-23)
 - **Don't** 在 fetcher 层 hardcode "今日 partial bar" 合并逻辑；统一在 K-line route 层 helper 走。Fetcher 层的"今日 bar"逻辑会跨 fetcher 行为不一致，并绕过 manager 的短路与熔断保护。统一在 `api/routes/helpers.py::_maybe_merge_today_bar` 触发（见 [K-line today's partial bar](#k-line-todays-partial-bar)）。

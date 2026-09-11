@@ -7,42 +7,117 @@ copy keeps only the pointer plus the two facts that are default-wrong
 (read `effective_source`, not `data_source`; the circuit breaker does not
 cover board endpoints).
 
-## Board Cache Source-Normalization (post-unification)
+## Source isolation (2026-09-11 split)
 
-`/boards/{code}/stocks` advertises "strict source routing" on the route layer (the user's `?source=` is plumbed through to the fetcher), **but the underlying SQLite cache (`stock_board_membership`) is keyed on `source='ths'` regardless of which fetcher served the response.** This is the post-2026-07-08 unification policy:
+`ths` and `zzshare` are two independent first-class sources. There is NO
+cross-source fallback and NO alias: a `?source=ths` request never calls
+zzshare, and vice versa.
 
-- **Why**: different sources normalize to the same THS platecode (e.g. eastmoney and ths both store `885595` for the same concept board). Per-source cache keys would force each source to cold-start its own cache row for the same board, doubling cold-path latency for no data-fidelity gain.
-- **What it means in practice**: a user passing `?source=eastmoney` who hits a ths cache row will get ths data with `data_source='persistence'`. The user's `?source=` is only honored on the cache-miss / refresh path (where `update_cached_board_stocks` always writes under `source='ths'`).
-- **User-visible contract**: `data_source='persistence'` does NOT mean the user's `?source=` was used — it means *some* fetcher served the request and the result was cached. The actual fetcher that served the most recent refresh is in the log, not the response.
+Their **code spaces overlap** (zzshare serves 885/886/881 as well as
+801/803/710/883 — see below), so `board_code` alone does not identify a
+source. What keeps them apart is that every request names its source
+explicitly and every cached row is keyed by it.
 
-If a future change requires per-source cache isolation (e.g. eastmoney-specific data fidelity concerns), change `update_cached_board_stocks(board_code, "ths", ...)` (board.py:900) to use the real origin label. Track this as a breaking change.
+| source | board_code namespace | ths_cid | history | realtime quote |
+|---|---|---|---|---|
+| `ths` | 885xxx / 886xxx / 881xxx | 3xxxxx (concept) / ==code (industry) / NULL | yes | yes |
+| `zzshare` | 885xxx / 886xxx (pt=15) · 881xxx (pt=14) · 801xxx / 803xxx / 710xxx / 883xxx (pt=17) | always NULL | no (400) | no |
+| `eastmoney` | BKxxxx | NULL | yes | no |
+| `zhitu` | sw_xxx | NULL | no | no |
 
-## `effective_source` (post-2026-07-10) — disambiguating fallback from primary
+`/boards/{code}/quote` takes **no `?source=` parameter at all** — it is
+hardcoded to ths, and an unexpected `?source=` is silently ignored (NOT
+422). `/boards/{code}/news` and `/surges` DO declare `Literal["ths"]` and
+therefore really do 422 on any other value.
 
-On `/boards/{code}/stocks`, the response carries **both** of:
-  * `query_source` — the user's `?source=` (verbatim, after Literal validation).
-  * `data_source` — `'persistence'` (cache hit) or the requested fetcher slug.
-  * **`effective_source`** — the fetcher that *actually served* the upstream call (always populated, per P4 contract).
+`/stocks/{code}/boards` with no `?source=` aggregates all four sources, so
+zzshare's 115k membership rows are reachable through the label that names
+them. The old `zzshare → ths` alias meant every entry came back as
+`source='ths'` and those rows were unreachable.
 
-**Cache-hit caveat (clarified 2026-07-16, audit §B).** On a cache hit no upstream call runs, so `effective_source` returns the cache-key label (`'ths'` for the post-2026-07-08 unified-cache scheme) rather than a real upstream serving fetcher. Compare against `data_source=='persistence'` to distinguish cache hits from real upstream serving; comparing `effective_source` to `query_source` only meaningfully detects the ZZSHARE ↔ THS fallback chain described below (which fires on cache-miss / refresh).
+## Cache
 
-For `source='ths'` + `include_quote=False` requests, the helper at
-`persistence/board.py::fetch_board_stocks_with_zzshare_fallback` runs an
-internal **ZZSHARE primary + THS fallback** chain. `effective_source` makes
-the difference observable: `query_source='ths'` + `effective_source='zzshare'`
-means ZZSHARE primary served, the THS leg was not needed; `effective_source='ths'`
-means ZZSHARE failed or returned empty and THS fallback served.
+`stock_board` and `stock_board_membership` are keyed `(code, source)` and
+`(board_code, source, stock_code)`. A cache hit for one source can never
+serve another source's rows, and the board-stock refresh tracker is keyed
+`f"{board_code}:{source}"`. `update_cached_boards` is a
+`(board_type, source)` snapshot replace (DELETE-then-INSERT), so a board
+that left upstream stops lingering and a board seen once under a cid-shaped
+key and later under a platecode-shaped key cannot be stored twice.
 
-Pre-2026-07-10 this distinction was *implicit* (silent cross-source
-fallback). Clients should compare `effective_source` vs `query_source` to
-detect fallback and avoid parsing `data_source` ambiguously.
+`data_source='persistence'` means "served from SQLite"; `effective_source`
+is the fetcher that served. Since there is no cross-source fallback, it only
+ever distinguishes legs WITHIN one source — the THS AJAX (<=50 rows) and F10
+(>50 rows) tiers.
 
-**Side effect**: when ZZSHARE serves the fallback path, the cached rows
-lack quote fields (ZZSHARE emits only `stock_code / stock_name / exchange`).
-A subsequent `?include_quote=true` request with the same date will skip the
-cache (`needs_refresh` is forced by `include_quote`) and re-fetch via THS,
-so clients don't see "apparent None quotes" — but if you want to force a
-fresh THS fetch on already-cached data, pass `?refresh=true`.
+## effective_source no longer signals a fallback
+
+Pre-split, `query_source='ths'` + `effective_source='zzshare'` meant the
+cross-source fallback fired. That combination is now impossible. The
+cache-hit early return used to hardcode `effective_source='ths'`; it now
+reports the row's own `source` (2026-09-11).
+
+## THS cid <-> platecode (2026-09-11)
+
+THS gives every concept board two identifiers: a public `platecode`
+(885xxx / 886xxx) and an internal `cid` (3xxxxx). They are NOT
+interchangeable — the gn AJAX constituent endpoint takes the cid, the F10
+page and board K-line take the platecode. Industry boards use one value
+(881xxx) for both.
+
+`ths_board_id_map` (SQLite) is the single cid -> platecode lookup. It is
+seeded at startup from `stock_data/stock_data_backup/ths_board_id_map.csv`
+and refreshed by
+`.venv/Scripts/python.exe -m stock_data.tools.refresh_ths_board_id_map --apply`,
+which sweeps THS's own `GET /gn/` (gnSection pair) and falls back to one
+`/gn/detail/code/{cid}/` request per unresolved board. The runtime board
+path additionally resolves an individual miss on demand and writes the
+result back, so each board costs at most one detail-page request ever.
+
+**The CSV is a snapshot, never authoritative.** It only contains pairs THS
+has shown us at some point; live observations must always overwrite it, or
+a THS renumbering would go unnoticed until a fetch 404s. The refresh tool
+prints an added / changed / removed diff for exactly that reason.
+
+A `ths_cid` value is always a real cid or NULL — never a platecode. The
+110 legacy rows that had `cid == code == 885xxx/886xxx` (the pre-2026-07-20
+layout wrote a platecode into the cid column) had their `cid` cleared during
+the 2026-09-11 CSV split.
+
+## The seed CSVs
+
+`stock_data/stock_data_backup/` holds one CSV per source:
+`stock_board_ths.csv` (588 rows), `stock_board_zzshare.csv` (186),
+`stock_board_eastmoney.csv` (992), `ths_board_id_map.csv` (479), and
+`stock_board_membership_zzshare.csv` (**115,081 rows — the whole legacy
+membership file**).
+
+The membership file is all zzshare data, even though its `board_code`
+values span 801xxx/803xxx/710xxx/883xxx *and* 885xxx/886xxx/881xxx.
+**A row's code prefix does not identify its source**: zzshare's
+`plates_rank` spans three plate types — 15 (概念) → 885/886, 14 (行业) →
+881, 17 (题材) → 801/803/710/883 — so it covers the same public codes THS
+does. Verified against live zzshare 2026-09-11: its membership for 885333
+/ 885431 / 881121 matches the CSV at Jaccard 0.97–0.99 (the gap is the
+2026-07-12 snapshot date).
+
+An intermediate revision split this file by prefix and labelled the
+885/886/881 half `ths`. That was wrong and is reverted: the "disjoint code
+spaces" it rested on held only between the file's own two groups, not
+between the two sources' capabilities, and the 同花顺概念 / 同花顺行业
+subtypes it cited are labels copied from the board list, which zzshare's
+own plate types 14/15 also produce.
+
+There is therefore **no THS membership seed**. `?source=ths` reverse
+lookups start cold and accumulate from the F10 sweep
+(`BOARD_BACKFILL_ON_STARTUP=true`) and runtime lazy fill.
+
+Completeness, measured: membership references 788 distinct board_codes
+while the board CSVs hold 186 + 588, leaving **602 membership codes with no
+board metadata row**. That is a snapshot gap (board CSVs come from one
+day's `plates_rank`, membership from a longer `plates_stocks` window), not
+a split bug — querying an orphan still works, only its metadata row is
+missing.
 
 ## Board endpoint failure observability
 
@@ -63,33 +138,7 @@ not `DataFetcherManager`"). The reverse direction also exists, and matters
 only if someone swaps SQLite for another backend:
 
 - `manager.py:692, 772` lazy-imports `persistence.trade_calendar` (`get_cached_calendar` / `update_cached_calendar`) and `persistence.pool_daily` (`get_pool`) inside method bodies, to break what would otherwise be a load-time circular import.
-- Five fetchers also reach down into persistence for table lookup helpers: `baostock_fetcher.py:219` (cached calendar), `zzshare_fetcher.py:74-75` (`THS_CONCEPT_SUBTYPE` constants + `get_latest_trade_date_on_or_before`), `ths_fetcher.py:63, 849, 907, 1332, 1351` (`THS_CONCEPT_SUBTYPE` + `get_board_metadata` + `_resolve_ths_cid_from_platecode`), `zhitu_fetcher.py:218, 970` (`get_latest_cached_trade_date`), `eastmoney/_boards_mixin.py:674` (`resolve_board_types`).
+- Five fetchers also reach down into persistence for table lookup helpers: `baostock_fetcher.py:219` (cached calendar), `zzshare_fetcher.py:74-75` (`THS_CONCEPT_SUBTYPE` constants + `get_latest_trade_date_on_or_before`), `ths_fetcher.py:63, 849, 907, 1332, 1351` (`THS_CONCEPT_SUBTYPE` + `get_board_metadata` + `resolve_ths_cid`), `zhitu_fetcher.py:218, 970` (`get_latest_cached_trade_date`), `eastmoney/_boards_mixin.py:674` (`resolve_board_types`).
 
 If a future change swaps SQLite for another backend (Postgres / Redis), all six of those import sites need to move with it — they're not abstracted behind a port interface today. Track as future tech debt; not blocking under the local-personal-project premise (SQLite + `backfill.py` rebuild keeps the risk low).
 
-## THS cid ↔ platecode (2026-09-11)
-
-THS gives every concept board two identifiers: a public `platecode`
-(885xxx / 886xxx) and an internal `cid` (3xxxxx). They are NOT
-interchangeable — the gn AJAX constituent endpoint takes the cid, the F10
-page and board K-line take the platecode. Industry boards use one value
-(881xxx) for both.
-
-`ths_board_id_map` (SQLite) is the single cid → platecode lookup. It is
-seeded at startup from `stock_data/stock_data_backup/ths_board_id_map.csv`
-and refreshed by
-`.venv/Scripts/python.exe -m stock_data.tools.refresh_ths_board_id_map --apply`,
-which sweeps THS's own `GET /gn/` (gnSection pair) and falls back to one
-`/gn/detail/code/{cid}/` request per unresolved board. The runtime board
-path additionally resolves an individual miss on demand and writes the
-result back, so each board costs at most one detail-page request ever.
-
-**The CSV is a snapshot, never authoritative.** It only contains pairs THS
-has shown us at some point; live observations must always overwrite it, or
-a THS renumbering would go unnoticed until a fetch 404s. The refresh tool
-prints an added / changed / removed diff for exactly that reason.
-
-A `ths_cid` value is always a real cid or NULL — never a platecode. The
-110 legacy rows that had `cid == code == 885xxx/886xxx` (the pre-2026-07-20
-layout wrote a platecode into the cid column) had their `cid` cleared
-during the 2026-09-11 CSV split.

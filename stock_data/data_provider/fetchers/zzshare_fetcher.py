@@ -732,6 +732,15 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
                 if include_quote:
                     for src_key, schema_key in self._PLATES_RANK_SCHEMA_MAP.items():
                         board[schema_key] = safe_float(row.get(src_key))
+                    # plates_rank emits trade_money in 元; the server's
+                    # board-list contract is 亿元 (THS-native). Convert at the
+                    # SOURCE boundary so every row of a response shares one
+                    # scale — the old silent merge-time normalization
+                    # (_normalize_zzshare_list_quote_units) is gone with the
+                    # merge itself (spec §7, D7/B).
+                    if board.get("amount") is not None:
+                        board["amount"] = board["amount"] / 1e8
+                    board["amount_unit"] = "yi"
                 out.append(board)
         return out
 

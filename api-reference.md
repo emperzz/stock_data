@@ -503,22 +503,21 @@ incompatible board classification systems (EastMoney: concept/industry;
 Zhitu: type × subtype), so failover between sources is intentionally
 not supported.
 
-**Available source labels (post 2026-07-08 unification):**
-- `ths` — ThsFetcher (concept + industry; d/w/m/1m/5m/15m/30m/60m K-line; internally merges ZzshareFetcher for platecode backfill)
+**Available source labels (post 2026-09-11 split):**
+- `ths` — ThsFetcher (concept + industry; d/w/m/1m/5m/15m/30m/60m K-line)
+- `zzshare` — ZzshareFetcher (concept + industry; its own 801xxx/803xxx/710xxx/883xxx board_code space; no K-line)
 - `eastmoney` — EastMoneyFetcher (concept + industry only; no index/special classification upstream; d/w/m/5m/15m/30m/60m K-line, no 1m)
 - `zhitu` — ZhituFetcher (concept / industry / index / special; no K-line)
 
-**`zzshare` aliases:**
-- `/boards` and `/boards/{code}/stocks` — `zzshare` is **not** a valid
-  source label; it returns 422 (was unified under `ths` on 2026-07-08).
-  The underlying ZzshareFetcher is still used internally for
-  platecode backfill on `?source=ths` board-list and as primary
-  `include_quote=false` fallback on `/boards/{code}/stocks`.
-- `/stocks/{code}/boards` — `zzshare` is accepted as alias for `ths`
-  (THS basic API is the shared upstream).
-- `/boards/{code}/history` — `zzshare` is accepted and aliased to
-  `ths` (ZzshareFetcher has no K-line implementation; upstream
-  `plate_kline` only supports 883957 同花顺全A).
+**`zzshare` is a first-class source** (since 2026-09-11) — there are no aliases left:
+- `/boards` and `/boards/{code}/stocks` — valid, serves zzshare's own rows.
+- `/stocks/{code}/boards` — valid. ZzshareFetcher has no reverse-lookup
+  upstream, so `?source=zzshare` reads the persistence layer only; a cold
+  index surfaces in `cold_sources`. Omitting `?source=` aggregates all four
+  sources, zzshare included.
+- `/boards/{code}/history` — **400 `invalid_source`.** ZzshareFetcher has no
+  K-line implementation (upstream `plate_kline` only supports 883957
+  同花顺全A). It used to be silently aliased to `ths`.
 
 ```bash
 # Board list (concept / industry / index / special)
@@ -575,20 +574,19 @@ GET /api/v1/boards/881270/history?source=ths&frequency=1m&board_type=industry
 
 `source` here is the **actual origin** (fetcher name on cache miss;
 `"persistence"` on cache hit). It does not always equal the user-supplied
-`source` query param — `source=ths` board-list internally merges THS
-+ ZzshareFetcher platecode backfill but the public surface tags both
-as `source="ths"`.
+`source` query param — one call per source, no merge and no alias. A
+`?source=ths` response contains only ths rows; `?source=zzshare` only
+zzshare rows.
 
-> **`source=ths` quote unit (post-2026-09-09):** the THS/ZZSHARE merge
-> used to mix two 1e8-apart `amount` scales — THS industry-rank rows
-> reported 亿元 while zzshare-appended rows reported raw 元. Merged rows
-> are now normalized to the **THS board-list semantics** (amount 亿元,
-> volume 万手, net_inflow 亿元) at `persistence/board.py`
-> (`_normalize_zzshare_list_quote_units` ÷1e8), so every row in one
-> `?source=ths` response is comparable. Note this differs per-source:
-> `eastmoney`/`zhitu` list rows keep their own native units (e.g. the
-> eastmoney example below is 元), and the quote endpoints' `amount`
-> (`/boards/{code}/quote`, batch-profile) remains 元.
+> **`amount` unit (post-2026-09-11, D7/B):** every board-list source
+> reports `amount` in **亿元** and declares it via `amount_unit: "yi"`.
+> zzshare's `plates_rank` emits 元, so ZzshareFetcher converts at its own
+> boundary (`/1e8`) rather than at a merge step — the old merge-time
+> normalization was deleted with the merge. `amount_unit` is `null` when
+> `include_quote=false` (no `amount` at all). Note this differs from the
+> quote endpoints' `amount` (`/boards/{code}/quote`, batch-profile), which
+> remains 元, and from `total_mv`, which has no THS counterpart and keeps
+> its native 元 value.
 
 **Response (with `include_quote=true`):**
 ```json
@@ -618,20 +616,25 @@ as `source="ths"`.
 **Parameters for `GET /boards/{board_code}/stocks`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `source` | string | Required | Data source: `ths`, `eastmoney`, or `zhitu`. `?source=zzshare` returns 422. |
+| `source` | string | Required | Data source: `ths`, `zzshare`, `eastmoney`, or `zhitu`. |
+| `top_n` | int | `50` | Max rows (1-800). With `include_quote=true` it also selects the tier: <=50 uses the THS AJAX endpoint, >50 the F10 full-membership page (where `change_speed` / `free_float_shares` / `float_market_cap` are always `null`). |
+| `sort_by` | string | null | Sort key, `include_quote=true` only. |
+| `sort_order` | string | `desc` | `asc` / `desc`. |
 | `include_quote` | bool | `false` | Include realtime quote fields (THS populates by default; EastMoney requires `true`; Zzshare/Zhitu emit no quote fields — affected fields are `null`, not omitted) |
 | `refresh` | bool | `false` | Force fetch latest from upstream |
 
 This endpoint returns three source fields:
 - `query_source` — the user-supplied `?source=` value (canonicalized)
 - `data_source` — the fetcher label on cache miss or `"persistence"` on cache hit
-- `effective_source` — the fetcher that actually served the upstream call;
-  on a persistence hit this is the unified cache-key label (currently `"ths"`)
+- `effective_source` — the fetcher that actually served. Since there is no
+  cross-source fallback it always equals `query_source`; it only
+  distinguishes legs within one source (THS AJAX <=50 / F10 >50). On a
+  persistence hit it reports the row's own source (it used to hardcode `"ths"`).
 
 **Parameters for `GET /stocks/{stock_code}/boards`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `source` | string | null (all) | Comma-separated sources (`ths,eastmoney,zhitu`). `zzshare` is accepted as alias for `ths`. Omit for all valid sources. |
+| `source` | string | null (all) | Comma-separated sources (`ths,zzshare,eastmoney,zhitu`). Omit for all valid sources. |
 | `type` | string | null | Filter by board type |
 | `subtype` | string | null | Filter by source-specific subtype |
 
@@ -667,7 +670,7 @@ parser handles both surfaces.
 **Parameters for `GET /boards/{board_code}/history`:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `source` | string | Required | Data source: `ths` (d/w/m/1m/5m/15m/30m/60m) or `eastmoney` (d/w/m/5m/15m/30m/60m; no 1m). `zzshare` is accepted and aliased to `ths`. |
+| `source` | string | Required | Data source: `ths` (d/w/m/1m/5m/15m/30m/60m) or `eastmoney` (d/w/m/5m/15m/30m/60m; no 1m). `zzshare` is **rejected with 400** (no board-K-line upstream; it used to be aliased to `ths`). |
 | `frequency` | string | `d` | K-line frequency. Validated against the selected source: THS supports all 8 listed frequencies; EastMoney supports the same set except `1m`. |
 | `start_date` | string | null | Start date (YYYY-MM-DD). Range width is capped at 800 days; exceeds → 400 `date_range_too_wide`. |
 | `end_date` | string | null | End date (YYYY-MM-DD). Defaults to today. |
@@ -1601,7 +1604,7 @@ Content-Type: application/json
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `board_code` | string | yes | THS platecode (`885xxx` / `881xxx`). |
-| `source` | string | yes | Data source: `ths` (recommended), `eastmoney`, or `zhitu`. `zzshare` returns 422. |
+| `source` | string | yes | Data source: `ths` (recommended), `zzshare`, `eastmoney`, or `zhitu`. |
 | `filters.turnover_pct` | `{min?, max?}` | no | Range filter on turnover rate (%). |
 | `filters.change_pct` | `{min?, max?}` | no | Range filter on change percent (%). |
 | `filters.amount_yi` | `{min?, max?}` | no | Range filter on traded amount in **亿元**. |
@@ -2795,11 +2798,11 @@ include_quote=True)` row.
 
 | Field | Type | Unit | Description |
 |---|---|---|---|
-| `code` | string | | Board code (THS platecode; e.g. `881154` industry, `885642` / `801xxx` concept). |
+| `code` | string | | Board code, in the serving source's own namespace: THS platecode (`881xxx` industry, `885xxx`/`886xxx` concept), zzshare `801xxx`/`803xxx`/`710xxx`/`883xxx`, EastMoney `BKxxxx`, Zhitu `sw_xxx`. |
 | `name` | string | | Board name (Chinese). |
-| `type` | string | | `"concept"` / `"industry"` (always `"ths"`-sourced rows). |
+| `type` | string | | `"concept"` / `"industry"`. |
 | `change_pct` | float \| null | % | Day change. Always non-null on emitted entries (it is the sort key). |
-| `amount` | float \| null | 亿元 | Board turnover. **THS board-list native units** — NOT the quote endpoints' 元 convention. zzshare-appended rows are ÷1e8 at the persistence merge (`persistence/board.py::_normalize_zzshare_list_quote_units`) so all rows in a response share one scale. |
+| `amount` | float \| null | 亿元 | Board turnover. Every source reports 亿元 — zzshare's native 元 is converted in ZzshareFetcher, not at a merge step (the merge is gone). NOT the quote endpoints' 元 convention. |
 | `volume` | int \| null | 万手 | Board volume. THS industry-rank rows only. |
 | `up_count` / `down_count` | int \| null | | Rising / falling member counts. THS industry-rank rows only. |
 | `net_inflow` | float \| null | 亿元 | Net capital inflow (pass-through, NOT ×1e8). |
@@ -2811,7 +2814,7 @@ upstream didn't supply them:
 |---|---|---|---|---|---|
 | THS concept (gnSection) | ✓ | — | — | — | ✓ |
 | THS industry (rank table) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| zzshare-appended (board THS pages miss) | ✓ | ✓ | — | — | — |
+| zzshare (plates_rank) | ✓ | ✓ | — | — | — |
 
 So concept movers — which dominate most days' top lists — typically
 carry only `change_pct` + `net_inflow`; `amount` / `volume` /
@@ -2838,7 +2841,7 @@ The MD projection renders the same fields in an 8-column table
  board at different ranks if `change_pct == 0.0`.
 
 **Cache impact**: none. The boards block already makes ONE upstream
-call site (`stock_board_cache.get_board_list` → ths+zzshare merge);
+call site (`stock_board_cache.get_board_list`, one THS call);
 top movers are pure in-memory sort over the rows already in cache.
 `make_market_stats_cache_key` signature and value are unchanged;
 60s TTL via `get_quote_cache` covers the new fields automatically.

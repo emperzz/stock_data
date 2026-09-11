@@ -50,12 +50,15 @@ _MEMBERSHIP_COLS = {
     "board_type",
     "subtype",
 }
-# Sources supported by seed_stock_board_from_csv. All currently
-# supported sources share the same 7-col schema; post-2026-07-20
-# the legacy 3-col eastmoney loader was deleted (its dispatch branch
-# in seed_stock_board_from_csv was removed when the schema unified).
-# Any other source value would silently filter every row.
-_SUPPORTED_STOCK_BOARD_SOURCES: frozenset[str] = frozenset({"ths", "eastmoney"})
+# Sources supported by seed_stock_board_from_csv. All supported sources
+# share the same 7-col schema; post-2026-07-20 the legacy 3-col eastmoney
+# loader was deleted (its dispatch branch in seed_stock_board_from_csv was
+# removed when the schema unified). Any other source value would silently
+# filter every row.
+#
+# `zzshare` added 2026-09-11: the split moved the 186 zzshare-prefixed rows
+# out of stock_board_ths.csv into their own file (spec §10.1).""
+_SUPPORTED_STOCK_BOARD_SOURCES: frozenset[str] = frozenset({"ths", "zzshare", "eastmoney"})
 
 # Required columns for the THS cid → platecode map CSV. `name` is optional
 # (the loader backfills "" so the upsert payload is uniform).
@@ -93,7 +96,7 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
     """Insert/REPLACE rows from a stock_board-style CSV into the DB.
 
     Args:
-        source: One of ``{'ths', 'eastmoney'}``. Both now use the
+        source: One of ``{'ths', 'zzshare', 'eastmoney'}``. All use the
             unified 7-col schema; legacy 3-col eastmoney was removed
             2026-07-20 when the schema unified across sources.
         csv_path: Path to the CSV file.
@@ -102,7 +105,8 @@ def seed_stock_board_from_csv(source: str, csv_path: Path) -> int:
         Number of rows inserted/updated.
 
     Raises:
-        ValueError: source not in {'ths', 'eastmoney'} or schema mismatch.
+        ValueError: source not in {'ths', 'zzshare', 'eastmoney'} or
+            schema mismatch.
         FileNotFoundError: csv_path doesn't exist.
     """
     if source not in _SUPPORTED_STOCK_BOARD_SOURCES:
@@ -303,18 +307,23 @@ def seed_ths_board_id_map_from_csv(csv_path: Path) -> int:
 
 
 def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
-    """Seed ths_board_id_map + stock_board (THS+eastmoney) + stock_board_membership (THS).
+    """Seed the board tables from the CSV backups.
 
-    Missing files: log a warning, skip that source. Don't raise.
+    Steps, in order (the order matters — see the inline comment):
+    ``ths_board_id_map`` → ``stock_board_ths`` → ``stock_board_eastmoney``
+    → ``stock_board_zzshare`` → ``stock_board_membership_zzshare``.
+
+    Missing files: log a warning, skip that step. Don't raise.
     Schema errors (missing columns), encoding errors, malformed rows, and
-    SQLite integrity errors: log error, skip that source. Don't raise.
+    SQLite integrity errors: log error, skip that step. Don't raise.
     Anything outside ``_NON_FATAL_SEED_EXCEPTIONS`` propagates so the
     caller (server.py lifespan) can decide whether to crash or continue
     with a partial/empty board cache.
 
     Returns:
-        {'ths_board_id_map': P, 'stock_board_ths': N,
-         'stock_board_eastmoney': M, 'stock_board_membership_ths': K}.
+        A subset of
+        {'ths_board_id_map', 'stock_board_ths', 'stock_board_eastmoney',
+         'stock_board_zzshare', 'stock_board_membership_zzshare'}.
         Missing entries are absent.
 
     Side effect: when files exist but ALL fail (schema/IO error), emits
@@ -329,70 +338,51 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
     failed_files: list[str] = []
     missing_files: list[str] = []
 
-    # Seeded FIRST: sidebar cid → platecode resolution depends on it.
-    id_map_csv = backup_dir / "ths_board_id_map.csv"
-    if id_map_csv.exists():
-        try:
-            results["ths_board_id_map"] = seed_ths_board_id_map_from_csv(id_map_csv)
-        except _NON_FATAL_SEED_EXCEPTIONS as e:
-            logger.error(
-                "[CSVSeed] %s: %s: %s; skipping",
-                id_map_csv.name,
-                type(e).__name__,
-                e,
-            )
-            failed_files.append(id_map_csv.name)
-    else:
-        logger.warning("[CSVSeed] %s not found; skipping id-map seed", id_map_csv)
-        missing_files.append(id_map_csv.name)
+    # (results key, filename, loader). Built here rather than at module
+    # scope so the loader names are resolved at CALL time — tests
+    # monkeypatch e.g. `board_csv.seed_ths_board_id_map_from_csv` and
+    # expect the substitution to take effect.
+    #
+    # `ths_board_id_map` is FIRST: sidebar cid → platecode resolution on the
+    # THS board-list path depends on the map being present.
+    steps = [
+        ("ths_board_id_map", "ths_board_id_map.csv", seed_ths_board_id_map_from_csv),
+        ("stock_board_ths", "stock_board_ths.csv",
+         lambda p: seed_stock_board_from_csv("ths", p)),
+        ("stock_board_eastmoney", "stock_board_eastmoney.csv",
+         lambda p: seed_stock_board_from_csv("eastmoney", p)),
+        ("stock_board_zzshare", "stock_board_zzshare.csv",
+         lambda p: seed_stock_board_from_csv("zzshare", p)),
+        # ONE membership file, all `source='zzshare'`. The legacy combined
+        # file was fetched from zzshare's `plates_stocks` across every plate
+        # type, and zzshare's own code space spans 885xxx/886xxx (plate_type
+        # 15 概念), 881xxx (14 行业) AND 801xxx/803xxx/710xxx/883xxx (17
+        # 题材) — so the prefix of a row says nothing about which fetcher
+        # produced it. Verified 2026-09-11 against live zzshare: its
+        # membership for 885333 / 885431 / 881121 matches the CSV at Jaccard
+        # 0.97-0.99. There is therefore no THS membership seed to keep;
+        # ths-side membership accumulates from the F10 sweep
+        # (BOARD_BACKFILL_ON_STARTUP) and runtime lazy fill.
+        ("stock_board_membership_zzshare", "stock_board_membership_zzshare.csv",
+         seed_membership_from_csv),
+    ]
 
-    ths_board = backup_dir / "stock_board_ths.csv"
-    if ths_board.exists():
-        try:
-            results["stock_board_ths"] = seed_stock_board_from_csv("ths", ths_board)
-        except _NON_FATAL_SEED_EXCEPTIONS as e:
-            logger.error(
-                "[CSVSeed] %s: %s: %s; skipping",
-                ths_board.name,
-                type(e).__name__,
-                e,
-            )
-            failed_files.append(ths_board.name)
-    else:
-        logger.warning("[CSVSeed] %s not found; skipping ths stock_board seed", ths_board)
-        missing_files.append(ths_board.name)
-
-    ths_member = backup_dir / "stock_board_membership_ths.csv"
-    if ths_member.exists():
-        try:
-            results["stock_board_membership_ths"] = seed_membership_from_csv(ths_member)
-        except _NON_FATAL_SEED_EXCEPTIONS as e:
-            logger.error(
-                "[CSVSeed] %s: %s: %s; skipping",
-                ths_member.name,
-                type(e).__name__,
-                e,
-            )
-            failed_files.append(ths_member.name)
-    else:
-        logger.warning("[CSVSeed] %s not found; skipping ths membership seed", ths_member)
-        missing_files.append(ths_member.name)
-
-    em_board = backup_dir / "stock_board_eastmoney.csv"
-    if em_board.exists():
-        try:
-            results["stock_board_eastmoney"] = seed_stock_board_from_csv("eastmoney", em_board)
-        except _NON_FATAL_SEED_EXCEPTIONS as e:
-            logger.error(
-                "[CSVSeed] %s: %s: %s; skipping",
-                em_board.name,
-                type(e).__name__,
-                e,
-            )
-            failed_files.append(em_board.name)
-    else:
-        logger.warning("[CSVSeed] %s not found; skipping eastmoney stock_board seed", em_board)
-        missing_files.append(em_board.name)
+    for key, filename, loader in steps:
+        csv_path = backup_dir / filename
+        if csv_path.exists():
+            try:
+                results[key] = loader(csv_path)
+            except _NON_FATAL_SEED_EXCEPTIONS as e:
+                logger.error(
+                    "[CSVSeed] %s: %s: %s; skipping",
+                    filename,
+                    type(e).__name__,
+                    e,
+                )
+                failed_files.append(filename)
+        else:
+            logger.warning("[CSVSeed] %s not found; skipping", csv_path)
+            missing_files.append(filename)
 
     # Distinguish "no CSVs shipped" from "CSVs shipped but ALL failed".
     # Both cases produce results={}; without this summary the operator

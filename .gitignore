@@ -95,6 +95,7 @@ worktrees/
 /stock_cache.db-shm
 /stock_cache.db-wal
 /stock_data/stock_cache.db
+/stock_data/stock_cache.db.bak-*
 /stock_data/stock_cache.db-shm
 /stock_data/stock_cache.db-wal
 

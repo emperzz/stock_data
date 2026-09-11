@@ -161,28 +161,26 @@ VALID_SUBTYPES_BY_SOURCE: dict[str, dict[str, set[str]]] = {
 # implementation.
 VALID_BOARD_TYPES: tuple[str, ...] = ("concept", "industry", "index", "special")
 # Forward-board sources: each must have BOTH get_all_boards AND
-# get_board_stocks implementations. 'ths' satisfies both since
-# ThsFetcher.get_all_boards landed (2026-07-08).
-VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
+# get_board_stocks implementations.
+#
+# `zzshare` became a first-class source on 2026-09-11 (spec §2 D1). It used
+# to be one of four textually-identical-but-separately-maintained
+# allowlists with two different alias behaviours, which is how
+# `?source=zzshare` ended up 422 on two routes, 200-with-ths-data on a
+# third, and 400 on a fourth (spec §9). There is now ONE tuple; the
+# per-endpoint names below are aliases of it so existing imports keep
+# working and cannot drift.
+VALID_SOURCES: tuple[str, ...] = ("ths", "zzshare", "eastmoney", "zhitu")
 
+# stock-boards reverse lookup. Same set, no alias: the old
+# `_STOCK_BOARDS_SOURCE_ALIAS = {"zzshare": "ths"}` mapped a request for one
+# source onto a different source's data, which is exactly what the split
+# removes.
+_STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = VALID_SOURCES
 
-# Stock-boards 专用 source 集合 + alias (仿照 _BOARD_HISTORY_VALID_SOURCES 模式).
-# stock-boards 端点 alias zzshare→ths: THS basic API 是真正的 stock→boards 上游;
-# zzshare SDK 没有这个端点. (board-list 端点 2026-07-08 后 zzshare 不再合法 —
-# source=zzshare 由 FastAPI Literal 校验返回 422,不再 alias;reverse-lookup
-# 的 zzshare→ths alias 继续生效.)
-# 注意: 'ths' 在 VALID_SUBTYPES_BY_SOURCE 里有 concept subtype (用于 stock-boards
-# 端点的 subtype 验证), 但不在 VALID_SOURCES 里 (因为它没有 get_all_boards).
-_STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
-_STOCK_BOARDS_SOURCE_ALIAS: dict[str, str] = {"zzshare": "ths"}
-
-
-# Board-stocks source 集合 (3 sources — ths/eastmoney/zhitu).
-# `zzshare` is not in the public surface yet (Literal returns 422). It is
-# NOT used internally by any cross-source fallback any more — the
-# ZZSHARE-primary include_quote=False chain was deleted 2026-09-11
-# (spec §2 D2); that path is now THS F10 only.
-_BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
+# Board-stocks constituent lookup. Same set — `?source=zzshare` serves
+# zzshare's own constituents via ZzshareFetcher.plates_stocks.
+_BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = VALID_SOURCES
 
 
 def normalize_board_stocks_source(source: str) -> str:
@@ -216,34 +214,6 @@ def normalize_board_stocks_source(source: str) -> str:
             f"Valid sources: {list(_BOARD_STOCKS_VALID_SOURCES)}"
         )
     return source
-
-
-def normalize_stock_board_source(source: str) -> str:
-    """Alias + validate a source name for the stock-boards endpoint.
-
-    Applies the stock-boards alias map (zzshare → ths) and validates
-    against _STOCK_BOARDS_VALID_SOURCES. The board-list endpoint
-    has no aliasing in either direction (both ``ths`` and ``zzshare``
-    are first-class labels as of 2026-07-08).
-
-    Args:
-        source: User-supplied source name (e.g. ``"ths"``, ``"zzshare"``).
-
-    Returns:
-        Canonical source name accepted by the persistence layer.
-
-    Raises:
-        ValueError: ``source`` is not in the valid set after aliasing.
-            Caller (route layer) maps this to ``HTTPException(400)``.
-    """
-    s = _STOCK_BOARDS_SOURCE_ALIAS.get(source, source)
-    if s not in _STOCK_BOARDS_VALID_SOURCES:
-        raise ValueError(
-            f"Unknown stock-boards source {source!r}. "
-            f"Valid sources: {list(_STOCK_BOARDS_VALID_SOURCES)} "
-            f"(alias 'zzshare' accepted)"
-        )
-    return s
 
 
 def _validate_subtype(source: str, board_type: str, subtype: str | None) -> None:
@@ -1030,30 +1000,59 @@ def get_board_stocks(
             update_cached_board_stocks(board_code, source, stocks)
         return stocks, origin, source, None, False, cached_count
 
-    # include_quote=True. THS's AJAX endpoint is cid-addressed
-    # (q.10jqka.com.cn/{section}/detail/code/{slug}/ — the slug is the cid,
-    # NOT the public platecode) and hard-caps at 50 rows. eastmoney
-    # (BKxxxx) and zhitu (sw_xxx) take their own board_code straight
-    # through, so the translation below is THS-only.
-    fetch_code = board_code
-    fetch_kwargs: dict = {}
-    if source == "ths":
-        fetch_code = resolve_ths_cid(board_code) or ""
-        if not fetch_code:
-            # An unresolvable cid is reported as reason="cid_unresolved"
-            # (the route maps it to 422) instead of an empty 404: "we
-            # cannot address this board" and "this board has no members"
-            # are different answers.
-            return [], source, source, "cid_unresolved", False, cached_count
-        fetch_kwargs = {"sort_by": sort_by, "sort_order": sort_order, "top_n": top_n}
+    # include_quote=True. Two THS-only tiers, selected by top_n (spec §8):
+    #
+    #   top_n <= 50 → q.10jqka AJAX. CID-addressed — the URL slug is THS's
+    #                 internal cid, NOT the public platecode — and hard-capped
+    #                 at 50 rows by upstream. 18/18 BoardStockInfo fields once
+    #                 the quote-cache union below fills open/high/low/
+    #                 prev_close/volume.
+    #   top_n >  50 → the F10 page. PLATECODE-addressed, server-renders the
+    #                 full membership (90+ concept / 150-180 industry), no cap.
+    #                 15/18 fields: change_speed / free_float_shares /
+    #                 float_market_cap are structurally absent from F10 (the
+    #                 row template has no such keys, and the union never sets
+    #                 them either), so they stay None on this tier. That is a
+    #                 documented contract, not a regression.
+    #
+    # eastmoney (BKxxxx) and zhitu (sw_xxx) take their own board_code straight
+    # through and keep the single AJAX-shaped call they always had.
+    if source == "ths" and top_n > 50:
+        stocks, origin = manager.get_board_stocks_full(
+            board_code=board_code,
+            source=source,
+            board_type=board_type_resolved,
+        )
+        if len(stocks) > top_n:
+            stocks = stocks[:top_n]
+        # F10 carries no sort order and no quote columns; sort in-process so
+        # the caller's sort_by contract still holds on this tier.
+        if sort_by is not None:
+            stocks = sorted(
+                stocks,
+                key=lambda r: r.get(sort_by) or 0,
+                reverse=(sort_order == "desc"),
+            )
+    else:
+        fetch_code = board_code
+        fetch_kwargs: dict = {}
+        if source == "ths":
+            fetch_code = resolve_ths_cid(board_code) or ""
+            if not fetch_code:
+                # An unresolvable cid is reported as reason="cid_unresolved"
+                # (the route maps it to 422) instead of an empty 404: "we
+                # cannot address this board" and "this board has no members"
+                # are different answers.
+                return [], source, source, "cid_unresolved", False, cached_count
+            fetch_kwargs = {"sort_by": sort_by, "sort_order": sort_order, "top_n": top_n}
 
-    stocks, origin = manager.get_board_stocks(
-        board_code=fetch_code,
-        source=source,
-        include_quote=True,
-        board_type=board_type_resolved,
-        **fetch_kwargs,
-    )
+        stocks, origin = manager.get_board_stocks(
+            board_code=fetch_code,
+            source=source,
+            include_quote=True,
+            board_type=board_type_resolved,
+            **fetch_kwargs,
+        )
 
     if not stocks:
         return [], origin, source, None, False, cached_count
@@ -1650,16 +1649,37 @@ def _is_ths_cid(value: Any) -> bool:
     return value.startswith("3") or value.startswith("881")
 
 
+def _is_ths_platecode(value: Any) -> bool:
+    """True iff ``value`` is a THS *public* platecode (885xxx / 886xxx / 881xxx).
+
+    The counterpart of :func:`_is_ths_cid`, and needed for the same reason:
+    the legacy combined CSV carried a row with ``cid='300066'`` (a real THS
+    cid) but ``code='803014'`` — a zzshare code. Filtering on the cid alone
+    let that pair into the map, and the runtime board-list path then
+    advertised ``803014`` as a **ths** board_code. Caught by
+    ``tests/test_board_split_acceptance.py`` via the live checklist
+    (2026-09-11).
+    """
+    if not isinstance(value, str) or len(value) != 6:
+        return False
+    if not (value.isascii() and value.isdigit()):
+        return False
+    return value.startswith("885") or value.startswith("886") or value.startswith("881")
+
+
 def upsert_ths_board_id_map(
     rows: list[dict], conn: sqlite3.Connection | None = None
 ) -> int:
     """Upsert THS ``cid → platecode`` mappings. Returns the rows written.
 
-    Rows whose ``cid`` fails :func:`_is_ths_cid`, or that carry no
-    platecode, are skipped silently (the caller's row count is the
-    diagnostic). Last write wins, so callers merge *live* observations
-    after CSV seeds — the CSV is a snapshot, live data is authoritative
-    (spec §3.2).
+    A row is written only when BOTH halves are THS-shaped: the ``cid`` must
+    pass :func:`_is_ths_cid` (3xxxxx / 881xxx) and the ``platecode`` must
+    pass :func:`_is_ths_platecode` (885xxx / 886xxx / 881xxx). Rows failing
+    either check, or carrying no platecode, are skipped silently (the
+    caller's row count is the diagnostic).
+
+    Last write wins, so callers merge *live* observations after CSV seeds —
+    the CSV is a snapshot, live data is authoritative (spec §3.2).
     """
     if not rows:
         return 0
@@ -1674,7 +1694,7 @@ def upsert_ths_board_id_map(
             r.get("board_type") or "",
         )
         for r in rows
-        if _is_ths_cid(r.get("cid")) and r.get("platecode")
+        if _is_ths_cid(r.get("cid")) and _is_ths_platecode(r.get("platecode"))
     ]
     if not payload:
         return 0
