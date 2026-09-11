@@ -116,7 +116,17 @@ gnSection:  {"358":{"platecode":"886071","platename":"AI PC","cid":"309121",...}
 
 兜底路径：`GET /gn/detail/code/{cid}/` 的 HTML 含且仅含一个 886 码（`309121` → `886071`），可逐板补齐冷门板块。
 
-**实测 CSV 覆盖**：`stock_board_ths.csv` 已含 485 条合法概念 `(platecode, cid)` 映射（另有 214 条行业行 `cid==code`，无需映射），**可解出 DB 中 141 个 cid-only 行的 130 个（92%）**，未覆盖的 11 条是 CSV 快照（2026-07-22）之后新建的板块。
+**实测 CSV 覆盖**（按 `board_type` 精确过滤，2026-09-11 复算）：
+
+| CSV 内容 | 行数 | 处置 |
+|---|---|---|
+| concept 行 + 真 3xxxxx cid = **genuine 映射** | **383** | 导入 `ths_board_id_map` |
+| concept 行但 `cid == code`（`710002`/`803003`/`803012`…，实为 zzshare code 被写进 cid 列） | 118 | **必须排除**（不是映射） |
+| industry 行（`cid == code`，identity） | 104 | 导入（identity，使 `resolve` 无启发式） |
+
+**genuine 映射可解出 DB 中 141 个 cid-only 行的 138 个（98%）**；未覆盖的 3 条是 CSV 快照（2026-07-22）之后新建的板块。
+
+注意：那 118 行的 cid 值（710xxx/803xxx）不与真 3xxxxx 碰撞，故不会污染查表；但生成器与 loader 必须按 `cid` 首字符/长度校验，禁止把它们当作映射导入。
 
 ### 3.2 设计
 
@@ -270,7 +280,7 @@ CREATE TABLE IF NOT EXISTS ths_board_id_map (
 1. CSV 拆三份：
    - `stock_board_ths.csv`：仅 THS 原生行（platecode 885/886/881 + 合法 cid）
    - `stock_board_zzshare.csv`：原 801/803/710/883 行 relabel 为 `source='zzshare'`
-   - `ths_board_id_map.csv`：新，485+ 条 `(cid, platecode, name)`，可独立 diff / 回归
+   - `ths_board_id_map.csv`：新，487 条（383 genuine concept + 104 industry identity）`(cid, platecode, name)`，可独立 diff / 回归
 2. `stock_board_membership_ths.csv` → **整体 relabel 为 `source='zzshare'`**（新增 `stock_board_membership_zzshare.csv`），因其数据本就是 zzshare 抓取。
 3. `board_csv.py`：`_SUPPORTED_STOCK_BOARD_SOURCES` 增加 `zzshare`；`seed_all_from_backup_dir` 增加映射 CSV 的 seed，且**顺序在 board 之前**（侧栏行解析依赖 map）。
 4. 重建流程：`STOCK_DB_INIT=true` → seed CSV →（可选）`BOARD_BACKFILL_ON_STARTUP=true` 重灌 ths。
