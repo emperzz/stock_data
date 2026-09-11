@@ -54,45 +54,39 @@ class TestSourcePurity:
     def test_zzshare_board_csv_has_no_ths_cid(self):
         assert {r["cid"] for r in _rows("stock_board_zzshare.csv")} <= {""}
 
-    def test_membership_csvs_are_source_pure(self):
-        """Membership is split by PROVENANCE (spec §1.4 corrected 2026-09-11).
+    def test_membership_csv_is_zzshare_labelled(self):
+        """All 115,081 rows are zzshare data — the prefix is NOT a source marker.
 
-        The legacy combined file was 55,301 zzshare rows + 59,780 THS rows —
-        not "all zzshare" as originally assumed. Prefixes alone are not the
-        proof: the two groups also carry disjoint code spaces and each
-        source's own subtype vocabulary.
+        zzshare's own board space spans 885xxx/886xxx (plate_type 15 概念),
+        881xxx (plate_type 14 行业) and 801xxx/803xxx/710xxx/883xxx
+        (plate_type 17 题材), so a row's code prefix says nothing about which
+        fetcher produced it. An earlier revision of this file split the
+        membership CSV by prefix on the theory that 885/886/881 were THS; that
+        was wrong — live zzshare returns those boards, matching the CSV at
+        Jaccard 0.97-0.99 (verified 2026-09-11).
         """
         assert {r["source"] for r in _rows("stock_board_membership_zzshare.csv")} == {"zzshare"}
-        assert {r["source"] for r in _rows("stock_board_membership_ths.csv")} == {"ths"}
 
     def test_membership_rows_are_conserved(self):
-        zz = _rows("stock_board_membership_zzshare.csv")
-        th = _rows("stock_board_membership_ths.csv")
-        assert len(zz) == 55301, f"zzshare membership drifted: {len(zz)}"
-        assert len(th) == 59780, f"ths membership drifted: {len(th)}"
-        assert len(zz) + len(th) == 115081, "the split must not drop or duplicate rows"
+        assert len(_rows("stock_board_membership_zzshare.csv")) == 115081
 
-    def test_membership_zzshare_rows_are_zzshare_prefixed(self):
-        bad = [r["board_code"] for r in _rows("stock_board_membership_zzshare.csv")
-               if r["board_code"][:3] not in ZZ_PREFIXES]
-        assert bad == [], f"non-zzshare codes in the zzshare membership file: {bad[:5]}"
+    def test_no_ths_membership_seed(self):
+        """There is no THS membership data to seed — the file was all
+        zzshare. ths-side membership accumulates from the F10 sweep
+        (BOARD_BACKFILL_ON_STARTUP) and runtime lazy fill."""
+        assert not (BACKUP / "stock_board_membership_ths.csv").exists()
 
-    def test_membership_ths_rows_are_ths_prefixed(self):
-        bad = [r["board_code"] for r in _rows("stock_board_membership_ths.csv")
-               if r["board_code"][:3] in ZZ_PREFIXES]
-        assert bad == [], f"zzshare codes in the ths membership file: {bad[:5]}"
+    def test_membership_codes_span_every_zzshare_plate_type(self):
+        """Pins the code-space fact the split got wrong.
 
-    def test_membership_subtype_vocabularies_are_source_specific(self):
-        """The provenance proof, pinned.
-
-        zzshare's plate=17 题材 surfaces as 同花顺题材, which THS's own concept
-        list never emits; THS industry surfaces as 同花顺行业 on 881xxx codes.
-        If a future re-split got this backwards, these two assertions flip.
+        801/803/710/883 (题材) AND 885/886 (概念) AND 881 (行业) must all be
+        present — if a future 'cleanup' assumed zzshare only serves
+        801xxx-style codes, it would drop two thirds of the seed.
         """
-        zz_sub = {r["subtype"] for r in _rows("stock_board_membership_zzshare.csv")}
-        th_sub = {r["subtype"] for r in _rows("stock_board_membership_ths.csv")}
-        assert "同花顺题材" in zz_sub and "同花顺题材" not in th_sub
-        assert "同花顺行业" in th_sub and "同花顺行业" not in zz_sub
+        codes = {r["board_code"] for r in _rows("stock_board_membership_zzshare.csv")}
+        for prefix, label in (("801", "题材 801xxx"), ("885", "概念 885xxx"),
+                              ("886", "概念 886xxx"), ("881", "行业 881xxx")):
+            assert any(c.startswith(prefix) for c in codes), f"missing {label}"
 
     def test_ths_board_csv_cid_column_is_only_real_cids(self):
         """spec §4 rule 6 + the 110-row legacy pollution (§3.1).
@@ -148,14 +142,14 @@ class TestSourcePurity:
 
 
 class TestSeedRoundTrip:
-    def test_seed_all_populates_six_steps(self, fresh_db):
+    def test_seed_all_populates_five_steps(self, fresh_db):
         results = board_csv.seed_all_from_backup_dir(BACKUP)
         assert results["ths_board_id_map"] > 0
         assert results["stock_board_ths"] == 588
         assert results["stock_board_zzshare"] == 186
         assert results["stock_board_eastmoney"] > 0
-        assert results["stock_board_membership_ths"] == 59780
-        assert results["stock_board_membership_zzshare"] == 55301
+        assert results["stock_board_membership_zzshare"] == 115081
+        assert "stock_board_membership_ths" not in results
 
     def test_no_zzshare_codes_under_ths_after_seed(self, fresh_db):
         board_csv.seed_all_from_backup_dir(BACKUP)
@@ -184,8 +178,19 @@ class TestSeedRoundTrip:
         bad = [dict(r) for r in rows if not _is_ths_cid(r["cid"])]
         assert bad == [], f"non-cid values in ths_cid: {bad[:5]}"
 
-    def test_every_zzshare_membership_board_has_a_board_row(self, fresh_db):
-        """Pre-split, 44 zzshare board_codes had no stock_board row (spec §1.4)."""
+    def test_orphan_membership_boards_are_bounded(self, fresh_db):
+        """Membership references more boards than the board CSVs hold.
+
+        Measured 2026-09-11: the zzshare membership covers 788 distinct
+        board_codes while stock_board_zzshare.csv holds 186, leaving 602
+        orphans. That is a *snapshot* gap, not a split bug — the board CSVs
+        come from one day's `plates_rank`, the membership from a longer
+        `plates_stocks` window. Querying an orphan still works (the
+        fetchers take the code directly); only its metadata row is missing.
+
+        Pinned so the number is visible if it drifts, and so nobody
+        "fixes" it by deleting membership rows.
+        """
         board_csv.seed_all_from_backup_dir(BACKUP)
         conn = board_mod.get_connection()
         orphans = conn.execute(
@@ -194,4 +199,4 @@ class TestSeedRoundTrip:
                    SELECT 1 FROM stock_board b
                    WHERE b.source='zzshare' AND b.code = m.board_code)"""
         ).fetchall()
-        assert len(orphans) <= 44, f"orphan growth: {[o['board_code'] for o in orphans[:10]]}"
+        assert len(orphans) <= 602, f"orphan growth: {[o['board_code'] for o in orphans[:10]]}"

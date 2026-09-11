@@ -204,3 +204,57 @@ def test_normalize_board_stocks_source_does_not_alias_other_directions():
 # Lazy import — keeps this module cheap to collect when only the persistence
 # tests above are being run via -k "not stock_boards_reverse_route".
 from stock_data.server import app as _app_for_test  # noqa: E402
+
+
+def test_ths_cold_cache_does_not_drop_non_ths_entries(fresh_db):
+    """The THS cold-cache fallback must not REPLACE the whole data list.
+
+    Regression (2026-09-11, found by the post-split acceptance checklist):
+    with no ths membership seed, `?source=` omitted took the "THS cold cache"
+    branch for every stock, which built the response purely from the live
+    THS fetcher result — so a stock with zzshare membership but no ths rows
+    lost its zzshare boards entirely. The endpoint returned 8 ths entries
+    for 600519 while the persistence layer held 10 zzshare ones.
+    """
+    # zzshare rows in persistence...
+    board_mod.upsert_membership_bulk(
+        source="zzshare",
+        stocks=[{"stock_code": "600519", "stock_name": "贵州茅台"}],
+        board_code="801001",
+        board_name="芯片",
+        board_type="concept",
+        subtype="同花顺概念",
+    )
+    # ...and a live THS result for the ths half.
+    with (
+        patch(
+            "stock_data.api._helpers.stock_boards.fetch_stock_boards_quote_enrichment",
+            return_value=(
+                [
+                    {
+                        "board_code": "885333",
+                        "name": "移动支付",
+                        "board_type": "concept",
+                        "subtype": "同花顺概念",
+                    }
+                ],
+                {},
+            ),
+        ),
+        TestClient(_app()) as client,
+    ):
+        r = client.get("/api/v1/stocks/600519/boards")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    sources = {e["source"] for e in body["data"]}
+    assert sources == {"ths", "zzshare"}, body["data"]
+    codes = {e["code"] for e in body["data"]}
+    assert "801001" in codes, f"zzshare entry was dropped: {body['data']}"
+    assert "885333" in codes, f"ths entry missing: {body['data']}"
+
+
+def _app():
+    """Import the app lazily so the fixture's env vars land first."""
+    from stock_data.server import app
+
+    return app

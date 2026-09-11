@@ -198,11 +198,10 @@ def test_seed_all_from_backup_dir_missing_dir(tmp_path, caplog):
 def test_seed_all_from_backup_dir_missing_files(tmp_path, caplog):
     """目录存在但全部 seed 文件都缺 → 每个都 warning, 返回空 dict.
 
-    6 steps, in order: ths_board_id_map, stock_board_ths,
+    5 steps, in order: ths_board_id_map, stock_board_ths,
     stock_board_eastmoney, stock_board_zzshare,
-    stock_board_membership_ths, stock_board_membership_zzshare. (The
-    id-map was added 2026-09-11 by Plan 1; the zzshare files by Plan 3's
-    source split, which split the membership seed by provenance.)
+    stock_board_membership_zzshare. (The id-map was added 2026-09-11 by
+    Plan 1; the zzshare files by Plan 3's source split.)
     """
     empty_dir = tmp_path / "empty_backup"
     empty_dir.mkdir()
@@ -213,7 +212,7 @@ def test_seed_all_from_backup_dir_missing_files(tmp_path, caplog):
         results = board_csv.seed_all_from_backup_dir(empty_dir)
     assert results == {}
     not_found_warnings = [r for r in caplog.records if "not found" in r.message]
-    assert len(not_found_warnings) == 6
+    assert len(not_found_warnings) == 5
 
 
 def test_seed_all_from_backup_dir_partial_files(fresh_db, tmp_path):

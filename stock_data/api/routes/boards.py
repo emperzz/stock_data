@@ -977,10 +977,32 @@ def get_stock_boards(
                 base.update(enrichment_by_code[e["board_code"]])
             data.append(StockBoardInfo(**base))
     elif ths_in_source_list and fetcher_full_result:
-        # Cold-cache fallback (no persistence writeback): the live fetcher
-        # result IS the response data. We rely on the fetcher's safe_int /
-        # safe_float coercion (in ThsFetcher.get_stock_boards) so the 11
-        # fields per entry are already typed correctly.
+        # Cold-cache fallback for THS (no persistence writeback): the live
+        # fetcher result IS the THS half of the response. We rely on the
+        # fetcher's safe_int / safe_float coercion (in
+        # ThsFetcher.get_stock_boards) so the 11 fields per entry are already
+        # typed correctly.
+        #
+        # Non-THS persistence entries still flow through. An earlier revision
+        # replaced the WHOLE data list with the THS rows, which silently
+        # dropped them: with no ths membership seed (the legacy file is all
+        # zzshare data), `?source=` omitted went down this branch for every
+        # stock and zzshare's rows vanished from the response entirely —
+        # found 2026-09-11 by the acceptance checklist.
+        for e in entries:
+            if e["source"] == "ths":
+                # Superseded by the live result below (and in practice
+                # unreachable: any ths entry would have taken branch 1).
+                continue
+            data.append(
+                StockBoardInfo(
+                    code=e["board_code"],
+                    name=e["name"],
+                    type=e.get("board_type", ""),
+                    subtype=e.get("subtype", ""),
+                    source=e["source"],
+                )
+            )
         for r in fetcher_full_result:
             data.append(
                 StockBoardInfo(

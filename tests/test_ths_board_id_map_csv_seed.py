@@ -54,6 +54,23 @@ class TestCommittedArtifact:
             ]
         assert bad == [], f"non-THS cid rows leaked into the seed: {bad[:5]}"
 
+    def test_no_non_ths_platecode_row(self):
+        """The map's platecode column must be a THS platecode (885/886/881).
+
+        Regression (2026-09-11, caught by the acceptance checklist): the
+        legacy CSV had `cid='300066'` (a real THS cid) with `code='803014'`
+        — a zzshare code. Filtering on the cid alone let that pair in, and
+        the runtime board list then advertised `803014` as a **ths**
+        board_code, which `update_cached_boards` persisted.
+        """
+        with REPO_CSV.open(encoding="utf-8-sig") as f:
+            bad = [
+                (r["cid"], r["platecode"])
+                for r in csv.DictReader(f)
+                if r["platecode"][:3] not in ("885", "886", "881")
+            ]
+        assert bad == [], f"non-THS platecodes in the map: {bad[:5]}"
+
     def test_contains_live_verified_pair(self):
         """Probed 2026-09-11: /gn/ gnSection entry 358 + /gn/detail/code/309121/."""
         with REPO_CSV.open(encoding="utf-8-sig") as f:

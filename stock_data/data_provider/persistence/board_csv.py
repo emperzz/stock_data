@@ -311,8 +311,7 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
 
     Steps, in order (the order matters — see the inline comment):
     ``ths_board_id_map`` → ``stock_board_ths`` → ``stock_board_eastmoney``
-    → ``stock_board_zzshare`` → ``stock_board_membership_ths``
-    → ``stock_board_membership_zzshare``.
+    → ``stock_board_zzshare`` → ``stock_board_membership_zzshare``.
 
     Missing files: log a warning, skip that step. Don't raise.
     Schema errors (missing columns), encoding errors, malformed rows, and
@@ -324,8 +323,8 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
     Returns:
         A subset of
         {'ths_board_id_map', 'stock_board_ths', 'stock_board_eastmoney',
-         'stock_board_zzshare', 'stock_board_membership_ths',
-         'stock_board_membership_zzshare'}. Missing entries are absent.
+         'stock_board_zzshare', 'stock_board_membership_zzshare'}.
+        Missing entries are absent.
 
     Side effect: when files exist but ALL fail (schema/IO error), emits
     one summary ERROR log so the caller can distinguish "no CSVs in the
@@ -354,14 +353,16 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
          lambda p: seed_stock_board_from_csv("eastmoney", p)),
         ("stock_board_zzshare", "stock_board_zzshare.csv",
          lambda p: seed_stock_board_from_csv("zzshare", p)),
-        # Membership is split by PROVENANCE, not by preference: the legacy
-        # combined file was 55,301 zzshare rows (801/803/710/883) + 59,780
-        # THS rows (881/885/886), confirmed by the two sources' disjoint
-        # code spaces and their distinct subtype vocabularies
-        # (zzshare: 同花顺概念/同花顺题材; ths: 同花顺概念/同花顺行业).
-        # Relabelling all of it either way would mislabel half the rows.
-        ("stock_board_membership_ths", "stock_board_membership_ths.csv",
-         seed_membership_from_csv),
+        # ONE membership file, all `source='zzshare'`. The legacy combined
+        # file was fetched from zzshare's `plates_stocks` across every plate
+        # type, and zzshare's own code space spans 885xxx/886xxx (plate_type
+        # 15 概念), 881xxx (14 行业) AND 801xxx/803xxx/710xxx/883xxx (17
+        # 题材) — so the prefix of a row says nothing about which fetcher
+        # produced it. Verified 2026-09-11 against live zzshare: its
+        # membership for 885333 / 885431 / 881121 matches the CSV at Jaccard
+        # 0.97-0.99. There is therefore no THS membership seed to keep;
+        # ths-side membership accumulates from the F10 sweep
+        # (BOARD_BACKFILL_ON_STARTUP) and runtime lazy fill.
         ("stock_board_membership_zzshare", "stock_board_membership_zzshare.csv",
          seed_membership_from_csv),
     ]

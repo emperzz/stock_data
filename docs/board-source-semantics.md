@@ -9,14 +9,19 @@ cover board endpoints).
 
 ## Source isolation (2026-09-11 split)
 
-`ths` and `zzshare` are two independent first-class sources with disjoint
-board code spaces. There is NO cross-source fallback and NO alias: a
-`?source=ths` request never calls zzshare, and vice versa.
+`ths` and `zzshare` are two independent first-class sources. There is NO
+cross-source fallback and NO alias: a `?source=ths` request never calls
+zzshare, and vice versa.
+
+Their **code spaces overlap** (zzshare serves 885/886/881 as well as
+801/803/710/883 — see below), so `board_code` alone does not identify a
+source. What keeps them apart is that every request names its source
+explicitly and every cached row is keyed by it.
 
 | source | board_code namespace | ths_cid | history | realtime quote |
 |---|---|---|---|---|
 | `ths` | 885xxx / 886xxx / 881xxx | 3xxxxx (concept) / ==code (industry) / NULL | yes | yes |
-| `zzshare` | 801xxx / 803xxx / 710xxx / 883xxx | always NULL | no (400) | no |
+| `zzshare` | 885xxx / 886xxx (pt=15) · 881xxx (pt=14) · 801xxx / 803xxx / 710xxx / 883xxx (pt=17) | always NULL | no (400) | no |
 | `eastmoney` | BKxxxx | NULL | yes | no |
 | `zhitu` | sw_xxx | NULL | no | no |
 
@@ -26,7 +31,7 @@ hardcoded to ths, and an unexpected `?source=` is silently ignored (NOT
 therefore really do 422 on any other value.
 
 `/stocks/{code}/boards` with no `?source=` aggregates all four sources, so
-zzshare's ~55k membership rows are reachable through the label that names
+zzshare's 115k membership rows are reachable through the label that names
 them. The old `zzshare → ths` alias meant every entry came back as
 `source='ths'` and those rows were unreachable.
 
@@ -79,24 +84,40 @@ A `ths_cid` value is always a real cid or NULL — never a platecode. The
 layout wrote a platecode into the cid column) had their `cid` cleared during
 the 2026-09-11 CSV split.
 
-## The seed CSVs are per-source, and split by provenance
+## The seed CSVs
 
 `stock_data/stock_data_backup/` holds one CSV per source:
 `stock_board_ths.csv` (588 rows), `stock_board_zzshare.csv` (186),
-`stock_board_eastmoney.csv` (992), `ths_board_id_map.csv` (480), plus
-`stock_board_membership_ths.csv` (59,780 rows) and
-`stock_board_membership_zzshare.csv` (55,301).
+`stock_board_eastmoney.csv` (992), `ths_board_id_map.csv` (479), and
+`stock_board_membership_zzshare.csv` (**115,081 rows — the whole legacy
+membership file**).
 
-The membership pair is a **provenance split, not a preference**: the legacy
-combined file was 55,301 zzshare rows (801/803/710/883) + 59,780 THS rows
-(881/885/886), proven by disjoint code spaces and by the two sources'
-distinct subtype vocabularies (zzshare emits 同花顺题材 from plate=17, which
-THS never does; THS emits 同花顺行业 on 881xxx). Relabelling the whole file
-either way mislabels half of it.
+The membership file is all zzshare data, even though its `board_code`
+values span 801xxx/803xxx/710xxx/883xxx *and* 885xxx/886xxx/881xxx.
+**A row's code prefix does not identify its source**: zzshare's
+`plates_rank` spans three plate types — 15 (概念) → 885/886, 14 (行业) →
+881, 17 (题材) → 801/803/710/883 — so it covers the same public codes THS
+does. Verified against live zzshare 2026-09-11: its membership for 885333
+/ 885431 / 881121 matches the CSV at Jaccard 0.97–0.99 (the gap is the
+2026-07-12 snapshot date).
 
-Neither side is complete: zzshare 186/186 boards have membership (plus 44
-membership codes with no board row), THS 558/588 (95%). Runtime lazy fill
-and `BOARD_BACKFILL_ON_STARTUP` cover the rest.
+An intermediate revision split this file by prefix and labelled the
+885/886/881 half `ths`. That was wrong and is reverted: the "disjoint code
+spaces" it rested on held only between the file's own two groups, not
+between the two sources' capabilities, and the 同花顺概念 / 同花顺行业
+subtypes it cited are labels copied from the board list, which zzshare's
+own plate types 14/15 also produce.
+
+There is therefore **no THS membership seed**. `?source=ths` reverse
+lookups start cold and accumulate from the F10 sweep
+(`BOARD_BACKFILL_ON_STARTUP=true`) and runtime lazy fill.
+
+Completeness, measured: membership references 788 distinct board_codes
+while the board CSVs hold 186 + 588, leaving **602 membership codes with no
+board metadata row**. That is a snapshot gap (board CSVs come from one
+day's `plates_rank`, membership from a longer `plates_stocks` window), not
+a split bug — querying an orphan still works, only its metadata row is
+missing.
 
 ## Board endpoint failure observability
 
@@ -117,7 +138,7 @@ not `DataFetcherManager`"). The reverse direction also exists, and matters
 only if someone swaps SQLite for another backend:
 
 - `manager.py:692, 772` lazy-imports `persistence.trade_calendar` (`get_cached_calendar` / `update_cached_calendar`) and `persistence.pool_daily` (`get_pool`) inside method bodies, to break what would otherwise be a load-time circular import.
-- Five fetchers also reach down into persistence for table lookup helpers: `baostock_fetcher.py:219` (cached calendar), `zzshare_fetcher.py:74-75` (`THS_CONCEPT_SUBTYPE` constants + `get_latest_trade_date_on_or_before`), `ths_fetcher.py:63, 849, 907, 1332, 1351` (`THS_CONCEPT_SUBTYPE` + `get_board_metadata` + `_resolve_ths_cid_from_platecode`), `zhitu_fetcher.py:218, 970` (`get_latest_cached_trade_date`), `eastmoney/_boards_mixin.py:674` (`resolve_board_types`).
+- Five fetchers also reach down into persistence for table lookup helpers: `baostock_fetcher.py:219` (cached calendar), `zzshare_fetcher.py:74-75` (`THS_CONCEPT_SUBTYPE` constants + `get_latest_trade_date_on_or_before`), `ths_fetcher.py:63, 849, 907, 1332, 1351` (`THS_CONCEPT_SUBTYPE` + `get_board_metadata` + `resolve_ths_cid`), `zhitu_fetcher.py:218, 970` (`get_latest_cached_trade_date`), `eastmoney/_boards_mixin.py:674` (`resolve_board_types`).
 
 If a future change swaps SQLite for another backend (Postgres / Redis), all six of those import sites need to move with it — they're not abstracted behind a port interface today. Track as future tech debt; not blocking under the local-personal-project premise (SQLite + `backfill.py` rebuild keeps the risk low).
 

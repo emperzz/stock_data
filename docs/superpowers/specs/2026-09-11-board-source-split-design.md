@@ -16,14 +16,18 @@
 
 ### 1.2 问题的机械根因
 
-`_merge_ths_zzshare_by_name`（`persistence/board.py:811`）**按板块名**把两个**互不相交的 code space** 拼进同一个 `source='ths'` 命名空间：
+`_merge_ths_zzshare_by_name`（`persistence/board.py:811`，已删）**按板块名**把两个来源的行拼进同一个 `source='ths'` 命名空间，而且只按板块名判断是否同一个板块 —— 一个板块在两边各有一个 code 时就会被当成两个不同的板块（或反过来被合并）：
 
 | 来源 | 概念 id | 行业 id |
 |---|---|---|
 | THS `gnSection`（`GET /gn/`） | `cid` = 3xxxxx **且** `platecode` = 885xxx/886xxx（同一次响应内两个都有） | 881xxx（`cid == platecode`） |
-| zzshare `plates_rank` | `plate_code` = 801xxx / 803xxx / 710xxx / 883xxx | 801xxx |
+| zzshare `plates_rank` plate_type=15（概念） | **885xxx / 886xxx**（+ 偶发 883/710） | — |
+| zzshare `plates_rank` plate_type=17（题材） | **801xxx / 803xxx / 710xxx / 883xxx** | — |
+| zzshare `plates_rank` plate_type=14（行业） | — | **881xxx** |
 
-两者**没有任何一个 code 共用**，而拼接依据只有板块名。更根本的是**同一个 dict key `code` 在管道边界上语义反转**：
+> **注意：两套 code space 并不像早期版本以为的那样不相交。** zzshare 的 `plates_rank` 三个 plate_type 合起来覆盖 885/886/881 **和** 801/803/710/883，与 THS 的公开码大面积重叠。早期版本的表只列了 plate_type=17 的码，据此得出"没有任何一个 code 共用"的结论，是错的。真正**不相交**的是同时出现时**同一个 code 只能有一个 owner**（2026-09-11 起按 source 隔离缓存），而不是取值域。
+
+拼接依据只有板块名，所以同一个 code 在两个来源下被当成同一个板块。更根本的是**同一个 dict key `code` 在管道边界上语义反转**：
 
 - `ThsFetcher._parse_gn_section` 里 `code` = **cid**
 - `update_cached_boards` 里 `code` = **platecode**
@@ -63,25 +67,19 @@
 
 `stock_data/stock_data_backup/`（`server.py:93` 硬编码路径，CSV 已 force-add 进版本库）：
 
-- `stock_board_membership_ths.csv`：115,081 行全部标 `source='ths'`。**它不是单一来源的数据** —— 2026-09-11 复算（见下）证明它来自**两个 fetcher**，按 `board_code` 前缀一分为二：
+- `stock_board_membership_ths.csv`：115,081 行全部标 `source='ths'`，但生成方式是 `manager.get_board_stocks(source="zzshare")` → `upsert_membership_bulk(source="ths")`（见 `docs/superpowers/specs/2026-07-10-ths-board-backfill-on-startup-design.md:69-71`）。**这 115,081 行全部是 zzshare 抓取的数据。**
 
-  | 前缀 | 行数 | distinct code | 真实来源 | subtype 词汇 |
-  |---|---|---|---|---|
-  | 801 / 803 / 710 / 883 | **55,301** | 230 | zzshare | 同花顺概念 + **同花顺题材** |
-  | 881 / 885 / 886 | **59,780** | 558 | THS | 同花顺概念 + **同花顺行业** |
+  它的 board_code 跨 788 个 code / 多个前缀（801xxx 52,010 行、885xxx 39,356、886xxx 14,077、881xxx 6,347、803/710/883 共 3,291），因为 zzshare 的 `plates_rank` 本身就跨三个 plate_type（见 §1.2）。**前缀不代表来源** —— 885/886/881 这些"看起来像 THS"的码，zzshare 一样能服务。
 
-  三项独立证据（任一单独都不够，三条合起来可判定）：
-  1. **code space 不相交**（交集 0），且各组 code 落在对应的 board CSV 里：zzshare 组 230 个 code 中 186 个在 `stock_board_zzshare.csv`；THS 组 558 个 code **全部**在 `stock_board_ths.csv`（558/588 = 95%）。
-  2. **subtype 词汇各说各话**：`同花顺题材` 是 zzshare `plate_type=17` 的产物，THS 自身的概念清单从不产生它（THS 概念 subtype 只有 `同花顺概念`）；`同花顺行业` 只出现在 881xxx（THS 行业码）上。
-  3. `refreshed_at` 两个分组的区间重叠（都在 2026-07-12 09:54–10:12），即同一次批量生成里两个 fetcher 各跑了一遍。
+  2026-09-11 用活库对照验证：zzshare 对 `885333` 返回 75 只、CSV 74 只（交集 74，Jaccard 0.99）；`885431` 1010 / 1002（0.97）；`881121` 181 / 176（0.97）。差异来自 CSV 是 2026-07-12 的快照。
 
-  > **早期版本的结论「这些数据本来就是 zzshare 数据，只是被贴了 `ths` 标签」是错的。** 它只核实了 801xxx 那 52,010 行（45%）就外推到全部 115,081 行。实际上一半以上是 THS 数据；整表 relabel 成任何一个 source 都会错误标注另一半。
+  > **一个中间版本曾把这张表按前缀拆成"zzshare 55,301 行 + THS 59,780 行"，并称"两套 code space 不相交、subtype 词汇各说各话"。这是错的，已回退。** 错因有二：(a) 所谓"不相交"只成立于该文件的**两个分组之间**，不成立于两个**来源的能力范围**之间；(b) `同花顺行业`/`同花顺概念` 这两个 subtype 是**板块清单**带下来的标签（生成器把它们抄进 membership 行），zzshare 自己的 plate_type=14/15 也正好对应行业/概念，所以它们无法区分来源。唯一真正只属于 zzshare 的词汇是 `同花顺题材`（plate_type=17），它只能证明那 801xxx 一组。
 
 - `stock_board_ths.csv`：797 行，混有 885/886/881（THS 原生）与 801/803/710（zzshare）。`tools/fix_stock_board_ths_csv.py:144-145` 明确以 zzshare 为准：`pc = zz_truth.get(nm) or ths_pc.get(nm)`。
 
-**结论：两个 CSV 都必须按 code space 拆成「THS 一份 + zzshare 一份」，而不是整表 relabel。** 对 board CSV 是"把混进来的 zzshare 行分出去"，对 membership CSV 是"把两个来源的行分开" —— 两者都不是重新分类，而是还原身份。
+**结论**：board CSV 按 code space 拆成「THS 一份 + zzshare 一份」（它确实是混的：885/886/881 是 THS 原生行被 zzshare 行混进来）；**membership CSV 整表 relabel 为 `source='zzshare'`**，因为它本来就是 zzshare 数据。两者都不是重新分类，而是还原身份。
 
-**完整性（2026-09-11 实测）**：两侧都**不完整**，但都可用 —— zzshare 侧 186/186 块板有成分清单（100%），另有 44 个 membership code 没有 board 元数据行；THS 侧 558/588 块板有成分清单（95%），30 块板缺。CSV 是快照，缺失部分由运行期 lazy fill 与 `BOARD_BACKFILL_ON_STARTUP` 补齐。
+**完整性（2026-09-11 实测）**：membership 覆盖 788 个 code，而 board CSV 只有 186+588 —— 其中 **602 个 membership code 没有 board 元数据行**（孤儿）。这是**快照差异**（board CSV 来自单日 `plates_rank`，membership 来自更长窗口的 `plates_stocks`），不是拆分错误：孤儿板块仍可查询，只是缺元数据行。`source='ths'` 侧则完全没有 seed（那 115k 行全是 zzshare），反向索引靠 `BOARD_BACKFILL_ON_STARTUP=true` 的 F10 扫描与运行期 lazy fill 积累。
 
 ### 1.5 THS 两套 id 的正确用法
 
@@ -90,9 +88,9 @@
 | 概念 `cid` | 3xxxxx | 仅 `q.10jqka.com.cn/gn/detail/code/{cid}/.../ajax/1/` 拉成分股 |
 | 概念 `platecode` | 885xxx / 886xxx | 公开身份；F10 全量页 `basic.10jqka.com.cn/48/{platecode}/`；`stock_concept_list` 返回的 `quote_code`；板块 K 线 |
 | 行业 | 881xxx | `cid == platecode`，同值，无歧义 |
-| zzshare `plate_code` | 801xxx… | 仅 zzshare `plates_rank` / `plates_stocks` |
+| zzshare `plate_code` | 885/886（pt=15 概念）、881（pt=14 行业）、801/803/710/883（pt=17 题材） | 仅 zzshare `plates_rank` / `plates_stocks`。**与 THS 公开码大面积重叠**，所以 `board_code` 单独不足以判断来源，必须带 `source` |
 
-现状最易踩雷处：`fetch_board_stocks_with_zzshare_fallback` 里**同一个板块的三条腿用三种 id** —— F10 腿传 platecode、zzshare 腿传 801xxx、THS-AJAX 腿传 cid；而调用方手里只有 route 给的 code（冷/热路径还不一样）。
+现状最易踩雷处（已删）：`fetch_board_stocks_with_zzshare_fallback` 里**同一个板块的三条腿用三种 id** —— F10 腿传 platecode、zzshare 腿传 801xxx、THS-AJAX 腿传 cid；而调用方手里只有 route 给的 code（冷/热路径还不一样）。该函数 2026-09-11 删除，两条腿现在按 source 严格分开。
 
 ---
 
@@ -139,13 +137,13 @@ gnSection:  {"358":{"platecode":"886071","platename":"AI PC","cid":"309121",...}
 | concept 行但 `cid == code`（旧版布局把 platecode 写进了 cid 列） | 118 | **必须排除**（不是映射） |
 | industry 行（`cid == code`，identity） | 104 | 导入（identity，使 `resolve` 无启发式） |
 
-行数守恒（2026-09-11 按 Plan 1 Task 2 Step 1 的脚本复算）：797 = 192（`cid` 空）+ 118（`cid == code`）+ 104（industry）+ 376（genuine concept）+ 7（`code` **空**的行）。**最终 seed 产物 = 480 条**（376 + 104）。
+行数守恒（2026-09-11 按 Plan 1 Task 2 Step 1 的脚本复算）：797 = 192（`cid` 空）+ 118（`cid == code`）+ 104（industry）+ 376（genuine concept）+ 7（`code` **空**的行）。**最终 seed 产物 = 479 条**（376 + 104 − 1）。少的那 1 条是 `cid='300066'` + `code='803014'`：cid 形态合法但 platecode 是 zzshare 码，被 `_is_ths_platecode` 守卫拦下（2026-09-11 由验收清单发现 —— 它曾让 `/boards?source=ths` 吐出一个 803xxx 的板，并被 `update_cached_boards` 落库）。
 
 那 118 行的 `cid` 组成是 **885×98 / 886×12 / 883×1 / 803×6 / 710×1** —— 只有 **8 行**真是 zzshare code，其余 **110 行是 THS 自己的 platecode 被写进了 cid 列**。（早前版本把这整组说成 "zzshare code 被写进 cid 列"，是错的。）这些值都不与真 3xxxxx 碰撞，故不影响查表；但生成器与 loader 仍必须按 `cid` 首字符/长度校验，禁止把它们当作映射导入。
 
 **这 110 行在 §10.1 的 CSV 拆分时必须把 `cid` 置空**：它们的 `code` 前缀是 885/886，前缀拆分规则会把它们留在 `stock_board_ths.csv`；若 `cid` 原样保留，入库后就会出现 "ths 行的 `ths_cid` = 885xxx"，违反 §4 硬规则 6，并使 `resolve_ths_cid` 把一个 platecode 当作 cid 喂给 AJAX 腿——正是本 spec 要消灭的那类错配。
 
-**覆盖率口径（活库探测，不可由 in-tree artifact 复现）**：`stock_board` 中 `source='ths' AND cid IS NULL` 有 141 行，seed 的 480 条可解出其中 138 条（98%）；未覆盖的 3 条是 CSV 快照（2026-07-22）之后新建的板块。备份 CSV 里没有 3xxxxx 形状的 `board_code`（membership 备份 0 行、`stock_board` 备份 0 行），所以这组数字只能在活库上复算。
+**覆盖率口径（活库探测，不可由 in-tree artifact 复现）**：`stock_board` 中 `source='ths' AND cid IS NULL` 有 141 行，seed 的 479 条可解出其中 138 条（98%）；未覆盖的 3 条是 CSV 快照（2026-07-22）之后新建的板块。备份 CSV 里没有 3xxxxx 形状的 `board_code`（membership 备份 0 行、`stock_board` 备份 0 行），所以这组数字只能在活库上复算。
 
 ### 3.2 设计
 
@@ -306,7 +304,7 @@ CREATE TABLE IF NOT EXISTS ths_board_id_map (
 1. CSV 拆三份：
    - `stock_board_ths.csv`：仅 THS 原生行（platecode 885/886/881）+ **合法 cid**。**`cid` 必须按 `_is_ths_cid` 过滤后再写**：非 THS cid 形态的一律置空。实测需要置空的是 **110 行**（`cid == code == 885xxx/886xxx`，见 §3.1），另 8 行 `cid == code` 属 803/710/883 前缀、随前缀规则进 zzshare 文件（该文件 `cid` 一律留空）。
    - `stock_board_zzshare.csv`：原 801/803/710/883 行 relabel 为 `source='zzshare'`；`cid` 列一律置空（spec §4 硬规则 3）。
-   - `ths_board_id_map.csv`：新，**480 条**（376 concept cid + 104 industry identity）`(cid, platecode, name)`，可独立 diff / 回归。
+   - `ths_board_id_map.csv`：新，**479 条**（376 concept cid + 104 industry identity − 1 条 platecode 非 THS 形态）`(cid, platecode, name)`，可独立 diff / 回归。
 2. `stock_board_membership_ths.csv` → **整体 relabel 为 `source='zzshare'`**（新增 `stock_board_membership_zzshare.csv`），因其数据本就是 zzshare 抓取；**原文件删除**（保留原名会让每次 `STOCK_DB_INIT=true` 都把 zzshare 数据灌回 `source='ths'`）。代价：`source='ths'` 的反向索引冷启动为空，首次走既有 cold-fallback。
 3. `board_csv.py`：`_SUPPORTED_STOCK_BOARD_SOURCES` 增加 `zzshare`；`seed_all_from_backup_dir` 增加映射 CSV 的 seed，且**顺序在 board 之前**（侧栏行解析依赖 map）。
 4. 重建流程：`STOCK_DB_INIT=true` → seed CSV →（可选）`BOARD_BACKFILL_ON_STARTUP=true` 重灌 ths。

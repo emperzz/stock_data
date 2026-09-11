@@ -1649,16 +1649,37 @@ def _is_ths_cid(value: Any) -> bool:
     return value.startswith("3") or value.startswith("881")
 
 
+def _is_ths_platecode(value: Any) -> bool:
+    """True iff ``value`` is a THS *public* platecode (885xxx / 886xxx / 881xxx).
+
+    The counterpart of :func:`_is_ths_cid`, and needed for the same reason:
+    the legacy combined CSV carried a row with ``cid='300066'`` (a real THS
+    cid) but ``code='803014'`` — a zzshare code. Filtering on the cid alone
+    let that pair into the map, and the runtime board-list path then
+    advertised ``803014`` as a **ths** board_code. Caught by
+    ``tests/test_board_split_acceptance.py`` via the live checklist
+    (2026-09-11).
+    """
+    if not isinstance(value, str) or len(value) != 6:
+        return False
+    if not (value.isascii() and value.isdigit()):
+        return False
+    return value.startswith("885") or value.startswith("886") or value.startswith("881")
+
+
 def upsert_ths_board_id_map(
     rows: list[dict], conn: sqlite3.Connection | None = None
 ) -> int:
     """Upsert THS ``cid → platecode`` mappings. Returns the rows written.
 
-    Rows whose ``cid`` fails :func:`_is_ths_cid`, or that carry no
-    platecode, are skipped silently (the caller's row count is the
-    diagnostic). Last write wins, so callers merge *live* observations
-    after CSV seeds — the CSV is a snapshot, live data is authoritative
-    (spec §3.2).
+    A row is written only when BOTH halves are THS-shaped: the ``cid`` must
+    pass :func:`_is_ths_cid` (3xxxxx / 881xxx) and the ``platecode`` must
+    pass :func:`_is_ths_platecode` (885xxx / 886xxx / 881xxx). Rows failing
+    either check, or carrying no platecode, are skipped silently (the
+    caller's row count is the diagnostic).
+
+    Last write wins, so callers merge *live* observations after CSV seeds —
+    the CSV is a snapshot, live data is authoritative (spec §3.2).
     """
     if not rows:
         return 0
@@ -1673,7 +1694,7 @@ def upsert_ths_board_id_map(
             r.get("board_type") or "",
         )
         for r in rows
-        if _is_ths_cid(r.get("cid")) and r.get("platecode")
+        if _is_ths_cid(r.get("cid")) and _is_ths_platecode(r.get("platecode"))
     ]
     if not payload:
         return 0
