@@ -160,6 +160,27 @@ class TestParseIndustrySidebarFixture:
 class TestMergeConceptSources:
     """Lock the merge logic — gnSection primary, sidebar fills gaps."""
 
+    @pytest.fixture(autouse=True)
+    def empty_id_map(self, tmp_path, monkeypatch):
+        """Isolate ``ths_board_id_map`` for this class.
+
+        These cases assert on *unresolved* sidebar rows, so they need the
+        map to be known-empty. Without this they read the default SQLite
+        file (``stock_data/stock_cache.db``) and pass or fail depending on
+        whether the server ever seeded the map — which is exactly how the
+        2026-09-11 board-source split turned
+        ``test_sidebar_only_gets_null_platecode`` red (its cid ``301558``
+        IS in the seed, as ``885611``).
+        """
+        from stock_data.data_provider.persistence import board as board_mod
+        from stock_data.data_provider.persistence import db as db_mod
+
+        monkeypatch.setattr(db_mod, "_db_path", None)
+        monkeypatch.setattr(db_mod, "_conn", None)
+        monkeypatch.setattr(board_mod, "_schema_initialized_paths", set())
+        monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "t.db"))
+        board_mod.init_schema()
+
     def setup_method(self):
         self.fetcher = ThsFetcher()
 
@@ -171,13 +192,39 @@ class TestMergeConceptSources:
         assert merged[0]["name"] == "移动支付"
         assert merged[0]["platecode"] == "885333"
 
-    def test_sidebar_only_gets_null_platecode(self):
+    def test_sidebar_only_gets_null_platecode_when_unresolvable(self, monkeypatch):
+        # Both the map (empty, see the fixture) and the detail-page fallback
+        # must fail for a row to keep platecode=None. 309999 is absent from
+        # the seed CSV and the fake page carries no platecode.
+        monkeypatch.setattr(
+            ThsFetcher,
+            "_http_get_ths_board_index",
+            lambda self, url: "<html>没有代码</html>",
+        )
+        gn = [{"code": "300188", "name": "移动支付", "platecode": "885333", "source": "ths"}]
+        sb = [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+        merged = self.fetcher._merge_concept_sources(gn, sb)
+        by_cid = {r["code"]: r for r in merged}
+        assert by_cid["309999"]["platecode"] is None
+        assert by_cid["309999"]["name"] == "未收录概念"
+
+    def test_sidebar_only_resolved_from_map(self, monkeypatch):
+        """The mirror case: a seeded cid resolves without any fetch."""
+        from stock_data.data_provider.persistence import board as board_mod
+
+        board_mod.upsert_ths_board_id_map(
+            [{"cid": "301558", "platecode": "885611", "name": "阿里巴巴概念", "board_type": "concept"}]
+        )
+
+        def boom(self, url):
+            raise AssertionError("a seeded cid must not trigger a detail fetch")
+
+        monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", boom)
         gn = [{"code": "300188", "name": "移动支付", "platecode": "885333", "source": "ths"}]
         sb = [{"code": "301558", "name": "阿里巴巴概念", "source": "ths"}]
         merged = self.fetcher._merge_concept_sources(gn, sb)
         by_cid = {r["code"]: r for r in merged}
-        assert by_cid["301558"]["platecode"] is None
-        assert by_cid["301558"]["name"] == "阿里巴巴概念"
+        assert by_cid["301558"]["platecode"] == "885611"
 
     def test_sidebar_fills_missing_name(self):
         # gnSection row with empty name; sidebar should fill it
