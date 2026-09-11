@@ -375,8 +375,10 @@ class BoardsMixin:
             if not code:
                 continue
             board: dict[str, Any] = {
-                "code": code,
+                "board_code": code,
                 "name": str(rec.get(_CONCEPT_LIST_NAME_FIELD, "")).strip(),
+                # EastMoney boards are BKxxxx — no THS cid exists for them.
+                "ths_cid": None,
             }
             if include_quote:
                 for fc, ok in _BOARD_LIST_FIELD_MAP.items():
@@ -406,8 +408,9 @@ class BoardsMixin:
             if not code:
                 continue
             board: dict[str, Any] = {
-                "code": code,
+                "board_code": code,
                 "name": str(rec.get(_INDUSTRY_LIST_NAME_FIELD, "")).strip(),
+                "ths_cid": None,
             }
             if include_quote:
                 for fc, ok in _BOARD_LIST_FIELD_MAP.items():
@@ -511,7 +514,7 @@ class BoardsMixin:
                 ("industry", self.get_all_industry_boards),
             ):
                 for b in helper(source=source, include_quote=include_quote):
-                    b.setdefault("type", bt)
+                    b.setdefault("board_type", bt)
                     b.setdefault("subtype", bt)
                     tagged.append(b)
             return tagged
@@ -532,7 +535,7 @@ class BoardsMixin:
         # has a uniform shape. setdefault preserves any value the inner
         # helper already set (defensive — currently the helpers don't).
         for b in boards:
-            b.setdefault("type", board_type)
+            b.setdefault("board_type", board_type)
             b.setdefault("subtype", board_type)
         return boards
 
@@ -644,14 +647,15 @@ class BoardsMixin:
             try:
                 out.append(
                     {
-                        "code": r["f12"],
+                        "board_code": r["f12"],
+                        "ths_cid": None,
                         "name": r["f14"],
                         # EastMoney doesn't cleanly distinguish concept/industry at
                         # the stock-membership level (f152=2 for both). Default to
                         # "industry" as a fallback; the resolve_board_types call
                         # below overwrites these with the authoritative values from
                         # the local stock_board cache when the code is known there.
-                        "type": "industry",
+                        "board_type": "industry",
                         "subtype": "industry",
                         "change_pct": (r.get("f3") or 0) / 100,
                         "change_amount": (r.get("f4") or 0) / 100,
@@ -673,7 +677,7 @@ class BoardsMixin:
         try:
             from ...persistence.board import resolve_board_types
 
-            codes = [b["code"] for b in out if b.get("code")]
+            codes = [b["board_code"] for b in out if b.get("board_code")]
             overrides = resolve_board_types(codes, source="eastmoney")
         except Exception as e:
             logger.warning(
@@ -682,11 +686,11 @@ class BoardsMixin:
             )
             overrides = {}
         for b in out:
-            override = overrides.get(b["code"])
+            override = overrides.get(b["board_code"])
             if not override:
                 continue
-            if override.get("type"):
-                b["type"] = override["type"]
+            if override.get("board_type"):
+                b["board_type"] = override["board_type"]
             if override.get("subtype"):
                 b["subtype"] = override["subtype"]
         return out

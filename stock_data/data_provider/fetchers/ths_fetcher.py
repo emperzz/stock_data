@@ -1013,7 +1013,7 @@ class ThsFetcher(BaseFetcher):
             from ..persistence.board import get_board_metadata
 
             meta = get_board_metadata(board_code, "ths")
-            board_type = meta["type"] if meta and meta.get("type") else "concept"
+            board_type = meta["board_type"] if meta and meta.get("board_type") else "concept"
         elif board_type not in ("concept", "industry"):
             raise DataFetchError(
                 f"[ThsFetcher] get_board_history: board_type must be "
@@ -1429,8 +1429,8 @@ class ThsFetcher(BaseFetcher):
             from ..persistence.board import get_board_metadata
 
             meta = get_board_metadata(board_code, "ths")
-            if meta and meta.get("type"):
-                board_type = meta["type"]
+            if meta and meta.get("board_type"):
+                board_type = meta["board_type"]
             else:
                 raise DataFetchError(
                     f"[ThsFetcher] board_realtime: cannot determine board_type "
@@ -1445,12 +1445,12 @@ class ThsFetcher(BaseFetcher):
         # platecode directly; concept boards (and other non-industry
         # types) require a platecode→cid translation that's stored in
         # stock_board.
-        from ..persistence.board import _resolve_ths_cid_from_platecode
+        from ..persistence.board import resolve_ths_cid
 
         if board_type == "industry":
             cid = board_code
         else:
-            cid = _resolve_ths_cid_from_platecode(board_code)
+            cid = resolve_ths_cid(board_code)
             if not cid:
                 raise DataFetchError(
                     f"[ThsFetcher] board_realtime: no THS cid resolved for "
@@ -1682,9 +1682,13 @@ class ThsFetcher(BaseFetcher):
         rows = payload.get("data") or []
         return [
             {
-                "code": normalize_stock_code(str(r.get("quote_code", "")).strip()),
+                "board_code": normalize_stock_code(str(r.get("quote_code", "")).strip()),
                 "name": str(r.get("name", "")).strip(),
-                "type": "concept",
+                "board_type": "concept",
+                # The upstream gives the public quote_code only; the gn cid
+                # is not part of this payload. Uniform shape: every board
+                # row carries ths_cid (None = "not known here").
+                "ths_cid": None,
                 "subtype": THS_CONCEPT_SUBTYPE,
                 "change_pct": safe_float(r.get("price_change_ratio_pct")),
                 "up_count": safe_int(r.get("rise_cnt")),
@@ -1844,7 +1848,7 @@ class ThsFetcher(BaseFetcher):
             # missing keys with None so every row has a uniform shape
             # (no "key present or absent" branching for the caller).
             for r in rows:
-                r["type"] = bt
+                r["board_type"] = bt
                 r["subtype"] = THS_CONCEPT_SUBTYPE if bt == "concept" else THS_INDUSTRY_SUBTYPE
                 # Uniform shape: every row carries the full set of
                 # realtime fields. Concept rows from gnSection get
@@ -1938,9 +1942,9 @@ class ThsFetcher(BaseFetcher):
                 )
                 continue
             row: dict = {
-                "code": cid,
+                "ths_cid": cid,
                 "name": name,
-                "platecode": platecode,
+                "board_code": platecode,
                 "source": "ths",
             }
             # Real-time fields from gnSection. The numeric key (e.g.
@@ -1991,7 +1995,7 @@ class ThsFetcher(BaseFetcher):
                 if not slug or not name:
                     logger.debug(f"[ThsFetcher] sidebar anchor missing slug or name: href={href!r}")
                     continue
-                out.append({"code": slug, "name": name, "source": "ths"})
+                out.append({"ths_cid": slug, "name": name, "source": "ths"})
         return out
 
     @staticmethod
@@ -2033,9 +2037,9 @@ class ThsFetcher(BaseFetcher):
 
         by_cid: dict[str, dict] = {}
         for r in gn_section:
-            by_cid[r["code"]] = r
+            by_cid[r["ths_cid"]] = r
         for r in sidebar:
-            cid = r["code"]
+            cid = r["ths_cid"]
             if cid in by_cid:
                 # Fill missing name (gnSection should already have it,
                 # but a malformed upstream that left name empty benefits).
@@ -2045,7 +2049,7 @@ class ThsFetcher(BaseFetcher):
             platecode = resolve_ths_platecode(cid)
             if platecode is None:
                 platecode = ThsFetcher._resolve_platecode_from_detail(cid)
-            by_cid[cid] = {**r, "platecode": platecode}
+            by_cid[cid] = {**r, "board_code": platecode}
         return list(by_cid.values())
 
     @classmethod
@@ -2096,14 +2100,15 @@ class ThsFetcher(BaseFetcher):
         realtime field is overridden in-place — there is no field
         we keep from the sidebar row, since the sidebar has none.
 
-        For industry, ``code`` IS the platecode (881xxx). We still
-        emit ``platecode`` redundantly in the response so the
-        ``/boards`` response shape is uniform across concept/industry.
+        For industry, the cid IS the platecode (881xxx) — one value, two
+        roles. We emit it as ``board_code`` AND ``ths_cid`` so the row shape
+        is uniform across concept/industry (concept rows carry two distinct
+        values; industry rows carry the same one twice).
         """
         html = self._http_get_ths_board_index(self._THS_INDUSTRY_INDEX_URL)
         rows = self._parse_ths_thshy_sidebar(html)
         for r in rows:
-            r["platecode"] = r["code"]  # industry code == platecode
+            r["board_code"] = r["ths_cid"]  # industry cid == platecode
         if include_quote:
             quotes_by_name = self._fetch_ths_industry_summary()
             for r in rows:
@@ -2141,7 +2146,7 @@ class ThsFetcher(BaseFetcher):
                 name = a.get_text(strip=True)
                 if not slug or not name:
                     continue
-                out.append({"code": slug, "name": name, "source": "ths"})
+                out.append({"ths_cid": slug, "name": name, "source": "ths"})
         return out
 
     # Industry rank/summary endpoint — paginated, carries change_pct and

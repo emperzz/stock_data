@@ -173,14 +173,14 @@ def test_helper_mcap_yi_divides_by_1e8(empty_memberships):
 def test_helper_boards_from_ths_cache(monkeypatch):
     """boards = {source:'persistence', data:merged} when ths_cached + enrichment present."""
     cached_entry = {
-        "code": "300750",
+        "board_code": "300750",
         "name": "宁德时代",
-        "type": "concept",
+        "board_type": "concept",
         "subtype": "industry",
         "source": "ths",
     }
     fetcher_full = [
-        {"code": "300750", "name": "宁德时代", "change_pct": 20.0, "limit_up_count": 1},
+        {"board_code": "300750", "name": "宁德时代", "change_pct": 20.0, "limit_up_count": 1},
     ]
     monkeypatch.setattr(
         stock_board_cache,
@@ -210,7 +210,7 @@ def test_helper_boards_from_ths_cache(monkeypatch):
 
 def test_helper_boards_from_fetcher_full(monkeypatch):
     """没有 ths_cached 但有 fetcher_full → boards = {source:'ths', data:fetcher_full}。"""
-    fetcher_full = [{"code": "300750", "name": "宁德时代", "change_pct": 20.0}]
+    fetcher_full = [{"board_code": "300750", "name": "宁德时代", "change_pct": 20.0}]
     monkeypatch.setattr(
         stock_board_cache,
         "get_stock_memberships",
@@ -225,7 +225,12 @@ def test_helper_boards_from_fetcher_full(monkeypatch):
     profile = build_stock_profile(m, "300750")
     assert profile.boards is not None
     assert profile.boards["source"] == "ths"
-    assert profile.boards["data"] == fetcher_full
+    # boards["data"] is the boundary-mapped view of the raw fetcher rows
+    # (internal board_code → public code; ths_cid dropped; board_type absent
+    # on this fixture → public type None).
+    assert profile.boards["data"] == [
+        {"code": "300750", "name": "宁德时代", "change_pct": 20.0, "type": None}
+    ]
 
 
 def test_helper_boards_failure_appends_error(monkeypatch):

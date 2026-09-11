@@ -32,13 +32,13 @@ class TestBoardAPIRoutes:
             mock_get.return_value = (
                 [
                     {
-                        "code": "BK1048",
+                        "board_code": "BK1048",
                         "name": "互联网服务",
                         "board_type": "concept",
                         "source": "eastmoney",
                     },
                     {
-                        "code": "BK1049",
+                        "board_code": "BK1049",
                         "name": "云计算",
                         "board_type": "concept",
                         "source": "eastmoney",
@@ -59,7 +59,7 @@ class TestBoardAPIRoutes:
             mock_get.return_value = (
                 [
                     {
-                        "code": "BK0816",
+                        "board_code": "BK0816",
                         "name": "银行",
                         "board_type": "industry",
                         "source": "eastmoney",
@@ -100,15 +100,15 @@ class TestBoardAPIRoutes:
         ``subtype`` table.
         """
         concept_board = {
-            "code": "BK1048",
+            "board_code": "BK1048",
             "name": "互联网服务",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "concept",
         }
         industry_board = {
-            "code": "BK0816",
+            "board_code": "BK0816",
             "name": "银行",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "industry",
         }
         with patch(_PERSISTENCE_PATCH) as mock_get:
@@ -153,7 +153,7 @@ class TestBoardAPIRoutes:
             mock_get_boards.return_value = (
                 [
                     {
-                        "code": "BK1048",
+                        "board_code": "BK1048",
                         "name": "互联网服务",
                         "board_type": "concept",
                         "source": "eastmoney",
@@ -205,7 +205,7 @@ class TestBoardAPIRoutes:
             mock_mgr.get_all_boards.return_value = (
                 [
                     {
-                        "code": "BK1048",
+                        "board_code": "BK1048",
                         "name": "互联网服务",
                         "board_type": "concept",
                         "source": "eastmoney",
@@ -238,7 +238,7 @@ class TestBoardAPIRoutes:
             mock_get.return_value = (
                 [
                     {
-                        "code": "BK1048",
+                        "board_code": "BK1048",
                         "name": "互联网服务",
                         "board_type": "concept",
                         "source": "eastmoney",
@@ -270,7 +270,7 @@ class TestBoardAPIRoutes:
             mock_get.return_value = (
                 [
                     {
-                        "code": "BK1048",
+                        "board_code": "BK1048",
                         "name": "互联网服务",
                         "board_type": "concept",
                         "source": "eastmoney",
@@ -316,7 +316,7 @@ class TestBoardAPIRoutes:
             mock_get.return_value = (
                 [
                     {
-                        "code": "BK1048",
+                        "board_code": "BK1048",
                         "name": "互联网服务",
                         "board_type": "concept",
                         "source": "eastmoney",
@@ -350,19 +350,32 @@ class TestBoardsSourceUnification:
         assert response.status_code == 422
 
     def test_boards_list_source_ths_passes_through(self, client):
-        """/api/v1/boards?source=ths reaches persistence; source hardcoded to 'ths'."""
-        from unittest.mock import patch
+        """/api/v1/boards?source=ths routes to the ths leg ONLY — no cross-source blend.
+
+        ``fetch_boards_with_zzshare_backfill`` was deleted 2026-09-11
+        (spec §2 D2): post-split, ``source='ths'`` is one fetcher call, so
+        the assertion moves from "the merge helper receives no ``source``
+        kwarg" to "``manager.get_all_boards`` is called exactly once with
+        source='ths'" — which is what actually keeps zzshare out.
+        """
+        from unittest.mock import MagicMock, patch
 
         from stock_data.data_provider.persistence import board as board_mod
 
-        with patch.object(
-            board_mod, "fetch_boards_with_zzshare_backfill", return_value=[]
-        ) as mock_backfill:
+        mgr = MagicMock()
+        mgr.get_all_boards.return_value = ([], "ths")
+        forced_refresh = type("T", (), {"is_first_call": lambda *a: True})()
+
+        with (
+            patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
+            patch.object(board_mod, "update_cached_boards", return_value=0),
+            patch.object(board_mod, "_refresh_tracker", forced_refresh),
+        ):
             response = client.get("/api/v1/boards?type=concept&source=ths")
         assert response.status_code == 200
-        # The persistence helper is called without a 'source' arg (post-unification)
-        for call in mock_backfill.call_args_list:
-            assert "source" not in call.kwargs
+        assert mgr.get_all_boards.call_count == 1
+        assert mgr.get_all_boards.call_args.kwargs["source"] == "ths"
+        assert mgr.get_all_boards.call_args.kwargs["board_type"] == "concept"
 
     def test_board_stocks_source_zzshare_returns_422(self, client):
         """/api/v1/boards/885642/stocks?source=zzshare returns 422."""
@@ -370,46 +383,31 @@ class TestBoardsSourceUnification:
         assert response.status_code == 422
 
     def test_board_stocks_strict_source_routing_include_quote_false(self, client):
-        """?source=ths&include_quote=false: ZZSHARE primary, THS fallback.
+        """?source=ths&include_quote=false: THS F10 tier is the ONLY leg.
 
-        Post-2026-07-10 optimization: ``?source=ths`` is the only source
-        that allows cross-source fallback (per the user's plan). For
-        ``include_quote=False`` the helper prefers ZZSHARE first and only
-        falls back to THS when ZZSHARE returns 0 rows or raises. This
-        test covers the **fallback-to-THS** branch by having the
-        mocked ZZSHARE leg return 0 rows.
+        Pre-2026-09-11 this request ran a ZZSHARE-primary + THS-fallback
+        chain. That chain was deleted (spec §2 D2, strict isolation): the
+        F10 page is addressed by the **public platecode** and is the single
+        leg, so the test now pins the absence of the fallback — exactly one
+        manager call, source='ths', and the zzshare/AJAX method never
+        reached.
 
-        For ``include_quote=True``, ZZSHARE is forbidden as primary
-        (it carries no quote fields) — see
-        ``test_board_stocks_include_quote_true_strict_ths_routing``.
-
-        ``?refresh=true`` is added to bypass the per-day refresh tracker
-        + on-disk SQLite cache (both module/singleton-scoped). Without it,
-        the route's cache-hit branch short-circuits and the manager leg
-        mocks below are never invoked. The test is asserting the two-leg
-        fallback chain, so the call site must be the cold-path branch.
+        ``?refresh=true`` is added to bypass the per-day refresh tracker +
+        on-disk SQLite cache (both module/singleton-scoped). Without it the
+        cache-hit branch short-circuits and the manager mock is never
+        invoked.
         """
         from unittest.mock import MagicMock, patch
 
         from stock_data.data_provider.persistence import board as board_mod
 
-        call_records: list[dict] = []
-
-        def fake_mgr_get(board_code, *, source, include_quote=False, **_kw):
-            """Returns rows only on THS leg; on ZZSHARE leg returns [].
-            Records each call so the assertion below can inspect ordering."""
-            call_records.append(
-                {"source": source, "include_quote": include_quote, "board_code": board_code}
-            )
-            if source == "ths":
-                return [{"stock_code": "300740", "stock_name": "x"}], "ths"
-            return [], "zzshare"
-
         mgr = MagicMock()
-        mgr.get_board_stocks.side_effect = fake_mgr_get
+        mgr.get_board_stocks_full.return_value = (
+            [{"stock_code": "300740", "stock_name": "x"}],
+            "ths",
+        )
 
         with (
-            patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
             patch.object(board_mod, "update_cached_board_stocks", return_value=0),
             patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
         ):
@@ -418,22 +416,27 @@ class TestBoardsSourceUnification:
             )
         assert response.status_code == 200
         body = response.json()
-        # Two legs: ZZSHARE primary (0 rows), then THS fallback (1 row).
-        assert len(call_records) == 2
-        assert call_records[0]["source"] == "zzshare"
-        assert call_records[1]["source"] == "ths"
-        assert call_records[1]["board_code"] == "301558"  # cid translated
+        # ONE leg: THS F10, addressed by the public platecode (not a cid).
+        assert mgr.get_board_stocks_full.call_count == 1
+        first_call = mgr.get_board_stocks_full.call_args
+        assert first_call.kwargs["source"] == "ths"
+        assert first_call.kwargs["board_code"] == "885642"
+        # The zzshare leg is gone — nothing else may be invoked.
+        assert mgr.get_board_stocks.call_count == 0
         # Response carries effective_source='ths' (the leg that served).
         assert body["effective_source"] == "ths"
         assert body["data_source"] == "ths"
         assert len(body["stocks"]) == 1
 
     def test_board_stocks_include_quote_true_strict_ths_routing(self, client):
-        """?source=ths&include_quote=true: THS is the primary; zzshare is fill-in only.
+        """?source=ths&include_quote=true: ONE cid-addressed THS AJAX call.
 
-        2026-07-13: include_quote=true 总是调一次 ZZSHARE 拉全量成员清单
-        (suffix fill-in). 但 THS 仍然是 primary, 失败应 propagate. 此测试
-        验证: 两次调用, 第一次是 source=ths, 第二次是 source=zzshare (fill-in).
+        Pre-2026-09-11 (2026-07-13 contract) every include_quote=true
+        request fired a second, ZZSHARE-sourced call to fill in members
+        beyond the 50-row AJAX cap. That fill-in leg was deleted with the
+        rest of the cross-source plumbing (spec §2 D2), so the request is
+        now a single ``manager.get_board_stocks`` call addressed by the
+        internal THS cid.
         """
         from unittest.mock import MagicMock, patch
 
@@ -444,52 +447,43 @@ class TestBoardsSourceUnification:
             [{"stock_code": "300740", "stock_name": "x"}],
             "ths",
         )
-        # 2026-07-30: include_quote=True now also calls
+        # 2026-07-30: include_quote=True also calls
         # get_cached_market_quotes → manager.get_realtime_quotes("csi").
         # Mock to return empty list (no enrichment) for this strict-routing
         # test.
         mgr.get_realtime_quotes.return_value = ([], "")
         with (
-            patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
+            patch.object(board_mod, "resolve_ths_cid", return_value="301558"),
             patch.object(board_mod, "update_cached_board_stocks", return_value=0),
             patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
         ):
             response = client.get("/api/v1/boards/885642/stocks?source=ths&include_quote=true")
         assert response.status_code == 200
-        # include_quote=true 总是 2 次调用: THS primary + ZZSHARE fill-in.
-        assert mgr.get_board_stocks.call_count == 2
+        # Exactly one call: the THS AJAX tier, addressed by the resolved cid.
+        assert mgr.get_board_stocks.call_count == 1
         first_call = mgr.get_board_stocks.call_args_list[0]
         assert first_call.kwargs["source"] == "ths"
-        assert first_call.kwargs["board_code"] == "301558"
-        second_call = mgr.get_board_stocks.call_args_list[1]
-        assert second_call.kwargs["source"] == "zzshare"
+        assert first_call.kwargs["board_code"] == "301558"  # cid-addressed
+        # Strict isolation: zzshare is never a leg, in any position.
+        assert [c.kwargs["source"] for c in mgr.get_board_stocks.call_args_list] == ["ths"]
 
     def test_board_stocks_no_ths_zzshare_silent_fallback(self, client):
-        """?source=ths&include_quote=true: THS raising → NO silent zzshare swap.
+        """?source=ths&include_quote=true: an EMPTY ths result does NOT swap to zzshare.
 
-        2026-07-13: 之前的 contract 是 "ths fail → silent zzshare fallback".
-        新 contract: ths 是 primary, 失败 propagate 5xx. 但 include_quote=true
-        总是会 调 zzshare 做 fill-in (后于 ths, 不作为 fallback). 此测试
-        验证: ths 失败时, 第二次 ZZSHARE 调用仍发生 (fill-in), 但 ths 的
-        5xx propagate 出去. 在我们的实现里, ths raise 5xx 之前 ZZSHARE
-        不会被 fill-in 调用 (因为 stocks 空时直接返回). 所以 ths raise
-        → 仍然 5xx, call_count=1.
+        Pre-2026-09-11 an empty / failed THS leg could be silently replaced
+        by a ZZSHARE result. Strict isolation (spec §2 D2) removed the
+        second leg entirely: the empty result is served as-is — the route
+        maps it to 404 — and zzshare is never invoked.
         """
         from unittest.mock import MagicMock, patch
 
         from stock_data.data_provider.persistence import board as board_mod
 
         mgr = MagicMock()
-        # Strict routing: ths is the primary, raise propagates. zzshare is
-        # only used as fill-in AFTER ths succeeded (its return is non-empty).
-        mgr.get_board_stocks.side_effect = [
-            ([{"stock_code": "300740", "stock_name": "x"}], "ths"),
-            # If implementation falls back, this gets consumed; otherwise
-            # the test is invalid because ths should be raising.
-            ([{"stock_code": "999999", "stock_name": "should-not-be-called"}], "zzshare"),
-        ]
+        # The THS leg genuinely has nothing for this board.
+        mgr.get_board_stocks.return_value = ([], "ths")
         with (
-            patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
+            patch.object(board_mod, "resolve_ths_cid", return_value="301558"),
             patch.object(board_mod, "update_cached_board_stocks", return_value=0),
             # 2026-07-30: cross-endpoint quote fillup is out of scope for
             # this test (no MagicMock setup for get_realtime_quotes).
@@ -499,13 +493,10 @@ class TestBoardsSourceUnification:
             patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
         ):
             response = client.get("/api/v1/boards/885642/stocks?source=ths&include_quote=true")
-        assert response.status_code == 200
-        # Strict routing: ths succeeds → ZZSHARE fill-in is called (2 total).
-        assert mgr.get_board_stocks.call_count == 2
-        first_call = mgr.get_board_stocks.call_args_list[0]
-        assert first_call.kwargs["source"] == "ths"
-        second_call = mgr.get_board_stocks.call_args_list[1]
-        assert second_call.kwargs["source"] == "zzshare"
+        # Empty upstream result → 404, NOT a silent zzshare-sourced 200.
+        assert response.status_code == 404
+        assert mgr.get_board_stocks.call_count == 1
+        assert mgr.get_board_stocks.call_args.kwargs["source"] == "ths"
 
     def test_board_stocks_ths_raises_propagates_5xx(self, client):
         """?source=ths: THS raising propagates to 5xx — no silent zzshare swap."""
@@ -517,7 +508,7 @@ class TestBoardsSourceUnification:
         mgr = MagicMock()
         mgr.get_board_stocks.side_effect = DataFetchError("ths 503")
         with (
-            patch.object(board_mod, "_resolve_ths_cid_from_platecode", return_value="301558"),
+            patch.object(board_mod, "resolve_ths_cid", return_value="301558"),
             patch.object(board_mod, "update_cached_board_stocks", return_value=0),
             patch("stock_data.api.routes.boards.get_manager", return_value=mgr),
         ):

@@ -90,15 +90,15 @@ def snapshot_gn(fetcher) -> dict:
     mapped: dict[str, str] = {}
     names: dict[str, str] = {}
     for row in _FetcherClass._parse_gn_section(html):
-        cid = row.get("code")
-        platecode = row.get("platecode")
+        cid = row.get("ths_cid")
+        platecode = row.get("board_code")
         if cid and platecode:
             mapped[cid] = platecode
             names[cid] = row.get("name") or ""
     sidebar = _FetcherClass._parse_ths_gn_sidebar(html)
-    sidebar_cids = [r["code"] for r in sidebar if r.get("code")]
+    sidebar_cids = [r["ths_cid"] for r in sidebar if r.get("ths_cid")]
     for r in sidebar:
-        names.setdefault(r["code"], r.get("name") or "")
+        names.setdefault(r["ths_cid"], r.get("name") or "")
     return {"mapped": mapped, "names": names, "sidebar_cids": sidebar_cids}
 
 

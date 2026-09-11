@@ -177,12 +177,11 @@ _STOCK_BOARDS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
 _STOCK_BOARDS_SOURCE_ALIAS: dict[str, str] = {"zzshare": "ths"}
 
 
-# Board-stocks 专用 source 集合 (3 sources — ths/eastmoney/zhitu).
-# Post-2026-07-08 unification dropped `zzshare` from the public surface;
-# zzshare is no longer valid here (Literal returns 422), but the
-# underlying ZzshareFetcher.plates_stocks is still used internally by
-# fetch_board_stocks_with_zzshare_fallback for the include_quote=False
-# primary path.
+# Board-stocks source 集合 (3 sources — ths/eastmoney/zhitu).
+# `zzshare` is not in the public surface yet (Literal returns 422). It is
+# NOT used internally by any cross-source fallback any more — the
+# ZZSHARE-primary include_quote=False chain was deleted 2026-09-11
+# (spec §2 D2); that path is now THS F10 only.
 _BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = ("ths", "eastmoney", "zhitu")
 
 
@@ -197,11 +196,9 @@ def normalize_board_stocks_source(source: str) -> str:
     - ``eastmoney``: EastMoneyFetcher (push2his)
     - ``zhitu``: ZhituFetcher
 
-    ``zzshare`` is *internal only* (post-2026-07-08 unification): no
-    longer a public label. It's invoked transparently by
-    ``fetch_board_stocks_with_zzshare_fallback`` as a *fallback* for
-    ``source='ths'`` + ``include_quote=False`` requests — see that
-    helper's docstring for the routing rules.
+    ``zzshare`` is not a public label here. It is no longer invoked
+    transparently on ``source='ths'`` requests either: the cross-source
+    fallback was deleted 2026-09-11 (spec §2 D2 — strict isolation).
 
     Args:
         source: User-supplied source name (e.g. ``"ths"``).
@@ -672,21 +669,16 @@ def get_board_list(
     if manager is None:
         raise ValueError("manager is required when refresh=True or cache miss")
 
-    if source == "ths":
-        boards = fetch_boards_with_zzshare_backfill(
-            board_type=board_type,
-            refresh=refresh,
-            include_quote=include_quote,
-            subtype=None,
-            manager=manager,
-        )
-    else:
-        boards, _ = manager.get_all_boards(
-            source=source,
-            board_type=board_type,
-            subtype=None,
-            include_quote=include_quote,
-        )
+    # One call per source, no merge branch. `ths` used to route through
+    # fetch_boards_with_zzshare_backfill, which blended zzshare rows into
+    # the ths namespace by board name — the mechanism behind spec §1.3's
+    # 240 mislabelled rows. Strict isolation (spec §2 D2) deletes it.
+    boards, _ = manager.get_all_boards(
+        source=source,
+        board_type=board_type,
+        subtype=None,
+        include_quote=include_quote,
+    )
 
     if boards:
         update_cached_boards(board_type, source, boards)
@@ -756,14 +748,15 @@ def _get_all_board_types(
                 f"({origin}); partial result may be incomplete."
             )
         for b in boards:
-            code = b.get("code")
-            if not code or code in seen_codes:
-                if code in seen_codes:
+            board_code = b.get("board_code")
+            if not board_code or board_code in seen_codes:
+                if board_code in seen_codes:
                     logger.debug(
-                        f"[BoardCache] dropping duplicate code '{code}' (kept first occurrence)"
+                        f"[BoardCache] dropping duplicate board_code "
+                        f"'{board_code}' (kept first occurrence)"
                     )
                 continue
-            seen_codes.add(code)
+            seen_codes.add(board_code)
             combined.append(b)
 
     if origins == {"persistence"}:
@@ -776,497 +769,33 @@ def _get_all_board_types(
     return combined, summary
 
 
-def _resolve_ths_cid_from_code(code: str) -> str | None:
-    """Resolve THS cid for a given public board code via the stock_board cache.
+def resolve_ths_cid(board_code: str) -> str | None:
+    """Resolve the THS internal cid for a THS public board_code.
 
-    Single SELECT against stock_board. The same query handles both
-    concept boards (cid ≠ code: 300xxx vs 885xxx) and industry
-    boards (cid == code: 881xxx) — for industry the row's
-    ``code`` and ``cid`` columns both store 881xxx (redundant but
-    consistent). No special-casing by length or prefix; the data
-    layer is the single source of truth.
+    Returns ``None`` when no THS row exists, or when the row's ``cid``
+    column is NULL. **There is deliberately no fallback to ``code``.**
 
-    Defensive NULL fallback: if a legacy / partially-migrated row
-    has ``cid IS NULL`` (which only happens for eastmoney / zhitu,
-    or for THS rows that pre-date the post-2026-07-20 schema fix),
-    fall back to ``code`` so callers always see a usable cid for
-    THS-routed boards.
+    That fallback is what let a zzshare plate code (801xxx) be handed to
+    ThsFetcher as if it were a cid (spec §1.3, mechanism 5), and it also
+    masked genuinely-unresolvable boards behind a plausible-looking value.
+    Industry rows keep ``cid == code`` (881xxx) by construction, so they
+    resolve normally without any special case.
 
     Args:
-        code: THS public board code (e.g. '885642' for concept,
-            '881270' for industry). Pre-2026-07-20 callers referred
-            to this as the ``platecode``; the conceptual name sticks
-            even though the SQLite column is ``code`` now.
+        board_code: THS public board code — 885xxx/886xxx (concept) or
+            881xxx (industry).
 
     Returns:
-        The THS cid (3xxxxx for concept, == code for industry),
-        or None if no row matches. Callers treat None as
-        "no cid available — skip ThsFetcher path, rely on zzshare".
+        The THS cid (3xxxxx for concept, == board_code for industry), or
+        ``None`` when unknown. Callers treat ``None`` as "cannot address
+        this board on the AJAX tier".
     """
     init_schema()
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT code, cid FROM stock_board WHERE code = ? AND source = 'ths' LIMIT 1",
-        (code,),
-    )
-    row = cursor.fetchone()
-    if row is None:
-        return None
-    # cid is the source of truth post-migration; fall back to code
-    # only when a legacy / partial-migration row left cid NULL.
-    return row["cid"] if row["cid"] is not None else row["code"] if row["code"] else None
-
-
-# Backward-compat alias — pre-2026-07-20 callers (ThsFetcher, several tests)
-# imported this name. Renaming the underlying function to
-# ``_resolve_ths_cid_from_code`` reflects the column rename; the old alias
-# is kept so existing imports still resolve.
-_resolve_ths_cid_from_platecode = _resolve_ths_cid_from_code
-
-
-def _merge_ths_zzshare_by_name(
-    ths_rows: list[dict],
-    zzshare_rows: list[dict],
-) -> list[dict]:
-    """Merge THS(primary) + ZZSHARE(platecode backfill) by board name.
-
-    Cross-source asymmetry (verified 2026-07-09): ZzshareFetcher stores
-    the plate_code value under ``code`` and does NOT emit a separate
-    ``platecode`` field. Earlier versions of this helper built the
-    backfill index by reading ``r.get("platecode")`` on zzshare rows —
-    always None — which silently disabled the backfill and caused
-    412/797 rows in ``stock_board`` to be persisted with ``platecode=NULL``.
-    We normalize zzshare rows to promote ``code`` → ``platecode`` here
-    so the same merge logic works against real fetcher output.
-
-    Contract:
-      - Every output row carries ``platecode`` (non-NULL when a code is
-        known) and ``source='ths'`` regardless of origin.
-      - THS rows that already carry ``platecode`` are kept as-is.
-      - THS sidebar-only rows (platecode=None) are backfilled by name
-        from the matching zzshare row's ``code`` (the plate_code).
-      - zzshare rows not matched by any THS row are appended; their
-        ``platecode`` is set to their own ``code``.
-      - Dedup by (code, name) guards against upstream double-emit
-        (rare; seen once in THS gnSection duplicates 2026-07-08). This
-        is a second-layer safety net behind ThsFetcher's own internal
-        `_merge_concept_sources` dedup (ths_fetcher.py:1300).
-
-    **In-place mutation**: Both input lists' dicts are mutated in place
-    (``platecode`` backfilled or promoted, ``source='ths'`` set on
-    every row). Callers must not reuse the input lists after this call.
-
-    Empty input edge cases:
-      - ths=[] + zz=[] → []
-      - ths=[] + zz=non-empty → all zzshare rows appended
-      - ths=non-empty + zz=[] → ths rows returned as-is
-    """
-    # ZzshareFetcher.get_all_boards does not emit a 'platecode' field —
-    # its plate_code value lives under 'code' only. Promote it here so
-    # the backfill index below can read r['platecode'] uniformly.
-    by_name: dict[str, str] = {}
-    for r in zzshare_rows:
-        if r.get("platecode") is None and r.get("code"):
-            r["platecode"] = r["code"]
-        name = r.get("name", "")
-        if name and r.get("platecode"):
-            by_name[name] = r["platecode"]
-
-    out: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    ths_names: set[str] = set()
-    for r in ths_rows:
-        if not r.get("platecode") and r.get("name") in by_name:
-            r["platecode"] = by_name[r["name"]]
-        key = (r.get("code", ""), r.get("name", ""))
-        if key in seen:
-            continue
-        seen.add(key)
-        ths_names.add(r.get("name", ""))
-        r["source"] = "ths"
-        out.append(r)
-    for r in zzshare_rows:
-        # Same name already represented by a THS row — THS wins (THS cid
-        # is the canonical code; zzshare's plate_code is metadata).
-        if r.get("name", "") in ths_names:
-            continue
-        key = (r.get("code", ""), r.get("name", ""))
-        if key in seen:
-            continue
-        seen.add(key)
-        r["source"] = "ths"
-        out.append(r)
-    return out
-
-
-def _normalize_zzshare_list_quote_units(rows: list[dict]) -> None:
-    """Convert ZZSHARE ``plates_rank`` monetary fields to THS board-list semantics (in place).
-
-    ZZSHARE's ``plates_rank`` emits ``trade_money`` → ``amount`` and
-    ``market_cap_cir`` → ``total_mv`` as raw **元** (verified live
-    2026-09-09: 有色冶炼加工 amount = 1.03e11). The THS industry-rank rows
-    merged against it emit ``amount`` in **亿元** (半导体 = 1738.4). Left
-    unnormalized, a single ``get_board_list(source='ths')`` response mixes
-    two 1e8-apart scales, making ``amount`` non-comparable across rows (and
-    every downstream ×1e8 conversion double-blows the ZZSHARE rows).
-
-    Canonical merged-row unit (documented contract): ``amount`` 亿元.
-    ``total_mv`` has no THS counterpart column in the merged list, so it
-    keeps its native 元 value (a per-row market cap, not comparable to any
-    other row's ``amount``). ``change_pct`` is unit-free on both sources.
-
-    No-op when the rows carry no quote fields (``include_quote=False``
-    rows are bare ``{code, name, type, subtype}``), and when zzshare maps a
-    non-numeric value to ``None`` via ``safe_float``.
-    """
-
-    for r in rows:
-        amt = r.get("amount")
-        if isinstance(amt, (int, float)) and not isinstance(amt, bool):
-            r["amount"] = amt / 1e8  # 元 → 亿元
-
-
-def fetch_boards_with_zzshare_backfill(
-    board_type: str | None,
-    refresh: bool,
-    include_quote: bool,
-    subtype: str | None,
-    manager,
-) -> list[dict]:
-    """Return unified board list with ths as primary, zzshare as platecode backfill.
-
-    Behavior:
-    - Always writes source='ths' to the cache (single source).
-    - Always calls both ThsFetcher and ZzshareFetcher; merge by name.
-    - When board_type is None, iterates every type VALID_SUBTYPES_BY_SOURCE['ths']
-      supports (currently concept + industry; index/special are NOT exposed by
-      ths — they fall through to persistence for eastmoney/zhitu callers).
-    - When subtype is given, applies after merge (post-filter in memory).
-    - When include_quote=True, the include_quote flag is forwarded to both
-      ThsFetcher and ZzshareFetcher; zzshare's quote fields are sparse
-      (only change_pct/amount/total_mv) so post-merge rows may have None
-      for fields THS doesn't supply either. zzshare's ``amount`` (raw 元)
-      is normalized to 亿元 before merge so every merged row shares the
-      THS board-list amount scale (see _normalize_zzshare_list_quote_units).
-    - ``refresh`` is accepted for call-site symmetry with the surrounding
-      ``get_board_list`` wrapper (which decides cache vs. fresh fetch);
-      this helper always fetches fresh data and ignores the value.
-
-    Returns:
-        list of {code, name, type, subtype, source, platecode, ...quote}
-        where source='ths' on every row (zzshare rows are tagged with the
-        same label after merge; the distinction is internal).
-
-    Raises:
-        DataFetchError: ThsFetcher's call failed. ZzshareFetcher failures
-        are logged at WARNING and treated as empty list (best-effort
-        backfill; primary path is THS).
-    """
-    types_to_fetch: list[str]
-    if board_type is None:
-        # Iterate every type ths supports (concept + industry currently).
-        # Falls back to "concept" if the metadata table is somehow empty.
-        ths_table = VALID_SUBTYPES_BY_SOURCE.get("ths", {})
-        types_to_fetch = list(ths_table.keys()) or ["concept", "industry"]
-    elif board_type in ("concept", "industry"):
-        types_to_fetch = [board_type]
-    else:
-        # index / special are not exposed by ths; return empty
-        return []
-
-    out: list[dict] = []
-    for bt in types_to_fetch:
-        ths_rows: list[dict] = []
-        try:
-            ths_rows, _ = manager.get_all_boards(
-                source="ths",
-                board_type=bt,
-                subtype=None,
-                include_quote=include_quote,
-            )
-        except DataFetchError as e:
-            logger.warning(
-                f"[BoardCache] fetch_boards_with_zzshare_backfill: ths({bt}) failed: {e}"
-            )
-            # ThsFetcher failure is fatal for this bt — skip it.
-            continue
-
-        zz_rows: list[dict] = []
-        try:
-            zz_rows, _ = manager.get_all_boards(
-                source="zzshare",
-                board_type=bt,
-                subtype=None,
-                include_quote=include_quote,
-            )
-        except Exception as e:
-            logger.warning(
-                f"[BoardCache] fetch_boards_with_zzshare_backfill: "
-                f"zzshare({bt}) failed (best-effort): {e}"
-            )
-            zz_rows = []
-
-        # ZZSHARE plates_rank quotes are 元-native; THS list quotes are
-        # 亿元-native. Normalize before merge so every merged row shares
-        # one amount scale (see _normalize_zzshare_list_quote_units).
-        _normalize_zzshare_list_quote_units(zz_rows)
-
-        merged = _merge_ths_zzshare_by_name(ths_rows, zz_rows)
-        # Subtype filter is applied per-type post-merge (in-memory).
-        if subtype is not None:
-            merged = [r for r in merged if r.get("subtype") == subtype]
-        out.extend(merged)
-    return out
-
-
-def fetch_board_stocks_with_zzshare_fallback(
-    board_code: str,
-    source: str,
-    include_quote: bool,
-    manager,
-    *,
-    sort_by: str | None = None,  # 2026-07-13: 透传到 ths
-    sort_order: str = "desc",
-    top_n: int = 50,
-) -> tuple[list[dict], str, str, str | None]:
-    """Get stocks for a board — STRICTLY source-routed with one cross-source fallback.
-
-    Behaviour rules per source (per the 2026-07-10 optimization
-    discussion; effective_source is ALWAYS populated, per the P4 product
-    decision):
-
-    - ``source='ths'``:
-        * ``include_quote=True`` → THS is the only fetcher that emits
-          realtime quote fields (price / change_pct / amount / …). On
-          ``DataFetchError``, propagate so the route returns 5xx
-          (zzshare fallback is forbidden here — its stocks carry no
-          quote fields and the response shape would silently degrade).
-          The new 2026-07-13 kwargs (``sort_by`` / ``sort_order`` /
-          ``top_n``) are forwarded to THS so the response honours the
-          user's sort+top-N contract.
-        * ``include_quote=False`` → prefer zzshare first (lighter
-          request, no quote enrichment needed); on zzshare
-          ``DataFetchError`` OR empty-rows, fall back to THS. The
-          route layer surfaces the actual fetcher via the
-          ``effective_source`` field so the client can tell whether
-          fallback fired. The sort/top-N kwargs are NOT forwarded to
-          the include_quote=False branches (zzshare / THS-fallback) —
-          the route layer 400-asserts those kwargs are at defaults
-          whenever ``include_quote=False``.
-
-    - ``source='zzshare'`` (internal label only; Literal at the route
-      layer rejects it post-2026-07-08 unification): call ZzshareFetcher
-      with the platecode. Errors propagate.
-    - ``source='eastmoney'`` / ``source='zhitu'``: call the named
-      fetcher with the platecode (these fetchers do not require cid
-      translation). Errors propagate.
-
-    Args:
-        board_code: Public platecode (e.g. ``'885642'``). For ``ths``
-            the helper looks up the THS concept cid internally.
-        source: Fetcher slug. One of ``'ths'``, ``'zzshare'``,
-            ``'eastmoney'``, ``'zhitu'``.
-        include_quote: Forwarded to the fetcher. Affects routing
-            inside the THS branch (above).
-        manager: Required. ``DataFetcherManager`` instance.
-        sort_by: 2026-07-13 — forwarded to the THS leg
-            (``source='ths' + include_quote=True``). See
-            ``ThsFetcher._THS_BOARD_STOCKS_SORT_FIELD_MAP`` for the
-            accepted set. Other branches ignore this kwarg.
-        sort_order: 2026-07-13 — ``"asc"`` / ``"desc"``. Same
-            forwarding rules as ``sort_by``.
-        top_n: 2026-07-13 — max number of THS rows. Same forwarding
-            rules as ``sort_by``.
-
-    Returns:
-        ``(stocks, source_label, effective_source, reason)`` — 4-tuple:
-          - ``stocks``: list of stock dicts (potentially empty).
-          - ``source_label``: fetcher name matching the user's
-            ``?source=`` (the *requested* source). For all branches
-            except the THS+include_quote=False fallback path, this
-            equals ``effective_source``.
-          - ``effective_source``: the fetcher name that *actually
-            served* the response (per P4: ALWAYS populated). When it
-            differs from ``source_label``, the route response carries
-            an actionable ``effective_source`` field so the client can
-            tell the response came from a fallback fetcher.
-          - ``reason``: optional annotation for the empty-result case.
-            Currently only one value: ``"cid_unresolved"`` — when
-            ``_resolve_ths_cid_from_platecode`` returned ``None`` and
-            the helper could not perform any fetch. ``None`` for all
-            other branches. The route layer maps ``reason="cid_unresolved"``
-            to a 422 response (see ``api/routes/boards.py``).
-
-        Note: this helper returns the bare 4-tuple above. The trailing
-        ``quote_truncated`` / ``quote_total_in_board`` 6-tuple fields
-        are only appended by ``get_board_stocks`` (which owns the
-        50-stock heuristic + ZZSHARE fill-in logic). Callers that need
-        the heuristic fields must compose them on top of this helper.
-
-    Raises:
-        DataFetchError: the chosen fetcher raised and no fallback was
-            applicable (or the fallback also raised). Propagates so
-            the route layer returns 5xx rather than masking the error.
-        ValueError: ``source`` is not one of the four supported slugs.
-    """
-    if source == "ths":
-        # Resolve board_type once (single SELECT against stock_board).
-        # ThsFetcher.get_board_stocks picks /thshy/ vs /gn/ on this;
-        # without it industry AJAX silently hits the concept endpoint
-        # and returns 404. None is tolerated (defaults to "gn").
-        _meta = get_board_metadata(board_code, "ths")
-        ths_board_type = _meta.get("type") if _meta else None
-
-        # include_quote=True: THS is mandatory — zzshare has no quote
-        # fields, falling back would silently degrade the response to
-        # null quotes. Propagate any failure unchanged. 2026-07-13:
-        # forward sort_by/sort_order/top_n to THS so the user contract
-        # (board-stocks top-N + sort) is honored end-to-end.
-        if include_quote:
-            cid = _resolve_ths_cid_from_platecode(board_code)
-            if not cid:
-                return [], "ths", "ths", "cid_unresolved"
-            try:
-                rows, _ = manager.get_board_stocks(
-                    board_code=cid,
-                    source="ths",
-                    include_quote=True,
-                    board_type=ths_board_type,
-                    sort_by=sort_by,
-                    sort_order=sort_order,
-                    top_n=top_n,
-                )
-            except DataFetchError:
-                raise
-            return rows, "ths", "ths", None
-
-        # include_quote=False: prefer THS F10 full (90+ members, no quote).
-        # Added 2026-07-20 per spec §3.5.1: the F10 page server-renders
-        # the full concept membership without the 50-stock cap that q.10jqka
-        # AJAX enforces. Falls back to the existing ZZSHARE primary + THS
-        # AJAX chain on any failure or empty result.
-        #
-        # Graceful degradation: if the manager's ``get_board_stocks_full``
-        # is unconfigured (older test mocks) or returns a non-2-tuple
-        # (MagicMock quirks), we silently skip the F10 leg and fall through
-        # to ZZSHARE primary. The check is on the *return shape*, not the
-        # call success — MagicMock auto-creates the attribute so
-        # ``hasattr`` is unreliable here.
-        f10_full = getattr(manager, "get_board_stocks_full", None)
-        if callable(f10_full):
-            try:
-                # Forward ths_board_type so the fetcher picks the right
-                # extraction strategy — concept uses ``#concept_data``
-                # JSON, industry uses inline ``onclick="changecode(...)"``.
-                # Without this kwarg, an industry request silently falls
-                # through to the concept JSON parser (which returns [])
-                # and then to ZZSHARE, misreporting
-                # ``effective_source="zzshare"``.
-                _f10_ret = f10_full(
-                    board_code=board_code,
-                    source="ths",
-                    board_type=ths_board_type,
-                )
-            except TypeError as ty_err:
-                # TypeError: legacy mock managers don't accept kwargs.
-                # Re-raise so test failures surface; production
-                # DataFetcherManager always accepts the kwargs.
-                raise ty_err
-            except DataFetchError as f10_err:
-                logger.info(
-                    f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                    f"ths F10 raised DataFetchError for board={board_code}; "
-                    f"falling back to zzshare primary "
-                    f"({type(f10_err).__name__}: {f10_err})"
-                )
-                _f10_ret = None
-            except Exception as f10_err:
-                logger.info(
-                    f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                    f"ths F10 raised for board={board_code}; "
-                    f"falling back to zzshare primary "
-                    f"({type(f10_err).__name__}: {f10_err})"
-                )
-                _f10_ret = None
-            # Verify it's a 2-tuple; otherwise skip (mock quirk).
-            if _f10_ret is not None and (
-                isinstance(_f10_ret, tuple) and len(_f10_ret) == 2 and isinstance(_f10_ret[0], list)
-            ):
-                f10_rows, _ = _f10_ret
-                if f10_rows:
-                    return f10_rows, "ths", "ths", None
-                logger.info(
-                    f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                    f"ths F10 returned 0 rows for board={board_code}; "
-                    f"falling back to zzshare primary"
-                )
-            # else: fall through to ZZSHARE primary
-
-        # include_quote=False (continued): prefer zzshare (lighter request,
-        # no quote enrichment). Fall back to ths on any DataFetchError
-        # OR zzshare-returned-empty (consistent with prior behaviour
-        # that 404 was treated as 'nothing here'). Both branches
-        # populate effective_source so the client sees what fired.
-        try:
-            rows, _ = manager.get_board_stocks(
-                board_code=board_code,
-                source="zzshare",
-                include_quote=False,
-            )
-        except DataFetchError as zz_err:
-            logger.info(
-                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"zzshare raised for board={board_code}; "
-                f"falling back to ths ({type(zz_err).__name__}: {zz_err})"
-            )
-        else:
-            if rows:
-                return rows, "ths", "zzshare", None
-            logger.info(
-                f"[BoardCache] fetch_board_stocks_with_zzshare_fallback: "
-                f"zzshare returned 0 rows for board={board_code}; "
-                f"falling back to ths"
-            )
-
-        # THS fallback path (include_quote=False from user).
-        cid = _resolve_ths_cid_from_platecode(board_code)
-        if not cid:
-            return [], "ths", "ths", "cid_unresolved"  # cid unresolved → empty; no fetch happened
-        try:
-            rows, _ = manager.get_board_stocks(
-                board_code=cid,
-                source="ths",
-                include_quote=False,
-                board_type=ths_board_type,
-            )
-        except DataFetchError:
-            raise
-        return rows, "ths", "ths", None
-
-    if source == "zzshare":
-        try:
-            rows, _ = manager.get_board_stocks(
-                board_code=board_code,
-                source="zzshare",
-                include_quote=include_quote,
-            )
-        except DataFetchError:
-            raise
-        return rows, "zzshare", "zzshare", None
-
-    if source in ("eastmoney", "zhitu"):
-        try:
-            rows, _ = manager.get_board_stocks(
-                board_code=board_code,
-                source=source,
-                include_quote=include_quote,
-            )
-        except DataFetchError:
-            raise
-        return rows, source, source, None
-
-    raise ValueError(f"fetch_board_stocks_with_zzshare_fallback: unsupported source {source!r}")
+    row = get_connection().execute(
+        "SELECT cid FROM stock_board WHERE code = ? AND source = 'ths' LIMIT 1",
+        (board_code,),
+    ).fetchone()
+    return row["cid"] if row and row["cid"] else None
 
 
 def _enrich_rows_with_market_quote(
@@ -1378,99 +907,70 @@ def get_board_stocks(
 ) -> tuple[list, str, str, str | None, bool, int]:
     """Get stocks belonging to a board with automatic refresh.
 
-    Cache is keyed on the public board_code (not on source — different
-    sources all normalize to the same THS platecode). Cache hits return
-    origin="persistence". Cache misses call
-    ``fetch_board_stocks_with_zzshare_fallback`` which (post-2026-07-10):
-      * Strictly honors the user-chosen ``source`` for the *primary*
-        route.
-      * For ``source='ths'`` + ``include_quote=False`` only, prefers
-        ZZSHARE first and falls back to THS (see the helper docstring).
-      * Exposes ``effective_source`` so the route / client can tell
-        whether a fallback fired.
+    Cache is keyed on the public board_code (not on source — a row written
+    by one source is never served to another; see spec §7). Cache hits
+    return origin="persistence".
 
-    Note (P3, 2026-07-10): rows written into the cache are always
-    tagged with ``source='ths'`` regardless of the upstream that
-    served them (post-unification policy). When ZZSHARE served the
-    fetch, the cached rows **lack quote fields** (zzshare emits only
-    stock_code / stock_name / exchange). The next caller using
-    ``?include_quote=true`` will still bypass the cache (the
-    ``needs_refresh`` flag forces a fresh THS fetch), so they don't
-    see "apparent None quotes". Pass ``?refresh=true`` if you need to
-    force a fresh THS fetch *and* the data is currently a ZZSHARE-served
-    cache row.
+    Cache miss: ONE source, ONE tier, no cross-source fallback (spec §2 D2).
 
-    2026-07-13 (board-stocks top-N + sort): the return shape is now
-    6-tuple. The new tail entries are:
+      * ``include_quote=False`` → the THS F10 page: full membership
+        (90+ concept / 150-180 industry), addressed by the public
+        platecode, no quote columns. Falls back to the SQLite copy on
+        upstream failure (reason="stale_after_upstream_failure").
+      * ``include_quote=True`` → the THS AJAX endpoint: `top_n` rows,
+        addressed by THS's internal **cid**, hard-capped at 50 by
+        upstream. Quote fields are then union-filled from the /stocks
+        full-market quote cache. An unresolvable cid returns
+        ``reason="cid_unresolved"``.
 
-      * ``quote_truncated`` (bool) — True if the response is a *partial*
-        snapshot: the THS leg returned exactly ``THS_HARD_CAP`` rows
-        (50) and we suspect the real membership may be larger. The
-        caller-facing 50-stock heuristic (the THS upstream hard cap) is
-        mitigated by an opportunistic ZZSHARE fill-in: we call
-        ``manager.get_board_stocks(source='zzshare', include_quote=False)``
-        and append any ZZSHARE members *not* already in the THS top-N
-        as a suffix with no quote fields. When the suffix is non-empty,
-        ``quote_truncated=True``. When ZZSHARE also returns empty /
-        errors, ``quote_truncated=True`` is reported conservatively —
-        the client should treat the result as potentially incomplete
-        (cannot be distinguished from "board really has 50 stocks").
-      * ``quote_total_in_board`` (int) — best-effort count of the
-        board's full membership (THS top-N + ZZSHARE suffix) when the
-        heuristic fired; otherwise the row count we actually returned.
-
-    The 50-stock heuristic is gated on ``include_quote=True`` (only
-    THS quote-fetched responses are size-capped; cache-hit
-    ``include_quote=False`` paths return all rows from the cache table,
-    which historically holds the full membership).
+    ``source`` is strictly routed: ``?source=ths`` never reaches zzshare
+    and vice versa. Before 2026-09-11 ``?source=ths`` + include_quote=False
+    ran a ZZSHARE-primary chain internally; that is gone.
 
     Args:
-        board_code: THS platecode (885xxx concept / 881xxx industry).
-        source: User's chosen fetcher; defaults to ``'ths'`` for
-            backward compatibility with the pre-strict-routing callers.
-            Strictly routed downstream.
+        board_code: THS platecode (885xxx/886xxx concept, 881xxx industry).
+        source: The fetcher slug to serve from. Strictly routed.
         refresh: If True, force refresh from upstream.
-        include_quote: If True, always fetch fresh realtime data from upstream.
-        manager: DataFetcherManager instance. Required when fetching from upstream.
-        sort_by: 2026-07-13 — forwarded to THS (THS supported set;
-            ignored for other sources). Default None = THS default
-            (currently ``"change_pct"``).
-        sort_order: 2026-07-13 — ``"asc"`` / ``"desc"``. Default ``"desc"``.
-        top_n: 2026-07-13 — max THS rows. Default 50. THS upstream
-            hard cap is 50; the heuristic at 50+ triggers the
-            ZZSHARE suffix fill-in.
+        include_quote: Selects the tier (see above).
+        manager: DataFetcherManager instance. Required when fetching from
+            upstream.
+        sort_by: Forwarded to THS (supported set only). Default None =
+            THS default (currently ``"change_pct"``).
+        sort_order: ``"asc"`` / ``"desc"``. Default ``"desc"``.
+        top_n: Max AJAX rows. Default 50; THS's upstream hard cap for that
+            endpoint is also 50.
 
     Returns:
         6-tuple ``(stocks, origin, effective_source, reason,
         quote_truncated, quote_total_in_board)``:
-          - ``stocks`` is the list of stock dicts (top-N + suffix
-            merged when the heuristic fired; otherwise just the
-            fetcher's response).
-          - ``origin`` is ``"persistence"`` (cache hit) or the
-            requested fetcher slug (cache miss path), as before.
-          - ``effective_source`` is always populated to the fetcher
-            slug that actually served the response — *post-fix* this is
-            always a non-empty string. ``query_source vs effective_source``
-            at the route layer tells the client whether the fallback fired.
-          - ``reason``: optional annotation, currently only
-            ``"cid_unresolved"`` when the THS cid-index cache missed
-            for the board_code and no fetch was attempted. ``None`` in
-            all other cases. The route layer maps
-            ``reason="cid_unresolved"`` to HTTP 422; ``None`` (or any
-            other empty-result case) maps to HTTP 404.
-          - ``quote_truncated`` (bool) — see heuristic notes above.
-          - ``quote_total_in_board`` (int) — see heuristic notes above.
+          - ``stocks`` — the row dicts served.
+          - ``origin`` — ``"persistence"`` (cache hit) or the serving
+            fetcher slug.
+          - ``effective_source`` — the slug that served. With no
+            cross-source fallback left this always equals ``source``
+            (the cache-hit path used to hardcode ``"ths"``).
+          - ``reason`` — ``"cid_unresolved"`` when the AJAX tier could not
+            address the board (route maps it to HTTP 422);
+            ``"stale_after_upstream_failure"`` when a stale cache copy was
+            served; ``None`` otherwise (route maps an empty result with no
+            reason to HTTP 404).
+          - ``quote_truncated`` — ``len(stocks) >= top_n`` on the AJAX
+            tier: True means "possibly cut off at the cap", which is the
+            honest answer even for a board that genuinely has exactly
+            ``top_n`` members. Always False on the F10 tier.
+          - ``quote_total_in_board`` — best-effort count; the larger of
+            the pre-refresh cache size and what we are returning.
     """
     init_schema()
 
-    # Tracker key intentionally stays at "ths" — the SQLite cache is keyed
-    # on (board_code, source='ths') regardless of which fetcher originally
-    # populated it (post-unification policy). Per-source tracker keys would
-    # mean non-ths callers always miss the cache, bypassing it even after
-    # ths has populated the same row.
-    needs_refresh = include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:ths")
+    # Both the tracker key and the cache read are per-source: a ths request
+    # and a zzshare request for the same board_code are different boards
+    # (disjoint code spaces), so neither may read the other's rows.
+    needs_refresh = (
+        include_quote or refresh or _refresh_tracker.is_first_call(f"{board_code}:{source}")
+    )
 
-    cached_full = _read_board_stocks_from_db(board_code, "ths")
+    cached_full = _read_board_stocks_from_db(board_code, source)
     cached_count = len(cached_full)
 
     if not needs_refresh and cached_full:
@@ -1478,29 +978,39 @@ def get_board_stocks(
         # is not surfaced here. The route layer reports
         # ``origin="persistence"``; clients that need the actual
         # upstream should pass ?refresh=true.
-        return cached_full, "persistence", "ths", None, False, cached_count
+        # effective_source is the ROW's source, not a hardcoded "ths" —
+        # pre-split a zzshare request that hit the cache was signed ths.
+        return cached_full, "persistence", source, None, False, cached_count
 
     if manager is None:
         raise ValueError("manager is required when refresh=True or cache miss")
 
+    # board_type picks THS's /thshy/ vs /gn/ section, and the F10
+    # extraction strategy. Only ths rows have one.
+    _meta = get_board_metadata(board_code, source)
+    board_type_resolved = _meta.get("board_type") if _meta else None
+
     if not include_quote:
-        # include_quote=False path — the route layer 400-asserts the
-        # 2026-07-13 sort/top_n kwargs are at defaults. Pass nothing
-        # through to the helper so the include_quote=False branches
-        # retain their existing include_quote=False semantics.
+        # One source, one leg, no cross-source fallback (spec §2 D2):
+        #   ths      → the F10 page: full membership (90+ concept /
+        #              150-180 industry), platecode-addressed, no quote
+        #              columns, no 50-row cap.
+        #   others   → their own constituent endpoint, board_code-addressed.
         try:
-            stocks, origin, effective_source, reason = fetch_board_stocks_with_zzshare_fallback(
-                board_code=board_code,
-                source=source,
-                include_quote=False,
-                manager=manager,
-            )
+            if source == "ths":
+                stocks, origin = manager.get_board_stocks_full(
+                    board_code=board_code,
+                    source=source,
+                    board_type=board_type_resolved,
+                )
+            else:
+                stocks, origin = manager.get_board_stocks(
+                    board_code=board_code,
+                    source=source,
+                    include_quote=False,
+                    board_type=board_type_resolved,
+                )
         except DataFetchError as e:
-            # P3-a1 (H4): when both ZZSHARE and THS fail upstream, fall back
-            # to whatever we have in SQLite. The user's request still
-            # succeeds with yesterday's data instead of a hard 5xx. The
-            # caller distinguishes via origin="persistence" + reason set.
-            # Mirror of pool_daily.get_pool:325-336.
             if cached_full:
                 logger.warning(
                     f"[BoardCache] Upstream failed for {board_code} "
@@ -1510,136 +1020,54 @@ def get_board_stocks(
                 return (
                     cached_full,
                     "persistence",
-                    "ths",
+                    source,
                     "stale_after_upstream_failure",
                     False,
                     cached_count,
                 )
             raise
         if stocks:
-            update_cached_board_stocks(board_code, "ths", stocks)
-            logger.info(
-                f"[BoardCache] Refreshed {len(stocks)} stocks for board "
-                f"{board_code}/ths (origin={origin}, effective_source={effective_source})"
-            )
-        # Return the initial DB count as-is (cached_count) — we just
-        # refreshed the cache, but the variable intentionally stays
-        # pinned to ``len(cached_full)`` so callers can compare
-        # against the pre-refresh state without losing track of the
-        # "what was in the cache at the start of this call" semantic.
-        return stocks, origin, effective_source, reason, False, cached_count
+            update_cached_board_stocks(board_code, source, stocks)
+        return stocks, origin, source, None, False, cached_count
 
-    # include_quote=True path: the THS branch honors sort_by / sort_order / top_n.
-    stocks, origin, effective_source, reason = fetch_board_stocks_with_zzshare_fallback(
-        board_code=board_code,
+    # include_quote=True. THS's AJAX endpoint is cid-addressed
+    # (q.10jqka.com.cn/{section}/detail/code/{slug}/ — the slug is the cid,
+    # NOT the public platecode) and hard-caps at 50 rows. eastmoney
+    # (BKxxxx) and zhitu (sw_xxx) take their own board_code straight
+    # through, so the translation below is THS-only.
+    fetch_code = board_code
+    fetch_kwargs: dict = {}
+    if source == "ths":
+        fetch_code = resolve_ths_cid(board_code) or ""
+        if not fetch_code:
+            # An unresolvable cid is reported as reason="cid_unresolved"
+            # (the route maps it to 422) instead of an empty 404: "we
+            # cannot address this board" and "this board has no members"
+            # are different answers.
+            return [], source, source, "cid_unresolved", False, cached_count
+        fetch_kwargs = {"sort_by": sort_by, "sort_order": sort_order, "top_n": top_n}
+
+    stocks, origin = manager.get_board_stocks(
+        board_code=fetch_code,
         source=source,
         include_quote=True,
-        manager=manager,
-        sort_by=sort_by,
-        sort_order=sort_order,
-        top_n=top_n,
+        board_type=board_type_resolved,
+        **fetch_kwargs,
     )
 
     if not stocks:
-        return [], origin, effective_source, reason, False, cached_count
+        return [], origin, source, None, False, cached_count
 
-    # 2026-07-13: per user Q&A — "include_quote=true 时, 总是调一次 ZZSHARE
-    # 拉全量成员清单, 补全剩余股票" (regardless of top_n / len(stocks)).
-    # 之前的 heuristic (len(stocks) >= 50) 让 top_n<50 的请求静默截断
-    # 200 只成分股的 board, THS 返回 10 行, ZZSHARE 不被调, client 误以为
-    # board 只有 10 只 — 契约撒谎. 新行为: 总是 1 次 ZZSHARE upstream call.
-    suffix_no_quote: list[dict] = []
-    try:
-        zz_rows, _ = manager.get_board_stocks(
-            board_code=board_code,
-            source="zzshare",
-            include_quote=False,
-        )
-    except DataFetchError as e:
-        logger.warning(
-            f"[BoardCache] ZZSHARE fill-in for {board_code} failed: {e}; "
-            f"falling back to THS-only top-{len(stocks)}"
-        )
-        zz_rows = []
-
-    quote_codes = {s["stock_code"] for s in stocks if s.get("stock_code")}
-    suffix_no_quote = [
-        r for r in (zz_rows or []) if r.get("stock_code") and r["stock_code"] not in quote_codes
-    ]
-
-    # === Cross-endpoint quote fillup (2026-07-30, union 2026-07-30+) ===
-    # Reuse the /api/v1/stocks full-market quote cache to fill in
-    # quote fields that are None on the response rows. Union semantics:
-    # existing non-None values on each row are preserved (THS top-50
-    # wins for fields it has; /stocks cache fills the gaps).
-    # THS top-50 rows gain 5 fields: open/high/low/prev_close/volume
-    # (THS 14 columns don't include them). Suffix rows gain all 13
-    # fillable fields (they have no quote data otherwise).
-    # On cache miss + fetch failure, nothing is filled and the
-    # quote_truncated / quote_total_in_board logic below preserves
-    # the prior behavior.
+    # Union-fill quote fields from the /stocks full-market quote cache.
+    # THS's 14 AJAX columns lack open/high/low/prev_close/volume; the cache
+    # supplies them without a second upstream call.
     cached_quotes = get_cached_market_quotes(manager)
     if cached_quotes:
-        before = len(stocks) + len(suffix_no_quote)
-        # Enrich THS top-50 rows first (preserve existing, fill gaps)
         stocks = _enrich_rows_with_market_quote(stocks, cached_quotes)
-        # Then enrich suffix rows (all-None → all filled)
-        suffix_no_quote = _enrich_rows_with_market_quote(
-            suffix_no_quote,
-            cached_quotes,
-        )
-        n_filled = sum(1 for r in (stocks + suffix_no_quote) if r.get("price") is not None)
-        logger.info(
-            f"[BoardCache] union fill: {n_filled}/{before} "
-            f"rows enriched from /stocks quote cache for "
-            f"board {board_code}"
-        )
 
-    # quote_truncated: True iff suffix 非空 (真截断 observed) OR
-    # ZZSHARE 失败/空 (无法验证, 保守 True). False iff suffix 空且
-    # ZZSHARE 至少返回了行 — 表示 board 真有 top_n 只成员.
-    if suffix_no_quote:
-        quote_truncated = True
-    elif not zz_rows:
-        # ZZSHARE failed or returned empty; can't verify completeness.
-        # Conservative: report True so clients can re-check.
-        quote_truncated = True
-        logger.info(
-            f"[BoardCache] {board_code}: include_quote=true with no ZZSHARE "
-            f"verification; quote_truncated=True conservatively"
-        )
-    else:
-        # ZZSHARE returned, suffix empty → board genuinely has only what THS gave.
-        quote_truncated = False
-
-    # quote_total_in_board:
-    #   suffix 非空 → len(stocks) + len(suffix_no_quote)  (ZZSHARE 是真板)
-    #   suffix 空 + ZZSHARE 至少返回 → max(cached_count, len(stocks))
-    #     (cached_count >= len(stocks) when cache had more rows pre-refresh)
-    #   suffix 空 + ZZSHARE 失败 → cached_count (conservative, 不知道 board 真大小)
-    if suffix_no_quote:
-        quote_total_in_board = max(cached_count, len(stocks) + len(suffix_no_quote))
-    elif zz_rows:
-        quote_total_in_board = max(cached_count, len(stocks))
-    else:
-        quote_total_in_board = cached_count
-
-    # 拼接最终响应列表 (top-N 在前, suffix 在后)
-    final_stocks = stocks + suffix_no_quote if suffix_no_quote else stocks
-
-    # 回写 cache: final_stocks 含 quote 字段, 但 update_cached_board_stocks
-    # 投影只写 (board_code, source, stock_code, stock_name, board_name,
-    # board_type, subtype, refreshed_at) — quote 字段自然被 SQLite 列投影丢弃
-    # (CLAUDE.md "Don't cache realtime quote data in SQLite").
-    update_cached_board_stocks(board_code, "ths", final_stocks)
-    logger.info(
-        f"[BoardCache] Refreshed {len(stocks)} ths + {len(suffix_no_quote)} zz suffix "
-        f"for board {board_code}/ths "
-        f"(origin={origin}, effective_source={effective_source}, "
-        f"quote_truncated={quote_truncated}, total={quote_total_in_board})"
-    )
-
-    return final_stocks, origin, effective_source, reason, quote_truncated, quote_total_in_board
+    update_cached_board_stocks(board_code, source, stocks)
+    quote_truncated = len(stocks) >= top_n
+    return stocks, origin, source, None, quote_truncated, max(cached_count, len(stocks))
 
 
 def resolve_board_types(
@@ -1659,9 +1087,9 @@ def resolve_board_types(
         source: Data source slug (``"eastmoney"`` / ``"zhitu"`` / ``"zzshare"``).
 
     Returns:
-        ``{code: {"type": str | None, "subtype": str | None}}`` for codes
-        present in the ``stock_board`` cache. Codes absent from the table are
-        simply not in the result; callers should default-fill.
+        ``{board_code: {"board_type": str | None, "subtype": str | None}}``
+        for codes present in the ``stock_board`` cache. Codes absent from the
+        table are simply not in the result; callers should default-fill.
     """
     if not codes:
         return {}
@@ -1676,7 +1104,7 @@ def resolve_board_types(
         (*codes, source),
     )
     return {
-        row["code"]: {"type": row["board_type"], "subtype": row["subtype"]}
+        row["code"]: {"board_type": row["board_type"], "subtype": row["subtype"]}
         for row in cursor.fetchall()
     }
 
@@ -1857,11 +1285,13 @@ def _read_membership_entries(
     raw_rows = cursor.fetchall()
     entries = [
         {
-            "code": r["board_code"],
+            "board_code": r["board_code"],
             # Authoritative name/type/subtype from stock_board when present;
             # otherwise the membership row's stored value (legacy fallback).
             "name": r["sb_name"] if r["sb_name"] is not None else r["board_name"],
-            "type": (r["sb_board_type"] if r["sb_board_type"] is not None else r["board_type"]),
+            "board_type": (
+                r["sb_board_type"] if r["sb_board_type"] is not None else r["board_type"]
+            ),
             "subtype": ((r["sb_subtype"] if r["sb_subtype"] is not None else r["subtype"]) or ""),
             "source": r["source"],
         }
@@ -1922,7 +1352,7 @@ def get_stock_memberships(
 
     # Apply type/subtype filters (post-query, in-memory)
     if type is not None:
-        entries = [e for e in entries if e["type"] == type]
+        entries = [e for e in entries if e["board_type"] == type]
     if subtype is not None:
         entries = [e for e in entries if e["subtype"] == subtype]
 
@@ -1974,7 +1404,7 @@ def get_board_name(board_code: str, source: str) -> str | None:
 
 
 def get_board_metadata(board_code: str, source: str) -> dict[str, Any] | None:
-    """Look up full board metadata (name + type + subtype + cid) from the SQLite cache.
+    """Look up full board metadata from the SQLite cache.
 
     Same fast-path semantics as :func:`get_board_name` — single-row read
     against ``stock_board``, matching on the public ``code`` column. No
@@ -1985,20 +1415,20 @@ def get_board_metadata(board_code: str, source: str) -> dict[str, Any] | None:
         source: Data source slug (``"ths"``, ``"eastmoney"``, etc.).
 
     Returns:
-        Dict ``{"name": str, "type": str, "subtype": str, "code": str, "cid": str | None}``
-        if a row exists; ``None`` on cache miss. ``type`` and ``subtype``
-        mirror the cache column values verbatim (may be empty string for
-        older rows where the column was added in a forward-compat migration).
-        ``code`` is the cross-source public board identifier (THS platecode
-        885xxx/881xxx, eastmoney BKxxxx, zhitu sw_xxx). ``cid`` is the THS
-        internal concept cid (3xxxxx); NULL for THS industry, eastmoney,
-        and zhitu rows.
+        A board row dict — ``{"name", "board_type", "subtype",
+        "board_code", "ths_cid"}`` — or ``None`` on cache miss.
+        ``board_type`` and ``subtype`` mirror the cache columns verbatim
+        (may be an empty string for older rows where the column was added
+        in a forward-compat migration). ``board_code`` is the cross-source
+        public board identifier (THS platecode 885xxx/886xxx/881xxx,
+        eastmoney BKxxxx, zhitu sw_xxx). ``ths_cid`` is THS's internal
+        concept cid (3xxxxx), or ``board_code`` itself for THS industry
+        (881xxx); NULL for eastmoney / zhitu rows.
 
-        The ``code`` and ``cid`` keys replaced the pre-2026-07-20
-        ``(code, platecode)`` pair (see spec
-        ``2026-07-20-ths-board-f10-extension-design.md`` §1.1). New code
-        reads ``code`` directly (post-migration, ``code`` IS the public
-        platecode; ``platecode`` is no longer a separate key).
+        Key names follow the board-path naming contract (spec §5.1): rows
+        use ``board_code`` / ``ths_cid`` / ``board_type``, never a bare
+        ``code`` / ``cid`` / ``type``. See also the pre-2026-09-11 rename
+        in ``docs/superpowers/plans/2026-09-11-board-source-split-plan-2-internal.md``.
     """
     init_schema()
     conn = get_connection()
@@ -2025,10 +1455,10 @@ def get_board_metadata(board_code: str, source: str) -> dict[str, Any] | None:
         )
     return {
         "name": row["name"],
-        "type": row["board_type"],
+        "board_type": row["board_type"],
         "subtype": row["subtype"] or "",
-        "code": row["code"],
-        "cid": row["cid"],
+        "board_code": row["code"],
+        "ths_cid": row["cid"],
     }
 
 
@@ -2083,7 +1513,7 @@ def get_board_name_with_fallback(
                 subtype=None,
             )
             match = next(
-                (b["name"] for b in boards if board_code in (b.get("code"), b.get("platecode"))),
+                (b["name"] for b in boards if board_code == b.get("board_code")),
                 None,
             )
             if match:
@@ -2132,19 +1562,16 @@ def _read_boards_from_db(
     rows = cursor.fetchall()
     return [
         {
-            "code": row["code"],
+            "board_code": row["code"],
             "name": row["name"],
-            "type": row["board_type"],
-            # Keep ``board_type`` for backwards compat with any caller that
-            # was using the SQL column name directly.
             "board_type": row["board_type"],
             "subtype": row["subtype"],
             "source": row["source"],
-            # Post-2026-07-20 we expose both `code` (cross-source public) and
-            # `cid` (THS internal). ``platecode`` is no longer a separate key
-            # in the returned dict — callers that need it should read `code`
-            # (which IS the old platecode for THS / BKxxxx for eastmoney).
-            "cid": row["cid"],
+            # The single canonical key for THS's internal cid. Non-THS
+            # sources carry NULL by construction (spec §4 rule 3), so a
+            # caller can read this without knowing which source it came
+            # from.
+            "ths_cid": row["cid"],
             "updated_at": row["updated_at"],
         }
         for row in rows
@@ -2290,15 +1717,24 @@ def get_ths_board_id_map_rows() -> list[dict[str, Any]]:
 
 def update_cached_boards(board_type: str, source: str, boards: list) -> int:
     """
-    Update cached boards metadata for a board_type + source.
+    Replace cached boards metadata for a (board_type, source) pair.
 
-    Only stores metadata (code, name, type, source, timestamp).
-    Realtime quote data is always fetched from the API, never cached in SQLite.
+    **Snapshot replace: rows for this ``(board_type, source)`` pair are
+    deleted before insert.** Pre-2026-09-11 there was no DELETE, so a board
+    that disappeared upstream lingered forever, and a board first observed
+    under a cid-shaped key and later under a platecode-shaped key ended up
+    stored twice and never merged (spec §1.3, mechanism 3). Mirrors
+    ``update_cached_board_stocks``' DELETE-then-INSERT contract.
+
+    Only stores metadata (board_code, name, board_type, source, timestamp,
+    and the THS cid). Realtime quote data is always fetched from the API,
+    never cached in SQLite.
 
     Args:
         board_type: "concept" or "industry"
-        source: Data source
-        boards: List of dicts [{"code": "BK1048", "name": "互联网服务"}, ...]
+        source: Data source slug
+        boards: List of board row dicts [{"board_code": "BK1048",
+            "name": "互联网服务", "board_type": "industry", "ths_cid": None}, ...]
 
     Returns:
         Number of boards inserted/updated
@@ -2314,37 +1750,34 @@ def update_cached_boards(board_type: str, source: str, boards: list) -> int:
             cursor = conn.cursor()
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            cursor.execute(
+                "DELETE FROM stock_board WHERE board_type = ? AND source = ?",
+                (board_type, source),
+            )
+
             cursor.executemany(
                 """INSERT OR REPLACE INTO stock_board
                 (code, name, board_type, subtype, source, cid, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
-                        # post-2026-07-20 schema: `code` = cross-source public
-                        # identifier (THS platecode / eastmoney BK / zhitu sw_xxx).
-                        # Fetcher rows still emit THS's value under key
-                        # ``platecode`` (legacy fetcher contract); fall back
-                        # to ``code`` (the fetcher's general-key field) when
-                        # the upstream didn't expose a separate platecode.
-                        b.get("platecode") or b["code"],
+                        # `code` (SQL column) = the cross-source public
+                        # identifier — THS platecode / eastmoney BKxxxx /
+                        # zhitu sw_xxx. It is a REQUIRED field on every
+                        # board row (fetchers all emit it).
+                        b["board_code"],
                         b["name"],
                         board_type,
                         b.get("subtype") or "",
                         source,
-                        # `cid` is the THS internal id. For THS source, the
-                        # fetcher dict's ``code`` key is the canonical cid
-                        # regardless of board_type:
-                        #   - THS concept: code=308791, platecode=886042
-                        #     (different — cid is the 3xxxxx)
-                        #   - THS industry: code=881270, platecode=881270
-                        #     (same — THS uses platecode as cid for
-                        #     industry; per spec the resolver returns
-                        #     the platecode as cid in this case, so we
-                        #     store the same value in `cid` rather than
-                        #     NULL to keep the resolver contract simple)
-                        # For eastmoney we keep cid=NULL — `b["code"]` is
-                        # BKxxxx there, not a THS cid.
-                        (b["code"] if (source == "ths" and b.get("platecode")) else None),
+                        # `cid` (SQL column) = THS's internal cid. Only THS
+                        # rows may carry one (spec §4 rule 3): for concept
+                        # boards it is a 3xxxxx distinct from board_code,
+                        # for industry it equals board_code (881xxx).
+                        # `.get` rather than `[...]` on purpose — a fetcher
+                        # that forgot to emit ths_cid should degrade to
+                        # NULL, never KeyError the whole board-list write.
+                        b.get("ths_cid") if source == "ths" else None,
                         now,
                     )
                     for b in boards

@@ -36,33 +36,42 @@ def _make_backfill_manager():
     """
     boards = [
         {
-            "code": "301558",
+            "board_code": "885001",
             "name": "ConceptA",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
-            "platecode": "885001",
+            "ths_cid": "301558",
         },
         {
-            "code": "301559",
+            "board_code": "885002",
             "name": "ConceptB",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "同花顺概念",
-            "platecode": "885002",
+            "ths_cid": "301559",
         },
     ]
     mock = MagicMock()
-    mock.get_all_boards.return_value = (boards, "ths")
 
-    def get_board_stocks(board_code, source, include_quote):
+    def get_all_boards(source, board_type=None, subtype=None, include_quote=False):
+        # THS-only backfill: one sweep per board_type.
+        if source != "ths":
+            return ([], source)
+        return ([b for b in boards if b["board_type"] == board_type], "ths")
+
+    mock.get_all_boards.side_effect = get_all_boards
+
+    def get_board_stocks_full(board_code, source="ths", *, board_type=None):
+        # Phase 2 reads the THS F10 page (the only leg post-2026-09-11).
+        assert source == "ths"
         return (
             [
                 {"stock_code": "000034", "stock_name": "Starter-000034"},
                 {"stock_code": "999999", "stock_name": "Other"},
             ],
-            "zzshare",
+            "ths",
         )
 
-    mock.get_board_stocks.side_effect = get_board_stocks
+    mock.get_board_stocks_full.side_effect = get_board_stocks_full
     return mock
 
 
@@ -82,11 +91,10 @@ def test_reverse_lookup_after_backfill_returns_all_boards(fresh_db, monkeypatch)
     )
 
     # 3. Both boards now appear (this is the bug-fix assertion).
-    # Membership rows store board_code = platecode for THS (the THS quirk
-    # documented on _read_membership_entries), so the returned `code`
-    # reflects the platecode even though the THS source list emits cid 301558/301559.
+    # ``get_stock_memberships`` returns internal board rows (board_code /
+    # board_type); the route layer maps them to the public code/type keys.
     assert len(entries) == 2
-    board_codes = {e["code"] for e in entries}
+    board_codes = {e["board_code"] for e in entries}
     assert board_codes == {"885001", "885002"}
     board_names = {e["name"] for e in entries}
     assert board_names == {"ConceptA", "ConceptB"}

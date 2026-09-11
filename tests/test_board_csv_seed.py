@@ -40,13 +40,13 @@ def test_seed_stock_board_ths_full_schema(fresh_db, tmp_path):
 
     industry_rows = board_mod._read_boards_from_db("industry", "ths")
     assert len(industry_rows) == 1
-    assert industry_rows[0]["code"] == "885001"
-    assert industry_rows[0]["cid"] is None  # industry has no separate cid
+    assert industry_rows[0]["board_code"] == "885001"
+    assert industry_rows[0]["ths_cid"] is None  # industry has no separate cid
 
     concept_rows = board_mod._read_boards_from_db("concept", "ths")
     assert len(concept_rows) == 1
-    assert concept_rows[0]["code"] == "885002"
-    assert concept_rows[0]["cid"] == "300002"
+    assert concept_rows[0]["board_code"] == "885002"
+    assert concept_rows[0]["ths_cid"] == "300002"
 
 
 def test_seed_eastmoney_full_schema_fills_defaults(fresh_db, tmp_path):
@@ -68,15 +68,15 @@ def test_seed_eastmoney_full_schema_fills_defaults(fresh_db, tmp_path):
 
     industry_rows = board_mod._read_boards_from_db("industry", "eastmoney")
     assert len(industry_rows) == 1
-    assert industry_rows[0]["code"] == "BK1627"
+    assert industry_rows[0]["board_code"] == "BK1627"
     assert industry_rows[0]["subtype"] == "industry"
-    assert industry_rows[0]["cid"] is None
+    assert industry_rows[0]["ths_cid"] is None
     assert industry_rows[0]["source"] == "eastmoney"
 
     # concept 行也必须正确写入(否则只验了 industry 一半覆盖)
     concept_rows = board_mod._read_boards_from_db("concept", "eastmoney")
     assert len(concept_rows) == 1
-    assert concept_rows[0]["code"] == "BK1701"
+    assert concept_rows[0]["board_code"] == "BK1701"
     assert concept_rows[0]["subtype"] == "concept"
 
 

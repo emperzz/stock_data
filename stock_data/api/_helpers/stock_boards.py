@@ -104,12 +104,13 @@ def fetch_stock_boards_quote_enrichment(
         "relevance",
     )
     for entry in result:
-        code = entry.get("code")
+        code = entry.get("board_code")
         if not code:
             continue
-        # Forward ONLY the 7 enrichment keys — don't shadow code/name/type/
-        # subtype/source, which are owned by the persistence layer's
-        # authoritative read.
+        # Keyed by the board's public code (board_code) — the route looks up
+        # `e["board_code"] in enrichment_by_code`. Forward ONLY the 7
+        # enrichment keys — don't shadow code/name/type/subtype/source,
+        # which are owned by the persistence layer's authoritative read.
         enrichment[code] = {k: entry.get(k) for k in enrichment_keys}
     cached_store(get_stock_boards_quote_cache, cache_key, (result, enrichment))
     return result, enrichment

@@ -173,12 +173,11 @@ def _resolve_board_history_source(source: str) -> str:
 
 # ──────────────────────────────────────────────────────────────────────────
 # board-stocks source validation — `zzshare` is no longer a valid label here.
-# After the 2026-07-08 unification, zzshare is not a first-class source on
-# /boards/{code}/stocks either: the Literal in get_board_stocks (boards.py:~419)
-# restricts to ("ths", "eastmoney", "zhitu"), so the route returns 422 before
-# _resolve_source runs. zzshare remains routable internally via manager._with_source
-# (used by fetch_board_stocks_with_zzshare_fallback for include_quote fallback)
-# but is never directly addressable by API clients.
+# zzshare is not (yet) a first-class source on /boards/{code}/stocks: the
+# Literal in get_board_stocks restricts to ("ths", "eastmoney", "zhitu"), so
+# the route returns 422 before _resolve_source runs. It is no longer invoked
+# internally either — the cross-source include_quote fallback was deleted
+# 2026-09-11 (spec §2 D2).
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -399,7 +398,9 @@ def list_boards(
             manager=manager,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)}) from e
+        raise HTTPException(
+            status_code=400, detail={"error": "invalid_request", "message": str(e)}
+        ) from e
 
     # Sort
     if sort_by is not None:
@@ -417,12 +418,12 @@ def list_boards(
         source=origin,
         data=[
             BoardInfo(
-                code=b["code"],
+                code=b["board_code"],
                 name=b["name"],
                 # Every code path (fresh fetcher + cache hit) tags rows
                 # with ``type``; see _read_boards_from_db and the
                 # board_type=None fan-out in get_board_list.
-                type=b.get("type"),
+                type=b.get("board_type"),
                 price=b.get("price"),
                 change_pct=b.get("change_pct"),
                 change_amount=b.get("change_amount"),
@@ -570,13 +571,11 @@ def get_board_stocks(
         # Route through the persistence layer so cache hits return
         # origin="persistence" (per CLAUDE.md source-tracking matrix).
         # refresh=true now actually forces an upstream refresh instead of
-        # being silently dropped. ``source`` is plumbed straight through
-        # for the include_quote=True path (strict-routed). For
-        # include_quote=False the helper transparently falls back to
-        # ZZSHARE first when source='ths' (see
-        # persistence/board::fetch_board_stocks_with_zzshare_fallback);
-        # ``effective_source`` tells the client which fetcher served the
-        # response. Compare against ``query_source`` to detect fallback.
+        # being silently dropped. ``source`` is plumbed straight through and
+        # strictly routed: no cross-source fallback exists any more
+        # (spec §2 D2), so ``effective_source`` always equals ``query_source``
+        # and only ever distinguishes legs *within* one source
+        # (THS AJAX <=50 vs F10 >50).
         stocks, origin, effective_source, reason, quote_truncated, total_in_board = (
             stock_board_cache.get_board_stocks(
                 board_code,
@@ -590,7 +589,9 @@ def get_board_stocks(
             )
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)}) from e
+        raise HTTPException(
+            status_code=400, detail={"error": "invalid_request", "message": str(e)}
+        ) from e
 
     if not stocks:
         # F2 (2026-07-10): when the persistence helper reports
@@ -676,8 +677,8 @@ def get_board_stocks(
                 # reserved for callers that bypass the route (e.g. Stage 2
                 # fetcher-test). On cache miss, surface a clear error.
                 cached_metadata = stock_board_cache.get_board_metadata(board_code, "ths")
-                if cached_metadata and cached_metadata.get("type"):
-                    cached_type = cached_metadata["type"]
+                if cached_metadata and cached_metadata.get("board_type"):
+                    cached_type = cached_metadata["board_type"]
                     try:
                         quote_data, quote_source = manager.get_board_realtime(
                             board_code,
@@ -780,7 +781,7 @@ def get_board_quote(
     # rename (was platecode OR code in the pre-rename schema) — see
     # stock_board_cache.get_board_metadata.
     metadata = stock_board_cache.get_board_metadata(board_code, "ths")
-    board_type = metadata.get("type") if metadata else None
+    board_type = metadata.get("board_type") if metadata else None
     if not board_type:
         raise HTTPException(
             status_code=422,
@@ -963,14 +964,14 @@ def get_stock_boards(
         # keep their None enrichment fields.
         for e in entries:
             base = {
-                "code": e["code"],
+                "code": e["board_code"],
                 "name": e["name"],
-                "type": e.get("type", ""),
+                "type": e.get("board_type", ""),
                 "subtype": e.get("subtype", ""),
                 "source": e["source"],
             }
-            if e["source"] == "ths" and e["code"] in enrichment_by_code:
-                base.update(enrichment_by_code[e["code"]])
+            if e["source"] == "ths" and e["board_code"] in enrichment_by_code:
+                base.update(enrichment_by_code[e["board_code"]])
             data.append(StockBoardInfo(**base))
     elif ths_in_source_list and fetcher_full_result:
         # Cold-cache fallback (no persistence writeback): the live fetcher
@@ -980,9 +981,9 @@ def get_stock_boards(
         for r in fetcher_full_result:
             data.append(
                 StockBoardInfo(
-                    code=r.get("code", ""),
+                    code=r.get("board_code", ""),
                     name=r.get("name", ""),
-                    type=r.get("type", ""),
+                    type=r.get("board_type", ""),
                     subtype=r.get("subtype", ""),
                     source="ths",
                     change_pct=r.get("change_pct"),
@@ -1006,9 +1007,9 @@ def get_stock_boards(
         for e in entries:
             data.append(
                 StockBoardInfo(
-                    code=e["code"],
+                    code=e["board_code"],
                     name=e["name"],
-                    type=e.get("type", ""),
+                    type=e.get("board_type", ""),
                     subtype=e.get("subtype", ""),
                     source=e["source"],
                 )

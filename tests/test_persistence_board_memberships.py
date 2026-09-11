@@ -47,7 +47,7 @@ class TestGetStockMemberships:
         )
         assert len(entries) == 1
         assert entries[0]["source"] == "zhitu"
-        assert entries[0]["code"] == "sw_yx"
+        assert entries[0]["board_code"] == "sw_yx"
         assert cold == []
         assert origin == "persistence"
 
@@ -78,7 +78,7 @@ class TestGetStockMemberships:
             stock_code="600519", sources=["zhitu"], type="concept"
         )
         assert len(entries) == 1
-        assert entries[0]["code"] == "chgn_700532"
+        assert entries[0]["board_code"] == "chgn_700532"
 
     def test_filter_by_subtype(self, fresh_db):
         """subtype filter applied per-entry."""
@@ -88,7 +88,7 @@ class TestGetStockMemberships:
             stock_code="600519", sources=["zhitu"], subtype="申万行业"
         )
         assert len(entries) == 1
-        assert entries[0]["code"] == "sw_yx"
+        assert entries[0]["board_code"] == "sw_yx"
 
     def test_no_sources_returns_empty(self, fresh_db):
         """Empty sources list → empty entries, empty cold."""
@@ -132,8 +132,8 @@ class TestResolveBoardTypes:
 
         result = board_mod.resolve_board_types(["BK0615", "BK0481"], source="eastmoney")
         assert result == {
-            "BK0615": {"type": "concept", "subtype": "concept"},
-            "BK0481": {"type": "industry", "subtype": "industry"},
+            "BK0615": {"board_type": "concept", "subtype": "concept"},
+            "BK0481": {"board_type": "industry", "subtype": "industry"},
         }
 
     def test_unknown_codes_absent_from_result(self, fresh_db):
@@ -225,7 +225,7 @@ class TestGetStockMembershipsBoardNameOverride:
 
         entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["eastmoney"])
         assert len(entries) == 1
-        assert entries[0]["code"] == "BK1001"
+        assert entries[0]["board_code"] == "BK1001"
         # The fix: name comes from stock_board, NOT from membership's stale value.
         assert entries[0]["name"] == "白酒", (
             f"expected authoritative name from stock_board; got {entries[0]['name']!r} "
@@ -263,11 +263,11 @@ class TestGetStockMembershipsBoardNameOverride:
 
         entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["eastmoney"])
         assert len(entries) == 1
-        assert entries[0]["code"] == "BK9999"
+        assert entries[0]["board_code"] == "BK9999"
         # No stock_board row → fall back to membership's stored board_name
         assert entries[0]["name"] == "BK9999"
         # Type/subtype also fall back to membership's stored values
-        assert entries[0]["type"] == "concept"
+        assert entries[0]["board_type"] == "concept"
         assert entries[0]["subtype"] == "concept"
 
     def test_keeps_membership_name_when_both_agree(self, fresh_db):
@@ -377,8 +377,8 @@ class TestGetStockMembershipsBoardNameOverride:
         entries, _, _ = board_mod.get_stock_memberships(stock_code="600519", sources=["eastmoney"])
         assert len(entries) == 1
         # The fix: board_type comes from stock_board, NOT from membership's empty value.
-        assert entries[0]["type"] == "industry", (
-            f"expected authoritative type from stock_board; got {entries[0]['type']!r} "
+        assert entries[0]["board_type"] == "industry", (
+            f"expected authoritative type from stock_board; got {entries[0]['board_type']!r} "
             f"(empty means the membership row's stale board_type leaked through)"
         )
 
@@ -450,7 +450,7 @@ class TestGetStockMembershipsBoardNameOverride:
         assert len(entries) == 1
         e = entries[0]
         assert e["name"] == "白酒"
-        assert e["type"] == "industry"
+        assert e["board_type"] == "industry"
         assert e["subtype"] == "industry"
 
     def test_override_source_scoped_in_mixed_response(self, fresh_db):
@@ -510,10 +510,10 @@ class TestGetStockMembershipsBoardNameOverride:
         assert set(by_source) == {"eastmoney", "zhitu"}
         # eastmoney: override applied
         assert by_source["eastmoney"]["name"] == "白酒-eastmoney"
-        assert by_source["eastmoney"]["type"] == "industry"
+        assert by_source["eastmoney"]["board_type"] == "industry"
         # zhitu: no stock_board row → fallback to membership's stored values
         assert by_source["zhitu"]["name"] == "BK1001-zhitu-fallback"
-        assert by_source["zhitu"]["type"] == "concept"
+        assert by_source["zhitu"]["board_type"] == "concept"
 
     def test_ths_concept_override_matches_via_platecode_not_code(self, fresh_db):
         """THS concept boards: membership stores board_code=platecode (885xxx),
@@ -551,9 +551,9 @@ class TestGetStockMembershipsBoardNameOverride:
         assert len(entries) == 1
         e = entries[0]
         # The fix: the platecode arm of the JOIN matches 885652.
-        assert e["code"] == "885652"
+        assert e["board_code"] == "885652"
         assert e["name"] == "东百集团", (
             f"expected override name from stock_board; got {e['name']!r}"
         )
-        assert e["type"] == "concept"
+        assert e["board_type"] == "concept"
         assert e["subtype"] == "同花顺概念"

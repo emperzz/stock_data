@@ -180,17 +180,32 @@ def build_stock_profile(
             _stock_boards_helper.fetch_stock_boards_quote_enrichment(code, manager)
         )
         ths_cached = [e for e in entries if e.get("source") == "ths"]
+
+        def _public(row: dict) -> dict:
+            """Map an internal board row to the public response key names.
+
+            Rows use ``board_code`` / ``board_type`` internally; the
+            ``StockBoardInfo`` contract (shared with ``/stocks/{code}/boards``
+            and ``/agent/boards/*``) exposes ``code`` / ``type``.
+            ``ths_cid`` is internal-only and is dropped. Every other key
+            (the 7 THS enrichment fields) passes through untouched.
+            """
+            out = {k: v for k, v in row.items() if k != "ths_cid"}
+            out["code"] = out.pop("board_code", None)
+            out["type"] = out.pop("board_type", None)
+            return out
+
         if ths_cached:
             merged = []
             for e in ths_cached:
-                base = {k: e.get(k) for k in ("code", "name", "type", "subtype", "source")}
-                base.update(enrichment_by_code.get(e["code"], {}))
+                base = _public(e)
+                base.update(enrichment_by_code.get(e["board_code"], {}))
                 merged.append(base)
             profile.boards = {"source": "persistence", "data": merged}
         elif fetcher_full_result:
-            profile.boards = {"source": "ths", "data": fetcher_full_result}
+            profile.boards = {"source": "ths", "data": [_public(r) for r in fetcher_full_result]}
         else:
-            profile.boards = {"source": "persistence", "data": entries}
+            profile.boards = {"source": "persistence", "data": [_public(r) for r in entries]}
     except Exception as exc:
         profile.errors.append(
             StockBatchAspectError(aspect="boards", error=type(exc).__name__, message=str(exc))

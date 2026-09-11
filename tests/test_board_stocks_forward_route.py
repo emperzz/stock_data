@@ -23,11 +23,10 @@ def fresh_db(tmp_path, monkeypatch):
 def test_get_board_stocks_reads_from_membership_table(fresh_db, monkeypatch):
     """get_board_stocks returns rows from stock_board_membership.
 
-    Post-unification (2026-07-08): the cache is keyed on source='ths', so
-    we seed membership with 'ths' and call get_board_stocks without a
-    source kwarg (the parameter was removed). The mock manager's
-    get_board_stocks raises if invoked — proving the cache-read path
-    is exercised without delegating to upstream.
+    The cache is keyed on source='ths', so we seed membership with 'ths'
+    and let ``get_board_stocks`` take its ``source='ths'`` default. The
+    mock manager's ``get_board_stocks`` raises if invoked — proving the
+    cache-read path is exercised without delegating to upstream.
     """
     # Seed membership directly (cache is keyed on 'ths' post-unification)
     board_mod.upsert_membership_bulk(
@@ -73,30 +72,31 @@ def test_get_board_stocks_reads_from_membership_table(fresh_db, monkeypatch):
 def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
     """Cold path: membership empty → fetcher called → upsert → return.
 
-    Post-strict-routing (2026-07-10): ``get_board_stocks`` honors the
-    caller's ``source=`` strictly. There is no more include_quote-driven
-    zzshare↔THS auto-preference — callers that want zzshare can pass
-    ``source='zzshare'`` explicitly. This test exercises the THS path.
+    Post-strict-isolation (2026-09-11, spec §2 D2): ``get_board_stocks``
+    honors the caller's ``source=`` strictly and there is no cross-source
+    fallback left. ``include_quote=False`` selects the THS F10 tier, which
+    is addressed by the **public platecode** (no cid translation) and is
+    the only fetcher call.
     """
-    # Seed stock_board so board_name/board_type resolve on lazy-fill
-    # and so _resolve_ths_cid_from_platecode(885642) returns a cid we
-    # can route against.
+    # Seed stock_board so board_name/board_type resolve on lazy-fill.
+    # The F10 tier is platecode-addressed, so the seed only has to supply
+    # board_type (the cid is carried for realism, not used on this path).
     board_mod.update_cached_boards(
         board_type="concept",
         source="ths",
         boards=[
             {
-                "code": "301558",  # upstream cid used in mock return
+                "board_code": "885642",  # public platecode — the addressing key
                 "name": "白酒",
                 "subtype": "concept",
-                "platecode": "885642",
+                "ths_cid": "301558",
             },
         ],
     )
 
-    # Mock manager returns 3 stocks when THS path is invoked
+    # Mock manager returns 3 stocks when the THS F10 leg is invoked
     mock_manager = MagicMock()
-    mock_manager.get_board_stocks.return_value = (
+    mock_manager.get_board_stocks_full.return_value = (
         [
             {"stock_code": "600519", "stock_name": "贵州茅台"},
             {"stock_code": "000858", "stock_name": "五粮液"},
@@ -112,16 +112,15 @@ def test_get_board_stocks_lazy_fill_when_membership_empty(fresh_db):
             manager=mock_manager,
         )
     )
-    # Post-2026-07-10: include_quote=False + source=ths prefers ZZSHARE
-    # primary; if the ZZSHARE leg returns rows (mock always returns the
-    # 3-stock payload), the helper takes the ZZSHARE primary and reports
-    # effective_source='zzshare'. The mock always returns the same rows
-    # regardless of source, so the ZZSHARE leg grabs them.
     assert origin == "ths"
-    assert effective_source == "zzshare"  # ZZSHARE primary served
+    assert effective_source == "ths"  # the only leg that can serve
     assert reason is None  # success path has no annotation
     assert len(stocks) == 3
-    assert mock_manager.get_board_stocks.call_count == 1
+    # Exactly one fetcher call: the THS F10 tier, by platecode. The AJAX
+    # (cid-addressed) method — the only former second leg — is untouched.
+    assert mock_manager.get_board_stocks_full.call_count == 1
+    assert mock_manager.get_board_stocks_full.call_args.kwargs["board_code"] == "885642"
+    mock_manager.get_board_stocks.assert_not_called()
     # Verify membership was populated (cache is keyed on the platecode
     # that the route layer passed in, with source='ths').
     rows = board_mod.read_membership(board_code="885642", source="ths")
@@ -166,7 +165,13 @@ def test_board_stocks_include_quote_fills_board_block(client):
         patch.object(
             board_mod,
             "get_board_metadata",
-            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+            return_value={
+                "board_code": "885595",
+                "name": "央企国企改革",
+                "board_type": "concept",
+                "subtype": "同花顺概念",
+                "ths_cid": None,
+            },
         ),
         patch.object(mgr_mod.DataFetcherManager, "get_board_realtime", return_value=(quote, "ths")),
     ):
@@ -243,7 +248,13 @@ def test_board_stocks_include_quote_best_effort_on_failure(client):
         patch.object(
             board_mod,
             "get_board_metadata",
-            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+            return_value={
+                "board_code": "885595",
+                "name": "央企国企改革",
+                "board_type": "concept",
+                "subtype": "同花顺概念",
+                "ths_cid": None,
+            },
         ),
         patch.object(
             mgr_mod.DataFetcherManager,
@@ -296,7 +307,13 @@ def test_board_stocks_board_block_has_type_from_cache(client):
         patch.object(
             board_mod,
             "get_board_metadata",
-            return_value={"name": "央企国企改革", "type": "concept", "subtype": "同花顺概念"},
+            return_value={
+                "board_code": "885595",
+                "name": "央企国企改革",
+                "board_type": "concept",
+                "subtype": "同花顺概念",
+                "ths_cid": None,
+            },
         ),
         patch.object(
             mgr_mod.DataFetcherManager,

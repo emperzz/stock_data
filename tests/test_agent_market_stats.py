@@ -107,7 +107,7 @@ def _patch_board_cache(monkeypatch, *, all_boards_payload):
 def test_market_stats_returns_200(client, monkeypatch):
     """Happy path — all 3 blocks populated, summary reports 3/3 ok."""
     quotes = [_make_quote("600000", 1.0), _make_quote("600001", -1.0), _make_quote("600002", 0.0)]
-    boards = [{"code": "BK0001", "name": "X", "change_pct": 0.5}]
+    boards = [{"board_code": "BK0001", "name": "X", "change_pct": 0.5}]
     fake_manager = _patch_manager(monkeypatch, quotes=quotes)
     fake_manager.get_zt_pool.return_value = ([], "akshare", None)
     _patch_board_cache(monkeypatch, all_boards_payload=(boards, "ths"))
@@ -134,7 +134,7 @@ def test_stocks_upstream_failure_does_not_affect_boards(client, monkeypatch):
     fake_manager.get_realtime_quotes.side_effect = DataFetchError("upstream down")
     fake_manager.get_zt_pool.return_value = ([], "akshare", None)
     monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
-    boards = [{"code": "BK0001", "name": "X", "change_pct": 0.5}]
+    boards = [{"board_code": "BK0001", "name": "X", "change_pct": 0.5}]
     _patch_board_cache(monkeypatch, all_boards_payload=(boards, "ths"))
 
     resp = client.get("/api/v1/agent/market-stats")
@@ -219,7 +219,7 @@ def test_include_boards_false_skips_boards_upstream(client, monkeypatch):
 def test_format_md_returns_markdown(client, monkeypatch):
     """?format=md → text/markdown; body contains expected section headers."""
     quotes = [_make_quote("600000", 1.0)]
-    boards = [{"code": "BK0001", "name": "白酒", "change_pct": 0.5}]
+    boards = [{"board_code": "BK0001", "name": "白酒", "change_pct": 0.5}]
     _patch_manager(monkeypatch, quotes=quotes)
     _patch_board_cache(monkeypatch, all_boards_payload=(boards, "ths"))
 
@@ -293,7 +293,7 @@ def test_market_stats_cache_hit_skips_upstream(monkeypatch):
     fresh_client = TestClient(server_module.app)
 
     quotes = [_make_quote("600000", 1.0)]
-    boards = [{"code": "BK0001", "name": "X", "change_pct": 0.5}]
+    boards = [{"board_code": "BK0001", "name": "X", "change_pct": 0.5}]
     fake_manager = MagicMock()
     fake_manager.get_realtime_quotes.return_value = (quotes, "akshare")
     fake_manager.get_zt_pool.return_value = ([], "akshare", None)
@@ -348,7 +348,7 @@ def _patch_zt_pool(monkeypatch, *, zt_value=([], "akshare", None), dt_value=([],
     monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
     fake_cache = MagicMock()
     fake_cache.get_board_list.return_value = (
-        [{"code": "BK0001", "name": "X", "change_pct": 0.5}],
+        [{"board_code": "BK0001", "name": "X", "change_pct": 0.5}],
         "ths",
     )
     monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
@@ -441,7 +441,7 @@ class TestMarketStatsPoolsBlock:
         monkeypatch.setattr(agent_module, "get_manager", lambda: fake_manager)
         fake_cache = MagicMock()
         fake_cache.get_board_list.return_value = (
-            [{"code": "BK0001", "name": "X", "change_pct": 0.5}],
+            [{"board_code": "BK0001", "name": "X", "change_pct": 0.5}],
             "ths",
         )
         monkeypatch.setattr(agent_module, "stock_board_cache", fake_cache)
@@ -615,49 +615,49 @@ def test_select_top_board_movers_sorts_correctly():
 
     rows = [
         {
-            "code": "BK0001",
+            "board_code": "BK0001",
             "name": "A",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "881",
             "source": "ths",
             "change_pct": 1.0,
         },
         {
-            "code": "BK0002",
+            "board_code": "BK0002",
             "name": "B",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "881",
             "source": "ths",
             "change_pct": 5.0,
         },
         {
-            "code": "BK0003",
+            "board_code": "BK0003",
             "name": "C",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "881",
             "source": "ths",
             "change_pct": -2.0,
         },
         {
-            "code": "BK0004",
+            "board_code": "BK0004",
             "name": "D",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "881",
             "source": "ths",
             "change_pct": 3.0,
         },
         {
-            "code": "BK0005",
+            "board_code": "BK0005",
             "name": "E",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "881",
             "source": "ths",
             "change_pct": -5.0,
         },
         {
-            "code": "BK0006",
+            "board_code": "BK0006",
             "name": "F",
-            "type": "industry",
+            "board_type": "industry",
             "subtype": "881",
             "source": "ths",
             "change_pct": 2.0,
@@ -677,11 +677,11 @@ def test_select_top_board_movers_excludes_none_change_pct():
     from stock_data.api.routes.agent import _select_top_board_movers
 
     rows = [
-        {"code": "BK0001", "change_pct": 2.0},
-        {"code": "BK0002", "change_pct": None},
-        {"code": "BK0003", "change_pct": "—"},  # upstream sentinel
-        {"code": "BK0004", "change_pct": 1.0},
-        {"code": "BK0005"},  # missing key
+        {"board_code": "BK0001", "change_pct": 2.0},
+        {"board_code": "BK0002", "change_pct": None},
+        {"board_code": "BK0003", "change_pct": "—"},  # upstream sentinel
+        {"board_code": "BK0004", "change_pct": 1.0},
+        {"board_code": "BK0005"},  # missing key
     ]
     gainers, losers = _select_top_board_movers(rows, top_n=3)
     codes = {g.code for g in gainers}
@@ -694,10 +694,10 @@ def test_select_top_board_movers_tie_break_code_asc():
     from stock_data.api.routes.agent import _select_top_board_movers
 
     rows = [
-        {"code": "BK0009", "change_pct": 2.0},
-        {"code": "BK0001", "change_pct": 2.0},
-        {"code": "BK0005", "change_pct": 2.0},
-        {"code": "BK0003", "change_pct": 2.0},
+        {"board_code": "BK0009", "change_pct": 2.0},
+        {"board_code": "BK0001", "change_pct": 2.0},
+        {"board_code": "BK0005", "change_pct": 2.0},
+        {"board_code": "BK0003", "change_pct": 2.0},
     ]
     gainers, _ = _select_top_board_movers(rows, top_n=3)
     assert [g.code for g in gainers] == ["BK0001", "BK0003", "BK0005"]
@@ -714,8 +714,8 @@ def test_select_top_board_movers_fewer_than_three():
     from stock_data.api.routes.agent import _select_top_board_movers
 
     rows = [
-        {"code": "BK0001", "change_pct": 2.0},
-        {"code": "BK0002", "change_pct": -1.0},
+        {"board_code": "BK0001", "change_pct": 2.0},
+        {"board_code": "BK0002", "change_pct": -1.0},
     ]
     gainers, losers = _select_top_board_movers(rows, top_n=3)
     assert len(gainers) == 2
@@ -746,9 +746,9 @@ def test_select_top_board_movers_entry_is_flat():
 
     rows = [
         {
-            "code": "BK0001",
+            "board_code": "BK0001",
             "name": "半导体",
-            "type": "industry",
+            "board_type": "industry",
             "change_pct": 5.82,
             "volume": 2345678,
             "amount": 12.0,  # 亿元 (post-merge canonical unit)
@@ -786,9 +786,9 @@ def test_boards_top_gainers_top_losers_in_response(client, monkeypatch):
     boards_payload = (
         [
             {
-                "code": "BK0001",
+                "board_code": "BK0001",
                 "name": "A",
-                "type": "industry",
+                "board_type": "industry",
                 "subtype": "881",
                 "source": "ths",
                 "change_pct": 5.82,
@@ -799,9 +799,9 @@ def test_boards_top_gainers_top_losers_in_response(client, monkeypatch):
                 "net_inflow": 0.5,
             },
             {
-                "code": "BK0002",
+                "board_code": "BK0002",
                 "name": "B",
-                "type": "industry",
+                "board_type": "industry",
                 "subtype": "881",
                 "source": "ths",
                 "change_pct": -3.0,
@@ -812,9 +812,9 @@ def test_boards_top_gainers_top_losers_in_response(client, monkeypatch):
                 "net_inflow": -0.3,
             },
             {
-                "code": "BK0003",
+                "board_code": "BK0003",
                 "name": "C",
-                "type": "industry",
+                "board_type": "industry",
                 "subtype": "881",
                 "source": "ths",
                 "change_pct": 2.0,
@@ -916,9 +916,9 @@ def test_market_stats_md_includes_top_movers_sections(client, monkeypatch):
     boards_payload = (
         [
             {
-                "code": "BK0001",
+                "board_code": "BK0001",
                 "name": "半导体",
-                "type": "industry",
+                "board_type": "industry",
                 "subtype": "881",
                 "source": "ths",
                 "change_pct": 5.82,
@@ -929,9 +929,9 @@ def test_market_stats_md_includes_top_movers_sections(client, monkeypatch):
                 "net_inflow": 4.5,
             },
             {
-                "code": "BK0002",
+                "board_code": "BK0002",
                 "name": "煤炭",
-                "type": "industry",
+                "board_type": "industry",
                 "subtype": "881",
                 "source": "ths",
                 "change_pct": -3.15,
@@ -1058,7 +1058,7 @@ class TestParallelFanout:
         _patch_manager(monkeypatch, quotes=[_make_quote("600000", 1.0)])
         _patch_board_cache(
             monkeypatch,
-            all_boards_payload=([{"code": "BK0001", "name": "X", "change_pct": 0.5}], "ths"),
+            all_boards_payload=([{"board_code": "BK0001", "name": "X", "change_pct": 0.5}], "ths"),
         )
 
         resp = client.get("/api/v1/agent/market-stats")
@@ -1116,7 +1116,7 @@ class TestParallelFanout:
         _patch_manager(monkeypatch, quotes=[])
         _patch_board_cache(
             monkeypatch,
-            all_boards_payload=([{"code": "BK0001", "name": "X", "change_pct": 0.5}], "ths"),
+            all_boards_payload=([{"board_code": "BK0001", "name": "X", "change_pct": 0.5}], "ths"),
         )
 
         resp = client.get("/api/v1/agent/market-stats")
@@ -1149,8 +1149,8 @@ class TestSyncAndAsyncPathsAssembleIdentically:
     def test_same_inputs_same_response(self, client, monkeypatch, include_boards, include_pools):
         quotes = [_make_quote("600000", 1.0), _make_quote("600001", -0.5)]
         boards = [
-            {"code": "BK0001", "name": "X", "change_pct": 2.5},
-            {"code": "BK0002", "name": "Y", "change_pct": -1.5},
+            {"board_code": "BK0001", "name": "X", "change_pct": 2.5},
+            {"board_code": "BK0002", "name": "Y", "change_pct": -1.5},
         ]
         _patch_manager(monkeypatch, quotes=quotes)
         _patch_board_cache(monkeypatch, all_boards_payload=(boards, "ths"))

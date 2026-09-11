@@ -158,16 +158,16 @@ class TestStocksBoardOverlap:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "半导体",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "",
                             "source": "ths",
                         },
                         {
-                            "code": "881yyy",
+                            "board_code": "881yyy",
                             "name": "电子",
-                            "type": "industry",
+                            "board_type": "industry",
                             "subtype": "",
                             "source": "ths",
                         },
@@ -178,16 +178,16 @@ class TestStocksBoardOverlap:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "半导体",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "",
                             "source": "ths",
                         },
                         {
-                            "code": "882zzz",
+                            "board_code": "882zzz",
                             "name": "新能源",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "",
                             "source": "ths",
                         },
@@ -226,9 +226,9 @@ class TestStocksBoardOverlap:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "X",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "",
                             "source": "ths",
                         }
@@ -242,9 +242,9 @@ class TestStocksBoardOverlap:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "X",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "",
                             "source": "ths",
                         }
@@ -552,9 +552,9 @@ class TestAgentCacheHit:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "半导体",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "",
                             "source": "ths",
                         }
@@ -565,9 +565,9 @@ class TestAgentCacheHit:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "半导体",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "",
                             "source": "ths",
                         }
@@ -983,9 +983,9 @@ class TestFormatMd:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "半导体",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "",
                             "source": "ths",
                         }
@@ -996,9 +996,9 @@ class TestFormatMd:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "半导体",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "",
                             "source": "ths",
                         }
@@ -1241,16 +1241,16 @@ class TestFormatMdDataCompleteness:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "半导体",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "技术",
                             "source": "ths",
                         },
                         {
-                            "code": "881yyy",
+                            "board_code": "881yyy",
                             "name": "电子",
-                            "type": "industry",
+                            "board_type": "industry",
                             "subtype": "-",
                             "source": "ths",
                         },
@@ -1261,9 +1261,9 @@ class TestFormatMdDataCompleteness:
                 (
                     [
                         {
-                            "code": "885xxx",
+                            "board_code": "885xxx",
                             "name": "半导体",
-                            "type": "concept",
+                            "board_type": "concept",
                             "subtype": "技术",
                             "source": "ths",
                         },
@@ -1603,9 +1603,9 @@ class TestBatchProfileHelperExtraction:
         from stock_data.data_provider.persistence import board as stock_board_cache
 
         cached_entry = {
-            "code": "300750",
+            "board_code": "300750",
             "name": "宁德时代",
-            "type": "concept",
+            "board_type": "concept",
             "subtype": "industry",
             "source": "ths",
         }
@@ -1618,7 +1618,7 @@ class TestBatchProfileHelperExtraction:
             sb_helper,
             "fetch_stock_boards_quote_enrichment",
             lambda stock_code, manager: (
-                [{"code": "300750", "change_pct": 20.0, "limit_up_count": 1}],
+                [{"board_code": "300750", "change_pct": 20.0, "limit_up_count": 1}],
                 {"300750": {"change_pct": 20.0, "limit_up_count": 1}},
             ),
         )
