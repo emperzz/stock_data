@@ -655,7 +655,32 @@ git commit -m "refactor(board): key board-stock cache and refresh tracker per so
                 _err = e
 ```
 
-（`_auto_rate_limit_s` 的 zzshare 依据失效 → 删除该函数，`inter_call_sleep_s` 改为固定 `0.0`，因为 F10 是单次 GET 且已有 45s HTML 缓存；在 `run_ths_board_backfill` 的 docstring 里写清。**这一步需要你 review 确认**：如果希望保留 THS 的限速，改成 `THS_BOARD_FETCH_JITTER_S = (1.5, 3.0)` 常量。）
+**限速处置（二选一，默认 A）**
+
+`_auto_rate_limit_s`（46-54）的取值依据是 zzshare `plates_stocks` 的限流（有 token 时 1.2s，否则 3.0s）。phase 2 的 zzshare 腿已删，该依据失效。
+
+- **A（默认）**：删除 `_auto_rate_limit_s` 与 `inter_call_sleep_s` 参数，sleep 固定 `0.0`。理由：F10 是单次 GET，且 `get_board_f10_page` 自带 45s HTML 缓存；THS 的板块页没有 zzshare 那样的限流证据。在 `run_ths_board_backfill` 的 docstring 里写明"no inter-call sleep: F10 is a single GET with a 45s HTML cache"。
+- **B（备选：保守限速）**：保留限速但改为 THS 依据：
+
+```python
+# THS q.10jqka.com.cn appears in the project's UA/rate-limit audit as the
+# weakest link under single-IP high-frequency use (CLAUDE.md, Key Design
+# Patterns). The backfill is a one-off sweep, so a conservative jitter
+# costs minutes, not hours.
+THS_BOARD_FETCH_JITTER_S = (1.5, 3.0)
+```
+
+并把 `_auto_rate_limit_s` 替换为：
+
+```python
+def _auto_rate_limit_s() -> float:
+    """Lower bound of the THS board-page jitter, in seconds."""
+    return THS_BOARD_FETCH_JITTER_S[0]
+```
+
+选 B 时，`tests/test_board_backfill.py:19/27` 的两个 `_auto_rate_limit_s` 用例**保留但改断言值**（1.2 / 3.0 → 1.5 / 1.5），不要删。
+
+Phase 2 的 `204-213`（连续错误计数）逻辑在两版下都不变。
 
 `backfill.py:218-226` 的 `upsert_membership_bulk(source="ths", ...)` 保持 `"ths"`，`board.get("board_type","")` 取新 key。
 

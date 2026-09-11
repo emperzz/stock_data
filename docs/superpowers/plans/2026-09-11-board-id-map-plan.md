@@ -1350,6 +1350,125 @@ git checkout master && git merge --no-ff feat/ths-board-id-map
 
 ---
 
+### Task 6（可选，默认不执行）: 运行期 gn 详情页兜底
+
+**为什么默认不做**：Task 4 把侧栏 platecode 解析放在运行期查表，miss 时留 `None`。spec §6 原本写的是"miss 时走 gn detail 页单次解析并回写"，本计划把它移到了工具期（`tools/refresh_ths_board_id_map.py`）。理由：`ths_fetcher.py:1784-1790` 的既有注释已论证过"每次 refresh 多 88 个请求"必须避免，且 seed 实测覆盖 138/141（98%），运行期 miss 不值得换 N 个请求。
+
+**什么情况下选做**：如果你更看重"运行期自愈"而非"零额外请求"（例如 `BOARD_BACKFILL_ON_STARTUP=false` 且长期不跑刷新工具，希望新板块自动补齐）。
+
+**Files:**
+- Modify: `stock_data/data_provider/fetchers/ths_fetcher.py`（`_merge_concept_sources`）
+- Test: `tests/test_ths_fetcher_sidebar_platecode.py`
+
+**Interfaces:**
+- Consumes: Task 4 的 `extract_platecode_from_detail(html) -> str | None`、`ThsFetcher._http_get_ths_board_index(url) -> str`、Plan 1 Task 1 的 `upsert_ths_board_id_map(rows) -> int`
+- Produces: 无
+
+- [ ] **Step 1: 写失败测试**
+
+追加到 `tests/test_ths_fetcher_sidebar_platecode.py`：
+
+```python
+class TestRuntimeDetailFallback:
+    def test_unmapped_sidebar_row_resolved_from_detail_page_and_cached(
+        self, fresh_db, monkeypatch
+    ):
+        detail_html = DETAIL_309121.replace("886071", "886123")
+        calls: list[str] = []
+
+        def fake_get(self, url):
+            calls.append(url)
+            return detail_html
+
+        monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", fake_get)
+
+        gn: list[dict] = []
+        sidebar = [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+        merged = ThsFetcher._merge_concept_sources(gn, sidebar)
+
+        assert merged[0]["platecode"] == "886123"
+        assert len(calls) == 1 and "309999" in calls[0]
+        # write-back: the next call must not hit the network again
+        calls.clear()
+        merged2 = ThsFetcher._merge_concept_sources(gn, sidebar)
+        assert merged2[0]["platecode"] == "886123"
+        assert calls == [], "resolved platecode must be persisted to ths_board_id_map"
+
+    def test_detail_fetch_failure_keeps_none(self, fresh_db, monkeypatch):
+        def boom(self, url):
+            raise DataFetchError("ths down")
+
+        monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", boom)
+        merged = ThsFetcher._merge_concept_sources(
+            [], [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+        )
+        assert merged[0]["platecode"] is None
+```
+
+（测试文件需补 `from stock_data.data_provider.base import DataFetchError` import。）
+
+- [ ] **Step 2: 运行确认失败**
+
+Run: `python -m pytest tests/test_ths_fetcher_sidebar_platecode.py::TestRuntimeDetailFallback -v`
+Expected: FAIL — `_merge_concept_sources` 只查表，不抓详情页
+
+- [ ] **Step 3: 实现兜底**
+
+`_merge_concept_sources` 的侧栏分支替换为：
+
+```python
+        for r in sidebar:
+            cid = r["code"]
+            if cid in by_cid:
+                if not by_cid[cid].get("name") and r.get("name"):
+                    by_cid[cid]["name"] = r["name"]
+                continue
+            platecode = resolve_ths_platecode(cid)
+            if platecode is None:
+                platecode = ThsFetcher._resolve_platecode_from_detail(cid)
+            by_cid[cid] = {**r, "platecode": platecode}
+        return list(by_cid.values())
+
+    @classmethod
+    def _resolve_platecode_from_detail(cls, ths_cid: str) -> str | None:
+        """Last-resort cid → platecode resolution, with write-back.
+
+        One GET per unmapped board. Deliberately a classmethod on the
+        fetcher rather than a persistence helper so the persistence layer
+        keeps its "no network" property. Failures are swallowed to ``None``
+        — a board whose platecode we cannot learn is still a valid board
+        row, just not addressable as a platecode.
+        """
+        from ..persistence.board import upsert_ths_board_id_map
+
+        url = f"https://q.10jqka.com.cn/gn/detail/code/{ths_cid}/"
+        try:
+            html = cls()._http_get_ths_board_index(url)
+        except Exception as e:
+            logger.debug(f"[ThsFetcher] detail-page resolve failed for {ths_cid}: {e}")
+            return None
+        platecode = cls.extract_platecode_from_detail(html)
+        if platecode:
+            upsert_ths_board_id_map(
+                [{"cid": ths_cid, "platecode": platecode, "board_type": "concept"}]
+            )
+        return platecode
+```
+
+- [ ] **Step 4: 运行确认通过**
+
+Run: `python -m pytest tests/test_ths_fetcher_sidebar_platecode.py -q`
+Expected: PASS
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add -A
+git commit -m "feat(ths): resolve unmapped sidebar platecodes from the gn detail page at runtime"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage（本计划覆盖的部分）**
@@ -1362,7 +1481,7 @@ git checkout master && git merge --no-ff feat/ths-board-id-map
 | §10.1 CSV 拆三份中的 `ths_board_id_map.csv` | Task 2 |
 | §10.3 seed 顺序在 board 之前 | Task 2 Step 5 + `TestSeedAllOrdering` |
 | §11 新增"id 契约不变量测试"（映射侧） | Task 1 `TestIsThsCid` / `test_zzshare_cid_rejected_on_write` |
-| §6 `get_all_boards` 侧栏解析 | Task 4 |
+| §6 `get_all_boards` 侧栏解析 | Task 4（查表）；Task 6（可选：运行期详情页兜底） |
 | §6 删除 zzshare 注释、`_merge_concept_sources` 中间态 | **Plan 2**（不在本计划；本计划只替换 `_merge_concept_sources` 的解析来源） |
 | §4 id 契约硬规则、§5 命名契约第 1+2 层 | **Plan 2** |
 | §7 删 merge/fallback、cache key 带 source | **Plan 2** |
@@ -1375,5 +1494,9 @@ git checkout master && git merge --no-ff feat/ths-board-id-map
 
 **类型一致性**：`upsert_ths_board_id_map(rows, conn=None) -> int` / `resolve_ths_platecode(str) -> str | None` / `get_ths_board_id_map_rows() -> list[dict]` / `seed_ths_board_id_map_from_csv(Path) -> int` / `extract_platecode_from_detail(str) -> str | None` / `snapshot_gn(fetcher) -> dict` / `resolve_unmapped(fetcher, snapshot, *, sleep_s, limit, log) -> tuple[dict, list[str]]` / `diff_maps(old, new) -> dict[str, list[str]]` —— Task 3 与 Task 4 共用 `extract_platecode_from_detail` 的同一签名，Task 1 与 Task 2/3/4 共用同一组 CRUD 名字。
 
-**已知偏差（有意，已在"范围与路线图"声明）**：spec §6 的运行时详情页解析改为工具期解析。
+**偏差与可选变体（均已声明，无隐含假设）**
+
+- spec §6 的"运行期 gn 详情页解析并回写"在 Plan 1 **默认不实现**，改由工具期（Task 3）承担 —— 见"范围与路线图"的偏差说明。**Task 6 是它的可选实现**（默认不执行），若你选择运行期自愈则执行 Task 6。
+- Task 3 与 Task 4 存在顺序依赖：`TestResolveUnmapped` 需要 Task 4 的 `extract_platecode_from_detail`。Task 3 Step 5 已显式说明"先跑 Task 4 的 Step 1-4 再回到本步"，不是笔误。
+- Task 2 Step 1 的 Expected 行数（480）为 2026-09-11 实测，不是推断值；`TestCommittedArtifact::test_contains_live_verified_pair` 断言的是两个实测校验点（`309121→886071` / `300188→885333`），不写死总行数，因此刷新 CSV 后不会误红。
 </content>

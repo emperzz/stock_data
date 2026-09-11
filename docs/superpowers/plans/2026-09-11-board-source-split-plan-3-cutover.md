@@ -442,6 +442,30 @@ Expected: FAIL（F10 tier 未实现；`le=50` 仍在）
 - `routes/boards.py:419-438` 的 `BoardInfo(...)` 传 `amount_unit=b.get("amount_unit")`。
 - 删除 `_normalize_zzshare_list_quote_units` 的任何残留引用（Plan 2 已删函数，此处确认无 import）。
 
+**单位策略（二选一，默认 A = D7 原样）**
+
+- **A（默认，上面已写）**：保留上游原生值 + 声明单位。客户端必须读 `amount_unit` 才能跨源比较 —— 这是 D7 的选择，与 `KLineData.volume_unit` 同范式。
+- **B（备选：对外单一单位）**：在 zzshare fetcher 边界换算成亿元，`amount_unit` 恒为 `"yi"`：
+
+```python
+# In zzshare_fetcher.get_all_boards, where the schema key is mapped:
+for src_key, schema_key in self._PLATES_RANK_SCHEMA_MAP.items():
+    board[schema_key] = safe_float(row.get(src_key))
+if include_quote:
+    # plates_rank emits trade_money in 元; the server's board-list contract
+    # is 亿元 (THS-native). Convert at the source boundary so every row in
+    # the response shares one scale — the previous silent merge-time
+    # normalization (_normalize_zzshare_list_quote_units) is gone with the
+    # merge itself (spec §7).
+    if board.get("amount") is not None:
+        board["amount"] = board["amount"] / 1e8
+    board["amount_unit"] = "yi"
+```
+
+选 B 时，`tests/test_board_amount_unit.py::test_zzshare_board_list_declares_yuan` 改为断言 `amount_unit == "yi"` 且 `amount` 已被除以 1e8；`test_missing_unit_is_none_not_defaulted` 不受影响。
+
+选 B 的代价：丢掉"上游原值"这一层信息（若要核对上游需自己乘回 1e8）。选 A 的代价：同一响应里 `amount` 可能有两种量级，客户端漏读 `amount_unit` 会算出 1e8 倍的错。**A 更诚实，B 更省事**。
+
 - [ ] **Step 6: 更新受影响的既有测试**
 
 | 文件:行 | 改为 |
@@ -489,30 +513,47 @@ import csv
 
 ZZ_PREFIXES = ("801", "803", "710", "883")
 SRC = "stock_data/stock_data_backup/stock_board_ths.csv"
+COLS = ["code", "name", "board_type", "subtype", "source", "cid"]
 
-rows = list(csv.DictReader(open(SRC, encoding="utf-8-sig")))
+rows = [r for r in csv.DictReader(open(SRC, encoding="utf-8-sig")) if r["code"]]
+dropped = sum(1 for r in csv.DictReader(open(SRC, encoding="utf-8-sig")) if not r["code"])
 ths = [r for r in rows if r["code"][:3] not in ZZ_PREFIXES]
 zz = [r for r in rows if r["code"][:3] in ZZ_PREFIXES]
 
-def dump(path, recs):
+
+def dump(path, recs, source):
     with open(path, "w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["code", "name", "board_type", "subtype", "source", "cid"])
+        w = csv.DictWriter(f, fieldnames=COLS)
         w.writeheader()
         for r in recs:
-            w.writerow({
-                "code": r["code"], "name": r["name"], "board_type": r["board_type"],
-                "subtype": r["subtype"],
-                "source": "ths" if path.endswith("ths.csv") else "zzshare",
-                "cid": (r.get("cid") or "") if path.endswith("ths.csv") else "",
-            })
+            w.writerow(
+                {
+                    "code": r["code"],
+                    "name": r["name"],
+                    "board_type": r["board_type"],
+                    "subtype": r["subtype"],
+                    "source": source,
+                    # cid holds a THS-internal id; only ths rows may carry one.
+                    # Note 118 of these legacy rows carry a zzshare code in the
+                    # cid column — those rows move to the zzshare file, so the
+                    # polluted values leave with them (spec §3.1).
+                    "cid": (r.get("cid") or "") if source == "ths" else "",
+                }
+            )
 
-dump("stock_data/stock_data_backup/stock_board_ths.csv", ths)
-dump("stock_data/stock_data_backup/stock_board_zzshare.csv", zz)
-print("ths rows:", len(ths), "| zzshare rows:", len(zz))
+
+dump("stock_data/stock_data_backup/stock_board_ths.csv", ths, "ths")
+dump("stock_data/stock_data_backup/stock_board_zzshare.csv", zz, "zzshare")
+print("ths rows:", len(ths), "| zzshare rows:", len(zz), "| dropped empty-code:", dropped)
 PY
 ```
 
-Expected: `ths rows: 620 | zzshare rows: 177`（797 - 177；实测前缀分布为 885/886/881 共 620 行，801/803/710/883 共 177 行 —— 以脚本输出为准，两个数之和必须等于 797）
+Expected（2026-09-11 实测）: `ths rows: 604 | zzshare rows: 186 | dropped empty-code: 7`
+
+- 原文件 797 行 = 604 ths（885/886/881）+ 186 zzshare（801/803/710/883）+ 7 空 code 垃圾行。
+- 空 code 行**直接丢弃**（loader 本就跳过它们，且 `UNIQUE(code,source)` 会让它们互相折叠）。
+- 604 ths 行里含 16 个重复 code，入库时按 `UNIQUE(code, source)` 折叠为 **588**；186 zzshare 行无重复。
+- 原文件里 118 行 concept 的 `cid` 列存的是 zzshare code —— 它们全部属于 801/803/710 前缀，因此随重分类进入 zzshare 文件（该文件 `cid` 一律留空），污染随之离开 ths 命名空间。
 
 - [ ] **Step 2: membership CSV 整体 relabel**
 
@@ -541,7 +582,19 @@ rm stock_data/stock_data_backup/stock_board_membership_ths.csv
 
 Expected: `relabelled 115081`；随后 ths membership 不再有 CSV（THS 反向数据由 Plan 1 的 `ths_board_id_map` + 运行时 live 积累，不再需要整表 seed）。
 
-> **这条决定需要你 review 确认**：删掉 `stock_board_membership_ths.csv` 意味着数据库里 `source='ths'` 的反向索引**冷启动为空**，`/stocks/{code}/boards?source=ths` 会走 cold-fallback（一次性抓 THS，已有实现）。保留原文件（只改 label 为 zzshare、另存 zzshare 版）也可以 —— 默认取"删除"，因为保留下来的话它就是一份不合格的 ths 数据。
+**`stock_board_membership_ths.csv` 的处置（二选一，默认 A）**
+
+- **A（默认，上面已执行）**：删除原文件。理由：那 115,081 行里 52,010 行的 `board_code` 是 801xxx（zzshare 码），把它当 ths 数据 seed 进 `source='ths'` 就是把刚拆开的两套命名空间再焊回去。代价：`source='ths'` 的反向索引冷启动为空，`/stocks/{code}/boards?source=ths` 首次走 cold-fallback（`_helpers/stock_boards.py` 已有一次性抓取实现，60s 缓存）。
+- **B（备选，保留但不 seed）**：把它移出 seed 路径留档，避免历史数据不可追溯：
+
+```bash
+mv stock_data/stock_data_backup/stock_board_membership_ths.csv \
+   stock_data/stock_data_backup/stock_board_membership_ths.csv.legacy
+```
+
+并把 `.gitignore` 的 `/stock_data/stock_data_backup/*.bak.*` 旁补一行 `/stock_data/stock_data_backup/*.legacy`。这样文件仍随 repo 保留供比对，但 `seed_all_from_backup_dir` 不会读到它（它按固定文件名查找）。**不要**保留原名 —— 那会让每次 `STOCK_DB_INIT=true` 都把 zzshare 数据重新灌回 ths。
+
+若选 B，Step 4 的 `test_row_counts_are_conserved` 等测试不受影响（它们只读 `ths` / `zzshare` 两个拆分后的 board CSV）。
 
 - [ ] **Step 3: loader 支持 zzshare**
 
@@ -604,9 +657,18 @@ class TestSourcePurity:
         assert {r["source"] for r in _rows("stock_board_membership_zzshare.csv")} == {"zzshare"}
 
     def test_row_counts_are_conserved(self):
+        """797 source rows = 604 ths + 186 zzshare + 7 empty-code (dropped).
+
+        Measured 2026-09-11 against the split source file. The 7 empty-code
+        rows are junk the CSV loader skips anyway (UNIQUE(code, source)
+        would collapse them); dropping them at split time makes the
+        conservation check exact instead of approximate.
+        """
         ths = len(_rows("stock_board_ths.csv"))
         zz = len(_rows("stock_board_zzshare.csv"))
-        assert ths + zz == 797, "the split must not drop or duplicate rows"
+        assert ths == 604, f"ths row count drifted: {ths}"
+        assert zz == 186, f"zzshare row count drifted: {zz}"
+        assert ths + zz + 7 == 797, "the split must not drop or duplicate valid rows"
 
 
 class TestSeedRoundTrip:
