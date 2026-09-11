@@ -403,6 +403,23 @@ def init_schema() -> None:
         CREATE INDEX IF NOT EXISTS idx_membership_forward
             ON stock_board_membership(board_code, source)
     """)
+    # THS cid → platecode map. The single query point for "which of THS's
+    # two board identifiers do I use here" — see docs/superpowers/specs/
+    # 2026-09-11-board-source-split-design.md §3. `cid` is the stable key
+    # (3xxxxx concept / 881xxx industry); `platecode` is the public one.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ths_board_id_map (
+            cid        TEXT PRIMARY KEY,
+            platecode  TEXT NOT NULL,
+            name       TEXT,
+            board_type TEXT,
+            observed_at DATETIME
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ths_board_id_map_platecode
+            ON ths_board_id_map(platecode)
+    """)
     conn.commit()
     logger.info(f"[BoardCache] Database initialized at {get_db_path()}")
 
@@ -2184,6 +2201,91 @@ def _is_valid_stock_code(code: Any) -> bool:
     if not isinstance(code, str) or not code:
         return False
     return bool(_VALID_STOCK_CODE.match(code))
+
+
+def _is_ths_cid(value: Any) -> bool:
+    """True iff ``value`` is a THS board cid.
+
+    A THS cid is either a concept cid (3xxxxx) or an industry cid
+    (881xxx — identical to its platecode). Everything else is rejected.
+    The legacy ``stock_board_ths.csv`` stores 118 concept rows whose
+    ``cid`` column is not a cid at all: 110 of them are THS platecodes
+    (885×98 / 886×12 / 883×1, from the pre-2026-07-20 layout) and only 8
+    are zzshare codes (803×6 / 710×1). None of the 118 is a mapping
+    (spec §3.1) — this guard is also what keeps those 110 platecode-shaped
+    values out of ``ths_cid`` when the CSV is split (spec §4 rule 6).
+    """
+    if not isinstance(value, str) or len(value) != 6:
+        return False
+    # isascii() guards against fullwidth digits, which str.isdigit() accepts.
+    if not (value.isascii() and value.isdigit()):
+        return False
+    return value.startswith("3") or value.startswith("881")
+
+
+def upsert_ths_board_id_map(
+    rows: list[dict], conn: sqlite3.Connection | None = None
+) -> int:
+    """Upsert THS ``cid → platecode`` mappings. Returns the rows written.
+
+    Rows whose ``cid`` fails :func:`_is_ths_cid`, or that carry no
+    platecode, are skipped silently (the caller's row count is the
+    diagnostic). Last write wins, so callers merge *live* observations
+    after CSV seeds — the CSV is a snapshot, live data is authoritative
+    (spec §3.2).
+    """
+    if not rows:
+        return 0
+    init_schema()
+    if conn is None:
+        conn = get_connection()
+    payload = [
+        (
+            r["cid"],
+            r["platecode"],
+            r.get("name") or "",
+            r.get("board_type") or "",
+        )
+        for r in rows
+        if _is_ths_cid(r.get("cid")) and r.get("platecode")
+    ]
+    if not payload:
+        return 0
+    with conn:
+        conn.cursor().executemany(
+            """INSERT OR REPLACE INTO ths_board_id_map
+               (cid, platecode, name, board_type, observed_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            payload,
+        )
+    return len(payload)
+
+
+def resolve_ths_platecode(ths_cid: str) -> str | None:
+    """Return the THS platecode for a THS cid, or ``None`` when unmapped.
+
+    Single SELECT. This helper is the only sanctioned cid → platecode
+    lookup (spec §3.2) — callers must not rebuild the relation ad hoc
+    (that is how the by-board-name join ended up conflating two code
+    spaces).
+    """
+    if not ths_cid:
+        return None
+    init_schema()
+    row = get_connection().execute(
+        "SELECT platecode FROM ths_board_id_map WHERE cid = ?", (ths_cid,)
+    ).fetchone()
+    return row["platecode"] if row else None
+
+
+def get_ths_board_id_map_rows() -> list[dict[str, Any]]:
+    """All mappings ordered by cid (CSV export / tool / test use)."""
+    init_schema()
+    rows = get_connection().execute(
+        "SELECT cid, platecode, name, board_type, observed_at "
+        "FROM ths_board_id_map ORDER BY cid"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def update_cached_boards(board_type: str, source: str, boards: list) -> int:
