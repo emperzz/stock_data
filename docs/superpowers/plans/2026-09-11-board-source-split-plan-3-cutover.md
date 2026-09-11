@@ -1457,7 +1457,57 @@ git commit -m "test(board): add post-split acceptance invariants"
 
 ---
 
-## 验收记录
+## 验收记录（2026-09-11，inline）
+
+Plan 3 已落地（commit `bb71b05` → `fbf9465` → `649563f` → `c1a5296` → `9e5a071`）。全量 `.venv/Scripts/python.exe -m pytest -q` = **2767 passed, 2 skipped, 0 failed**。
+
+### 重建结果（实测）
+
+`STOCK_DB_INIT=true` + `reset_all()` + `seed_all_from_backup_dir`：
+
+```
+{'ths_board_id_map': 479, 'stock_board_ths': 588, 'stock_board_eastmoney': 992,
+ 'stock_board_zzshare': 186, 'stock_board_membership_zzshare': 115081}
+```
+
+（`ths_board_id_map` 是 479 而非 480 —— 见下面的缺陷 #1。）
+
+### 端到端验收（真实 server + 真实上游）
+
+| # | 命令 | 实测 |
+|---|---|---|
+| 1 | `/boards?source=ths&type=concept` | 484 行，前缀只有 885/886 |
+| 2 | `/boards?source=zzshare&type=concept` | 186 行（缓存），前缀 801/803/710/883 |
+| 3 | `/boards/885333/stocks?source=ths&include_quote=false` | 78 只，`effective_source="ths"` |
+| 6 | `...&include_quote=true&top_n=100` | 78 行；`change_speed`/`free_float_shares`/`float_market_cap` 均 `null`；`quote_truncated=false` |
+| 12 | `...&include_quote=true&top_n=50` | 50 行；`quote_truncated=true`；首行 `open/high/low` 有值（AJAX 50 行上限 = 真截断） |
+| 7 | `/boards/885333/history?source=zzshare` | **400** |
+| 8 | `/stocks/600519/boards?source=ths` vs `?source=zzshare` | 8 条 vs 10 条，条目 source 各自纯净（改前逐字节相同） |
+| 9 | `/stocks/600519/boards`（省略 source） | 18 条 = 10 zzshare + 8 ths |
+| 10 | `/boards?source=zzshare&include_quote=true` | `amount_unit="yi"`，`amount=51.5105`（亿元） |
+| 11 | `/boards/885333/quote?source=zzshare` | **200**（该端点无 `source` 参数，参数被忽略） |
+
+**第 5 项与预期不符，但 404 是对的**：`/boards/885300/stocks?source=ths` 返回 404 而非计划期望的 200。实测 885300 的 F10 页是 **2,138 字节的空壳**（无成分股），而活的 885333 是 108,505 字节 —— 885300 是已下线的 THS 代码。改前的 422 是 `cid_unresolved`（无 DB 行），改后是空结果 404，两者都是"没有数据"，404 更准确。
+
+### 验收清单抓到的四个缺陷（3 个是本轮引入的）
+
+| # | 缺陷 | 处置 |
+|---|---|---|
+| 1 | **`ths_board_id_map` 收进了 zzshare 码**：CSV 里 `cid='300066'`（真 THS cid）+ `code='803014'`（zzshare 码）。只守 cid 半边就放行，随后运行期把 803014 当作 ths 板块吐出并落库 | 新增 `_is_ths_platecode`（885/886/881），写入路径 + seed 生成双重把关；seed 480 → 479 |
+| 2 | **plan 原文的"整表 relabel 为 zzshare"是对的，我的中间版本按前缀拆错了**（见下） | 回退为单个 115,081 行 `stock_board_membership_zzshare.csv` |
+| 3 | **`/stocks/{code}/boards` 在 ths 冷缓存时丢弃所有非 THS 条目**：cold-branch 用 live THS 结果**替换**了整个 data 列表，而不是与之合并。因为没有 ths membership seed，这条分支对每个股票都会命中 —— 600519 返回 8 条 ths、静默丢掉 10 条 zzshare | 改为合并；回归测试已验证"去掉修复就失败" |
+| 4 | spec §1.2 的 code space 表只列了 zzshare plate_type 17，"没有任何一个 code 共用"的结论由此而来 | §1.2/§1.4/§1.5 + `board-source-semantics.md` + `CLAUDE.md` + `.env.example` 全部订正 |
+
+### 缺陷 #2 的细节（一次被推翻的结论）
+
+Plan 3 Task 3 Step 2 原文是"membership 整体 relabel 为 zzshare"。执行中我按 `board_code` 前缀把它拆成 zzshare 55,301 行 + THS 59,780 行，理由是"code space 不相交 + subtype 词汇各说各话"。**这个理由是错的**，两条都不成立：
+
+- zzshare 的 `plates_rank` 跨三个 plate_type：**15(概念) → 885/886**、**14(行业) → 881**、17(题材) → 801/803/710/883。所以它和 THS 的公开码**大面积重叠**。我所谓的"不相交"只成立于该文件自己的两个分组之间，不成立于两个**来源的能力范围**之间。
+- `同花顺概念`/`同花顺行业` 是**板块清单**带下来的 label（生成器抄进 membership 行），而 zzshare 的 plate_type 14/15 正好对应行业/概念，所以这两个 subtype 根本无法区分来源。唯一只属于 zzshare 的词汇是 `同花顺题材`(pt=17)，它只能证明 801xxx 那一组。
+
+推翻它的证据是活库对照：zzshare 对 `885333` 返回 75 只 / CSV 74 只（交集 74，Jaccard 0.99）、`885431` 1010/1002（0.97）、`881121` 181/176（0.97）。差异来自 CSV 是 2026-07-12 的快照。
+
+**教益**：`board_code` 的前缀不是来源标记 —— 两个 source 的取值域重叠。判断来源要靠 `source` 字段本身或上游对照，不能靠 code 形状。
 
 （执行本计划时在此记录 Task 6 Step 4 的 10 条实际输出摘要。）
 
