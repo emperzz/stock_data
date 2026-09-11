@@ -990,6 +990,36 @@ git commit -m "fix(board): make update_cached_boards a (board_type, source) snap
 
 ---
 
+## 执行记录（2026-09-11，inline）
+
+Plan 2 已落地并合并（commit `646b95c`，merge `5cdbbc2`）。全量 `.venv/Scripts/python.exe -m pytest -q` = **2697 passed, 2 skipped, 0 failed**。
+
+### 计划里的三处代码片段是错的，按实际代码改了
+
+`fetch_board_stocks_with_zzshare_fallback` 被删掉之后，它做的三件事在计划的两处替换片段（Task 2 Step 3、Plan 3 Task 2 Step 3）里**都丢了**。这三件都补回来了：
+
+| # | 计划片段的问题 | 实际实现 |
+|---|---|---|
+| 1 | **THS 的 AJAX 端点是 cid 寻址的** —— URL slug 要 cid（3xxxxx），不是公开 platecode。片段把 `board_code` 直接透传，会拿 platecode 去查 THS，静默查到错板块 | `source == "ths"` 时 `cid = resolve_ths_cid(board_code)`，用 cid 调 `get_board_stocks`；eastmoney / zhitu 用各自的 `board_code` 直通 |
+| 2 | **丢了 `reason="cid_unresolved"`（→ 422）契约**。片段让 cid 解析不到的板块静默走成空结果 404 —— "无法定位这个板块" 和 "这个板块没有成分股" 是两回事 | cid 解析不到时直接返回 `([], source, source, "cid_unresolved", False, cached_count)`，**不调用 manager** |
+| 3 | **丢了 `board_type` 解析**（`/thshy/` vs `/gn/`）。片段没有从 `get_board_metadata` 取 `board_type` | 进入 fetch 前解析一次 `board_type_resolved`，两个分支都传 |
+| 4 | 片段还把 eastmoney / zhitu 也走了 THS 的 cid 翻译 | 已按来源分流（见 #1） |
+
+另外**缓存命中早退分支的 `effective_source` 硬编码 `"ths"`**（计划只在 Task 3 Step 3 的文字里提了一句）已改为 `source` —— 否则 zzshare 请求命中缓存会被署名成 ths。
+
+### 执行要点
+
+| # | 事项 |
+|---|---|
+| 1 | **Task 1+2 合成一笔提交**：行 key 重命名会让 `_merge_ths_zzshare_by_name`（Task 2 才删）立刻 KeyError，分开提交的第一笔必然是红的。与 Plan 1 Task 3+4 同理 |
+| 2 | 同理 Task 3/4/5 也在同一笔：`get_board_stocks` 的 cache key、快照替换、backfill 都改在同一个函数/文件上，无法各自独立成绿 |
+| 3 | `tests/test_persistence_board_merge.py`（21 用例）与 `test_persistence_board_f10_fallback.py`（6 用例）整文件删除；`TestResolveThsCidFromPlatecode` 里断言 `cid→code` 回退的那一条随之消失，由新的 `tests/test_board_cache_key_per_source.py` 以"NULL cid → None"顶替 |
+| 4 | `tests/test_board_naming_contract.py` / `test_board_prune_stale_boards.py` 为新增 |
+| 5 | **`update_cached_boards` 的 `ths_cid` 用 `.get()`**：eastmoney / zhitu 行若漏带该键，硬下标会 KeyError 炸掉整个 board-list 写；四个 fetcher 现在统一带 `ths_cid`（非 THS 源为 `None`） |
+| 6 | `ruff check .` 的既有 39 个错误与本次无关；改动文件的 `ruff check` 干净（8 个残留均为 HEAD 既有）。`ruff format --check` 在 5 个文件上报警，经 `git stash` 验证 **在 HEAD 上同样报警**，故不动，避免无关 churn |
+| 7 | 一次自伤：行 key 重命名被过度应用到了 `agent.py` 的两个 **MD 渲染器**（`render_stocks_board_overlap_as_md` 的 `t = b.get("type")`、`render_stocks_batch_profile_as_md` 的 `b.get("code")` / `b.get("type")`）。它们消费的是**响应边界**的 dict（同循环内读 `b.get('code')` 即证据），已回退。教训：`code`/`type` 在**响应载荷**里是契约名，重命名只针对内部行 dict |
+| 8 | 同类自伤还有一处：`get_board_stocks` 的 `include_quote=False` 分支一度**只**调 `get_board_stocks_full`，导致 eastmoney/zhitu 请求 400/422；已按来源分流（见上表 #4） |
+
 ## Self-Review
 
 **Spec 覆盖**
