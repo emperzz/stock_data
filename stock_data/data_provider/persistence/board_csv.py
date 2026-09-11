@@ -57,6 +57,10 @@ _MEMBERSHIP_COLS = {
 # Any other source value would silently filter every row.
 _SUPPORTED_STOCK_BOARD_SOURCES: frozenset[str] = frozenset({"ths", "eastmoney"})
 
+# Required columns for the THS cid → platecode map CSV. `name` is optional
+# (the loader backfills "" so the upsert payload is uniform).
+_THS_BOARD_ID_MAP_COLS = {"cid", "platecode"}
+
 # 6-digit ASCII stock code pattern, used to filter membership CSV rows.
 _VALID_STOCK_CODE = re.compile(r"^\d{6}$")
 
@@ -263,8 +267,43 @@ def seed_membership_from_csv(csv_path: Path) -> int:
     return len(rows)
 
 
+def seed_ths_board_id_map_from_csv(csv_path: Path) -> int:
+    """Seed ``ths_board_id_map`` from a ``cid,platecode,name,board_type`` CSV.
+
+    Non-THS cid rows are skipped by ``board.upsert_ths_board_id_map``
+    (spec §3.1: the legacy ``stock_board_ths.csv`` carries 118 concept
+    rows whose ``cid`` column holds a platecode, not a cid).
+
+    Raises:
+        FileNotFoundError: ``csv_path`` doesn't exist.
+        ValueError: required columns missing.
+    """
+    if not csv_path.exists():
+        raise FileNotFoundError(csv_path)
+    board_mod.init_schema()
+    _validate_csv_columns(csv_path, _THS_BOARD_ID_MAP_COLS)
+
+    rows = [
+        {
+            "cid": r["cid"],
+            "platecode": r["platecode"],
+            "name": r.get("name") or "",
+            "board_type": r.get("board_type") or "",
+        }
+        for r in _open_csv(csv_path)
+    ]
+    written = board_mod.upsert_ths_board_id_map(rows)
+    logger.info(
+        "[CSVSeed] %s: wrote %d cid→platecode mappings (of %d rows)",
+        csv_path.name,
+        written,
+        len(rows),
+    )
+    return written
+
+
 def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
-    """Seed both stock_board (THS+eastmoney) and stock_board_membership (THS).
+    """Seed ths_board_id_map + stock_board (THS+eastmoney) + stock_board_membership (THS).
 
     Missing files: log a warning, skip that source. Don't raise.
     Schema errors (missing columns), encoding errors, malformed rows, and
@@ -274,8 +313,9 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
     with a partial/empty board cache.
 
     Returns:
-        {'stock_board_ths': N, 'stock_board_eastmoney': M,
-         'stock_board_membership_ths': K}. Missing entries are absent.
+        {'ths_board_id_map': P, 'stock_board_ths': N,
+         'stock_board_eastmoney': M, 'stock_board_membership_ths': K}.
+        Missing entries are absent.
 
     Side effect: when files exist but ALL fail (schema/IO error), emits
     one summary ERROR log so the caller can distinguish "no CSVs in the
@@ -288,6 +328,23 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
 
     failed_files: list[str] = []
     missing_files: list[str] = []
+
+    # Seeded FIRST: sidebar cid → platecode resolution depends on it.
+    id_map_csv = backup_dir / "ths_board_id_map.csv"
+    if id_map_csv.exists():
+        try:
+            results["ths_board_id_map"] = seed_ths_board_id_map_from_csv(id_map_csv)
+        except _NON_FATAL_SEED_EXCEPTIONS as e:
+            logger.error(
+                "[CSVSeed] %s: %s: %s; skipping",
+                id_map_csv.name,
+                type(e).__name__,
+                e,
+            )
+            failed_files.append(id_map_csv.name)
+    else:
+        logger.warning("[CSVSeed] %s not found; skipping id-map seed", id_map_csv)
+        missing_files.append(id_map_csv.name)
 
     ths_board = backup_dir / "stock_board_ths.csv"
     if ths_board.exists():
