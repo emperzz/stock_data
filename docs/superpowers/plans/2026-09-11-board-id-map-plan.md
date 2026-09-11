@@ -1459,13 +1459,22 @@ PY
 
 Expected:
 ```
-seed results: {'ths_board_id_map': 480, 'stock_board_ths': 774, 'stock_board_membership_ths': 115081, 'stock_board_eastmoney': 992}
+seed results: {'ths_board_id_map': 480, 'stock_board_ths': 790, 'stock_board_membership_ths': 115081, 'stock_board_eastmoney': 992}
 map size: 480
 309121 -> 886071
 710002 -> None
 ```
 
-（`stock_board_ths` 为 **774** 而非 797：7 行空 `code` 被 loader 跳过（790 行入库）后，其中 **16** 组重复 `code` 在 `UNIQUE(code, source)` 上折叠 —— 既有行为，非本次引入。早前版本写的 775 / 17 组是推算值，实测为 774 / 16。注：Plan 3 Task 3 的 CSV 拆分会在拆分期就去重，届时这个数字变成 588。）
+**注意 `stock_board_ths` 的两个不同口径**（2026-09-11 实测，容易看错）：
+
+| 口径 | 值 | 含义 |
+|---|---|---|
+| `seed_all_from_backup_dir` 的返回值 | **790** | loader **处理过的行数**（797 − 7 行空 `code`），不含去重 |
+| `SELECT COUNT(*) FROM stock_board WHERE source='ths'` | **774** | 实际落库行数 —— 16 组重复 `code` 被 `UNIQUE(code, source)` 的 `INSERT OR REPLACE` 折叠 |
+
+早前版本把这两个数混成 775（推算值）；`stock_board_eastmoney` 则两个口径一致（992，无重复 code）。
+
+（Plan 3 Task 3 的 CSV 拆分会在拆分期就确定性去重，届时两个口径都变成 588。）
 
 - [ ] **Step 4: 文档**
 
@@ -1514,6 +1523,22 @@ git checkout master && git merge --no-ff feat/ths-board-id-map
 早前版本把它列为可选，依据是 `ths_fetcher.py:1784-1790` 的"每次 refresh 多 88 个请求" —— 那是**没有 seed 时**测得的数字。seed 落地后残余 miss 只剩个位数，回写又保证每个板块一辈子只花 1 个请求；且能从侧栏看到就说明板块在 THS 存在，详情页必然带 platecode。结论见"范围与路线图"的"为什么运行期兜底值得做"。
 
 保留备查的反向判据：只有"明确不需要运行期自愈、且接受新板块在刷新工具跑之前一直 `platecode=None`"时才该退回到纯查表 —— 那就删掉 Task 4 Step 4 的 `_resolve_platecode_from_detail` 调用与 `TestRuntimeDetailFallback`，其余不变。
+
+## 执行记录（2026-09-11，inline）
+
+Plan 1 已按本文档落地并合并（commit `984c845` → `70f4129` → `48ddc7f`，merge 为 `a02ba51`）。执行中发现并处理了下面这些**计划没写到**的点：
+
+| # | 发现 | 处理 |
+|---|---|---|
+| 1 | `ruff check .` 在**未改动的**文件里有 **39 个既有错误**（`docs/akshare/scripts/*.py`、`tests/test_persistence_board.py`、`tests/test_stocks_list_quote_session_cache.py`）。Global Constraints 的"ruff 干净"按 `ruff check .` 无法达成，与本次改动无关 | 改为对**改动文件**跑 ruff（全绿）；全仓 `ruff check .` 的既有债不在本计划范围 |
+| 2 | Task 3 的工具若与 Task 4 分开提交，那一笔 commit 后测试是红的（工具的 `resolve_unmapped` 依赖 `extract_platecode_from_detail`） | **合并为一笔 commit**（`70f4129`），符合本文档"Task 3 Step 5 先跑 Task 4 Step 1-4"的说明 |
+| 3 | 工具的 `DEFAULT_OUT` 原本按顶层 `tools/` 写的（`parents[1] / "stock_data" / "stock_data_backup"`），挪到 `stock_data/tools/` 后多了一层 | 改为 `parents[1] / "stock_data_backup"` |
+| 4 | `TestMainDryRun` 用 `monkeypatch.setattr(tool, "ThsFetcher", lambda: FakeFetcher())`，而 `snapshot_gn` / `resolve_unmapped` 又去 `ThsFetcher._parse_gn_section` 取类属性 → `AttributeError: 'function' object has no attribute '_parse_gn_section'` | 工具里引入 `_FetcherClass = ThsFetcher`（parser 与常量走它）与 `_GN_INDEX_URL`；模块级 `ThsFetcher` 只作**构造**入口，因此测试的替换照常生效。这是工具的设计缺陷，不是测试的问题 |
+| 5 | `tests/test_board_csv_seed.py::test_seed_all_from_backup_dir_missing_files` 断言缺 3 个文件；新增 id-map 后是 4 | 计划外的一处既有测试改动（3 → 4），随 Task 2 一起提交 |
+| 6 | Step 3 的 `stock_board_ths` 有**两个口径**：loader 返回值 790 vs 落库 774 | 已在 Task 5 Step 3 写清（见该处表格） |
+| 7 | Task 4 Step 7 要改的既有用例，最终实现比计划草稿多做了一点 | 用了 `@pytest.fixture(autouse=True)` 把 map 隔离为**已知为空**（而不是只换 cid），并补了一条**正向**用例：seed 里的 cid（301558 → 885611）解析成功且**不发**详情页请求 |
+
+**验证结果**：全量 `.venv/Scripts/python.exe -m pytest -q` = **2707 passed, 2 skipped**（基线 2658 passed，+49 全为本计划新增，无回归）；live 覆盖率测试 `tests/test_ths_concept_platecode_coverage_live.py` 对真实 THS **实测通过**。
 
 ## Self-Review
 
