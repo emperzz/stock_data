@@ -595,6 +595,10 @@ _THS_F10_BOARD_URL = "https://basic.10jqka.com.cn/{market_id_prefix}{board_code}
 # stock-click handler (probed 2026-07-22 against 881121).
 _THS_CHANGECODE_RE = re.compile(r"changecode\('(\d{6})'\)")
 
+# A concept board's detail page carries exactly one 885/886 code — the
+# platecode. Verified live 2026-09-11: /gn/detail/code/309121/ → 886071.
+_THS_DETAIL_PLATECODE_RE = re.compile(r"\b(88[56]\d{3})\b")
+
 # A-share first-digit → exchange suffix. Matches the project-wide
 # convention used in ``data_provider/utils/normalize.py`` (6/9 → SH,
 # 0/3 → SZ, 4/8 → BJ) and the inline exchange column on the concept
@@ -1781,13 +1785,14 @@ class ThsFetcher(BaseFetcher):
           separate cid for industry boards (verified 2026-07-08: the
           ``/thshy/detail/code/881272/`` detail page's ``<input id=clid>``
           returns 881272, identical to the URL slug).
-        - ``platecode`` may be ``None`` for concept rows that appear
-          only in the sidebar (88 of ~383 on a typical snapshot) — the
-          sidebar doesn't carry platecode. Reverse-filling them by
-          fetching ``/gn/detail/code/{cid}/`` would cost 88 extra
-          requests on every refresh; out of scope. Clients that need
-          the platecode for K-line can resolve on demand via
-          ``get_board_history`` (which already does the clid lookup).
+        - ``platecode`` is resolved for sidebar-only concept rows via
+          ``ths_board_id_map`` (seeded from
+          ``stock_data/stock_data_backup/ths_board_id_map.csv`` and
+          refreshed by ``stock_data/tools/refresh_ths_board_id_map.py``).
+          A map miss costs ONE ``/gn/detail/code/{cid}/`` request, whose
+          result is written back — so each board is fetched at most once
+          ever. It stays ``None`` only for boards THS exposes no
+          platecode for at all.
 
         Args:
             board_type: ``"concept"`` / ``"industry"`` / ``None`` (both).
@@ -1990,16 +1995,42 @@ class ThsFetcher(BaseFetcher):
         return out
 
     @staticmethod
+    def extract_platecode_from_detail(html: str) -> str | None:
+        """Return the platecode of a ``/gn/detail/code/{cid}/`` page.
+
+        Returns ``None`` when the page carries zero or more than one
+        distinct candidate — an ambiguous page must never be guessed at.
+        The page is the last-resort resolver used by
+        ``stock_data/tools/refresh_ths_board_id_map.py``; the runtime
+        board-list path only consults it on a ``ths_board_id_map`` miss.
+        """
+        found = sorted(set(_THS_DETAIL_PLATECODE_RE.findall(html or "")))
+        return found[0] if len(found) == 1 else None
+
+    @staticmethod
     def _merge_concept_sources(gn_section: list[dict], sidebar: list[dict]) -> list[dict]:
-        """Merge gnSection (primary) + sidebar (fallback for missing names).
+        """Merge gnSection (primary) + sidebar, resolving sidebar platecodes.
 
         - gnSection rows always win (they carry platecode + real-time).
-        - Sidebar-only rows are appended; their ``platecode`` is set
-          to ``None`` so callers can detect "no K-line via platecode"
-          and fall back to ``get_board_history``'s clid lookup.
-        - Duplicates within either source (e.g. gnSection repeating
-          the same cid twice in a single snapshot) are de-duped by cid.
+        - Sidebar-only rows carry only a cid; their platecode comes from
+          ``ths_board_id_map`` — the single cid → platecode query point,
+          seeded from the repo CSV and refreshed live by
+          ``stock_data/tools/refresh_ths_board_id_map.py``.
+        - A map miss falls back to ONE ``/gn/detail/code/{cid}/`` request,
+          whose result is written back to the map, so each board costs at
+          most one detail-page request ever. That write-back is what makes
+          "miss" mean "newer than the seed snapshot" rather than "unknown".
+        - Duplicates within either source (e.g. gnSection repeating the
+          same cid twice in a single snapshot) are de-duped by cid.
+
+        Deliberately NOT resolved by matching board names against another
+        source: that is what conflated THS's and zzshare's code spaces
+        (docs/superpowers/specs/2026-09-11-board-source-split-design.md §1.2).
+        A row that stays unresolved keeps ``platecode=None`` — callers must
+        read that as "not known yet", never as another source's board.
         """
+        from ..persistence.board import resolve_ths_platecode
+
         by_cid: dict[str, dict] = {}
         for r in gn_section:
             by_cid[r["code"]] = r
@@ -2011,9 +2042,37 @@ class ThsFetcher(BaseFetcher):
                 if not by_cid[cid].get("name") and r.get("name"):
                     by_cid[cid]["name"] = r["name"]
                 continue
-            # Sidebar-only: no platecode available, leave None.
-            by_cid[cid] = {**r, "platecode": None}
+            platecode = resolve_ths_platecode(cid)
+            if platecode is None:
+                platecode = ThsFetcher._resolve_platecode_from_detail(cid)
+            by_cid[cid] = {**r, "platecode": platecode}
         return list(by_cid.values())
+
+    @classmethod
+    def _resolve_platecode_from_detail(cls, ths_cid: str) -> str | None:
+        """Last-resort cid → platecode resolution, with write-back.
+
+        One GET per unmapped board, and only for boards that appear in the
+        sidebar but neither in gnSection nor in ``ths_board_id_map``.
+        Deliberately a fetcher method rather than a persistence helper so
+        the persistence layer keeps its "no network" property. Failures are
+        swallowed to ``None``: a board whose platecode we cannot learn is
+        still a valid board row, just not addressable as a platecode.
+        """
+        from ..persistence.board import upsert_ths_board_id_map
+
+        url = f"https://q.10jqka.com.cn/gn/detail/code/{ths_cid}/"
+        try:
+            html = cls()._http_get_ths_board_index(url)
+        except Exception as e:  # any failure means "still unknown"
+            logger.debug(f"[ThsFetcher] detail-page resolve failed for {ths_cid}: {e}")
+            return None
+        platecode = cls.extract_platecode_from_detail(html)
+        if platecode:
+            upsert_ths_board_id_map(
+                [{"cid": ths_cid, "platecode": platecode, "board_type": "concept"}]
+            )
+        return platecode
 
     # -- industry: /thshy/ ---------------------------------------------
 

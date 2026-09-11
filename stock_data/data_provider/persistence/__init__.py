@@ -17,8 +17,11 @@ from . import board, board_csv, pool_daily, stock_list, trade_calendar
 from .board import (
     get_board_list,
     get_board_stocks,
+    get_ths_board_id_map_rows,
+    resolve_ths_platecode,
     update_cached_board_stocks,
     update_cached_boards,
+    upsert_ths_board_id_map,
 )
 from .board_csv import seed_all_from_backup_dir
 from .db import get_connection, get_db_path
@@ -77,6 +80,10 @@ __all__ = [
     "get_board_stocks",
     "update_cached_boards",
     "update_cached_board_stocks",
+    # THS cid → platecode map
+    "upsert_ths_board_id_map",
+    "resolve_ths_platecode",
+    "get_ths_board_id_map_rows",
     # Board CSV seed (cold-path bootstrap from on-disk CSV files)
     "seed_all_from_backup_dir",
     # Pool daily CRUD

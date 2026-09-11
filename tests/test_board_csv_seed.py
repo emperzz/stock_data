@@ -196,7 +196,11 @@ def test_seed_all_from_backup_dir_missing_dir(tmp_path, caplog):
 
 
 def test_seed_all_from_backup_dir_missing_files(tmp_path, caplog):
-    """目录存在但 3 个文件全缺 → 每个都 warning, 返回空 dict."""
+    """目录存在但 4 个文件全缺 → 每个都 warning, 返回空 dict.
+
+    4 = ths_board_id_map + stock_board_ths + stock_board_membership_ths
+    + stock_board_eastmoney (the id-map was added 2026-09-11).
+    """
     empty_dir = tmp_path / "empty_backup"
     empty_dir.mkdir()
     with caplog.at_level(
@@ -206,7 +210,7 @@ def test_seed_all_from_backup_dir_missing_files(tmp_path, caplog):
         results = board_csv.seed_all_from_backup_dir(empty_dir)
     assert results == {}
     not_found_warnings = [r for r in caplog.records if "not found" in r.message]
-    assert len(not_found_warnings) == 3
+    assert len(not_found_warnings) == 4
 
 
 def test_seed_all_from_backup_dir_partial_files(fresh_db, tmp_path):
