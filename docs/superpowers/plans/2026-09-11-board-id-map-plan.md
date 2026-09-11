@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 建立 THS `cid → platecode` 的本地映射（表 + seed CSV + 刷新工具），并让 `ThsFetcher` 用它在板块清单里解出侧栏板块的 platecode，消除 141 个 cid-only 板块导致的 422。
+**Goal:** 建立 THS `cid → platecode` 的本地映射（表 + seed CSV + 刷新工具），并让 `ThsFetcher` 用它在板块清单里解出侧栏板块的 platecode，消除侧栏板块 `platecode=None` 导致的 422。
 
-**Architecture:** 新增窄表 `ths_board_id_map` 作为"两套 id 关系"的唯一查询点；repo 内提交一份 `ths_board_id_map.csv` 作冷启动 seed；`tools/refresh_ths_board_id_map.py` 从 THS 自身（gn 首页 `gnSection` + 逐板详情页）刷新并对上一版做 diff。运行期只查表、不发额外请求。
+**Architecture:** 新增窄表 `ths_board_id_map` 作为"两套 id 关系"的唯一查询点；repo 内提交一份 `ths_board_id_map.csv` 作冷启动 seed；`stock_data/tools/refresh_ths_board_id_map.py` 从 THS 自身（gn 首页 `gnSection` + 逐板详情页）刷新并对上一版做 diff。运行期以查表为主，仅在 miss 时对单个板块抓一次详情页并回写（Task 4）。
 
-**Tech Stack:** Python 3.13 / SQLite (`persistence` 层) / FastAPI（仅 `server.py` lifespan 复用既有 seed 通道）/ pytest / bs4（`ThsFetcher` 既有依赖）
+**Tech Stack:** Python 3.10.11（`.venv/Scripts/python.exe`）/ SQLite (`persistence` 层) / FastAPI（仅 `server.py` lifespan 复用既有 seed 通道）/ pytest / bs4（`ThsFetcher` 既有依赖，惰性 import）/ lxml
 
 ## Global Constraints
 
-- 本机**没有** `.venv/`，解释器用系统 `python`（miniconda 3.13.9）。`akshare` / `yfinance` / `gm` 不可用 —— 本计划不触碰 akshare 路由的端点。
-- 测试命令一律 `python -m pytest <path> -v`；默认 addopts 已排除 `live_network`。
+- 解释器一律用 **`.venv/Scripts/python.exe`**（CPython 3.10.11，`akshare` / `yfinance` / `gm` / `curl_cffi` 齐备）。**不要用系统 `python`**：它连测试采集都过不去 —— `tests/conftest.py:131` 在 `import curl_cffi` 处直接抛 `ModuleNotFoundError`（eastmoney fetcher 的依赖链）。CLAUDE.md 的 Common Commands 对此有硬性要求：`.venv/` 存在时必须用 venv 解释器，否则 akshare 路由的 fetcher 会静默 `is_available() == False`。
+- 测试命令一律 `.venv/Scripts/python.exe -m pytest <path> -v`；默认 addopts 已排除 `live_network`。开工前基线：`.venv/Scripts/python.exe -m pytest -q` = **2658 passed, 2 skipped, 158 deselected**（97s）。
 - 新代码遵守 spec §5 命名契约：board 路径**禁止裸 `code`**，必须写 `board_code` / `stock_code` / `ths_cid`。（`code` 作为既有行 key 的清理属 Plan 2，本计划不改。）
 - `ths_board_id_map` 的写入必须过滤非 THS cid：`710xxx` / `803xxx` 是 zzshare code，**绝不可**入表（spec §3.1）。
 - seed CSV 的优先级**必须低于** live 观测：表用 `INSERT OR REPLACE`（后写覆盖），工具先读 base 再叠加 live。
@@ -22,13 +22,20 @@
 
 | 计划 | 覆盖 spec 阶段 | 交付物 | 公开 API 变化 |
 |---|---|---|---|
-| **Plan 1（本文档）** | 阶段 1 + 阶段 2 的侧栏解析半部分 | 映射表 + seed CSV + 刷新工具 + `ThsFetcher` 侧栏解析 | **无** |
-| Plan 2 | 阶段 3-6 | id/命名契约、删 merge/fallback、路由放开 zzshare、include_quote 两层 | 有（6 项 breaking） |
-| Plan 3 | 阶段 7-9 | 测试重写、4 份文档、`STOCK_DB_INIT` 重建与端到端验证 | 无 |
+| **Plan 1（本文档）** | 阶段 1 + 阶段 2 的侧栏解析半部分 | 映射表 + seed CSV + 刷新工具 + `ThsFetcher` 侧栏解析（查表 + 运行期详情页兜底 + 回写） | **无** |
+| Plan 2 | 阶段 3-4 | id/命名契约、删 merge/fallback、cache key per-source、`update_cached_boards` purge、`backfill.py` ths-only | 公开**行为**变化（breaking #1、#9、#10）；API 参数面不变 |
+| Plan 3 | 阶段 5-9 | zzshare 转正、include_quote 两层、5 类新测试、4 份文档、重建验收 | 公开**接口**变化（breaking #2-#8） |
 
-**为什么 3-6 不拆进本计划**：重命名行 key（`code`/`platecode` → `board_code`/`ths_cid`）会立刻打断 `persistence` 的读写，两者必须同一个 commit 落地；把它塞进本计划会让"映射基础设施"失去可独立交付性。
+**无相对 spec 的偏差**：spec §6 的"`map` miss 时走 gn detail 页单次解析并回写"由 **Task 4 在运行期实现**（`ThsFetcher._resolve_platecode_from_detail` + 回写 `ths_board_id_map`），同时 Task 3 提供**工具期**的批量生成器。两条路径共用 `extract_platecode_from_detail`，都通过 `upsert_ths_board_id_map` 后写覆盖 ⇒ live 恒优先于 seed。
 
-**一处相对 spec 的偏差（有意）**：spec §6 写"`map` miss 时走 gn detail 页单次解析并回写"发生在**运行期**。本计划把它移到**工具期**（`tools/refresh_ths_board_id_map.py`），运行期只查表。理由：`ths_fetcher.py:1784-1790` 的既有注释已论证"每次 refresh 多 88 个请求"是必须避免的成本；且实测 seed 已覆盖 138/141（98%），运行期 miss 不值得换 N 个请求。
+**为什么运行期兜底值得做**（2026-09-11 复核，推翻早前的"移到工具期"方案）：`ths_fetcher.py:1784-1790` 的 "每次 refresh 多 88 个请求" 是**没有 seed 时**测得的数字。seed 落地后侧栏 miss 的残余只有个位数，且回写让**每个板块一辈子只花 1 个请求**。更关键的是存在性论证：能从侧栏看到 ⇒ 板块在 THS 存在 ⇒ `/gn/detail/code/{cid}/` 一定带 platecode（实测 `309121 → 886071`）。所以 miss 只意味着"seed 快照之后新建、且刷新工具尚未跑过"，而不是"解不出"——运行期兜底把"记得跑刷新工具"这个运维依赖换成了自愈。
+
+**为什么阶段 3-4 不拆进本计划**：重命名行 key（`code`/`platecode` → `board_code`/`ths_cid`）会立刻打断 `persistence` 的读写，两者必须同一个 commit 落地；把它塞进本计划会让"映射基础设施"失去可独立交付性。
+
+**跨计划耦合（Plan 2 必须一并处理）**：本计划 Task 4 新增的 `ThsFetcher.extract_platecode_from_detail` 与改写后的 `_merge_concept_sources` 仍然使用**旧行 key**（`code` / `platecode`）——因为行 key 重命名属 Plan 2。Plan 2 Task 1 的改动点清单因此**必须包含**：
+- `stock_data/tools/refresh_ths_board_id_map.py` 的 `snapshot_gn`（读 `row["code"]` / `row["platecode"]` → `ths_cid` / `board_code`）与 `sidebar_cids`（读 `r["code"]`）；
+- `tests/test_refresh_ths_board_id_map.py` 与 `tests/test_ths_fetcher_sidebar_platecode.py` 的 mock 行 key；
+- `tests/test_ths_fetcher_get_all_boards_live.py::TestMergeConceptSources` 的三个用例（见 Task 4 Step 7）。
 
 ---
 
@@ -40,7 +47,7 @@
 | `stock_data/data_provider/persistence/board_csv.py` (Modify) | `ths_board_id_map.csv` 的 loader + 挂进 `seed_all_from_backup_dir`（顺序在 board 之前） |
 | `stock_data/data_provider/persistence/__init__.py` (Modify) | 导出新 CRUD |
 | `stock_data/data_provider/fetchers/ths_fetcher.py` (Modify) | `extract_platecode_from_detail` + `_merge_concept_sources` 查表解析侧栏 |
-| `tools/refresh_ths_board_id_map.py` (Create) | 刷新 + diff 生成器（唯一触碰 gn 详情页的地方） |
+| `stock_data/tools/refresh_ths_board_id_map.py` (Create) | 刷新 + diff 生成器（工具期批量补齐） |
 | `stock_data/stock_data_backup/ths_board_id_map.csv` (Create) | 480 条 seed，repo 内提交 |
 | `tests/test_persistence_ths_board_id_map.py` (Create) | 表 + CRUD 单测 |
 | `tests/test_ths_board_id_map_csv_seed.py` (Create) | loader + seed 顺序 + 提交产物校验 |
@@ -49,6 +56,8 @@
 | `tests/fixtures/ths_gn_index.html` (Create) | gn 首页 fixture（含真实 `gnSection` + `cate_items` 片段） |
 | `tests/fixtures/ths_gn_detail_309121.html` (Create) | 详情页 fixture（仅含 886071 一个候选） |
 | `docs/board-source-semantics.md` (Modify) | 增一节 `THS cid ↔ platecode` |
+
+> **位置说明**：刷新工具放 `stock_data/tools/`（有 `__init__.py` 的真包，`tests/test_build_membership_index.py` 已用 `from stock_data.tools import build_membership_index as cli_mod` 引用它）而**不是**顶层 `tools/`。顶层 `tools/` 没有 `__init__.py`，只能靠 PEP 420 命名空间包在"repo 根恰好是 CWD"时可导入；本计划与 Plan 3 的测试都要 import 这个模块，所以选稳定的一侧。
 
 ---
 
@@ -178,7 +187,7 @@ class TestUpsertAndResolve:
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `python -m pytest tests/test_persistence_ths_board_id_map.py -v`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_persistence_ths_board_id_map.py -v`
 Expected: FAIL — `AttributeError: module 'stock_data.data_provider.persistence.board' has no attribute '_is_ths_cid'`
 
 - [ ] **Step 3: 加表 DDL**
@@ -216,10 +225,13 @@ def _is_ths_cid(value: Any) -> bool:
     """True iff ``value`` is a THS board cid.
 
     A THS cid is either a concept cid (3xxxxx) or an industry cid
-    (881xxx — identical to its platecode). Everything else is rejected,
-    notably the zzshare plate codes (710xxx / 803xxx) that the legacy
-    ``stock_board_ths.csv`` stores in its ``cid`` column: those are not
-    mappings, and 118 such concept rows exist in that file (spec §3.1).
+    (881xxx — identical to its platecode). Everything else is rejected.
+    The legacy ``stock_board_ths.csv`` stores 118 concept rows whose
+    ``cid`` column is not a cid at all: 110 of them are THS platecodes
+    (885×98 / 886×12 / 883×1, from the pre-2026-07-20 layout) and only 8
+    are zzshare codes (803×6 / 710×1). None of the 118 is a mapping
+    (spec §3.1) — this guard is also what keeps those 110 platecode-shaped
+    values out of ``ths_cid`` when the CSV is split (spec §4 rule 6).
     """
     if not isinstance(value, str) or len(value) != 6:
         return False
@@ -314,8 +326,8 @@ from .board import (
 
 - [ ] **Step 6: 运行确认通过**
 
-Run: `python -m pytest tests/test_persistence_ths_board_id_map.py -v`
-Expected: PASS（16 passed）
+Run: `.venv/Scripts/python.exe -m pytest tests/test_persistence_ths_board_id_map.py -v`
+Expected: PASS（14 passed）
 
 - [ ] **Step 7: 提交**
 
@@ -345,7 +357,7 @@ git commit -m "feat(persistence): add ths_board_id_map table (cid → platecode)
 在 repo 根目录运行（一次性；本机 `python` 即可）：
 
 ```bash
-python - <<'PY'
+.venv/Scripts/python.exe - <<'PY'
 import csv
 
 SRC = "stock_data/stock_data_backup/stock_board_ths.csv"
@@ -380,7 +392,13 @@ PY
 
 Expected: `wrote 480`
 
-实测拆解（2026-09-11 验证）：输入 797 行 → 过滤 317 行 → 写入 480 条 distinct cid（376 concept + 104 industry identity）。被过滤的是：192 行 cid 为空、118 行 concept 的 cid 存的是 zzshare code（710xxx/803xxx）、以及少量空 code 行；另有 7 个 cid 在 383 个 genuine concept 行中重复出现，按 cid 折叠后为 376。cid 前缀全部落在 3xxxxx / 881xxx。
+实测拆解（2026-09-11 用上面的脚本逐条复算，数字与脚本输出一致）：
+
+- 输入 **797** 行 → 过滤 **317** 行 → 写入 **480** 条 distinct cid（**376 concept + 104 industry identity**）。
+- 过滤的 317 行 = **192** 行 `cid` 为空 + **118** 行 `cid == code` + **7** 行 `code` 为空。
+- 那 118 行的 `cid` 并非"zzshare code"（早前版本如此描述，是错的）：实际组成是 **885×98 / 886×12 / 883×1 / 803×6 / 710×1**，只有 8 行是 zzshare code，其余 110 行是 THS platecode 被写进了 cid 列。它们全部被 `is_ths_cid` 拒绝，因此不会进映射表。
+- **480 条里 0 个重复 cid**（"383 行 / 7 个重复 cid"是早前的推断值，实测不成立）。
+- 写入行的 cid 前缀全部落在 3xxxxx / 881xxx。
 
 - [ ] **Step 2: 写失败测试**
 
@@ -520,7 +538,7 @@ class TestSeedAllOrdering:
 
 - [ ] **Step 3: 运行确认失败**
 
-Run: `python -m pytest tests/test_ths_board_id_map_csv_seed.py -v`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_board_id_map_csv_seed.py -v`
 Expected: FAIL — `AttributeError: module ... board_csv has no attribute 'seed_ths_board_id_map_from_csv'`
 
 - [ ] **Step 4: 加 loader**
@@ -596,7 +614,7 @@ def seed_ths_board_id_map_from_csv(csv_path: Path) -> int:
 
 - [ ] **Step 6: 运行确认通过**
 
-Run: `python -m pytest tests/test_ths_board_id_map_csv_seed.py -v`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_board_id_map_csv_seed.py -v`
 Expected: PASS（8 passed）
 
 - [ ] **Step 7: 提交**
@@ -605,15 +623,15 @@ Expected: PASS（8 passed）
 git add stock_data/stock_data_backup/ths_board_id_map.csv \
         stock_data/data_provider/persistence/board_csv.py \
         tests/test_ths_board_id_map_csv_seed.py
-git commit -m "feat(persistence): seed ths_board_id_map from repo CSV (487 mappings)"
+git commit -m "feat(persistence): seed ths_board_id_map from repo CSV (480 mappings)"
 ```
 
 ---
 
-### Task 3: 刷新工具 `tools/refresh_ths_board_id_map.py`
+### Task 3: 刷新工具 `stock_data/tools/refresh_ths_board_id_map.py`
 
 **Files:**
-- Create: `tools/refresh_ths_board_id_map.py`
+- Create: `stock_data/tools/refresh_ths_board_id_map.py`
 - Create: `tests/fixtures/ths_gn_index.html`
 - Create: `tests/fixtures/ths_gn_detail_309121.html`
 - Test: `tests/test_refresh_ths_board_id_map.py`
@@ -656,7 +674,7 @@ Create `tests/fixtures/ths_gn_detail_309121.html`（只含一个 885/886 候选�
 Create `tests/test_refresh_ths_board_id_map.py`:
 
 ```python
-"""Tests for tools/refresh_ths_board_id_map.py (offline, fake fetcher)."""
+"""Tests for stock_data/tools/refresh_ths_board_id_map.py (offline, fake fetcher)."""
 
 from __future__ import annotations
 
@@ -788,12 +806,12 @@ class TestMainDryRun:
 
 - [ ] **Step 3: 运行确认失败**
 
-Run: `python -m pytest tests/test_refresh_ths_board_id_map.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'tools.refresh_ths_board_id_map'`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_refresh_ths_board_id_map.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'stock_data.tools.refresh_ths_board_id_map'`
 
 - [ ] **Step 4: 实现工具**
 
-Create `tools/refresh_ths_board_id_map.py`:
+Create `stock_data/tools/refresh_ths_board_id_map.py`:
 
 ```python
 """Refresh ``stock_data/stock_data_backup/ths_board_id_map.csv``.
@@ -812,9 +830,9 @@ removed). Live observations win over the file — the CSV is a snapshot,
 never authoritative (spec §3.2).
 
 Usage:
-    python -m tools.refresh_ths_board_id_map --dry-run      # report only
-    python -m tools.refresh_ths_board_id_map --apply        # write the CSV
-    python -m tools.refresh_ths_board_id_map --apply --no-detail   # skip per-board fetches
+    .venv/Scripts/python.exe -m stock_data.tools.refresh_ths_board_id_map --dry-run   # report only
+    .venv/Scripts/python.exe -m stock_data.tools.refresh_ths_board_id_map --apply     # write the CSV
+    .venv/Scripts/python.exe -m stock_data.tools.refresh_ths_board_id_map --apply --no-detail
 """
 
 from __future__ import annotations
@@ -1011,13 +1029,13 @@ if __name__ == "__main__":
 
 - [ ] **Step 5: 运行确认通过**
 
-Run: `python -m pytest tests/test_refresh_ths_board_id_map.py -v`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_refresh_ths_board_id_map.py -v`
 Expected: 在 `extract_platecode_from_detail` 落地前，`TestResolveUnmapped` 两个用例 FAIL（`AttributeError`），其余 PASS。**先跑 Task 4 的 Step 1-4 再回到本步**，然后全部 PASS（11 passed）。
 
 - [ ] **Step 6: 提交**
 
 ```bash
-git add tools/refresh_ths_board_id_map.py tests/test_refresh_ths_board_id_map.py \
+git add stock_data/tools/refresh_ths_board_id_map.py tests/test_refresh_ths_board_id_map.py \
         tests/fixtures/ths_gn_index.html tests/fixtures/ths_gn_detail_309121.html
 git commit -m "feat(tools): add ths_board_id_map refresher (gn sweep + detail pages + diff)"
 ```
@@ -1047,6 +1065,7 @@ from pathlib import Path
 
 import pytest
 
+from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
 from stock_data.data_provider.persistence import board as board_mod
 from stock_data.data_provider.persistence import db as db_mod
@@ -1126,11 +1145,69 @@ class TestMergeConceptSources:
             {"code": "309121", "name": "AI PC", "platecode": "886071", "source": "ths"},
         ]
         assert len(ThsFetcher._merge_concept_sources(gn, [])) == 1
+
+
+class TestRuntimeDetailFallback:
+    """Map miss → one detail-page GET → write back to ths_board_id_map."""
+
+    def test_unmapped_sidebar_row_resolved_from_detail_page_and_cached(
+        self, fresh_db, monkeypatch
+    ):
+        detail_html = DETAIL_309121.replace("886071", "886123")
+        calls: list[str] = []
+
+        def fake_get(self, url):
+            calls.append(url)
+            return detail_html
+
+        monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", fake_get)
+
+        gn: list[dict] = []
+        sidebar = [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+        merged = ThsFetcher._merge_concept_sources(gn, sidebar)
+
+        assert merged[0]["platecode"] == "886123"
+        assert len(calls) == 1 and "309999" in calls[0]
+        # write-back: the next call must not hit the network again
+        calls.clear()
+        merged2 = ThsFetcher._merge_concept_sources(gn, sidebar)
+        assert merged2[0]["platecode"] == "886123"
+        assert calls == [], "resolved platecode must be persisted to ths_board_id_map"
+
+    def test_detail_fetch_failure_keeps_none(self, fresh_db, monkeypatch):
+        """A board whose platecode we cannot learn is still a valid row."""
+
+        def boom(self, url):
+            raise DataFetchError("ths down")
+
+        monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", boom)
+        merged = ThsFetcher._merge_concept_sources(
+            [], [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+        )
+        assert merged[0]["platecode"] is None
+
+    def test_unparsable_detail_page_keeps_none_and_does_not_write(self, fresh_db, monkeypatch):
+        monkeypatch.setattr(
+            ThsFetcher, "_http_get_ths_board_index", lambda self, url: "<html>没有代码</html>"
+        )
+        merged = ThsFetcher._merge_concept_sources(
+            [], [{"code": "309998", "name": "待定", "source": "ths"}]
+        )
+        assert merged[0]["platecode"] is None
+        assert board_mod.resolve_ths_platecode("309998") is None
+
+    def test_gnsection_row_never_triggers_a_fetch(self, fresh_db, monkeypatch):
+        def boom(self, url):
+            raise AssertionError("gnSection rows must not fetch a detail page")
+
+        monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", boom)
+        gn = [{"code": "309121", "name": "AI PC", "platecode": "886071", "source": "ths"}]
+        assert ThsFetcher._merge_concept_sources(gn, [])[0]["platecode"] == "886071"
 ```
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `python -m pytest tests/test_ths_fetcher_sidebar_platecode.py -v`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher_sidebar_platecode.py -v`
 Expected: FAIL — `AttributeError: type object 'ThsFetcher' has no attribute 'extract_platecode_from_detail'`
 
 - [ ] **Step 3: 加 `extract_platecode_from_detail`**
@@ -1153,7 +1230,7 @@ Expected: FAIL — `AttributeError: type object 'ThsFetcher' has no attribute 'e
         Returns ``None`` when the page carries zero or more than one
         distinct candidate — an ambiguous page must never be guessed at.
         The page is the last-resort resolver used by
-        ``tools/refresh_ths_board_id_map.py``; the runtime board-list path
+        ``stock_data/tools/refresh_ths_board_id_map.py``; the runtime board-list path
         only queries ``ths_board_id_map`` (no per-refresh fetches).
         """
         found = sorted(set(ThsFetcher._THS_DETAIL_PLATECODE_RE.findall(html or "")))
@@ -1173,7 +1250,12 @@ Expected: FAIL — `AttributeError: type object 'ThsFetcher' has no attribute 'e
         win. Sidebar-only rows carry only a cid; their platecode comes from
         ``ths_board_id_map`` — the single cid → platecode query point,
         seeded from the repo CSV and refreshed live by
-        ``tools/refresh_ths_board_id_map.py``.
+        ``stock_data/tools/refresh_ths_board_id_map.py``.
+
+        A map miss falls back to ONE ``/gn/detail/code/{cid}/`` request,
+        whose result is written back to the map (so each board costs at
+        most one request, ever). That write-back is what makes "miss" mean
+        "newer than the seed snapshot" instead of "unknown".
 
         Deliberately NOT resolved by matching board names against another
         source: that is what conflated THS's and zzshare's code spaces
@@ -1194,39 +1276,114 @@ Expected: FAIL — `AttributeError: type object 'ThsFetcher' has no attribute 'e
                 if not by_cid[cid].get("name") and r.get("name"):
                     by_cid[cid]["name"] = r["name"]
                 continue
-            by_cid[cid] = {**r, "platecode": resolve_ths_platecode(cid)}
+            platecode = resolve_ths_platecode(cid)
+            if platecode is None:
+                platecode = ThsFetcher._resolve_platecode_from_detail(cid)
+            by_cid[cid] = {**r, "platecode": platecode}
         return list(by_cid.values())
+
+    @classmethod
+    def _resolve_platecode_from_detail(cls, ths_cid: str) -> str | None:
+        """Last-resort cid → platecode resolution, with write-back.
+
+        One GET per unmapped board, and only for boards that appear in the
+        sidebar but neither in gnSection nor in ``ths_board_id_map``.
+        Deliberately a fetcher method rather than a persistence helper so
+        the persistence layer keeps its "no network" property. Failures are
+        swallowed to ``None``: a board whose platecode we cannot learn is
+        still a valid board row, just not addressable as a platecode.
+        """
+        from ..persistence.board import upsert_ths_board_id_map
+
+        url = f"https://q.10jqka.com.cn/gn/detail/code/{ths_cid}/"
+        try:
+            html = cls()._http_get_ths_board_index(url)
+        except Exception as e:  # noqa: BLE001 — any failure means "still unknown"
+            logger.debug(f"[ThsFetcher] detail-page resolve failed for {ths_cid}: {e}")
+            return None
+        platecode = cls.extract_platecode_from_detail(html)
+        if platecode:
+            upsert_ths_board_id_map(
+                [{"cid": ths_cid, "platecode": platecode, "board_type": "concept"}]
+            )
+        return platecode
 ```
+
+> `_http_get_ths_board_index` 只做 GET + 重试，不区分 URL 语义，所以详情页直接复用它（Plan 1 Task 3 的工具同样这么做）。`cls()` 每次实例化 `ThsFetcher` 是无状态且廉价的（token 可选）；不要把它改成模块级单例——fetcher 的构造是 `BaseFetcher` 的既有契约，绕过它反而引入隐式共享。
 
 - [ ] **Step 5: 更新 `get_all_boards` 的过时 docstring**
 
-把 1784-1790 那段（"``platecode`` may be ``None`` for concept rows ... out of scope"）替换为：
+把 1784-1790 那段（"``platecode`` may be ``None`` for concept rows ... out of scope"，原文含"would cost 88 extra requests on every refresh"）替换为：
 
 ```python
         - ``platecode`` is resolved for sidebar-only concept rows via
           ``ths_board_id_map`` (seeded from
           ``stock_data/stock_data_backup/ths_board_id_map.csv`` and
-          refreshed by ``tools/refresh_ths_board_id_map.py``). It stays
-          ``None`` only for boards THS has not yet exposed a platecode
-          for — measured 3 of 141 on 2026-09-11.
+          refreshed by ``stock_data/tools/refresh_ths_board_id_map.py``).
+          A map miss costs ONE ``/gn/detail/code/{cid}/`` request, whose
+          result is written back — so each board is fetched at most once
+          ever. It stays ``None`` only for boards THS exposes no
+          platecode for at all.
 ```
 
 - [ ] **Step 6: 运行确认通过**
 
-Run: `python -m pytest tests/test_ths_fetcher_sidebar_platecode.py -v`
-Expected: PASS（10 passed）
+Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher_sidebar_platecode.py -v`
+Expected: PASS（**14 passed** —— Task 4 Step 1 的 `TestRuntimeDetailFallback` 4 个用例也在这个文件里）
 
-- [ ] **Step 7: 回归既有 THS 板块测试**
+- [ ] **Step 7: 回归既有 THS 板块测试（**本步会先红后绿，必须改一个既有用例**）**
 
-Run: `python -m pytest tests/test_ths_fetcher_get_all_boards_live.py tests/test_boards.py tests/test_persistence_board_merge.py -v`
-Expected: 全部 PASS（`test_persistence_board_merge.py` 的 merge 用例与 `_merge_concept_sources` 无关，不受影响）
+`tests/test_ths_fetcher_get_all_boards_live.py::TestMergeConceptSources` 有 **3 个非 live 用例**（`test_gnsection_wins` / `test_sidebar_only_gets_null_platecode` / `test_sidebar_fills_missing_name`），它们直接调 `_merge_concept_sources` 且**没有 `fresh_db` fixture**，跑的是默认 SQLite（`stock_data/stock_cache.db`）。其中：
+
+- `test_sidebar_only_gets_null_platecode`（约 174 行）用 cid **`301558`** 断言 `platecode is None` —— 但 `301558` **正是 seed CSV 里的一行**（`885611`）。今天能过，只因默认库里还没有 `ths_board_id_map` 表；一旦 seed 生效就会变成 `885611`，断言失败。**必须改**。
+- 另两个用例的 cid（`300188`）走 gnSection 分支，不受影响。
+
+改法（同时消除它依赖默认库的隐式耦合）：
+
+1. 给 `TestMergeConceptSources` 加一个本文件内的 fixture，让 map 处于**已知为空**的状态，而不是依赖默认库：
+
+```python
+@pytest.fixture
+def empty_id_map(tmp_path, monkeypatch):
+    """Isolate the map: this class asserts on unresolved sidebar rows."""
+    from stock_data.data_provider.persistence import board as board_mod
+    from stock_data.data_provider.persistence import db as db_mod
+
+    monkeypatch.setattr(db_mod, "_db_path", None)
+    monkeypatch.setattr(db_mod, "_conn", None)
+    monkeypatch.setattr(board_mod, "_schema_initialized_paths", set())
+    monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "t.db"))
+    board_mod.init_schema()
+```
+
+2. 三个用例的函数签名加 `empty_id_map`，并把 `test_sidebar_only_gets_null_platecode` 的 cid 换成 seed 里**确定没有**的值（`309999`），再加一条 `monkeypatch` 让详情页兜底也失效，以断言"解析不出就恒为 None"：
+
+```python
+    def test_sidebar_only_gets_null_platecode_when_unresolvable(
+        self, empty_id_map, monkeypatch
+    ):
+        # Both the map and the detail-page fallback must fail for a row to
+        # keep platecode=None. 309999 is absent from the seed CSV.
+        monkeypatch.setattr(
+            ThsFetcher, "_http_get_ths_board_index", lambda self, url: "<html>没有代码</html>"
+        )
+        gn = [{"code": "300188", "name": "移动支付", "platecode": "885333", "source": "ths"}]
+        sb = [{"code": "309999", "name": "未收录概念", "source": "ths"}]
+        merged = self.fetcher._merge_concept_sources(gn, sb)
+        by_cid = {r["code"]: r for r in merged}
+        assert by_cid["309999"]["platecode"] is None
+        assert by_cid["309999"]["name"] == "未收录概念"
+```
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_fetcher_get_all_boards_live.py tests/test_boards.py tests/test_persistence_board_merge.py -v`
+Expected: 全部 PASS。（`test_persistence_board_merge.py` 的 merge 用例与被删的 `_merge_ths_zzshare_by_name` 无关，本计划也不动它——Plan 2 才删该函数。）
 
 - [ ] **Step 8: 提交**
 
 ```bash
 git add stock_data/data_provider/fetchers/ths_fetcher.py \
         tests/test_ths_fetcher_sidebar_platecode.py
-git commit -m "feat(ths): resolve sidebar-only concept platecodes from ths_board_id_map"
+git commit -m "feat(ths): resolve sidebar-only concept platecodes from ths_board_id_map (detail-page fallback + write-back)"
 ```
 
 ---
@@ -1276,15 +1433,15 @@ def test_concept_platecode_coverage_is_high():
 
 - [ ] **Step 2: 运行覆盖率测试**
 
-Run: `python -m pytest tests/test_ths_concept_platecode_coverage_live.py -v -m live_network`
-Expected: PASS（或网络类失败自动 xfail —— 见 `tests/_network_guard.py`）。若失败且原因是"未解析数远超阈值"，运行 `python -m tools.refresh_ths_board_id_map --apply` 刷新 CSV 后重跑。
+Run: `.venv/Scripts/python.exe -m pytest tests/test_ths_concept_platecode_coverage_live.py -v -m live_network`
+Expected: PASS（或网络类失败自动 xfail —— 见 `tests/_network_guard.py`）。若失败且原因是"未解析数远超阈值"，运行 `.venv/Scripts/python.exe -m stock_data.tools.refresh_ths_board_id_map --apply` 刷新 CSV 后重跑。
 
 - [ ] **Step 3: 验证 seed 通道真的会装载映射**
 
 Run:
 
 ```bash
-python - <<'PY'
+.venv/Scripts/python.exe - <<'PY'
 import os, tempfile, pathlib
 os.environ["STOCK_CACHE_DB_PATH"] = str(pathlib.Path(tempfile.mkdtemp()) / "t.db")
 from stock_data.data_provider import persistence
@@ -1302,13 +1459,13 @@ PY
 
 Expected:
 ```
-seed results: {'ths_board_id_map': 480, 'stock_board_ths': 775, 'stock_board_membership_ths': 115081, 'stock_board_eastmoney': 992}
+seed results: {'ths_board_id_map': 480, 'stock_board_ths': 774, 'stock_board_membership_ths': 115081, 'stock_board_eastmoney': 992}
 map size: 480
 309121 -> 886071
 710002 -> None
 ```
 
-（`stock_board_ths` 为 775 而非 797：17 组重复 code 在 `UNIQUE(code, source)` 上折叠 —— 既有行为，非本次引入。）
+（`stock_board_ths` 为 **774** 而非 797：7 行空 `code` 被 loader 跳过（790 行入库）后，其中 **16** 组重复 `code` 在 `UNIQUE(code, source)` 上折叠 —— 既有行为，非本次引入。早前版本写的 775 / 17 组是推算值，实测为 774 / 16。注：Plan 3 Task 3 的 CSV 拆分会在拆分期就去重，届时这个数字变成 588。）
 
 - [ ] **Step 4: 文档**
 
@@ -1325,7 +1482,7 @@ page and board K-line take the platecode. Industry boards use one value
 
 `ths_board_id_map` (SQLite) is the single cid → platecode lookup. It is
 seeded at startup from `stock_data/stock_data_backup/ths_board_id_map.csv`
-and refreshed by `python -m tools.refresh_ths_board_id_map --apply`, which
+and refreshed by `.venv/Scripts/python.exe -m stock_data.tools.refresh_ths_board_id_map --apply`, which
 sweeps THS's own `GET /gn/` (gnSection pair) and falls back to one
 `/gn/detail/code/{cid}/` request per unresolved board.
 
@@ -1337,7 +1494,7 @@ prints an added / changed / removed diff for exactly that reason.
 
 - [ ] **Step 5: 全量回归**
 
-Run: `python -m pytest tests/test_persistence_ths_board_id_map.py tests/test_ths_board_id_map_csv_seed.py tests/test_refresh_ths_board_id_map.py tests/test_ths_fetcher_sidebar_platecode.py tests/test_persistence_board.py tests/test_board_csv_seed.py tests/test_boards.py -v`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_persistence_ths_board_id_map.py tests/test_ths_board_id_map_csv_seed.py tests/test_refresh_ths_board_id_map.py tests/test_ths_fetcher_sidebar_platecode.py tests/test_persistence_board.py tests/test_board_csv_seed.py tests/test_boards.py -v`
 Expected: 全部 PASS
 
 - [ ] **Step 6: 提交并合并**
@@ -1350,124 +1507,13 @@ git checkout master && git merge --no-ff feat/ths-board-id-map
 
 ---
 
-### Task 6（可选，默认不执行）: 运行期 gn 详情页兜底
+### Task 6（已并入 Task 4，不再单独存在）
 
-**为什么默认不做**：Task 4 把侧栏 platecode 解析放在运行期查表，miss 时留 `None`。spec §6 原本写的是"miss 时走 gn detail 页单次解析并回写"，本计划把它移到了工具期（`tools/refresh_ths_board_id_map.py`）。理由：`ths_fetcher.py:1784-1790` 的既有注释已论证过"每次 refresh 多 88 个请求"必须避免，且 seed 实测覆盖 138/141（98%），运行期 miss 不值得换 N 个请求。
+运行期 gn 详情页兜底**已在 Task 4 Step 1 / Step 4 落地**（`TestRuntimeDetailFallback` 4 个用例 + `ThsFetcher._resolve_platecode_from_detail`），不再是一个"可选、默认不做"的任务。
 
-**什么情况下选做**：如果你更看重"运行期自愈"而非"零额外请求"（例如 `BOARD_BACKFILL_ON_STARTUP=false` 且长期不跑刷新工具，希望新板块自动补齐）。
+早前版本把它列为可选，依据是 `ths_fetcher.py:1784-1790` 的"每次 refresh 多 88 个请求" —— 那是**没有 seed 时**测得的数字。seed 落地后残余 miss 只剩个位数，回写又保证每个板块一辈子只花 1 个请求；且能从侧栏看到就说明板块在 THS 存在，详情页必然带 platecode。结论见"范围与路线图"的"为什么运行期兜底值得做"。
 
-**Files:**
-- Modify: `stock_data/data_provider/fetchers/ths_fetcher.py`（`_merge_concept_sources`）
-- Test: `tests/test_ths_fetcher_sidebar_platecode.py`
-
-**Interfaces:**
-- Consumes: Task 4 的 `extract_platecode_from_detail(html) -> str | None`、`ThsFetcher._http_get_ths_board_index(url) -> str`、Plan 1 Task 1 的 `upsert_ths_board_id_map(rows) -> int`
-- Produces: 无
-
-- [ ] **Step 1: 写失败测试**
-
-追加到 `tests/test_ths_fetcher_sidebar_platecode.py`：
-
-```python
-class TestRuntimeDetailFallback:
-    def test_unmapped_sidebar_row_resolved_from_detail_page_and_cached(
-        self, fresh_db, monkeypatch
-    ):
-        detail_html = DETAIL_309121.replace("886071", "886123")
-        calls: list[str] = []
-
-        def fake_get(self, url):
-            calls.append(url)
-            return detail_html
-
-        monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", fake_get)
-
-        gn: list[dict] = []
-        sidebar = [{"code": "309999", "name": "未收录概念", "source": "ths"}]
-        merged = ThsFetcher._merge_concept_sources(gn, sidebar)
-
-        assert merged[0]["platecode"] == "886123"
-        assert len(calls) == 1 and "309999" in calls[0]
-        # write-back: the next call must not hit the network again
-        calls.clear()
-        merged2 = ThsFetcher._merge_concept_sources(gn, sidebar)
-        assert merged2[0]["platecode"] == "886123"
-        assert calls == [], "resolved platecode must be persisted to ths_board_id_map"
-
-    def test_detail_fetch_failure_keeps_none(self, fresh_db, monkeypatch):
-        def boom(self, url):
-            raise DataFetchError("ths down")
-
-        monkeypatch.setattr(ThsFetcher, "_http_get_ths_board_index", boom)
-        merged = ThsFetcher._merge_concept_sources(
-            [], [{"code": "309999", "name": "未收录概念", "source": "ths"}]
-        )
-        assert merged[0]["platecode"] is None
-```
-
-（测试文件需补 `from stock_data.data_provider.base import DataFetchError` import。）
-
-- [ ] **Step 2: 运行确认失败**
-
-Run: `python -m pytest tests/test_ths_fetcher_sidebar_platecode.py::TestRuntimeDetailFallback -v`
-Expected: FAIL — `_merge_concept_sources` 只查表，不抓详情页
-
-- [ ] **Step 3: 实现兜底**
-
-`_merge_concept_sources` 的侧栏分支替换为：
-
-```python
-        for r in sidebar:
-            cid = r["code"]
-            if cid in by_cid:
-                if not by_cid[cid].get("name") and r.get("name"):
-                    by_cid[cid]["name"] = r["name"]
-                continue
-            platecode = resolve_ths_platecode(cid)
-            if platecode is None:
-                platecode = ThsFetcher._resolve_platecode_from_detail(cid)
-            by_cid[cid] = {**r, "platecode": platecode}
-        return list(by_cid.values())
-
-    @classmethod
-    def _resolve_platecode_from_detail(cls, ths_cid: str) -> str | None:
-        """Last-resort cid → platecode resolution, with write-back.
-
-        One GET per unmapped board. Deliberately a classmethod on the
-        fetcher rather than a persistence helper so the persistence layer
-        keeps its "no network" property. Failures are swallowed to ``None``
-        — a board whose platecode we cannot learn is still a valid board
-        row, just not addressable as a platecode.
-        """
-        from ..persistence.board import upsert_ths_board_id_map
-
-        url = f"https://q.10jqka.com.cn/gn/detail/code/{ths_cid}/"
-        try:
-            html = cls()._http_get_ths_board_index(url)
-        except Exception as e:
-            logger.debug(f"[ThsFetcher] detail-page resolve failed for {ths_cid}: {e}")
-            return None
-        platecode = cls.extract_platecode_from_detail(html)
-        if platecode:
-            upsert_ths_board_id_map(
-                [{"cid": ths_cid, "platecode": platecode, "board_type": "concept"}]
-            )
-        return platecode
-```
-
-- [ ] **Step 4: 运行确认通过**
-
-Run: `python -m pytest tests/test_ths_fetcher_sidebar_platecode.py -q`
-Expected: PASS
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add -A
-git commit -m "feat(ths): resolve unmapped sidebar platecodes from the gn detail page at runtime"
-```
-
----
+保留备查的反向判据：只有"明确不需要运行期自愈、且接受新板块在刷新工具跑之前一直 `platecode=None`"时才该退回到纯查表 —— 那就删掉 Task 4 Step 4 的 `_resolve_platecode_from_detail` 调用与 `TestRuntimeDetailFallback`，其余不变。
 
 ## Self-Review
 
@@ -1481,7 +1527,7 @@ git commit -m "feat(ths): resolve unmapped sidebar platecodes from the gn detail
 | §10.1 CSV 拆三份中的 `ths_board_id_map.csv` | Task 2 |
 | §10.3 seed 顺序在 board 之前 | Task 2 Step 5 + `TestSeedAllOrdering` |
 | §11 新增"id 契约不变量测试"（映射侧） | Task 1 `TestIsThsCid` / `test_zzshare_cid_rejected_on_write` |
-| §6 `get_all_boards` 侧栏解析 | Task 4（查表）；Task 6（可选：运行期详情页兜底） |
+| §6 `get_all_boards` 侧栏解析 | Task 4（查表 + miss 时运行期详情页兜底 + 回写） |
 | §6 删除 zzshare 注释、`_merge_concept_sources` 中间态 | **Plan 2**（不在本计划；本计划只替换 `_merge_concept_sources` 的解析来源） |
 | §4 id 契约硬规则、§5 命名契约第 1+2 层 | **Plan 2** |
 | §7 删 merge/fallback、cache key 带 source | **Plan 2** |
@@ -1496,7 +1542,9 @@ git commit -m "feat(ths): resolve unmapped sidebar platecodes from the gn detail
 
 **偏差与可选变体（均已声明，无隐含假设）**
 
-- spec §6 的"运行期 gn 详情页解析并回写"在 Plan 1 **默认不实现**，改由工具期（Task 3）承担 —— 见"范围与路线图"的偏差说明。**Task 6 是它的可选实现**（默认不执行），若你选择运行期自愈则执行 Task 6。
+- spec §6 的"运行期 gn 详情页解析并回写"由 **Task 4** 实现（`TestRuntimeDetailFallback` + `_resolve_platecode_from_detail`），工具期生成器（Task 3）同时保留做批量补齐与改号 diff。**无偏差。**
+- **跨计划耦合**：Task 3/4 的产物仍用旧行 key（`code`/`platecode`），行 key 重命名属 Plan 2 —— Plan 2 Task 1 必须一并改 `stock_data/tools/refresh_ths_board_id_map.py`、`tests/test_refresh_ths_board_id_map.py`、`tests/test_ths_fetcher_sidebar_platecode.py`、`tests/test_ths_fetcher_get_all_boards_live.py::TestMergeConceptSources`。已在本文件"范围与路线图"里点名。
+- **Task 4 Step 7 会改一个既有用例**（`test_sidebar_only_gets_null_platecode`），因为它的 cid `301558` 就在 seed CSV 里（`885611`）。这不是回归，是该用例的隐含假设（"map 为空"）被本次改动打破了。
 - Task 3 与 Task 4 存在顺序依赖：`TestResolveUnmapped` 需要 Task 4 的 `extract_platecode_from_detail`。Task 3 Step 5 已显式说明"先跑 Task 4 的 Step 1-4 再回到本步"，不是笔误。
 - Task 2 Step 1 的 Expected 行数（480）为 2026-09-11 实测，不是推断值；`TestCommittedArtifact::test_contains_live_verified_pair` 断言的是两个实测校验点（`309121→886071` / `300188→885333`），不写死总行数，因此刷新 CSV 后不会误红。
 </content>

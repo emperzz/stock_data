@@ -6,12 +6,12 @@
 
 **Architecture:** 路由层的四个 source 白名单收敛为一套，`zzshare` 从别名改为真值；`/boards/{code}/history` 与 `/boards/{code}/quote` 对 zzshare 明确 400/422（zzshare 无对应上游能力）。`include_quote=true` 的 `top_n>50` 走 `get_board_stocks_full`（F10，无 50 上限）并用既有 `_enrich_rows_with_market_quote` 从 `/stocks` 全市场行情缓存补 quote。
 
-**Tech Stack:** Python 3.13 / SQLite / FastAPI / pytest / ruff 0.15.12
+**Tech Stack:** Python 3.10.11（`.venv/Scripts/python.exe`）/ SQLite / FastAPI / pytest / ruff
 
 ## Global Constraints
 
-- 本机无 `.venv/`，用系统 `python`（miniconda 3.13.9）。
-- 每个 Task 结束时 `python -m pytest -q` 与 `python -m ruff check .` 必须干净。
+- 解释器一律用 **`.venv/Scripts/python.exe`**（CPython 3.10.11，含 `curl_cffi` / `akshare`）。**不要用系统 `python`**：`tests/conftest.py:131` 会在 `import curl_cffi` 处抛 `ModuleNotFoundError`，整套测试无法采集。CLAUDE.md 的 Common Commands 对此有硬性要求。
+- 每个 Task 结束时 `python -m pytest -q` 与 `.venv/Scripts/python.exe -m ruff check .` 必须干净。
 - 公开模型字段名不变（`BoardInfo.code` / `type`）；唯一例外是**新增**字段（`amount_unit`），属加法。
 - 本计划的 5 类新测试按**不变量**断言，不写死行数/比率 —— 这样它们对上游数据漂移免疫。
 - `top_n` 的 `Query(le=50)` 放宽后，上限取 **800**（与 `/boards/{code}/history` 的 800 天上限同量级，避免无界请求）。
@@ -106,7 +106,7 @@ class TestSourceParsing:
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `python -m pytest tests/test_board_source_allowlist.py -v`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_board_source_allowlist.py -v`
 Expected: FAIL（`zzshare` 不在白名单、`_STOCK_BOARDS_SOURCE_ALIAS` 仍存在等）
 
 - [ ] **Step 3: 收敛持久层白名单**
@@ -128,7 +128,8 @@ _BOARD_STOCKS_VALID_SOURCES: tuple[str, ...] = VALID_SOURCES
 - [ ] **Step 4: 收敛路由层白名单与 Literal**
 
 `api/routes/boards.py`：
-- 324（`/boards`）、464（`/boards/{board_code}/stocks`）、848（`/stocks/{stock_code}/boards`）的 `source: Literal[...]` 加入 `"zzshare"`。
+- 只有**两处**是 `source: Literal[...]`，各加 `"zzshare"`：`boards.py:324`（`/boards`）与 `boards.py:464`（`/boards/{board_code}/stocks`）。
+- **`/stocks/{stock_code}/boards` 不是 Literal**（早前版本说"848 的 `source: Literal[...]`"，那是 `type:` 那一行；该路由的 `source` 在 840-847，类型是 `str | None`，逗号分隔，别名逻辑在 `_parse_stock_boards_source_csv` 里）。它**不需要改类型**，只需 Step 4 后半段的解析器改动；`?source=zzshare` 由 422 变 200 靠的就是删掉别名映射。
 - `_resolve_source`（106-124）与 `_resolve_board_history_source`（144-171）的白名单分别指向 `stock_board_cache.VALID_SOURCES` 与 `_BOARD_HISTORY_VALID_SOURCES`。
 - `_resolve_board_history_source` 删除 158-159 的 alias：
 
@@ -145,9 +146,30 @@ def _resolve_board_history_source(source: str) -> str:
 
 - `_parse_stock_boards_source_csv`（251-298）：删除 275 的 alias map 读取与 283 的 `alias_map.get(s, s)`，把 274 的 valid set 改成 `stock_board_cache.VALID_SOURCES`，并把错误消息里的 `(alias 'zzshare' accepted)` 去掉。
 
-- [ ] **Step 5: `/boards/{board_code}/quote` 对 unsupported source 的处理**
+- [ ] **Step 5: `/boards/{board_code}/quote` —— 它没有 `?source=` 参数，且 `?source=` 会被静默忽略**
 
-该路由**没有** `?source=` 参数（硬编码 ths），无需改动；在它的 docstring 与 `schemas.py` 的 `BoardQuoteResponse` 说明里补一句"来源固定 ths；其他 source 不支持板块实时行情"。`/boards/{board_code}/news` 与 `/surges` 的 `Literal["ths"]` 保持不变（同理由）。
+**实测**：该路由（`boards.py:745-798`）只声明了 `board_code: str = Path(...)`，**没有 `source` 参数**，实现里硬编码 `source="ths"`（798 行）。因此 `curl ".../quote?source=zzshare"` **返回 200 的 THS 数据**，参数被 FastAPI 静默丢弃 —— 不是 400/422。（spec §9 早前写的"→ 400/422"是错的，已修正。）它的 docstring（764-775）与 `schemas.py::BoardQuoteResponse.source` 的说明**已经**写明"该路由不接受 `?source=`"，所以本次无需改代码，只做两件事：
+
+1. 在 `api-reference.md` 的该端点参数表里显式写一句"**无 `source` 参数**；该端点固定 ths，其他 source 不支持板块实时行情"。
+2. **加一条测试钉住"传了 `?source=` 也不改变行为"**（避免以后有人误以为它生效）：
+
+```python
+def test_board_quote_ignores_source_param(client, monkeypatch):
+    """The quote route has no ?source= param — passing one must not 422
+    and must not change the served source (spec §9, reviewed 2026-09-11)."""
+    called: list[str] = []
+    monkeypatch.setattr(
+        "stock_data.data_provider.manager.DataFetcherManager.get_board_realtime",
+        lambda self, board_code, source, **kw: (called.append(source) or {"code": board_code}, source),
+    )
+    r = client.get("/api/v1/boards/885333/quote?source=zzshare")
+    assert r.status_code == 200, r.text
+    assert called == ["ths"]
+```
+
+（放进 `tests/test_boards_api.py` 或 Plan 3 Task 4 的 `test_board_source_isolation.py` 均可。）
+
+`/boards/{board_code}/news`（`boards.py:1209`）与 `/surges`（`:1251`）的 `source: Literal["ths"]` **保持不变** —— 它们是**真** 422，与 quote 不同，别一起改。
 
 - [ ] **Step 6: REWRITE 受影响的既有测试**
 
@@ -176,7 +198,7 @@ def _resolve_board_history_source(source: str) -> str:
 
 - [ ] **Step 7: 运行确认通过**
 
-Run: `python -m pytest tests/test_board_source_allowlist.py tests/test_boards.py tests/test_boards_api.py tests/test_stock_boards_reverse_route.py tests/test_boards_history_route.py -q`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_board_source_allowlist.py tests/test_boards.py tests/test_boards_api.py tests/test_stock_boards_reverse_route.py tests/test_boards_history_route.py -q`
 Expected: PASS
 
 - [ ] **Step 8: 提交**
@@ -213,8 +235,9 @@ Two tiers, both THS-only:
   top_n >  50  → F10 full membership + /stocks quote-cache union
                  (15/18 fields; change_speed / free_float_shares /
                   float_market_cap are structurally absent from F10 —
-                  probed 2026-09-11: all three are 0-filled on both the
-                  concept and industry F10 paths)
+                  probed 2026-09-11: the F10 row template simply has no
+                  such keys, and _enrich_rows_with_market_quote never
+                  sets them either, so they stay None on this tier)
 """
 
 from __future__ import annotations
@@ -340,7 +363,7 @@ class TestF10TierAbove50:
         )
         assert stocks[0]["price"] == 1800.0
 
-    def test_f10_threestucturally_absent_fields_stay_none(self, fresh_db, monkeypatch):
+    def test_f10_structurally_absent_fields_stay_none(self, fresh_db, monkeypatch):
         """Contract: these three are None on the >50 tier (probed 2026-09-11)."""
         _seed_metadata()
         monkeypatch.setattr(
@@ -355,17 +378,26 @@ class TestF10TierAbove50:
 
 
 class TestTopNLimitWidened:
-    def test_route_accepts_top_n_above_50(self):
-        from stock_data.api.routes import boards as routes_mod
-        import inspect
+    def test_route_accepts_top_n_above_50(self, client):
+        """Assert on the OpenAPI schema, not on source text.
 
-        src = inspect.getsource(routes_mod.get_board_stocks)
-        assert "le=50" not in src, "top_n cap must be widened for the F10 tier"
+        The earlier draft did `assert "le=50" not in
+        inspect.getsource(routes_mod.get_board_stocks)`. That is a
+        false-green: `@map_errors` / `@cache_endpoint` replace the module
+        attribute with a WRAPPER (see CLAUDE.md's decorator-order rule), and
+        `inspect.getsource` reports the wrapper's source — in errors.py — so
+        the assertion passes no matter what the route body says.
+        """
+        schema = client.get("/openapi.json").json()
+        params = schema["paths"]["/api/v1/boards/{board_code}/stocks"]["get"]["parameters"]
+        top_n = next(p for p in params if p["name"] == "top_n")
+        assert top_n["schema"]["maximum"] == 800, top_n
+        assert top_n["schema"]["default"] == 50, top_n
 ```
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `python -m pytest tests/test_board_include_quote_tiers.py -v`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_board_include_quote_tiers.py -v`
 Expected: FAIL（F10 tier 未实现；`le=50` 仍在）
 
 - [ ] **Step 3: 实现两层**
@@ -413,58 +445,89 @@ Expected: FAIL（F10 tier 未实现；`le=50` 仍在）
         stocks = _enrich_rows_with_market_quote(stocks, cached_quotes)
 
     update_cached_board_stocks(board_code, source, stocks)
-    quote_truncated = top_n > 50 and len(stocks) >= top_n
+    quote_truncated = len(stocks) >= top_n
     return stocks, origin, source, None, quote_truncated, max(cached_count, len(stocks))
 ```
 
-检查 `manager.get_board_stocks_full` 的签名是否接受 `source=`：manager 的 `call=lambda f: (f.get_board_stocks_full(board_code, board_type=board_type), f.name)` **不接受 `source` kwarg** —— 若报 `TypeError`，改为调用 `manager.get_board_stocks_full(board_code=board_code, board_type=board_type)`（`_with_source` 已用 `source` 定位 fetcher，无需再传）。
+**`quote_truncated` 必须是 `len(stocks) >= top_n`，不能写 `top_n > 50 and …`**：AJAX 层（`top_n ≤ 50`）的上游硬上限就是 50，所以 `top_n=50` 且拿到 50 行时**就是被截断了**，标志必须为 `True`。（早前版本的 `top_n > 50 and …` 会让该分支恒为 `False`，而同一份计划的 `test_persistence_board_topn.py:72` 又断言 `quote_truncated is True` —— 自相矛盾。已修正为统一语义。）
+
+**关于 `manager.get_board_stocks_full` 的 `source=`**：早前版本的担心是错的。公开方法是 `get_board_stocks_full(self, board_code: str, source: str, *, board_type=None) -> tuple[list[dict], str]`（`manager.py:1265-1271`）—— **`source` 是必需参数**；`manager.py:1288` 那个不含 `source` 的 `call=lambda f: (…)` 是包装器**内部**的 lambda，不是调用方约束。现有生产代码也是这么调的（`persistence/board.py:1149-1153`）。所以 `source=source` 照传；**千万别按早前版本的建议去掉它**，那会 `TypeError: missing 1 required positional argument: 'source'`。`ThsFetcher.get_board_stocks_full`（`ths_fetcher.py:2426`）签名末尾有 `**kwargs`，会静默吸收它。
+
+**6-tuple 第 3 位是 `effective_source`**（`(stocks, origin, effective_source, reason, quote_truncated, quote_total_in_board)`）。严格隔离后新鲜路径上 `effective_source == origin == source`，写 `source` 是等价的；但**别把它和第 2 位的 `origin` 搞混** —— 缓存命中时 `origin` 是字面量 `"persistence"`。缓存命中早退分支的硬编码 `"ths"` 已在 Plan 2 Task 3 Step 3 改为 `source`。
 
 - [ ] **Step 4: 放宽路由 `top_n` 上限**
 
 `api/routes/boards.py:509-521` 的 `top_n: int = Query(50, ge=1, le=50, ...)` → `le=800`，并更新描述为 "max rows; >50 switches to the THS F10 full-membership tier"。同时更新 docstring 与 `schemas.py` 里 `quote_top_n` 的说明。
 
-- [ ] **Step 5: 加 `amount_unit` 声明（D7）**
+- [ ] **Step 5: `amount` 单位统一到亿元 + 新增 `amount_unit` 声明（**已选定 B**）**
 
-- `api/schemas.py` 的 `BoardInfo` 加字段：
+**决策（2026-09-11 复核，选 B）**：换算**前移到 zzshare fetcher 边界**，对外 `amount` 只有一个量级（亿元），`amount_unit` 恒为 `"yi"`。原先 `_normalize_zzshare_list_quote_units`（`board.py:886-910`，由 Plan 2 删除）做的是 merge 期隐式换算——换算位置与"谁是权威"都藏在合并逻辑里。前移到 fetcher 之后，每个 source 自己声明自己的单位，merge 不存在了也就不需要换算层。
+
+代价（明确写下）：丢掉"上游原值"这一层信息，若要核对上游需自己乘回 `1e8`。收益：客户端不必读 `amount_unit` 也能跨源比较；同一条响应不会出现两种量级。
+
+1. `zzshare_fetcher.get_all_boards`（`zzshare_fetcher.py:729-731`）：映射之后把 `amount` 换算成亿元并声明单位：
+
+```python
+                if include_quote:
+                    for src_key, schema_key in self._PLATES_RANK_SCHEMA_MAP.items():
+                        board[schema_key] = safe_float(row.get(src_key))
+                    # plates_rank emits trade_money in 元; the server's
+                    # board-list contract is 亿元 (THS-native). Convert at
+                    # the SOURCE boundary so every row of a response shares
+                    # one scale — the old silent merge-time normalization
+                    # (_normalize_zzshare_list_quote_units) is gone with the
+                    # merge itself (spec §7, D7).
+                    if board.get("amount") is not None:
+                        board["amount"] = board["amount"] / 1e8
+                    board["amount_unit"] = "yi"
+```
+
+2. `ths_fetcher.get_all_boards`：`include_quote=True` 时给每行打 `r["amount_unit"] = "yi"`（THS 板块清单的 `amount` 本来就是亿元，**不改数值**）。`include_quote=False` 两条路径都**不打** `amount_unit` —— 没有 `amount` 就没有单位声明，`None` 比默认值诚实。
+
+3. `api/schemas.py` 的 `BoardInfo` 加字段（放在 `amount` 之后）：
 
 ```python
     amount_unit: str | None = Field(
         default=None,
         description=(
-            "Unit of `amount`: 'yi' (亿元, THS board list) or 'yuan' (元, "
-            "zzshare plates_rank native). Declared explicitly instead of "
-            "silently normalized, mirroring KLineData.volume_unit."
+            "Unit of `amount`. Always 'yi' (亿元) on the board-list path — "
+            "zzshare's native 元 is converted at its fetcher boundary. "
+            "`None` means the row carries no `amount` at all "
+            "(include_quote=false). Mirrors KLineData.volume_unit."
         ),
     )
 ```
 
-- `zzshare_fetcher.get_all_boards` 在 `include_quote=True` 时给每行打 `board["amount_unit"] = "yuan"`；`ths_fetcher.get_all_boards` 打 `"yi"`。
-- `routes/boards.py:419-438` 的 `BoardInfo(...)` 传 `amount_unit=b.get("amount_unit")`。
-- 删除 `_normalize_zzshare_list_quote_units` 的任何残留引用（Plan 2 已删函数，此处确认无 import）。
+4. `routes/boards.py` 的 `BoardInfo(...)` 构造传 `amount_unit=b.get("amount_unit")`（见 Step 2 一起抽出的 `_to_board_infos`）。
 
-**单位策略（二选一，默认 A = D7 原样）**
+5. **清掉 `_normalize_zzshare_list_quote_units` 的全部残留引用**（函数本身由 Plan 2 Task 2 删；这些是文字引用）：`api/schemas.py:2136`（`BoardMoverEntry` docstring，Plan 2 Task 2 Step 6 已列）、`api/routes/agent.py:1497`（Plan 2 已列）、**`api-reference.md:587` 与 `:2802`（Plan 3 Task 5 Step 3 处理）**。核对命令：
 
-- **A（默认，上面已写）**：保留上游原生值 + 声明单位。客户端必须读 `amount_unit` 才能跨源比较 —— 这是 D7 的选择，与 `KLineData.volume_unit` 同范式。
-- **B（备选：对外单一单位）**：在 zzshare fetcher 边界换算成亿元，`amount_unit` 恒为 `"yi"`：
-
-```python
-# In zzshare_fetcher.get_all_boards, where the schema key is mapped:
-for src_key, schema_key in self._PLATES_RANK_SCHEMA_MAP.items():
-    board[schema_key] = safe_float(row.get(src_key))
-if include_quote:
-    # plates_rank emits trade_money in 元; the server's board-list contract
-    # is 亿元 (THS-native). Convert at the source boundary so every row in
-    # the response shares one scale — the previous silent merge-time
-    # normalization (_normalize_zzshare_list_quote_units) is gone with the
-    # merge itself (spec §7).
-    if board.get("amount") is not None:
-        board["amount"] = board["amount"] / 1e8
-    board["amount_unit"] = "yi"
+```bash
+grep -rn "_normalize_zzshare_list_quote_units" stock_data/ docs/ api-reference.md CLAUDE.md
 ```
 
-选 B 时，`tests/test_board_amount_unit.py::test_zzshare_board_list_declares_yuan` 改为断言 `amount_unit == "yi"` 且 `amount` 已被除以 1e8；`test_missing_unit_is_none_not_defaulted` 不受影响。
+6. `tests/test_board_amount_unit.py` 按 B 写（见 Task 4 Step 2）：`test_zzshare_board_list_declares_yi` 断言 `amount_unit == "yi"`；再加一条钉住 fetcher 边界换算的用例：
 
-选 B 的代价：丢掉"上游原值"这一层信息（若要核对上游需自己乘回 1e8）。选 A 的代价：同一响应里 `amount` 可能有两种量级，客户端漏读 `amount_unit` 会算出 1e8 倍的错。**A 更诚实，B 更省事**。
+```python
+    def test_zzshare_fetcher_converts_trade_money_to_yi(self, monkeypatch):
+        """plates_rank emits 元; the fetcher must emit 亿元 (D7/B)."""
+        from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
+        f = ZzshareFetcher()
+        monkeypatch.setattr(f, "_ensure_api", lambda: None)
+        monkeypatch.setattr(
+            ZzshareFetcher,
+            "_api",
+            type("A", (), {"plates_rank": lambda self, **kw: [
+                {"plate_code": "801001", "plate_name": "芯片",
+                 "trade_money": 1.03e11, "rate": 1.0, "market_cap_cir": 5.0e12}
+            ]})(),
+        )
+        rows = f.get_all_boards(board_type="concept", include_quote=True)
+        assert rows
+        assert rows[0]["amount"] == pytest.approx(1030.0)  # 1.03e11 元 → 亿元
+        assert rows[0]["amount_unit"] == "yi"
+```
 
 - [ ] **Step 6: 更新受影响的既有测试**
 
@@ -480,7 +543,7 @@ if include_quote:
 
 - [ ] **Step 7: 运行确认通过**
 
-Run: `python -m pytest tests/test_board_include_quote_tiers.py tests/test_persistence_board_topn.py tests/test_persistence_board.py tests/test_persistence_origin.py -q`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_board_include_quote_tiers.py tests/test_persistence_board_topn.py tests/test_persistence_board.py tests/test_persistence_origin.py -q`
 Expected: PASS
 
 - [ ] **Step 8: 提交**
@@ -517,15 +580,70 @@ COLS = ["code", "name", "board_type", "subtype", "source", "cid"]
 
 rows = [r for r in csv.DictReader(open(SRC, encoding="utf-8-sig")) if r["code"]]
 dropped = sum(1 for r in csv.DictReader(open(SRC, encoding="utf-8-sig")) if not r["code"])
-ths = [r for r in rows if r["code"][:3] not in ZZ_PREFIXES]
+ths_raw = [r for r in rows if r["code"][:3] not in ZZ_PREFIXES]
 zz = [r for r in rows if r["code"][:3] in ZZ_PREFIXES]
 
 
+def is_ths_cid(v):
+    """Same guard as persistence.board._is_ths_cid (spec §4 rule 6)."""
+    return (
+        isinstance(v, str)
+        and len(v) == 6
+        and v.isascii()
+        and v.isdigit()
+        and (v.startswith("3") or v.startswith("881"))
+    )
+
+
+def collapse(recs):
+    """One row per `code`, deterministically.
+
+    16 ths codes appear twice in the source file. `seed_stock_board_from_csv`
+    uses INSERT OR REPLACE on UNIQUE(code, source), so the LAST row in the
+    file wins — and for 885940 ("WiFi 6") the last row carries the polluted
+    `cid=885940` while the FIRST carries the real `cid=308791`. Letting the
+    loader decide would silently lose that cid (and with it the AJAX leg for
+    that board). Collapsing here with an explicit preference makes the CSV
+    self-consistent and the loader's collapse a no-op.
+    """
+    out: dict[str, dict] = {}
+    for r in recs:
+        prev = out.get(r["code"])
+        if prev is None:
+            out[r["code"]] = r
+            continue
+        # Prefer a real THS cid, then any non-empty cid, then the earlier row.
+        if not is_ths_cid(prev.get("cid")) and is_ths_cid(r.get("cid")):
+            out[r["code"]] = r
+        elif not (prev.get("cid") or "") and (r.get("cid") or ""):
+            out[r["code"]] = r
+    return list(out.values())
+
+
+ths = collapse(ths_raw)
+
+
+nulled = 0
+
+
 def dump(path, recs, source):
+    global nulled
     with open(path, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=COLS)
         w.writeheader()
         for r in recs:
+            cid = r.get("cid") or ""
+            if source == "ths":
+                # 110 legacy concept rows have cid == code == 885xxx/886xxx
+                # (the pre-2026-07-20 layout wrote a platecode into the cid
+                # column). Keeping them would put a platecode into
+                # stock_board.cid, violating spec §4 rule 6 and feeding a
+                # platecode to the AJAX leg as if it were a cid.
+                if cid and not is_ths_cid(cid):
+                    nulled += 1
+                    cid = ""
+            else:
+                cid = ""  # spec §4 rule 3: zzshare rows carry no THS cid
             w.writerow(
                 {
                     "code": r["code"],
@@ -533,27 +651,30 @@ def dump(path, recs, source):
                     "board_type": r["board_type"],
                     "subtype": r["subtype"],
                     "source": source,
-                    # cid holds a THS-internal id; only ths rows may carry one.
-                    # Note 118 of these legacy rows carry a zzshare code in the
-                    # cid column — those rows move to the zzshare file, so the
-                    # polluted values leave with them (spec §3.1).
-                    "cid": (r.get("cid") or "") if source == "ths" else "",
+                    "cid": cid,
                 }
             )
 
 
 dump("stock_data/stock_data_backup/stock_board_ths.csv", ths, "ths")
 dump("stock_data/stock_data_backup/stock_board_zzshare.csv", zz, "zzshare")
-print("ths rows:", len(ths), "| zzshare rows:", len(zz), "| dropped empty-code:", dropped)
+print("ths raw:", len(ths_raw), "-> collapsed:", len(ths),
+      "| zzshare rows:", len(zz),
+      "| dropped empty-code:", dropped, "| collapsed dups:", len(ths_raw) - len(ths),
+      "| cid nulled:", nulled)
 PY
 ```
 
-Expected（2026-09-11 实测）: `ths rows: 604 | zzshare rows: 186 | dropped empty-code: 7`
+Expected（2026-09-11 实测）: `ths raw: 604 -> collapsed: 588 | zzshare rows: 186 | dropped empty-code: 7 | collapsed dups: 16 | cid nulled: 109`
 
-- 原文件 797 行 = 604 ths（885/886/881）+ 186 zzshare（801/803/710/883）+ 7 空 code 垃圾行。
-- 空 code 行**直接丢弃**（loader 本就跳过它们，且 `UNIQUE(code,source)` 会让它们互相折叠）。
-- 604 ths 行里含 16 个重复 code，入库时按 `UNIQUE(code, source)` 折叠为 **588**；186 zzshare 行无重复。
-- 原文件里 118 行 concept 的 `cid` 列存的是 zzshare code —— 它们全部属于 801/803/710 前缀，因此随重分类进入 zzshare 文件（该文件 `cid` 一律留空），污染随之离开 ths 命名空间。
+- 原文件 797 行 = 604 ths（885=397 / 886=103 / 881=104）+ 186 zzshare（801=177 / 803=7 / 710=1 / 883=1）+ 7 空 code 行。
+- 空 code 行**直接丢弃**（loader 本就跳过它们）。
+- **16 个 ths code 在源文件里出现两次**，由 `collapse()` 在拆分期确定性折叠（见该函数 docstring：loader 的 last-wins 会丢掉 `885940` 的真实 cid `308791`）。**输出 CSV 无重复 code**，LOADER 的 `UNIQUE(code, source)` 折叠因此成为 no-op —— 这条守恒链是可断言的，而不是"加载时才知道"。
+- `cid` 置空：**109 行**。其中 110 行是 `cid == code == 885/886` 的旧布局污染，但 16 个重复 code 折叠掉 16 行，被折叠掉的那 16 行里恰好有 1 行是污染行（`885940`，保留了带真实 cid 的那行），所以净置空 = 110 − 1 = **109**。
+- 另有 15 行 `cid` 本就为空。
+- **早前版本说"118 行 cid 里的污染随 zzshare 行一起离开 ths 命名空间"是错的**：那 118 行里只有 8 行的 `code` 属于 801/803/710/883 前缀（因而进 zzshare 文件）；剩下 **110 行的 `code` 是 885/886，会留在 ths 文件里**，必须显式置空 `cid`。这正是 Task 6 的不变量 `test_ths_cid_only_on_ths_rows_and_always_3xxxxx_or_881` 要钉的东西——不置空它直接红。
+- 置空 + 折叠后 ths 文件的 `cid` 分布：**479 行合法 cid + 109 行空 = 588** ✓
+- 守恒核对：797 = 588（ths 输出）+ 186（zzshare 输出）+ 16（折叠的重复 code）+ 7（空 code 丢弃）
 
 - [ ] **Step 2: membership CSV 整体 relabel**
 
@@ -582,19 +703,11 @@ rm stock_data/stock_data_backup/stock_board_membership_ths.csv
 
 Expected: `relabelled 115081`；随后 ths membership 不再有 CSV（THS 反向数据由 Plan 1 的 `ths_board_id_map` + 运行时 live 积累，不再需要整表 seed）。
 
-**`stock_board_membership_ths.csv` 的处置（二选一，默认 A）**
+**`stock_board_membership_ths.csv` 的处置（**已选定 A：删除原文件**）**
 
-- **A（默认，上面已执行）**：删除原文件。理由：那 115,081 行里 52,010 行的 `board_code` 是 801xxx（zzshare 码），把它当 ths 数据 seed 进 `source='ths'` 就是把刚拆开的两套命名空间再焊回去。代价：`source='ths'` 的反向索引冷启动为空，`/stocks/{code}/boards?source=ths` 首次走 cold-fallback（`_helpers/stock_boards.py` 已有一次性抓取实现，60s 缓存）。
-- **B（备选，保留但不 seed）**：把它移出 seed 路径留档，避免历史数据不可追溯：
+理由：那 115,081 行里 **52,010 行**的 `board_code` 是 801xxx（zzshare 码），把它当 ths 数据 seed 进 `source='ths'` 就是把刚拆开的两套命名空间再焊回去。代价：`source='ths'` 的反向索引冷启动为空，`/stocks/{code}/boards?source=ths` 首次走 cold-fallback（`_helpers/stock_boards.py` 已有一次性抓取实现，60s 缓存）。
 
-```bash
-mv stock_data/stock_data_backup/stock_board_membership_ths.csv \
-   stock_data/stock_data_backup/stock_board_membership_ths.csv.legacy
-```
-
-并把 `.gitignore` 的 `/stock_data/stock_data_backup/*.bak.*` 旁补一行 `/stock_data/stock_data_backup/*.legacy`。这样文件仍随 repo 保留供比对，但 `seed_all_from_backup_dir` 不会读到它（它按固定文件名查找）。**不要**保留原名 —— 那会让每次 `STOCK_DB_INIT=true` 都把 zzshare 数据重新灌回 ths。
-
-若选 B，Step 4 的 `test_row_counts_are_conserved` 等测试不受影响（它们只读 `ths` / `zzshare` 两个拆分后的 board CSV）。
+**唯一不能做的是"保留原名"** —— 那会让每次 `STOCK_DB_INIT=true` 都把 zzshare 数据重新灌回 `source='ths'`。若日后要留档，用 `mv … .legacy` + 在 `.gitignore` 的 `/stock_data/stock_data_backup/*.bak.*` 旁补 `/stock_data/stock_data_backup/*.legacy`（`seed_all_from_backup_dir` 按固定文件名查找，`.legacy` 不会被读到）；本轮选择直接删，历史仍在 git 里。
 
 - [ ] **Step 3: loader 支持 zzshare**
 
@@ -653,22 +766,61 @@ class TestSourcePurity:
     def test_zzshare_board_csv_has_no_ths_cid(self):
         assert {r["cid"] for r in _rows("stock_board_zzshare.csv")} <= {""}
 
+    def test_ths_board_csv_cid_column_is_only_real_cids(self):
+        """spec §4 rule 6 + the 110-row legacy pollution (§3.1).
+
+        These 110 rows stay in the ths file (their `code` is 885/886), so
+        if the split forgets to null their `cid`, this is where it shows.
+        """
+        def _is_cid(v: str) -> bool:
+            return len(v) == 6 and v.isascii() and v.isdigit() and (
+                v.startswith("3") or v.startswith("881")
+            )
+
+        bad = [r["cid"] for r in _rows("stock_board_ths.csv") if r["cid"] and not _is_cid(r["cid"])]
+        assert bad == [], f"platecode-shaped cid survived the split: {bad[:5]}"
+
+    def test_ths_board_csv_cid_nulled_count(self):
+        """479 real cids + 109 blank == 588 (measured 2026-09-11).
+
+        Blank = 15 rows that were already blank + 110 polluted rows nulled
+        − 1 polluted row that disappeared in the 16-code de-duplication.
+        """
+        rows = _rows("stock_board_ths.csv")
+        blank = sum(1 for r in rows if not r["cid"])
+        real = sum(1 for r in rows if r["cid"])
+        assert (real, blank) == (479, 109), f"got real={real} blank={blank}"
+
+    def test_no_duplicate_board_codes_in_either_file(self):
+        """The split must de-duplicate: the loader's INSERT OR REPLACE is
+        last-wins, and for 885940 the last source row carries the polluted
+        cid — letting the loader decide would silently lose cid 308791."""
+        for name in ("stock_board_ths.csv", "stock_board_zzshare.csv"):
+            codes = [r["code"] for r in _rows(name)]
+            dups = sorted({c for c in codes if codes.count(c) > 1})
+            assert dups == [], f"{name} still has duplicate codes: {dups[:5]}"
+
+    def test_885940_keeps_its_real_cid(self):
+        """The one code whose de-duplication choice is load-bearing."""
+        by_code = {r["code"]: r for r in _rows("stock_board_ths.csv")}
+        assert by_code["885940"]["cid"] == "308791"
+
     def test_membership_csv_is_zzshare_labelled(self):
         assert {r["source"] for r in _rows("stock_board_membership_zzshare.csv")} == {"zzshare"}
 
     def test_row_counts_are_conserved(self):
-        """797 source rows = 604 ths + 186 zzshare + 7 empty-code (dropped).
+        """797 source rows = 588 ths + 186 zzshare + 16 collapsed dup + 7 empty-code.
 
         Measured 2026-09-11 against the split source file. The 7 empty-code
-        rows are junk the CSV loader skips anyway (UNIQUE(code, source)
-        would collapse them); dropping them at split time makes the
-        conservation check exact instead of approximate.
+        rows are junk the loader skips anyway; the 16 duplicate ths codes
+        are collapsed BY THE SPLIT (deterministically, preferring a real
+        cid) rather than by the loader's last-wins INSERT OR REPLACE.
         """
         ths = len(_rows("stock_board_ths.csv"))
         zz = len(_rows("stock_board_zzshare.csv"))
-        assert ths == 604, f"ths row count drifted: {ths}"
+        assert ths == 588, f"ths row count drifted: {ths}"
         assert zz == 186, f"zzshare row count drifted: {zz}"
-        assert ths + zz + 7 == 797, "the split must not drop or duplicate valid rows"
+        assert ths + zz + 16 + 7 == 797, "the split must not drop or duplicate valid rows"
 
 
 class TestSeedRoundTrip:
@@ -703,7 +855,7 @@ class TestSeedRoundTrip:
 
 - [ ] **Step 5: 运行确认通过**
 
-Run: `python -m pytest tests/test_board_csv_split_migration.py tests/test_board_csv_seed.py -q`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_board_csv_split_migration.py tests/test_board_csv_seed.py -q`
 Expected: PASS
 
 - [ ] **Step 6: 提交**
@@ -858,12 +1010,14 @@ class TestDeclaredUnits:
                  "amount_unit": "yi", "board_type": "concept"}]
         assert routes_mod._to_board_infos(rows)[0].amount_unit == "yi"
 
-    def test_zzshare_board_list_declares_yuan(self):
-        rows = [{"board_code": "801001", "name": "芯片", "amount": 1.03e11,
-                 "amount_unit": "yuan", "board_type": "concept"}]
+    def test_zzshare_board_list_declares_yi(self):
+        """D7/B: the 元→亿元 conversion happens in the fetcher, so the route
+        layer sees 亿元 + `"yi"` for every source."""
+        rows = [{"board_code": "801001", "name": "芯片", "amount": 1030.0,
+                 "amount_unit": "yi", "board_type": "concept"}]
         info = routes_mod._to_board_infos(rows)[0]
-        assert info.amount_unit == "yuan"
-        assert info.amount == 1.03e11, "value must stay upstream-native, not rescaled"
+        assert info.amount == 1030.0
+        assert info.amount_unit == "yi"
 
     def test_missing_unit_is_none_not_defaulted(self):
         rows = [{"board_code": "BK1048", "name": "互联网服务", "board_type": "industry"}]
@@ -935,7 +1089,7 @@ class TestPrecedence:
 
 - [ ] **Step 4: 运行确认通过**
 
-Run: `python -m pytest tests/test_board_source_isolation.py tests/test_board_amount_unit.py tests/test_ths_board_id_map_precedence.py -q`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_board_source_isolation.py tests/test_board_amount_unit.py tests/test_ths_board_id_map_precedence.py -q`
 Expected: PASS（`test_board_amount_unit.py` 需要 Step 2 的 `_to_board_infos` 提取先完成）
 
 - [ ] **Step 5: 提交**
@@ -957,11 +1111,18 @@ git commit -m "test(board): pin strict source isolation, declared units, and map
 
 - [ ] **Step 1: 重写 `docs/board-source-semantics.md`**
 
-该文件现以"post-unification 共享 ths 缓存"为前提（第 10-18 行），全部失效。重写为：
+该文件现以"post-unification 共享 ths 缓存"为前提（第 10-18 行 = `## Board Cache Source-Normalization`），第 20-45 行是 `effective_source` 段，**两段都失效**。
+
+**但不要整文件替换** —— 早前版本给的替换稿把两个**仍然有效**的小节丢掉了：
+
+- `## Board endpoint failure observability`（现第 47-57 行）
+- `## Persistence ↔ manager bidirectional coupling (audit §M3)`（现第 59-68 行）
+
+那两节的结论本次没有推翻（`_with_source` 仍不与 CircuitBreaker 集成；persistence↔manager 的耦合站点只是变少，没有消失）。改法是**只替换 10-45 行**，保留 47 行之后，并把 Plan 1 Task 5 Step 4 追加的 `## THS cid ↔ platecode` 一节与下面的新内容合并（不要出现"brought forward — see that section"这种占位句）。
+
+替换稿（10-45 行 → 以下内容）：
 
 ```markdown
-# Board endpoint source semantics
-
 ## Source isolation (2026-09-11 split)
 
 `ths` and `zzshare` are two independent first-class sources with disjoint
@@ -970,34 +1131,57 @@ board code spaces. There is NO cross-source fallback and NO alias: a
 
 | source | board_code namespace | ths_cid | history | realtime quote |
 |---|---|---|---|---|
-| `ths` | 885xxx / 886xxx / 881xxx | 3xxxxx (concept) / ==code (industry) | ✅ | ✅ |
-| `zzshare` | 801xxx / 803xxx / 710xxx / 883xxx | always NULL | ✗ (400) | ✗ (400/422) |
+| `ths` | 885xxx / 886xxx / 881xxx | 3xxxxx (concept) / ==code (industry) / NULL | ✅ | ✅ |
+| `zzshare` | 801xxx / 803xxx / 710xxx / 883xxx | always NULL | ✗ (400) | ✗ |
 | `eastmoney` | BKxxxx | NULL | ✅ | ✗ |
 | `zhitu` | sw_xxx | NULL | ✗ | ✗ |
+
+`/boards/{code}/quote` takes **no `?source=` parameter at all** — it is
+hardcoded to ths, and an unexpected `?source=` is silently ignored (not
+422). `/boards/{code}/news` and `/surges` DO declare `Literal["ths"]` and
+therefore really do 422 on any other value.
 
 ## Cache
 
 `stock_board` and `stock_board_membership` are keyed `(code, source)` and
 `(board_code, source, stock_code)`. A cache hit for one source can never
 serve another source's rows. `data_source='persistence'` means "served from
-SQLite"; `effective_source` is the fetcher that served the upstream call —
-since there is no cross-source fallback, it now only distinguishes legs
-WITHIN one source (the THS AJAX / F10 tiers).
+SQLite"; `effective_source` is the fetcher that served — since there is no
+cross-source fallback, it only ever distinguishes legs WITHIN one source
+(the THS AJAX ≤50 / F10 >50 tiers).
 
 ## effective_source no longer signals a fallback
 
 Pre-split, `query_source='ths'` + `effective_source='zzshare'` meant the
-cross-source fallback fired. That combination is now impossible.
+cross-source fallback fired. That combination is now impossible. The
+cache-hit early return used to hardcode `effective_source='ths'`; it now
+reports the row's own `source` (2026-09-11).
 
 ## THS cid ↔ platecode
 
-(brought forward from the 2026-09-11 addition — see that section)
+THS gives every concept board two identifiers: a public `platecode`
+(885xxx / 886xxx) and an internal `cid` (3xxxxx). They are NOT
+interchangeable — the gn AJAX constituent endpoint takes the cid, the F10
+page and board K-line take the platecode. Industry boards use one value
+(881xxx) for both.
 
-## Failure observability (unchanged)
+`ths_board_id_map` (SQLite) is the single cid → platecode lookup. It is
+seeded at startup from `stock_data/stock_data_backup/ths_board_id_map.csv`
+and refreshed by `.venv/Scripts/python.exe -m
+stock_data.tools.refresh_ths_board_id_map --apply`, which sweeps THS's own
+`GET /gn/` (gnSection pair) and falls back to one
+`/gn/detail/code/{cid}/` request per unresolved board. The runtime board
+path additionally resolves an individual miss on demand and writes the
+result back, so each board costs at most one detail-page request ever.
 
-Board endpoints route through `DataFetcherManager._with_source`, which is
-NOT CircuitBreaker-integrated. THS board outages surface as 5xx rate, never
-as CB state changes.
+**The CSV is a snapshot, never authoritative.** It only contains pairs THS
+has shown us at some point; live observations must always overwrite it, or
+a THS renumbering would go unnoticed until a fetch 404s. The refresh tool
+prints an added / changed / removed diff for exactly that reason.
+
+A `ths_cid` value is always a real cid or NULL — never a platecode. The
+110 legacy rows that had `cid == code == 885xxx/886xxx` had their `cid`
+cleared during the 2026-09-11 CSV split.
 ```
 
 - [ ] **Step 2: 改 `CLAUDE.md`**
@@ -1010,17 +1194,31 @@ as CB state changes.
 | "Board endpoints（source-routed）" 表 | 三类 source 改为四类；`get_all_boards` 的 "`zzshare` unified under `ths`" 删除 |
 | "Board response source fields" 段 | 整段重写为 per-source 缓存 + `effective_source` 仅表示同源换腿 |
 | Anti-patterns | 删 "Don't treat `data_source` as the user's fetcher choice" 里关于 zzshare fallback 的论证（保留 read-`effective_source` 的结论）；新增 "Don't 在 board 路径使用裸 `code` 作为行 key" |
-| `fetcher_method` 覆盖表 | 补 `get_board_stocks_full` 一行 |
+| `fetcher_method` 覆盖表（`CLAUDE.md:122-134`） | **不能补 `get_board_stocks_full` 一行** —— `EndpointMeta.fetcher_method` 是**单个标量**（`api/endpoint_meta.py:55`），`/boards/{board_code}/stocks` 已经声明了 `get_board_stocks`。F10 只是该端点的**内部层**（`top_n>50`），不是独立端点，无法用现有 schema 表达。改为在 `get_board_stocks` 那一行补一句"（`top_n>50` 时内部换 `get_board_stocks_full`）" |
 | "K-line today's partial bar" 段 | 不变 |
-| `/boards/{code}/stocks` 400/422 契约段 | 补 `zzshare` 的 history/quote 400/422 契约 |
+| `/boards/{code}/stocks` 400/422 契约段 | 补 `zzshare` 的 history 400 契约；补 quote 端点"无 `?source=` 参数、传了被忽略"（**不是** 400/422，见 Task 1 Step 5） |
+| 环境变量段（`fetcher_method` 表附近 / Configuration 段） | **`THS_ENABLED=false` 与 `ZZSHARE_ENABLED=false` 的 blast-radius 说明已失效**（CLAUDE.md 与 `.env.example:110-120` 都写着"board cache 恒 keyed source='ths'，且 `?source=zzshare` 被 alias 成 ths"）。改为：`THS_ENABLED=false` 仍会打断 ths 侧全部 board 端点，但 **zzshare 侧的 `/boards?source=zzshare` 依然可用**（不再互相依赖）；`ZZSHARE_ENABLED=false` 只影响 zzshare 侧端点与 zzshare membership 的 lazy fill，**不再有"调用方没点名的内部链路"** |
+| Persistence ↔ manager coupling 段 | 站点减少（merge/fallback 两个函数被删），但方向性结论不变；`docs/board-source-semantics.md` 的小节保留 |
 
 - [ ] **Step 3: 改 `api-reference.md`**
 
-- `/boards`、`/boards/{board_code}/stocks`、`/stocks/{stock_code}/boards` 的 `source` 取值文档加 `zzshare`。
-- 删 2798 行附近把 `801xxx` 说成 THS concept 板块码的陈述（**已过时**：801xxx 是 zzshare 的码）。
-- `BoardInfo.amount_unit` 新字段说明（取值 `yi` / `yuan`，缺失为 `None`）。
-- `top_n` 上限 50 → 800，并说明 `>50` 走 F10 层、该层 `change_speed` / `free_float_shares` / `float_market_cap` 为 `None`。
-- `/boards/{board_code}/history` 的 `source` 取值明确为 `ths` / `eastmoney`（`zzshare` → 400）。
+逐条给出**实际存在的**位置（早前版本只点了 2798，其余是"凭印象"的）：
+
+| 位置 | 改动 |
+|---|---|
+| `506-509` | source 标签总表：`zzshare` 由"alias"改为独立 source；补四源列表 |
+| `511-521` | **alias 行为矩阵整段作废**（现在写着 `/boards` + `/boards/{code}/stocks` 对 zzshare → 422、`/stocks/{code}/boards` → alias、`/boards/{code}/history` → alias）。重写为：前两者 → 200（真源）；`/stocks/{code}/boards` → 200（真源，默认聚合含 zzshare）；`/boards/{code}/history` → 400 |
+| `548` | `/boards` 的 `source` 取值：`ths`,`eastmoney`,`zhitu` → 加 `zzshare` |
+| `621` | `/boards/{board_code}/stocks` 的 "`?source=zzshare` returns 422" → 改为 200 |
+| `618-623` | **该端点的参数表没有 `top_n`**（只有 `source`/`include_quote`/`refresh`），所以"把 `top_n` 上限 50 改成 800"**不是改文字，是新增**：补 `top_n` / `sort_by` / `sort_order` 三行，并写明"`top_n>50` 切换到 THS F10 整表层（无 50 上限，上限 800），该层 `change_speed` / `free_float_shares` / `float_market_cap` 恒为 `None`" |
+| `634` | `/stocks/{stock_code}/boards` 的 "`zzshare` is accepted as alias for `ths`" → 删除，改为独立 source |
+| `670` | `/boards/{board_code}/history` 的 "`zzshare` is accepted and aliased to `ths`" → 改为 "`zzshare` → 400（zzshare 无板块 K 线上游）" |
+| `746-798` 对应的文档段 | 补一句"该端点**没有 `source` 参数**，固定 ths；传入 `?source=` 会被忽略（不报错）" |
+| `1604` | `POST /agent/boards/filter-stocks` 的 "`zzshare` returns 422" → 200 |
+| `2476` / `2534` | agent 端点的 `boards` 标签 source → 加 `zzshare` |
+| `2798` | 删/改 "Board code (THS platecode; e.g. `881154` industry, `885642` / `801xxx` concept)" —— `801xxx` **不是** THS 码 |
+| `587` 与 `2802` | 两处引用 `_normalize_zzshare_list_quote_units`（Plan 2 已删该函数）→ 改写为"zzshare 的 `amount` 在 fetcher 边界换算成亿元" |
+| `BoardInfo` 字段表 | 新增 `amount_unit` 行（恒 `"yi"`；`None` 表示该行无 `amount`） |
 
 - [ ] **Step 4: 检查 `.env.example`**
 
@@ -1067,18 +1265,43 @@ ZZ_PREFIXES = ("801", "803", "710", "883")
 
 @pytest.fixture(scope="module")
 def seeded_db(tmp_path_factory):
+    """Seed a throwaway DB once for the module, then put globals back.
+
+    Module scope is deliberate (115k membership rows are slow to re-seed),
+    which means ``monkeypatch`` is unavailable. So the env var, the
+    memoised ``db._db_path``/``db._conn``, and
+    ``board_mod._schema_initialized_paths`` must be saved and restored BY
+    HAND — otherwise every later test in the session re-resolves
+    ``get_db_path()`` to this temp file (it stays set after teardown) and
+    the suite order starts mattering.
+    """
     import os
 
     path = tmp_path_factory.mktemp("acceptance") / "acc.db"
+    saved_env = os.environ.get("STOCK_CACHE_DB_PATH")
+    saved_db_path = db_mod._db_path
+    saved_conn = db_mod._conn
+    saved_schema = board_mod._schema_initialized_paths
+
     os.environ["STOCK_CACHE_DB_PATH"] = str(path)
     db_mod._db_path = None
     db_mod._conn = None
     board_mod._schema_initialized_paths = set()
-    board_mod.init_schema()
-    board_csv.seed_all_from_backup_dir(BACKUP)
-    yield
-    db_mod._conn = None
-    db_mod._db_path = None
+    try:
+        board_mod.init_schema()
+        board_csv.seed_all_from_backup_dir(BACKUP)
+        yield
+    finally:
+        temp_conn = db_mod._conn
+        if temp_conn is not None and temp_conn is not saved_conn:
+            temp_conn.close()
+        db_mod._conn = saved_conn
+        db_mod._db_path = saved_db_path
+        board_mod._schema_initialized_paths = saved_schema
+        if saved_env is None:
+            os.environ.pop("STOCK_CACHE_DB_PATH", None)
+        else:
+            os.environ["STOCK_CACHE_DB_PATH"] = saved_env
 
 
 class TestInvariants:
@@ -1104,16 +1327,47 @@ class TestInvariants:
             assert r["source"] == "ths", f"non-ths row carries a cid: {dict(r)}"
             assert r["cid"][:1] == "3" or r["cid"].startswith("881"), r["cid"]
 
-    def test_every_advertised_ths_board_code_resolves(self, seeded_db):
-        """No advertised ths board_code may 422 on cid_unresolved."""
+    def test_advertised_cids_agree_with_the_id_map(self, seeded_db):
+        """Every ths row that carries a cid must agree with ths_board_id_map.
+
+        This is the real cross-artifact invariant: it ties the board table
+        (seeded from stock_board_ths.csv) to the map table (seeded from
+        ths_board_id_map.csv) — both come from the same source file, so a
+        disagreement means one of the two loaders or the split is wrong.
+
+        Verified on the split artifacts 2026-09-11: all 479 ths rows with a
+        non-NULL cid satisfy `resolve_ths_platecode(cid) == code`, and all
+        104 industry rows are identity (`cid == code == 881xxx`).
+
+        NOTE: the earlier draft of this test ended in
+        `assert all(… or True for c in unresolved)` — a tautology that
+        asserts nothing. Do not reintroduce that shape.
+        """
         rows = board_mod.get_connection().execute(
-            "SELECT code FROM stock_board WHERE source='ths' AND board_type='concept'"
+            "SELECT code, cid, board_type FROM stock_board "
+            "WHERE source='ths' AND cid IS NOT NULL"
         ).fetchall()
-        unresolved = [r["code"] for r in rows if board_mod.resolve_ths_cid(r["code"]) is None]
-        # Sidebar-only boards with no known platecode cannot be addressed as
-        # a platecode at all; they are not advertised under a 885xxx code.
-        assert all(c in board_mod.get_ths_board_id_map_rows() or True for c in unresolved)
-        assert len(unresolved) < len(rows), "every concept board advertised with a cid"
+        assert rows, "seeded ths rows must carry cids"
+        mismatched = [
+            (r["code"], r["cid"], board_mod.resolve_ths_platecode(r["cid"]))
+            for r in rows
+            if board_mod.resolve_ths_platecode(r["cid"]) != r["code"]
+        ]
+        assert mismatched == [], f"cid/board_code disagree with the map: {mismatched[:5]}"
+
+    def test_no_ths_board_code_is_a_bare_cid(self, seeded_db):
+        """spec §4 rule 2: a cid must never be written into board_code.
+
+        (881xxx industry codes are exempt — there cid == code by design.)
+        """
+        rows = board_mod.get_connection().execute(
+            "SELECT code FROM stock_board WHERE source='ths'"
+        ).fetchall()
+        offenders = [
+            r["code"] for r in rows
+            if r["code"].startswith("3") and not r["code"].startswith("881")
+        ]
+        assert offenders == [], f"bare cids leaked into board_code: {offenders}"
 
     def test_no_board_name_maps_to_two_codes_within_a_source(self, seeded_db):
         rows = board_mod.get_connection().execute(
@@ -1138,7 +1392,7 @@ class TestOmittedSourceAggregate:
 
 - [ ] **Step 2: 跑离线验收**
 
-Run: `python -m pytest tests/test_board_split_acceptance.py -q`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_board_split_acceptance.py -q`
 Expected: PASS
 
 - [ ] **Step 3: 重建生产库**
@@ -1162,7 +1416,16 @@ print(persistence.seed_all_from_backup_dir(Path('stock_data/stock_data_backup'))
 "
 ```
 
-Expected: `{'ths_board_id_map': N, 'stock_board_ths': ~620, 'stock_board_eastmoney': ~992, 'stock_board_zzshare': ~177, 'stock_board_membership_zzshare': 115081}`（N 为 Plan 1 的产物，实测 480；board 行数会因 `UNIQUE(code,source)` 折叠而略低于 CSV 行数）
+Expected（2026-09-11 实测口径）:
+
+```
+{'ths_board_id_map': 480, 'stock_board_ths': 588, 'stock_board_eastmoney': 992,
+ 'stock_board_zzshare': 186, 'stock_board_membership_zzshare': 115081}
+```
+
+- `stock_board_ths` 是 **588**，与拆分后的 CSV 行数**一致**（Task 3 的 `collapse()` 已经去重，loader 不再折叠任何东西）。
+- `stock_board_zzshare` 是 **186**（早前写的 `~177` 是 801 前缀的行数，漏算了 803/710/883 共 9 行）。
+- `stock_board_eastmoney` 992（该文件 992 行，无重复 code）。
 
 - [ ] **Step 4: 端到端手工验收（不变量清单）**
 
@@ -1173,13 +1436,15 @@ Expected: `{'ths_board_id_map': N, 'stock_board_ths': ~620, 'stock_board_eastmon
 | 1 | `curl "localhost:8899/api/v1/boards?source=ths&type=concept" \| jq '.data[].code' \| sort -u \| head` | 只出现 885xxx/886xxx，**无 801xxx** |
 | 2 | `curl "localhost:8899/api/v1/boards?source=zzshare&type=concept" \| jq '.data \| length'` | > 0（原先 422） |
 | 3 | `curl "localhost:8899/api/v1/boards/885333/stocks?source=ths&include_quote=false"` | 200，`effective_source="ths"` |
-| 4 | `curl "localhost:8899/api/v1/boards/801001/stocks?source=ths&include_quote=false"` | **非 200**（801001 不是 THS 码）或 404，且 `effective_source` **绝不等于** `zzshare` |
+| 4 | `curl "localhost:8899/api/v1/boards/801001/stocks?source=ths&include_quote=false"` | **非 200**：THS 拿一个 zzshare 码去查，F10 页无此板块 → 空结果 → 路由把空映射为 **404**（若上游直接报错则 503）。`effective_source` **绝不等于** `zzshare`（这一条就是 D2 的反例检测） |
 | 5 | `curl "localhost:8899/api/v1/boards/885300/stocks?source=ths&include_quote=false"` | 200（不再是 422 cid_unresolved） |
 | 6 | `curl "localhost:8899/api/v1/boards/885333/stocks?source=ths&include_quote=true&top_n=100"` | 200；行数 > 50；首行 `change_speed`/`free_float_shares`/`float_market_cap` 为 `null` |
 | 7 | `curl "localhost:8899/api/v1/boards/885333/history?source=zzshare"` | 400 |
 | 8 | `curl "localhost:8899/api/v1/stocks/600519/boards?source=ths"` 与 `?source=zzshare` | **两份结果不同**（各自源的数据）；`source=zzshare` 的 entries 全部 `source=="zzshare"` |
 | 9 | `curl "localhost:8899/api/v1/stocks/600519/boards"` | `cold_sources` / 各 entry 的 `source` 覆盖 4 个源 |
-| 10 | `curl "localhost:8899/api/v1/boards?source=zzshare&include_quote=true" \| jq '.data[0].amount_unit'` | `"yuan"` |
+| 10 | `curl "localhost:8899/api/v1/boards?source=zzshare&include_quote=true" \| jq '.data[0].amount_unit'` | `"yi"`（D7/B：zzshare 在 fetcher 边界已换算成亿元） |
+| 11 | `curl "localhost:8899/api/v1/boards/885333/quote?source=zzshare"` | **200**，且返回 THS 数据 —— 该端点没有 `source` 参数，`?source=` 被静默忽略（**不是** 400/422，见 Task 1 Step 5） |
+| 12 | `curl "localhost:8899/api/v1/boards/885333/stocks?source=ths&include_quote=true&top_n=50"` | `quote_truncated` 在拿到 50 行时为 `true`（`len(stocks) >= top_n`，**不是** `top_n > 50 and …`） |
 
 - [ ] **Step 5: 记录验收结果并提交**
 
@@ -1218,5 +1483,28 @@ git commit -m "test(board): add post-split acceptance invariants"
 
 **类型一致性**：`_to_board_infos(rows) -> list[BoardInfo]`（Task 2 Step 2 定义）在 Task 2 Step 3 与 Task 4 Step 2 使用；`resolve_ths_cid` / `resolve_ths_platecode` 分别指 THS cid 解析与映射表查询，Task 1-4 一致；`quote_truncated` 语义在两处（Task 2 Step 3 实现、Task 2 Step 6 测试）描述一致。
 
-**已知需你 confirm 的两点**（正文已标注）：Task 3 Step 2 是否删除 `stock_board_membership_ths.csv`；Task 2 Step 5 的 `amount_unit` 采用"原生值 + 声明单位"（而非在 fetcher 边界统一换算成亿元）。
+**两个原先待确认项，已定档（正文已按此改写）**：
+
+1. **Task 3 Step 2 → 删除 `stock_board_membership_ths.csv`**（选 A）。
+2. **Task 2 Step 5 → 在 zzshare fetcher 边界换算成亿元**，`amount_unit` 恒 `"yi"`（选 B）。
+
+**本次 review 修正的问题（全部已写进正文）**：
+
+| # | 问题 | 修正位置 |
+|---|---|---|
+| 1 | Global Constraints 说"本机无 `.venv/`、用系统 python（miniconda 3.13.9）"—— 实际 `.venv/Scripts/python.exe`（3.10.11）存在，系统 python 连 conftest 都采不到 | Global Constraints |
+| 2 | `/stocks/{stock_code}/boards` 的 `source` **不是** Literal（848 是 `type:`），早前版本的改法指向了错误的行 | Task 1 Step 4 |
+| 3 | `/boards/{code}/quote?source=zzshare` 不会 400/422 —— 该端点没有 `source` 参数，参数被静默忽略 | Task 1 Step 5 + Task 6 验收 #11 |
+| 4 | `quote_truncated = top_n > 50 and …` 与本计划自己的 `test_persistence_board_topn.py:72` 断言自相矛盾 | Task 2 Step 3 |
+| 5 | `manager.get_board_stocks_full` **确实**接受 `source=`（必需参数），早前版本的"去掉 source"建议会导致 `TypeError` | Task 2 Step 3 |
+| 6 | CSV 拆分把 118 行 `cid == code` 全说成"zzshare code 污染"——实际只有 8 行是 zzshare 码，**110 行是 885/886 platecode，会留在 ths 文件里且必须置空** | Task 3 Step 1 + Step 4 |
+| 7 | 16 个 ths 重复 code 交给 loader 的 last-wins `INSERT OR REPLACE` 会静默丢掉 `885940` 的真实 cid `308791` | Task 3 Step 1 新增 `collapse()` |
+| 8 | Task 6 的 `test_every_advertised_ths_board_code_resolves` 里 `all(… or True …)` 是恒真断言，什么都没钉住 | Task 6 Step 1 |
+| 9 | Task 6 的 module-scoped fixture 直接改 `os.environ` / `db._db_path` 且不还原，会污染同 session 的后续测试 | Task 6 Step 1 |
+| 10 | `fetcher_method` 是**单标量**，`get_board_stocks_full` 加不进那个表（它是端点内部层） | Task 5 Step 2 |
+| 11 | Task 5 Step 1 的替换稿会**删掉两个仍然有效的小节**（failure observability / persistence↔manager coupling） | Task 5 Step 1 |
+| 12 | 任务 5 Step 3 说"改 `top_n` 上限 50 → 800"，但 `api-reference.md` **根本没写 `top_n`** —— 是新增不是修改 | Task 5 Step 3 |
+| 13 | `stock_board_zzshare` 的期望行数 `~177` 只是 801 前缀的数量，漏了 803/710/883 共 9 行 | Task 6 Step 3 |
+| 14 | `_normalize_zzshare_list_quote_units` 的引用还有 `api-reference.md:587` / `:2802` 未在早前版本列出 | Task 5 Step 3 |
+| 15 | Task 2 Step 1 的 `assert "le=50" not in inspect.getsource(routes_mod.get_board_stocks)` 是**假绿**：`@map_errors` / `@cache_endpoint` 已把模块属性换成 wrapper，`getsource` 拿到的是 `errors.py` 里的包装函数 | Task 2 Step 1（改为断言 OpenAPI schema） |
 </content>
