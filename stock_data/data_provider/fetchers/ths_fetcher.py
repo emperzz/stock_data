@@ -1858,6 +1858,12 @@ class ThsFetcher(BaseFetcher):
                 # presence — no ``if "change_pct" in r`` branching.
                 for k in ThsFetcher._REALTIME_BOARD_FIELDS:
                     r.setdefault(k, None)
+                if include_quote:
+                    # THS board-list `amount` is already 亿元 — declare it
+                    # rather than convert (D7/B; zzshare converts in its own
+                    # fetcher so the merged view used to need this anyway).
+                    # Not set when include_quote=False: no amount, no unit.
+                    r["amount_unit"] = "yi"
             if subtype is not None:
                 rows = [r for r in rows if r.get("subtype") == subtype]
             out.extend(rows)

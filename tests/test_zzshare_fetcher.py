@@ -1520,7 +1520,12 @@ class TestBoards:
         assert b["name"] == "送转填权"
         assert b["board_type"] == "concept"
         assert b["change_pct"] == pytest.approx(8.178)
-        assert b["amount"] == pytest.approx(68171800.0)
+        # plates_rank emits trade_money in 元 (68,171,800); the fetcher
+        # converts to 亿元 at the source boundary so every row of a board-list
+        # response shares THS's scale (spec §7, D7/B).
+        assert b["amount"] == pytest.approx(0.681718)
+        assert b["amount_unit"] == "yi"
+        # total_mv has no THS counterpart and keeps its native 元 value.
         assert b["total_mv"] == pytest.approx(2783750000.0)
 
     def test_get_all_boards_include_quote_preserves_raw_columns(self):

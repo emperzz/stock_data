@@ -71,6 +71,39 @@ _SOURCES = stock_board_cache.VALID_SOURCES
 _TYPES = stock_board_cache.VALID_BOARD_TYPES
 
 
+def _to_board_infos(rows: list[dict]) -> list[BoardInfo]:
+    """Map board row dicts to the public ``BoardInfo`` shape.
+
+    The response boundary for ``/boards``: internal rows carry
+    ``board_code`` / ``board_type`` (spec §5.1), the public model exposes
+    ``code`` / ``type``. Every code path — fresh fetcher rows, cache hits,
+    and the all-types fan-out — goes through here, so the two field sets
+    cannot drift.
+    """
+    return [
+        BoardInfo(
+            code=b["board_code"],
+            name=b["name"],
+            type=b.get("board_type"),
+            price=b.get("price"),
+            change_pct=b.get("change_pct"),
+            change_amount=b.get("change_amount"),
+            volume=b.get("volume"),
+            amount=b.get("amount"),
+            amount_unit=b.get("amount_unit"),
+            turnover_pct=b.get("turnover_rate"),
+            total_mv=b.get("total_mv"),
+            net_inflow=b.get("net_inflow"),
+            up_count=b.get("up_count"),
+            down_count=b.get("down_count"),
+            leading_stock=b.get("leading_stock"),
+            leading_stock_price=b.get("leading_stock_price"),
+            leading_stock_pct=b.get("leading_stock_pct"),
+        )
+        for b in rows
+    ]
+
+
 def _build_board_stock_info(s: dict) -> BoardStockInfo:
     """Map a persistence row to BoardStockInfo."""
     return BoardStockInfo(
@@ -409,33 +442,7 @@ def list_boards(
     if limit is not None:
         boards = boards[:limit]
 
-    return BoardListResponse(
-        source=origin,
-        data=[
-            BoardInfo(
-                code=b["board_code"],
-                name=b["name"],
-                # Every code path (fresh fetcher + cache hit) tags rows
-                # with ``type``; see _read_boards_from_db and the
-                # board_type=None fan-out in get_board_list.
-                type=b.get("board_type"),
-                price=b.get("price"),
-                change_pct=b.get("change_pct"),
-                change_amount=b.get("change_amount"),
-                volume=b.get("volume"),
-                amount=b.get("amount"),
-                turnover_pct=b.get("turnover_rate"),
-                total_mv=b.get("total_mv"),
-                net_inflow=b.get("net_inflow"),
-                up_count=b.get("up_count"),
-                down_count=b.get("down_count"),
-                leading_stock=b.get("leading_stock"),
-                leading_stock_price=b.get("leading_stock_price"),
-                leading_stock_pct=b.get("leading_stock_pct"),
-            )
-            for b in boards
-        ],
-    )
+    return BoardListResponse(source=origin, data=_to_board_infos(boards))
 
 
 @router.get(
@@ -505,14 +512,15 @@ def get_board_stocks(
     top_n: int = Query(
         50,
         ge=1,
-        le=50,
+        le=800,
         description=(
-            "Max number of stocks to fetch live quotes for "
-            "(default 50, mirrors THS upstream hard cap). "
-            "When include_quote=true, the server always invokes a single "
-            "ZZSHARE membership call to fill in the remaining unquoted "
-            "members; the response contains quote_truncated=true iff that "
-            "fill-in added rows (or ZZSHARE itself failed)."
+            "Max rows to return (default 50). With include_quote=true the "
+            "value also selects the tier: <=50 uses the THS AJAX endpoint "
+            "(18/18 quote fields, hard-capped at 50 rows by upstream), "
+            ">50 switches to the THS F10 full-membership page, where "
+            "change_speed / free_float_shares / float_market_cap are always "
+            "null (that tier has no such columns). quote_truncated=true "
+            "means the result may have been cut off at top_n."
         ),
     ),
 ) -> BoardStocksResponse:

@@ -1000,30 +1000,59 @@ def get_board_stocks(
             update_cached_board_stocks(board_code, source, stocks)
         return stocks, origin, source, None, False, cached_count
 
-    # include_quote=True. THS's AJAX endpoint is cid-addressed
-    # (q.10jqka.com.cn/{section}/detail/code/{slug}/ — the slug is the cid,
-    # NOT the public platecode) and hard-caps at 50 rows. eastmoney
-    # (BKxxxx) and zhitu (sw_xxx) take their own board_code straight
-    # through, so the translation below is THS-only.
-    fetch_code = board_code
-    fetch_kwargs: dict = {}
-    if source == "ths":
-        fetch_code = resolve_ths_cid(board_code) or ""
-        if not fetch_code:
-            # An unresolvable cid is reported as reason="cid_unresolved"
-            # (the route maps it to 422) instead of an empty 404: "we
-            # cannot address this board" and "this board has no members"
-            # are different answers.
-            return [], source, source, "cid_unresolved", False, cached_count
-        fetch_kwargs = {"sort_by": sort_by, "sort_order": sort_order, "top_n": top_n}
+    # include_quote=True. Two THS-only tiers, selected by top_n (spec §8):
+    #
+    #   top_n <= 50 → q.10jqka AJAX. CID-addressed — the URL slug is THS's
+    #                 internal cid, NOT the public platecode — and hard-capped
+    #                 at 50 rows by upstream. 18/18 BoardStockInfo fields once
+    #                 the quote-cache union below fills open/high/low/
+    #                 prev_close/volume.
+    #   top_n >  50 → the F10 page. PLATECODE-addressed, server-renders the
+    #                 full membership (90+ concept / 150-180 industry), no cap.
+    #                 15/18 fields: change_speed / free_float_shares /
+    #                 float_market_cap are structurally absent from F10 (the
+    #                 row template has no such keys, and the union never sets
+    #                 them either), so they stay None on this tier. That is a
+    #                 documented contract, not a regression.
+    #
+    # eastmoney (BKxxxx) and zhitu (sw_xxx) take their own board_code straight
+    # through and keep the single AJAX-shaped call they always had.
+    if source == "ths" and top_n > 50:
+        stocks, origin = manager.get_board_stocks_full(
+            board_code=board_code,
+            source=source,
+            board_type=board_type_resolved,
+        )
+        if len(stocks) > top_n:
+            stocks = stocks[:top_n]
+        # F10 carries no sort order and no quote columns; sort in-process so
+        # the caller's sort_by contract still holds on this tier.
+        if sort_by is not None:
+            stocks = sorted(
+                stocks,
+                key=lambda r: r.get(sort_by) or 0,
+                reverse=(sort_order == "desc"),
+            )
+    else:
+        fetch_code = board_code
+        fetch_kwargs: dict = {}
+        if source == "ths":
+            fetch_code = resolve_ths_cid(board_code) or ""
+            if not fetch_code:
+                # An unresolvable cid is reported as reason="cid_unresolved"
+                # (the route maps it to 422) instead of an empty 404: "we
+                # cannot address this board" and "this board has no members"
+                # are different answers.
+                return [], source, source, "cid_unresolved", False, cached_count
+            fetch_kwargs = {"sort_by": sort_by, "sort_order": sort_order, "top_n": top_n}
 
-    stocks, origin = manager.get_board_stocks(
-        board_code=fetch_code,
-        source=source,
-        include_quote=True,
-        board_type=board_type_resolved,
-        **fetch_kwargs,
-    )
+        stocks, origin = manager.get_board_stocks(
+            board_code=fetch_code,
+            source=source,
+            include_quote=True,
+            board_type=board_type_resolved,
+            **fetch_kwargs,
+        )
 
     if not stocks:
         return [], origin, source, None, False, cached_count

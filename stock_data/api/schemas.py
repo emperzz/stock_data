@@ -461,6 +461,16 @@ class BoardInfo(BaseModel):
     )
     volume: int | None = Field(default=None, description="Volume (requires include_quote=True)")
     amount: float | None = Field(default=None, description="Amount (requires include_quote=True)")
+    amount_unit: str | None = Field(
+        default=None,
+        description=(
+            "Unit of `amount`. Always 'yi' (亿元) on the board-list path — "
+            "zzshare's native 元 is converted at its fetcher boundary, THS's "
+            "is 亿元 to begin with. `None` means the row carries no `amount` "
+            "(include_quote=false). Mirrors KLineData.volume_unit; clients "
+            "should read it rather than assume a scale."
+        ),
+    )
     turnover_pct: float | None = Field(
         default=None, description="Turnover rate (requires include_quote=True)"
     )

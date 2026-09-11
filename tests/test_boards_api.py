@@ -1157,9 +1157,18 @@ class TestBoardStocksTopNAndSort:
         detail = r.json().get("detail", {})
         assert detail.get("error") == "invalid_combination"
 
-    def test_top_n_above_50_returns_422(self, client):
-        """Query(le=50) → FastAPI 自带 422 validation."""
+    def test_top_n_above_50_switches_to_the_f10_tier(self, client):
+        """top_n>50 is accepted and selects the F10 tier (spec §8).
+
+        Was `le=50` → 422 before the 2026-09-11 split; the cap is now 800 and
+        the value doubles as the tier selector.
+        """
         r = client.get("/api/v1/boards/885756/stocks?source=ths&include_quote=true&top_n=100")
+        assert r.status_code == 200, r.text
+
+    def test_top_n_above_800_returns_422(self, client):
+        """Upper bound is 800 (same order as the 800-day history cap)."""
+        r = client.get("/api/v1/boards/885756/stocks?source=ths&include_quote=true&top_n=801")
         assert r.status_code == 422
 
     def test_sort_by_invalid_literal_returns_422(self, client):
