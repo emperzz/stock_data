@@ -1555,6 +1555,16 @@ class StocksBoardOverlapStockSet(BaseModel):
         default_factory=list,
         description="[{code, name, type, subtype, source}] from stock_board_membership",
     )
+    source: str = Field(
+        default="persistence",
+        description=(
+            "Where this set came from. 'persistence' = warm ths reverse index; "
+            "'ths' = cold index served by the live THS reverse lookup; "
+            "'unavailable' = neither could answer, so `boards` is empty because "
+            "the membership is UNKNOWN — not because it is empty (see errors[] "
+            "and the null pair fields)."
+        ),
+    )
 
 
 class StocksBoardOverlapPair(BaseModel):
@@ -1566,9 +1576,20 @@ class StocksBoardOverlapPair(BaseModel):
         default_factory=list,
         description="Boards that BOTH stocks belong to (deduped by (code, name))",
     )
-    intersection_count: int = Field(description="Number of common boards")
-    jaccard: float = Field(
-        description="|A ∩ B| / |A ∪ B|. 0.0 when both have zero boards.",
+    intersection_count: int | None = Field(
+        default=None,
+        description=(
+            "Number of common boards. null when either set is unknown "
+            "(source='unavailable') — deliberately NOT 0, which would claim "
+            "there are no common boards."
+        ),
+    )
+    jaccard: float | None = Field(
+        default=None,
+        description=(
+            "|A ∩ B| / |A ∪ B|. 0.0 when both sets are known and the union is "
+            "empty; null when either set is unknown."
+        ),
     )
 
 

@@ -149,6 +149,9 @@ class TestBoardsOverlap:
 
 
 _STOCK_MEMBERSHIPS_PATCH = "stock_data.data_provider.persistence.board.get_stock_memberships"
+_STOCK_BOARDS_HELPER_PATCH = (
+    "stock_data.api._helpers.stock_boards.fetch_stock_boards_quote_enrichment"
+)
 
 
 class TestStocksBoardOverlap:
@@ -261,6 +264,120 @@ class TestStocksBoardOverlap:
             data = response.json()
             assert {s["code"] for s in data["sets"]} == {"A", "C"}
             assert any(e["code"] == "B" for e in data["errors"])
+
+    # ── ths reverse index cold: live fallback + unknown-set signalling ────
+    #
+    # The ths reverse index ships EMPTY (there is no THS membership CSV
+    # seed — see persistence/board_csv.py) and is only filled by the F10
+    # sweep (BOARD_BACKFILL_ON_STARTUP) / runtime lazy fill. When it is
+    # cold, this endpoint used to report ``jaccard: 0.0`` with
+    # ``errors: []`` — a confident false fact ("these stocks share no
+    # boards") for stocks whose membership was merely UNKNOWN. Measured
+    # 2026-09-14: reported 0.0 where the truth was 28 common boards
+    # (jaccard 0.197). The tests below pin the fix: fall back to the live
+    # THS reverse lookup, and when that also fails say "unknown", never
+    # "zero".
+
+    @staticmethod
+    def _live(board_code="885xxx", name="半导体", board_type="concept"):
+        return {
+            "board_code": board_code,
+            "name": name,
+            "board_type": board_type,
+            "subtype": "",
+        }
+
+    def test_cold_index_falls_back_to_live_lookup(self, client):
+        """Cold ths index → live THS reverse lookup serves the sets."""
+        with (
+            patch(_STOCK_MEMBERSHIPS_PATCH, return_value=([], ["ths"], "persistence")),
+            patch(
+                _STOCK_BOARDS_HELPER_PATCH,
+                return_value=([self._live(), self._live("881yyy", "电子", "industry")], {}),
+            ),
+        ):
+            response = client.post(
+                "/api/v1/agent/stocks/board-overlap",
+                json={"codes": ["600519", "688981"]},
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert [s["source"] for s in data["sets"]] == ["ths", "ths"]
+        assert {b["code"] for b in data["sets"][0]["boards"]} == {"885xxx", "881yyy"}
+        # Public key names, not the persistence-internal ones.
+        assert {"code", "name", "type", "subtype", "source"} <= set(data["sets"][0]["boards"][0])
+        assert data["errors"] == []
+        # Both stocks saw the same live rows → identical sets → jaccard 1.0
+        assert data["pairs"][0]["jaccard"] == 1.0
+
+    def test_cold_index_and_failed_live_lookup_reports_unknown_not_zero(self, client):
+        """Both paths empty → UNKNOWN. Must not be reported as 0.0/0.
+
+        This is the regression that made the endpoint hand out
+        ``jaccard: 0.0`` (a fact claim) for an unanswerable question.
+        """
+        with (
+            patch(_STOCK_MEMBERSHIPS_PATCH, return_value=([], ["ths"], "persistence")),
+            patch(_STOCK_BOARDS_HELPER_PATCH, return_value=(None, {})),
+        ):
+            response = client.post(
+                "/api/v1/agent/stocks/board-overlap",
+                json={"codes": ["600519", "688981"]},
+            )
+        assert response.status_code == 200
+        data = response.json()
+
+        assert [s["source"] for s in data["sets"]] == ["unavailable", "unavailable"]
+        assert data["sets"][0]["boards"] == []
+        # The caller must be able to tell this apart from "no boards".
+        assert {e["code"] for e in data["errors"]} == {"600519", "688981"}
+        assert all(e["error"] == "ths_reverse_lookup_unavailable" for e in data["errors"])
+        # THE regression: unknown, never 0.
+        assert data["pairs"][0]["jaccard"] is None
+        assert data["pairs"][0]["intersection_count"] is None
+        assert data["pairs"][0]["common_boards"] == []
+
+    def test_live_lookup_returning_no_boards_is_known_empty(self, client):
+        """Upstream answering "no boards" IS an answer: 0.0, no error.
+
+        ``fetch_stock_boards_quote_enrichment`` returns ``[]`` (not
+        ``None``) when the upstream genuinely has nothing — that must stay
+        distinguishable from an unavailable lookup.
+        """
+        with (
+            patch(_STOCK_MEMBERSHIPS_PATCH, return_value=([], ["ths"], "persistence")),
+            patch(_STOCK_BOARDS_HELPER_PATCH, return_value=([], {})),
+        ):
+            response = client.post(
+                "/api/v1/agent/stocks/board-overlap",
+                json={"codes": ["600519", "688981"]},
+            )
+        data = response.json()
+        assert [s["source"] for s in data["sets"]] == ["ths", "ths"]
+        assert data["sets"][0]["boards"] == []
+        assert data["errors"] == []
+        assert data["pairs"][0]["jaccard"] == 0.0
+        assert data["pairs"][0]["intersection_count"] == 0
+
+    def test_warm_index_does_not_call_the_live_lookup(self, client):
+        """A warm ths index must not pay an upstream call."""
+        with (
+            patch(
+                _STOCK_MEMBERSHIPS_PATCH,
+                return_value=([{**self._live(), "source": "ths"}], [], "persistence"),
+            ),
+            patch(_STOCK_BOARDS_HELPER_PATCH) as live,
+        ):
+            response = client.post(
+                "/api/v1/agent/stocks/board-overlap",
+                json={"codes": ["600519", "688981"]},
+            )
+        assert response.status_code == 200
+        live.assert_not_called()
+        assert [s["source"] for s in response.json()["sets"]] == [
+            "persistence",
+            "persistence",
+        ]
 
 
 class TestFilterStocks:
@@ -1283,6 +1400,34 @@ class TestFormatMdDataCompleteness:
         # Pair common_boards column carries the actual shared board
         assert "共同板块 |" in body
         assert "885xxx(半导体)" in body
+
+    def test_stocks_board_overlap_unknown_set_renders_marker(self, client):
+        """A null jaccard must render as an explicit unknown marker.
+
+        ``jaccard: null`` means "unanswerable" (cold ths index + failed
+        live fallback). Rendering it as ``0.0000`` — or as an empty
+        ``（无所属板块）`` with no hint — would read as "these stocks share
+        no boards", which is exactly the false fact this endpoint used to
+        hand out. Every non-null field still has to appear.
+        """
+        with (
+            patch(_STOCK_MEMBERSHIPS_PATCH, return_value=([], ["ths"], "persistence")),
+            patch(_STOCK_BOARDS_HELPER_PATCH, return_value=(None, {})),
+        ):
+            r = client.post(
+                "/api/v1/agent/stocks/board-overlap?format=md",
+                json={"codes": ["600519", "688981"]},
+            )
+        body = r.text
+        # The set-level source is a JSON field → must be rendered.
+        assert "unavailable" in body
+        # The unknown set must not claim "no boards".
+        assert "（无所属板块）" not in body
+        # Both nulls render as 未知, never as a number.
+        assert "| 未知 | 未知 |" in body
+        assert "0.0000" not in body
+        # And the reason reaches the caller.
+        assert "ths_reverse_lookup_unavailable" in body
 
     def test_market_context_all_flash_news_rendered(self, client, monkeypatch):
         """flash_news > 20 entries must all be rendered (no [:20] truncation)."""

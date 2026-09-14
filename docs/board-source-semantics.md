@@ -112,6 +112,22 @@ There is therefore **no THS membership seed**. `?source=ths` reverse
 lookups start cold and accumulate from the F10 sweep
 (`BOARD_BACKFILL_ON_STARTUP=true`) and runtime lazy fill.
 
+**Consequence for reverse-lookup consumers (2026-09-14).** A cold ths
+index is the *normal* state of a freshly seeded DB, so "the persistence
+read returned nothing" must never be read as "this stock belongs to no
+boards". Two consumers already handled it: `/stocks/{code}/boards` and
+`/agent/stocks/batch-profile` both fall back to the live THS reverse
+lookup (`ThsFetcher.get_stock_boards` — which *does* exist, unlike
+zzshare's, which has no reverse-lookup upstream). `/agent/stocks/board-overlap`
+did not, and silently reported `jaccard: 0.0` for stocks it could not
+look up at all (measured: `0.0` where the truth was 20 common boards /
+0.196). It now uses the same live fallback and labels each set
+`persistence` / `ths` / `unavailable`, with `null` (not `0`) pair fields
+when an intersection is unknowable. When adding another reverse-lookup
+consumer, do one of those two things — or at minimum surface
+`cold_sources`, which the persistence layer already returns for exactly
+this purpose.
+
 Completeness, measured: membership references 788 distinct board_codes
 while the board CSVs hold 186 + 588, leaving **602 membership codes with no
 board metadata row**. That is a snapshot gap (board CSVs come from one

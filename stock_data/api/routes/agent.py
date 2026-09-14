@@ -56,6 +56,7 @@ from ...data_provider.utils.stats import (
     build_stock_buckets,
     compute_aggregate,
 )
+from .._helpers import stock_boards as _stock_boards_helper
 from .._helpers.agent_stock_profile import build_minimal_quote_from_unified, build_stock_profile
 from ..cache import (
     cached_lookup,
@@ -386,7 +387,11 @@ def post_boards_stock_overlap(
     summary="股票所属板块两两重叠度（龙头 / 候选 板块重叠度服务端化）",
     markets=["csi"],
     capabilities=[],
-    depends_on=["/api/v1/stocks/{stock_code}/boards", "cache.get_stock_memberships"],
+    depends_on=[
+        "/api/v1/stocks/{stock_code}/boards",
+        "cache.get_stock_memberships",
+        "cache.stock_boards_quote",
+    ],
 )
 @map_errors
 def post_stocks_board_overlap(
@@ -401,9 +406,28 @@ def post_stocks_board_overlap(
 
     Each stock is reverse-looked-up via
     ``stock_board_cache.get_stock_memberships`` with ``source='ths'``
-    (per spec §3.2.5). Boards are deduped by ``(code, name)`` to absorb
-    name differences across fetchers (irrelevant here — we always use
-    ths — but the dedup is a cheap defense).
+    (per spec §3.2.5); on a cold ths reverse index the live THS reverse
+    lookup serves the set (see the ``unavailable`` handling below).
+    Boards are deduped by ``(code, name)`` to absorb name differences
+    across fetchers (irrelevant here — we always use ths — but the dedup
+    is a cheap defense).
+
+    **Cold-index contract (2026-09-14).** There is no THS membership CSV
+    seed (``persistence/board_csv.py``), so a freshly seeded DB has an
+    EMPTY ths reverse index and this endpoint's persistence read returns
+    nothing for every stock. Falling through to ``jaccard: 0.0`` there
+    was a silent false fact — "these stocks share no boards" — for stocks
+    that could not be looked up at all (measured: 0.0 reported where the
+    truth was 28 common boards / 0.197). The three states are now
+    explicit per set:
+
+    * ``persistence`` — warm index, no upstream call.
+    * ``ths`` — cold index, live reverse lookup answered (an empty
+      ``boards`` here IS a fact: the stock belongs to no concept board).
+    * ``unavailable`` — cold index AND the live lookup returned nothing
+      (upstream failure / cache disabled). The set is UNKNOWN: the code
+      is recorded in ``errors[]`` and every pair touching it carries
+      ``jaccard: null`` / ``intersection_count: null``.
     """
     cache_key = make_stocks_board_overlap_cache_key(payload.codes)
     hit = cached_lookup(get_quote_cache, cache_key, "agent_stocks_board_overlap")
@@ -413,11 +437,12 @@ def post_stocks_board_overlap(
     manager = get_manager()
     sets_out: list[StocksBoardOverlapStockSet] = []
     sets_index: dict[str, set[tuple[str, str]]] = {}
+    unknown_codes: set[str] = set()
     errors: list[dict] = []
 
     for code in payload.codes:
         try:
-            entries, _cold, _origin = stock_board_cache.get_stock_memberships(
+            entries, cold, _origin = stock_board_cache.get_stock_memberships(
                 stock_code=code,
                 sources=["ths"],
                 manager=manager,
@@ -426,21 +451,77 @@ def post_stocks_board_overlap(
             logger.warning(f"[agent/stocks/board-overlap] {code} failed: {exc}")
             errors.append({"code": code, "error": type(exc).__name__, "message": str(exc)})
             continue
-        boards = [
-            {
-                "code": e["board_code"],
-                "name": e.get("name", ""),
-                "type": e.get("board_type", ""),
-                "subtype": e.get("subtype", ""),
-                "source": e.get("source", ""),
-            }
-            for e in entries
-        ]
+
+        if entries:
+            boards = [
+                {
+                    "code": e["board_code"],
+                    "name": e.get("name", ""),
+                    "type": e.get("board_type", ""),
+                    "subtype": e.get("subtype", ""),
+                    "source": e.get("source", ""),
+                }
+                for e in entries
+            ]
+            source = "persistence"
+        else:
+            # Cold ths reverse index — the normal state on a fresh DB, and
+            # the state on any DB where the F10 sweep / lazy fill has not
+            # covered this stock. Same helper the /stocks/{code}/boards cold
+            # path uses, so the 60s TTLCache is shared.
+            live_rows, _enrichment = _stock_boards_helper.fetch_stock_boards_quote_enrichment(
+                code, manager
+            )
+            if live_rows is None:
+                # None = upstream failure (or the cache layer is disabled);
+                # [] would mean "upstream says: no boards". Do NOT collapse
+                # the two — the first is unanswerable, the second is a fact.
+                boards = []
+                source = "unavailable"
+                unknown_codes.add(code)
+                errors.append(
+                    {
+                        "code": code,
+                        "error": "ths_reverse_lookup_unavailable",
+                        "message": (
+                            f"board membership for {code} is UNKNOWN, not empty: the "
+                            f"ths reverse index is cold (cold_sources={cold}) and the "
+                            "live THS fallback returned no data (upstream failure or "
+                            "ENABLE_API_CACHE=false). Pairs touching this code carry "
+                            "null jaccard. Warm the index via "
+                            "BOARD_BACKFILL_ON_STARTUP=true, or per-board via "
+                            "/boards/{board_code}/stocks?source=ths."
+                        ),
+                    }
+                )
+            else:
+                boards = [
+                    {
+                        "code": r.get("board_code", ""),
+                        "name": r.get("name", ""),
+                        "type": r.get("board_type", ""),
+                        "subtype": r.get("subtype", "") or "",
+                        "source": "ths",
+                    }
+                    for r in live_rows
+                ]
+                source = "ths"
+
         sets_index[code] = {(b["code"], b["name"]) for b in boards}  # response-boundary keys
-        sets_out.append(StocksBoardOverlapStockSet(code=code, boards=boards))
+        sets_out.append(StocksBoardOverlapStockSet(code=code, boards=boards, source=source))
 
     pairs: list[StocksBoardOverlapPair] = []
     for a, b in combinations(sets_index.keys(), 2):
+        if a in unknown_codes or b in unknown_codes:
+            # One side is unknown ⇒ the intersection is unknowable. Emit the
+            # pair with nulls (dropping it entirely would hide the fact that
+            # the pair exists but could not be answered).
+            pairs.append(
+                StocksBoardOverlapPair(
+                    a=a, b=b, common_boards=[], intersection_count=None, jaccard=None
+                )
+            )
+            continue
         sa, sb = sets_index[a], sets_index[b]
         common_keys = sa & sb
         common_boards = [
@@ -2010,6 +2091,8 @@ def render_stocks_board_overlap_as_md(p: StocksBoardOverlapResponse) -> str:
     out.append("## 股票所属板块")
     for s in p.sets:
         out.append(f"### {s.code}")
+        # Set-level provenance is a JSON field — never dropped.
+        out.append(f"- 数据来源: {s.source}")
         if s.boards:
             for b in s.boards:
                 # Response-boundary dict: StocksBoardOverlapStockSet.boards
@@ -2020,6 +2103,10 @@ def render_stocks_board_overlap_as_md(p: StocksBoardOverlapResponse) -> str:
                     f"- {b.get('code', '?')} ({t}/{sub}) {b.get('name', '')}"
                     f" — source: {b.get('source', '?')}"
                 )
+        elif s.source == "unavailable":
+            # An empty boards list from an unavailable lookup is UNKNOWN, not
+            # empty. Rendering （无所属板块） here would assert a fact we don't have.
+            out.append("（所属板块未知 — 反向索引冷且实时兜底无数据，详见失败列表）")
         else:
             out.append("（无所属板块）")
         out.append("")
@@ -2033,10 +2120,11 @@ def render_stocks_board_overlap_as_md(p: StocksBoardOverlapResponse) -> str:
                 if pair.common_boards
                 else "—"
             )
-            out.append(
-                f"| {pair.a} | {pair.b} | {pair.intersection_count} | "
-                f"{_md_num(pair.jaccard, 4)} | {common_repr} |"
-            )
+            # null = unanswerable (one side had source='unavailable'). Rendered
+            # as 未知, never as 0.0000/0 — "no overlap" is a different claim.
+            count_repr = "未知" if pair.intersection_count is None else str(pair.intersection_count)
+            jaccard_repr = "未知" if pair.jaccard is None else _md_num(pair.jaccard, 4)
+            out.append(f"| {pair.a} | {pair.b} | {count_repr} | {jaccard_repr} | {common_repr} |")
     else:
         out.append("（无）")
     out.append("")
