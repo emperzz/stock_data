@@ -52,9 +52,26 @@ class TestZzshareFetcherMetadata:
     def test_name(self):
         assert ZzshareFetcher.name == "ZzshareFetcher"
 
-    def test_priority_default(self, monkeypatch):
-        monkeypatch.delenv("ZZSHARE_PRIORITY", raising=False)
-        assert ZzshareFetcher.priority == 2
+    def test_priority_default(self):
+        """``priority`` falls back to ``2`` when ``ZZSHARE_PRIORITY`` is unset.
+
+        ``priority`` is evaluated at class-body time (one-shot, no re-read),
+        so the runtime ``monkeypatch.delenv`` cannot un-set it after import
+        — that path would silently be a no-op. The only honest check is
+        source inspection, the same shape ``test_priority_env_override``
+        uses for the env-var name: the ``os.getenv`` second argument is
+        the documented default. If a future refactor changes either the
+        default or the read pattern, this test catches it.
+        """
+        import inspect
+
+        from stock_data.data_provider.fetchers import zzshare_fetcher
+
+        src = inspect.getsource(zzshare_fetcher)
+        assert 'os.getenv("ZZSHARE_PRIORITY", "2")' in src, (
+            "ZzshareFetcher.priority default fallback is no longer 2; "
+            "update this test if the default intentionally changed."
+        )
 
     def test_is_enabled_default(self, monkeypatch):
         """The <SLUG>_ENABLED switch defaults to enabled.

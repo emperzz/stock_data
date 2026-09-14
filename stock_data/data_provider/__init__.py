@@ -3,6 +3,30 @@ Data Provider Package
 Stock data fetchers with unified interface
 """
 
+# Load .env BEFORE importing any fetcher class. Each fetcher's class body
+# reads ``priority = int(os.getenv("<SLUG>_PRIORITY", "<default>"))`` at
+# module import time — if ``load_dotenv()`` runs after that, the priority
+# always comes from the hardcoded default and the operator's .env override
+# is silently ignored.
+#
+# This used to live in ``server.py``, but ``server.py`` imports
+# ``routes/__init__.py`` (which transitively pulls in *this* file) before
+# calling ``load_dotenv()``, so the bug was structural — any entry point
+# that touched ``stock_data.data_provider`` without first calling
+# ``load_dotenv()`` itself inherited the same silent override.
+#
+# Centralizing the load here makes it a side effect of importing the
+# package, so the priority is always read from the operator's .env
+# regardless of entry point (server / tests / tools / future MCP server).
+# ``server.py`` keeps its own ``load_dotenv()`` call as redundant
+# documentation at the entry point — ``load_dotenv()`` is idempotent
+# (``override=False`` default, so existing env vars are never overwritten).
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Core classes - main entry point
 from .base import (
     STANDARD_COLUMNS,

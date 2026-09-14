@@ -49,7 +49,13 @@ class _UTF8JSONResponse(JSONResponse):
     media_type = "application/json; charset=utf-8"
 
 
-# Load environment variables
+# Load environment variables. This call is now redundant with the canonical
+# load site in ``stock_data.data_provider.__init__`` (which runs first
+# because the import chain pulls in fetcher class bodies before this
+# line) — keeping it here as explicit, documented entry-point behaviour.
+# ``load_dotenv()`` is idempotent (``override=False``), so the duplicate
+# is safe: any operator-set env vars from the canonical load are kept,
+# and any vars present here that weren't there before are now also set.
 load_dotenv()
 
 # Configure logging
