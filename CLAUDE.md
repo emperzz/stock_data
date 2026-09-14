@@ -28,7 +28,7 @@ Top-level (full layout — see `ls -R stock_data/` for the complete file list):
 - `stock_data/data_provider/base.py` — `BaseFetcher` ABC, `DataCapability` flag enum, `DataFetchError`.
 - `stock_data/data_provider/manager.py` — `DataFetcherManager` (capability routing, circuit breaker, failover).
 - `stock_data/data_provider/fetchers/` — one file per data source: `tushare_fetcher.py`, `baostock_fetcher.py`, `akshare/` (package), `yfinance_fetcher.py`, `zhitu_fetcher.py`, `tencent_fetcher.py`, `eastmoney_fetcher.py`, `ths_fetcher.py`, `cninfo_fetcher.py`, `myquant_fetcher.py`, `baidu_fetcher.py`, plus `index_symbols.py` (CSI/HK/US index mappings).
-- `stock_data/data_provider/persistence/` — on-disk SQLite layer (replaces legacy `data_provider/cache/`). Sub-modules: `db.py` (shared connection), `stock_list.py`, `board.py`, `trade_calendar.py`, `pool_daily.py` (unified zt/dt/zbgc table).
+- `stock_data/data_provider/persistence/` — on-disk SQLite layer (replaces legacy `data_provider/cache/`). Sub-modules: `db.py` (**per-thread** connection, see below), `stock_list.py`, `board.py`, `trade_calendar.py`, `pool_daily.py` (unified zt/dt/zbgc table).
 - `stock_data/data_provider/indicators/` — pure-compute indicator layer. One file per indicator: `ma.py`, `macd.py`, `boll.py`, `kdj.py`, `rsi.py`, `wr.py`, `bias.py`, `cci.py`, `atr.py`, `obv.py`, `roc.py`, `dmi.py`, `sar.py`, `kc.py`. Registry + orchestrator in `registry.py` / `indicator_service.py`.
 - `stock_data/data_provider/utils/normalize.py` — code/market normalization.
 - `stock_data/data_provider/core/types.py` — `UnifiedRealtimeQuote`, `CircuitBreaker`, `safe_float`/`safe_int`.
@@ -48,6 +48,7 @@ repeated here.
 - **Board methods** (`get_all_boards`, `get_board_stocks`, `get_stock_boards`, `get_board_history`) use `_with_source()` (source-routed, no failover) instead of `_with_failover()`, because different sources have incompatible board classification systems.
 
 ### `data_provider/persistence/`
+- `db.py::get_connection()` is **per-thread** (one connection per thread, rebuilt when `get_db_path()` changes). Never share a connection across threads — a shared connection's statement cache corrupts `sqlite3.Row` column lookups under the FastAPI threadpool (see Anti-Patterns).
 - `stock_list.py` auto-refreshes on the first call of the day; `pool_daily.py` is ONE table for ZT/DT/ZBGC discriminated by a `pool_type` column; `trade_calendar.py` provides `is_trade_date()` / `get_latest_trade_date_on_or_before()`.
 
 ### `data_provider/core/types.py`
@@ -510,6 +511,7 @@ The non-obvious knobs worth memorizing here:
 - **Don't** create deeply nested manager hierarchies — one `DataFetcherManager` is sufficient
 - **Don't** hardcode a specific fetcher class (e.g. `AkshareFetcher()`) in `DataFetcherManager` methods. The Hard rule under *Capability-Based Routing* above is the canonical statement; this list just mirrors it for grep-ability.
 - **Don't** cache realtime quote data in SQLite — the `stock_board` and `stock_board_membership` tables store metadata only (code, name, type, timestamps). Quote/price data is always fetched live from the API.
+- **Don't** re-introduce a process-wide (module-level) SQLite connection, and don't hoist `get_connection()`'s return value into a module global or an object attribute that outlives one thread. `get_connection()` is per-thread by design (P3, 2026-09-14): `sqlite3` carries a **statement cache per connection** and `sqlite3.Row` holds a live reference to its statement's column-name → index map, so two threads calling `execute()` on one connection race on that map. That race raised `IndexError: tuple index out of range` on plain `row["board_code"]` lookups in production (`/stocks/{code}/boards` → `persistence/board.py::_read_membership_entries`), and could also resolve a column to the wrong value. WAL + `busy_timeout` do **not** help — the corruption is in Python-level row bookkeeping, not SQLite locking. Pinned by `tests/test_db_concurrency_pragma.py`.
 - **Don't** put indicator math inside a `BaseFetcher` or anywhere in the fetcher layer. The fetcher's job is to deliver a clean standardized K-line DataFrame; the indicator service's job is to enrich it.
 - **Don't** write `options.get(key) or default` for numeric/float option keys — when `key=0` is a valid value, the `or` treats it as missing. Use `options.get(key, default)` so `0` flows through.
 - **Don't** re-introduce inline MA/EMA/WMA calculations in the fetcher path. If you need a moving average on K-line data, ask the indicator service via `?indicators=ma` (or compute it downstream of the API).

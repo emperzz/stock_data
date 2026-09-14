@@ -299,7 +299,9 @@ CLAUDE.md 称 effective_source = "实际服务上游的 fetcher"。cache hit 时
 
 ### P2-1 · SQLite WAL + busy_timeout（原 C2 降级）
 
-**现状** `data_provider/persistence/db.py:34` 单例 `_conn = sqlite3.connect(get_db_path(), timeout=30, check_same_thread=False)`，FastAPI 40 线程池下共享。
+> **P3 已落地 2026-09-14**：per-thread connection 已全量替换单例（`db.py` 无 `_conn`，改用 `threading.local()`）。降级理由（"触发概率低 / 面窄"）**被生产事故推翻**：崩溃点不是写事务交错，而是**读路径**——共享连接的 statement cache 让两个线程的 `execute()` 争用同一份 `sqlite3.Row` 列名→下标映射，`row["board_code"]` 直接 `IndexError: tuple index out of range`（`/stocks/{code}/boards`），并且会**静默取到错列的值**（回归测试首跑就复现出 `None is not None` 这种静默错值）。见下方"实测与落地"。
+
+**现状**（2026-07-16 快照）`data_provider/persistence/db.py:34` 单例 `_conn = sqlite3.connect(get_db_path(), timeout=30, check_same_thread=False)`，FastAPI 40 线程池下共享。
 
 **问题**：`with conn:` 不持锁，事务连接级。并发写时线程 B 的 commit 可能提前提交线程 A 未完成的 DELETE（数据丢失）。本地单用户触发概率低，但低成本提升。
 
@@ -334,7 +336,19 @@ def get_connection() -> sqlite3.Connection:
 
 > 注意：改 `threading.local` 后，`init_schema` 的 `_schema_initialized_paths` 守卫仍有效（per-path 而非 per-conn），但每个线程首次写会各自建连。`STOCK_DB_INIT=true` 的 DROP+recreate 仍只在主线程 lifespan 跑。落地前跑全套测试确认无回归。
 
-**验证**：`tests/test_board_membership_double_write.py` 已存在——确认改后仍绿；补一个并发写测试（两线程同时 update 不同 board，断言无 "database is locked" 且数据正确）。
+**实测与落地（2026-09-14，P3）**
+
+落地时相对上面伪代码有三处偏离，都是实测逼出来的：
+
+1. **去掉 `check_same_thread=False`**（保留默认 `True`）。连接按线程发放后，跨线程误用只可能是调用方 bug——让它**立刻抛异常**，好过再走一遍"静默错值"。这同时是一道结构性防回归。
+2. **连接在 `get_db_path()` 变化时重建**。测试 fixture（`tmp_db` / 各文件 `fresh_db`）靠换 DB 路径 + `monkeypatch.setattr(db, "_conn", None)` 做隔离；`_conn` 消失后那条 setattr 变成 `AttributeError`。与其让 30 个测试文件改调 `reset_connection()`，不如让连接层自己感知路径变化——顺带也解决了"anyio 工作线程长期存活、跨测试持有旧路径连接"的隐患。
+3. **`_conn` 名字直接删除**，不留兼容 shim（避免后人误以为它还是活的）；30 个测试文件里那 43 行冗余 setattr 一并删掉。
+
+**性能**：`get_connection()` 的额外成本只有一次路径字符串比较（命中路径）。加锁方案的持锁时长实测为 0.6 ms（membership 反查中位）～6 ms（`stock_list` 全量读）/ 59 ms（5000 行写）；per-thread 方案连这个排队成本都没有，WAL 下不同连接的读是真并发。
+
+**验证**：`tests/test_db_concurrency_pragma.py` 新增三条——`test_get_connection_is_thread_local`（结构不变量）、`test_concurrent_row_lookups_do_not_corrupt`（行为回归，改前必失败：首跑即复现 `IndexError: tuple index out of range` + 静默错值）、`test_connection_follows_db_path_change_in_other_threads`（跨线程路径隔离）。`tests/test_board_membership_double_write.py` 改后仍绿。
+
+**仍待补**：并发**写**测试（两线程同时 update 不同 board，断言无 "database is locked" 且数据正确）。per-thread 连接使写事务不再交错，但 `busy_timeout` 下的写-写竞争尚无回归测试覆盖。
 
 ---
 

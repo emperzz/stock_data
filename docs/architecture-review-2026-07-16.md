@@ -20,6 +20,9 @@
 - **修复**：补 `169.254.0.0/16`、`100.64.0.0/10`、`198.18.0.0/15`、`fe80::/10` 到 `_PRIVATE_IP_RANGES`，并补对应回归测试。现有 `test_news_content_ssrf.py` 与代码共享同一盲点。
 
 ### C2. SQLite 共享单例连接在 FastAPI 线程池下非线程安全 — 并发写损坏数据
+> **已修复 2026-09-14（P3 落地）**：`db.py` 改为 `threading.local()` per-thread 连接，`_conn` 已删除。
+> 触发面比本条描述更广——**读路径**同样出事，且不是"崩溃"一种形态：共享连接的 statement cache 让两个线程争用同一份 `sqlite3.Row` 列名→下标映射，`row["board_code"]` 抛 `IndexError: tuple index out of range`，也可能**静默解析到错误的列**。生产实际命中 `/stocks/{code}/boards`（`persistence/board.py::_read_membership_entries`）。
+> 回归测试：`tests/test_db_concurrency_pragma.py`（结构不变量 + 行为回归 + 跨线程路径隔离）。
 - **位置**：`data_provider/persistence/db.py:34` `get_connection()` 返回模块级单例 `_conn`（`check_same_thread=False`）
 - **场景**：路由 handler 是同步 `def`，Starlette 用 40 线程池并发跑。多个线程拿到**同一个** Connection 对象。`with conn:` 只调 commit/rollback，不持锁；auto-BEGIN 事务是连接级而非线程级。线程 A 进入事务执行 DELETE，线程 B 也进入（无新 BEGIN）、执行自己的写、B 退出时 commit **提前提交了 A 未完成的 DELETE**，A 随后崩溃 → INSERT 永不执行 → 数据丢失。影响所有写路径：`update_cached_stocks` / `update_cached_boards` / `update_cached_board_stocks` / `save_pool` / `update_cached_calendar` / `upsert_membership_bulk`。
 - **修复**：`threading.local()` 每线程连接 + WAL；或至少加一个模块级 `threading.Lock` 串行化所有写。并在 `get_connection()` 设 `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000; PRAGMA synchronous=NORMAL`。

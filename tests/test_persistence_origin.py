@@ -171,15 +171,14 @@ def test_board_list_subtype_round_trip(tmp_path, monkeypatch):
     """subtype field survives write (update_cached_boards) → read (_read_boards_from_db).
 
     Uses a temp DB so the test is hermetic and doesn't depend on the project's
-    real stock_cache.db. We point db.get_db_path at the temp file AND reset
-    the module-level connection singleton so the next get_connection() opens
-    a fresh sqlite3 handle against the new path.
+    real stock_cache.db. Pointing db.get_db_path at the temp file is enough:
+    get_connection() is per-thread and rebuilds on a path change, so the next
+    call opens a fresh sqlite3 handle against the new path.
     """
     from stock_data.data_provider.persistence import db
 
     db_file = tmp_path / "board_subtype_test.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     # Force re-init against the new path
@@ -219,7 +218,6 @@ def test_get_board_list_always_fetches_full_then_filters(tmp_path, monkeypatch):
 
     db_file = tmp_path / "board_subtype_filter_test.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
@@ -272,7 +270,6 @@ def test_get_board_list_cache_hit_with_subtype_filter(tmp_path, monkeypatch):
 
     db_file = tmp_path / "board_cache_hit_subtype.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
@@ -319,7 +316,6 @@ def test_get_board_list_refresh_bypasses_cache(tmp_path, monkeypatch):
 
     db_file = tmp_path / "board_refresh_test.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
@@ -389,7 +385,6 @@ def test_get_board_list_all_types_persists_each_type_separately(tmp_path, monkey
 
     db_file = tmp_path / "all_types_persist.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
@@ -466,7 +461,6 @@ def test_get_board_list_all_types_summary_origin_persistence(tmp_path, monkeypat
 
     db_file = tmp_path / "all_types_cache_hit.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
@@ -508,7 +502,6 @@ def test_get_board_list_all_types_mixed_origin(tmp_path, monkeypatch):
 
     db_file = tmp_path / "all_types_mixed.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
@@ -570,7 +563,6 @@ def test_get_board_list_all_types_rejects_subtype(tmp_path, monkeypatch):
 
     db_file = tmp_path / "all_types_subtype_reject.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
@@ -633,7 +625,6 @@ def test_get_board_list_all_types_include_quote_bypasses_cache(tmp_path, monkeyp
 
     db_file = tmp_path / "all_types_include_quote.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
@@ -711,7 +702,6 @@ def test_get_board_list_cache_hit_rows_carry_board_type_field(tmp_path, monkeypa
 
     db_file = tmp_path / "cache_hit_type_key.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod
@@ -759,7 +749,6 @@ def test_init_schema_migrates_zzshare_special_rows_to_concept(tmp_path, monkeypa
 
     db_file = tmp_path / "zzshare_special_migration.db"
     monkeypatch.setattr(db, "get_db_path", lambda: db_file)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setattr(db, "_db_path", None)
 
     import stock_data.data_provider.persistence.board as board_mod

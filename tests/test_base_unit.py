@@ -145,7 +145,6 @@ class TestDataFetcherManagerUnit:
         )
 
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
-        monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list_mod.init_schema()
 
         name = stock_list.get_stock_name("000001", manager=None)
@@ -163,7 +162,6 @@ class TestDataFetcherManagerUnit:
         )
 
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
-        monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list_mod.init_schema()
 
         # The shared ``manager`` fixture ships MockFetcher, whose

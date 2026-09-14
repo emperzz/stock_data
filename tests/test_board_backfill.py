@@ -56,7 +56,6 @@ def test_ths_board_fetch_jitter_bounds():
 def fresh_db(tmp_path, monkeypatch):
     """Ephemeral SQLite DB — reset module singletons so init_schema reruns."""
     monkeypatch.setattr(db_mod, "_db_path", None)
-    monkeypatch.setattr(db_mod, "_conn", None)
     monkeypatch.setattr(board_mod, "_schema_initialized_paths", set())
     monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "test.db"))
     board_mod.init_schema()

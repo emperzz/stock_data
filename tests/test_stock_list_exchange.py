@@ -53,7 +53,6 @@ class TestExchangeRoundTrip:
         from stock_data.data_provider.persistence import db, stock_list
 
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
-        monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
         update_cached_stocks(
@@ -70,7 +69,6 @@ class TestExchangeRoundTrip:
         from stock_data.data_provider.persistence import db, stock_list
 
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
-        monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
         update_cached_stocks(
@@ -87,7 +85,6 @@ class TestExchangeRoundTrip:
         from stock_data.data_provider.persistence import db, stock_list
 
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
-        monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
         update_cached_stocks(
@@ -104,7 +101,6 @@ class TestExchangeRoundTrip:
         from stock_data.data_provider.persistence import db, stock_list
 
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
-        monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
         update_cached_stocks(
@@ -122,7 +118,6 @@ class TestExchangeRoundTrip:
         from stock_data.data_provider.persistence import db, stock_list
 
         monkeypatch.setattr(db, "get_db_path", lambda: tmp_path / "test.db")
-        monkeypatch.setattr(db, "_conn", None, raising=False)
         stock_list.init_schema()
 
         update_cached_stocks(

@@ -152,7 +152,6 @@ def tmp_db(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr(db, "_db_path", None)
-    monkeypatch.setattr(db, "_conn", None)
     monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "test.db"))
     for mod in (board, pool_daily, stock_list, trade_calendar):
         monkeypatch.setattr(mod, "_schema_initialized_paths", set())

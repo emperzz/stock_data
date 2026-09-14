@@ -25,52 +25,58 @@ def seeded_db(tmp_path_factory):
 
     Module scope is deliberate (115k membership rows are slow to re-seed),
     which means ``monkeypatch`` is unavailable. So the env var, the memoised
-    ``db._db_path`` / ``db._conn``, and ``board_mod._schema_initialized_paths``
-    are saved and restored BY HAND — otherwise every later test in the session
+    ``db._db_path``, and ``board_mod._schema_initialized_paths`` are saved
+    and restored BY HAND — otherwise every later test in the session
     re-resolves ``get_db_path()`` to this temp file and the suite order starts
     mattering.
+
+    Connections need no save/restore: they are per-thread and
+    ``get_connection()`` rebuilds one whenever ``get_db_path()`` changes, so
+    the swap below is picked up on the next call in each thread (the stale
+    handle is closed at that point).
     """
     import os
 
     path = tmp_path_factory.mktemp("acceptance") / "acc.db"
     saved_env = os.environ.get("STOCK_CACHE_DB_PATH")
     saved_db_path = db_mod._db_path
-    saved_conn = db_mod._conn
     saved_schema = board_mod._schema_initialized_paths
 
     os.environ["STOCK_CACHE_DB_PATH"] = str(path)
     db_mod._db_path = None
-    db_mod._conn = None
     board_mod._schema_initialized_paths = set()
     try:
         board_mod.init_schema()
         board_csv.seed_all_from_backup_dir(BACKUP)
         yield
     finally:
-        temp_conn = db_mod._conn
-        if temp_conn is not None and temp_conn is not saved_conn:
-            temp_conn.close()
-        db_mod._conn = saved_conn
-        db_mod._db_path = saved_db_path
         board_mod._schema_initialized_paths = saved_schema
         if saved_env is None:
             os.environ.pop("STOCK_CACHE_DB_PATH", None)
         else:
             os.environ["STOCK_CACHE_DB_PATH"] = saved_env
+        db_mod._db_path = saved_db_path
+        # Force this thread to drop the temp-DB handle now that the path is
+        # restored, rather than waiting for the next unrelated call.
+        db_mod.get_connection()
 
 
 class TestInvariants:
     def test_no_zzshare_code_is_labelled_ths(self, seeded_db):
-        rows = board_mod.get_connection().execute(
-            "SELECT code FROM stock_board WHERE source='ths'"
-        ).fetchall()
+        rows = (
+            board_mod.get_connection()
+            .execute("SELECT code FROM stock_board WHERE source='ths'")
+            .fetchall()
+        )
         offenders = [r["code"] for r in rows if r["code"][:3] in ZZ_PREFIXES]
         assert offenders == []
 
     def test_no_ths_code_is_labelled_zzshare(self, seeded_db):
-        rows = board_mod.get_connection().execute(
-            "SELECT code FROM stock_board WHERE source='zzshare'"
-        ).fetchall()
+        rows = (
+            board_mod.get_connection()
+            .execute("SELECT code FROM stock_board WHERE source='zzshare'")
+            .fetchall()
+        )
         offenders = [r["code"] for r in rows if r["code"][:3] not in ZZ_PREFIXES]
         assert offenders == []
 
@@ -80,17 +86,21 @@ class TestInvariants:
         This is the invariant the 2026-09-11 CSV split exists to satisfy —
         without nulling the 110 legacy `cid == code == 885/886` rows it fails.
         """
-        rows = board_mod.get_connection().execute(
-            "SELECT code, cid FROM stock_board WHERE cid IS NOT NULL"
-        ).fetchall()
+        rows = (
+            board_mod.get_connection()
+            .execute("SELECT code, cid FROM stock_board WHERE cid IS NOT NULL")
+            .fetchall()
+        )
         assert rows, "seeded ths rows must carry cids"
         for r in rows:
             assert r["cid"][:1] == "3" or r["cid"].startswith("881"), dict(r)
 
     def test_no_zzshare_row_carries_a_ths_cid(self, seeded_db):
-        rows = board_mod.get_connection().execute(
-            "SELECT code FROM stock_board WHERE source='zzshare' AND cid IS NOT NULL"
-        ).fetchall()
+        rows = (
+            board_mod.get_connection()
+            .execute("SELECT code FROM stock_board WHERE source='zzshare' AND cid IS NOT NULL")
+            .fetchall()
+        )
         assert rows == [], f"zzshare rows carry a THS cid: {[dict(r) for r in rows[:5]]}"
 
     def test_advertised_cids_agree_with_the_id_map(self, seeded_db):
@@ -109,9 +119,11 @@ class TestInvariants:
         `assert all(… or True for c in unresolved)` — a tautology that
         asserts nothing. Do not reintroduce that shape.
         """
-        rows = board_mod.get_connection().execute(
-            "SELECT code, cid FROM stock_board WHERE source='ths' AND cid IS NOT NULL"
-        ).fetchall()
+        rows = (
+            board_mod.get_connection()
+            .execute("SELECT code, cid FROM stock_board WHERE source='ths' AND cid IS NOT NULL")
+            .fetchall()
+        )
         mismatched = [
             (r["code"], r["cid"], board_mod.resolve_ths_platecode(r["cid"]))
             for r in rows
@@ -124,9 +136,11 @@ class TestInvariants:
 
         (881xxx industry codes are exempt — there cid == code by design.)
         """
-        rows = board_mod.get_connection().execute(
-            "SELECT code FROM stock_board WHERE source='ths'"
-        ).fetchall()
+        rows = (
+            board_mod.get_connection()
+            .execute("SELECT code FROM stock_board WHERE source='ths'")
+            .fetchall()
+        )
         offenders = [
             r["code"] for r in rows if r["code"].startswith("3") and not r["code"].startswith("881")
         ]
@@ -141,32 +155,42 @@ class TestInvariants:
         that actually matters here, which is that the old by-name merge can
         no longer reintroduce a name→multi-code group inside ths.
         """
-        rows = board_mod.get_connection().execute(
-            "SELECT source, name, COUNT(DISTINCT code) n FROM stock_board "
-            "WHERE source IN ('ths', 'zzshare') "
-            "GROUP BY source, name HAVING n > 1"
-        ).fetchall()
+        rows = (
+            board_mod.get_connection()
+            .execute(
+                "SELECT source, name, COUNT(DISTINCT code) n FROM stock_board "
+                "WHERE source IN ('ths', 'zzshare') "
+                "GROUP BY source, name HAVING n > 1"
+            )
+            .fetchall()
+        )
         assert rows == [], f"duplicate board names within a source: {[dict(r) for r in rows[:5]]}"
 
     def test_membership_sources_are_all_known(self, seeded_db):
-        rows = board_mod.get_connection().execute(
-            "SELECT DISTINCT source FROM stock_board_membership"
-        ).fetchall()
+        rows = (
+            board_mod.get_connection()
+            .execute("SELECT DISTINCT source FROM stock_board_membership")
+            .fetchall()
+        )
         assert {r["source"] for r in rows} <= {"ths", "zzshare", "eastmoney", "zhitu"}
 
     def test_membership_seed_is_present(self, seeded_db):
         """The full 115k zzshare membership must survive the seed."""
-        n = board_mod.get_connection().execute(
-            "SELECT COUNT(*) n FROM stock_board_membership WHERE source='zzshare'"
-        ).fetchone()["n"]
+        n = (
+            board_mod.get_connection()
+            .execute("SELECT COUNT(*) n FROM stock_board_membership WHERE source='zzshare'")
+            .fetchone()["n"]
+        )
         assert n == 115081, n
 
     def test_no_ths_membership_rows_from_the_seed(self, seeded_db):
         """The legacy file was zzshare data end to end; seeding any of it as
         ths is exactly the mislabelling this split removes."""
-        n = board_mod.get_connection().execute(
-            "SELECT COUNT(*) n FROM stock_board_membership WHERE source='ths'"
-        ).fetchone()["n"]
+        n = (
+            board_mod.get_connection()
+            .execute("SELECT COUNT(*) n FROM stock_board_membership WHERE source='ths'")
+            .fetchone()["n"]
+        )
         assert n == 0, n
 
 

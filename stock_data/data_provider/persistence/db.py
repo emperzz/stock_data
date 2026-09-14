@@ -1,14 +1,19 @@
 """Shared SQLite database path and connection utilities for persistence modules."""
 
+import contextlib
 import logging
 import os
 import sqlite3
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _db_path: Path | None = None
-_conn: sqlite3.Connection | None = None
+
+# One connection per thread. See ``get_connection`` for why a shared
+# connection is not an option.
+_local = threading.local()
 
 
 def get_db_path() -> Path:
@@ -24,35 +29,63 @@ def get_db_path() -> Path:
     return _db_path
 
 
-def get_connection() -> sqlite3.Connection:
-    """Get a shared database connection with row factory.
+def _connect(path: str) -> sqlite3.Connection:
+    """Open one configured connection. Caller owns it.
 
-    Returns a module-level singleton connection (check_same_thread=False).
-    Callers should NOT call conn.close() — the connection lives for the
-    process lifetime.
-
-    The connection is configured for concurrent access (added 2026-07-16,
-    P2-1 of ``docs/optimization-plan-2026-07-16.md``):
-
-    * ``journal_mode=WAL`` — readers and writers don't block each other.
-    * ``busy_timeout=30000`` — wait up to 30s for a write lock instead of
-      raising ``OperationalError("database is locked")`` immediately.
-    * ``synchronous=NORMAL`` — fsync only at checkpoint, not per commit;
-      safe with WAL.
-    * ``timeout=30`` — connection-level lock wait, kept as a fallback for
-      the brief window before ``busy_timeout`` takes effect.
-
-    These settings are persistent in the DB file once applied, so existing
-    DBs created by earlier init paths that only set WAL will pick up the
-    new pragma values on the next process boot.
+    ``check_same_thread`` is left at its default (True) on purpose: the
+    connection is handed out per thread, so a cross-thread misuse is a
+    bug in the caller — and we want that to raise immediately instead of
+    silently corrupting rows the way a shared connection did.
     """
-    global _conn
-    if _conn is None:
-        _conn = sqlite3.connect(get_db_path(), timeout=30, check_same_thread=False)
-        _conn.row_factory = sqlite3.Row
-        # Concurrency hardening (P2-1). WAL is a persistent DB-level
-        # setting so this is idempotent on every fresh connection.
-        _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.execute("PRAGMA busy_timeout=30000")
-        _conn.execute("PRAGMA synchronous=NORMAL")
-    return _conn
+    conn = sqlite3.connect(path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    # Concurrency hardening (P2-1 of ``docs/optimization-plan-2026-07-16.md``).
+    # WAL is a persistent DB-level setting so this is idempotent; the two
+    # PRAGMAs below are per-connection and must be re-applied every time.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def get_connection() -> sqlite3.Connection:
+    """Get this thread's database connection with row factory.
+
+    **Per-thread, never shared** (P3, 2026-09-14). Each thread gets its
+    own connection; calling this twice in the same thread returns the
+    same object. Callers should NOT call ``conn.close()`` — the
+    connection lives until the thread dies (thread-local storage is
+    dropped with the thread, so short-lived workers clean up on their
+    own).
+
+    Why not one shared connection (the P2-1 design): a ``sqlite3``
+    connection carries a statement cache, and a ``sqlite3.Row`` holds a
+    *live* reference to its statement's column-name → index map. Two
+    threads calling ``execute()`` on the same connection race on that
+    map, so one thread's row can end up describing the other thread's
+    statement. That surfaced in production as
+    ``IndexError: tuple index out of range`` on a plain
+    ``row["board_code"]`` lookup (``persistence/board.py``, the
+    ``/stocks/{code}/boards`` route runs in the FastAPI threadpool), and
+    it can also silently resolve a column to the wrong value. WAL +
+    ``busy_timeout`` (P2-1) do not help: the corruption is in the
+    Python-level row bookkeeping, not in SQLite's locking.
+
+    The connection is rebuilt when ``get_db_path()`` changes, so a path
+    swap (``STOCK_CACHE_DB_PATH``, test fixtures) takes effect for every
+    thread without any explicit reset.
+    """
+    path = str(get_db_path())
+    conn = getattr(_local, "conn", None)
+    if conn is not None and getattr(_local, "path", None) != path:
+        # Path swapped under us — drop the stale handle rather than serve
+        # reads from the previous database. Closing an already-dead handle
+        # is not worth propagating.
+        with contextlib.suppress(sqlite3.Error):
+            conn.close()
+        conn = None
+    if conn is None:
+        conn = _connect(path)
+        _local.conn = conn
+        _local.path = path
+    return conn

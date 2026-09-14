@@ -16,7 +16,6 @@ from stock_data.data_provider.persistence import db as db_mod
 @pytest.fixture
 def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db_mod, "_db_path", None)
-    monkeypatch.setattr(db_mod, "_conn", None)
     monkeypatch.setattr(board_mod, "_schema_initialized_paths", set())
     monkeypatch.setenv("STOCK_CACHE_DB_PATH", str(tmp_path / "test.db"))
     board_mod.init_schema()
