@@ -153,10 +153,14 @@ def _mock_manager(*, realtime_results: dict, history_results: dict):
         if not isinstance(realtime_results.get(code), Exception)
         else (_ for _ in ()).throw(realtime_results[code])
     )
-    manager.get_board_history.side_effect = lambda code, source, frequency, days: (
-        (history_results[code], "ths")
-        if not isinstance(history_results.get(code), Exception)
-        else (_ for _ in ()).throw(history_results[code])
+    # Post days-removal the agent passes explicit start_date/end_date
+    # (converted from calendar days at the route layer).
+    manager.get_board_history.side_effect = (
+        lambda code, source, frequency, start_date, end_date, **kw: (
+            (history_results[code], "ths")
+            if not isinstance(history_results.get(code), Exception)
+            else (_ for _ in ()).throw(history_results[code])
+        )
     )
     return manager
 

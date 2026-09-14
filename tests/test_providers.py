@@ -602,7 +602,7 @@ class TestIndexSupport:
         if not yfinance_fetcher.is_available():
             pytest.skip("yfinance not installed")
 
-        df = yfinance_fetcher.get_kline_data("SPX", days=30, frequency="w")
+        df = yfinance_fetcher.get_kline_data("SPX", "2026-08-15", "2026-09-14", frequency="w")
         assert df is not None
         assert len(df) > 0
 
@@ -611,7 +611,7 @@ class TestIndexSupport:
         if not yfinance_fetcher.is_available():
             pytest.skip("yfinance not installed")
 
-        df = yfinance_fetcher.get_kline_data("SPX", days=365, frequency="m")
+        df = yfinance_fetcher.get_kline_data("SPX", "2025-09-14", "2026-09-14", frequency="m")
         assert df is not None
         assert len(df) > 0
 
@@ -648,7 +648,7 @@ class TestIndexSupport:
         if not baostock_fetcher.is_available():
             pytest.skip("baostock not available")
 
-        df = baostock_fetcher.get_kline_data("000300", days=10, frequency="d")
+        df = baostock_fetcher.get_kline_data("000300", "2026-09-04", "2026-09-14", frequency="d")
         assert df is not None
         assert len(df) > 0
 
@@ -657,7 +657,7 @@ class TestIndexSupport:
         if not baostock_fetcher.is_available():
             pytest.skip("baostock not available")
 
-        df = baostock_fetcher.get_kline_data("000300", days=60, frequency="w")
+        df = baostock_fetcher.get_kline_data("000300", "2026-07-16", "2026-09-14", frequency="w")
         assert df is not None
         assert len(df) > 0
 
@@ -666,7 +666,7 @@ class TestIndexSupport:
         if not baostock_fetcher.is_available():
             pytest.skip("baostock not available")
 
-        df = baostock_fetcher.get_kline_data("000300", days=365, frequency="m")
+        df = baostock_fetcher.get_kline_data("000300", "2025-09-14", "2026-09-14", frequency="m")
         assert df is not None
         assert len(df) > 0
 

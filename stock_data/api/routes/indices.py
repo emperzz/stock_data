@@ -3,6 +3,8 @@
 All three endpoints share the main ``router`` declared in ``routes/__init__.py``.
 """
 
+from datetime import date as _date
+
 from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.fetchers.index_symbols import get_all_indices
@@ -119,14 +121,13 @@ def get_index_quote(
 )
 @map_errors
 @cache_endpoint(
-    cache_fn=lambda index_code, period, days, start_date, end_date, adjust, indicators: (
-        get_kline_cache(_period_to_freq(period))
+    cache_fn=lambda index_code, period, start_date, end_date, adjust, indicators: get_kline_cache(
+        _period_to_freq(period)
     ),
-    key_builder=lambda index_code, period, days, start_date, end_date, adjust, indicators: (
+    key_builder=lambda index_code, period, start_date, end_date, adjust, indicators: (
         make_kline_cache_key(
             index_code,
             _period_to_freq(period),
-            days,
             start_date,
             end_date,
             adjust or None,
@@ -141,9 +142,10 @@ def get_index_kline(
         default="daily",
         pattern="^(daily|weekly|monthly|1m|5m|15m|30m|60m)$",
     ),
-    days: int = Query(default=30, ge=1, le=365),
-    start_date: str | None = Query(default=None),
-    end_date: str | None = Query(default=None),
+    start_date: str = Query(..., description="Start date (YYYY-MM-DD). Required."),
+    end_date: str | None = Query(
+        default=None, description="End date (YYYY-MM-DD); defaults to today."
+    ),
     adjust: str = Query(default="", pattern="^(qfq|hfq)?$"),
     indicators: str | None = Query(default=None),
 ) -> IndexHistoryResponse:
@@ -151,7 +153,9 @@ def get_index_kline(
 
     Symmetric to /stocks/{code}/kline but with INDEX_KLINE capability.
     Indices have no qfq/hfq concept (no ex-dividend events) — adjust is
-    rejected at the route layer with 422.
+    rejected at the route layer with 422. ``start_date`` is REQUIRED;
+    ``end_date`` defaults to today. ``?days`` was removed in the
+    days-removal refactor (Plan §3.1).
     """
     _reject_non_index_code(index_code, endpoint_kind="kline")
 
@@ -168,22 +172,22 @@ def get_index_kline(
     freq = _period_to_freq(period)
 
     requested_indicators = _parse_indicators_param(indicators)
-    actual_days = _expand_indicator_lookback(requested_indicators, days)
+    effective_start = _expand_indicator_lookback(requested_indicators, start_date, freq)
+    effective_end = end_date or _date.today().isoformat()
 
     manager = get_manager()
     df, source = manager.get_kline_data(
         index_code,
-        start_date=start_date,
-        end_date=end_date,
-        days=actual_days,
+        start_date=effective_start,
+        end_date=effective_end,
         frequency=freq,
         adjust=None,  # adjust already rejected above
         asset="index",
     )
     # Merge BEFORE computing indicators (see _finalize_kline docstring).
     # adjust is always None here — qfq/hfq are rejected above.
-    df, merged = _maybe_merge_today_bar(df, index_code, end_date, freq, manager, asset="index")
-    df = _finalize_kline(df, requested_indicators, days=days, merged=merged)
+    df, _merged = _maybe_merge_today_bar(df, index_code, end_date, freq, manager, asset="index")
+    df = _finalize_kline(df, requested_indicators, start_date=start_date)
     index_name = _resolve_index_name(index_code)
 
     records = df.to_dict("records")

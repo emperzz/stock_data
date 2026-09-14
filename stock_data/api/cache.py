@@ -385,15 +385,19 @@ def make_news_content_cache_key(url: str) -> str:
 def make_kline_cache_key(
     code: str,
     frequency: str,
-    days: int | None,
     start_date: str | None,
     end_date: str | None,
     adjust: str | None,
     indicators: list[str],
 ) -> str:
-    """Stable cache key for /kline responses per spec §5.4."""
+    """Stable cache key for /kline responses per spec §5.4.
+
+    ``days`` was removed from the signature when the /kline endpoint
+    dropped the parameter (Plan §3.1). Old keys (with `days` segment)
+    are unreachable from the new contract and will TTL-expire naturally.
+    """
     return (
-        f"kline:{code}:{frequency}:{days or ''}:{start_date or ''}:"
+        f"kline:{code}:{frequency}:{start_date or ''}:"
         f"{end_date or ''}:{adjust or ''}:{','.join(sorted(indicators))}"
     )
 

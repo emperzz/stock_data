@@ -175,7 +175,9 @@ def test_self_heal_recovers_on_second_attempt():
             ),
         ) as mock_connect,
     ):
-        df = fetcher.get_kline_data("000001", days=1, frequency="d", asset="stock")
+        df = fetcher.get_kline_data(
+            "000001", "2026-09-12", "2026-09-13", frequency="d", asset="stock"
+        )
 
     assert not df.empty, "Expected non-empty DataFrame after self-heal"
     assert call_count["n"] == 2, (
@@ -221,7 +223,7 @@ def test_self_heal_does_not_loop_when_both_attempts_fail():
         ),
         pytest.raises(DataFetchError) as exc_info,
     ):
-        fetcher.get_kline_data("000001", days=1, frequency="d", asset="stock")
+        fetcher.get_kline_data("000001", "2026-09-12", "2026-09-13", frequency="d", asset="stock")
 
     msg = exc_info.value.args[0] if exc_info.value.args else ""
     if isinstance(msg, bytes):
@@ -255,7 +257,9 @@ def test_no_retry_on_unrelated_error_msg():
         patch("baostock.util.socketutil.SocketUtil.connect") as mock_connect,
     ):
         with pytest.raises(DataFetchError):
-            fetcher.get_kline_data("000001", days=1, frequency="d", asset="stock")
+            fetcher.get_kline_data(
+                "000001", "2026-09-12", "2026-09-13", frequency="d", asset="stock"
+            )
 
     assert mock_connect.call_count == 0, (
         "SocketUtil.connect must NOT be called for non-socket errors"

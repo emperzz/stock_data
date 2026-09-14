@@ -86,9 +86,9 @@ what's available without reading source.
 
 ```bash
 # Stocks
-GET /api/v1/stocks/600519/kline?days=120&indicators=ma,macd,kdj,boll,rsi
+GET /api/v1/stocks/600519/kline?start_date=2025-05-20&indicators=ma,macd,kdj,boll,rsi
 # Indices (same query param, same behavior)
-GET /api/v1/indices/000300/kline?days=120&indicators=ma,macd,boll
+GET /api/v1/indices/000300/kline?start_date=2025-05-20&indicators=ma,macd,boll
 ```
 
 **Supported indicators** (with their default `output_columns`):
@@ -118,30 +118,34 @@ only after 9 bars.
 
 #### Auto lookback expansion
 
-The server fetches extra K-line bars automatically so the indicators
-have enough history to warm up, then truncates the response back to
-the `days` you asked for. You don't need to pre-compute a larger
-`days` value — just ask for what you want displayed.
+When `?indicators=` is set, the server silently extends the FETCH window
+backwards (before `start_date`) so the indicators have enough history to
+warm up, then slices the response back to exactly your
+`[start_date, end_date]` window. You don't need to widen `start_date`
+yourself — just ask for the range you want displayed.
 
-**Example**: `?days=30&indicators=macd` triggers an internal fetch of
-`max(30, 87) = 87` bars, runs MACD over all 87, then slices the last
-30 rows for the response.
+**Example**: `?start_date=2026-08-01&end_date=2026-09-13&indicators=macd`
+fetches from `2026-05-06` (start − 87 calendar days at daily frequency),
+runs MACD over all bars, then returns only bars `>= 2026-08-01`.
 
-> **`days` is a calendar-day window** (no ×2 padding): a request without
-> `?indicators=` returns whatever bars fall in the window (~0.7×`days` for
-> daily, since weekends/holidays carry no bars). With `?indicators=`, the
-> lookback expansion still gives enough bars to warm the indicator and the
-> response is truncated back to the last `days` rows.
+> **The window is calendar-based** (no padding): the response contains the
+> bars that fall inside `[start_date, end_date]` — for daily that is
+> roughly 0.7× the calendar-day width, since weekends/holidays carry no
+> bars. Ask for ~1.4× the calendar width of the bar count you want shown.
+
+> **`days` was removed** (2026-09-14): its semantics differed by period —
+> for daily/weekly/monthly it was a calendar window, for minute periods it
+> collapsed to the last N bars, which was almost never what callers wanted.
+> `start_date` is now required and says exactly what it means.
 
 ---
 
 **Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `period` | string | `daily` | K-line period: `daily`, `weekly`, `monthly` |
-| `days` | int | 30 | Calendar-day window — number of days of history to fetch (1-365, ignored when `start_date` provided). Non-trading days are **not** padded: the response contains the bars that fall in the window (~0.7×`days` trading bars for daily). Ask for ~1.4× the bar count you want displayed. |
-| `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` parameter |
-| `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
+| `period` | string | `daily` | K-line period: `daily`, `weekly`, `monthly`, `1m`, `5m`, `15m`, `30m`, `60m` |
+| `start_date` | string | **required** | Start date (YYYY-MM-DD) — lower bound of the response window. |
+| `end_date` | string | null | End date (YYYY-MM-DD), defaults to today. |
 | `adjust` | string | `` | Adjustment type: empty=不复权, `qfq`=前复权, `hfq`=后复权 |
 | `indicators` | string | null | Comma-separated list of technical indicators to attach (see [Technical Indicators](#technical-indicators)) |
 
@@ -204,7 +208,8 @@ the `days` you asked for. You don't need to pre-compute a larger
 
 The server automatically fetches extra lookback bars when the
 indicators need it (e.g. MACD needs ~87 bars to warm up) and then
-truncates the response to the `days` you asked for.
+slices the response back to the `[start_date, end_date]` window
+you asked for.
 
 ---
 
@@ -304,16 +309,18 @@ Minute-level (intraday) data is served via the unified K-line endpoint
 with `period=1m|5m|15m|30m|60m`. There is no separate `/intraday` route.
 
 ```bash
-GET /api/v1/stocks/600519/kline?period=5m
-GET /api/v1/indices/000300/kline?period=15m
+GET /api/v1/stocks/600519/kline?period=5m&start_date=2026-09-12
+GET /api/v1/indices/000300/kline?period=15m&start_date=2026-09-12
 ```
 
 The `period` values `1m/5m/15m/30m/60m` select minute granularity; the
 rest of the response shape matches the daily K-line response
-(per-bar `time` replaces `date`). `adjust` is accepted but only Akshare
-1m rejects it; Zzshare also rejects minute+adjust upstream. A-share
-stocks and CSI indices support minute periods; US/HK stocks and US
-indices do not.
+(per-bar `time` replaces `date`). For minute periods, `start_date`/`end_date`
+are a **calendar-day window** — `start_date=2026-09-09&end_date=2026-09-13`
+returns all 5-minute bars across those 5 trading days (~240 bars), NOT 5
+bars. `adjust` is accepted but only Akshare 1m rejects it; Zzshare also
+rejects minute+adjust upstream. A-share stocks and CSI indices support
+minute periods; US/HK stocks and US indices do not.
 
 ---
 
@@ -409,15 +416,14 @@ GET /api/v1/indices/{index_code}/quote
 #### Index Historical K-line
 
 ```bash
-GET /api/v1/indices/{index_code}/kline?period=daily&days=30
+GET /api/v1/indices/{index_code}/kline?period=daily&start_date=2026-08-01&end_date=2026-09-13
 ```
 
 **Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `period` | string | `daily` | K-line period: `daily`, `weekly`, `monthly` |
-| `days` | int | 30 | Calendar-day window — number of days of history to fetch (1-365, ignored when `start_date` provided). Non-trading days are **not** padded (same semantics as `/stocks/{code}/kline`). |
-| `start_date` | string | null | Start date (YYYY-MM-DD), overrides `days` |
+| `start_date` | string | **required** | Start date (YYYY-MM-DD) — lower bound of the response window (same semantics as `/stocks/{code}/kline`). |
 | `end_date` | string | null | End date (YYYY-MM-DD), defaults to today |
 | `indicators` | string | null | Comma-separated list of technical indicators to attach (see [Technical Indicators](#technical-indicators)). Same semantics as `/stocks/{code}/kline`. |
 
@@ -427,7 +433,7 @@ Minute-level data for CSI indices is served via the unified K-line
 endpoint with `period=5m|15m|30m|60m` (1m is not supported for indices).
 
 ```bash
-GET /api/v1/indices/000300/kline?period=5m
+GET /api/v1/indices/000300/kline?period=5m&start_date=2026-09-12&end_date=2026-09-13
 ```
 
 ---
@@ -2176,9 +2182,9 @@ Content-Type: application/json
 
 **No raw bars.** The old `kline` / `kline_5m` aspects are replaced by
 `features`. Clients that need raw bars go through
-`/stocks/{code}/kline?frequency=...&days=...&indicators=...`. Stocks fix
-`adjust=qfq` server-side (no `adjust` request param); indices use no
-adjust.
+`/stocks/{code}/kline?period=...&start_date=...&end_date=...&indicators=...`.
+Stocks fix `adjust=qfq` server-side (no `adjust` request param); indices
+use no adjust.
 
 **Per-aspect error isolation:** each aspect (`quote` / `features` / `info`
 / `boards`) is wrapped in its own try/except. The `boards` aspect routes

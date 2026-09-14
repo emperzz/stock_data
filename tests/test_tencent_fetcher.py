@@ -317,4 +317,12 @@ class TestHistoricalNotSupported:
 
         f = TencentFetcher()
         with pytest.raises(DataFetchError, match="does not support historical"):
+            f.get_kline_data("600519", "2026-01-01", "2026-05-01")
+
+    def test_get_kline_data_requires_explicit_dates(self):
+        """days-removal contract: no implicit window defaulting — a caller
+        that omits start_date/end_date must get a TypeError at binding time,
+        never a silently-garbage 30-day window."""
+        with pytest.raises(TypeError):
+            f = TencentFetcher()
             f.get_kline_data("600519")

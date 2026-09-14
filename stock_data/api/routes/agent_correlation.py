@@ -146,7 +146,7 @@ def _pct_change(close_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fetch_stock_series(
-    code: str, days: int, frequency: str
+    code: str, start_date: str, end_date: str, frequency: str
 ) -> tuple[pd.Series | None, str | None, str | None]:
     """Fetch a single stock's close-price series.
 
@@ -159,7 +159,8 @@ def _fetch_stock_series(
         canonical = normalize_stock_code(code)
         df, _source = get_manager().get_kline_data(
             stock_code=canonical,
-            days=days,
+            start_date=start_date,
+            end_date=end_date,
             frequency=frequency,
             asset="stock",  # disambiguate from CSI index codes (000001, 000300, etc.)
         )
@@ -186,15 +187,25 @@ def _fetch_stock_series(
 
 
 def _fetch_board_series(
-    board_code: str, source: str, days: int, frequency: str
+    board_code: str, source: str, start_date: str, end_date: str, frequency: str
 ) -> tuple[pd.Series | None, str | None, str | None]:
     """Fetch a single board's close-price series.
 
     Returns (series, name, reason); semantics match `_fetch_stock_series`.
     """
     try:
+        # days is re-derived from the explicit window: ThsFetcher resolves its
+        # lower bound as ``min(start_date, end - days)``, so omitting days
+        # (default 30) would silently widen narrow windows. Passing the exact
+        # window width pins the two terms to the same date.
+        window_days = (pd.Timestamp(end_date) - pd.Timestamp(start_date)).days
         rows, _src = get_manager().get_board_history(
-            board_code=board_code, source=source, frequency=frequency, days=days
+            board_code=board_code,
+            source=source,
+            frequency=frequency,
+            start_date=start_date,
+            end_date=end_date,
+            days=window_days,
         )
         if not rows:
             return None, None, "empty"
@@ -499,6 +510,14 @@ async def post_correlation_matrix(
 
     # 2) Fetch + assemble per-asset close series
     fetch_days = days + 1  # +1 buffer for pct_change 前置 bar
+    # Convert calendar days to (start_date, end_date) for the new explicit-date
+    # manager/fetcher contracts. Same buffer-day semantics; just date-form.
+    from datetime import date, timedelta
+
+    fetch_end = date.today()
+    fetch_start = fetch_end - timedelta(days=fetch_days)
+    fetch_start_str = fetch_start.isoformat()
+    fetch_end_str = fetch_end.isoformat()
     stock_labels = {lbl["code"]: lbl for lbl in labels_raw if lbl["type"] == "stock"}
     board_labels = {
         (lbl["code"], lbl["source"]): lbl for lbl in labels_raw if lbl["type"] == "board"
@@ -509,7 +528,7 @@ async def post_correlation_matrix(
 
     # Stocks (with names)
     for code in stocks:
-        s, name, reason = _fetch_stock_series(code, fetch_days, frequency)
+        s, name, reason = _fetch_stock_series(code, fetch_start_str, fetch_end_str, frequency)
         if s is None:
             errors_out.append(
                 {
@@ -528,7 +547,9 @@ async def post_correlation_matrix(
     # Boards (with names)
     for b in boards:
         bcode, bsrc = b["code"], b["source"]
-        s, name, reason = _fetch_board_series(bcode, bsrc, fetch_days, frequency)
+        s, name, reason = _fetch_board_series(
+            bcode, bsrc, fetch_start_str, fetch_end_str, frequency
+        )
         if s is None:
             errors_out.append(
                 {

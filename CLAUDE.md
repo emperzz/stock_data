@@ -301,20 +301,28 @@ split of the seed CSVs, persistence↔manager coupling sites):
 
 ### Indicator Computation
 Pure DataFrame transformer at the orchestration boundary:
-1. `routes.py` calls `manager.get_kline_data(code, days=max(days, lookback))`
-   — `lookback` is the maximum across the requested indicators.
+1. `routes.py` computes `effective_start = _expand_indicator_lookback(indicators, start_date, freq)`
+   — for `?indicators=`, this moves the FETCH start earlier (by
+   `ceil(lookback / bars_per_day)` calendar days, freq-aware) so the
+   indicators have warm-up history; the user's `start_date` is preserved
+   for the response cut. `manager.get_kline_data(code, start_date=effective_start, end_date=...)`
+   is called with explicit dates (no `days`).
 2. The returned DataFrame is handed to `indicator_service.compute(df, spec)`.
 3. The service iterates `INDICATOR_REGISTRY` once per requested indicator,
    calls the corresponding `calc*` function, and merges the per-bar
    result dicts onto the DataFrame as an `indicators` column.
-4. `routes.py` then truncates the DataFrame back to the user's `days`
-   (the extra lookback was only needed to warm the indicator).
+4. `_finalize_kline(df, indicators, start_date=start_date)` then slices
+   the DataFrame back to the user's `[start_date, end_date]` window by
+   **date**, not row count (the extra lookback bars were only for warm-up).
 
-**Index indicators**: `/indices/{code}/kline` accepts the same `?indicators=`
-query param as `/stocks/{code}/kline` and runs through the same
-`_apply_indicators` / `_parse_indicators_param` helpers in `routes.py`.
-The `KLineData` response shape and its conditional serialization behavior
-are the same as stocks (see [Standardized Data Schema](#standardized-data-schema)).
+> **`days` was removed from `/stocks/{code}/kline` + `/indices/{code}/kline`**
+> (2026-09-14). It was a calendar-day window for d/w/m but collapsed to the
+> last N BARS for minute frequencies — `?period=5m&days=5` returned 5 bars
+> (25 minutes) instead of 5 days of 5-minute data. The public surface is now
+> explicit `start_date` (required) + `end_date` (defaults to today). Agent
+> endpoints (`/agent/*/batch-profile`, `/agent/correlation/matrix`) KEEP their
+> `days` param — it means calendar days there, and the route converts it to a
+> `(start_date, end_date)` window internally via `_days_to_window`.
 
 ## K-line today's partial bar
 
@@ -330,7 +338,7 @@ K 线 routes (`/stocks/{code}/kline` + `/indices/{code}/kline`) 默认在以下�
 
 合并 source：`manager.get_realtime_quote(code)` (stock) 或 `manager.get_index_realtime_quote(code)` (index)，best-effort，失败时回退到原 K 线。
 
-**执行顺序**：merge 在 `compute()` **之前**，因此今日实时数据**参与** `?indicators=` 计算（今日那根的 `ma5` 是含今日的值）。已收盘行的指标值逐位不变——SMA/EMA/SAR/OBV 等均为前向递推，尾部追加不影响前面。输出行数为 `days` 根已收盘 + 1 根今日（`_finalize_kline` 用 helper 返回的 `merged` 标志决定是否多保留一行；**不可**用日期比较替代——fetcher 盘后 backfill 的今日 bar 日期相同但是已结算 bar）。
+**执行顺序**：merge 在 `compute()` **之前**，因此今日实时数据**参与** `?indicators=` 计算（今日那根的 `ma5` 是含今日的值）。已收盘行的指标值逐位不变——SMA/EMA/SAR/OBV 等均为前向递推，尾部追加不影响前面。输出行数为 `[start_date, end_date]` 窗口内的已收盘根数 + 1 根今日（`_maybe_merge_today_bar` 追加的今日 bar 日期为 `pd.Timestamp(today)`，天然 `>= start_date`，故 `_finalize_kline` 的日期过滤会保留它——`days` 移除后不再需要 `merged` 标志控制行数，今日行的"合成 vs 原生"区分改由日期本身承担：fetcher 盘后 backfill 的今日 bar 与合成 bar 都落在窗口内，行为一致）。
 
 **`_build_kline_data` 的 `isinstance(ind, dict)` 守卫是永久不变量**，不是临时补丁：`indicators` 列是 object dtype，任何未经 `compute()` 的行（`pd.concat` 拼接、per-bar 结果偏短）都会带 `NaN`——而 `nan` 是**真值**，会绕过 `or {}` 直接 400 掉整个响应。
 
@@ -531,7 +539,8 @@ The non-obvious knobs worth memorizing here:
 - **Don't** reintroduce `manager.get_stock_list(market, refresh=False)` in `persistence/stock_list.py::get_stock_name`'s cold-cache auto-warm branch. That method does NOT exist on `DataFetcherManager` (the public name is `get_all_stocks`); the `AttributeError` is silently swallowed by `except Exception: pass`, so the DB stays empty and every cold-cache request 400s. Use the persistence-level `get_stock_list(market, manager=manager)` (same file, line 105), which already wires fetch + `update_cached_stocks`. Likewise **don't** collapse `_reject_invalid_stock_code`'s two message branches into one template — the "Index X is not supported..." wording is correct ONLY when `is_index_code(code)` is true; for genuinely-unknown codes the helper emits "Stock code X was not found..." (see Standardized Data Schema → "/stocks/{code}/* 400 contract"). (2026-07-23)
 - **Don't** 在 fetcher 层 hardcode "今日 partial bar" 合并逻辑；统一在 K-line route 层 helper 走。Fetcher 层的"今日 bar"逻辑会跨 fetcher 行为不一致，并绕过 manager 的短路与熔断保护。统一在 `api/routes/helpers.py::_maybe_merge_today_bar` 触发（见 [K-line today's partial bar](#k-line-todays-partial-bar)）。
 - **Don't** 把 `_maybe_merge_today_bar` 挪回 `compute()` 之后。顺序错了会有两个后果：今日实时数据不参与指标计算（与契约冲突），且拼接行产生的 `NaN` 会 400 掉整个响应。同理 **Don't** 用 `row.get("indicators") or {}` —— `nan` 是真值，必须 `isinstance(ind, dict)`。
-- **Don't** 用「`df` 末根日期 == today」来判断要不要多保留一行。合成 bar 与 fetcher 盘后 backfill 的 bar 日期相同，但前者需要额外保留、后者本就是 `days` 根之一。用 `_maybe_merge_today_bar` 返回的 `merged` 标志。
+- **Don't** 在 `days` 移除后又把它加回 `/kline`。`days` 的多义性是本次重构要消灭的根因（d/w/m 是日历窗口、minute 是 bar 数）。公开契约固定为 `start_date`（必填）+ `end_date`（默认 today）。Agent 端点若需要"最近 N 天"的便利入口，保留其 `days` 但内部经 `_days_to_window` 转成显式日期再调 manager，不得让 `days` 泄漏回 `/kline` 层。
+- **Don't** 把 `_maybe_merge_today_bar` 今日 bar 的 `date` 写成 `str`。fetcher 返回的 `date` 列是 `datetime64[ns]`，`pd.concat` 一个 `str` 今日行会把整列降级为 `object`，使 `_finalize_kline` 的 `df["date"] >= pd.Timestamp(...)` 抛 `TypeError`。今日行必须写 `pd.Timestamp(today_str)`（见 helpers.py `_maybe_merge_today_bar` 第 8 步）。
 
 ## Skill Discipline
 

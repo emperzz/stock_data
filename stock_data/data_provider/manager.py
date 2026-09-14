@@ -91,7 +91,7 @@ class DataFetcherManager:
 
     Usage:
         manager = DataFetcherManager()
-        df, source = manager.get_kline_data("600519")
+        df, source = manager.get_kline_data("600519", "2026-09-01", "2026-09-13")
     """
 
     def __init__(self, fetchers: list[BaseFetcher] | None = None):
@@ -471,9 +471,8 @@ class DataFetcherManager:
     def get_kline_data(
         self,
         stock_code: str,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        days: int = 30,
+        start_date: str,
+        end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
         *,
@@ -484,9 +483,9 @@ class DataFetcherManager:
 
         Args:
             stock_code: Stock code
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
-            days: Number of days when start_date not provided
+            start_date: Start date (YYYY-MM-DD). Required; the route layer
+                is responsible for any defaulting (``end_date`` → today).
+            end_date: End date (YYYY-MM-DD). Required.
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
             adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权
             asset: Server-internal override for asset routing. ``"stock"`` or
@@ -530,7 +529,7 @@ class DataFetcherManager:
             market,
             f"kline {stock_code} {frequency}",
             lambda f: f.get_kline_data(
-                stock_code, start_date, end_date, days, frequency, adjust, asset=asset
+                stock_code, start_date, end_date, frequency, adjust, asset=asset
             ),
             return_source=True,
             circuit_breaker=KLINE_CIRCUIT_BREAKER,

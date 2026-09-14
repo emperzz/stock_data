@@ -84,7 +84,9 @@ def test_end_date_today_merge_when_missing(mock_isd):
     result = _maybe_merge_today_bar(df, "600519", TODAY, "d", manager, asset="stock")[0]
     manager.get_realtime_quote.assert_called_once_with("600519")
     assert len(result) == 2
-    assert result.iloc[-1]["date"] == TODAY
+    # the appended today-bar carries a pd.Timestamp (so pd.concat keeps the
+    # column datetime64); compare via str()[:10] for dtype-agnostic assertion
+    assert str(result.iloc[-1]["date"])[:10] == TODAY
 
 
 @patch("stock_data.api.routes.helpers.is_trade_date", return_value=True)
@@ -375,7 +377,7 @@ def test_last_date_with_time_freq_d_truncation(mock_isd):
     result = _maybe_merge_today_bar(df, "600519", None, "d", manager, asset="stock")[0]
     manager.get_realtime_quote.assert_called_once()
     assert len(result) == 2
-    assert result.iloc[-1]["date"] == TODAY
+    assert str(result.iloc[-1]["date"])[:10] == TODAY
 
 
 @patch("stock_data.api.routes.helpers.is_trade_date", return_value=True)
@@ -386,7 +388,7 @@ def test_multi_row_df_truncation_then_merge(mock_isd):
     manager.get_realtime_quote.return_value = _quote()
     result = _maybe_merge_today_bar(df, "600519", None, "d", manager, asset="stock")[0]
     assert len(result) == 101
-    assert result.iloc[-1]["date"] == TODAY
+    assert str(result.iloc[-1]["date"])[:10] == TODAY
     assert result.iloc[-2]["date"] == YESTERDAY
 
 
@@ -426,7 +428,8 @@ def test_today_bar_gets_indicators_including_today_close(mock_isd):
     )
 
     merged_df, merged = _maybe_merge_today_bar(df, "600519", None, "d", manager, asset="stock")
-    out = _finalize_kline(merged_df, ["ma"], days=10, merged=merged)
+    # user's window starts at the first closed bar — every row stays
+    out = _finalize_kline(merged_df, ["ma"], start_date=str(df["date"].iloc[0])[:10])
 
     assert merged is True
     assert len(out) == 11  # 10 根已收盘 + 1 根今日 partial
@@ -437,7 +440,7 @@ def test_today_bar_gets_indicators_including_today_close(mock_isd):
     assert today_inds["ma5"] == pytest.approx(26.8)
 
     # 已收盘行的指标不受追加影响 — 与「不合并直接算」逐位相同 (ma5=8.0)
-    baseline = _finalize_kline(df, ["ma"], days=10, merged=False)
+    baseline = _finalize_kline(df, ["ma"], start_date=str(df["date"].iloc[0])[:10])
     for i in range(len(baseline)):
         assert out.iloc[i]["indicators"]["ma5"] == pytest.approx(
             baseline.iloc[i]["indicators"]["ma5"]
@@ -445,32 +448,50 @@ def test_today_bar_gets_indicators_including_today_close(mock_isd):
 
 
 @patch("stock_data.api.routes.helpers.is_trade_date", return_value=True)
-def test_output_keeps_days_plus_today_after_lookback_truncation(mock_isd):
-    """★ 行数契约: lookback 展开后仍保留今日行 (days + 1)."""
+def test_output_keeps_user_window_plus_today_after_lookback_truncation(mock_isd):
+    """★ 行数契约: lookback 展开（更宽的 fetch 窗口）后，响应切回用户窗口 + 今日行.
+
+    Post days-removal (Plan §3.1): the user asks for the last 5 closed bars
+    (start_date = 5th-from-last); ``_expand_indicator_lookback`` moves the
+    FETCH start earlier so ma5 has warm bars; ``_finalize_kline`` slices back
+    to the user's start_date by DATE, keeping 5 closed + 1 today = 6 rows.
+    """
     from stock_data.api.routes.helpers import _expand_indicator_lookback, _finalize_kline
+    from stock_data.data_provider.indicators.registry import estimate_lookback
 
-    # days=5 + ma 的 warmup 需求 → actual_days 远大于 days
-    actual_days = _expand_indicator_lookback(["ma"], 5)
-    assert actual_days > 5
+    # user wants the last 5 closed bars of a 60-bar fetch
+    df = _closed_df(60)
+    user_start = str(df["date"].iloc[-5])[:10]
 
-    df = _closed_df(actual_days)
+    # ma (lookback 250 bars incl. ma250) must push the FETCH start earlier
+    # than the user window by exactly ceil(lookback / bars_per_day) days
+    expanded = _expand_indicator_lookback(["ma"], user_start, "d")
+    assert expanded < user_start
+    import math
+
+    expected_days = math.ceil(estimate_lookback(["ma"]) / 1.0)  # daily: 1 bar/day
+    assert (date.fromisoformat(user_start) - date.fromisoformat(expanded)).days == expected_days
+
     manager = MagicMock()
     manager.get_realtime_quote.return_value = _quote(
         price=100.0, open_price=99.0, high=101.0, low=98.5
     )
     merged_df, merged = _maybe_merge_today_bar(df, "600519", None, "d", manager, asset="stock")
     assert merged is True
-    assert len(merged_df) == actual_days + 1
+    assert len(merged_df) == 61
 
-    out = _finalize_kline(merged_df, ["ma"], days=5, merged=merged)
-    assert len(out) == 6  # 5 根已收盘 + 1 根今日，不是 5
+    out = _finalize_kline(merged_df, ["ma"], start_date=user_start)
+    assert len(out) == 6  # 5 根已收盘 + 1 根今日，不是 5，也不是 61
     assert str(out.iloc[-1]["date"])[:10] == TODAY
     assert isinstance(out.iloc[-1]["indicators"], dict)
+    # the warm-up bars (outside the user window) make ma5 defined on the
+    # FIRST visible row too — the whole point of the lookback expansion
+    assert out.iloc[0]["indicators"]["ma5"] is not None
 
 
 @patch("stock_data.api.routes.helpers.is_trade_date", return_value=True)
 def test_no_merge_does_not_add_a_row(mock_isd):
-    """未合并时不得多出一行 (merged=False → days 行)."""
+    """未合并时不得多出一行（fetcher 已 backfill 今日 → 响应精确 30 行）."""
     from stock_data.api.routes.helpers import _finalize_kline
 
     # 末根已经是今日 → helper 不合并 (fetcher 盘后已 backfill)
@@ -480,5 +501,5 @@ def test_no_merge_does_not_add_a_row(mock_isd):
     assert merged is False
     assert len(merged_df) == 30
 
-    out = _finalize_kline(merged_df, ["ma"], days=30, merged=merged)
+    out = _finalize_kline(merged_df, ["ma"], start_date=str(df["date"].iloc[0])[:10])
     assert len(out) == 30

@@ -43,9 +43,7 @@ class _FakeFetcher(BaseFetcher):
     def _normalize_data(self, df, stock_code):
         return df
 
-    def get_kline_data(
-        self, stock_code, start_date, end_date, days, frequency, adjust, *, asset=None
-    ):
+    def get_kline_data(self, stock_code, start_date, end_date, frequency, adjust, *, asset=None):
         return pd.DataFrame({"date": ["2026-06-29"], "close": [1.0]}), "fake"
 
 
@@ -61,9 +59,8 @@ def test_manager_filters_by_supports_kline_when_empty_raises():
     with pytest.raises(DataFetchError) as exc:
         mg.get_kline_data(
             "600519",
-            start_date=None,
+            start_date="2026-06-28",
             end_date="2026-06-29",
-            days=1,
             frequency="1",
             adjust="qfq",
         )
@@ -103,7 +100,7 @@ def test_manager_picks_only_supporting_fetcher():
             return df
 
         def get_kline_data(
-            self, stock_code, start_date, end_date, days, frequency, adjust, *, asset=None
+            self, stock_code, start_date, end_date, frequency, adjust, *, asset=None
         ):
             captured.append((self.name, frequency, adjust))
             return pd.DataFrame({"date": ["2026-06-29"], "close": [1.0]}), self.name
@@ -113,9 +110,8 @@ def test_manager_picks_only_supporting_fetcher():
 
     df, source = mg.get_kline_data(
         "600519",
-        start_date=None,
+        start_date="2026-06-28",
         end_date="2026-06-29",
-        days=1,
         frequency="5",
         adjust="qfq",
     )
@@ -136,9 +132,8 @@ def test_manager_three_stage_drops_unsupported_markets():
         # 600519 is csi market; HKOnly is filtered out by _filter_by_capability.
         mg.get_kline_data(
             "600519",
-            start_date=None,
+            start_date="2026-06-28",
             end_date="2026-06-29",
-            days=1,
             frequency="d",
         )
 

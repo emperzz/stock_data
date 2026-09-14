@@ -6,7 +6,6 @@ import logging
 import os
 import threading
 from abc import ABC, abstractmethod
-from datetime import datetime
 from enum import Flag, auto
 from typing import Any
 
@@ -435,39 +434,12 @@ class BaseFetcher(ABC):
 
         return df
 
-    @staticmethod
-    def _resolve_kline_window(
-        start_date: str | None, end_date: str | None, days: int
-    ) -> tuple[str, str]:
-        """Fill in a (start_date, end_date) window when either is omitted.
-
-        ``end_date`` defaults to today; ``start_date`` defaults to
-        ``days`` calendar days before ``end_date``. ``days`` is the
-        calendar-day window — no implicit padding; callers wanting N
-        trading bars across holidays should pass a larger ``days``.
-        Returns ``(start_date, end_date)`` — both guaranteed non-None.
-
-        Single source of truth for the defaulting logic, reused by
-        ``get_kline_data`` and by ``_kline_with_index_dispatch`` (which must
-        resolve the window itself before handing dates to a fetcher's
-        separate index API).
-        """
-        from datetime import timedelta
-
-        if end_date is None:
-            end_date = datetime.now().strftime("%Y-%m-%d")
-        if start_date is None:
-            start_dt = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=days)
-            start_date = start_dt.strftime("%Y-%m-%d")
-        return start_date, end_date
-
     def _kline_with_index_dispatch(
         self,
         index_fn,
         stock_code: str,
-        start_date: str | None,
-        end_date: str | None,
-        days: int,
+        start_date: str,
+        end_date: str,
         frequency: str,
         adjust: str | None,
         *,
@@ -488,8 +460,10 @@ class BaseFetcher(ABC):
 
         Args:
             index_fn: The fetcher's index-fetch method, called as
-                ``index_fn(stock_code, start_date, end_date, frequency)`` when
-                ``stock_code`` is an index code (window already resolved).
+                ``index_fn(stock_code, start_date, end_date, frequency)``.
+            start_date, end_date: explicit YYYY-MM-DD strings; both required
+                (caller — the route layer — is responsible for defaulting
+                ``end_date`` to today).
             (remaining args mirror ``get_kline_data``)
 
         Dispatch:
@@ -502,18 +476,21 @@ class BaseFetcher(ABC):
           explicitly is behavior-preserving and avoids re-dispatch recursion.
         """
         if asset == "index" or (asset is None and index_market_tag(stock_code) is not None):
-            start_date, end_date = self._resolve_kline_window(start_date, end_date, days)
+            if start_date is None or end_date is None:
+                raise DataFetchError(
+                    f"index K-line requires explicit start_date/end_date; "
+                    f"got start_date={start_date!r}, end_date={end_date!r}"
+                )
             return index_fn(stock_code, start_date, end_date, frequency)
         return BaseFetcher.get_kline_data(
-            self, stock_code, start_date, end_date, days, frequency, adjust, asset=asset
+            self, stock_code, start_date, end_date, frequency, adjust, asset=asset
         )
 
     def get_kline_data(
         self,
         stock_code: str,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        days: int = 30,
+        start_date: str,
+        end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
         *,
@@ -524,9 +501,10 @@ class BaseFetcher(ABC):
 
         Args:
             stock_code: Stock code
-            start_date: Start date (YYYY-MM-DD), defaults to days ago
-            end_date: End date (YYYY-MM-DD), defaults to today
-            days: Number of days when start_date not provided
+            start_date: Start date (YYYY-MM-DD). Required — caller (route
+                layer) is responsible for defaulting. No implicit "N days ago".
+            end_date: End date (YYYY-MM-DD). Required — caller defaults this
+                to today at the route layer when user omits it.
             frequency: K-line frequency - 'd'=日线, 'w'=周线, 'm'=月线, '5/15/30/60'=分钟线
             adjust: Adjustment type - None=不复权, 'qfq'=前复权, 'hfq'=后复权 (unified, mapped per-provider)
             asset: Server-internal override. ``"stock"`` / ``"index"`` is plumbed
@@ -538,7 +516,15 @@ class BaseFetcher(ABC):
         Returns:
             DataFrame with standard columns and technical indicators
         """
-        start_date, end_date = self._resolve_kline_window(start_date, end_date, days)
+        # start_date, end_date are caller-provided (the route layer defaults
+        # end_date to today; the indicator lookback may have widened
+        # start_date). No defaulting here — fail fast with a clear error so
+        # direct callers (tests, tools) can't silently fetch a garbage window.
+        if not start_date or not end_date:
+            raise DataFetchError(
+                f"[{self.name}] get_kline_data requires explicit start_date / "
+                f"end_date; got start_date={start_date!r}, end_date={end_date!r}"
+            )
 
         # Map unified adjust to provider-specific value
         provider_adjust = self._map_adjust(adjust or "")

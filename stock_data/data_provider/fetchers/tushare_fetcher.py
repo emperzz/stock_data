@@ -189,9 +189,8 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
     def get_kline_data(
         self,
         stock_code: str,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        days: int = 30,
+        start_date: str,
+        end_date: str,
         frequency: str = "d",
         adjust: str | None = None,
         *,
@@ -210,7 +209,6 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
             stock_code,
             start_date,
             end_date,
-            days,
             frequency,
             adjust,
             asset=asset,
@@ -371,10 +369,10 @@ class TushareFetcher(SDKFetcherMixin, BaseFetcher):
 
         if not start_date:
             start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        if not end_date:
+            end_date = datetime.now().strftime("%Y-%m-%d")
 
         try:
-            return self.get_kline_data(
-                index_code, start_date, end_date, days=365, frequency=frequency
-            )
+            return self.get_kline_data(index_code, start_date, end_date, frequency=frequency)
         except DataFetchError:
             return None

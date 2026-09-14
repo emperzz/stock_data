@@ -310,7 +310,7 @@ class TestGetKlineDataIndexDispatch:
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
 
-        self.fetcher.get_kline_data("000001", days=4, frequency="d")
+        self.fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="d")
 
         called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args.args[0]
         assert "/hz/history/fsjy/000001.SH/d" in called_url
@@ -329,7 +329,7 @@ class TestGetKlineDataIndexDispatch:
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
 
-        self.fetcher.get_kline_data("000001", days=1, frequency="5")
+        self.fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="5")
 
         called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args.args[0]
         assert "/hz/history/fsjy/000001.SH/5" in called_url
@@ -344,7 +344,7 @@ class TestGetKlineDataIndexDispatch:
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
 
-        self.fetcher.get_kline_data("399006", days=2, frequency="d")
+        self.fetcher.get_kline_data("399006", "2026-09-08", "2026-09-13", frequency="d")
 
         called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args.args[0]
         assert "/hz/history/fsjy/399006.SZ/d" in called_url
@@ -358,7 +358,7 @@ class TestGetKlineDataIndexDispatch:
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
 
-        df = self.fetcher.get_kline_data("000001", days=4, frequency="d")
+        df = self.fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="d")
 
         assert isinstance(df, pd.DataFrame)
         # 必须含 KLineData 所需的所有列 — 由 api/routes/helpers.py:_build_kline_data 读取
@@ -378,7 +378,7 @@ class TestGetKlineDataIndexDispatch:
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
 
-        df = self.fetcher.get_kline_data("000001", days=4, frequency="d")
+        df = self.fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="d")
 
         # 2025-07-01: c=3457.75, pc=3444.43, expected ≈ 0.387
         first = df.iloc[0]
@@ -403,7 +403,7 @@ class TestGetKlineDataIndexDispatch:
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
 
-        df = self.fetcher.get_kline_data("000001", days=4, frequency="d")
+        df = self.fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="d")
 
         # 444356739.0 (手) × 100 = 44,435,673,900 (股) — 与 Myquant 一致
         assert df.iloc[0]["volume"] == 44435673900
@@ -426,7 +426,7 @@ class TestGetKlineDataIndexDispatch:
         from stock_data.data_provider.base import DataFetchError
 
         with pytest.raises(DataFetchError):
-            self.fetcher.get_kline_data("000001", days=4, frequency="d")
+            self.fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="d")
 
     @patch("stock_data.data_provider.utils.http.requests.get")
     def test_stock_daily_still_raises(self, mock_get, monkeypatch):
@@ -437,7 +437,7 @@ class TestGetKlineDataIndexDispatch:
         from stock_data.data_provider.base import DataFetchError
 
         with pytest.raises(DataFetchError):
-            self.fetcher.get_kline_data("600519", days=4, frequency="d")
+            self.fetcher.get_kline_data("600519", "2026-09-08", "2026-09-13", frequency="d")
         assert not mock_get.called, "stock daily should not call Zhitu upstream"
 
     @patch("stock_data.data_provider.utils.http.requests.get")
@@ -468,7 +468,7 @@ class TestGetKlineDataIndexDispatch:
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
 
-        df = self.fetcher.get_kline_data("000001", days=1, frequency="d")
+        df = self.fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="d")
 
         v = df.iloc[0]["pct_chg"]
         assert pd.isna(v) or (isinstance(v, float) and math.isnan(v)), (
@@ -487,7 +487,7 @@ class TestGetKlineDataIndexDispatch:
         mock_response.raise_for_status = lambda: None
         mock_get.return_value = mock_response
 
-        df = self.fetcher.get_kline_data("000001", days=4, frequency="d")
+        df = self.fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="d")
 
         assert "code" in df.columns
         assert (df["code"] == "000001").all()

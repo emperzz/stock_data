@@ -18,6 +18,7 @@ lifts, not redesigns.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date
 from typing import TYPE_CHECKING
 
@@ -165,7 +166,10 @@ def _forbid_quote_params(request: Request) -> None:
 
     Per spec §5.5: quote is a snapshot; ``period``, ``adjust``, ``days``,
     ``start_date``, ``end_date``, ``indicators`` have no meaning. Clients
-    get a clear 422 with a hint to use ``/kline`` instead.
+    get a clear 422 with a hint to use ``/kline`` instead. (``days`` stays
+    in the set even after /kline dropped it — a client still sending
+    ``?days=`` deserves the explicit "use /kline" 422, not a silently
+    ignored param. Pinned by tests/test_quote_param_reject.py.)
     """
     bad = _FORBID_QUOTE_PARAMS & set(request.query_params.keys())
     if bad:
@@ -250,55 +254,88 @@ def _parse_indicators_param(indicators: str | None) -> list[str]:
     return out
 
 
-def _expand_indicator_lookback(requested_indicators: list[str], days: int) -> int:
-    """Return the bar count needed to warm the requested indicators.
+# Frequency → bars per A-share CALENDAR day. Used by _expand_indicator_lookback
+# to convert indicator bar-lookback into calendar-day window extension.
+# Daily: 1 bar per day. Weekly: 1 bar per week = 1/7 bars per day.
+# Monthly: 1 bar per month = 1/30 bars per day. Minute: A-share 4-hour
+# continuous auction (9:30-11:30 + 13:00-15:00) = 240 min / freq minutes.
+_FREQ_TO_BARS_PER_DAY: dict[str, float] = {
+    "d": 1.0,
+    "w": 1 / 7,
+    "m": 1 / 30,
+    "1": 240,
+    "5": 48,
+    "15": 16,
+    "30": 8,
+    "60": 4,
+}
 
-    If no indicators are requested, returns ``days`` unchanged. Otherwise
-    returns ``max(days, lookback)`` so the orchestrator has enough history
-    to compute the first valid indicator row, then ``_finalize_kline``
-    truncates back to ``days``.
 
-    Used by both ``/stocks/{code}/kline`` and ``/indices/{code}/kline``.
+def _expand_indicator_lookback(
+    requested_indicators: list[str],
+    start_date: str,
+    frequency: str,
+) -> str:
+    """Extend ``start_date`` backwards in calendar days to warm indicators.
+
+    Returns the (possibly earlier) start_date to pass to the fetcher so it
+    pulls enough bars to compute the requested indicators. The route layer
+    slices the result back to the user's ``[start_date, end_date]`` window
+    in ``_finalize_kline``.
+
+    The bars-per-day map uses A-share trading-day shape (240 minutes =
+    4 hours continuous auction across morning + afternoon). Holidays and
+    weekends reduce the actual bar count, so we round up — over-fetching
+    a few bars is fine, under-fetching leaves indicators undefined at the
+    top of the response.
     """
     if not requested_indicators:
-        return days
+        return start_date
     extra = estimate_lookback(requested_indicators)
-    return max(days, extra) if extra > 0 else days
+    if extra <= 0:
+        return start_date
+    bars_per_day = _FREQ_TO_BARS_PER_DAY.get(frequency, 1)
+    extra_days = math.ceil(extra / bars_per_day)
+    from datetime import date, timedelta
+
+    return (date.fromisoformat(start_date) - timedelta(days=extra_days)).isoformat()
 
 
 def _finalize_kline(
     df: pd.DataFrame,
     requested_indicators: list[str],
-    days: int,
-    merged: bool,
+    *,
+    start_date: str,
 ) -> pd.DataFrame:
-    """Compute the requested indicators over ``df``, then trim to the
-    user-facing bar count.
+    """Run indicators + slice to the user's exact [start_date, end_date] window.
+
+    The fetcher returns a possibly-wider range (start_date may have been
+    extended backwards by ``_expand_indicator_lookback`` for warm-up);
+    this helper cuts back to the user-requested window by DATE, not by
+    row count, so the contract "5 calendar days returns N×bars_per_day
+    rows" holds uniformly across all frequencies.
+
+    ``end_date`` is enforced upstream by the fetcher; ``merged`` (today
+    partial bar) is naturally included because today's date >= start_date.
+    Both dropped from the signature — no longer needed.
 
     Called AFTER ``_maybe_merge_today_bar`` so that today's partial bar
     participates in the indicator window (its moving averages etc. reflect
     the realtime price). Trading indicators are forward-recursive
     (SMA/EMA/SAR/OBV), so appending one bar at the tail leaves every
     already-closed row's values bit-for-bit unchanged.
-
-    Args:
-        df: K-line DataFrame, already merged (fetch rows + today's partial
-            bar when ``merged`` is True).
-        requested_indicators: empty list → indicators skipped.
-        days: the user-requested bar count. The extra lookback rows fetched
-            to warm the indicators are trimmed off here.
-        merged: whether ``_maybe_merge_today_bar`` appended today's bar.
-            When True the output keeps ``days`` closed bars PLUS that one
-            partial bar (``days + 1`` total) — matching the long-standing
-            "``?days=5`` returns 6 bars intraday" contract.
-
-    Returns:
-        A DataFrame with the ``indicators`` column populated (when
-        requested) and ``days`` or ``days + 1`` rows.
     """
     if requested_indicators:
         df = compute(df, requested_indicators)
-    return df.tail(days + (1 if merged else 0)).reset_index(drop=True)
+    # Slice to user's window by date (inclusive lower bound).
+    # Coerce date column to datetime64[ns] first — the today-bar merge at
+    # line ~419 appends a row with `date: pd.Timestamp(today_str)` so the
+    # dtype should already be consistent, but defensive coercion avoids
+    # TypeError if any caller still produces object-dtype date columns.
+    dates = pd.to_datetime(df["date"], errors="coerce")
+    cutoff = pd.Timestamp(start_date)
+    df = df[dates >= cutoff].reset_index(drop=True)
+    return df
 
 
 # Only the daily bar can be completed by a single realtime tick. Higher
@@ -416,8 +453,11 @@ def _maybe_merge_today_bar(
     # fields retain None). volume stays raw shares — both zzshare ``daily.vol``
     # and ``rt_k.vol`` are documented in shares (docs/zzshare/01-kline.md:42,
     # docs/zzshare/02-realtime.md:42), so no unit conversion is needed.
+    # Coerce `date` to a Timestamp so the column stays datetime64[ns] after
+    # pd.concat — without this, the date column becomes object dtype and
+    # the date-filter in _finalize_kline raises TypeError on comparison.
     today_bar = {
-        "date": today_str,
+        "date": pd.Timestamp(today_str),
         "open": open_p,
         "high": high,
         "low": low,

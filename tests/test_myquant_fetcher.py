@@ -187,7 +187,7 @@ class TestGetKlineDataIndexDispatch:
         monkeypatch.setattr("gm.api.history", fake_history, raising=False)
         fetcher = self._setup_fetcher()
 
-        df = fetcher.get_kline_data("399006", days=4, frequency="d")
+        df = fetcher.get_kline_data("399006", "2026-09-08", "2026-09-13", frequency="d")
 
         assert df is not None
         assert not df.empty
@@ -213,7 +213,7 @@ class TestGetKlineDataIndexDispatch:
         monkeypatch.setattr("gm.api.history", fake_history, raising=False)
         fetcher = self._setup_fetcher()
 
-        fetcher.get_kline_data("000300", days=4, frequency="d")
+        fetcher.get_kline_data("000300", "2026-09-08", "2026-09-13", frequency="d")
 
         assert captured["symbol"] == "SHSE.000300"
 
@@ -230,7 +230,7 @@ class TestGetKlineDataIndexDispatch:
         fetcher = self._setup_fetcher()
         # 5-minute: should raise WITHOUT calling gm.api.history (early guard)
         with pytest.raises(DataFetchError, match="frequency"):
-            fetcher.get_kline_data("399006", days=1, frequency="5")
+            fetcher.get_kline_data("399006", "2026-09-08", "2026-09-13", frequency="5")
 
     def test_index_branch_non_csi_raises(self, monkeypatch):
         """Non-CSI index (e.g. HSI) is unsupported by myquant — must raise."""
@@ -238,7 +238,7 @@ class TestGetKlineDataIndexDispatch:
 
         fetcher = self._setup_fetcher()
         with pytest.raises(DataFetchError, match="non-CSI"):
-            fetcher.get_kline_data("HSI", days=4, frequency="d")
+            fetcher.get_kline_data("HSI", "2026-09-08", "2026-09-13", frequency="d")
 
     def test_index_branch_us_index_raises(self, monkeypatch):
         """US index (SPX) goes through the reverse-lookup → 'us' branch in
@@ -250,7 +250,7 @@ class TestGetKlineDataIndexDispatch:
 
         fetcher = self._setup_fetcher()
         with pytest.raises(DataFetchError, match="non-CSI"):
-            fetcher.get_kline_data("SPX", days=4, frequency="d")
+            fetcher.get_kline_data("SPX", "2026-09-08", "2026-09-13", frequency="d")
 
     def test_index_branch_sdk_unavailable_raises(self, monkeypatch):
         """P2-3: SDK unavailable must raise ``DataFetchError``, not return None.
@@ -398,6 +398,6 @@ class TestGetKlineDataIndexDispatch:
         fetcher = self._setup_fetcher()
 
         # Must not raise "Use to_myquant_index_format ..." for a stock code.
-        df = fetcher.get_kline_data("600519", days=1, frequency="d")
+        df = fetcher.get_kline_data("600519", "2026-09-08", "2026-09-13", frequency="d")
         assert df is not None
         assert "date" in df.columns

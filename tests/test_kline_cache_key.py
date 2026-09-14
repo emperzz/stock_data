@@ -11,11 +11,13 @@ from stock_data.api.cache import (
 
 
 def test_kline_cache_key_contains_all_components():
-    """Key contains code, frequency, days, start_date, end_date, adjust, indicators."""
+    """Key contains code, frequency, start_date, end_date, adjust, indicators.
+
+    (``days`` was dropped from the key when /kline removed the parameter.)
+    """
     k = make_kline_cache_key(
         code="600519",
         frequency="5",
-        days=1,
         start_date="2026-06-20",
         end_date="2026-06-29",
         adjust="qfq",
@@ -34,7 +36,6 @@ def test_kline_cache_key_empty_indicators():
     k = make_kline_cache_key(
         code="600519",
         frequency="d",
-        days=30,
         start_date=None,
         end_date=None,
         adjust=None,
@@ -51,7 +52,6 @@ def test_kline_cache_key_prefix():
     k = make_kline_cache_key(
         code="000001",
         frequency="d",
-        days=30,
         start_date=None,
         end_date=None,
         adjust=None,
@@ -92,7 +92,6 @@ def test_kline_cache_key_indicator_order_independent():
     k1 = make_kline_cache_key(
         code="600519",
         frequency="d",
-        days=30,
         start_date=None,
         end_date=None,
         adjust=None,
@@ -101,7 +100,6 @@ def test_kline_cache_key_indicator_order_independent():
     k2 = make_kline_cache_key(
         code="600519",
         frequency="d",
-        days=30,
         start_date=None,
         end_date=None,
         adjust=None,

@@ -473,19 +473,16 @@ def get_quote(
 )
 @map_errors
 @cache_endpoint(
-    cache_fn=lambda code, period, days, start_date, end_date, adjust, indicators: get_kline_cache(
+    cache_fn=lambda code, period, start_date, end_date, adjust, indicators: get_kline_cache(
         _period_to_freq(period)
     ),
-    key_builder=lambda code, period, days, start_date, end_date, adjust, indicators: (
-        make_kline_cache_key(
-            code,
-            _period_to_freq(period),
-            days,
-            start_date,
-            end_date,
-            adjust or None,
-            _parse_indicators_param(indicators),
-        )
+    key_builder=lambda code, period, start_date, end_date, adjust, indicators: make_kline_cache_key(
+        code,
+        _period_to_freq(period),
+        start_date,
+        end_date,
+        adjust or None,
+        _parse_indicators_param(indicators),
     ),
     hit_label="kline",
 )
@@ -495,13 +492,19 @@ def get_kline(
         default="daily",
         pattern="^(daily|weekly|monthly|1m|5m|15m|30m|60m)$",
     ),
-    days: int = Query(default=30, ge=1, le=365),
-    start_date: str | None = Query(default=None),
-    end_date: str | None = Query(default=None),
+    start_date: str = Query(..., description="Start date (YYYY-MM-DD). Required."),
+    end_date: str | None = Query(
+        default=None, description="End date (YYYY-MM-DD); defaults to today."
+    ),
     adjust: str = Query(default="", pattern="^(qfq|hfq)?$"),
     indicators: str | None = Query(default=None),
 ) -> StockHistoryResponse:
     """Unified K-line endpoint: daily/weekly/monthly + minute (1m/5m/15m/30m/60m).
+
+    ``start_date`` is REQUIRED — caller must specify the window's lower bound.
+    ``end_date`` defaults to today at the route layer. The ``?days`` parameter
+    was removed in the days-removal refactor (Plan §3.1) because its semantics
+    varied by frequency (bar count for minute, calendar-day window for daily).
 
     ``supports_kline`` at manager level decides fetcher availability;
     no route-layer reject for minute+adjust.
@@ -511,23 +514,23 @@ def get_kline(
     freq = _period_to_freq(period)
 
     requested_indicators = _parse_indicators_param(indicators)
-    actual_days = _expand_indicator_lookback(requested_indicators, days)
+    effective_start = _expand_indicator_lookback(requested_indicators, start_date, freq)
+    effective_end = end_date or _date.today().isoformat()
 
     df, source = manager.get_kline_data(
         code,
-        start_date=start_date,
-        end_date=end_date,
-        days=actual_days,
+        start_date=effective_start,
+        end_date=effective_end,
         frequency=freq,
         adjust=adjust or None,
         asset="stock",
     )
     # Merge BEFORE computing indicators: today's realtime bar must be part
     # of the indicator window, not appended to an already-finished series.
-    df, merged = _maybe_merge_today_bar(
+    df, _merged = _maybe_merge_today_bar(
         df, code, end_date, freq, manager, asset="stock", adjust=adjust or None
     )
-    df = _finalize_kline(df, requested_indicators, days=days, merged=merged)
+    df = _finalize_kline(df, requested_indicators, start_date=start_date)
     name = stock_list.get_stock_name(code, manager=manager)
 
     records = df.to_dict("records")

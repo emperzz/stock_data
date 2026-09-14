@@ -196,6 +196,24 @@ def _resolve_and_validate_days(frequency: str, days: int | None) -> int:
     return resolved
 
 
+def _days_to_window(days: int) -> tuple[str, str]:
+    """Resolve ``days`` (calendar days) to ``(start_date, end_date)``.
+
+    Returns ISO-format YYYY-MM-DD strings. ``end_date`` defaults to today;
+    ``start_date`` is ``days`` calendar days before ``end_date``.
+
+    Frequency-independent by design: ``days`` is always calendar days at
+    the agent-API surface, regardless of the requested `period`. The bar
+    density (240 bars/day for 1m, 1 bar/day for daily, etc.) is decided
+    by the fetcher when given an explicit ``start_date``/``end_date``.
+    """
+    from datetime import date, timedelta
+
+    end = date.today()
+    start = end - timedelta(days=days)
+    return start.isoformat(), end.isoformat()
+
+
 def _classify_limit_band(change_pct: float | None) -> float | None:
     """Map raw change_pct to its canonical limit band percentage (10 or 20).
 
@@ -795,9 +813,7 @@ def _build_stocks_block(manager) -> tuple["StockStats | None", list["MarketStats
     try:
         quotes, _src = manager.get_realtime_quotes("csi")
         values = [
-            q.change_pct
-            for q in (quotes or [])
-            if getattr(q, "change_pct", None) is not None
+            q.change_pct for q in (quotes or []) if getattr(q, "change_pct", None) is not None
         ]
         agg = compute_aggregate(
             values,
@@ -984,9 +1000,11 @@ def get_indices_batch_profile(
             errors["quote"] = str(exc)
 
         try:
+            fetch_start, fetch_end = _days_to_window(fetch_days)
             df, _src = manager.get_kline_data(
                 code,
-                days=fetch_days,
+                start_date=fetch_start,
+                end_date=fetch_end,
                 frequency=profile.mgr_frequency,
                 adjust=None,
                 asset="index",
@@ -1662,6 +1680,7 @@ def post_boards_batch_profile(
 
         # --- computed features ---
         try:
+            fetch_start, fetch_end = _days_to_window(fetch_days)
             rows, _src = manager.get_board_history(
                 code,
                 source="ths",
@@ -1670,6 +1689,14 @@ def post_boards_batch_profile(
                 # which contains public strings ("5m" etc.); mgr_frequency is for the stock/index
                 # path (manager.get_kline_data) only. See spec §3.1 "Frequency translation note".
                 frequency=payload.frequency,
+                start_date=fetch_start,
+                end_date=fetch_end,
+                # days MUST stay alongside the explicit window: ThsFetcher's
+                # resolver takes ``min(start_date, end - days)`` as the lower
+                # bound, so an omitted/30-default ``days`` would silently widen
+                # narrow windows (e.g. 1m/5m) to 30 calendar days. Passing
+                # days=fetch_days pins the default to the same value as the
+                # explicit start_date → exact window, behavior-unchanged.
                 days=fetch_days,
             )
             # manager.get_board_history returns (list[dict], source) — NOT a DataFrame
@@ -1920,11 +1947,11 @@ async def get_market_stats(
             return block, errs, block is not None
         except Exception as exc:
             logger.warning(f"[agent/market-stats] stocks failed: {exc}", exc_info=True)
-            return None, [
-                MarketStatsErrorEntry(
-                    block="stocks", error=type(exc).__name__, message=str(exc)
-                )
-            ], False
+            return (
+                None,
+                [MarketStatsErrorEntry(block="stocks", error=type(exc).__name__, message=str(exc))],
+                False,
+            )
 
     async def _gather_boards():
         if not include_boards:
@@ -1934,19 +1961,17 @@ async def get_market_stats(
             return block, errs, block is not None
         except Exception as exc:
             logger.warning(f"[agent/market-stats] boards failed: {exc}", exc_info=True)
-            return None, [
-                MarketStatsErrorEntry(
-                    block="boards", error=type(exc).__name__, message=str(exc)
-                )
-            ], False
+            return (
+                None,
+                [MarketStatsErrorEntry(block="boards", error=type(exc).__name__, message=str(exc))],
+                False,
+            )
 
     async def _gather_pools():
         if not include_pools:
             return None, [], False
         try:
-            block, errs = await asyncio.to_thread(
-                _build_limit_pools_block, manager, target_date
-            )
+            block, errs = await asyncio.to_thread(_build_limit_pools_block, manager, target_date)
             # Per-pool failures don't decrement ok — the block DID run
             # (with partial data). Empty upstream results also count as
             # success (caller distinguishes via inner [] vs null). Mirrors
@@ -1960,16 +1985,24 @@ async def get_market_stats(
             # ValidationError. block='zt_pool' is the closest match in
             # MarketStatsErrorEntry's Literal for "the pools block failed".
             logger.warning(f"[agent/market-stats] pools failed: {exc}", exc_info=True)
-            return None, [
-                MarketStatsErrorEntry(
-                    block="zt_pool", error=type(exc).__name__, message=str(exc)
-                )
-            ], False
+            return (
+                None,
+                [
+                    MarketStatsErrorEntry(
+                        block="zt_pool", error=type(exc).__name__, message=str(exc)
+                    )
+                ],
+                False,
+            )
 
-    (stocks_block, stocks_errs, stocks_ok), (boards_block, boards_errs, boards_ok), (
-        pools_block,
-        pools_errs,
-        pools_ok,
+    (
+        (stocks_block, stocks_errs, stocks_ok),
+        (boards_block, boards_errs, boards_ok),
+        (
+            pools_block,
+            pools_errs,
+            pools_ok,
+        ),
     ) = await asyncio.gather(_gather_stocks(), _gather_boards(), _gather_pools())
 
     ok = int(stocks_ok) + int(boards_ok) + int(pools_ok)

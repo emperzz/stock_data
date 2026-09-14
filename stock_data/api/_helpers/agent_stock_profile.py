@@ -142,12 +142,22 @@ def build_stock_profile(
     # 2. features (opt-in — skipped for lead-stocks per 2026-09-06 amendment)
     if include_features:
         freq_profile = _FEATURE_FREQS[frequency]
-        fetch_days = max(days or freq_profile.default_days, freq_profile.ma60_warmup_days or 0)
+        fetch_window_days = max(
+            days or freq_profile.default_days, freq_profile.ma60_warmup_days or 0
+        )
         features_days = days if days is not None else freq_profile.default_days
         try:
+            # Inline conversion (4 lines) instead of importing _days_to_window
+            # from agent.py — agent.py imports this module, so a back-import
+            # would be circular. Same calendar-day semantics.
+            from datetime import date, timedelta
+
+            _end = date.today()
+            _start = _end - timedelta(days=fetch_window_days)
             df, _src = manager.get_kline_data(
                 code,
-                days=fetch_days,
+                start_date=_start.isoformat(),
+                end_date=_end.isoformat(),
                 frequency=freq_profile.mgr_frequency,
                 adjust="qfq" if freq_profile.mgr_frequency in ("d", "w", "m") else None,
                 asset="stock",

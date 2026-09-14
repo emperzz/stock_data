@@ -53,7 +53,7 @@ def test_kline_serves_utf8_charset(tmp_db):
     from stock_data.server import app
 
     client = TestClient(app)
-    r = client.get("/api/v1/stocks/600519/kline?days=5&frequency=d")
+    r = client.get("/api/v1/stocks/600519/kline?period=daily&start_date=2026-09-08")
     assert r.status_code == 200, r.text
     ct = r.headers.get("content-type", "")
     assert "charset=utf-8" in ct.lower(), f"missing charset=utf-8 in Content-Type: {ct!r}"

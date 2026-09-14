@@ -4,18 +4,48 @@ These tests bypass the network by monkey-patching the DataFetcherManager's
 `get_kline_data` method to return a synthetic K-line. The real fetcher
 system is irrelevant for these tests — we only care that the API layer
 plumbs `?indicators=` through to the indicator orchestrator correctly.
+
+Post days-removal (Plan §3.1): the route passes explicit ``start_date`` /
+``end_date`` down to the manager; the stub generates business-day bars over
+that window (ending YESTERDAY, mirroring real fetchers that have not
+backfilled today), and the response row count is the number of trading bars
+inside the user's window — no more "days = bar count" aliasing.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
 
+TODAY = date.today()
+YESTERDAY = TODAY - timedelta(days=1)
 
-def _synthetic_kline(n: int) -> pd.DataFrame:
+
+def _window(days: int) -> tuple[str, str]:
+    """(start_date, end_date=today) spanning ``days`` calendar days back —
+    the old ``?days=N`` equivalent."""
+    return (TODAY - timedelta(days=days)).isoformat(), TODAY.isoformat()
+
+
+def _bars_in_user_window(days: int) -> int:
+    """Expected response length for a ``days``-calendar-day window: trading
+    bars in [TODAY-days, YESTERDAY] (stub never returns today's bar)."""
+    return len(pd.bdate_range(start=TODAY - timedelta(days=days), end=YESTERDAY))
+
+
+def _synthetic_kline_between(start: str, end: str) -> pd.DataFrame:
+    """Business-day bars covering [start, end], capped at YESTERDAY.
+
+    The YESTERDAY cap emulates every real fetcher in the fleet (see
+    docs/kline-today-bar-merge-spec-2026-07-24.md §1.1): today's settled
+    bar is not yet available, so the route's merge logic can splice it.
+    """
+    end_dt = min(pd.Timestamp(end), pd.Timestamp(YESTERDAY.isoformat()))
+    dates = pd.bdate_range(start=start, end=end_dt)
+    n = len(dates)
     return pd.DataFrame(
         {
-            "date": pd.date_range("2024-01-01", periods=n, freq="B"),
+            "date": dates,
             "open": [100.0 + i * 0.1 for i in range(n)],
             "high": [101.0 + i * 0.1 for i in range(n)],
             "low": [99.0 + i * 0.1 for i in range(n)],
@@ -31,13 +61,10 @@ def _synthetic_kline(n: int) -> pd.DataFrame:
 @pytest.fixture
 def client(monkeypatch):
     """Build a FastAPI TestClient with all network calls stubbed out."""
-    # Stub the network-touching bits before importing the app.
-    fake_kline = _synthetic_kline(60)
 
-    def fake_get_kline_data(self, stock_code, **kwargs):
-        # Truncate to whatever the caller asked for, simulating a real fetcher.
-        requested = int(kwargs.get("days") or 30)
-        return fake_kline.tail(requested).reset_index(drop=True), "StubFetcher"
+    # Stub the network-touching bits before importing the app.
+    def fake_get_kline_data(self, stock_code, start_date, end_date, **kwargs):
+        return _synthetic_kline_between(start_date, end_date), "StubFetcher"
 
     # Import the FastAPI app
     from stock_data.server import app
@@ -51,7 +78,7 @@ def client(monkeypatch):
     # best-effort merge today's realtime bar when the trade calendar is
     # warm, which (a) would make the row count depend on the wall clock and
     # the session DB contents, and (b) would hit the real network here.
-    # Returning None is the documented "no today bar" path.
+    # is_trade_date=False is the documented "no today bar" path.
     monkeypatch.setattr(
         "stock_data.data_provider.DataFetcherManager.get_realtime_quote",
         lambda self, stock_code: None,
@@ -111,11 +138,13 @@ def test_catalog_endpoint_lists_all_indicators(client):
 
 
 def test_history_default_no_indicators(client):
-    r = client.get("/api/v1/stocks/600519/kline?days=30")
+    start, end = _window(30)
+    r = client.get(f"/api/v1/stocks/600519/kline?start_date={start}&end_date={end}")
     assert r.status_code == 200
     body = r.json()
     assert body["code"] == "600519"
-    assert len(body["data"]) == 30
+    # calendar window → trading bars inside it (no padding, no tail-N)
+    assert len(body["data"]) == _bars_in_user_window(30)
     # No indicators requested -> indicators field is OMITTED from
     # the response entirely (model_serializer drops it when None/empty).
     for row in body["data"]:
@@ -127,10 +156,11 @@ def test_history_default_no_indicators(client):
 
 
 def test_history_with_ma_indicator(client):
-    r = client.get("/api/v1/stocks/600519/kline?days=30&indicators=ma")
+    start, end = _window(30)
+    r = client.get(f"/api/v1/stocks/600519/kline?start_date={start}&end_date={end}&indicators=ma")
     assert r.status_code == 200
     body = r.json()
-    assert len(body["data"]) == 30
+    assert len(body["data"]) == _bars_in_user_window(30)
     # The last row should have all the MA columns in the indicators dict
     last_inds = body["data"][-1]["indicators"]
     assert "ma5" in last_inds
@@ -139,7 +169,10 @@ def test_history_with_ma_indicator(client):
 
 
 def test_history_with_multiple_indicators(client):
-    r = client.get("/api/v1/stocks/600519/kline?days=30&indicators=ma,macd,boll")
+    start, end = _window(30)
+    r = client.get(
+        f"/api/v1/stocks/600519/kline?start_date={start}&end_date={end}&indicators=ma,macd,boll"
+    )
     assert r.status_code == 200
     body = r.json()
     last_inds = body["data"][-1]["indicators"]
@@ -149,7 +182,10 @@ def test_history_with_multiple_indicators(client):
 
 
 def test_history_unknown_indicator_rejected(client):
-    r = client.get("/api/v1/stocks/600519/kline?days=30&indicators=macd,nope")
+    start, end = _window(30)
+    r = client.get(
+        f"/api/v1/stocks/600519/kline?start_date={start}&end_date={end}&indicators=macd,nope"
+    )
     assert r.status_code == 400
     body = r.json()
     assert body["detail"]["error"] == "invalid_indicator"
@@ -157,29 +193,34 @@ def test_history_unknown_indicator_rejected(client):
 
 
 def test_history_indicators_trigger_lookback_expansion(client):
-    """When indicators need more lookback than `days`, the underlying
-    fetch should request the larger amount."""
+    """When indicators need more lookback than the user window, the FETCH
+    start_date moves earlier; the response still covers only the user window."""
     captured_kwargs: list[dict] = []
 
-    def spy_get_kline_data(self, stock_code, **kwargs):
-        captured_kwargs.append(kwargs)
-        fake_kline = _synthetic_kline(200)
-        requested = int(kwargs.get("days") or 30)
-        return fake_kline.tail(requested).reset_index(drop=True), "StubFetcher"
+    def spy_get_kline_data(self, stock_code, start_date, end_date, **kwargs):
+        captured_kwargs.append({"start_date": start_date, "end_date": end_date, **kwargs})
+        return _synthetic_kline_between(start_date, end_date), "StubFetcher"
 
     import stock_data.data_provider as dp
 
     original = dp.DataFetcherManager.get_kline_data
     dp.DataFetcherManager.get_kline_data = spy_get_kline_data
     try:
-        # Asking for days=30 but with macd (lookback=87)
-        r = client.get("/api/v1/stocks/600519/kline?days=30&indicators=macd")
+        start, end = _window(30)
+        # macd lookback = 87 bars on daily → 87 calendar days of warm-up
+        r = client.get(
+            f"/api/v1/stocks/600519/kline?start_date={start}&end_date={end}&indicators=macd"
+        )
         assert r.status_code == 200
-        # The last captured request should have requested at least 87 days
-        assert any(int(kw.get("days", 0)) >= 87 for kw in captured_kwargs)
-        # But the response should only contain 30 bars
+        # The route-level fetch used a start_date earlier than the user's
+        assert captured_kwargs, "stub never saw a manager call"
+        fetched = captured_kwargs[-1]
+        assert fetched["start_date"] < start
+        # response is still cut to the user's window
         body = r.json()
-        assert len(body["data"]) == 30
+        assert len(body["data"]) == _bars_in_user_window(30)
+        # and every visible bar is inside the user window
+        assert all(row["date"] >= start for row in body["data"])
     finally:
         dp.DataFetcherManager.get_kline_data = original
 
@@ -188,11 +229,12 @@ def test_index_history_supports_indicators(client):
     """The /indices/{code}/kline endpoint accepts the same `?indicators=`
     query param as /stocks/{code}/kline. With it, the indicators dict
     appears; without it, it's omitted."""
+    start, end = _window(30)
     # With indicators
-    r = client.get("/api/v1/indices/000300/kline?days=30&indicators=ma")
+    r = client.get(f"/api/v1/indices/000300/kline?start_date={start}&end_date={end}&indicators=ma")
     assert r.status_code == 200
     body = r.json()
-    assert len(body["data"]) == 30
+    assert len(body["data"]) == _bars_in_user_window(30)
     last = body["data"][-1]
     # ma indicator should be computed and surfaced in indicators dict
     assert "indicators" in last
@@ -200,7 +242,7 @@ def test_index_history_supports_indicators(client):
     assert "ma30" in last["indicators"]
 
     # Without indicators — indicators field must be omitted
-    r2 = client.get("/api/v1/indices/000300/kline?days=30")
+    r2 = client.get(f"/api/v1/indices/000300/kline?start_date={start}&end_date={end}")
     assert r2.status_code == 200
     last2 = r2.json()["data"][-1]
     assert "indicators" not in last2
@@ -210,7 +252,10 @@ def test_index_history_supports_indicators(client):
 
 
 def test_index_history_unknown_indicator_rejected(client):
-    r = client.get("/api/v1/indices/000300/kline?days=30&indicators=macd,nope")
+    start, end = _window(30)
+    r = client.get(
+        f"/api/v1/indices/000300/kline?start_date={start}&end_date={end}&indicators=macd,nope"
+    )
     assert r.status_code == 400
     body = r.json()
     assert body["detail"]["error"] == "invalid_indicator"
@@ -236,11 +281,8 @@ def merging_client(monkeypatch):
     """Like `client`, but with today-bar merging ACTIVE (warm calendar)."""
     from stock_data.data_provider.core.types import UnifiedRealtimeQuote
 
-    fake_kline = _synthetic_kline(300)
-
-    def fake_get_kline_data(self, stock_code, **kwargs):
-        requested = int(kwargs.get("days") or 30)
-        return fake_kline.tail(requested).reset_index(drop=True), "StubFetcher"
+    def fake_get_kline_data(self, stock_code, start_date, end_date, **kwargs):
+        return _synthetic_kline_between(start_date, end_date), "StubFetcher"
 
     from stock_data.server import app
 
@@ -282,24 +324,32 @@ def merging_client(monkeypatch):
 
 def test_kline_with_indicators_and_today_merge_returns_200(merging_client):
     """The exact original failure: indicators + today bar must not 400."""
-    r = merging_client.get("/api/v1/stocks/600519/kline?period=daily&days=285&indicators=ma")
+    start, end = _window(285)
+    r = merging_client.get(
+        f"/api/v1/stocks/600519/kline?period=daily&start_date={start}&end_date={end}&indicators=ma"
+    )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert len(body["data"]) == 286  # 285 closed + today's partial bar
+    # window bars + today's partial bar (the merge adds exactly one row)
+    assert len(body["data"]) == _bars_in_user_window(285) + 1
+    assert body["data"][-1]["date"] == TODAY.isoformat()
 
 
 def test_today_bar_indicators_include_realtime_price(merging_client):
     """Today's realtime close participates: ma5 reflects the 200.0 quote."""
-    r = merging_client.get("/api/v1/stocks/600519/kline?days=10&indicators=ma")
+    start, end = _window(10)
+    r = merging_client.get(
+        f"/api/v1/stocks/600519/kline?start_date={start}&end_date={end}&indicators=ma"
+    )
     assert r.status_code == 200, r.text
     data = r.json()["data"]
-    assert len(data) == 11
+    assert len(data) == _bars_in_user_window(10) + 1
 
     # Every row carries an indicators dict — no NaN, no missing key.
     assert all(isinstance(row.get("indicators"), dict) for row in data)
 
     today = data[-1]
-    assert today["date"] == date.today().isoformat()
+    assert today["date"] == TODAY.isoformat()
     assert today["close"] == 200.0
 
     # ma5 must be the mean of the last 5 closes INCLUDING today's realtime
@@ -314,8 +364,11 @@ def test_today_bar_indicators_include_realtime_price(merging_client):
 
 def test_index_kline_with_indicators_and_today_merge_returns_200(merging_client):
     """Index route shares the helpers — same regression coverage."""
-    r = merging_client.get("/api/v1/indices/000300/kline?days=10&indicators=ma")
+    start, end = _window(10)
+    r = merging_client.get(
+        f"/api/v1/indices/000300/kline?start_date={start}&end_date={end}&indicators=ma"
+    )
     assert r.status_code == 200, r.text
     data = r.json()["data"]
-    assert len(data) == 11
+    assert len(data) == _bars_in_user_window(10) + 1
     assert all(isinstance(row.get("indicators"), dict) for row in data)

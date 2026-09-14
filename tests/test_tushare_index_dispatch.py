@@ -137,7 +137,6 @@ class TestTushareIndexCapabilities:
             "stock_code",
             "start_date",
             "end_date",
-            "days",
             "frequency",
             "adjust",
             "asset",
@@ -163,7 +162,7 @@ class TestGetKlineDataIndexDispatch:
         """
         with _TushareInitState() as fetcher:
             fetcher._api.query.return_value = _fake_index_daily_payload()
-            df = fetcher.get_kline_data("000001", days=4, frequency="d")
+            df = fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="d")
 
             # Inspect INSIDE the with block (before __exit__ restores _api)
             args, kwargs = fetcher._api.query.call_args
@@ -185,7 +184,7 @@ class TestGetKlineDataIndexDispatch:
         """Shenzhen index 399006 must produce ``399006.SZ`` and use ``index_daily``."""
         with _TushareInitState() as fetcher:
             fetcher._api.query.return_value = _fake_index_daily_payload()
-            fetcher.get_kline_data("399006", days=4, frequency="d")
+            fetcher.get_kline_data("399006", "2026-09-08", "2026-09-13", frequency="d")
 
             args, kwargs = fetcher._api.query.call_args
             api_name = args[0]
@@ -196,7 +195,7 @@ class TestGetKlineDataIndexDispatch:
         """``frequency='w'`` must dispatch to ``index_weekly``."""
         with _TushareInitState() as fetcher:
             fetcher._api.query.return_value = _fake_index_daily_payload()
-            fetcher.get_kline_data("000300", days=10, frequency="w")
+            fetcher.get_kline_data("000300", "2026-09-08", "2026-09-13", frequency="w")
 
             args, kwargs = fetcher._api.query.call_args
             api_name = args[0]
@@ -207,7 +206,7 @@ class TestGetKlineDataIndexDispatch:
         """``frequency='m'`` must dispatch to ``index_monthly``."""
         with _TushareInitState() as fetcher:
             fetcher._api.query.return_value = _fake_index_daily_payload()
-            fetcher.get_kline_data("000300", days=30, frequency="m")
+            fetcher.get_kline_data("000300", "2026-09-08", "2026-09-13", frequency="m")
 
             args, kwargs = fetcher._api.query.call_args
             api_name = args[0]
@@ -224,7 +223,7 @@ class TestGetKlineDataIndexDispatch:
         """
         with _TushareInitState() as fetcher:
             with pytest.raises(DataFetchError):
-                fetcher.get_kline_data("HSI", days=4, frequency="d")
+                fetcher.get_kline_data("HSI", "2026-09-08", "2026-09-13", frequency="d")
             # Tushare's API must NOT be called for unsupported index codes
             fetcher._api.query.assert_not_called()
 
@@ -238,7 +237,7 @@ class TestGetKlineDataIndexDispatch:
         with _TushareInitState() as fetcher:
             fetcher._api.query.return_value = pd.DataFrame()  # empty
             with pytest.raises(DataFetchError, match="no data"):
-                fetcher.get_kline_data("000001", days=4, frequency="d")
+                fetcher.get_kline_data("000001", "2026-09-08", "2026-09-13", frequency="d")
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -260,7 +259,7 @@ class TestGetKlineDataStockUnchanged:
         """The stock branch must continue to use the ``daily`` API."""
         with _TushareInitState() as fetcher:
             fetcher._api.query.return_value = _fake_stock_daily_payload()
-            df = fetcher.get_kline_data("600519", days=2, frequency="d")
+            df = fetcher.get_kline_data("600519", "2026-09-08", "2026-09-13", frequency="d")
 
             args, kwargs = fetcher._api.query.call_args
             api_name = args[0]
@@ -280,7 +279,7 @@ class TestGetKlineDataStockUnchanged:
         """
         with _TushareInitState() as fetcher:
             fetcher._api.query.return_value = _fake_stock_daily_payload()
-            fetcher.get_kline_data("000002", days=2, frequency="d")
+            fetcher.get_kline_data("000002", "2026-09-08", "2026-09-13", frequency="d")
 
             args, kwargs = fetcher._api.query.call_args
             api_name = args[0]
@@ -310,7 +309,9 @@ class TestGetKlineDataStockUnchanged:
         monkeypatch.setattr(tushare, "pro_bar", fake_pro_bar)
 
         with _TushareInitState() as fetcher:
-            fetcher.get_kline_data("600519", days=2, frequency="d", adjust="qfq")
+            fetcher.get_kline_data(
+                "600519", "2026-09-08", "2026-09-13", frequency="d", adjust="qfq"
+            )
             # Stock-adjust branch must NOT call api.query at all
             fetcher._api.query.assert_not_called()
 

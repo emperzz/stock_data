@@ -124,7 +124,7 @@ class TestDataFetcherManagerUnit:
         assert f.name == "MockFetcher"
 
     def test_get_kline_data(self, manager):
-        df, source = manager.get_kline_data("600519", days=5)
+        df, source = manager.get_kline_data("600519", "2026-09-01", "2026-09-13")
         assert source == "MockFetcher"
         assert len(df) > 0
         assert "close" in df.columns
@@ -202,7 +202,7 @@ class TestDataFetcherManagerUnit:
         """
         mgr = DataFetcherManager([MockFetcherNoIndex()])
         with pytest.raises(DataFetchError):
-            mgr.get_kline_data("000300", days=5, frequency="d")
+            mgr.get_kline_data("000300", "2026-09-08", "2026-09-13", frequency="d")
 
     def test_get_kline_data_index_no_fallback_minute(self):
         """Index code + minute freq + no INDEX_KLINE fetcher: must raise.
@@ -215,7 +215,7 @@ class TestDataFetcherManagerUnit:
         """
         mgr = DataFetcherManager([MockFetcherNoIndex()])
         with pytest.raises(DataFetchError):
-            mgr.get_kline_data("000300", days=5, frequency="5")
+            mgr.get_kline_data("000300", "2026-09-08", "2026-09-13", frequency="5")
 
 
 class TestKlineDataProcessing:

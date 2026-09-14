@@ -389,11 +389,11 @@ class BaostockFetcher(SDKFetcherMixin, BaseFetcher):
 
         if not start_date:
             start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        if not end_date:
+            end_date = datetime.now().strftime("%Y-%m-%d")
 
         try:
-            return self.get_kline_data(
-                index_code, start_date, end_date, days=365, frequency=frequency
-            )
+            return self.get_kline_data(index_code, start_date, end_date, frequency=frequency)
         except DataFetchError:
             return None
 

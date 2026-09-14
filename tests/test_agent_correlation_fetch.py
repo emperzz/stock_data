@@ -1,4 +1,9 @@
-"""Tests for stock/board fetch wrappers."""
+"""Tests for stock/board fetch wrappers.
+
+Post days-removal (Plan §3.1): the fetchers take explicit ``start_date`` /
+``end_date`` — the route converts its calendar-day ``days`` into a date
+window before calling them.
+"""
 
 from unittest.mock import MagicMock
 
@@ -6,6 +11,9 @@ import pandas as pd
 import pytest
 
 from stock_data.api.routes import agent_correlation as ac
+
+START = "2026-01-01"
+END = "2026-01-08"
 
 
 @pytest.fixture
@@ -29,14 +37,15 @@ def test_fetch_stock_series_returns_close_series(monkeypatch, mock_manager):
     )
     mock_manager.get_kline_data.return_value = (df, "tushare")
     _patch_manager(monkeypatch, mock_manager)
-    s, name, reason = ac._fetch_stock_series("SH600519", days=5, frequency="d")
+    s, name, reason = ac._fetch_stock_series("SH600519", START, END, frequency="d")
     assert reason is None
     assert s is not None and len(s) == 5
     assert abs(s.iloc[0] - 100.0) < 1e-9
     # normalize_stock_code canonicalized to bare 6-digit
     called = mock_manager.get_kline_data.call_args.kwargs
     assert called["stock_code"] == "600519"
-    assert called["days"] == 5
+    assert called["start_date"] == START
+    assert called["end_date"] == END
     assert called["frequency"] == "d"
     # asset="stock" must be passed to disambiguate from index codes
     assert called["asset"] == "stock"
@@ -54,7 +63,7 @@ def test_fetch_stock_series_reads_canonical_date_column(monkeypatch, mock_manage
     )
     mock_manager.get_kline_data.return_value = (df, "baostock")
     _patch_manager(monkeypatch, mock_manager)
-    s, name, reason = ac._fetch_stock_series("600519", days=3, frequency="d")
+    s, name, reason = ac._fetch_stock_series("600519", START, END, frequency="d")
     assert reason is None
     assert s is not None and len(s) == 3
     assert s.index[0] == pd.Timestamp("2026-01-02")  # real dates, not 1970
@@ -66,7 +75,7 @@ def test_fetch_stock_series_returns_none_on_data_fetch_error(monkeypatch, mock_m
 
     mock_manager.get_kline_data.side_effect = DataFetchError("upstream down")
     _patch_manager(monkeypatch, mock_manager)
-    s, name, reason = ac._fetch_stock_series("600519", days=5, frequency="d")
+    s, name, reason = ac._fetch_stock_series("600519", START, END, frequency="d")
     assert s is None and name is None
     assert reason == "data_unavailable"
 
@@ -74,7 +83,7 @@ def test_fetch_stock_series_returns_none_on_data_fetch_error(monkeypatch, mock_m
 def test_fetch_stock_series_returns_none_on_empty_df(monkeypatch, mock_manager):
     mock_manager.get_kline_data.return_value = (pd.DataFrame(), "tushare")
     _patch_manager(monkeypatch, mock_manager)
-    s, name, reason = ac._fetch_stock_series("600519", days=5, frequency="d")
+    s, name, reason = ac._fetch_stock_series("600519", START, END, frequency="d")
     assert s is None and name is None
     assert reason == "empty"
 
@@ -89,7 +98,7 @@ def test_fetch_stock_series_returns_none_on_too_short(monkeypatch, mock_manager)
     )
     mock_manager.get_kline_data.return_value = (df, "tushare")
     _patch_manager(monkeypatch, mock_manager)
-    s, name, reason = ac._fetch_stock_series("600519", days=5, frequency="d")
+    s, name, reason = ac._fetch_stock_series("600519", START, END, frequency="d")
     assert s is None and name is None
     assert reason == "too_short"
 
@@ -102,13 +111,14 @@ def test_fetch_board_series_returns_close_series(monkeypatch, mock_manager):
     ]
     mock_manager.get_board_history.return_value = (rows, "ths")
     _patch_manager(monkeypatch, mock_manager)
-    s, name, reason = ac._fetch_board_series("885595", "ths", days=3, frequency="d")
+    s, name, reason = ac._fetch_board_series("885595", "ths", START, END, frequency="d")
     assert reason is None
     assert s is not None and len(s) == 3
     called = mock_manager.get_board_history.call_args.kwargs
     assert called["board_code"] == "885595"
     assert called["source"] == "ths"
-    assert called["days"] == 3
+    assert called["start_date"] == START
+    assert called["end_date"] == END
     assert called["frequency"] == "d"
 
 
@@ -118,7 +128,7 @@ def test_fetch_board_series_returns_empty_when_no_date_column(monkeypatch, mock_
     rows = [{"close": 1000.0}, {"close": 1010.0}]
     mock_manager.get_board_history.return_value = (rows, "ths")
     _patch_manager(monkeypatch, mock_manager)
-    s, name, reason = ac._fetch_board_series("885595", "ths", days=3, frequency="d")
+    s, name, reason = ac._fetch_board_series("885595", "ths", START, END, frequency="d")
     assert s is None and name is None
     assert reason == "empty"
 
@@ -128,6 +138,6 @@ def test_fetch_board_series_returns_none_on_data_fetch_error(monkeypatch, mock_m
 
     mock_manager.get_board_history.side_effect = DataFetchError("ths timeout")
     _patch_manager(monkeypatch, mock_manager)
-    s, name, reason = ac._fetch_board_series("885595", "ths", days=3, frequency="d")
+    s, name, reason = ac._fetch_board_series("885595", "ths", START, END, frequency="d")
     assert s is None and name is None
     assert reason == "data_unavailable"
