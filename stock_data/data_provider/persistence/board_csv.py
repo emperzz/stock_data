@@ -3,6 +3,7 @@
 Public API:
 - seed_stock_board_from_csv(source, csv_path) -> int
 - seed_membership_from_csv(csv_path) -> int
+- seed_ths_membership_from_csv(csv_path) -> int
 - seed_all_from_backup_dir(backup_dir) -> dict[str, int]
 
 Loaders are pure functions (modulo the singleton get_connection()) — safe
@@ -41,6 +42,7 @@ _NON_FATAL_SEED_EXCEPTIONS: tuple[type[BaseException], ...] = (
 logger = logging.getLogger(__name__)
 
 _STOCK_BOARD_COLS = {"code", "name", "board_type", "subtype", "source", "cid"}
+# 8-col contract for the existing zzshare membership CSV (carries `subtype`).
 _MEMBERSHIP_COLS = {
     "board_code",
     "stock_code",
@@ -49,6 +51,19 @@ _MEMBERSHIP_COLS = {
     "stock_name",
     "board_type",
     "subtype",
+}
+# 7-col contract for the THS membership CSV (no `subtype` — for THS that
+# value is always `同花顺概念` or `同花顺行业` and is recoverable from
+# `board_type`, so the CSV skips it). `refreshed_at` is informational; the
+# loader writes `now()` to SQL regardless of the CSV value (mirroring
+# `seed_membership_from_csv:224`).
+_THS_MEMBERSHIP_COLS = {
+    "board_code",
+    "stock_code",
+    "source",
+    "board_name",
+    "stock_name",
+    "board_type",
 }
 # Sources supported by seed_stock_board_from_csv. All supported sources
 # share the same 7-col schema; post-2026-07-20 the legacy 3-col eastmoney
@@ -271,6 +286,142 @@ def seed_membership_from_csv(csv_path: Path) -> int:
     return len(rows)
 
 
+def seed_ths_membership_from_csv(csv_path: Path) -> int:
+    """Insert/REPLACE rows from a THS-specific stock_board_membership CSV.
+
+    Differs from :func:`seed_membership_from_csv` in two ways:
+
+    1. **7-col contract** (no ``subtype`` column): for THS the subtype is
+       always ``同花顺概念`` / ``同花顺行业`` and is recoverable from
+       ``board_type``, so the CSV omits it to keep the per-row payload tight.
+       ``refreshed_at`` (col 7) is informational metadata; the SQL
+       INSERT always writes ``now()`` (same convention as
+       :func:`seed_membership_from_csv`).
+    2. **Per-row source guard**: every row MUST have ``source == 'ths'`` —
+       mixed-source rows are silently dropped (aggregated into one summary
+       WARNING at EOF) to prevent cross-source contamination of the
+       ``(board_code, source, stock_code)`` unique key.
+
+    NOT NULL column defense: ``board_code`` / ``board_name`` / ``stock_name``
+    / ``board_type`` are NOT NULL in the SQLite schema; an empty-string or
+    missing value in any of these would surface as a mid-batch
+    ``sqlite3.IntegrityError`` and roll back the entire transaction.
+    Skipped per-row with a single aggregated warning instead.
+
+    Args:
+        csv_path: Path to the THS membership CSV.
+
+    Returns:
+        Number of rows inserted/updated.
+
+    Raises:
+        FileNotFoundError: csv_path doesn't exist.
+        ValueError: required columns missing in CSV header.
+    """
+    if not csv_path.exists():
+        raise FileNotFoundError(csv_path)
+    board_mod.init_schema()
+    _validate_csv_columns(csv_path, _THS_MEMBERSHIP_COLS)
+
+    conn = get_connection()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rows: list[tuple] = []
+    skipped_invalid_code_samples: list[str] = []
+    skipped_invalid_code_count = 0
+    skipped_wrong_source_samples: list[str] = []
+    skipped_wrong_source_count = 0
+    skipped_null_field_samples: list[str] = []
+    skipped_null_field_count = 0
+    # NOT NULL columns (per board.py:351-364 DDL). Empty string == NULL
+    # for our purposes; csv.DictReader returns None for missing fields.
+    _NOT_NULL_FIELDS = ("board_code", "board_name", "stock_name", "board_type")
+
+    for r in _open_csv(csv_path):
+        # Source guard — wrong-source rows would silently mix into
+        # stock_board_membership under the wrong UNIQUE key.
+        if r["source"] != "ths":
+            if len(skipped_wrong_source_samples) < _MAX_SAMPLE_RETAINED:
+                skipped_wrong_source_samples.append(
+                    f"code={r.get('board_code')!r} source={r['source']!r}"
+                )
+            skipped_wrong_source_count += 1
+            continue
+        # NOT NULL defense — IntegrityError on a single NULL row would
+        # abort the whole batch.
+        null_fields = [f for f in _NOT_NULL_FIELDS if not r.get(f)]
+        if null_fields:
+            if len(skipped_null_field_samples) < _MAX_SAMPLE_RETAINED:
+                skipped_null_field_samples.append(
+                    f"code={r.get('board_code')!r} stock_code={r.get('stock_code')!r} "
+                    f"missing={null_fields}"
+                )
+            skipped_null_field_count += 1
+            continue
+        # stock_code 6-digit ASCII validation (mirrors seed_membership_from_csv:230).
+        code = r["stock_code"]
+        if not (isinstance(code, str) and _VALID_STOCK_CODE.match(code)):
+            if len(skipped_invalid_code_samples) < _MAX_SAMPLE_RETAINED:
+                skipped_invalid_code_samples.append(repr(code))
+            skipped_invalid_code_count += 1
+            continue
+        # Schema write: subtype is intentionally omitted (CSV doesn't carry it).
+        # SQLite `subtype` column is nullable; runtime reads recover it from
+        # stock_board LEFT JOIN in board.py:_read_membership_entries.
+        rows.append(
+            (
+                r["board_code"],
+                code,
+                r["source"],
+                r["board_name"],
+                r["stock_name"],
+                r["board_type"],
+                None,  # subtype — always NULL for THS-seeded rows
+                now,
+            )
+        )
+    if skipped_wrong_source_count:
+        logger.warning(
+            "[CSVSeed] %s: %d rows had wrong source (expected 'ths'); first samples: %s",
+            csv_path.name,
+            skipped_wrong_source_count,
+            skipped_wrong_source_samples,
+        )
+    if skipped_invalid_code_count:
+        logger.warning(
+            "[CSVSeed] %s: %d rows had invalid stock_code (non-6-digit); first samples: %s",
+            csv_path.name,
+            skipped_invalid_code_count,
+            skipped_invalid_code_samples,
+        )
+    if skipped_null_field_count:
+        logger.warning(
+            "[CSVSeed] %s: %d rows had empty NOT NULL field(s); first samples: %s",
+            csv_path.name,
+            skipped_null_field_count,
+            skipped_null_field_samples,
+        )
+    if not rows:
+        logger.warning("[CSVSeed] %s: 0 rows after validation", csv_path.name)
+        return 0
+    with conn:
+        conn.executemany(
+            """INSERT OR REPLACE INTO stock_board_membership
+               (board_code, stock_code, source, board_name, stock_name,
+                board_type, subtype, refreshed_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            rows,
+        )
+    logger.info(
+        "[CSVSeed] %s: wrote %d membership rows (skipped=%d wrong_source, %d invalid_code, %d null_field)",
+        csv_path.name,
+        len(rows),
+        skipped_wrong_source_count,
+        skipped_invalid_code_count,
+        skipped_null_field_count,
+    )
+    return len(rows)
+
+
 def seed_ths_board_id_map_from_csv(csv_path: Path) -> int:
     """Seed ``ths_board_id_map`` from a ``cid,platecode,name,board_type`` CSV.
 
@@ -323,7 +474,8 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
     Returns:
         A subset of
         {'ths_board_id_map', 'stock_board_ths', 'stock_board_eastmoney',
-         'stock_board_zzshare', 'stock_board_membership_zzshare'}.
+         'stock_board_zzshare', 'stock_board_membership_zzshare',
+         'stock_board_membership_ths'}.
         Missing entries are absent.
 
     Side effect: when files exist but ALL fail (schema/IO error), emits
@@ -360,11 +512,17 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
         # 题材) — so the prefix of a row says nothing about which fetcher
         # produced it. Verified 2026-09-11 against live zzshare: its
         # membership for 885333 / 885431 / 881121 matches the CSV at Jaccard
-        # 0.97-0.99. There is therefore no THS membership seed to keep;
-        # ths-side membership accumulates from the F10 sweep
-        # (BOARD_BACKFILL_ON_STARTUP) and runtime lazy fill.
+        # 0.97-0.99.
         ("stock_board_membership_zzshare", "stock_board_membership_zzshare.csv",
          seed_membership_from_csv),
+        # THS membership CSV — produced by tools/build_ths_membership_csv.py.
+        # 7-col contract (no `subtype`), per-row source='ths' guard. Ships
+        # header-only by default; operator runs the build tool to populate.
+        # If `BOARD_BACKFILL_ON_STARTUP=true` AND `STOCK_DB_INIT=true` are
+        # both set, this step runs once here and again from server.py:159 —
+        # idempotent (INSERT OR REPLACE), so the duplicate is ~ms cost.
+        ("stock_board_membership_ths", "stock_board_membership_ths.csv",
+         seed_ths_membership_from_csv),
     ]
 
     for key, filename, loader in steps:
@@ -405,5 +563,6 @@ def seed_all_from_backup_dir(backup_dir: Path) -> dict[str, int]:
 __all__ = [
     "seed_stock_board_from_csv",
     "seed_membership_from_csv",
+    "seed_ths_membership_from_csv",
     "seed_all_from_backup_dir",
 ]

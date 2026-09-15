@@ -197,10 +197,12 @@ def test_seed_all_from_backup_dir_missing_dir(tmp_path, caplog):
 def test_seed_all_from_backup_dir_missing_files(tmp_path, caplog):
     """目录存在但全部 seed 文件都缺 → 每个都 warning, 返回空 dict.
 
-    5 steps, in order: ths_board_id_map, stock_board_ths,
+    6 steps, in order: ths_board_id_map, stock_board_ths,
     stock_board_eastmoney, stock_board_zzshare,
-    stock_board_membership_zzshare. (The id-map was added 2026-09-11 by
-    Plan 1; the zzshare files by Plan 3's source split.)
+    stock_board_membership_zzshare, stock_board_membership_ths.
+    (The id-map was added 2026-09-11 by Plan 1; the zzshare files by
+    Plan 3's source split; the THS membership step was added
+    2026-09-15 to mirror zzshare's seed path.)
     """
     empty_dir = tmp_path / "empty_backup"
     empty_dir.mkdir()
@@ -211,7 +213,7 @@ def test_seed_all_from_backup_dir_missing_files(tmp_path, caplog):
         results = board_csv.seed_all_from_backup_dir(empty_dir)
     assert results == {}
     not_found_warnings = [r for r in caplog.records if "not found" in r.message]
-    assert len(not_found_warnings) == 5
+    assert len(not_found_warnings) == 6
 
 
 def test_seed_all_from_backup_dir_partial_files(fresh_db, tmp_path):
@@ -230,7 +232,10 @@ def test_seed_all_from_backup_dir_partial_files(fresh_db, tmp_path):
 
     results = board_csv.seed_all_from_backup_dir(backup_dir)
     assert results == {"stock_board_ths": 1}
-    # Explicitly assert the other two keys are absent (not present-with-zero)
+    # Explicitly assert absent keys stay absent (not present-with-zero).
+    # Note: stock_board_membership_ths IS a valid orchestrator key now, but
+    # since its CSV file isn't present in this fixture, it correctly stays
+    # absent.
     assert "stock_board_membership_ths" not in results
     assert "stock_board_eastmoney" not in results
 

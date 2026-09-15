@@ -69,11 +69,35 @@ class TestSourcePurity:
     def test_membership_rows_are_conserved(self):
         assert len(_rows("stock_board_membership_zzshare.csv")) == 115081
 
-    def test_no_ths_membership_seed(self):
-        """There is no THS membership data to seed — the file was all
-        zzshare. ths-side membership accumulates from the F10 sweep
-        (BOARD_BACKFILL_ON_STARTUP) and runtime lazy fill."""
-        assert not (BACKUP / "stock_board_membership_ths.csv").exists()
+    def test_ths_membership_csv_exists_with_correct_header(self):
+        """The THS membership CSV is shipped in the repo so the startup
+        loader can pre-warm the table even when the operator hasn't run
+        tools/build_ths_membership_csv.py yet.
+
+        The committed artifact starts header-only and gets populated by the
+        build tool (currently ~70k rows after the 2026-09-15 first run).
+        Either way, the header must be present and well-formed so the
+        loader contract is testable without depending on a live THS fetch.
+        """
+        path = BACKUP / "stock_board_membership_ths.csv"
+        assert path.exists(), (
+            f"{path} missing — the file is part of the repo (see "
+            ".gitignore:106 `!stock_data/stock_data_backup/*.csv`)"
+        )
+        with path.open(encoding="utf-8-sig") as f:
+            header = next(csv.reader(f))
+        assert header == [
+            "board_code",
+            "stock_code",
+            "source",
+            "board_name",
+            "stock_name",
+            "board_type",
+            "refreshed_at",
+        ], f"header drifted: {header}"
+        # Body rows may be 0 (header-only just-shipped state) or N (after
+        # the operator runs the build tool). The header contract is what
+        # the loader pins; the row count is operational state.
 
     def test_membership_codes_span_every_zzshare_plate_type(self):
         """Pins the code-space fact the split got wrong.
@@ -141,14 +165,19 @@ class TestSourcePurity:
 
 
 class TestSeedRoundTrip:
-    def test_seed_all_populates_five_steps(self, fresh_db):
+    def test_seed_all_populates_six_steps(self, fresh_db):
         results = board_csv.seed_all_from_backup_dir(BACKUP)
         assert results["ths_board_id_map"] > 0
         assert results["stock_board_ths"] == 588
         assert results["stock_board_zzshare"] == 186
         assert results["stock_board_eastmoney"] > 0
         assert results["stock_board_membership_zzshare"] == 115081
-        assert "stock_board_membership_ths" not in results
+        # THS membership CSV: 0 rows if header-only, N (~70k) if the
+        # operator has run tools/build_ths_membership_csv.py. The step
+        # itself is in the orchestrator either way; what we assert is
+        # presence + non-error.
+        assert "stock_board_membership_ths" in results
+        assert results["stock_board_membership_ths"] >= 0
 
     def test_no_zzshare_codes_under_ths_after_seed(self, fresh_db):
         board_csv.seed_all_from_backup_dir(BACKUP)

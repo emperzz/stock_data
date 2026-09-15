@@ -155,6 +155,29 @@ async def lifespan(app: FastAPI):
     # wraps the worker in asyncio.create_task and stores the task ref on
     # app.state.backfill_task; the shutdown hook below awaits it.
     if os.getenv("BOARD_BACKFILL_ON_STARTUP", "false").lower() == "true":
+        # Seed the THS membership CSV into SQLite BEFORE the sweep starts,
+        # so the sweep's DELETE-then-INSERT on per-board membership runs on
+        # a warm table (and so a sweep crash mid-run still leaves the table
+        # warm for the next cold start). Idempotent — INSERT OR REPLACE on
+        # UNIQUE(board_code, source, stock_code). Also fired by
+        # seed_all_from_backup_dir when STOCK_DB_INIT=true is set, so the
+        # double-seed under both flags=true is a few-ms redundant INSERT,
+        # not a correctness issue.
+        from .data_provider.persistence.board_csv import seed_ths_membership_from_csv
+
+        backup_dir = Path(__file__).parent / "stock_data_backup"
+        ths_membership_csv = backup_dir / "stock_board_membership_ths.csv"
+        try:
+            seed_ths_membership_from_csv(ths_membership_csv)
+        except Exception as e:
+            # seed_ths_membership_from_csv already swallows its own
+            # _NON_FATAL_SEED_EXCEPTIONS and logs WARNINGs; this outer
+            # try/except is defense-in-depth against e.g. MemoryError on a
+            # malformed giant CSV.
+            logger.warning(
+                "[Startup] THS membership CSV seed failed: %s; continuing", e
+            )
+
         from .data_provider.persistence.backfill import (
             schedule_ths_board_backfill_on_startup,
         )
