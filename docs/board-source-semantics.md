@@ -108,9 +108,32 @@ between the two sources' capabilities, and the 同花顺概念 / 同花顺行业
 subtypes it cited are labels copied from the board list, which zzshare's
 own plate types 14/15 also produce.
 
-There is therefore **no THS membership seed**. `?source=ths` reverse
-lookups start cold and accumulate from the F10 sweep
-(`BOARD_BACKFILL_ON_STARTUP=true`) and runtime lazy fill.
+There is therefore **no THS membership seed by default**, but a seed path
+now exists (added 2026-09-15). `stock_board_membership_ths.csv` is shipped
+in the repo (force-tracked by `.gitignore:106`); it is committed
+header-only by default and gets populated by
+`tools/build_ths_membership_csv.py` (~10-20 min walk of 473 THS boards,
+1-3s jitter between boards).
+
+The startup loader (`seed_ths_membership_from_csv`) consumes the file
+under two triggers:
+
+- `STOCK_DB_INIT=true` → handled by the `seed_all_from_backup_dir`
+  orchestrator as the 6th step (alongside the other 5 CSV seeds).
+- `BOARD_BACKFILL_ON_STARTUP=true` → explicit
+  `seed_ths_membership_from_csv` call in `server.py:159` before the
+  F10 sweep starts. Idempotent under both flags=true (INSERT OR
+  REPLACE on `UNIQUE(board_code, source, stock_code)`) — the second
+  run is ~ms of redundant INSERT because every row collides.
+
+If both env vars are true the CSV is seeded twice; ~ms cost.
+
+Missing file is a warning (operator hasn't run the build tool yet).
+THS-side cold-start still works without the seed (the F10 sweep fills
+the table from scratch), just slower than with it.
+
+Without the seed, `?source=ths` reverse lookups start cold and
+accumulate from the F10 sweep and runtime lazy fill.
 
 **Consequence for reverse-lookup consumers (2026-09-14).** A cold ths
 index is the *normal* state of a freshly seeded DB, so "the persistence
