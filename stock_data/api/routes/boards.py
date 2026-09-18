@@ -46,6 +46,9 @@ from ..schemas import (
     BoardNewsItem,
     BoardNewsResponse,
     BoardQuoteResponse,
+    BoardRelationshipRow,
+    BoardRelationshipsRequest,
+    BoardRelationshipsResponse,
     BoardStockInfo,
     BoardStocksResponse,
     BoardSurgeItem,
@@ -1510,3 +1513,52 @@ def get_reasons(
     if is_current_day:
         cached_store(get_reasons_cache, cache_key, result)
     return result
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Bulk board-stock relationships (added 2026-09-18 per spec §3).
+#
+# Pure persistence read; no fetcher calls, no caching layer.
+# Capabilities=[] because the route is an aggregation over the SQLite
+# stock_board_membership table — not a fetcher-routed capability. This
+# matches the /agent/* convention (spec §Explorer manifest) and stops
+# explorer/manifest.py from enumerating fetcher drill-down entries for
+# every STOCK_BOARD-capable fetcher.
+# ────────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/boards/relationships",
+    response_model=BoardRelationshipsResponse,
+    tags=["boards"],
+)
+@endpoint_meta(
+    summary="板块-股票关系 bulk 查询 (persistence 直读; board_codes/stock_codes 任一可空; 若二者皆空返回该 source 全量)",
+    markets=["csi"],
+    capabilities=[],
+)
+@map_errors
+def post_board_relationships(
+    payload: BoardRelationshipsRequest,
+) -> BoardRelationshipsResponse:
+    """Bulk read of stock_board_membership.
+
+    Reads directly from the SQLite persistence layer via
+    ``read_memberships_by_codes`` — no fetcher calls, no caching layer.
+    Both ``board_codes`` and ``stock_codes`` may be empty (full snapshot
+    for the chosen source); both empty ``[]`` are normalised to ``None``
+    before the helper call.
+
+    Sort order comes from the SQL helper: ``ORDER BY board_code,
+    stock_code`` (ASC, ASC) so the response is stable across calls.
+    """
+    rows = stock_board_cache.read_memberships_by_codes(
+        board_codes=payload.board_codes or None,
+        stock_codes=payload.stock_codes or None,
+        source=payload.source,
+    )
+    return BoardRelationshipsResponse(
+        source=payload.source,
+        count=len(rows),
+        rows=[BoardRelationshipRow(**r) for r in rows],
+    )
