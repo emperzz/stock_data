@@ -8,8 +8,6 @@ the seeded data and respect the SQL sort order.
 
 from __future__ import annotations
 
-import pytest
-
 from stock_data.data_provider.persistence import board as board_mod
 
 

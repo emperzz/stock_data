@@ -18,7 +18,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 _PERSISTENCE_PATCH = (
     "stock_data.data_provider.persistence.board.read_memberships_by_codes"
 )
