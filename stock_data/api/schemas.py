@@ -2355,3 +2355,69 @@ class MarketRecapResponse(BaseModel):
     summary: dict[str, int | float] = Field(
         description="requested / ok / failed / elapsed_ms — mirrors context/stats"
     )
+
+
+# ----------------------------------------------------------------------------
+# Bulk board-stock relationships endpoint (2026-09-18 spec).
+# Reads stock_board_membership directly; no fetcher calls.
+# ----------------------------------------------------------------------------
+
+
+class BoardRelationshipRow(BaseModel):
+    """One row in /api/v1/boards/relationships response.
+
+    Slim shape: 6 fields per row. Deliberately omits ``subtype`` and the
+    per-row ``source`` (the top-level ``source`` echo is sufficient).
+    """
+
+    board_code: str = Field(description="板块 code")
+    board_name: str = Field(description="板块名")
+    board_type: str = Field(description="板块类型 concept/industry/index/special")
+    stock_code: str = Field(description="股票 code")
+    stock_name: str = Field(description="股票名")
+    refreshed_at: str = Field(
+        description=(
+            "Membership row last-refresh timestamp from SQLite (UTC). "
+            "Verbatim SQLite CURRENT_TIMESTAMP string; no timezone applied."
+        )
+    )
+
+
+class BoardRelationshipsRequest(BaseModel):
+    """POST body for /api/v1/boards/relationships.
+
+    Both ``board_codes`` and ``stock_codes`` are optional; both empty
+    returns the full snapshot for the chosen ``source``. FastAPI's
+    Literal / max_length validators return 422 on violation; @map_errors
+    does not catch that — clients see the FastAPI default 422 shape.
+    """
+
+    source: Literal["ths", "zzshare", "eastmoney", "zhitu"] = Field(
+        ..., description="单 source (必填, Literal)"
+    )
+    board_codes: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="板块 code 列表; 空 = 该轴不过滤; max_length=100",
+    )
+    stock_codes: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="股票 列表; 空 = 该轴不过滤; max_length=100",
+    )
+
+
+class BoardRelationshipsResponse(BaseModel):
+    """Response for /api/v1/boards/relationships.
+
+    ``count`` always equals ``len(rows)`` — there is no ceiling, no
+    truncation. The endpoint is a pure persistence read; callers can
+    iterate ``rows`` directly or aggregate client-side.
+    """
+
+    source: str = Field(description="回显查询源")
+    count: int = Field(ge=0, description="rows 行数 (= len(rows))")
+    rows: list[BoardRelationshipRow] = Field(
+        default_factory=list,
+        description="flat row list, ORDER BY (board_code, stock_code)",
+    )
