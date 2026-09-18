@@ -150,7 +150,7 @@ class BoardRelationshipsResponse(BaseModel):
 @endpoint_meta(
     summary="板块-股票双向关系 bulk 查询 (persistence 直读; board_codes/stock_codes 任一可空; 若二者皆空返回该 source 全量)",
     markets=["csi"],
-    capabilities=["STOCK_BOARD"],
+    capabilities=[],
 )
 @map_errors
 def post_board_relationships(payload: BoardRelationshipsRequest) -> BoardRelationshipsResponse:
@@ -201,7 +201,8 @@ schemas 注册在 `stock_data/api/schemas.py` 末尾。
 ## Explorer manifest
 
 - `/explorer/` 通过 `@endpoint_meta` 自动发现新端点
-- `fetcher_method=None` → 不显示 fetcher drill-down（纯 persistence 直读）
+- 此端点 `capabilities=[]`（与 `/agent/*` 聚合端点一致），所以不展示 fetcher drill-down
+  - 原因：`explorer/manifest.py` 对 `capabilities` 非空 + `fetcher_method is None` 的端点会回退到 `CAPABILITY_TO_METHOD[cap]`，从而把 capability 下每个 fetcher 的 drill-down 全列出来；我们不走 fetcher 链，所以用 `capabilities=[]` 让 manifest 走聚合分支（与 `/agent/*` 的 precedent 一致）
 - 文档路径：`docs/superpowers/specs/2026-09-18-board-relationships-bulk-design.md`（本文）
 
 ## 不引入 / YAGNI
