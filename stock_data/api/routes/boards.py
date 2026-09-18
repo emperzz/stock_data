@@ -1308,7 +1308,6 @@ def _safe_optional_float(v):
     response_model=ZTPoolResponse,
     responses={
         400: {"model": ErrorResponse, "description": "Invalid pool type"},
-        404: {"model": ErrorResponse, "description": "No data found for date"},
         500: {"model": ErrorResponse, "description": "Server error"},
     },
     tags=["zt-pools"],
@@ -1375,11 +1374,21 @@ def get_pools(
         refresh=refresh,
     )
 
-    if not stocks:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": f"No {type} pool data found"},
-        )
+    # An empty pool is a READING, not an error (changed 2026-09-18). When upstream
+    # explicitly reports "not a single stock in this pool today", ``total=0`` IS the
+    # answer — fall through and build the normal 200 response below.
+    #
+    # A genuine fetch failure cannot reach this line: ``get_pool()`` raises when
+    # upstream fails with no persisted fallback (mapped to 5xx via ``@map_errors``).
+    # So the only empty list arriving here is the manager's "empty chain" — the
+    # "no errors at all" branch in ``manager.py``, which returns ``source=""``.
+    #
+    # This used to raise 404, which made "0 limit-down stocks today" indistinguishable
+    # from "the dt pool is unavailable". The dt pool is necessarily empty on a broad
+    # rally day (2026-09-18 measured: 4163 up / 1205 down / 77 limit-up / 0 limit-down),
+    # so the misreading happened almost daily. The downstream dsh-stock-trading plugin
+    # reported ``dt_count: null`` and rendered a placeholder — indistinguishable from
+    # a real outage.
 
     actual_date = query_date or stocks[0].get("pool_date", "")
 

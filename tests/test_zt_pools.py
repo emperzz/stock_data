@@ -185,15 +185,31 @@ class TestZTPoolAPIRoutes:
                 refresh=True,
             )
 
-    def test_get_pools_no_data_returns_404(self, client):
-        """Test GET /api/v1/zt-pools when no data returns 404."""
+    def test_get_pools_empty_pool_returns_200_with_zero(self, client):
+        """An empty pool is a READING, not an error: upstream says "none today" -> 200 + total=0.
+
+        The ``""`` in the mocked ``([], "", None)`` is the discriminator: the manager
+        raises on a genuine fetch failure (routed through ``@map_errors`` to 5xx), so
+        the only path returning an empty list is its "empty chain" branch — the
+        "no errors at all" case, where ``source=""``.
+
+        Before 2026-09-18 this asserted 404, which made "0 limit-down stocks today"
+        indistinguishable from "the dt pool is unavailable". The dt pool is
+        necessarily empty on a broad rally day, so the misreading happened almost
+        daily: the downstream dsh-stock-trading plugin set ``dt_count`` to null and
+        rendered a placeholder, indistinguishable from a real outage.
+        """
         with patch("stock_data.api.routes.boards.get_manager") as mock_manager:
             mock_mgr = MagicMock()
             mock_mgr.get_zt_pool.return_value = ([], "", None)
             mock_manager.return_value = mock_mgr
 
-            response = client.get("/api/v1/zt-pools?type=zt&date=2024-05-10")
-            assert response.status_code == 404
+            response = client.get("/api/v1/zt-pools?type=dt&date=2024-05-10")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["total"] == 0
+            assert body["stocks"] == []
+            assert body["type"] == "dt"
 
     def test_get_pools_passes_date_to_manager(self, client):
         """Test GET /api/v1/zt-pools passes date to manager correctly."""
