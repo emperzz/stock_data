@@ -1168,6 +1168,73 @@ def read_membership(
     ]
 
 
+def read_memberships_by_codes(
+    board_codes: list[str] | None,
+    stock_codes: list[str] | None,
+    source: str,
+) -> list[dict[str, Any]]:
+    """Bulk OR-query of stock_board_membership for a single source.
+
+    Returns rows matching ``(board_code IN board_codes) OR (stock_code IN stock_codes)``,
+    filtered by ``source``. An empty (or ``None``) axis means "no filter on that axis".
+    Both empty returns the full snapshot for the given source.
+
+    Sort order: ``(board_code ASC, stock_code ASC)`` so pagination / streaming
+    added later has a stable order. Each row dict carries the 6 fields
+    ``board_code, stock_code, board_name, stock_name, board_type, refreshed_at``
+    (no ``subtype``, no per-row ``source`` — see spec 2026-09-18 §4).
+
+    Distinct from :func:`read_membership` (XOR, single-code, 8 columns):
+    this helper supports OR semantics on lists of codes and returns the
+    slim 6-column shape the bulk endpoint requires.
+
+    Args:
+        board_codes: optional list of board codes. ``None`` or ``[]`` skips
+            the board_code filter.
+        stock_codes: optional list of stock codes. ``None`` or ``[]`` skips
+            the stock_code filter.
+        source: the source slug to scope the query to. Required (the caller
+            decides which source; this helper does not cross sources).
+
+    Returns:
+        List of membership row dicts (may be empty). Order: ascending by
+        ``(board_code, stock_code)``.
+    """
+    init_schema()
+
+    # The two axes are OR-ed at the outer level; ``source = ?`` always ANDs.
+    # Empty axes are dropped from the WHERE clause (not turned into ``IN ()``,
+    # which is a SQL syntax error).
+    axis_clauses: list[str] = []
+    params: list[Any] = []
+    if board_codes:
+        placeholders = ",".join("?" * len(board_codes))
+        axis_clauses.append(f"board_code IN ({placeholders})")
+        params.extend(board_codes)
+    if stock_codes:
+        placeholders = ",".join("?" * len(stock_codes))
+        axis_clauses.append(f"stock_code IN ({placeholders})")
+        params.extend(stock_codes)
+
+    if axis_clauses:
+        where = "source = ? AND (" + " OR ".join(axis_clauses) + ")"
+        sql_params: tuple = (source, *params)
+    else:
+        # Both axes empty: full snapshot for the source.
+        where = "source = ?"
+        sql_params = (source,)
+
+    sql = (
+        "SELECT board_code, stock_code, board_name, stock_name, "
+        "       board_type, refreshed_at "
+        "FROM stock_board_membership "
+        f"WHERE {where} "
+        "ORDER BY board_code, stock_code"
+    )
+    cursor = get_connection().execute(sql, sql_params)
+    return [dict(r) for r in cursor.fetchall()]
+
+
 def upsert_membership_bulk(
     source: str,
     stocks: list[dict],
