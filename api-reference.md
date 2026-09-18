@@ -718,6 +718,105 @@ parser handles both surfaces.
 
 ---
 
+### Board Relationships (板块-股票关系 bulk 查询)
+
+Bulk lookup of the stock↔board membership relation, read **directly from
+the SQLite persistence layer** (`stock_board_membership`). No fetcher is
+involved: the endpoint never calls upstream and never falls back. Use it
+to replace N+1 calls to `/boards/{code}/stocks` or
+`/stocks/{code}/boards`.
+
+Both directions are accepted in one call and their results are **unioned**
+(OR), not intersected.
+
+```bash
+POST /api/v1/boards/relationships
+Content-Type: application/json
+
+# Forward: which stocks are in these boards?
+-d '{"source": "ths", "board_codes": ["885595", "881270"]}'
+
+# Reverse: which boards do these stocks belong to?
+-d '{"source": "ths", "stock_codes": ["600519", "000001"]}'
+
+# Union: rows matching either axis
+-d '{"source": "ths", "board_codes": ["885595"], "stock_codes": ["600519"]}'
+
+# Full snapshot for one source (both axes omitted)
+-d '{"source": "ths"}'
+```
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `source` | string | **yes** | Exactly one source: `ths`, `zzshare`, `eastmoney`, `zhitu`. Validated by a `Literal` — an unknown value is a **422** (FastAPI's own shape, not the server's `{"error","message"}` envelope). |
+| `board_codes` | string[] | no | Board codes to look up. Empty/omitted = no filter on this axis. `max_length=100`. |
+| `stock_codes` | string[] | no | Stock codes to look up. Empty/omitted = no filter on this axis. `max_length=100`. |
+
+When **both** lists are empty the endpoint returns the *entire* membership
+table for that source. There is no row cap and no pagination — a full
+`ths` snapshot is on the order of tens of thousands of rows.
+
+**Response (200):**
+
+```json
+{
+  "source": "ths",
+  "count": 3,
+  "rows": [
+    {
+      "board_code": "881270",
+      "board_name": "白酒",
+      "board_type": "industry",
+      "stock_code": "600519",
+      "stock_name": "贵州茅台",
+      "refreshed_at": "2026-09-18 03:48:49"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | string | Echo of the request's `source`. See the note below — this is **not** a provenance field. |
+| `count` | int | Always equals `len(rows)`. Never truncated. |
+| `rows[].board_code` | string | Board code in the queried source's code space. |
+| `rows[].board_name` | string | Board name as stored on the membership row. |
+| `rows[].board_type` | string | `concept` / `industry` / `index` / `special`. |
+| `rows[].stock_code` | string | Bare 6-digit A-share code. |
+| `rows[].stock_name` | string | Stock name. |
+| `rows[].refreshed_at` | string | Membership row's last-refresh timestamp, verbatim from SQLite `CURRENT_TIMESTAMP` (**UTC**, no timezone applied). |
+
+Rows are sorted `(board_code ASC, stock_code ASC)` — a stable order, so
+client-side pagination is deterministic.
+
+**`source` is an echo here, not provenance.** The usual contract for a
+`source` field on this server is "which fetcher served this" or
+`"persistence"` (see `docs/source-tracking.md`). This endpoint emits the
+*queried source's label* instead, because the whole point of the call is
+"give me the `ths` slice of the membership table" — the label identifies
+which slice, and the data always comes from persistence. This is a
+documented deviation; do not read it as an upstream fetcher name.
+
+**Errors:**
+
+- `422` — `source` missing or not one of the four labels; `board_codes` /
+  `stock_codes` longer than 100. FastAPI's validation shape, not the
+  server's error envelope.
+- `500 internal_error` — SQLite failure (via `@map_errors`).
+
+An all-miss query is **not** an error: it returns `{"count": 0, "rows": []}`
+with HTTP 200. This differs from the single-value endpoints
+(`/boards/{code}/stocks` 404) — for a bulk call, "none of these codes
+matched" is a normal answer.
+
+**No caching.** The persistence layer *is* the cache, and it only changes
+on backfill, so a response TTL would add staleness without saving work.
+A board-membership refresh is visible on the very next request.
+
+---
+
 ### Board Realtime Quote (板块实时行情)
 
 ```bash

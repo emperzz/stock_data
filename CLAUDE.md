@@ -278,6 +278,17 @@ when swapping the SQLite backend — sites listed in `docs/board-source-semantic
 
 Anti-pattern: `manager.get_board_stocks(...)` in `api/routes/boards.py`. Add a new method to `stock_board_cache` instead.
 
+**Pure-persistence endpoint** (added 2026-09-18): `POST /boards/relationships`
+is the one board route with **no fetcher path at all** — it reads
+`stock_board_membership` via `stock_board_cache.read_memberships_by_codes`
+(one SQL: `source = ? AND (board_code IN … OR stock_code IN …)`, both axes
+optional, both empty = full snapshot for that source). It declares
+`capabilities=[]` so the explorer manifest treats it as an aggregation (the
+`/agent/*` convention) rather than enumerating fetcher drill-down entries,
+and it writes **no** TTLCache — the persistence layer is the cache and only
+changes on backfill. Add a persistence helper rather than reaching for
+`manager.*` if you extend it.
+
 ### Board response source fields
 
 `/boards/{code}/stocks` carries three source fields: `query_source` (the
@@ -294,6 +305,14 @@ reports the row's own source.
 Board endpoints route through `_with_source`, which is **not**
 CircuitBreaker-integrated — THS board outages surface as 5xx rate, never as
 CB state changes.
+
+**Exception — `/boards/relationships` echoes `source`.** Everywhere else a
+top-level `source` is a provenance field (fetcher name or `"persistence"`,
+see [Source Tracking](#source-tracking)). This endpoint emits the *queried
+source's label* (`"ths"` / `"zzshare"` / `"eastmoney"` / `"zhitu"`)
+because the data always comes from SQLite and the label identifies which
+slice was requested. Do not read it as "a fetcher named `ths` served this".
+Full rationale: `docs/source-tracking.md` → "Echo exception".
 
 Full semantics (per-source cache keys, the snapshot replace, the province
 split of the seed CSVs, persistence↔manager coupling sites):

@@ -21,6 +21,7 @@ summary and points here for the per-endpoint matrix.
 | 板块清单 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
 | 板块成分股 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
 | 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
+| `/boards/relationships` | n/a (纯 persistence 读取, 从不调 fetcher) | **回显请求的 `source`** (非 `"persistence"`) — 见下方例外说明 |
 | `/agent/correlation/matrix` | 不跟踪 serving fetcher — stock label 恒为 `source: null`;board label 记录*请求的* source (`ths`/`eastmoney`, spec §2.3),非实际服务的 fetcher | n/a (compute-only — no top-level `source` field on `CorrelationMatrixResponse` because the response is a composite of multiple fetchers) |
 
 > `/stocks` 暴露 `source` 字段 (post-2026-07-29): 每个 list entry 的 source 是 metadata origin (akshare/zzshare/persistence) 或 quote fetcher (当 `?include_quote=true`)。`/calendar` 仍然不暴露 source (response model 无该字段)。
@@ -31,3 +32,23 @@ Aggregation endpoints whose response is stitched from several fetchers
 (`/agent/correlation/matrix`, `/agent/*/batch-profile`, `/agent/market-context`)
 carry **no top-level `source`** — there is no single serving fetcher to name.
 Per-item provenance, where it exists, lives on the item.
+
+## Echo exception: `/boards/relationships`
+
+`POST /api/v1/boards/relationships` is the one endpoint where a top-level
+`source` field does **not** follow the three-value rule above. It emits the
+**queried source's label** (e.g. `"ths"`), not `"persistence"` and not a
+fetcher name.
+
+Rationale: the endpoint reads the `stock_board_membership` table filtered by
+source, and its purpose is "give me the `ths` slice of the relation". The
+label identifies *which slice* was requested. Data always comes from
+persistence, so a provenance reading would be wrong for every response.
+
+Consequence for consumers: if you need to know the data came from SQLite,
+that is unconditional — there is no fetcher path. If you need the request
+echo, it is the same string you sent. Do not treat this field as evidence
+that a fetcher named `ths` served the call.
+
+(Added 2026-09-18. Rows carry no per-row `source` field by design — the
+top-level echo is the only source signal on this response.)

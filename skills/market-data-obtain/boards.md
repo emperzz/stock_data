@@ -350,6 +350,92 @@ curl 'http://localhost:8888/api/v1/stocks/600519/boards?source=ths&type=concept'
 
 ---
 
+## `POST /api/v1/boards/relationships`
+
+### 功能
+
+**批量**查询「板块 ↔ 股票」关系，一次拿多块 / 多股，替代对 `/boards/{code}/stocks`
+或 `/stocks/{code}/boards` 的 N 次循环调用。数据直接读本地 SQLite 持久层，
+**不请求上游、无 fallback、无缓存**——backfill 刷新后下一次请求即可见。
+
+`board_codes` 与 `stock_codes` 可单独用、也可同时用；**同时用时取并集（OR）**，
+不是交集。两者都省略 = 返回该 source 的全量关系表。
+
+### 入参
+
+POST body（JSON）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `source` | string | 是 | 单值，四选一：`ths` / `zzshare` / `eastmoney` / `zhitu`。非法值返回 422 |
+| `board_codes` | string[] | 否 | 板块 code 列表，最多 100 条。空 / 省略 = 该轴不过滤 |
+| `stock_codes` | string[] | 否 | 股票 code 列表（6 位裸码），最多 100 条。空 / 省略 = 该轴不过滤 |
+
+> 超过 100 条返回 422（FastAPI 校验）。若需要更多，改用「两者都不传」的全量模式。
+> 全量返回**无行数上限、无分页**，`ths` 全量约数万行。
+
+### 返回参数
+
+```json
+{
+  "source": "ths",
+  "count": 3,
+  "rows": [
+    {
+      "board_code": "881270",
+      "board_name": "白酒",
+      "board_type": "industry",
+      "stock_code": "600519",
+      "stock_name": "贵州茅台",
+      "refreshed_at": "2026-09-18 03:48:49"
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `source` | string | **回显请求的 `source`**，不是数据来源标记 —— 数据恒来自持久层，该字段只标识「查的是哪个 source 的切片」 |
+| `count` | int | 恒等于 `len(rows)`，无截断 |
+| `rows[].board_code` | string | 板块 code（该 source 的 code 空间） |
+| `rows[].board_name` | string | 板块名 |
+| `rows[].board_type` | string | `concept` / `industry` / `index` / `special` |
+| `rows[].stock_code` | string | 6 位裸码 |
+| `rows[].stock_name` | string | 股票名 |
+| `rows[].refreshed_at` | string | 该关系行最后刷新时间，SQLite `CURRENT_TIMESTAMP` 原样输出（**UTC，未做时区转换**） |
+
+行序恒为 `(board_code ASC, stock_code ASC)`，客户端可据此做确定性分页。
+
+**全部未命中不是错误**：返回 `{"count": 0, "rows": []}` + HTTP 200。
+这与单值端点不同（`/boards/{code}/stocks` 未命中是 404）——批量语义下
+「这些 code 一个都没匹配上」是正常答案。
+
+### 示例
+
+```bash
+# 正向：这几个板块里有哪些股票
+curl -X POST 'http://localhost:8888/api/v1/boards/relationships' \
+  -H 'Content-Type: application/json' \
+  -d '{"source": "ths", "board_codes": ["885595", "881270"]}'
+
+# 反向：这几只股票属于哪些板块
+curl -X POST 'http://localhost:8888/api/v1/boards/relationships' \
+  -H 'Content-Type: application/json' \
+  -d '{"source": "ths", "stock_codes": ["600519", "000001"]}'
+
+# 并集：两条轴同时给
+curl -X POST 'http://localhost:8888/api/v1/boards/relationships' \
+  -H 'Content-Type: application/json' \
+  -d '{"source": "ths", "board_codes": ["885595"], "stock_codes": ["600519"]}'
+
+# 全量：两条轴都省略
+curl -X POST 'http://localhost:8888/api/v1/boards/relationships' \
+  -H 'Content-Type: application/json' \
+  -d '{"source": "ths"}'
+```
+
+---
+
 ## `GET /api/v1/boards/{board_code}/history`
 
 ### 功能

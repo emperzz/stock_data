@@ -15,6 +15,7 @@ Persistence (on-disk SQLite for stock lists / board metadata / trade calendar / 
 
 - **Multi-source aggregation** (13 fetchers): Tushare, Baostock, Akshare, Yfinance, Zhitu, Zzshare, Tencent, EastMoney, THS, Cninfo, Cls, Myquant, Baidu
 - **Board data** (concept / industry / index / special): source-routed across `ths` (concept + industry, d/w/m/1m/5m/15m/30m/60m K-line), `eastmoney` (concept + industry, d/w/m/5m/15m/30m/60m K-line), `zhitu` (all 4 types, no K-line); `zzshare` unified under `ths` since 2026-07-08. THS also serves `GET /boards/{code}/quote`, `/news`, and `/surges` (F10 炒作周期). `/stocks/{code}/boards` THS rows carry 7 extra per-board fields (板块涨跌幅 / 涨跌家数 / 涨停跌停家数 / 概念解析 / 关联度) — see `skills/market-data-obtain/boards.md`.
+- **Board relationships bulk lookup** — `POST /boards/relationships` returns the stock↔board membership relation for one source in a single call, replacing N+1 round-trips against `/boards/{code}/stocks` or `/stocks/{code}/boards`. Accepts `board_codes` and/or `stock_codes` (each ≤100, unioned); both omitted returns the full snapshot. Reads SQLite directly — no fetcher, no cache.
 - **Automatic failover**: priority-based source selection with capability-routed fallback
 - **Circuit breaker**: prevents cascading failures from unavailable sources
 - **Persistent metadata cache**: SQLite for stock lists, board metadata, trade calendar, ZT/DT/ZBGC pools (separate from in-process TTLCache)
@@ -159,7 +160,7 @@ or browse it interactively at `/explorer/` once the server is running.
 
 Quick index: health · technical indicators · K-line · realtime quote ·
 company profile · per-stock news · trade calendar · indices · stock list ·
-boards (list / stocks / stock→boards / quote / news / surges / history) · 涨跌停股池 ·
+boards (list / stocks / stock→boards / relationships / quote / news / surges / history) · 涨跌停股池 ·
 margin · block trade · holder count · dividend · dragon-tiger · fund flow ·
 hot topics · north-bound flow · research reports · announcements ·
 news search / flash / content · 财联社早报 / 焦点复盘 · **agent batch**
@@ -241,6 +242,11 @@ the `source` query parameter, with two exceptions:
   `data_source` (fetcher label on cache miss or `"persistence"` on cache hit), and
   `effective_source` (the fetcher that actually served the upstream call; on a
   persistence hit this is the unified cache-key label, currently `"ths"`).
+- `POST /boards/relationships` is the exception: its `source` is an **echo of
+  the requested source**, not `"persistence"` and not a fetcher name. The call
+  reads SQLite unconditionally, so the label identifies *which source's slice*
+  was asked for rather than where the bytes came from. See
+  `docs/source-tracking.md` → "Echo exception".
 
 `/stocks` and `/calendar` currently do NOT expose `source` (their response models have no such field) — the persistence origin is still computed and discarded. This is a YAGNI choice; if needed later, add `source: str` to those response models and the route layer is already wired to pass it through.
 

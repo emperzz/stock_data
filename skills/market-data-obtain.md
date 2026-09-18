@@ -34,7 +34,7 @@ A 股市场数据获取 skill。本 skill **不绑定任何特定数据 API**—
 | [fundamentals.md](market-data-obtain/fundamentals.md) | §6 基础数据 | 1 |
 | [announcements.md](market-data-obtain/announcements.md) | §7 公告 | 1 |
 | [research-reports.md](market-data-obtain/research-reports.md) | §8 研报 | 2 |
-| [boards.md](market-data-obtain/boards.md) | §9 特殊池 & 板块（不含 agent 批量） | 12 |
+| [boards.md](market-data-obtain/boards.md) | §9 特殊池 & 板块（不含 agent 批量） | 13 |
 | [agent-batch.md](market-data-obtain/agent-batch.md) | §9.1 Agent 批量端点 | 9 |
 | [news.md](market-data-obtain/news.md) | §10 新闻 / 消息 | 6 |
 | [meta.md](market-data-obtain/meta.md) | §11 其他 | 2 |
@@ -186,6 +186,7 @@ agent 可通过以下任意方式访问服务器能力（**先确认服务器在
 | `GET /api/v1/boards/{board_code}/surges` | `BOARD_SURGES` | 获取板块炒作周期 |
 | `GET /api/v1/stocks/{stock_code}/boards` | `STOCK_BOARD` | 获取个股所属板块（THS 行额外带 7 个 enrichment 字段，契约见 [boards.md](market-data-obtain/boards.md) `/stocks/{code}/boards`；也用于 `agent/stocks/batch-profile` 的 `boards` 块） |
 | `GET /api/v1/boards/{board_code}/history` | `STOCK_BOARD` | 获取板块 K 线 |
+| `POST /api/v1/boards/relationships` | — | **批量**板块↔股票关系（多块 / 多股一次拿全，双向并集；纯持久层读取，无 fetcher / 无缓存）。契约见 [boards.md](market-data-obtain/boards.md) `/boards/relationships` |
 | `GET /api/v1/zt-pools` | `STOCK_ZT_POOL` | 获取涨跌停股池（zt / dt / zbgc；2026-09-03 起走 akshare + zhitu，**zzshare 不再作为 primary**） |
 | `GET /api/v1/zt-reasons` | `STOCK_ZT_REASON` | 获取涨停原因（每行带 `reason` 归因文本 + ZT 上下文；2026-09-03 新增，zzshare 唯一 provider） |
 | `GET /api/v1/dragon-tiger` | `DRAGON_TIGER` | 获取全市场龙虎榜 |
