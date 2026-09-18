@@ -180,13 +180,18 @@ schemas 注册在 `stock_data/api/schemas.py` 末尾。
 
 ## 测试计划
 
-`tests/test_board_relationships.py`：
+测试分 4 个文件（每层一个）：
+
+- `tests/test_persistence_board_relationships.py` — helper 层单测（Task 1）
+- `tests/test_board_relationships_schemas.py` — Pydantic schema 单测（Task 2）
+- `tests/test_board_relationships_route.py` — route 层单测（mock persistence，Task 3）
+- `tests/test_board_relationships_e2e.py` — 端到端（real DB，Task 4）
 
 1. **正向**: `board_codes=["885595"]` → 每行 `board_code == "885595"`
 2. **反向**: `stock_codes=["600519"]` → 每行 `stock_code == "600519"`
 3. **双向并集**: 两集合同时传；返回的行 ⊆ forward ∪ reverse
 4. **去重**: (board_code, stock_code) 联合唯一约束 → 响应无重复行
-5. **空入参 → 全量**: 两列表都空 + `source="ths"` → 返回该 source 全量；`count` 等于实际行数
+5. **空入参 → 全量**: 两列表都空 + `source="ths"` → 返回该 source 全量；`count` 等于实际行数；`source="zzshare"` 返回 zzshare 全量（互不污染）
 6. **source 校验**: 不在 Literal → 422
 7. **max_length**: 101 条 → 422
 8. **字段最小化**: 每行只 6 字段（无 `subtype`、无 per-row `source`）

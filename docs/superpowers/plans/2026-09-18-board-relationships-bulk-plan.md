@@ -334,7 +334,7 @@ def read_memberships_by_codes(
 .venv/Scripts/python.exe -m pytest tests/test_persistence_board_relationships.py -v
 ```
 
-Expected: all 8 tests pass.
+Expected: all 9 tests pass.
 
 - [ ] **Step 5: Commit**
 
