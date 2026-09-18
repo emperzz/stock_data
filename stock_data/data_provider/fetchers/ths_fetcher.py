@@ -2568,8 +2568,23 @@ class ThsFetcher(BaseFetcher):
         concept_data = soup.find(id="concept_data")
         if concept_data is not None:
             txt = concept_data.get_text() or ""
+            # THS inline #concept_data payloads occasionally contain
+            # non-standard characters that strict JSON rejects:
+            #   1. raw ASCII control chars (\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f) —
+            #      scrubbed defensively before parsing.
+            #   2. bare ``"`` inside string values — e.g. 885820 char 170784
+            #      contained ``构建"生产-...`` inside a JSON string. Strict
+            #      JSON rejects this; strict=False alone doesn't help because
+            #      the offending char is a structural delimiter, not a control
+            #      char. ``_unescape_inner_quotes`` walks the payload once
+            #      and escapes bare quotes that appear inside string values.
+            # Both normalizations are lossless for strictly-valid JSON:
+            # clean payloads produce identical parse trees (verified
+            # 2026-09-18 against 886069 — 466 rows unchanged).
+            txt = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", txt)
+            txt = _unescape_inner_quotes(txt)
             try:
-                payload = _json.loads(txt)
+                payload = _json.loads(txt, strict=False)
                 ld = (payload.get("result") or {}).get("listdata") or {}
                 # listdata keyed by date; take the only (or latest) entry.
                 for _date, entries in ld.items():
@@ -3275,3 +3290,67 @@ def _parse_ths_board_stocks_row(tds: list) -> dict | None:
 
 
 ThsFetcher._parse_ths_board_stocks_row = staticmethod(_parse_ths_board_stocks_row)
+
+
+def _unescape_inner_quotes(txt: str) -> str:
+    """Escape bare ``"`` characters that appear inside JSON string values.
+
+    THS's inline ``#concept_data`` payloads occasionally embed a literal
+    double-quote inside a string value (probed 2026-09-18: 885820 at char
+    170784 contained a bare ``"`` inside ``构建"生产-...``). Strict JSON
+    rejects this; ``strict=False`` doesn't help either because the
+    offending char is a structural delimiter, not a control char.
+
+    State-machine approach: walk the payload once, track ``inside_str``
+    state (toggled by unescaped ``"``). While inside a string, decide
+    whether each subsequent ``"`` is a terminator (followed by structural
+    JSON like ``, : } ]`` after optional whitespace) or a literal quote
+    that needs escaping.
+
+    The state machine is intentionally minimal — it does not understand
+    every JSON construct, only the ``"`` toggle rule, which is the only
+    relevant rule for fixing this specific class of upstream bug. The
+    repaired text is then fed into ``json.loads(..., strict=False)``.
+
+    Position is tracked via the input index ``i`` so the forward peek
+    always looks at the *next* char, not always the first one (verified
+    2026-09-18 against the 885820 / 885936 payloads).
+    """
+    out: list[str] = []
+    inside_str = False
+    escape_next = False
+    i = 0
+    n = len(txt)
+    while i < n:
+        ch = txt[i]
+        if escape_next:
+            out.append(ch)
+            escape_next = False
+            i += 1
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escape_next = True
+            i += 1
+            continue
+        if ch == '"':
+            if inside_str:
+                # Look ahead past whitespace for the next non-WS char.
+                j = i + 1
+                while j < n and txt[j] in " \t\r\n":
+                    j += 1
+                if j >= n or txt[j] in ",:}]":
+                    # String terminator.
+                    inside_str = False
+                    out.append(ch)
+                else:
+                    # Bare quote inside a string — escape it.
+                    out.append('\\"')
+            else:
+                inside_str = True
+                out.append(ch)
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
