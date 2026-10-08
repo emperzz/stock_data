@@ -23,6 +23,7 @@ zzshare 是一个面向 AI Agent / LLM 场景优化的 A 股量化数据 SDK，�
 | [08-hot-topics.md](08-hot-topics.md) | **同花顺热度**：`ths_hot_top`（热度 TopN）、`stock_ths_hot`（个股热度） |
 | [09-topic-library.md](09-topic-library.md) | **题材库 / AI 报告 / 异动监控**：`topic_table_list` / `topic_table_detail` / `topic_table_stocks`（题材库表格）、`ai_report_list` / `ai_report_detail`（AI 每日报告）、`movement_alerts`（异动数据）、`zdjk_get`（监管监控） |
 | [10-rate-limits.md](10-rate-limits.md) | **频率限制速查表**：14 个核心接口 × {无 token, 有 token} 的限速对照 |
+| [11-fundamentals.md](11-fundamentals.md) | **财务基本面**（2026-10-08 新增，需 `zzshare>=0.4.12`）：`finance_valuation` / `finance_indicator` / `finance_income` / `finance_balance` / `finance_cash_flow` 五表 + `finance_pit` / `finance_range` / `finance_stock` / `finance_latest` 四个高级查询 |
 
 ## 通用约定
 
@@ -113,6 +114,7 @@ zzshare 接口与 `data_provider.base.DataCapability` 标志位的对应关系�
 | `lhb_list` / `lhb_detail` / `lhb_stock_history` / `lhb_trader_history` | `DRAGON_TIGER` |
 | `ths_hot_top` / `stock_ths_hot` | `HOT_TOPICS` |
 | `stock_info` | **已停用 2026-07-14** — 见下文 § 3；upstream `info_type=1` 对所有 A 股返 null，不再映射为 `STOCK_INFO` |
+| `finance_valuation` / `finance_indicator` / `finance_income` / `finance_balance` / `finance_cash_flow` / `finance_pit` / `finance_range` / `finance_stock` / `finance_latest` | (无现成 capability，2026-10-08 镜像文档时项目尚未定义 `STOCK_FINANCIAL`；见 11-fundamentals.md，需 `zzshare>=0.4.12`) |
 | `topic_table_list` / `topic_table_detail` / `topic_table_stocks` / `topic_kline` | (无现成 capability) |
 | `plate_kline` | (无现成 capability) |
 | `ai_report_list` / `ai_report_detail` | (无现成 capability) |
