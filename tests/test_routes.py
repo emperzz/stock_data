@@ -1078,8 +1078,8 @@ class TestBoardStocksAmplitudeRenameE2E:
 
 class TestReportsTargetPriceE2E:
     def test_reports_carry_target_price_and_broker_rating(self, client, monkeypatch):
-        from stock_data.api.routes.helpers import get_manager
         from stock_data.api.routes import stocks as stocks_routes
+        from stock_data.api.routes.helpers import get_manager
 
         priced = {
             "title": "飞天整体稳健，推进全面向C",
@@ -1108,7 +1108,9 @@ class TestReportsTargetPriceE2E:
             "broker_rating": "强烈推荐",
         }
         mgr = get_manager()
-        monkeypatch.setattr(mgr, "get_reports", lambda code, max_pages: ([priced, no_price], "eastmoney"))
+        monkeypatch.setattr(
+            mgr, "get_reports", lambda code, max_pages: ([priced, no_price], "eastmoney")
+        )
         monkeypatch.setattr(stocks_routes.stock_list, "get_stock_name", lambda *a, **kw: "贵州茅台")
 
         r = client.get("/api/v1/stocks/600519/reports?max_pages=2")
