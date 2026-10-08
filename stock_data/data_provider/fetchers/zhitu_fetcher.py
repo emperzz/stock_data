@@ -70,6 +70,9 @@ class ZhituFetcher(BaseFetcher):
         # 沪深指数 (/hz/ 前缀) — docs/zhitu/10-indices-api.md
         | DataCapability.INDEX_REALTIME_QUOTE
         | DataCapability.INDEX_KLINE
+        # 财务备源 (/hs/fin/income 差分推导, spec 2026-10-08) — 无 BJ 覆盖
+        | DataCapability.STOCK_FINANCIAL
+        | DataCapability.STOCK_FINANCIAL_SERIES
     )
 
     def __init__(self):

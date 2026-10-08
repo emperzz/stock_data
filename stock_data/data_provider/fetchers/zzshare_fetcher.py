@@ -166,6 +166,9 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         | DataCapability.STOCK_ZT_REASON
         | DataCapability.DRAGON_TIGER
         | DataCapability.HOT_TOPICS
+        # 财务主源 (finance_latest/finance_stock, SDK >=0.4.12) — BJ 零覆盖
+        | DataCapability.STOCK_FINANCIAL
+        | DataCapability.STOCK_FINANCIAL_SERIES
     )
 
     # SDKFetcherMixin declarations. Token is optional — the zzshare SDK

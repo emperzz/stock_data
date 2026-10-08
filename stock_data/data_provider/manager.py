@@ -318,6 +318,7 @@ class DataFetcherManager:
         circuit_breaker: CircuitBreaker | None = None,
         candidates: list[BaseFetcher] | None = None,
         empty_is_failure: bool = False,
+        empty_ok: bool = False,
     ) -> T:
         """Run `call(fetcher)` over every fetcher with the given capability, in priority order.
 
@@ -349,6 +350,15 @@ class DataFetcherManager:
                 (different-coverage) fallback. Default False preserves
                 the existing "any non-None dict is a success" behavior
                 for K-line / quote / dividend / etc.
+            empty_ok: when True, an empty chain in which EVERY fetcher
+                returned ``None`` (no fetcher raised) resolves to
+                ``(None, "")`` instead of raising DataFetchError. Without
+                it that case falls through to the "all failed" raise with
+                an EMPTY error list — a misleading 503 rendering "no
+                coverage" as "outage". Opt-in only (financial snapshot
+                chain: BJ codes legitimately return None from every leg);
+                default False keeps every existing route's behavior
+                byte-identical.
 
         Returns:
             The first non-None/non-empty result (or ``(result, source_name)``
@@ -412,6 +422,12 @@ class DataFetcherManager:
         #   (c) errors occurred           → raise the aggregated failure.
         if allow_none:
             return (None, "") if return_source else None  # type: ignore[return-value]
+        if not errors and empty_ok:
+            logger.info(
+                f"[Manager] {op_label}: empty chain (all fetchers returned None, "
+                f"no errors) — empty_ok route returns {last_empty_result!r}"
+            )
+            return (last_empty_result, "") if return_source else last_empty_result  # type: ignore[return-value]
         if not errors and last_empty_result is not None:
             logger.info(
                 f"[Manager] {op_label}: all {len(fetchers)} candidates returned "
@@ -1347,6 +1363,7 @@ class DataFetcherManager:
         *args: Any,
         op_label: str | None = None,
         empty_is_failure: bool = False,
+        empty_ok: bool = False,
     ) -> Any:
         """CSI-market capability routing boilerplate.
 
@@ -1372,6 +1389,7 @@ class DataFetcherManager:
             lambda f: getattr(f, method_name)(*args),
             return_source=True,
             empty_is_failure=empty_is_failure,
+            empty_ok=empty_ok,
         )
 
     def get_dragon_tiger(self, code: str, trade_date: str = "") -> tuple[dict, str]:
@@ -1433,6 +1451,56 @@ class DataFetcherManager:
 
     def get_fund_flow_120d(self, code: str) -> tuple[list[dict], str]:
         return self._route_cap(DataCapability.FUND_FLOW, "get_fund_flow_120d", code)
+
+    # ---------- financials (spec 2026-10-08) ----------
+
+    def get_financial_snapshot(self, code: str) -> tuple[dict | None, str]:
+        """财务快照 failover: Zzshare (P2) → Zhitu (P5, 差分推导).
+
+        Empty chain (e.g. BJ 代码 — zzshare 财务五表零覆盖 + zhitu fin/* 404)
+        returns ``(None, "")`` via the coherent-empty path: 无数据≠失败.
+        Fetchers return ``None`` (never ``{}``) when empty so the chain
+        actually falls through (``_is_meaningful({})`` is True). The chain
+        opts into ``empty_ok`` because every leg returning ``None`` (BJ
+        zero coverage) must yield the empty contract, not a 503.
+        """
+        return self._route_cap(
+            DataCapability.STOCK_FINANCIAL, "get_financial_snapshot", code, empty_ok=True
+        )
+
+    def get_financial_history(
+        self, code: str, start_date: str | None = None, end_date: str | None = None
+    ) -> tuple[list[dict], str]:
+        """单季财务序列 failover: Zzshare (P2) → Zhitu (P5, 差分推导).
+
+        Same single-quarter contract on both legs (spec §2.2); ``roe_pct``
+        is the only field the backup leg cannot honestly derive (null).
+        """
+        return self._route_cap(
+            DataCapability.STOCK_FINANCIAL_SERIES,
+            "get_financial_history",
+            code,
+            start_date,
+            end_date,
+        )
+
+    def get_main_business_composition(
+        self, code: str, category: str | None = None, report_date: str | None = None
+    ) -> tuple[dict, str]:
+        """主营构成 — EastMoney F10 单源（项目内唯一上游，无 failover）.
+
+        The fetcher never raises on user input (an unavailable
+        ``report_date`` comes back as a flag for the route's 400 decision)
+        and an empty ``zygcfx`` is the authoritative "no breakdown" answer,
+        so ``empty_is_failure`` stays False by design.
+        """
+        return self._route_cap(
+            DataCapability.STOCK_MAIN_BUSINESS,
+            "get_main_business_composition",
+            code,
+            category,
+            report_date,
+        )
 
     # ---------- ths / research / announcement ----------
 

@@ -93,6 +93,8 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
         | DataCapability.STOCK_BOARD  # migrated from AkshareFetcher
         | DataCapability.STOCK_NEWS  # per-stock news feed (np-listapi)
         | DataCapability.ANNOUNCEMENT  # joins failover chain alongside CninfoFetcher
+        # 主营构成唯一上游 (emweb F10 PageAjax; zhitu/zzshare 均无此表)
+        | DataCapability.STOCK_MAIN_BUSINESS
     )
 
     def is_available(self) -> bool:

@@ -211,6 +211,7 @@ get_main_business_composition(code, category=None, report_date=None) -> tuple[di
 ```
 
 - **空值协议（P0 修正，逐端点定死）**：快照 fetcher 无可用字段时必须返回 **`None`**（`{}` 会被 `_is_meaningful` 判真短路整条链）；历史返回 **`[]`**（list 空值能正确 fall-through）；主营构成单源，空滑窗返回**完整 dict**（`records: []`）即为权威答案，走成功路径。`empty_is_failure` 三方法均保持默认 False：新股无报告期 = 诚实空答案 → `_with_failover` coherent-empty 返回 `(last_empty, "")`——**路由层 `source` 字段收到 `""` 是设计内行为**，schema `source: str = ""` 天然容忍；不给财务链开 `empty_is_failure`——东财对无拆分数据股票的权威空集会被误判为软失败。
+- **实现期发现（rev2.1，TDD 阶段证伪 spec 原句）**：coherent-empty 分支守卫是 `last_empty_result is not None`——**全链返回 `None`**（快照 BJ 合法情形）原样会落到 "all failed" raise（errors 为空串的误导 503）。修正：`_with_failover`/`_route_cap` 新增默认关闭的 `empty_ok` 参数，仅 `get_financial_snapshot` 打开（全链 None 且无错误 → `(None, "")`）；其余 capability 行为逐字节不变（有回归守卫测试钉住）。
 - 快照/历史在 zzshare fetcher 方法内部做 2-3 次 SDK 调用；**任一上游调用抛错 → fetcher 方法 raise `DataFetchError`**（部分字段成功不算成功），由 manager 降级下一源。不做字段级拼装跨源。
 - **fetcher 层的唯一异常语言是 `DataFetchError`**（`manager.py:374-381` 无差别捕获一切异常折进 failover 链）；参数校验型错误一律在 route handler body 抛（§3.2/§3.3）。
 
