@@ -748,6 +748,11 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
                 "predict_eps_this": r.get("predictThisYearEps"),
                 "predict_eps_next": r.get("predictNextYearEps"),
                 "predict_eps_next2": r.get("predictNextTwoYearEps"),
+                # Raw pass-through ("" when absent) — same convention as the
+                # predict_eps fields; ReportRecord sanitizes "" to null.
+                "target_price": r.get("indvAimPriceT", ""),
+                "target_price_low": r.get("indvAimPriceL", ""),
+                "broker_rating": r.get("sRatingName", ""),
             }
             for r in all_records
         ]

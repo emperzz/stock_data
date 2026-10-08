@@ -1278,6 +1278,11 @@ class ReportRecord(_UpstreamSanitizedModel):
     predict_eps_this: float | None = Field(default=None, description="今年EPS预测")
     predict_eps_next: float | None = Field(default=None, description="明年EPS预测")
     predict_eps_next2: float | None = Field(default=None, description="后年EPS预测")
+    target_price: float | None = Field(default=None, description="目标价(元;研报未给出时为 null)")
+    target_price_low: float | None = Field(
+        default=None, description="目标价下限(元;单值目标价时与 target_price 相等)"
+    )
+    broker_rating: str = Field(default="", description="券商评级(与 rating=东财评级 是两套口径)")
 
 
 class ReportResponse(BaseModel):

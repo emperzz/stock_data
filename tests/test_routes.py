@@ -1061,3 +1061,71 @@ class TestBoardStocksAmplitudeRenameE2E:
         stock = r.json()["stocks"][0]
         for f in ("open", "high", "low", "prev_close"):
             assert f in stock and stock[f] is None, f"{f} should be present and None"
+
+
+# ============================================================
+# Reports target price + 券商评级 E2E (2026-10-08)
+# ============================================================
+#
+# EastMoney upstream (reportapi.eastmoney.com/report/list) carries
+# indvAimPriceT/L (目标价) and sRatingName (券商评级 — a DIFFERENT scale
+# from the 东财评级 already exposed as `rating`). The fetcher projection
+# dropped all three until 2026-10-08. These tests pin the full chain:
+# fetcher dict -> ReportRecord -> JSON, including the "" -> null
+# sanitization for reports without a target price. Record values mirror
+# the live probe of code=600519.
+
+
+class TestReportsTargetPriceE2E:
+    def test_reports_carry_target_price_and_broker_rating(self, client, monkeypatch):
+        from stock_data.api.routes.helpers import get_manager
+        from stock_data.api.routes import stocks as stocks_routes
+
+        priced = {
+            "title": "飞天整体稳健，推进全面向C",
+            "publish_date": "2026-08-18",
+            "org": "群益证券",
+            "info_code": "AP202608181828101201",
+            "rating": "持有",
+            "predict_eps_this": "68.12",
+            "predict_eps_next": "73.29",
+            "predict_eps_next2": "77.44",
+            "target_price": "1430.0000000000",
+            "target_price_low": "1430.0000000000",
+            "broker_rating": "区间操作(Tranding Buy)",
+        }
+        no_price = {
+            "title": "贵州茅台公司跟踪报告：以动销定投放",
+            "publish_date": "2026-09-21",
+            "org": "诚通证券",
+            "info_code": "AP202609211829719676",
+            "rating": "买入",
+            "predict_eps_this": "65.1400000000",
+            "predict_eps_next": "67.8700000000",
+            "predict_eps_next2": "71.3200000000",
+            "target_price": "",
+            "target_price_low": "",
+            "broker_rating": "强烈推荐",
+        }
+        mgr = get_manager()
+        monkeypatch.setattr(mgr, "get_reports", lambda code, max_pages: ([priced, no_price], "eastmoney"))
+        monkeypatch.setattr(stocks_routes.stock_list, "get_stock_name", lambda *a, **kw: "贵州茅台")
+
+        r = client.get("/api/v1/stocks/600519/reports?max_pages=2")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 2
+        assert body["source"] == "eastmoney"
+
+        rec0, rec1 = body["reports"]
+        # string -> float coercion happens at the schema boundary
+        assert rec0["target_price"] == 1430.0
+        assert rec0["target_price_low"] == 1430.0
+        assert rec0["broker_rating"] == "区间操作(Tranding Buy)"
+        # "" from upstream (no target price) must surface as null, not ""
+        assert rec1["target_price"] is None
+        assert rec1["target_price_low"] is None
+        assert rec1["broker_rating"] == "强烈推荐"
+        # pre-existing fields unchanged by this addition
+        assert rec0["rating"] == "持有"
+        assert rec0["predict_eps_this"] == 68.12

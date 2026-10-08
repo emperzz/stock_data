@@ -225,21 +225,63 @@ class TestReports:
     def setup_method(self):
         self.fetcher = EastMoneyFetcher()
 
-    @patch.object(EastMoneyFetcher, "get_reports")
-    def test_returns_records(self, mock_reports):
-        mock_reports.return_value = [
-            {
-                "title": "Test Report",
-                "publish_date": "2026-05-20",
-                "org": "中信证券",
-                "info_code": "ABC123",
-                "rating": "买入",
-            }
-        ]
-        result = self.fetcher.get_reports("600519", max_pages=1)
-        assert len(result) == 1
-        assert result[0]["title"] == "Test Report"
-        assert result[0]["rating"] == "买入"
+    # Records mirror a live probe of reportapi.eastmoney.com/report/list
+    # (2026-10-08, code=600519). Non-obvious upstream facts pinned here:
+    # aim prices arrive as numeric STRINGS ("" when the report has no target
+    # price), and emRatingName (东财评级) / sRatingName (券商评级) are two
+    # DIFFERENT rating scales on the same record. The odd literal
+    # "Tranding Buy" is EastMoney's own typo, kept verbatim.
+    _PRICED = {
+        "title": "飞天整体稳健，推进全面向C",
+        "publishDate": "2026-08-18 00:00:00.000",
+        "orgSName": "群益证券",
+        "infoCode": "AP202608181828101201",
+        "emRatingName": "持有",
+        "sRatingName": "区间操作(Tranding Buy)",
+        "indvAimPriceT": "1430.0000000000",
+        "indvAimPriceL": "1430.0000000000",
+        "predictThisYearEps": "68.12",
+        "predictNextYearEps": "73.29",
+        "predictNextTwoYearEps": "77.44",
+    }
+    _NO_PRICE = {
+        "title": "贵州茅台公司跟踪报告：以动销定投放，缓解市场压力，低速稳态发展",
+        "publishDate": "2026-09-21 00:00:00.000",
+        "orgSName": "诚通证券",
+        "infoCode": "AP202609211829719676",
+        "emRatingName": "买入",
+        "sRatingName": "强烈推荐",
+        "indvAimPriceT": "",
+        "indvAimPriceL": "",
+        "predictThisYearEps": "65.1400000000",
+        "predictNextYearEps": "67.8700000000",
+        "predictNextTwoYearEps": "71.3200000000",
+    }
+
+    def test_returns_records(self):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"data": [self._PRICED, self._NO_PRICE], "TotalPage": 1}
+        with patch.object(self.fetcher._session, "get", return_value=mock_response):
+            result = self.fetcher.get_reports("600519", max_pages=1)
+        assert len(result) == 2
+        priced, no_price = result
+        assert priced["title"] == "飞天整体稳健，推进全面向C"
+        assert priced["publish_date"] == "2026-08-18"
+        assert priced["org"] == "群益证券"
+        assert priced["info_code"] == "AP202608181828101201"
+        assert priced["rating"] == "持有"
+        assert priced["predict_eps_this"] == "68.12"
+        assert priced["predict_eps_next"] == "73.29"
+        assert priced["predict_eps_next2"] == "77.44"
+        # target price + 券商评级 — dropped by this projection before 2026-10-08
+        assert priced["target_price"] == "1430.0000000000"
+        assert priced["target_price_low"] == "1430.0000000000"
+        assert priced["broker_rating"] == "区间操作(Tranding Buy)"
+        # upstream emits "" for absent aim prices; fetcher passes it through,
+        # ReportRecord sanitization turns it into null at the API boundary.
+        assert no_price["target_price"] == ""
+        assert no_price["target_price_low"] == ""
+        assert no_price["broker_rating"] == "强烈推荐"
 
     def test_pdf_url(self):
         f = EastMoneyFetcher()
