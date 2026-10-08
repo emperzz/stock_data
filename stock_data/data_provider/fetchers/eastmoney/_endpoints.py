@@ -5,7 +5,7 @@ centralises every EastMoney URL / report-name / sort-default / fs-prefix
 that the rest of the fetcher references by symbolic name.
 
 Two top-level singletons are exported:
-- ``URLS``  (``_EastMoneyURLs``) — the 6 push2/news subdomain URLs.
+- ``URLS``  (``_EastMoneyURLs``) — the push2/news/emweb subdomain URLs.
 - ``ENDPOINTS``  (``_Endpoints``) — every API entry the methods call:
   dataclass entries for ``datacenter-web.eastmoney.com`` (7 endpoints),
   dict entries for ``push2.eastmoney.com`` fund-flow + board clist,
@@ -34,6 +34,9 @@ class _EastMoneyURLs:
     push2/news domain endpoint.
     """
 
+    F10_BUSINESS_ANALYSIS = (
+        "https://emweb.securities.eastmoney.com/PC_HSF10/BusinessAnalysis/PageAjax"
+    )
     STOCK_BOARDS = "https://push2.eastmoney.com/api/qt/slist/get"
     STOCK_NEWS = "https://np-listapi.eastmoney.com/comm/web/getListInfo"
     STOCK_ANNOUNCEMENTS = "https://np-anotice-stock.eastmoney.com/api/security/ann"

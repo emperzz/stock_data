@@ -22,7 +22,14 @@ summary and points here for the per-endpoint matrix.
 | 板块成分股 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
 | 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
 | `/boards/relationships` | n/a (纯 persistence 读取, 从不调 fetcher) | **回显请求的 `source`** (非 `"persistence"`) — 见下方例外说明 |
+| `/stocks/{code}/financials` · `/financials/history` | fetcher 名 (e.g. `ZzshareFetcher`, `ZhituFetcher`)；**空链 (BJ 无财务覆盖) → `""` + null 字段** (非 `"persistence"`) | n/a |
+| `/stocks/{code}/business-composition` | fetcher 名 (e.g. `EastMoneyFetcher`) | n/a |
 | `/agent/correlation/matrix` | 不跟踪 serving fetcher — stock label 恒为 `source: null`;board label 记录*请求的* source (`ths`/`eastmoney`, spec §2.3),非实际服务的 fetcher | n/a (compute-only — no top-level `source` field on `CorrelationMatrixResponse` because the response is a composite of multiple fetchers) |
+
+> 注 (2026-10-08)：本表旧行的示例写小写 slug（`tushare`/`eastmoney`），但 `/stocks/*` 家族
+> 路由实测直传 `fetcher.name`（CamelCase，`test_routes.py` 钉住）；`cls.py` 走
+> `_derive_slug()` 出小写。仓库存在两种形态并存，新端点（财务三端点）跟随 **stocks 家族
+> CamelCase** 先例；统一清理另行处理。
 
 > `/stocks` 暴露 `source` 字段 (post-2026-07-29): 每个 list entry 的 source 是 metadata origin (akshare/zzshare/persistence) 或 quote fetcher (当 `?include_quote=true`)。`/calendar` 仍然不暴露 source (response model 无该字段)。
 

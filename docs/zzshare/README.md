@@ -114,7 +114,7 @@ zzshare 接口与 `data_provider.base.DataCapability` 标志位的对应关系�
 | `lhb_list` / `lhb_detail` / `lhb_stock_history` / `lhb_trader_history` | `DRAGON_TIGER` |
 | `ths_hot_top` / `stock_ths_hot` | `HOT_TOPICS` |
 | `stock_info` | **已停用 2026-07-14** — 见下文 § 3；upstream `info_type=1` 对所有 A 股返 null，不再映射为 `STOCK_INFO` |
-| `finance_valuation` / `finance_indicator` / `finance_income` / `finance_balance` / `finance_cash_flow` / `finance_pit` / `finance_range` / `finance_stock` / `finance_latest` | (无现成 capability，2026-10-08 镜像文档时项目尚未定义 `STOCK_FINANCIAL`；见 11-fundamentals.md，需 `zzshare>=0.4.12`) |
+| `finance_latest` / `finance_stock`（indicator/valuation/income 三表） | `STOCK_FINANCIAL` + `STOCK_FINANCIAL_SERIES`（2026-10-08 接入 — `ZzshareFetcher.get_financial_snapshot` / `get_financial_history`；**BJ 零覆盖**，见 11-fundamentals.md；需 `zzshare>=0.4.12`。其余 `finance_valuation/indicator/income/balance/cash_flow/pit/range` 基础表与 PIT 查询暂不消费） |
 | `topic_table_list` / `topic_table_detail` / `topic_table_stocks` / `topic_kline` | (无现成 capability) |
 | `plate_kline` | (无现成 capability) |
 | `ai_report_list` / `ai_report_detail` | (无现成 capability) |

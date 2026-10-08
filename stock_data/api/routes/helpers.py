@@ -128,7 +128,13 @@ def _reject_invalid_stock_code(
     """
     if not stock_list.get_stock_name(code, manager=manager):
         if is_index_code(code):
-            hint = _INDEX_CODE_HINT_TEMPLATES[endpoint_kind].format(code=code)
+            # .get() fallback (spec 2026-10-08 P0-3): endpoints without a
+            # dedicated redirect template (e.g. /financials) previously
+            # KeyError'd into a 500. New-kind callers fall back to a generic
+            # no-index message — no nonexistent /indices/{kind} redirect.
+            hint = _INDEX_CODE_HINT_TEMPLATES.get(
+                endpoint_kind, "This endpoint does not serve index codes."
+            ).format(code=code)
             message = f"Index {code} is not supported via this endpoint. {hint}"
         else:
             message = f"Stock code {code} was not found in the stock list."

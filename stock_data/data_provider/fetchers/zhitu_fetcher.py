@@ -3,6 +3,19 @@ Zhitu fetcher for A-share realtime quote + index K-line (Priority 5).
 
 API: https://api.zhituapi.com/hs/real/ssjy/{stock_code}?token={token}
 Token configured via ZHITU_TOKEN environment variable.
+
+Financial backup chain (spec 2026-10-08): ``get_financial_snapshot`` /
+``get_financial_history`` derive SINGLE-QUARTER records from
+``/hs/fin/income/{code}`` — the only financial endpoint this fetcher uses.
+Upstream emits CUMULATIVE report-period values (H1 含 Q1); the §2.2
+pipeline cleans ``-``/``--`` placeholders, dedups restatement rows by max
+``plrq``, never trusts upstream sort order, differences absolutes, re-derives
+margins/yoy/qoq from the differences, and leaves ``roe_pct`` null (weighted
+ROE is not additive — no fake conversions). Empty answer = ``None`` / ``[]``
+(never ``{}``, which would short-circuit manager failover). Zhitu fin/* is
+404 for 北交所 — BJ coverage exists nowhere in this chain's zhitu leg.
+``/hs/fin/ratios`` and ``/hs/gs/cwzb`` exist but are cumulative-basis /
+``"--"``-riddled and intentionally unused.
 """
 
 import logging
@@ -70,6 +83,9 @@ class ZhituFetcher(BaseFetcher):
         # 沪深指数 (/hz/ 前缀) — docs/zhitu/10-indices-api.md
         | DataCapability.INDEX_REALTIME_QUOTE
         | DataCapability.INDEX_KLINE
+        # 财务备源 (/hs/fin/income 差分推导, spec 2026-10-08) — 无 BJ 覆盖
+        | DataCapability.STOCK_FINANCIAL
+        | DataCapability.STOCK_FINANCIAL_SERIES
     )
 
     def __init__(self):
@@ -1075,3 +1091,248 @@ class ZhituFetcher(BaseFetcher):
         # Newest report date first — matches EastMoney / schema expectation.
         rows.sort(key=lambda r: r["date"], reverse=True)
         return rows[: max(1, page_size)]
+
+    # ---------- financials backup chain (hs/fin/income) ----------
+
+    _FIN_CUM_FIELDS = (
+        # (contract key, upstream cumulative column, is_money)  money: 元→亿
+        ("total_revenue_yi", "yyzsr", True),
+        ("net_profit_yi", "jlr", True),
+        ("net_profit_attr_yi", "gsmgsyzzdjlr", True),
+        ("deduct_net_profit_attr_yi", "jlrhfcjcx", True),
+        ("operating_profit_yi", "yylr", True),
+        ("eps", "jbmgsy", False),
+    )
+    _FIN_QUARTER_OF_MONTH = {3: 1, 6: 2, 9: 3, 12: 4}
+
+    @staticmethod
+    def _fin_date(value: object) -> str | None:
+        """Normalize a zhitu date ('2026-06-30' / '20260630' / with time part)
+        to 'YYYY-MM-DD', else None. Local twin of the zzshare fetcher's
+        helper — fetchers must not import each other's privates.
+
+        Component-wise digit validation (review P2-3): a loose len+dash check
+        would accept '2026-ab-30' and then ``int(d[5:7])`` would raise
+        ValueError INSIDE the fetcher — violating the fetcher-only-
+        DataFetchError contract (manager folds anything else into the
+        failover chain)."""
+        if value is None:
+            return None
+        s = str(value).strip().split(" ")[0]
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+        if (
+            len(s) == 10
+            and s[4] == "-"
+            and s[7] == "-"
+            and s[:4].isdigit()
+            and s[5:7].isdigit()
+            and s[8:10].isdigit()
+        ):
+            return s
+        return None
+
+    @staticmethod
+    def _fin_row_rank(row: dict) -> tuple:
+        """Deterministic tie-break key for same-(jzrq,plrq) restatement pairs:
+        value-based, so input order cannot flip which row survives (review
+        P2-1). None values sort to -inf."""
+        out = []
+        for col in ("yyzsr", "jlr", "gsmgsyzzdjlr"):
+            f = safe_float(row.get(col))
+            out.append(f if f is not None else float("-inf"))
+        return tuple(out)
+
+    @classmethod
+    def _build_single_quarter_series(cls, raw: object) -> list[dict]:
+        """Derive SINGLE-QUARTER financial records from ``/hs/fin/income``
+        CUMULATIVE rows (spec rev2 §2.2 — the backup chain's only algorithm).
+
+        Pipeline: clean (``-``/``--`` → None via safe_float) → dedup by report
+        period keeping the max ``plrq`` row (upstream emits restatement
+        duplicates — measured ~20 on 600519's 122 rows) → order ASC (upstream
+        ASC/DESC depends on whether st/et were passed, never trust it) →
+        difference. Q1 single-quarter = its own cumulative. Non-Q1 without
+        its same-year predecessor emits null absolutes (no extrapolation).
+
+        Margins are re-derived from single-quarter deltas:
+        ``gross = (Δyyzsr − Δyycb) / Δyyzsr``, ``net = Δjlr / Δyyzsr``.
+        YoY compares against last year's same quarter; QoQ against the
+        chronologically adjacent period (Q1's QoQ legitimately points at
+        last year's Q4 — spec §3.2 keeps it). ``roe_pct`` is ALWAYS None:
+        weighted ROE is not additive and we refuse fake conversions.
+        """
+        rows = raw if isinstance(raw, list) else []
+        best: dict[tuple[int, int], dict] = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            d = cls._fin_date(r.get("jzrq"))
+            if not d:
+                continue
+            month = int(d[5:7])
+            q = cls._FIN_QUARTER_OF_MONTH.get(month)
+            if q is None:
+                continue
+            pub = cls._fin_date(r.get("plrq")) or ""
+            key = (int(d[:4]), q)
+            prev = best.get(key)
+            # Dedup restatement pairs: latest plrq wins (spec §2.2). When
+            # plrq TIES (real upstream emits same-jzrq same-plrq pairs with
+            # different values), fall back to a value-based deterministic
+            # pick so ASC vs DESC input order cannot change the output
+            # (review P2-1).
+            if prev is None:
+                best[key] = {**r, "_date": d, "_pub": pub}
+            else:
+                prev_pub = prev.get("_pub") or ""
+                if pub > prev_pub or (
+                    pub == prev_pub and cls._fin_row_rank(r) >= cls._fin_row_rank(prev)
+                ):
+                    best[key] = {**r, "_date": d, "_pub": pub}
+
+        ordered = sorted(best)
+        sq_cum: dict[tuple[int, int], dict[str, float | None]] = {}
+        for y, q in ordered:
+            row = best[(y, q)]
+            vals: dict[str, float | None] = {}
+            base = best.get((y, q - 1)) if q > 1 else None
+            for contract_key, col, is_money in cls._FIN_CUM_FIELDS:
+                cur = safe_float(row.get(col))
+                if cur is None:
+                    vals[contract_key] = None
+                elif q == 1:
+                    vals[contract_key] = cur / 1e8 if is_money else cur
+                else:
+                    prev_cum = safe_float(base.get(col)) if base else None
+                    if prev_cum is None:
+                        vals[contract_key] = None
+                    else:
+                        delta = cur - prev_cum
+                        vals[contract_key] = delta / 1e8 if is_money else delta
+            # single-quarter cost for margins
+            cost_sq: float | None = None
+            if q == 1:
+                cost_sq = safe_float(row.get("yycb"))
+            else:
+                cur_c = safe_float(row.get("yycb"))
+                prev_c = safe_float(base.get("yycb")) if base else None
+                cost_sq = None if (cur_c is None or prev_c is None) else cur_c - prev_c
+            rev_sq = vals["total_revenue_yi"]
+            if rev_sq is not None and rev_sq > 0:
+                vals["_gross_pct"] = (
+                    None if cost_sq is None else (rev_sq - cost_sq / 1e8) / rev_sq * 100
+                )
+                jp = vals["net_profit_yi"]
+                vals["_net_pct"] = None if jp is None else jp / rev_sq * 100
+            else:
+                vals["_gross_pct"] = None
+                vals["_net_pct"] = None
+            sq_cum[(y, q)] = vals
+
+        out: list[dict] = []
+        for idx, (y, q) in enumerate(ordered):
+            vals = sq_cum[(y, q)]
+            rec: dict = {
+                "report_date": best[(y, q)]["_date"],
+                "pub_date": best[(y, q)]["_pub"] or None,
+                "total_revenue_yi": vals["total_revenue_yi"],
+                "net_profit_yi": vals["net_profit_yi"],
+                "net_profit_attr_yi": vals["net_profit_attr_yi"],
+                "deduct_net_profit_attr_yi": vals["deduct_net_profit_attr_yi"],
+                "operating_profit_yi": vals["operating_profit_yi"],
+                "eps": vals["eps"],
+                "roe_pct": None,
+                "gross_margin_pct": vals["_gross_pct"],
+                "net_margin_pct": vals["_net_pct"],
+            }
+
+            def _ratio(cur: float | None, base_v: float | None) -> float | None:
+                if cur is None or base_v is None or base_v == 0:
+                    return None
+                return (cur - base_v) / abs(base_v) * 100
+
+            yoy_vals = sq_cum.get((y - 1, q), {})
+            # QoQ base must be the LITERALLY previous quarter (y, q-1) or,
+            # for Q1, (y-1, 4) — review P2-2. ordered[idx-1] alone would let
+            # a gapped series (e.g. 2025-Q1 → 2026-Q1, 4 quarters apart)
+            # pass a cross-year ratio off as 环比.
+            expected_prev = (y, q - 1) if q > 1 else (y - 1, 4)
+            prev_key = ordered[idx - 1] if idx > 0 else None
+            qoq_vals = sq_cum.get(prev_key, {}) if prev_key == expected_prev else {}
+            rec["revenue_yoy_pct"] = _ratio(
+                vals["total_revenue_yi"], yoy_vals.get("total_revenue_yi")
+            )
+            rec["net_profit_yoy_pct"] = _ratio(
+                vals["net_profit_attr_yi"], yoy_vals.get("net_profit_attr_yi")
+            )
+            rec["revenue_qoq_pct"] = _ratio(
+                vals["total_revenue_yi"], qoq_vals.get("total_revenue_yi")
+            )
+            rec["net_profit_qoq_pct"] = _ratio(
+                vals["net_profit_attr_yi"], qoq_vals.get("net_profit_attr_yi")
+            )
+            out.append(rec)
+        return out
+
+    _FINANCE_VALUATION_KEYS = (
+        "trade_date",
+        "pe_ttm",
+        "pe_lyr",
+        "pb",
+        "ps",
+        "pcf",
+        "market_cap_yi",
+        "float_market_cap_yi",
+        "total_share_wan_shares",
+        "float_share_wan_shares",
+        "turnover_ratio_pct",
+    )
+
+    def get_financial_snapshot(self, code: str) -> dict | None:
+        """Zhitu backup snapshot: last derived single-quarter record.
+
+        Profit fields come from the §2.2 differencing pipeline; ``roe_pct``
+        and the whole valuation block are honest ``None`` (zhitu fin/income
+        carries no valuation, no ROE). Returns ``None`` — never ``{}`` —
+        when nothing is derivable (BJ codes 404 upstream,新股无报告期),
+        keeping the manager's empty-chain semantics intact.
+        """
+        recs = self._get_financial_series(code)
+        if not recs:
+            return None
+        snap = dict(recs[-1])
+        for k in self._FINANCE_VALUATION_KEYS:
+            snap[k] = None
+        return snap
+
+    def get_financial_history(
+        self,
+        code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """Zhitu backup single-quarter series (same contract as the zzshare
+        primary). Window filters on ``report_date``; no window → last 12
+        periods (spec §3.2)."""
+        recs = self._get_financial_series(code)
+        s = self._fin_date(start_date)
+        e = self._fin_date(end_date)
+        if s or e:
+            return [
+                r
+                for r in recs
+                if (not s or r["report_date"] >= s) and (not e or r["report_date"] <= e)
+            ]
+        return recs[-12:] if len(recs) > 12 else recs
+
+    def _get_financial_series(self, code: str) -> list[dict]:
+        """One upstream call + §2.2 pipeline. ``_fetch_json`` already maps
+        any failure (network / BJ 404 / token missing) to ``None`` → the
+        series degrades to ``[]`` and the failover semantics stay honest."""
+        code = normalize_stock_code(code)
+        data = self._fetch_json(
+            f"/hs/fin/income/{code}",
+            op_label=f"financial income {code}",
+        )
+        return self._build_single_quarter_series(data)

@@ -1105,6 +1105,138 @@ GET /api/v1/stocks/{code}/holder-num?page_size=10
 
 ---
 
+### Financial Snapshot (财务快照)
+
+```bash
+GET /api/v1/stocks/{code}/financials
+```
+
+```json
+{
+  "code": "600519",
+  "name": "贵州茅台",
+  "report_date": "2026-06-30",
+  "pub_date": "2026-08-15",
+  "eps": 13.8186,
+  "roe_pct": 6.62,
+  "gross_margin_pct": 89.48,
+  "net_margin_pct": 48.59,
+  "total_revenue_yi": 375.75,
+  "net_profit_attr_yi": 172.74,
+  "deduct_net_profit_attr_yi": 172.24,
+  "revenue_yoy_pct": -5.14,
+  "net_profit_yoy_pct": -6.94,
+  "revenue_qoq_pct": -31.75,
+  "net_profit_qoq_pct": -36.49,
+  "trade_date": "2026-09-30",
+  "pe_ttm": 19.32, "pe_lyr": 19.11, "pb": 6.26, "ps": 9.08, "pcf": 37.53,
+  "market_cap_yi": 15733.78, "float_market_cap_yi": 15733.78,
+  "total_share_wan_shares": 125008.16, "float_share_wan_shares": 125008.16,
+  "turnover_ratio_pct": 0.31,
+  "source": "ZzshareFetcher"
+}
+```
+
+契约要点：盈利块为**单季口径**（`report_date`/`pub_date` 标注基准与披露日）；
+估值块为最新交易日快照。单位：`_yi`=亿元、`_pct`=百分数、`_wan_shares`=万股、EPS=元、
+PE/PB 等=倍数。字段 `null` = 该源不提供或上游未披露，**不会出现 0 冒充缺失**。
+北交所（BJ）代码 = 财务上游零覆盖 → 200 + 全 `null` + `source=""`。
+仅支持 A 股（非 csi 代码 / 未收录 / 指数代码 → 400）。
+
+---
+
+### Financial History 单季历史 (财务历史)
+
+```bash
+GET /api/v1/stocks/{code}/financials/history?start_date=2024-01-01&end_date=2026-10-08
+```
+
+- `start_date` / `end_date`：可选，按**报告期**过滤，`YYYY-MM-DD` 或 `YYYYMMDD`；
+  都省略时返回最近 12 个报告期。非法格式 → 400。
+
+```json
+{
+  "code": "600519", "name": "贵州茅台",
+  "basis": "single_quarter",
+  "total": 2,
+  "records": [
+    {
+      "report_date": "2026-03-31", "pub_date": "2026-04-25",
+      "total_revenue_yi": 547.03, "net_profit_yi": 281.54, "net_profit_attr_yi": 272.43,
+      "operating_profit_yi": 375.37, "deduct_net_profit_attr_yi": 272.4,
+      "eps": 21.7545, "roe_pct": 10.57,
+      "gross_margin_pct": 89.91, "net_margin_pct": 52.22,
+      "revenue_yoy_pct": 6.54, "net_profit_yoy_pct": 1.37,
+      "revenue_qoq_pct": 33.49, "net_profit_qoq_pct": 52.91
+    },
+    {
+      "report_date": "2026-06-30", "pub_date": "2026-08-15",
+      "total_revenue_yi": 375.75, "net_profit_yi": 178.79, "net_profit_attr_yi": 172.74,
+      "operating_profit_yi": 238.74, "deduct_net_profit_attr_yi": 172.24,
+      "eps": 13.8186, "roe_pct": 6.62,
+      "gross_margin_pct": 89.48, "net_margin_pct": 48.59,
+      "revenue_yoy_pct": -5.14, "net_profit_yoy_pct": -6.94,
+      "revenue_qoq_pct": -31.75, "net_profit_qoq_pct": -36.49
+    }
+  ],
+  "source": "ZzshareFetcher"
+}
+```
+
+契约要点：`basis` 恒 `"single_quarter"`（单季值，非报告期累计）；records 按
+`report_date` **升序**；`pub_date` 可用于回测防未来函数；`source=""` + `records: []`
+= 无覆盖（如 BJ）。单位/null 语义同「财务快照」。仅 A 股。
+
+---
+
+### Main Business Composition 主营构成
+
+```bash
+GET /api/v1/stocks/{code}/business-composition?category=product&report_date=2026-06-30
+```
+
+- `category`：可选 `product|region|industry`；省略=全部。非法值 → 400。
+- `report_date`：可选，`YYYY-MM-DD` / `YYYYMMDD`；缺省=上游窗口内最新报告期；
+  不在上游窗口内 → 400（message 附可用期首尾）。
+
+```json
+{
+  "code": "600519", "name": "贵州茅台",
+  "report_date": "2026-06-30",
+  "total": 3,
+  "records": [
+    {
+      "category": "product", "item": "茅台酒", "rank": 1,
+      "revenue_yi": 777.24, "revenue_share_pct": 85.69,
+      "cost_yi": 60.01, "cost_share_pct": 63.34,
+      "profit_yi": 717.24, "profit_share_pct": 88.3,
+      "gross_margin_pct": 92.28
+    },
+    {
+      "category": "product", "item": "其他系列酒", "rank": 2,
+      "revenue_yi": 129.34, "revenue_share_pct": 14.26,
+      "cost_yi": 34.16, "cost_share_pct": 36.06,
+      "profit_yi": 95.18, "profit_share_pct": 11.72,
+      "gross_margin_pct": 73.59
+    },
+    {
+      "category": "product", "item": "其他(补充)", "rank": 3,
+      "revenue_yi": 0.45, "revenue_share_pct": 0.05,
+      "cost_yi": 0.57, "cost_share_pct": 0.6,
+      "profit_yi": -0.12, "profit_share_pct": -0.02,
+      "gross_margin_pct": -27.88
+    }
+  ],
+  "source": "EastMoneyFetcher"
+}
+```
+
+契约要点：`industry`（行业）拆分行**并非每只股票每期都存在**（如中期报告常缺），
+`category=industry` 返回空 `records` 是合法事实而非错误；覆盖沪深**北**三所。
+收入占比 = 该分项收入 ÷ 当期总营收。单位/null 语义同上。仅 A 股。
+
+---
+
 ### Dividend History (分红送转)
 
 ```bash

@@ -58,6 +58,7 @@ _TTL_BOARD_NEWS = int(os.getenv("CACHE_TTL_BOARD_NEWS", "1800"))  # 板块新闻
 _TTL_BOARD_SURGES = int(
     os.getenv("CACHE_TTL_BOARD_SURGES", "3600")
 )  # 板块炒作周期 (1h, 月度粒度变动慢)
+_TTL_STOCK_FINANCIAL = int(os.getenv("CACHE_TTL_STOCK_FINANCIAL", "86400"))  # 财报表按季更新 (24h)
 
 # Cache instances
 _dragontiger_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_DRAGON_TIGER)
@@ -73,6 +74,9 @@ _reports_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_REPORTS)
 _announcements_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_ANNOUNCEMENTS)
 _pools_cache: TTLCache = TTLCache(maxsize=128, ttl=_TTL_POOLS)
 _reasons_cache: TTLCache = TTLCache(maxsize=128, ttl=_TTL_POOLS)
+_financial_snapshot_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_FINANCIAL)
+_financial_history_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_FINANCIAL)
+_main_business_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_STOCK_FINANCIAL)
 _stock_info_cache: TTLCache = TTLCache(maxsize=512, ttl=_TTL_STOCK_INFO)
 _news_search_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_SEARCH)
 _news_content_cache: TTLCache = TTLCache(maxsize=256, ttl=_TTL_NEWS_CONTENT)
@@ -162,6 +166,21 @@ def get_holder_num_cache() -> TTLCache:
 
 def get_dividend_cache() -> TTLCache:
     return _dividend_cache
+
+
+def get_financial_snapshot_cache() -> TTLCache:
+    """Cache for /stocks/{code}/financials (财报按季披露, 24h TTL)."""
+    return _financial_snapshot_cache
+
+
+def get_financial_history_cache() -> TTLCache:
+    """Cache for /stocks/{code}/financials/history."""
+    return _financial_history_cache
+
+
+def get_main_business_cache() -> TTLCache:
+    """Cache for /stocks/{code}/business-composition."""
+    return _main_business_cache
 
 
 def get_fund_flow_cache() -> TTLCache:
@@ -368,6 +387,54 @@ def make_reasons_cache_key(date: str | None) -> str:
 
 def make_stock_info_cache_key(stock_code: str) -> str:
     return f"stock_info:{stock_code}"
+
+
+# ---- financials (spec 2026-10-08 §5): normalize in keys — SH600519 and
+# 600519 must share a slot (precedent: make_news_stock_cache_key).
+
+
+def make_financial_snapshot_cache_key(stock_code: str) -> str:
+    from stock_data.data_provider.utils.normalize import normalize_stock_code
+
+    return f"fin:{normalize_stock_code(stock_code)}"
+
+
+def make_financial_history_cache_key(
+    stock_code: str, start_date: str | None, end_date: str | None
+) -> str:
+    from stock_data.data_provider.utils.normalize import normalize_stock_code
+
+    # _fin_key_date keeps 20260101 and 2026-01-01 in ONE slot (review P2-4);
+    # it never raises — key_builder runs before handler validation.
+    return f"finhist:{normalize_stock_code(stock_code)}:{_fin_key_date(start_date)}:{_fin_key_date(end_date)}"
+
+
+def _fin_key_date(value: str | None) -> str:
+    """Best-effort dash-normalize a financial query date FOR CACHE KEYS ONLY.
+
+    key_builder runs before the handler's validation, so this must NEVER
+    raise — garbage dates fall through verbatim (the handler will 400 the
+    request and that entry never gets stored). ``20260101`` and
+    ``2026-01-01`` describe the same window and must share one slot
+    (review P2-4).
+    """
+    if not value:
+        return ""
+    s = str(value).strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    return s
+
+
+def make_main_business_cache_key(
+    stock_code: str, category: str | None, report_date: str | None
+) -> str:
+    from stock_data.data_provider.utils.normalize import normalize_stock_code
+
+    return (
+        f"bizcomp:{normalize_stock_code(stock_code)}:"
+        f"{category or 'all'}:{_fin_key_date(report_date) or 'latest'}"
+    )
 
 
 def make_news_search_cache_key(

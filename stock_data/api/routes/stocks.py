@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.persistence import stock_list, trade_calendar
-from ...data_provider.utils.normalize import code_to_exchange
+from ...data_provider.utils.normalize import code_to_exchange, market_tag, normalize_stock_code
 from ..cache import (
     cache_endpoint,
     cached_lookup,
@@ -26,10 +26,13 @@ from ..cache import (
     get_block_trade_cache,
     get_dividend_cache,
     get_dragontiger_cache,
+    get_financial_history_cache,
+    get_financial_snapshot_cache,
     get_fund_flow_cache,
     get_fund_flow_daily_cache,
     get_holder_num_cache,
     get_kline_cache,
+    get_main_business_cache,
     get_margin_cache,
     get_quote_cache,
     get_reports_cache,
@@ -41,10 +44,13 @@ from ..cache import (
     make_block_trade_cache_key,
     make_dividend_cache_key,
     make_dragon_tiger_cache_key,
+    make_financial_history_cache_key,
+    make_financial_snapshot_cache_key,
     make_fund_flow_cache_key,
     make_fund_flow_daily_cache_key,
     make_holder_num_cache_key,
     make_kline_cache_key,
+    make_main_business_cache_key,
     make_margin_cache_key,
     make_quote_cache_key,
     make_reports_cache_key,
@@ -58,6 +64,8 @@ from ..schemas import (
     AnnouncementResponse,
     BlockTradeRecord,
     BlockTradeResponse,
+    BusinessCompositionRecord,
+    BusinessCompositionResponse,
     DividendRecord,
     DividendResponse,
     DragonTigerInstitution,
@@ -65,6 +73,9 @@ from ..schemas import (
     DragonTigerResponse,
     DragonTigerSeat,
     ErrorResponse,
+    FinancialHistoryRecord,
+    FinancialHistoryResponse,
+    FinancialSnapshotResponse,
     FundFlowDailyRecord,
     FundFlowMinuteRecord,
     FundFlowResponse,
@@ -751,6 +762,226 @@ def get_dividend(
         code=stock_code,
         name=stock_name or "",
         records=[DividendRecord(**r) for r in data],
+        source=source,
+    )
+
+
+# ============================================================================
+# Financials — snapshot / single-quarter history / main-business composition
+# (spec docs/superpowers/specs/2026-10-08-stock-financial-data-design.md)
+# ============================================================================
+
+_FIN_COMPOSITION_CATEGORIES = {"product", "region", "industry"}
+
+
+def _require_csi_stock_code(stock_code: str, manager) -> None:
+    """Two-layer input guard for the financial routes, order fixed.
+
+    1. Market gate: ``_reject_invalid_stock_code`` is a POSITIVE existence
+       check against the stock list — a valid HK code can pass it once the
+       HK list is populated. These endpoints are csi-only upstream (zzshare /
+       zhitu / eastmoney financial tables), so non-A-shares are rejected
+       first, before the manager is touched at all.
+    2. Existence check: unknown / index codes → the standard 400 contract;
+       index codes hit the generic fallback in ``_reject_invalid_stock_code``
+       (the financial endpoints have no ``/indices/...`` redirect).
+    """
+    if market_tag(stock_code) != "csi":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "message": (
+                    f"Stock code {stock_code} is not an A-share (csi) code; "
+                    "financial endpoints cover SH/SZ/BJ only."
+                ),
+            },
+        )
+    _reject_invalid_stock_code(stock_code, endpoint_kind="financials", manager=manager)
+
+
+def _fin_query_date(value: str | None, param: str) -> str | None:
+    """Validate/normalize a ``YYYY-MM-DD`` | ``YYYYMMDD`` query date → zero-padded ISO.
+
+    RE-EMITS from the parsed date (review P1-1): ``strptime`` accepts
+    non-padded ``2026-6-1``, but every downstream consumer (zzshare statDate
+    axis, eastmoney available_report_dates) is zero-padded — passing the raw
+    form through would silently no-op the window filter or produce a bogus
+    "not in upstream window" 400.
+
+    Raises ``ValueError`` in the HANDLER BODY — map_errors turns it into 400
+    at the handler boundary. Never sink input validation into a fetcher:
+    ``_with_failover`` catches every exception and folds it into a 503
+    (spec §6 / review P0-1).
+    """
+    if value is None or value == "":
+        return None
+    s = value.strip()
+    if len(s) == 8 and s.isdigit():
+        s = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    try:
+        parsed = datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"{param} must be YYYY-MM-DD or YYYYMMDD, got {value!r}") from None
+    return parsed.strftime("%Y-%m-%d")
+
+
+@router.get(
+    "/stocks/{stock_code}/financials",
+    response_model=FinancialSnapshotResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["stocks"],
+)
+@endpoint_meta(
+    summary="财务快照",
+    markets=["csi"],
+    capabilities=["STOCK_FINANCIAL"],
+)
+@map_errors
+@cache_endpoint(
+    cache_fn=lambda *args, **kwargs: get_financial_snapshot_cache(),
+    key_builder=lambda stock_code: make_financial_snapshot_cache_key(stock_code),
+    hit_label="financial_snapshot",
+)
+def get_financials(stock_code: str = Path(max_length=20)) -> FinancialSnapshotResponse:
+    """最新报告期单季盈利 + 最新交易日估值。
+
+    Failover Zzshare(P2)→Zhitu(P5)；备源整块估值与 ``roe_pct`` 为 null。
+    北交所代码 = 上游零覆盖 → 200 + 全 null + ``source=""``（无数据≠故障）。
+    """
+    manager = get_manager()
+    _require_csi_stock_code(stock_code, manager)
+    data, source = manager.get_financial_snapshot(stock_code)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
+    known = set(FinancialSnapshotResponse.model_fields)
+    payload = {k: v for k, v in (data or {}).items() if k in known}
+    return FinancialSnapshotResponse(
+        code=normalize_stock_code(stock_code), name=stock_name or "", source=source, **payload
+    )
+
+
+@router.get(
+    "/stocks/{stock_code}/financials/history",
+    response_model=FinancialHistoryResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["stocks"],
+)
+@endpoint_meta(
+    summary="财务历史（单季）",
+    markets=["csi"],
+    capabilities=["STOCK_FINANCIAL_SERIES"],
+)
+@map_errors
+@cache_endpoint(
+    cache_fn=lambda *args, **kwargs: get_financial_history_cache(),
+    key_builder=lambda stock_code, start_date, end_date: make_financial_history_cache_key(
+        stock_code, start_date, end_date
+    ),
+    hit_label="financial_history",
+)
+def get_financials_history(
+    stock_code: str = Path(max_length=20),
+    start_date: str | None = Query(default=None, description="报告期起 YYYY-MM-DD / YYYYMMDD"),
+    end_date: str | None = Query(default=None, description="报告期止 YYYY-MM-DD / YYYYMMDD"),
+) -> FinancialHistoryResponse:
+    """按报告期升序的单季财务序列；缺省最近 12 个报告期。
+
+    ``basis`` 恒 ``single_quarter``（主备两源同一口径，spec §2.2）；备源仅
+    ``roe_pct`` 缺席。日期参数在本 handler 内校验（fetcher 抛错会变 503）。
+    """
+    manager = get_manager()
+    _require_csi_stock_code(stock_code, manager)
+    s = _fin_query_date(start_date, "start_date")
+    e = _fin_query_date(end_date, "end_date")
+    data, source = manager.get_financial_history(stock_code, s, e)
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
+    known = set(FinancialHistoryRecord.model_fields)
+    records = [
+        FinancialHistoryRecord(**{k: v for k, v in row.items() if k in known})
+        for row in (data or [])
+    ]
+    return FinancialHistoryResponse(
+        code=normalize_stock_code(stock_code),
+        name=stock_name or "",
+        basis="single_quarter",
+        total=len(records),
+        records=records,
+        source=source,
+    )
+
+
+@router.get(
+    "/stocks/{stock_code}/business-composition",
+    response_model=BusinessCompositionResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Data unavailable"},
+        500: {"model": ErrorResponse, "description": "Server error"},
+    },
+    tags=["stocks"],
+)
+@endpoint_meta(
+    summary="主营构成",
+    markets=["csi"],
+    capabilities=["STOCK_MAIN_BUSINESS"],
+)
+@map_errors
+@cache_endpoint(
+    cache_fn=lambda *args, **kwargs: get_main_business_cache(),
+    key_builder=lambda stock_code, category, report_date: make_main_business_cache_key(
+        stock_code, category, report_date
+    ),
+    hit_label="main_business",
+)
+def get_business_composition(
+    stock_code: str = Path(max_length=20),
+    category: str | None = Query(default=None, description="product|region|industry；省略=全部"),
+    report_date: str | None = Query(default=None, description="报告期 YYYY-MM-DD / YYYYMMDD"),
+) -> BusinessCompositionResponse:
+    """主营业务构成（东财 F10 单源，含北交所）。
+
+    ``category=industry`` 对中期报告期可合法返回空 records（上游该期无行业
+    拆分行）；请求的 ``report_date`` 不在上游滑窗 → 400（带可用期首尾提示）。
+    """
+    manager = get_manager()
+    _require_csi_stock_code(stock_code, manager)
+    if category is not None and category not in _FIN_COMPOSITION_CATEGORIES:
+        raise ValueError(
+            f"category must be one of {sorted(_FIN_COMPOSITION_CATEGORIES)}, got {category!r}"
+        )
+    rd = _fin_query_date(report_date, "report_date")
+    data, source = manager.get_main_business_composition(stock_code, category, rd)
+    if data.get("requested_report_date_available") is False:
+        avail = data.get("available_report_dates") or []
+        hint = (
+            f"available from {avail[0]} to {avail[-1]}"
+            if avail
+            else "upstream has no composition data for this stock"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "message": f"report_date {rd} is not in the upstream window ({hint}).",
+            },
+        )
+    stock_name = stock_list.get_stock_name(stock_code, manager=manager)
+    known = set(BusinessCompositionRecord.model_fields)
+    records = [
+        BusinessCompositionRecord(**{k: v for k, v in row.items() if k in known})
+        for row in (data.get("records") or [])
+    ]
+    return BusinessCompositionResponse(
+        code=normalize_stock_code(stock_code),
+        name=stock_name or "",
+        report_date=data.get("report_date"),
+        total=len(records),
+        records=records,
         source=source,
     )
 

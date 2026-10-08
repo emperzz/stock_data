@@ -381,6 +381,15 @@ df = api.finance_latest(table="indicator", codes="600519.SH,000001.SZ")
 - **单位实测**：income/balance/cash_flow 金额为**元**（float）；valuation 的 `market_cap`/`circulating_market_cap` 为**亿元**、`capitalization`/`circulating_cap` 为**万股**；indicator 各比率字段为**百分数数值**（89.48 即 89.48%）；eps 为**元/股**。
 - 字段缺失值为 `None`（DataFrame 中的 NaN/None，不是 zhitu 那种 `"-"` 字符串）。
 
+### SDK 错误咽没陷阱（2026-10-08 源码核实，本项目备注）
+
+`core.py::_query` 把**网络异常（含重试耗尽）、非 200 响应、业务错误码**统一 `return None`
+（只有 401/429 抛 `ApiAuthError`/`ApiRateLimitError`）；`finance_data_to_df(None)` 再把
+`None` 转成**空 DataFrame**——与"上游合法返回空集（如北交所）"完全不可区分。
+**故障若走 shortcut 会被伪装成 200 空答案。** 因此本项目财务方法绕开 `finance_*` shortcut，
+直用公开 `api.query(path, params)` 通道按原始 envelope 判：`None`=故障（raise），
+`[]`=真空。路径模板与 shortcut 表逐字一致（见 11 文档上方 SDK URL 映射表）。
+
 ### 覆盖范围提示（本项目备注）
 
 - zzshare 财报覆盖 = 五表：**估值日频 + 指标/利润/资产负债/现金流季频**。

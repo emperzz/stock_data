@@ -12,6 +12,12 @@ Endpoint coverage of THIS module:
 - push2/push2his.eastmoney.com: 资金流 (minute-level + 120-day)
 - reportapi.eastmoney.com: 研报列表
 - pdf.dfcfw.com: 研报 PDF
+- emweb.securities.eastmoney.com: 主营构成 (F10 BusinessAnalysis PageAjax,
+  ``get_main_business_composition`` — 项目内 STOCK_MAIN_BUSINESS 唯一上游,
+  覆盖沪深北)。单请求无分页 delay；``_emweb_query`` 失败必须 raise
+  ``DataFetchError``（刻意不跟 ``_datacenter_query`` 的吞异常返 ``[]`` 先例，
+  否则单源链 503 语义失效）。上游真实字段含笔误
+  ``MAIN_BUSINESS_RPOFIT``/``GROSS_RPOFIT_RATIO``，按字面解析。
 
 See the two mixin modules for the rest.
 """
@@ -28,13 +34,35 @@ from typing import Any
 from curl_cffi import requests as cffi_requests
 
 from ...base import BaseFetcher, DataCapability, DataFetchError
+from ...core.types import safe_float, safe_int
 from ...utils.code_converter import to_eastmoney_secid
-from ...utils.normalize import normalize_stock_code
+from ...utils.normalize import code_to_exchange, normalize_stock_code
 from ._boards_mixin import BoardsMixin
-from ._endpoints import DATACENTER_URL, ENDPOINTS, UA
+from ._endpoints import DATACENTER_URL, ENDPOINTS, UA, URLS
 from ._news_mixin import NewsMixin
 
 logger = logging.getLogger(__name__)
+
+
+def to_emweb_f10_code(code: str) -> str:
+    """Normalize + prefix an A-share code for the emweb F10 endpoints
+    (``SH600519`` / ``SZ000001`` / ``BJ920002``).
+
+    OUTBOUND-ONLY — the F10 ``code=`` param wants the exchange-prefix form,
+    which is different from push2's numeric ``_secid`` (``1.600519``). The
+    public API surface keeps returning bare 6-digit codes (inbound/outbound
+    boundary rule).
+
+    Raises:
+        DataFetchError: no exchange could be derived. Fetchers speak only
+        DataFetchError (route-layer guards reject non-A-shares before this;
+        ValueError here would be swallowed by the manager failover).
+    """
+    c = normalize_stock_code(code)
+    ex = code_to_exchange(c)
+    if not ex:
+        raise DataFetchError(f"EastMoneyFetcher: cannot derive exchange for {code!r}")
+    return f"{ex}{c}"
 
 
 class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
@@ -71,6 +99,8 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
         | DataCapability.STOCK_BOARD  # migrated from AkshareFetcher
         | DataCapability.STOCK_NEWS  # per-stock news feed (np-listapi)
         | DataCapability.ANNOUNCEMENT  # joins failover chain alongside CninfoFetcher
+        # 主营构成唯一上游 (emweb F10 PageAjax; zhitu/zzshare 均无此表)
+        | DataCapability.STOCK_MAIN_BUSINESS
     )
 
     def is_available(self) -> bool:
@@ -797,3 +827,154 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
         self._session = cffi_requests.Session(impersonate="chrome120")
         self._session.headers.update(self._NEWS_SEARCH_BASE_HEADERS)
         self._news_warmed = False
+
+    # ---------- main business composition (emweb F10) ----------
+
+    _F10_CATEGORY_OF_TYPE = {"1": "industry", "2": "product", "3": "region"}
+    _F10_TYPE_OF_CATEGORY = {"industry": "1", "product": "2", "region": "3"}
+
+    def _emweb_query(self, f10_code: str) -> dict:
+        """GET the F10 BusinessAnalysis PageAjax payload.
+
+        Single request — NO paging, hence NO inter-page delay (the board
+        clist 1-2s sleep lives in the paging loop and must not be copied
+        here). Error contract deliberately diverges from
+        ``_datacenter_query``'s swallow-to-``[]`` precedent: this endpoint
+        is the ONLY provider for ``STOCK_MAIN_BUSINESS``, so any failure
+        must raise ``DataFetchError`` to surface a truthful 503 instead of
+        masquerading as an authoritative empty answer.
+        """
+        headers = {
+            "User-Agent": UA,
+            "Referer": "https://emweb.securities.eastmoney.com/",
+        }
+        try:
+            r = self._session.get(
+                URLS.F10_BUSINESS_ANALYSIS,
+                params={"code": f10_code},
+                headers=headers,
+                timeout=15,
+            )
+            # status must be checked BEFORE parsing: block/waf pages can
+            # arrive as parseable JSON error bodies, and swallowing those
+            # into an empty zygcfx would fake an authoritative "no
+            # breakdown" answer (spec §4.3, review P1-2)
+            if r.status_code != 200:
+                raise DataFetchError(f"[EastMoneyFetcher] F10 {f10_code} HTTP {r.status_code}")
+            body = r.json()
+        except DataFetchError:
+            raise
+        except Exception as e:
+            raise DataFetchError(f"[EastMoneyFetcher] F10 {f10_code} failed: {e}") from e
+        if not isinstance(body, dict):
+            raise DataFetchError(
+                f"[EastMoneyFetcher] F10 {f10_code} unexpected body type {type(body).__name__}"
+            )
+        return body
+
+    @staticmethod
+    def _f10_pct(value: object) -> float | None:
+        """Upstream 0..1 fraction → contract 百分数 (0.8569 → 85.69)."""
+        f = safe_float(value)
+        return None if f is None else f * 100
+
+    @staticmethod
+    def _f10_yi(value: object) -> float | None:
+        """Upstream 元 → contract 亿元."""
+        f = safe_float(value)
+        return None if f is None else f / 1e8
+
+    def get_main_business_composition(
+        self,
+        code: str,
+        category: str | None = None,
+        report_date: str | None = None,
+    ) -> dict:
+        """主营构成 (main-business breakdown) via EastMoney F10 ``zygcfx``.
+
+        Upstream (mirrored from akshare's internal implementation, probed
+        2026-10-08): ``GET emweb…/PC_HSF10/BusinessAnalysis/PageAjax?code=SH600519``
+        returns ``{zyfw, zygcfx, jyps}``; only ``zygcfx`` is consumed. Rows
+        carry a ~200-row multi-period sliding window; ``MAINOP_TYPE``
+        ``"1"/"2"/"3"`` = 行业/产品/地区 (行业行 is NOT present for every
+        stock/period — an interim ``category=industry`` answer is a
+        legitimate empty set). Amounts are 元; share ratios and
+        ``GROSS_RPOFIT_RATIO`` are fractions. The upstream typos
+        ``MAIN_BUSINESS_RPOFIT`` / ``GROSS_RPOFIT_RATIO`` are REAL keys —
+        parse them literally, do not "fix" them.
+
+        Returns (internal contract — ``available_report_dates`` and the
+        availability flag are consumed by the route for its 400 decision
+        and MUST NOT leak into the public schema):
+            {
+              "report_date": str | None,          # period actually served
+              "records": list[dict],              # contract field names, 亿/pct units
+              "available_report_dates": list[str],# ASC, deduped
+              "requested_report_date_available": bool | None,  # None if not asked
+            }
+        Fetcher never raises on bad user input (manager would fold it into
+        503); an empty ``zygcfx`` is the authoritative "no breakdown" answer
+        (200 + records: []).
+        """
+        code = normalize_stock_code(code)
+        f10 = to_emweb_f10_code(code)
+        body = self._emweb_query(f10)
+        rows = body.get("zygcfx")
+        rows = rows if isinstance(rows, list) else []
+
+        parsed: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            rd = str(row.get("REPORT_DATE") or "").split(" ")[0]
+            if len(rd) != 10:
+                continue
+            parsed.append({"row": row, "report_date": rd})
+
+        avail = sorted({p["report_date"] for p in parsed})
+        requested_available: bool | None = None
+        served = report_date.strip().split(" ")[0] if report_date else None
+        if report_date:
+            requested_available = served in avail
+            if not requested_available:
+                return {
+                    "report_date": served,
+                    "records": [],
+                    "available_report_dates": avail,
+                    "requested_report_date_available": False,
+                }
+        elif avail:
+            served = avail[-1]
+
+        want_type = self._F10_TYPE_OF_CATEGORY.get(category) if category else None
+        records: list[dict] = []
+        for p in parsed:
+            if served is None or p["report_date"] != served:
+                continue
+            r = p["row"]
+            mtype = str(r.get("MAINOP_TYPE") or "")
+            cat = self._F10_CATEGORY_OF_TYPE.get(mtype)
+            if cat is None or (want_type and mtype != want_type):
+                continue
+            records.append(
+                {
+                    "category": cat,
+                    "item": str(r.get("ITEM_NAME") or ""),
+                    "rank": safe_int(r.get("RANK")),
+                    "revenue_yi": self._f10_yi(r.get("MAIN_BUSINESS_INCOME")),
+                    "revenue_share_pct": self._f10_pct(r.get("MBI_RATIO")),
+                    "cost_yi": self._f10_yi(r.get("MAIN_BUSINESS_COST")),
+                    "cost_share_pct": self._f10_pct(r.get("MBC_RATIO")),
+                    # upstream typo RPOFIT is the REAL key — keep literal
+                    "profit_yi": self._f10_yi(r.get("MAIN_BUSINESS_RPOFIT")),
+                    "profit_share_pct": self._f10_pct(r.get("MBR_RATIO")),
+                    "gross_margin_pct": self._f10_pct(r.get("GROSS_RPOFIT_RATIO")),
+                }
+            )
+        records.sort(key=lambda x: (x["category"], x["rank"] if x["rank"] is not None else 10**9))
+        return {
+            "report_date": served,
+            "records": records,
+            "available_report_dates": avail,
+            "requested_report_date_available": requested_available,
+        }

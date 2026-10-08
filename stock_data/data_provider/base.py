@@ -203,6 +203,9 @@ class DataCapability(Flag):
     MARKET_RECAP = auto()  # 财联社焦点复盘（按日取全文本）
     BOARD_NEWS = auto()  # 板块热点新闻（THS F10 .m_box#news 抓取）
     BOARD_SURGES = auto()  # 板块炒作周期（THS F10 .history.timeline 抓取）
+    STOCK_FINANCIAL = auto()  # 财务快照（单季盈利+日频估值；zzshare 主/zhitu 差分备）
+    STOCK_FINANCIAL_SERIES = auto()  # 单季历史财务序列（zzshare 主/zhitu 差分备）
+    STOCK_MAIN_BUSINESS = auto()  # 主营构成（EastMoney F10 单源，含 BJ）
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -251,6 +254,9 @@ CAPABILITY_TO_METHOD: dict[DataCapability, str] = {
     DataCapability.MARKET_RECAP: "get_market_recap",
     DataCapability.BOARD_NEWS: "get_board_news",
     DataCapability.BOARD_SURGES: "get_board_surges",
+    DataCapability.STOCK_FINANCIAL: "get_financial_snapshot",
+    DataCapability.STOCK_FINANCIAL_SERIES: "get_financial_history",
+    DataCapability.STOCK_MAIN_BUSINESS: "get_main_business_composition",
 }
 
 
