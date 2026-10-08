@@ -126,6 +126,31 @@ def _from_yyyymmdd(date: str) -> str:
     return date
 
 
+def _finance_date(value: object) -> str | None:
+    """Normalize a finance-table date to 'YYYY-MM-DD' (or None).
+
+    Accepts None/'', 'YYYY-MM-DD', 'YYYY-MM-DD 00:00:00' (seen on some zzshare
+    date columns) and 'YYYYMMDD'. Non-string scalars (pd.Timestamp) stringify
+    first. Never raises — garbage in, None out (a bogus date must not poison
+    a whole record).
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s or s.lower() in ("nan", "none"):
+        return None
+    s = s.split(" ")[0]
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    return s if len(s) == 10 and s[4] == "-" else None
+
+
+def _yi(value: object) -> float | None:
+    """Money 元 → 亿元 (contract unit for all financial absolute amounts)."""
+    f = safe_float(value)
+    return f / 1e8 if f is not None else None
+
+
 class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
     """zzshare SDK fetcher — A-share multi-capability (priority 5)."""
 
@@ -1043,3 +1068,175 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
                 }
             )
         return out
+
+    # ---------- financials (finance_latest / finance_stock) ----------
+
+    @staticmethod
+    def _finance_rows(df: object) -> list[dict]:
+        """DataFrame → list[dict] (upstream finance_* methods return DataFrames).
+
+        Empty/None DataFrame yields ``[]``. Kept tiny on purpose: all unit
+        conversion and placeholder cleaning happens in the mapping code below
+        (zzshare empties are None/NaN — safe_float rejects both).
+        """
+        if df is None or not hasattr(df, "to_dict"):
+            return []
+        if len(df) == 0:
+            return []
+        return df.to_dict("records")
+
+    def _finance_call(self, label: str, fn: object, *args: object, **kwargs: object) -> list[dict]:
+        """One upstream finance_* call, wrapped in the fetcher error contract.
+
+        Any SDK-side exception (network/parse) raises ``DataFetchError`` so
+        the manager failover moves on to Zhitu — partial-success snapshots
+        across sources are explicitly NOT assembled (spec §4.2).
+        """
+        try:
+            return self._finance_rows(fn(*args, **kwargs))  # type: ignore[operator]
+        except DataFetchError:
+            raise
+        except Exception as e:
+            raise DataFetchError(f"ZzshareFetcher {label} failed: {e}") from e
+
+    def get_financial_snapshot(self, code: str) -> dict | None:
+        """Current financial snapshot: single-quarter profitability + daily valuation.
+
+        Upstream (docs/zzshare/11-fundamentals.md, SDK >= 0.4.12):
+          - ``finance_latest("indicator", codes=<ts>)`` — 单季比率块（eps/roe/
+            毛利率/净利率/同比环比/扣非额）。
+          - ``finance_latest("valuation", codes=<ts>)`` — 日频估值块（pe_ttm/
+            pe_lyr/pb/ps/pcf/市值(亿)/股本(万股)/换手(%)）。
+          - ``finance_stock("income", <ts>, limit=1)`` — 营收绝对额（indicator
+            表无营收绝对额，实测 18 列确认；金额单位元 → /1e8 亿）。
+
+        Never call the base ``finance_indicator(date, codes=…)`` form —
+        zzshare silently ignores ``codes=`` there and returns the full market
+        (5209 rows measured 2026-10-08).
+
+        Returns:
+            dict keyed by the public contract (snake_case, ``_yi``=亿元,
+            ``_pct``=百分数, 其余倍数/元原样), or **None** when nothing is
+            available (e.g. 北交所代码 — zzshare 财务五表零覆盖, 实测 BJ 全部
+            0 行). Must not return ``{}``: ``_is_meaningful({})`` is True and
+            would short-circuit the manager failover chain.
+        """
+        self._ensure_api()
+        api = self.__class__._api
+        if api is None:
+            raise DataFetchError(f"ZzshareFetcher zzshare SDK 不可用: {ZzshareFetcher._init_error}")
+        ts = _to_zzshare_ts_code(normalize_stock_code(code))
+        ind = self._finance_call(
+            f"financial indicator {code}", api.finance_latest, "indicator", codes=ts
+        )
+        val = self._finance_call(
+            f"financial valuation {code}", api.finance_latest, "valuation", codes=ts
+        )
+        inc = self._finance_call(f"financial income {code}", api.finance_stock, "income", ts, limit=1)
+        if not ind and not val:
+            return None
+        irow = ind[0] if ind else {}
+        vrow = val[0] if val else {}
+        row = inc[0] if inc else {}
+        return {
+            "report_date": _finance_date(irow.get("statDate")),
+            "pub_date": _finance_date(irow.get("pubDate")),
+            "eps": safe_float(irow.get("eps")),
+            "roe_pct": safe_float(irow.get("roe")),
+            "gross_margin_pct": safe_float(irow.get("gross_profit_margin")),
+            "net_margin_pct": safe_float(irow.get("net_profit_margin")),
+            "total_revenue_yi": _yi(row.get("total_operating_revenue")),
+            "net_profit_attr_yi": _yi(row.get("np_parent_company_owners")),
+            "deduct_net_profit_attr_yi": _yi(irow.get("adjusted_profit")),
+            "revenue_yoy_pct": safe_float(irow.get("inc_revenue_year_on_year")),
+            "net_profit_yoy_pct": safe_float(irow.get("inc_net_profit_year_on_year")),
+            "revenue_qoq_pct": safe_float(irow.get("inc_revenue_annual")),
+            "net_profit_qoq_pct": safe_float(irow.get("inc_net_profit_annual")),
+            "trade_date": _finance_date(vrow.get("trade_date")),
+            "pe_ttm": safe_float(vrow.get("pe_ratio")),
+            "pe_lyr": safe_float(vrow.get("pe_ratio_lyr")),
+            "pb": safe_float(vrow.get("pb_ratio")),
+            "ps": safe_float(vrow.get("ps_ratio")),
+            "pcf": safe_float(vrow.get("pcf_ratio")),
+            "market_cap_yi": safe_float(vrow.get("market_cap")),
+            "float_market_cap_yi": safe_float(vrow.get("circulating_market_cap")),
+            "total_share_wan_shares": safe_float(vrow.get("capitalization")),
+            "float_share_wan_shares": safe_float(vrow.get("circulating_cap")),
+            "turnover_ratio_pct": safe_float(vrow.get("turnover_ratio")),
+        }
+
+    def get_financial_history(
+        self,
+        code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """Per-quarter financial series, SINGLE-QUARTER basis (verified 2026-10-08).
+
+        Joins ``finance_stock("income")`` (绝对额, 元→亿) with
+        ``finance_stock("indicator")`` (eps/roe/毛利率/净利率/同比环比) on
+        ``statDate``. Upstream orders rows DESC; output is re-sorted ASC like
+        the K-line convention. No start/end → upstream ``limit=12`` (最近 12
+        个报告期, spec §3.2); with dates → filtered upstream, no cap.
+
+        Join spine is the income table — a period without absolute revenue is
+        not a revenue/profit history record (指标有而营收无的期不进历史);
+        the reverse (income row without indicator row) emits a record with
+        the ratio fields None (未知≠0). Empty (e.g. BJ codes) → ``[]``.
+        """
+        self._ensure_api()
+        api = self.__class__._api
+        if api is None:
+            raise DataFetchError(f"ZzshareFetcher zzshare SDK 不可用: {ZzshareFetcher._init_error}")
+        ts = _to_zzshare_ts_code(normalize_stock_code(code))
+        s = _finance_date(start_date)
+        e = _finance_date(end_date)
+        limit = None if (s or e) else 12
+        inc = self._finance_call(
+            f"financial history {code}",
+            api.finance_stock,
+            "income",
+            ts,
+            start_date=s,
+            end_date=e,
+            limit=limit,
+        )
+        ind = self._finance_call(
+            f"financial indicators {code}",
+            api.finance_stock,
+            "indicator",
+            ts,
+            start_date=s,
+            end_date=e,
+            limit=limit,
+        )
+        ind_by_date = {
+            d: row
+            for d, row in ((_finance_date(r.get("statDate")), r) for r in ind)
+            if d
+        }
+        by_date: dict[str, dict] = {}
+        for row in inc:
+            d = _finance_date(row.get("statDate"))
+            if not d:
+                continue
+            rec = by_date.setdefault(d, {"report_date": d})
+            rec["pub_date"] = _finance_date(row.get("pubDate")) or rec.get("pub_date")
+            rec["total_revenue_yi"] = _yi(row.get("total_operating_revenue"))
+            rec["net_profit_yi"] = _yi(row.get("net_profit"))
+            rec["net_profit_attr_yi"] = _yi(row.get("np_parent_company_owners"))
+            rec["operating_profit_yi"] = _yi(row.get("operating_profit"))
+            irow = ind_by_date.get(d, {})
+            rec["pub_date"] = rec["pub_date"] or _finance_date(irow.get("pubDate"))
+            # income.deduct_parent_net_profit is unfilled upstream (measured);
+            # indicator.adjusted_profit carries it.
+            rec["deduct_net_profit_attr_yi"] = _yi(irow.get("adjusted_profit"))
+            rec["eps"] = safe_float(irow.get("eps"))
+            rec["roe_pct"] = safe_float(irow.get("roe"))
+            rec["gross_margin_pct"] = safe_float(irow.get("gross_profit_margin"))
+            rec["net_margin_pct"] = safe_float(irow.get("net_profit_margin"))
+            rec["revenue_yoy_pct"] = safe_float(irow.get("inc_revenue_year_on_year"))
+            rec["net_profit_yoy_pct"] = safe_float(irow.get("inc_net_profit_year_on_year"))
+            rec["revenue_qoq_pct"] = safe_float(irow.get("inc_revenue_annual"))
+            rec["net_profit_qoq_pct"] = safe_float(irow.get("inc_net_profit_annual"))
+        return [by_date[d] for d in sorted(by_date)]
