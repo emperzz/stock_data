@@ -375,8 +375,8 @@ df = api.finance_latest(table="indicator", codes="600519.SH,000001.SZ")
 
 ### 口径实测判定：季频四表为**单季值**，非报告期累计值
 
-- `finance_income` 2026-06-30 行 `np_parent_company_owners=1.7274e10` **小于** 2026-03-31 行 `2.7242e10`——若是 H1 累计值不可能小于 Q1 值 ⇒ **单季**。
-- 交叉验证（Zhitu `/hs/fin/income` 为**累计**口径）：Zhitu 2026-06-30 归母 4.452e10 − 2026-03-31 归母 2.724e10 = 1.728e10 ≈ zzshare Q2 单季 1.727e10 ✓（差额为四舍五入级）。
+- `finance_income` 2026-06-30 行 `np_parent_company_owners=1.727437e10` **小于** 2026-03-31 行 `2.724251e10`——若是 H1 累计值不可能小于 Q1 值 ⇒ **单季**。
+- 交叉验证（Zhitu `/hs/fin/income` 为**累计**口径）：Zhitu 2026-06-30 归母 44,516,880,421.86 − 2026-03-31 归母 27,242,512,886.45 = **17,274,367,535.41**，与 zzshare Q2 单季 `1.727437e10` **逐位吻合**（2026-10-08 二次复核升级：由"≈四舍五入级"改为精确相等）。
 - `finance_indicator` 的 `eps`/`roe`/`gross_profit_margin` 同样是单季口径（eps 14.13 @2025-12-31，而 Baostock 2025 年度 `epsTTM=65.74`，四季单值相加 ≈ 年度值）。
 - **单位实测**：income/balance/cash_flow 金额为**元**（float）；valuation 的 `market_cap`/`circulating_market_cap` 为**亿元**、`capitalization`/`circulating_cap` 为**万股**；indicator 各比率字段为**百分数数值**（89.48 即 89.48%）；eps 为**元/股**。
 - 字段缺失值为 `None`（DataFrame 中的 NaN/None，不是 zhitu 那种 `"-"` 字符串）。
@@ -384,5 +384,7 @@ df = api.finance_latest(table="indicator", codes="600519.SH,000001.SZ")
 ### 覆盖范围提示（本项目备注）
 
 - zzshare 财报覆盖 = 五表：**估值日频 + 指标/利润/资产负债/现金流季频**。
-- **不包含「主营业务构成」**（分产品/分地区/分行业收入拆分）——该数据本项目当前仅 akshare `stock_zygc_em`（EastMoney F10）提供，见 docs 之外说明。
-- 频率限制未列入 [10-rate-limits.md](10-rate-limits.md) 速查表；`finance_*` 实测匿名可调，但全市场级查询（`finance_valuation`/`finance_indicator` 基础表、`finance_latest` 不带 codes）单次返回 5000+ 行，**本项目仅使用带 codes / 单股的查询形态**。
+- **不包含「主营业务构成」**（分产品/分地区/分行业收入拆分）——zzshare/zhitu 均无此表，本项目该数据走 EastMoney F10 `PageAjax` 直连（`docs/superpowers/specs/2026-10-08-stock-financial-data-design.md`）。
+- **北交所零覆盖（2026-10-08 二次复核实测）**：`920002.BJ`/`832566.BJ`/`430047.BJ` 在 `finance_latest`/`finance_stock` 全部 0 行（带 token 同样 0 行）；全市场 `finance_indicator("2026q2")` 5209 行后缀直方图 = SZ 2896 + SH 2313 + **BJ 0**。行情类接口（`daily`/`rt_k`）覆盖 BJ 不代表财务表覆盖 BJ。
+- `finance_stock` 的 `limit` 是 **SDK 默认值（1000）而非硬上限**：实测 `limit=3000` 完整尊重（valuation 日频回到 2014-06-05）；默认 1000 行 ≈ 4.1 年估值历史（2022-08-18→2026-10-08）。
+- 频率限制未列入 [10-rate-limits.md](10-rate-limits.md) 速查表；`finance_*` 实测匿名可调（首次调用偶发 10s read-timeout，SDK 自动重试成功），但全市场级查询（`finance_valuation`/`finance_indicator` 基础表、`finance_latest` 不带 codes）单次返回 5000+ 行，**本项目仅使用带 codes / 单股的查询形态**。
