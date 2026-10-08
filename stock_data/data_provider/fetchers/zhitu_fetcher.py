@@ -1109,13 +1109,39 @@ class ZhituFetcher(BaseFetcher):
     def _fin_date(value: object) -> str | None:
         """Normalize a zhitu date ('2026-06-30' / '20260630' / with time part)
         to 'YYYY-MM-DD', else None. Local twin of the zzshare fetcher's
-        helper — fetchers must not import each other's privates."""
+        helper — fetchers must not import each other's privates.
+
+        Component-wise digit validation (review P2-3): a loose len+dash check
+        would accept '2026-ab-30' and then ``int(d[5:7])`` would raise
+        ValueError INSIDE the fetcher — violating the fetcher-only-
+        DataFetchError contract (manager folds anything else into the
+        failover chain)."""
         if value is None:
             return None
         s = str(value).strip().split(" ")[0]
         if len(s) == 8 and s.isdigit():
             return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
-        return s if len(s) == 10 and s[4] == "-" else None
+        if (
+            len(s) == 10
+            and s[4] == "-"
+            and s[7] == "-"
+            and s[:4].isdigit()
+            and s[5:7].isdigit()
+            and s[8:10].isdigit()
+        ):
+            return s
+        return None
+
+    @staticmethod
+    def _fin_row_rank(row: dict) -> tuple:
+        """Deterministic tie-break key for same-(jzrq,plrq) restatement pairs:
+        value-based, so input order cannot flip which row survives (review
+        P2-1). None values sort to -inf."""
+        out = []
+        for col in ("yyzsr", "jlr", "gsmgsyzzdjlr"):
+            f = safe_float(row.get(col))
+            out.append(f if f is not None else float("-inf"))
+        return tuple(out)
 
     @classmethod
     def _build_single_quarter_series(cls, raw: object) -> list[dict]:
@@ -1150,8 +1176,20 @@ class ZhituFetcher(BaseFetcher):
                 continue
             pub = cls._fin_date(r.get("plrq")) or ""
             key = (int(d[:4]), q)
-            if key not in best or pub >= (best[key].get("_pub") or ""):
+            prev = best.get(key)
+            # Dedup restatement pairs: latest plrq wins (spec §2.2). When
+            # plrq TIES (real upstream emits same-jzrq same-plrq pairs with
+            # different values), fall back to a value-based deterministic
+            # pick so ASC vs DESC input order cannot change the output
+            # (review P2-1).
+            if prev is None:
                 best[key] = {**r, "_date": d, "_pub": pub}
+            else:
+                prev_pub = prev.get("_pub") or ""
+                if pub > prev_pub or (
+                    pub == prev_pub and cls._fin_row_rank(r) >= cls._fin_row_rank(prev)
+                ):
+                    best[key] = {**r, "_date": d, "_pub": pub}
 
         ordered = sorted(best)
         sq_cum: dict[tuple[int, int], dict[str, float | None]] = {}
@@ -1215,8 +1253,13 @@ class ZhituFetcher(BaseFetcher):
                 return (cur - base_v) / abs(base_v) * 100
 
             yoy_vals = sq_cum.get((y - 1, q), {})
+            # QoQ base must be the LITERALLY previous quarter (y, q-1) or,
+            # for Q1, (y-1, 4) — review P2-2. ordered[idx-1] alone would let
+            # a gapped series (e.g. 2025-Q1 → 2026-Q1, 4 quarters apart)
+            # pass a cross-year ratio off as 环比.
+            expected_prev = (y, q - 1) if q > 1 else (y - 1, 4)
             prev_key = ordered[idx - 1] if idx > 0 else None
-            qoq_vals = sq_cum.get(prev_key, {}) if prev_key else {}
+            qoq_vals = sq_cum.get(prev_key, {}) if prev_key == expected_prev else {}
             rec["revenue_yoy_pct"] = _ratio(
                 vals["total_revenue_yi"], yoy_vals.get("total_revenue_yi")
             )
@@ -1291,6 +1334,5 @@ class ZhituFetcher(BaseFetcher):
         data = self._fetch_json(
             f"/hs/fin/income/{code}",
             op_label=f"financial income {code}",
-            timeout=15,
         )
         return self._build_single_quarter_series(data)

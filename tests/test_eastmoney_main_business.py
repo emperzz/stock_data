@@ -169,3 +169,33 @@ class TestEmptyAndFailure:
         f = _wire(fetcher, FakeResp(_full_payload([{"REPORT_DATE": None, "ITEM_NAME": None}])))
         out = f.get_main_business_composition("600519")
         assert out["records"] == []
+
+
+class TestReviewP1FollowUps:
+    def test_non_200_status_raises_even_with_parseable_json(self, fetcher):
+        """Review P1-2: spec §4.3 — 非 200 必须 raise。反爬场景会回 403+JSON
+        错误体；若只靠 .json() 是否成功来判失败，会把封锁伪装成权威空集。"""
+        f = _wire(fetcher, FakeResp(_full_payload(_FIX["zygcfx"]), status=429))
+        with pytest.raises(DataFetchError):
+            f.get_main_business_composition("600519")
+
+    def test_industry_rows_map_from_real_annual_capture(self, fetcher):
+        """Review P2-11③: MAINOP_TYPE='1' mapping was never data-covered
+        (the newest-period slice has no 行业行). Use the REAL annual-period
+        type-1 rows captured 2026-10-08."""
+        rows = _FIX["industry_rows_real"] + _FIX["zygcfx"]
+        f = _wire(fetcher, FakeResp(_full_payload(rows)))
+        annual = _FIX["industry_rows_real"][-1]["REPORT_DATE"].split(" ")[0]
+        out = f.get_main_business_composition("600519", category="industry", report_date=annual)
+        assert out["requested_report_date_available"] is True
+        assert out["records"], "real type-1 rows must map to category=industry"
+        assert all(r["category"] == "industry" for r in out["records"])
+        assert all(r["revenue_share_pct"] is not None for r in out["records"])
+
+    def test_unknown_mainop_type_dropped_not_raised(self, fetcher):
+        rows = [dict(_FIX["zygcfx"][0], MAINOP_TYPE="4")]
+        f = _wire(fetcher, FakeResp(_full_payload(rows)))
+        out = f.get_main_business_composition("600519")
+        assert out["records"] == []
+        # the period IS served (date known), only its breakdown is unmappable
+        assert out["report_date"] == "2026-06-30"

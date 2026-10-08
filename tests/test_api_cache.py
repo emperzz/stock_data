@@ -303,3 +303,29 @@ class TestFinancialCacheKeys:
         )
         assert a is get_financial_snapshot_cache()
         assert len({id(a), id(b), id(c)}) == 3
+
+
+class TestFinancialKeyDateNormalization:
+    """Review P2-4: 20260101 / 2026-01-01 are the same window — one slot.
+    Normalization is best-effort and must NEVER raise (key_builder runs
+    before handler validation; raising here would turn a 400 into a 500)."""
+
+    def test_history_date_variants_share_slot(self):
+        from stock_data.api.cache import make_financial_history_cache_key
+
+        a = make_financial_history_cache_key("600519", "20260101", None)
+        b = make_financial_history_cache_key("600519", "2026-01-01", None)
+        assert a == b == "finhist:600519:2026-01-01:"
+
+    def test_composition_date_variant(self):
+        from stock_data.api.cache import make_main_business_cache_key
+
+        assert make_main_business_cache_key(
+            "600519", None, "20251231"
+        ) == make_main_business_cache_key("600519", None, "2025-12-31")
+
+    def test_garbage_date_never_raises_in_key_builder(self):
+        from stock_data.api.cache import make_financial_history_cache_key
+
+        # handler will 400 it; the key builder must still produce a key
+        assert make_financial_history_cache_key("600519", "nonsense", None)

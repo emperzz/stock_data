@@ -11,7 +11,6 @@ finance_indicator(date, codes=...) form.
 
 from __future__ import annotations
 
-import pandas as pd
 import pytest
 
 from stock_data.data_provider.base import DataFetchError
@@ -100,42 +99,42 @@ VALUATION_ROW = {
 }
 
 
-def _df(rows: list[dict]) -> pd.DataFrame:
-    return pd.DataFrame(rows)
-
-
-EMPTY = pd.DataFrame()
-
-
 class FakeApi:
-    """Stands in for zzshare.client.DataApi. Frames keyed by (method, table)."""
+    """Stands in for zzshare.client.DataApi via the raw ``query()`` channel.
 
-    def __init__(self, frames: dict):
+    Mirrors the real SDK semantics verified 2026-10-08 (core.py::_query):
+    SUCCESS returns the envelope ``data`` — a list of dicts, possibly empty
+    for a true no-data answer (e.g. BJ); FAILURE (network / non-200 /
+    business code) collapses to ``None``. Only 401/429 raise. Paths listed
+    in ``fail_paths`` simulate that swallow-to-None outage channel.
+    """
+
+    def __init__(self, frames: dict, fail_paths=()):
+        # frames keyed by (kind, table): ("latest","indicator") / ("stock","income")
         self.frames = frames
+        self.fail_paths = set(fail_paths)
         self.calls: list[tuple] = []
 
-    def finance_latest(self, table, codes=None, **kwargs):
-        self.calls.append(("finance_latest", table, codes))
-        return self.frames.get(("finance_latest", table), EMPTY)
+    def query(self, api_name, params=None):
+        params = dict(params or {})
+        self.calls.append((api_name, params))
+        if api_name in self.fail_paths:
+            return None
+        parts = api_name.split("/")
+        # v3/fundamentals/{table}/latest  |  v3/fundamentals/{table}/stock/{code}
+        table, kind = parts[2], parts[3]
+        rows = list(self.frames.get((kind, table), []))
+        if kind == "stock":
+            if params.get("start_date"):
+                rows = [r for r in rows if str(r.get("statDate", "")) >= params["start_date"]]
+            if params.get("end_date"):
+                rows = [r for r in rows if str(r.get("statDate", "")) <= params["end_date"]]
+            if params.get("limit") is not None:
+                rows = rows[: int(params["limit"])]
+        return rows
 
-    def finance_stock(self, table, code, start_date=None, end_date=None, limit=None, **kwargs):
-        self.calls.append(("finance_stock", table, code, start_date, end_date, limit))
-        frame = self.frames.get(("finance_stock", table), EMPTY)
-        if start_date:
-            col = "statDate" if "statDate" in frame.columns else "trade_date"
-            frame = frame[frame[col] >= start_date]
-        if end_date:
-            col = "statDate" if "statDate" in frame.columns else "trade_date"
-            frame = frame[frame[col] <= end_date]
-        if limit is not None:
-            frame = frame.head(int(limit))
-        return frame
-
-    def finance_indicator(self, *args, **kwargs):  # pragma: no cover - must never be called
-        raise AssertionError("finance_indicator base form silently ignores codes=; forbidden")
-
-    def finance_valuation(self, *args, **kwargs):  # pragma: no cover - must never be called
-        raise AssertionError("full-market base form forbidden")
+    def __getattr__(self, name):  # shortcuts must NOT be used anymore
+        raise AssertionError(f"ZzshareFetcher must not call shortcut {name!r} — raw query() only")
 
 
 @pytest.fixture
@@ -158,9 +157,9 @@ class TestSnapshot:
         f = _wire(
             fetcher,
             {
-                ("finance_latest", "indicator"): _df([INDICATOR_Q2_ROW]),
-                ("finance_latest", "valuation"): _df([VALUATION_ROW]),
-                ("finance_stock", "income"): _df([INCOME_Q2_ROW]),
+                ("latest", "indicator"): [INDICATOR_Q2_ROW],
+                ("latest", "valuation"): [VALUATION_ROW],
+                ("stock", "income"): [INCOME_Q2_ROW],
             },
         )
         snap = f.get_financial_snapshot("600519")
@@ -190,24 +189,33 @@ class TestSnapshot:
         assert snap["total_share_wan_shares"] == pytest.approx(125008.1601)
         assert snap["turnover_ratio_pct"] == pytest.approx(0.3066)
 
-    def test_only_latest_and_stock_forms_are_called(self, fetcher):
+    def test_only_latest_and_stock_paths_are_called(self, fetcher):
         f = _wire(
             fetcher,
             {
-                ("finance_latest", "indicator"): _df([INDICATOR_Q2_ROW]),
-                ("finance_latest", "valuation"): _df([VALUATION_ROW]),
-                ("finance_stock", "income"): _df([INCOME_Q2_ROW]),
+                ("latest", "indicator"): [INDICATOR_Q2_ROW],
+                ("latest", "valuation"): [VALUATION_ROW],
+                ("stock", "income"): [INCOME_Q2_ROW],
             },
         )
         f.get_financial_snapshot("SH600519")
         api = fetcher._api
-        forms = {c[0] for c in api.calls}
-        assert forms == {"finance_latest", "finance_stock"}
-        # outbound ts_code suffix injected; inbound is bare
-        assert ("finance_latest", "indicator", "600519.SH") in api.calls
+        # spec §7.1 pins BOTH the 3-call count and their order
+        assert [c[0] for c in api.calls] == [
+            "v3/fundamentals/indicator/latest",
+            "v3/fundamentals/valuation/latest",
+            "v3/fundamentals/income/stock/600519.SH",
+        ]
+        # outbound ts_code suffix on the stock leg; latest legs filter via codes=
+        assert api.calls[0][1] == {"codes": "600519.SH"}
+        assert api.calls[2][1] == {"limit": 1}
+        # the base table form (v3/fundamentals/{table}/{date}) silently ignores
+        # codes= and returns the whole market — must never be reachable
+        assert not any(p.count("/") == 3 and p.split("/")[3].startswith("20") for p, _ in api.calls)
 
     def test_all_empty_returns_none_not_empty_dict(self, fetcher):
-        """P0 guard: {} would short-circuit manager failover (_is_meaningful)."""
+        """P0 guard: {} would short-circuit manager failover (_is_meaningful).
+        Empty LIST from upstream = legitimate no-data (BJ), not an outage."""
         f = _wire(fetcher, {})
         assert f.get_financial_snapshot("920002") is None
 
@@ -215,8 +223,8 @@ class TestSnapshot:
         f = _wire(
             fetcher,
             {
-                ("finance_latest", "indicator"): _df([INDICATOR_Q2_ROW]),
-                ("finance_stock", "income"): _df([INCOME_Q2_ROW]),
+                ("latest", "indicator"): [INDICATOR_Q2_ROW],
+                ("stock", "income"): [INCOME_Q2_ROW],
             },
         )
         snap = f.get_financial_snapshot("600519")
@@ -225,15 +233,73 @@ class TestSnapshot:
         assert snap["pe_ttm"] is None
         assert snap["market_cap_yi"] is None
 
+    def test_income_only_rows_still_snapshots(self, fetcher):
+        """Latest-disclosure skew: latest indicator/valuation windows empty but
+        the income row exists — absolutes are usable data, not a None answer."""
+        f = _wire(
+            fetcher,
+            {
+                ("latest", "indicator"): [],
+                ("latest", "valuation"): [],
+                ("stock", "income"): [INCOME_Q2_ROW],
+            },
+        )
+        snap = f.get_financial_snapshot("600519")
+        assert snap is not None
+        assert snap["total_revenue_yi"] == pytest.approx(375.7516)
+        assert snap["eps"] is None
+
+    def test_period_mismatch_nulls_cross_table_absolutes(self, fetcher):
+        """report_date anchors on indicator; income limit=1 may be an OLDER
+        period during disclosure skew. Mixing periods into one snapshot would
+        mislabel them, so absolutes go null and only same-period (indicator)
+        fields survive."""
+        older = dict(INCOME_Q2_ROW, statDate="2025-12-31")
+        f = _wire(
+            fetcher,
+            {
+                ("latest", "indicator"): [INDICATOR_Q2_ROW],
+                ("latest", "valuation"): [VALUATION_ROW],
+                ("stock", "income"): [older],
+            },
+        )
+        snap = f.get_financial_snapshot("600519")
+        assert snap["report_date"] == "2026-06-30"
+        assert snap["total_revenue_yi"] is None
+        assert snap["net_profit_attr_yi"] is None
+        assert snap["deduct_net_profit_attr_yi"] == pytest.approx(172.2422)
+        assert snap["eps"] == pytest.approx(13.8186)
+
     def test_sdk_error_raises_datafetcherror(self, fetcher):
         class Boom(FakeApi):
-            def finance_latest(self, table, codes=None, **kw):
+            def query(self, api_name, params=None):
                 raise RuntimeError("network down")
 
         fetcher._api = Boom({})
         f = fetcher()
         with pytest.raises(DataFetchError):
             f.get_financial_snapshot("600519")
+
+    def test_sdk_none_means_outage_not_empty_answer(self, fetcher):
+        """SDK ``_query`` swallows network / non-200 / business-code failures
+        into ``None`` (only 401/429 raise) — verified 2026-10-08 in
+        ``zzshare/core.py:133-161``. The fetcher MUST read ``None`` as a
+        failure so the chain falls through / surfaces 503, never as the
+        honest 200 empty contract (which would also be cached 24h)."""
+        fetcher._api = FakeApi(
+            {("latest", "indicator"): [INDICATOR_Q2_ROW]},
+            fail_paths=["v3/fundamentals/valuation/latest"],
+        )
+        with pytest.raises(DataFetchError):
+            fetcher().get_financial_snapshot("600519")
+
+    def test_history_none_upstream_raises_too(self, fetcher):
+        fetcher._api = FakeApi(
+            {("stock", "indicator"): [INDICATOR_Q2_ROW]},
+            fail_paths=["v3/fundamentals/income/stock/600519.SH"],
+        )
+        with pytest.raises(DataFetchError):
+            fetcher().get_financial_history("600519")
 
 
 class TestHistory:
@@ -242,8 +308,8 @@ class TestHistory:
         f = _wire(
             fetcher,
             {
-                ("finance_stock", "income"): _df([INCOME_Q2_ROW, INCOME_Q1_ROW]),
-                ("finance_stock", "indicator"): _df([INDICATOR_Q2_ROW, INDICATOR_Q1_ROW]),
+                ("stock", "income"): [INCOME_Q2_ROW, INCOME_Q1_ROW],
+                ("stock", "indicator"): [INDICATOR_Q2_ROW, INDICATOR_Q1_ROW],
             },
         )
         recs = f.get_financial_history("600519")
@@ -267,24 +333,30 @@ class TestHistory:
         f = _wire(
             fetcher,
             {
-                ("finance_stock", "income"): _df([INCOME_Q2_ROW]),
-                ("finance_stock", "indicator"): _df([INDICATOR_Q2_ROW]),
+                ("stock", "income"): [INCOME_Q2_ROW],
+                ("stock", "indicator"): [INDICATOR_Q2_ROW],
             },
         )
         f.get_financial_history("600519")
-        stock_calls = [c for c in fetcher._api.calls if c[0] == "finance_stock"]
-        assert stock_calls and all(c[5] == 12 for c in stock_calls)
+        stock_calls = [c for c in fetcher._api.calls if "/stock/" in c[0]]
+        assert len(stock_calls) == 2
+        assert all(c[1].get("limit") == 12 for c in stock_calls)
 
     def test_start_end_window_passed_through(self, fetcher):
         f = _wire(
             fetcher,
             {
-                ("finance_stock", "income"): _df([INCOME_Q2_ROW, INCOME_Q1_ROW]),
-                ("finance_stock", "indicator"): _df([INDICATOR_Q2_ROW, INDICATOR_Q1_ROW]),
+                ("stock", "income"): [INCOME_Q2_ROW, INCOME_Q1_ROW],
+                ("stock", "indicator"): [INDICATOR_Q2_ROW, INDICATOR_Q1_ROW],
             },
         )
         recs = f.get_financial_history("600519", start_date="2026-04-01", end_date="2026-10-08")
         assert [r["report_date"] for r in recs] == ["2026-06-30"]
+        stock_calls = [c for c in fetcher._api.calls if "/stock/" in c[0]]
+        assert all(c[1].get("start_date") == "2026-04-01" for c in stock_calls)
+        assert all(c[1].get("end_date") == "2026-10-08" for c in stock_calls)
+        # window given → no 12-cap (user asked for a span, not a count)
+        assert all(c[1].get("limit") is None for c in stock_calls)
 
     def test_empty_returns_empty_list(self, fetcher):
         f = _wire(fetcher, {})
@@ -295,8 +367,8 @@ class TestHistory:
         f = _wire(
             fetcher,
             {
-                ("finance_stock", "income"): _df([INCOME_Q2_ROW]),
-                ("finance_stock", "indicator"): _df([INDICATOR_Q1_ROW]),
+                ("stock", "income"): [INCOME_Q2_ROW],
+                ("stock", "indicator"): [INDICATOR_Q1_ROW],
             },
         )
         recs = f.get_financial_history("600519")

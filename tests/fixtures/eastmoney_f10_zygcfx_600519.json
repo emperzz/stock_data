@@ -1,6 +1,6 @@
 {
  "_meta": {
-  "captured": "2026-10-08",
+  "captured": "2026-10-08 + industry rows from annual periods",
   "url": "PC_HSF10/BusinessAnalysis/PageAjax?code=SH600519",
   "full_window_rows": 200,
   "report_dates_in_window": [
@@ -82,6 +82,38 @@
    "MAIN_BUSINESS_RPOFIT": 951776541.81,
    "MBR_RATIO": 0.011717,
    "GROSS_RPOFIT_RATIO": 0.917736,
+   "RANK": 2
+  }
+ ],
+ "industry_rows_real": [
+  {
+   "SECUCODE": "600519.SH",
+   "SECURITY_CODE": "600519",
+   "REPORT_DATE": "2024-12-31 00:00:00",
+   "MAINOP_TYPE": "1",
+   "ITEM_NAME": "其他(补充)",
+   "MAIN_BUSINESS_INCOME": 287314224.32,
+   "MBI_RATIO": 0.001681,
+   "MAIN_BUSINESS_COST": 159486555.09,
+   "MBC_RATIO": 0.011566,
+   "MAIN_BUSINESS_RPOFIT": 127827669.23,
+   "MBR_RATIO": 0.000814,
+   "GROSS_RPOFIT_RATIO": 0.444905,
+   "RANK": 2
+  },
+  {
+   "SECUCODE": "600519.SH",
+   "SECURITY_CODE": "600519",
+   "REPORT_DATE": "2025-12-31 00:00:00",
+   "MAINOP_TYPE": "1",
+   "ITEM_NAME": "其他(补充)",
+   "MAIN_BUSINESS_INCOME": 63517327.14,
+   "MBI_RATIO": 0.000376,
+   "MAIN_BUSINESS_COST": 86377431.32,
+   "MBC_RATIO": 0.0058,
+   "MAIN_BUSINESS_RPOFIT": -22860104.18,
+   "MBR_RATIO": -0.000148,
+   "GROSS_RPOFIT_RATIO": -0.359903,
    "RANK": 2
   }
  ]

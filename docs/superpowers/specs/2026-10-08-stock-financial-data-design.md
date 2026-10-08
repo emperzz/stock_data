@@ -21,7 +21,7 @@ v1 明确不做（YAGNI）：资产负债/现金流量明细、Tushare 路径（
 
 | 块 | 主源 | 备源 | 实测要点 |
 |---|---|---|---|
-| 快照 | ZzshareFetcher `finance_latest(indicator)` + `finance_latest(valuation)` + `finance_stock(income, limit=1)` | ZhituFetcher `/hs/fin/income` 单上游，§2.2 差分推导（绝对额/eps/毛利/净利率/同环比）；`roe_pct` 与估值块 null | zzshare 匿名可调、多 codes 逗号分隔可用；BJ 无覆盖（§1） |
+| 快照 | ZzshareFetcher raw `query()`：`indicator/latest` + `valuation/latest` + `income/stock?limit=1`（rev3，见 §4.2） | ZhituFetcher `/hs/fin/income` 单上游，§2.2 差分推导（绝对额/eps/毛利/净利率/同环比）；`roe_pct` 与估值块 null | zzshare 匿名可调、多 codes 逗号分隔可用；BJ 无覆盖（§1） |
 | 历史序列 | ZzshareFetcher `finance_stock(income)` + `finance_stock(indicator)` | ZhituFetcher `/hs/fin/income`，§2.2 排序→去重→差分推导管线 | zzshare 单季 86 期回溯至 2005-03-31（降序）；**zhitu fin/income 默认即 122 期（2001-06-30 起），`st/et` 可任意前取**（初稿"仅 2023 起 14 期"系探针自带 `st=20230101` 所误，复核证伪） |
 | 主营构成 | EastMoneyFetcher `GET emweb.securities.eastmoney.com/PC_HSF10/BusinessAnalysis/PageAjax?code=SH600519` | 无（单源） | 600519=200 行/37 期、SZ000001=200 行、BJ920002=90 行滑窗；裸 `requests` 本网络实测也通，但实现仍复用包内既有 curl_cffi chrome120 Session（一致性 + 抗未来指纹拦截） |
 
@@ -43,7 +43,7 @@ v1 明确不做（YAGNI）：资产负债/现金流量明细、Tushare 路径（
 单上游 `/hs/fin/income`（不带 st/et，全量 122 期）。管线：
 
 1. **清洗**：`"-"`/`"--"` → None（`safe_float`）；`jzrq`/`plrq` 规整为 `YYYY-MM-DD`。
-2. **排序去重**：按 `jzrq` 升序；同 `jzrq` 保留 `plrq` 最大行（修正重述取最新披露）。
+2. **排序去重**：按 `jzrq` 升序；同 `jzrq` 保留 `plrq` 最大行（修正重述取最新披露）。rev3 补：`plrq` 也相同时按 `(yyzsr, jlr, gsmgsyzzdjlr)` 数值序做**确定性 tie-break**——上游确实存在同 jzrq 同 plrq 不同值的对，否则输入序（ASC/DESC）会改变输出（评审 P2-1）。
 3. **单季差分**：`Δ(x) = 本期累计 − 上一相邻报告期累计`；Q1（`jzrq` 月=03）单季 = 累计本身。相邻关系按 (年, 季) 配对（03-31/06-30/09-30/12-31）；找不到上一期 → 该期派生字段全部 `null`。
 4. **逐字段映射**：
 
@@ -212,7 +212,8 @@ get_main_business_composition(code, category=None, report_date=None) -> tuple[di
 
 - **空值协议（P0 修正，逐端点定死）**：快照 fetcher 无可用字段时必须返回 **`None`**（`{}` 会被 `_is_meaningful` 判真短路整条链）；历史返回 **`[]`**（list 空值能正确 fall-through）；主营构成单源，空滑窗返回**完整 dict**（`records: []`）即为权威答案，走成功路径。`empty_is_failure` 三方法均保持默认 False：新股无报告期 = 诚实空答案 → `_with_failover` coherent-empty 返回 `(last_empty, "")`——**路由层 `source` 字段收到 `""` 是设计内行为**，schema `source: str = ""` 天然容忍；不给财务链开 `empty_is_failure`——东财对无拆分数据股票的权威空集会被误判为软失败。
 - **实现期发现（rev2.1，TDD 阶段证伪 spec 原句）**：coherent-empty 分支守卫是 `last_empty_result is not None`——**全链返回 `None`**（快照 BJ 合法情形）原样会落到 "all failed" raise（errors 为空串的误导 503）。修正：`_with_failover`/`_route_cap` 新增默认关闭的 `empty_ok` 参数，仅 `get_financial_snapshot` 打开（全链 None 且无错误 → `(None, "")`）；其余 capability 行为逐字节不变（有回归守卫测试钉住）。
-- 快照/历史在 zzshare fetcher 方法内部做 2-3 次 SDK 调用；**任一上游调用抛错 → fetcher 方法 raise `DataFetchError`**（部分字段成功不算成功），由 manager 降级下一源。不做字段级拼装跨源。
+- 快照/历史在 zzshare fetcher 方法内部做 2-3 次调用；**任一上游调用抛错 → fetcher 方法 raise `DataFetchError`**（部分字段成功不算成功），由 manager 降级下一源。不做字段级拼装跨源。
+- **rev3（实现期 SDK 源码核实，评审 P1-3）**：zzshare SDK 的 `finance_*` shortcut **不能用来区分故障与真空**——`core._query` 把网络异常/非 200/业务错误码统一咽成 `None`（仅 401/429 真抛），shortcut 再把 `None` 转成空 DataFrame ≙ 真空。故财务方法**绕开 shortcut、直用公开 `api.query(path, params)` 通道**：返回 `None` = 故障 → raise；返回列表（含空表）= 权威答案。真实验证：2026-10-08 smoke 中 zzshare 上游 ReadTimeout → raw 通道判故障 → 正确 failover 到 zhitu（旧 shortcut 形态会输出全 null 200）。路径模板与 shortcut 表逐字一致（`v3/fundamentals/{table}/latest`、`v3/fundamentals/{table}/stock/{code}`）。
 - **fetcher 层的唯一异常语言是 `DataFetchError`**（`manager.py:374-381` 无差别捕获一切异常折进 failover 链）；参数校验型错误一律在 route handler body 抛（§3.2/§3.3）。
 
 ### 4.3 Fetcher 方法规格
@@ -271,3 +272,14 @@ Python 代码走 `feat/stock-financials` 分支 + PR；纯文档（CLAUDE.md / a
 - **P1**：cls.py 引证错误已改（该注释主张 slug 并走 `_derive_slug`，与 stocks 家族 CamelCase 并存——分裂如实注记，本次跟 stocks 先例）；§8 补 `CAPABILITY_LABELS` 硬约束；§3.4 伪码改 keyword-only 实样。
 - **P2**：`entries`/`count` → `records`/`total`；`stock_code` 措辞消歧；`"-"`/`"--"` 双形态清洗；zhitu 备源改为 **income 单上游差分推导**（消除 ratios 累计口径违宪 + 三处字段矩阵自相矛盾），YoY/QoQ 可推导故不再置 null、ROE 不可导故 null；缓存键 normalize；`_emweb_query` 无 delay + 不吞异常。
 - **上游复核**：BJ 零覆盖（§1）、zhitu 122 期深度（删"备源受限"）、重复 jzrq/排序方向陷阱（§2.2）、空 `zygcfx` 无实例（防御条款 + mock 注记）、行业行合法空集（§3.3）、`limit=3000` 无硬上限（§2.1）、差分交叉数升级为一逐位吻合（§2.1）。
+
+## 11. 评审修订记录（rev2 → rev3，实现后双 subagent 复审）
+
+实现完成、60 测试全绿后，两个独立 review agent（契约审计 + 对抗复测）返回 3 P1 / 若干 P2。逐条裁决与处置：
+
+- **P1-1（证实，已修）**：`strptime("%m")` 接受非补零 `2026-6-1` 且原串直通 → zzshare 的 statDate 轴比较静默失过滤、东财 available 列表匹配假 400。修法：`_fin_query_date` 用 `strptime→strftime` **补零重出**；测试钉转发值 `2026-06-01`。
+- **P1-2（证实，已修）**：`_emweb_query` 未读 `status_code`——403+JSON 封锁体会被咽成权威空集。修法：非 200 先 raise `DataFetchError`，测试用 `status=429` 的 JSON 体驱动。
+- **P1-3（证实，已修——比报告更深一层）**：`_query` 连**重试耗尽后的 RequestException** 都咽成 `None`（smoke 里看到的 ReadTimeout 堆栈正是 `logger.exception`），shortcut 把 `None` 转空 DataFrame → 故障与真空不可分， outage 会被渲染成 200 空契约并缓存 24h。修法：财务方法绕开 shortcut，直用 `api.query(path, params)` 原始通道，`None`→raise（failover/503）、`[]`→诚实空。BJ 走的是合法 `[]` 通道（200 空契约保持），真实故障走 raise——次日 smoke 中 zzshare 恰好再超时，链路正确落到 ZhituFetcher，行为获实证。
+- **P2 采纳并修**：缓存键日期破折号归一（key_builder 在 handler 校验前执行 → 归一函数**永不 raise**，垃圾串原样进键、由 handler 400 兜底）；`empty_ok` 分支加 `and fetchers`（零候选 = `*_ENABLED=false` 配置错误必须 503 不是 200 空）；zhitu `_fin_date` 分段数字校验（杜绝 fetcher 内 `int()` ValueError）；同 (jzrq,plrq) 平手去重的确定性 tie-break（值序比较，输入序免疫）；qoq 基期强制**字面相邻季**（缺口序列不再把隔季比值谎称环比；跨年 Q4→Q1 合法）；三新路由响应 `code` 归一为裸 6 位（消除 `SH600519` 请求回显污染 + 与归一化缓存键的交叉污染；注：dividend 等既有路由未改，家族先例保持）；zzshare 快照空判定纳入 income 腿 + 跨表 `statDate` 错配守卫（指标期与营收期不一致时绝对额置 null，不跨期混装）；zhitu `_fetch_json` timeout 回归文件默认 10；api-reference 示例内部矛盾修正；source-tracking 表格中断修复；CLAUDE.md 增补"fetcher 内禁抛 ValueError"铁律。
+- **P2 不修（记录在案）**：非法 `report_date` 每次 400 都会打一次东财（400 不落缓存，窗口内低频可接受）；"zzshare 合法空 + zhitu 网络故障"组合仍呈 200 空（zhitu `_fetch_json` 全局 swallow 是既有契约，P1-3 修复后主源故障已能区分，残余模糊面仅限该组合）。
+- **复测确认无误**：装饰器栈、capability 三件套、快照 None 短路防御、单季差分逐位钉值、BJ 全链路 200 空、测试零网络泄漏（route 测试 patch 目标经 `--capture=tee-sys` + 行为双重验证）、全量回归失败集 = 已知 5 环境 noise。

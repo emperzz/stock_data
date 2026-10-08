@@ -11,10 +11,14 @@ The fetcher is_available() returns True as long as the SDK is importable,
 even without a token.
 
 Financial chain (spec 2026-10-08 rev2, primary source):
-``get_financial_snapshot`` = ``finance_latest("indicator")`` +
-``finance_latest("valuation")`` + ``finance_stock("income", limit=1)``;
-``get_financial_history`` joins ``finance_stock("income"/"indicator")`` on
-``statDate`` and re-sorts DESC→ASC. Quarterly tables are SINGLE-QUARTER
+``get_financial_snapshot`` = raw ``query()`` over
+``v3/fundamentals/indicator/latest`` + ``valuation/latest`` +
+``income/stock/{ts}?limit=1``; ``get_financial_history`` joins
+``income/stock`` with ``indicator/stock`` on ``statDate`` and re-sorts
+DESC→ASC. Raw ``query()`` is used INSTEAD of the ``finance_*`` shortcuts
+because the SDK swallows failures into ``None`` and the shortcuts turn
+that into an EMPTY DataFrame (failure indistinguishable from a true
+"no rows") — review P1-3, 2026-10-08. Quarterly tables are SINGLE-QUARTER
 values (digit-for-digit cross-check vs zhitu cumulative differencing,
 docs/zzshare/11-fundamentals.md). NEVER use the base
 ``finance_indicator(date, codes=…)`` form — ``codes=`` is silently ignored
@@ -180,7 +184,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         | DataCapability.STOCK_ZT_REASON
         | DataCapability.DRAGON_TIGER
         | DataCapability.HOT_TOPICS
-        # 财务主源 (finance_latest/finance_stock, SDK >=0.4.12) — BJ 零覆盖
+        # 财务主源 (raw query() v3/fundamentals/*, SDK >=0.4.12) — BJ 零覆盖
         | DataCapability.STOCK_FINANCIAL
         | DataCapability.STOCK_FINANCIAL_SERIES
     )
@@ -1086,50 +1090,54 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             )
         return out
 
-    # ---------- financials (finance_latest / finance_stock) ----------
+    # ---------- financials (raw query() — fundamentals latest/stock) ----------
 
-    @staticmethod
-    def _finance_rows(df: object) -> list[dict]:
-        """DataFrame → list[dict] (upstream finance_* methods return DataFrames).
+    def _finance_query(self, label: str, api: object, path: str, params: dict) -> list[dict]:
+        """One fundamentals query over the RAW ``api.query()`` envelope.
 
-        Empty/None DataFrame yields ``[]``. Kept tiny on purpose: all unit
-        conversion and placeholder cleaning happens in the mapping code below
-        (zzshare empties are None/NaN — safe_float rejects both).
-        """
-        if df is None or not hasattr(df, "to_dict"):
-            return []
-        if len(df) == 0:
-            return []
-        return df.to_dict("records")
-
-    def _finance_call(self, label: str, fn: object, *args: object, **kwargs: object) -> list[dict]:
-        """One upstream finance_* call, wrapped in the fetcher error contract.
-
-        Any SDK-side exception (network/parse) raises ``DataFetchError`` so
-        the manager failover moves on to Zhitu — partial-success snapshots
-        across sources are explicitly NOT assembled (spec §4.2).
+        Deliberately bypasses the ``finance_*`` shortcuts: SDK
+        ``core._query`` collapses network errors, non-200 and business-code
+        errors into ``None`` (verified 2026-10-08 — only 401/429 raise), and
+        the shortcuts convert that ``None`` into an EMPTY DataFrame —
+        indistinguishable from a legitimate "no rows" answer. Raw query
+        restores the distinction: ``None`` ⇒ OUTAGE (raise ``DataFetchError``
+        so the manager fails over / surfaces 503 — an outage must never
+        degrade into the cached 24h empty contract), ``[]`` ⇒ honest empty.
         """
         try:
-            return self._finance_rows(fn(*args, **kwargs))  # type: ignore[operator]
+            data = api.query(path, params)  # type: ignore[attr-defined]
         except DataFetchError:
             raise
         except Exception as e:
             raise DataFetchError(f"ZzshareFetcher {label} failed: {e}") from e
+        if data is None:
+            raise DataFetchError(
+                f"ZzshareFetcher {label}: upstream failure (SDK _query returned None — "
+                f"network/HTTP/business error swallowed by the SDK)"
+            )
+        if not isinstance(data, list):
+            return []
+        return [r for r in data if isinstance(r, dict)]
 
     def get_financial_snapshot(self, code: str) -> dict | None:
         """Current financial snapshot: single-quarter profitability + daily valuation.
 
-        Upstream (docs/zzshare/11-fundamentals.md, SDK >= 0.4.12):
-          - ``finance_latest("indicator", codes=<ts>)`` — 单季比率块（eps/roe/
+        Upstream paths (docs/zzshare/11-fundamentals.md, SDK >= 0.4.12):
+          - ``v3/fundamentals/indicator/latest?codes=`` — 单季比率块（eps/roe/
             毛利率/净利率/同比环比/扣非额）。
-          - ``finance_latest("valuation", codes=<ts>)`` — 日频估值块（pe_ttm/
+          - ``v3/fundamentals/valuation/latest?codes=`` — 日频估值块（pe_ttm/
             pe_lyr/pb/ps/pcf/市值(亿)/股本(万股)/换手(%)）。
-          - ``finance_stock("income", <ts>, limit=1)`` — 营收绝对额（indicator
+          - ``v3/fundamentals/income/stock/{ts}?limit=1`` — 营收绝对额（indicator
             表无营收绝对额，实测 18 列确认；金额单位元 → /1e8 亿）。
 
-        Never call the base ``finance_indicator(date, codes=…)`` form —
+        Never call the base ``v3/fundamentals/{table}/{date}`` form —
         zzshare silently ignores ``codes=`` there and returns the full market
         (5209 rows measured 2026-10-08).
+
+        Disclosure-skew guard: the snapshot anchors on the indicator table's
+        ``statDate``; income/indicator can lag each other, so when the
+        income row's period differs, the cross-table absolute fields are
+        nulled rather than mixed across periods.
 
         Returns:
             dict keyed by the public contract (snake_case, ``_yi``=亿元,
@@ -1143,29 +1151,36 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         if api is None:
             raise DataFetchError(f"ZzshareFetcher zzshare SDK 不可用: {ZzshareFetcher._init_error}")
         ts = _to_zzshare_ts_code(normalize_stock_code(code))
-        ind = self._finance_call(
-            f"financial indicator {code}", api.finance_latest, "indicator", codes=ts
+        ind = self._finance_query(
+            f"financial indicator {code}", api, "v3/fundamentals/indicator/latest", {"codes": ts}
         )
-        val = self._finance_call(
-            f"financial valuation {code}", api.finance_latest, "valuation", codes=ts
+        val = self._finance_query(
+            f"financial valuation {code}", api, "v3/fundamentals/valuation/latest", {"codes": ts}
         )
-        inc = self._finance_call(
-            f"financial income {code}", api.finance_stock, "income", ts, limit=1
+        inc = self._finance_query(
+            f"financial income {code}", api, f"v3/fundamentals/income/stock/{ts}", {"limit": 1}
         )
-        if not ind and not val:
+        if not ind and not val and not inc:
             return None
         irow = ind[0] if ind else {}
         vrow = val[0] if val else {}
         row = inc[0] if inc else {}
+        # Disclosure-skew guard: absolutes only valid when the income row
+        # matches the indicator-anchored period.
+        anchor = _finance_date(irow.get("statDate"))
+        row_date = _finance_date(row.get("statDate"))
+        same_period = bool(row) and (anchor is None or row_date == anchor)
         return {
-            "report_date": _finance_date(irow.get("statDate")),
+            "report_date": anchor,
             "pub_date": _finance_date(irow.get("pubDate")),
             "eps": safe_float(irow.get("eps")),
             "roe_pct": safe_float(irow.get("roe")),
             "gross_margin_pct": safe_float(irow.get("gross_profit_margin")),
             "net_margin_pct": safe_float(irow.get("net_profit_margin")),
-            "total_revenue_yi": _yi(row.get("total_operating_revenue")),
-            "net_profit_attr_yi": _yi(row.get("np_parent_company_owners")),
+            "total_revenue_yi": _yi(row.get("total_operating_revenue")) if same_period else None,
+            "net_profit_attr_yi": (
+                _yi(row.get("np_parent_company_owners")) if same_period else None
+            ),
             "deduct_net_profit_attr_yi": _yi(irow.get("adjusted_profit")),
             "revenue_yoy_pct": safe_float(irow.get("inc_revenue_year_on_year")),
             "net_profit_yoy_pct": safe_float(irow.get("inc_net_profit_year_on_year")),
@@ -1192,9 +1207,9 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
     ) -> list[dict]:
         """Per-quarter financial series, SINGLE-QUARTER basis (verified 2026-10-08).
 
-        Joins ``finance_stock("income")`` (绝对额, 元→亿) with
-        ``finance_stock("indicator")`` (eps/roe/毛利率/净利率/同比环比) on
-        ``statDate``. Upstream orders rows DESC; output is re-sorted ASC like
+        Joins ``v3/fundamentals/income/stock`` (绝对额, 元→亿) with
+        ``v3/fundamentals/indicator/stock`` (eps/roe/毛利率/净利率/同比环比)
+        on ``statDate``. Upstream orders rows DESC; output is re-sorted ASC like
         the K-line convention. No start/end → upstream ``limit=12`` (最近 12
         个报告期, spec §3.2); with dates → filtered upstream, no cap.
 
@@ -1211,23 +1226,21 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         s = _finance_date(start_date)
         e = _finance_date(end_date)
         limit = None if (s or e) else 12
-        inc = self._finance_call(
-            f"financial history {code}",
-            api.finance_stock,
-            "income",
-            ts,
-            start_date=s,
-            end_date=e,
-            limit=limit,
+        params: dict = {}
+        if s:
+            params["start_date"] = s
+        if e:
+            params["end_date"] = e
+        if limit is not None:
+            params["limit"] = limit
+        inc = self._finance_query(
+            f"financial history {code}", api, f"v3/fundamentals/income/stock/{ts}", dict(params)
         )
-        ind = self._finance_call(
+        ind = self._finance_query(
             f"financial indicators {code}",
-            api.finance_stock,
-            "indicator",
-            ts,
-            start_date=s,
-            end_date=e,
-            limit=limit,
+            api,
+            f"v3/fundamentals/indicator/stock/{ts}",
+            dict(params),
         )
         ind_by_date = {
             d: row for d, row in ((_finance_date(r.get("statDate")), r) for r in ind) if d

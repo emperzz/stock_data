@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, Path, Query, Request
 
 from ...data_provider.persistence import stock_list, trade_calendar
-from ...data_provider.utils.normalize import code_to_exchange, market_tag
+from ...data_provider.utils.normalize import code_to_exchange, market_tag, normalize_stock_code
 from ..cache import (
     cache_endpoint,
     cached_lookup,
@@ -801,7 +801,13 @@ def _require_csi_stock_code(stock_code: str, manager) -> None:
 
 
 def _fin_query_date(value: str | None, param: str) -> str | None:
-    """Validate/normalize a ``YYYY-MM-DD`` | ``YYYYMMDD`` query date → dashed form.
+    """Validate/normalize a ``YYYY-MM-DD`` | ``YYYYMMDD`` query date → zero-padded ISO.
+
+    RE-EMITS from the parsed date (review P1-1): ``strptime`` accepts
+    non-padded ``2026-6-1``, but every downstream consumer (zzshare statDate
+    axis, eastmoney available_report_dates) is zero-padded — passing the raw
+    form through would silently no-op the window filter or produce a bogus
+    "not in upstream window" 400.
 
     Raises ``ValueError`` in the HANDLER BODY — map_errors turns it into 400
     at the handler boundary. Never sink input validation into a fetcher:
@@ -814,10 +820,10 @@ def _fin_query_date(value: str | None, param: str) -> str | None:
     if len(s) == 8 and s.isdigit():
         s = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
     try:
-        datetime.strptime(s, "%Y-%m-%d")
+        parsed = datetime.strptime(s, "%Y-%m-%d")
     except ValueError:
         raise ValueError(f"{param} must be YYYY-MM-DD or YYYYMMDD, got {value!r}") from None
-    return s
+    return parsed.strftime("%Y-%m-%d")
 
 
 @router.get(
@@ -853,7 +859,7 @@ def get_financials(stock_code: str = Path(max_length=20)) -> FinancialSnapshotRe
     known = set(FinancialSnapshotResponse.model_fields)
     payload = {k: v for k, v in (data or {}).items() if k in known}
     return FinancialSnapshotResponse(
-        code=stock_code, name=stock_name or "", source=source, **payload
+        code=normalize_stock_code(stock_code), name=stock_name or "", source=source, **payload
     )
 
 
@@ -901,7 +907,7 @@ def get_financials_history(
         for row in (data or [])
     ]
     return FinancialHistoryResponse(
-        code=stock_code,
+        code=normalize_stock_code(stock_code),
         name=stock_name or "",
         basis="single_quarter",
         total=len(records),
@@ -971,7 +977,7 @@ def get_business_composition(
         for row in (data.get("records") or [])
     ]
     return BusinessCompositionResponse(
-        code=stock_code,
+        code=normalize_stock_code(stock_code),
         name=stock_name or "",
         report_date=data.get("report_date"),
         total=len(records),

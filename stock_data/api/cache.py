@@ -404,7 +404,26 @@ def make_financial_history_cache_key(
 ) -> str:
     from stock_data.data_provider.utils.normalize import normalize_stock_code
 
-    return f"finhist:{normalize_stock_code(stock_code)}:{start_date or ''}:{end_date or ''}"
+    # _fin_key_date keeps 20260101 and 2026-01-01 in ONE slot (review P2-4);
+    # it never raises — key_builder runs before handler validation.
+    return f"finhist:{normalize_stock_code(stock_code)}:{_fin_key_date(start_date)}:{_fin_key_date(end_date)}"
+
+
+def _fin_key_date(value: str | None) -> str:
+    """Best-effort dash-normalize a financial query date FOR CACHE KEYS ONLY.
+
+    key_builder runs before the handler's validation, so this must NEVER
+    raise — garbage dates fall through verbatim (the handler will 400 the
+    request and that entry never gets stored). ``20260101`` and
+    ``2026-01-01`` describe the same window and must share one slot
+    (review P2-4).
+    """
+    if not value:
+        return ""
+    s = str(value).strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    return s
 
 
 def make_main_business_cache_key(
@@ -413,7 +432,8 @@ def make_main_business_cache_key(
     from stock_data.data_provider.utils.normalize import normalize_stock_code
 
     return (
-        f"bizcomp:{normalize_stock_code(stock_code)}:{category or 'all'}:{report_date or 'latest'}"
+        f"bizcomp:{normalize_stock_code(stock_code)}:"
+        f"{category or 'all'}:{_fin_key_date(report_date) or 'latest'}"
     )
 
 

@@ -855,7 +855,15 @@ class EastMoneyFetcher(NewsMixin, BoardsMixin, BaseFetcher):
                 headers=headers,
                 timeout=15,
             )
+            # status must be checked BEFORE parsing: block/waf pages can
+            # arrive as parseable JSON error bodies, and swallowing those
+            # into an empty zygcfx would fake an authoritative "no
+            # breakdown" answer (spec §4.3, review P1-2)
+            if r.status_code != 200:
+                raise DataFetchError(f"[EastMoneyFetcher] F10 {f10_code} HTTP {r.status_code}")
             body = r.json()
+        except DataFetchError:
+            raise
         except Exception as e:
             raise DataFetchError(f"[EastMoneyFetcher] F10 {f10_code} failed: {e}") from e
         if not isinstance(body, dict):

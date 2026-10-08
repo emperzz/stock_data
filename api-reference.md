@@ -1168,6 +1168,15 @@ GET /api/v1/stocks/{code}/financials/history?start_date=2024-01-01&end_date=2026
       "gross_margin_pct": 89.91, "net_margin_pct": 52.22,
       "revenue_yoy_pct": 6.54, "net_profit_yoy_pct": 1.37,
       "revenue_qoq_pct": 33.49, "net_profit_qoq_pct": 52.91
+    },
+    {
+      "report_date": "2026-06-30", "pub_date": "2026-08-15",
+      "total_revenue_yi": 375.75, "net_profit_yi": 178.79, "net_profit_attr_yi": 172.74,
+      "operating_profit_yi": 238.74, "deduct_net_profit_attr_yi": 172.24,
+      "eps": 13.8186, "roe_pct": 6.62,
+      "gross_margin_pct": 89.48, "net_margin_pct": 48.59,
+      "revenue_yoy_pct": -5.14, "net_profit_yoy_pct": -6.94,
+      "revenue_qoq_pct": -31.75, "net_profit_qoq_pct": -36.49
     }
   ],
   "source": "ZzshareFetcher"
@@ -1194,7 +1203,7 @@ GET /api/v1/stocks/{code}/business-composition?category=product&report_date=2026
 {
   "code": "600519", "name": "贵州茅台",
   "report_date": "2026-06-30",
-  "total": 2,
+  "total": 3,
   "records": [
     {
       "category": "product", "item": "茅台酒", "rank": 1,
@@ -1203,7 +1212,20 @@ GET /api/v1/stocks/{code}/business-composition?category=product&report_date=2026
       "profit_yi": 717.24, "profit_share_pct": 88.3,
       "gross_margin_pct": 92.28
     },
-    { "category": "region", "item": "国内", "rank": 1, "revenue_yi": 896.66, "revenue_share_pct": 98.86 }
+    {
+      "category": "product", "item": "其他系列酒", "rank": 2,
+      "revenue_yi": 129.34, "revenue_share_pct": 14.26,
+      "cost_yi": 34.16, "cost_share_pct": 36.06,
+      "profit_yi": 95.18, "profit_share_pct": 11.72,
+      "gross_margin_pct": 73.59
+    },
+    {
+      "category": "product", "item": "其他(补充)", "rank": 3,
+      "revenue_yi": 0.45, "revenue_share_pct": 0.05,
+      "cost_yi": 0.57, "cost_share_pct": 0.6,
+      "profit_yi": -0.12, "profit_share_pct": -0.02,
+      "gross_margin_pct": -27.88
+    }
   ],
   "source": "EastMoneyFetcher"
 }

@@ -422,7 +422,12 @@ class DataFetcherManager:
         #   (c) errors occurred           → raise the aggregated failure.
         if allow_none:
             return (None, "") if return_source else None  # type: ignore[return-value]
-        if not errors and empty_ok:
+        if not errors and empty_ok and fetchers:
+            # `and fetchers`: empty_ok is for the LEGITIMATE no-data chain
+            # (every candidate answered None). Zero candidates means the
+            # fetchers are all disabled by *_ENABLED=false / SDK missing —
+            # a config error that must surface as 503, not masquerade as
+            # "no coverage" (review P2-6).
             logger.info(
                 f"[Manager] {op_label}: empty chain (all fetchers returned None, "
                 f"no errors) — empty_ok route returns {last_empty_result!r}"

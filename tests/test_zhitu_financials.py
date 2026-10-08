@@ -254,3 +254,53 @@ class TestPublicMethods:
         f = self._fetcher(monkeypatch, [{"jzrq": None, "plrq": None}])
         assert f.get_financial_history("600519") == []
         assert f.get_financial_snapshot("600519") is None
+
+
+class TestReviewP2FollowUps:
+    """Review 2026-10-08 P2 batch: junk dates must not ValueError inside the
+    fetcher, dedup tie determinism, strict qoq adjacency."""
+
+    def test_garbage_jzrq_never_raises_valueerror(self):
+        # "2026-ab-30" is len==10 with s[4]=='-' — the old _fin_date accepted
+        # it and int(d[5:7]) blew up INSIDE the fetcher (violates the
+        # fetcher-no-ValueError contract; manager would fold it to 503)
+        rows = [{"jzrq": "2026-ab-30", "plrq": "x"}, R_2026_Q1, R_2026_Q2]
+        recs = _sq(rows)  # must not raise
+        assert [r["report_date"] for r in recs] == ["2026-03-31", "2026-06-30"]
+
+    def test_dedup_tie_is_input_order_independent(self):
+        # same jzrq AND same plrq but different values (restatement pair the
+        # upstream genuinely emits): whichever order the rows arrive, the
+        # pipeline must keep the SAME one (deterministic tie-break)
+        hi = dict(R_2009_A, yyzsr=2e9, jlr=2e9, gsmgsyzzdjlr=2e9)
+        lo = dict(R_2009_A, yyzsr=1e9, jlr=1e9, gsmgsyzzdjlr=1e9)
+        a = _sq([R_2026_Q1, hi, lo])
+        b = _sq([R_2026_Q1, lo, hi])
+        assert a == b
+        q = [r for r in a if r["report_date"] == "2009-03-31"]
+        assert q and q[0]["total_revenue_yi"] == pytest.approx(max(hi["yyzsr"], lo["yyzsr"]) / 1e8)
+
+    def test_qoq_requires_adjacent_report_period(self):
+        # 2025-Q1 ... 2026-Q1 with the 2025 Q2/Q3/Q4 missing: chronologically
+        # adjacent is 2025-Q1 (3 quarters back) — calling that "环比" would
+        # be a lie; qoq must be None even though the prev row's own deltas
+        # exist. Q1's ABSOLUTE is fine (identity rule).
+        rows = [R_2025_Q1, R_2026_Q1]
+        recs = {r["report_date"]: r for r in _sq(rows)}
+        assert recs["2026-03-31"]["total_revenue_yi"] is not None
+        assert recs["2026-03-31"]["revenue_qoq_pct"] is None
+
+    def test_qoq_ok_across_year_boundary(self):
+        # Q1 after last year's Q4 IS adjacent — keep computing it there.
+        # Q3'25 included so the Q4'25 base quarter itself is DERIVABLE
+        # (Q4−Q3); with only [Q4, Q1] both would be None — no-fabrication,
+        # which is also correct behavior.
+        rows = [R_2025_Q3, dict(R_2025_Q4), R_2026_Q1]
+        recs = {r["report_date"]: r for r in _sq(rows)}
+        assert recs["2026-03-31"]["revenue_qoq_pct"] is not None
+
+    def test_qoq_none_when_base_quarter_underivable(self):
+        rows = [dict(R_2025_Q4), R_2026_Q1]
+        recs = {r["report_date"]: r for r in _sq(rows)}
+        assert recs["2026-03-31"]["total_revenue_yi"] is not None  # Q1 identity
+        assert recs["2026-03-31"]["revenue_qoq_pct"] is None  # base undeducible

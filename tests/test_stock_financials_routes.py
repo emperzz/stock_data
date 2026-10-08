@@ -154,13 +154,16 @@ def fm(monkeypatch):
     monkeypatch.setattr(stocks_module, "get_manager", lambda: fake)
     names = {
         "600519": "贵州茅台",
+        "000001": "平安银行",
         "920002": "倍益康",
         "HK00700": "腾讯控股",  # EXISTS in list — market gate must still 400 it
     }
+    from stock_data.data_provider.utils.normalize import normalize_stock_code as _nsc
+
     monkeypatch.setattr(
         stocks_module.stock_list,
         "get_stock_name",
-        lambda code, manager=None: names.get(code, ""),
+        lambda code, manager=None: names.get(_nsc(code), ""),
     )
     return fake
 
@@ -291,3 +294,42 @@ class TestCompositionRoute:
         fm.raise_error = True
         r = client.get(f"{BASE}/600519/business-composition")
         assert r.status_code == 503
+
+
+class TestReviewP1Fixes:
+    """Review 2026-10-08 follow-ups: P1-1 non-padded dates, code echo."""
+
+    def test_non_padded_dates_normalized_before_forward(self, client, fm):
+        # strptime accepts 2026-6-1; the fetchers compare against zero-padded
+        # statDate/avail lists — the route MUST re-emit the padded form
+        # (otherwise the window filter silently no-ops, review P1-1).
+        r = client.get(f"{BASE}/600519/financials/history?start_date=2026-6-1&end_date=2026-12-31")
+        assert r.status_code == 200
+        assert fm.calls[-1] == ("history", "600519", "2026-06-01", "2026-12-31")
+
+    def test_composition_non_padded_report_date_ok(self, client, fm):
+        comp = dict(COMP_OK, requested_report_date_available=True)
+        fm.comp_result = (comp, "EastMoneyFetcher")
+        r = client.get(f"{BASE}/600519/business-composition?report_date=2026-6-30")
+        assert r.status_code == 200
+        assert fm.calls[-1] == ("composition", "600519", None, "2026-06-30")
+
+    def test_prefixed_code_echo_normalized_and_cache_shared(self, client, fm):
+        # spec §4.3: the code field in responses is bare 6-digit; cache keys
+        # normalize too, so SH600519/600519 must not cross-echo or split slots
+        r1 = client.get(f"{BASE}/SH600519/financials")
+        assert r1.status_code == 200
+        assert r1.json()["code"] == "600519"
+        r2 = client.get(f"{BASE}/600519/financials")
+        assert r2.json()["code"] == "600519"
+        assert fm.calls == [("snapshot", "SH600519")]  # second hit came from cache
+
+    def test_history_code_echo_normalized(self, client, fm):
+        r = client.get(f"{BASE}/sz000001/financials/history")
+        assert r.status_code == 200
+        assert r.json()["code"] == "000001"
+
+    def test_composition_code_echo_normalized(self, client, fm):
+        r = client.get(f"{BASE}/SH600519/business-composition")
+        assert r.status_code == 200
+        assert r.json()["code"] == "600519"

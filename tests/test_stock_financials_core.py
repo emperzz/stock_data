@@ -200,3 +200,47 @@ class TestEmptyOkIsAdditive:
         m = _mk_manager([AllNone()])
         with pytest.raises(DataFetchError):
             m.get_financial_history("600519")
+
+
+class TestEmptyOkSafety:
+    def test_no_candidates_still_raises_even_with_empty_ok(self):
+        """empty_ok covers the LEGITIMATE no-data chain (BJ codes through both
+        live legs). Zero registered candidates means the financial fetchers
+        are all *_ENABLED=false / SDK missing — a config error that must
+        surface as 503, not masquerade as 'no coverage' (review P2-6)."""
+        from stock_data.data_provider.base import DataFetchError
+
+        m = _mk_manager([])
+        with pytest.raises(DataFetchError):
+            m.get_financial_snapshot("600519")
+
+
+class TestEmptyDictShortCircuitPinned:
+    def test_empty_dict_blocks_chain_documented_hazard(self):
+        """{} counts as a SUCCESS to _is_meaningful — THIS is why financial
+        fetchers must return None when empty (spec §3.1/§4.2). Pinned as a
+        behavior test so a future refactor of _with_failover can't flip the
+        semantics silently."""
+        from stock_data.data_provider.base import DataCapability
+
+        class PrimaryDict:
+            name = "ZzshareFetcher"
+            priority = 2
+            supported_markets = {"csi"}
+            supported_data_types = DataCapability.STOCK_FINANCIAL
+
+            def get_financial_snapshot(self, code):
+                return {}
+
+        class Backup:
+            name = "ZhituFetcher"
+            priority = 5
+            supported_markets = {"csi"}
+            supported_data_types = DataCapability.STOCK_FINANCIAL
+
+            def get_financial_snapshot(self, code):
+                return {"eps": 1.0}
+
+        m = _mk_manager([PrimaryDict(), Backup()])
+        out, source = m.get_financial_snapshot("600519")
+        assert source == "ZzshareFetcher"  # the {} hijacked the chain — never return {}
