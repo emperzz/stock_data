@@ -1,6 +1,6 @@
 # 10 沪深指数 API
 
-> 抓取时间：2026-07-06
+> 抓取时间：2026-10-08
 > 源站点：<https://www.zhituapi.com/hsindexapi.html>
 
 本页与 `01-09` 不同:URL 路径前缀是 `/hz/`(沪深指数)而不是 `/hs/`(沪深股票),代码格式为 `000001.SH` / `000300.SZ` 等带市场后缀的指数代码。
@@ -19,7 +19,7 @@
 https://api.zhituapi.com/hz/list/hszs?token=token证书
 ```
 
-**描述**：获取沪深两市主要的指数代码和名称,用于后续接口的参数传入。
+**描述**：获取沪深两市主要的指数代码和名称，用于后续接口的参数传入。
 
 **更新频率**：每日0点
 
@@ -29,9 +29,9 @@ https://api.zhituapi.com/hz/list/hszs?token=token证书
 
 | 字段名称 | 数据类型 | 字段说明 |
 | --- | --- | --- |
-| dm | string | 指数代码,如:`000001.SH` |
-| mc | string | 指数名称,如:`上证指数` |
-| jys | string | 交易所,`"sh"` 表示上证,`"sz"` 表示深证 |
+| dm | string | 指数代码，如：000001.SH |
+| mc | string | 指数名称，如：上证指数 |
+| jys | string | 交易所，"sh"表示上证，"sz"表示深证 |
 
 **Python 接入示例**：
 
@@ -43,6 +43,7 @@ data = response.json()
 print(data)
 ```
 
+
 ---
 
 ## 二、实时交易
@@ -52,16 +53,16 @@ print(data)
 **API 地址**：
 
 ```
-https://api.zhituapi.com/hz/real/ssjy/指数代码(如:000001.SH)?token=token证书
+https://api.zhituapi.com/hz/real/ssjy/指数代码(如：000001.SH)?token=token证书
 ```
 
-**描述**：根据《指数列表》得到的股票代码获取实时交易数据(您可以理解为日线的最新数据)。
+**描述**：根据《指数列表》得到的股票代码获取实时交易数据（您可以理解为日线的最新数据）。
 
 **更新频率**：实时
 
 **请求频率限制**：包量版1分钟300次 |体验版、包月版1分钟1000次 | 包年版1分钟3千次 | 至尊版1分钟6千次
 
-**字段说明**(实时报价部分)：
+**字段说明**：
 
 | 字段名称 | 数据类型 | 字段说明 |
 | --- | --- | --- |
@@ -77,11 +78,6 @@ https://api.zhituapi.com/hz/real/ssjy/指数代码(如:000001.SH)?token=token证
 | pc | float | 涨跌幅 |
 | zf | float | 振幅 |
 | t | string | 更新时间 |
-
-**字段说明**(最近一根 K 线快照部分,与实时报价并列返回)：
-
-| 字段名称 | 数据类型 | 字段说明 |
-| --- | --- | --- |
 | t | string | 交易时间 |
 | o | float | 开盘价 |
 | h | float | 最高价 |
@@ -91,17 +87,16 @@ https://api.zhituapi.com/hz/real/ssjy/指数代码(如:000001.SH)?token=token证
 | a | float | 成交额 |
 | pc | float | 前收盘价 |
 
-> **注意**:上游返回体内同时含实时报价字段(p/o/h/l/yc/cje/v/pv/ud/pc/zf/t)和最近 K 线字段(t/o/h/l/c/v/a/pc),命名风格略不同(前一组用 `yc`/`cje`/`pv`,后一组用 `pc`/`a`)。文档按上游原始结构保留。
-
 **Python 接入示例**：
 
 ```python
 import requests
-url = "https://api.zhituapi.com/hz/real/ssjy/指数代码(如:000001.SH)?token=token证书"
+url = "https://api.zhituapi.com/hz/real/ssjy/指数代码(如：000001.SH)?token=token证书"
 response = requests.get(url)
 data = response.json()
 print(data)
 ```
+
 
 ---
 
@@ -112,10 +107,10 @@ print(data)
 **API 地址**：
 
 ```
-https://api.zhituapi.com/hz/latest/fsjy/指数代码.市场(如000001.SH)/分时级别(如d)?token=token证书&limit=最新条数(例如2)
+https://api.zhituapi.com/hz/latest/fsjy/指数代码.市场（如000001.SH）/分时级别(如d)?token=token证书&limit=最新条数(例如2)
 ```
 
-**描述**：根据《指数列表》得到的指数代码和分时级别获取最新交易数据,交易时间升序。目前分时级别支持 5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线,对应的请求参数分别为 `5、15、30、60、d、w、m、y`。
+**描述**：根据《指数列表》得到的指数代码和分时级别获取最新交易数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y；另：1 分钟分时请使用「最新/历史分时交易（Pro版）」路径（含 /pro/），勿在常规分时接口传 period=1
 
 **更新频率**：实时
 
@@ -134,27 +129,34 @@ https://api.zhituapi.com/hz/latest/fsjy/指数代码.市场(如000001.SH)/分时
 | a | float | 成交额 |
 | pc | float | 前收盘价 |
 
+**返回示例**：
+
+```json
+[{"t":"2026-08-05","o":3815.12,"h":3884.4,"l":3815.12,"c":3878.43,"v":592155124,"a":1208723017752.0,"pc":3822.28,"sf":0},{"t":"2026-08-06","o":3864.27,"h":3902.05,"l":3864.27,"c":3900.35,"v":588555280,"a":1166818677225.0,"pc":3878.43,"sf":0}
+```
+
 **Python 接入示例**：
 
 ```python
 import requests
-url = "https://api.zhituapi.com/hz/latest/fsjy/指数代码.市场(如000001.SH)/分时级别(如d)?token=token证书&limit=最新条数(例如2)"
+url = "https://api.zhituapi.com/hz/latest/fsjy/指数代码.市场（如000001.SH）/分时级别(如d)?token=token证书&limit=最新条数(例如2)"
 response = requests.get(url)
 data = response.json()
 print(data)
 ```
+
 
 ### 历史分时交易
 
 **API 地址**：
 
 ```
-https://api.zhituapi.com/hz/history/fsjy/指数代码.市场(如000001.SH)/分时级别(如d)?token=token证书&st=开始时间(如20240601)&et=结束时间(如20250430)
+https://api.zhituapi.com/hz/history/fsjy/指数代码.市场（如000001.SH）/分时级别(如d)?token=token证书&st=开始时间(如20240601)&et=结束时间(如20250430)
 ```
 
-**描述**：根据《指数列表》得到的指数代码和分时级别获取历史交易数据,交易时间升序。目前分时级别支持 5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线,对应的请求参数分别为 `5、15、30、60、d、w、m、y`。开始时间以及结束时间的格式均为 `YYYYMMDD` 或 `YYYYMMDDhhmmss`,例如:`'20240101'` 或 `'20241231235959'`。不设置开始时间和结束时间则为全部历史数据。
+**描述**：根据《指数列表》得到的指数代码和分时级别获取历史交易数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据；另：1 分钟分时请使用「最新/历史分时交易（Pro版）」路径（含 /pro/），勿在常规分时接口传 period=1
 
-**更新频率**：日线以上数据每日下午 15:30 开始更新,预计 17:10 完成更新
+**更新频率**：日线以上数据每日下午15:30开始更新，预计17:10完成更新
 
 **请求频率限制**：包量版1分钟300次 |体验版、包月版1分钟1000次 | 包年版1分钟3千次 | 至尊版1分钟6千次
 
@@ -175,60 +177,367 @@ https://api.zhituapi.com/hz/history/fsjy/指数代码.市场(如000001.SH)/分�
 
 ```python
 import requests
-url = "https://api.zhituapi.com/hz/history/fsjy/指数代码.市场(如000001.SH)/分时级别(如d)?token=token证书&st=开始时间(如20240601)&et=结束时间(如20250430)"
+url = "https://api.zhituapi.com/hz/history/fsjy/指数代码.市场（如000001.SH）/分时级别(如d)?token=token证书&st=开始时间(如20240601)&et=结束时间(如20250430)"
 response = requests.get(url)
 data = response.json()
 print(data)
 ```
 
----
 
-## 四、技术指标
-
-> 4 个技术指标接口共用同一模板,只是路径末段(`macd` / `ma` / `boll` / `kdj`)不同。所有频率都支持,日线及以上每日 15:35 更新,分钟级盘中按频率滚动更新。
-
-### 历史分时 MACD
+### 最新分时交易（Pro版）
 
 **API 地址**：
 
 ```
-https://api.zhituapi.com/hz/history/macd/指数代码(000001.SH)/分时级别(d)?token=token证书&st=开始时间&et=结束时间&lt=最新条数
+https://api.zhituapi.com/hz/pro/latest/fsjy/指数代码.市场（如000001.SH）/1/n?token=token证书&lt=最新条数(如5)
 ```
+
+**描述**：API扩能包专属。路径须含 /pro/。获取沪深指数最新 1 分钟 K 线（period 固定为 1）。基础证过期时只要 API Pro 仍有效仍可调用。亦可经专属域名 https://p.zhituapi.com 同路径访问。
+
+**更新频率**：1 分钟级数据由 Redis 提供；盘中增量更新，需已开通「API扩能包」
+
+**请求频率限制**：需有效 token + 已开通且未过期的 API扩能包；基础证过期时只要 API Pro 未到期仍可调用本接口。限流同证书档位
 
 **字段说明**：
 
 | 字段名称 | 数据类型 | 字段说明 |
 | --- | --- | --- |
-| t | string | 交易时间,短分时级别格式为 `yyyy-MM-ddHH:mm:ss`,日线级别为 `yyyy-MM-dd` |
-| diff | number | DIFF 值 |
-| dea | number | DEA 值 |
-| macd | number | MACD 值 |
-| ema12 | number | EMA(12) 值 |
-| ema26 | number | EMA(26) 值 |
+| t | string | 交易时间（北京时间），格式 yyyy-MM-dd HH:mm:ss |
+| o | float | 开盘价 |
+| h | float | 最高价 |
+| l | float | 最低价 |
+| c | float | 收盘价 |
+| v | float | 成交量 |
+| a | float | 成交额 |
+| pc | float | 前收价（若有） |
+| sf | float | 停牌标志，0 表示正常交易，非 0 表示停牌（若有） |
 
 **返回示例**：
 
 ```json
-[
-  {"t":"2025-04-17 00:00:00","diff":-27.043,"dea":-27.177,"macd":0.268,"ema12":3268.3451,"ema26":3295.3885},
-  {"t":"2025-04-18 00:00:00","diff":-24.371,"dea":-26.616,"macd":4.489,"ema12":3269.6351,"ema26":3294.0064},
-  {"t":"2025-04-21 00:00:00","diff":-20.827,"dea":-25.458,"macd":9.262,"ema12":3272.9881,"ema26":3293.8155},
-  {"t":"2025-04-22 00:00:00","diff":-17.149,"dea":-23.796,"macd":13.295,"ema12":3277.1069,"ema26":3294.2559},
-  {"t":"2025-04-23 00:00:00","diff":-14.343,"dea":-21.906,"macd":15.126,"ema12":3280.0689,"ema26":3294.4117}
-]
+[{"t":"2026-09-10 14:59:00","o":11.2,"h":11.25,"l":11.18,"c":11.22,"v":123456,"a":1380000,"pc":11.19,"sf":0}]
 ```
 
 **Python 接入示例**：
 
 ```python
 import requests
-url = "https://api.zhituapi.com/hz/history/macd/指数代码(000001.SH)/分时级别(d)?token=token证书&st=开始时间&et=结束时间&lt=最新条数"
+url = "https://api.zhituapi.com/hz/pro/latest/fsjy/指数代码.市场（如000001.SH）/1/n?token=token证书&lt=最新条数(如5)"
 response = requests.get(url)
 data = response.json()
 print(data)
 ```
 
-### 历史分时 MA
+
+### 历史分时交易（Pro版）
+
+**API 地址**：
+
+```
+https://api.zhituapi.com/hz/pro/history/fsjy/指数代码.市场（如000001.SH）/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数
+```
+
+**描述**：API扩能包专属。路径须含 /pro/。获取沪深指数 1 分钟历史 K 线（period 固定为 1）。基础证过期时只要 API Pro 仍有效仍可调用。亦可经专属域名 https://p.zhituapi.com 同路径访问。
+
+**更新频率**：1 分钟级数据由 Redis 提供；盘中增量更新，需已开通「API扩能包」
+
+**请求频率限制**：需有效 token + 已开通且未过期的 API扩能包；基础证过期时只要 API Pro 未到期仍可调用本接口。限流同证书档位
+
+**字段说明**：
+
+| 字段名称 | 数据类型 | 字段说明 |
+| --- | --- | --- |
+| t | string | 交易时间（北京时间），格式 yyyy-MM-dd HH:mm:ss |
+| o | float | 开盘价 |
+| h | float | 最高价 |
+| l | float | 最低价 |
+| c | float | 收盘价 |
+| v | float | 成交量 |
+| a | float | 成交额 |
+| pc | float | 前收价（若有） |
+| sf | float | 停牌标志，0 表示正常交易，非 0 表示停牌（若有） |
+
+**返回示例**：
+
+```json
+[{"t":"2026-09-10 14:59:00","o":11.2,"h":11.25,"l":11.18,"c":11.22,"v":123456,"a":1380000,"pc":11.19,"sf":0}]
+```
+
+**Python 接入示例**：
+
+```python
+import requests
+url = "https://api.zhituapi.com/hz/pro/history/fsjy/指数代码.市场（如000001.SH）/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数"
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+
+### 完整历史分时交易（Pro版）
+
+**API 地址**：
+
+```
+https://p.zhituapi.com/hz/history/full/{指数代码}/{分时级别}?token=token证书
+```
+
+**描述**：API扩能包专属。根据指数代码与分时级别获取该指数完整历史分钟K线。请求路径：https://p.zhituapi.com/hz/history/full/{指数代码}/{分时级别}?token=。分时级别支持 1、5、15、30、60。可选查询参数 year=YYYY，仅获取指定年份；不传 year 则按时间顺序返回全部历史。本接口托管于 Pro 专用域名，推荐直接请求 https://p.zhituapi.com；若仍请求 api.zhituapi.com 同路径，网关将 302 跳转至 Pro 域名（过渡期也可能由主站直出）。沪深主流标的分钟线最长可回溯至约 1991 年（三十余年，以标的可采数据为准）；不传 year 时按年片合并返回全部可采历史；传 year=YYYY 仅返回该年。本年度数据每月更新 1 次，获取本年度最新分钟线请使用含 /pro/ 的最新/历史分时或常规分时接口。鉴权为 Query 参数 token=；未开通或已过期的 API扩能包将返回 108；本接口限流为每分钟 60 次。
+
+**更新频率**：历史年片最长可回溯至约1991年（以标的为准）；本年度数据每月更新1次。若需本年度最新分钟线，建议改用常规历史/最新分时接口（含 /pro/ 的 1 分钟滚动窗口）
+
+**请求频率限制**：1分钟60次；仅 API扩能包可用
+
+**字段说明**：
+
+| 字段名称 | 数据类型 | 字段说明 |
+| --- | --- | --- |
+| t | string | 交易时间（北京时间），格式 yyyy-MM-dd HH:mm:ss |
+| o | float | 开盘价 |
+| h | float | 最高价 |
+| l | float | 最低价 |
+| c | float | 收盘价 |
+| v | float | 成交量 |
+| a | float | 成交额 |
+| pc | float | 前收价（若有） |
+| sf | float | 停牌标志，0 表示正常交易，非 0 表示停牌（若有） |
+
+**返回示例**：
+
+```json
+[{"t":"2010-01-04 10:30:00","o":24.52,"h":24.56,"l":24.21,"c":24.24,"v":40553.0,"a":98799520.0,"pc":24.37,"sf":0}]
+```
+
+**Python 接入示例**：
+
+```python
+import requests
+url = "https://p.zhituapi.com/hz/history/full/{指数代码}/{分时级别}?token=token证书"
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+> **本项目备注**（非上游原文）：Pro 系列接口属「API扩能包」付费能力，本项目 `ZhituFetcher` 未接入；股票分钟线现走 `hs/latest|history/fsjy`（5/15/30/60m）与「企业版历史数据【1m级别】」。
+
+
+### 历史分时MACD（Pro版·1分钟）
+
+**API 地址**：
+
+```
+https://api.zhituapi.com/hz/pro/history/macd/指数代码(如000001.SH)/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数
+```
+
+**描述**：API扩能包专属。路径须含 /pro/history/macd/。根据《指数列表》代码获取1分钟历史MACD（period 固定为 1）。支持 st/et/lt。请勿再使用普通路径 /hz/history/macd/…/1/（已停止开放）。
+
+**更新频率**：基于 1 分钟历史分时实时计算；盘中可结合 Redis :today 合并。须已开通且未过期的「API扩能包」。
+
+**请求频率限制**：需有效证书 + API扩能包未过期；基础证过期时只要 Pro 未到期仍可调用。限流同证书档位。普通路径 period=1 已关闭。
+
+**字段说明**：
+
+| 字段名称 | 数据类型 | 字段说明 |
+| --- | --- | --- |
+| t | string | 交易时间，分钟级格式为 yyyy-MM-dd HH:mm:ss |
+| diff | number | DIFF值 |
+| dea | number | DEA值 |
+| macd | number | MACD值 |
+| ema12 | number | EMA（12）值 |
+| ema26 | number | EMA（26）值 |
+
+**返回示例**：
+
+```json
+[{"t":"2026-09-30 14:59:00","diff":-0.005,"dea":-0.004,"macd":-0.002,"ema12":11.5868,"ema26":11.5921},{"t":"2026-09-30 15:00:00","diff":-0.006,"dea":-0.005,"macd":-0.003,"ema12":11.5842,"ema26":11.5905}]
+```
+
+**Python 接入示例**：
+
+```python
+import requests
+url = "https://api.zhituapi.com/hz/pro/history/macd/指数代码(如000001.SH)/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数"
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+
+### 历史分时MA（Pro版·1分钟）
+
+**API 地址**：
+
+```
+https://api.zhituapi.com/hz/pro/history/ma/指数代码(如000001.SH)/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数
+```
+
+**描述**：API扩能包专属。路径须含 /pro/history/ma/。根据《指数列表》代码获取1分钟历史MA（period 固定为 1）。支持 st/et/lt。请勿再使用普通路径 /hz/history/ma/…/1/（已停止开放）。
+
+**更新频率**：基于 1 分钟历史分时实时计算；盘中可结合 Redis :today 合并。须已开通且未过期的「API扩能包」。
+
+**请求频率限制**：需有效证书 + API扩能包未过期；基础证过期时只要 Pro 未到期仍可调用。限流同证书档位。普通路径 period=1 已关闭。
+
+**字段说明**：
+
+| 字段名称 | 数据类型 | 字段说明 |
+| --- | --- | --- |
+| t | string | 交易时间，分钟级格式为 yyyy-MM-dd HH:mm:ss |
+| ma3 | number | MA3，没有则为null |
+| ma5 | number | MA5，没有则为null |
+| ma10 | number | MA10，没有则为null |
+| ma15 | number | MA15，没有则为null |
+| ma20 | number | MA20，没有则为null |
+| ma30 | number | MA30，没有则为null |
+| ma60 | number | MA60，没有则为null |
+| ma120 | number | MA120，没有则为null |
+| ma200 | number | MA200，没有则为null |
+| ma250 | number | MA250，没有则为null |
+
+**返回示例**：
+
+```json
+[{"t":"2026-09-30 15:00:00","ma3":11.58,"ma5":11.582,"ma10":11.59,"ma15":11.595,"ma20":11.6,"ma30":11.61,"ma60":11.62,"ma120":null,"ma200":null,"ma250":null}]
+```
+
+**Python 接入示例**：
+
+```python
+import requests
+url = "https://api.zhituapi.com/hz/pro/history/ma/指数代码(如000001.SH)/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数"
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+
+### 历史分时BOLL（Pro版·1分钟）
+
+**API 地址**：
+
+```
+https://api.zhituapi.com/hz/pro/history/boll/指数代码(如000001.SH)/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数
+```
+
+**描述**：API扩能包专属。路径须含 /pro/history/boll/。根据《指数列表》代码获取1分钟历史BOLL（period 固定为 1）。支持 st/et/lt。请勿再使用普通路径 /hz/history/boll/…/1/（已停止开放）。
+
+**更新频率**：基于 1 分钟历史分时实时计算；盘中可结合 Redis :today 合并。须已开通且未过期的「API扩能包」。
+
+**请求频率限制**：需有效证书 + API扩能包未过期；基础证过期时只要 Pro 未到期仍可调用。限流同证书档位。普通路径 period=1 已关闭。
+
+**字段说明**：
+
+| 字段名称 | 数据类型 | 字段说明 |
+| --- | --- | --- |
+| t | string | 交易时间，分钟级格式为 yyyy-MM-dd HH:mm:ss |
+| u | number | 上轨 |
+| d | number | 下轨 |
+| m | number | 中轨 |
+
+**返回示例**：
+
+```json
+[{"t":"2026-09-30 15:00:00","u":11.65,"d":11.49,"m":11.57}]
+```
+
+**Python 接入示例**：
+
+```python
+import requests
+url = "https://api.zhituapi.com/hz/pro/history/boll/指数代码(如000001.SH)/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数"
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+
+### 历史分时KDJ（Pro版·1分钟）
+
+**API 地址**：
+
+```
+https://api.zhituapi.com/hz/pro/history/kdj/指数代码(如000001.SH)/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数
+```
+
+**描述**：API扩能包专属。路径须含 /pro/history/kdj/。根据《指数列表》代码获取1分钟历史KDJ（period 固定为 1）。支持 st/et/lt。请勿再使用普通路径 /hz/history/kdj/…/1/（已停止开放）。
+
+**更新频率**：基于 1 分钟历史分时实时计算；盘中可结合 Redis :today 合并。须已开通且未过期的「API扩能包」。
+
+**请求频率限制**：需有效证书 + API扩能包未过期；基础证过期时只要 Pro 未到期仍可调用。限流同证书档位。普通路径 period=1 已关闭。
+
+**字段说明**：
+
+| 字段名称 | 数据类型 | 字段说明 |
+| --- | --- | --- |
+| t | string | 交易时间，分钟级格式为 yyyy-MM-dd HH:mm:ss |
+| k | number | K值 |
+| d | number | D值 |
+| j | number | J值 |
+
+**返回示例**：
+
+```json
+[{"t":"2026-09-30 15:00:00","k":45.2,"d":48.1,"j":39.4}]
+```
+
+**Python 接入示例**：
+
+```python
+import requests
+url = "https://api.zhituapi.com/hz/pro/history/kdj/指数代码(如000001.SH)/1?token=token证书&st=开始时间&et=结束时间&lt=最新条数"
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+
+---
+
+## 四、技术指标
+
+### 历史分时MACD
+
+**API 地址**：
+
+```
+https://api.zhituapi.com/hz/history/macd/指数代码（000001.SH）/分时级别(d)?token=token证书&st=开始时间&et=结束时间&lt=最新条数
+```
+
+**描述**：根据《指数列表》得到的指数代码和分时级别获取历史MACD数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。 【重要】1分钟级别技术指标已改为API扩能包专属，请使用 /…/pro/history/{macd|ma|boll|kdj}/…/1/… ；普通本路径的 period=1 已停止开放。其它周期（5/15/30/60/d/w/m/y）不变。
+
+**更新频率**：分钟级别数据盘中更新，分时越小越优先更新，如5分钟级别会每5分钟更新，15分钟级别会每15分钟更新，以此类推，日线及以上级别每日15:35更新
+
+**请求频率限制**：包量版1分钟300次 |体验版、包月版1分钟1000次 | 包年版1分钟3千次 | 至尊版1分钟6千次
+
+**字段说明**：
+
+| 字段名称 | 数据类型 | 字段说明 |
+| --- | --- | --- |
+| t | string | 交易时间，短分时级别格式为yyyy-MM-ddHH:mm:ss，日线级别为yyyy-MM-dd |
+| diff | number | DIFF值 |
+| dea | number | DEA值 |
+| macd | number | MACD值 |
+| ema12 | number | EMA（12）值 |
+| ema26 | number | EMA（26）值 |
+
+**返回示例**：
+
+```json
+[
+  {"t":"2025-04-17 00:00:00","diff":-27.043,"dea":-27.177,"macd":0.268,"ema12":3268.3451,"ema26":3295.3885},{"t":"2025-04-18 00:00:00","diff":-24.371,"dea":-26.616,"macd":4.489,"ema12":3269.6351,"ema26":3294.0064},{"t":"2025-04-21 00:00:00","diff":-20.827,"dea":-25.458,"macd":9.262,"ema12":3272.9881,"ema26":3293.8155},{"t":"2025-04-22 00:00:00","diff":-17.149,"dea":-23.796,"macd":13.295,"ema12":3277.1069,"ema26":3294.2559},{"t":"2025-04-23 00:00:00","diff":-14.343,"dea":-21.906,"macd":15.126,"ema12":3280.0689,"ema26":3294.4117},{"t":"2025-04-24 00:00:00","diff":-11.907,"dea":-19.906,"macd":15.999,"ema12":3282.7183,"ema26":3294.6249},{"t":"2025-04-25 00:00:00","diff":-10.04,"dea":-17.933,"macd":15.785,"ema12":3284.617,"ema26":3294.6572},{"t":"2025-04-28 00:00:00","diff":-8.994,"dea":-16.145,"macd":14.302,"ema12":3285.2006,"ema26":3294.1944},{"t":"2025-04-29 00:00:00","diff":-8.211,"dea":-14.558,"macd":12.694,"ema12":3285.4251,"ema26":3293.6363},{"t":"2025-04-30 00:00:00","diff":-8.113,"dea":-13.269,"macd":10.312,"ema12":3284.4412,"ema26":3292.5544}]
+```
+
+**Python 接入示例**：
+
+```python
+import requests
+url = "https://api.zhituapi.com/hz/history/macd/指数代码（000001.SH）/分时级别(d)?token=token证书&st=开始时间&et=结束时间&lt=最新条数"
+response = requests.get(url)
+data = response.json()
+print(data)
+```
+
+
+### 历史分时MA
 
 **API 地址**：
 
@@ -236,36 +545,58 @@ print(data)
 https://api.zhituapi.com/hz/history/ma/指数代码(如000001.SH)/分时级别(如d)?token=token证书&st=开始时间&et=结束时间&lt=最新条数
 ```
 
+**描述**：根据《指数列表》得到的指数代码和分时级别获取历史MA数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。 【重要】1分钟级别技术指标已改为API扩能包专属，请使用 /…/pro/history/{macd|ma|boll|kdj}/…/1/… ；普通本路径的 period=1 已停止开放。其它周期（5/15/30/60/d/w/m/y）不变。
+
+**更新频率**：分钟级别数据盘中更新，分时越小越优先更新，如5分钟级别会每5分钟更新，15分钟级别会每15分钟更新，以此类推，日线及以上级别每日15:35更新
+
+**请求频率限制**：包量版1分钟300次 |体验版、包月版1分钟1000次 | 包年版1分钟3千次 | 至尊版1分钟6千次
+
 **字段说明**：
 
 | 字段名称 | 数据类型 | 字段说明 |
 | --- | --- | --- |
-| t | string | 交易时间,短分时级别格式为 `yyyy-MM-ddHH:mm:ss`,日线级别为 `yyyy-MM-dd` |
-| ma3 | number | MA3,没有则为 null |
-| ma5 | number | MA5,没有则为 null |
-| ma10 | number | MA10,没有则为 null |
-| ma15 | number | MA15,没有则为 null |
-| ma20 | number | MA20,没有则为 null |
-| ma30 | number | MA30,没有则为 null |
-| ma60 | number | MA60,没有则为 null |
-| ma120 | number | MA120,没有则为 null |
-| ma200 | number | MA200,没有则为 null |
-| ma250 | number | MA250,没有则为 null |
+| t | string | 交易时间，短分时级别格式为yyyy-MM-ddHH:mm:ss，日线级别为yyyy-MM-dd |
+| ma3 | number | MA3，没有则为null |
+| ma5 | number | MA5，没有则为null |
+| ma10 | number | MA10，没有则为null |
+| ma15 | number | MA15，没有则为null |
+| ma20 | number | MA20，没有则为null |
+| ma30 | number | MA30，没有则为null |
+| ma60 | number | MA60，没有则为null |
+| ma120 | number | MA120，没有则为null |
+| ma200 | number | MA200，没有则为null |
+| ma250 | number | MA250，没有则为null |
 
 **返回示例**：
 
 ```json
 [
-  {
-    "t": "2025-07-21 15:00",
-    "ma3": 12.6, "ma5": 12.598, "ma10": 12.597, "ma15": 12.5927, "ma20": 12.591,
-    "ma30": 12.5903, "ma60": 12.6127, "ma120": 12.6279, "ma200": 12.6154, "ma250": 12.6638
-  },
-  {
-    "t": "2025-07-22 09:35",
-    "ma3": 12.6, "ma5": 12.596, "ma10": 12.595, "ma15": 12.5933, "ma20": 12.5915,
-    "ma30": 12.5897, "ma60": 12.6115, "ma120": 12.628, "ma200": 12.6146, "ma250": 12.6622
-  }
+        {
+        "t": "2025-07-21 15:00",
+        "ma3": 12.6,
+        "ma5": 12.598,
+        "ma10": 12.597,
+        "ma15": 12.5927,
+        "ma20": 12.591,
+        "ma30": 12.5903,
+        "ma60": 12.6127,
+        "ma120": 12.6279,
+        "ma200": 12.6154,
+        "ma250": 12.6638
+    },
+    {
+        "t": "2025-07-22 09:35",
+        "ma3": 12.6,
+        "ma5": 12.596,
+        "ma10": 12.595,
+        "ma15": 12.5933,
+        "ma20": 12.5915,
+        "ma30": 12.5897,
+        "ma60": 12.6115,
+        "ma120": 12.628,
+        "ma200": 12.6146,
+        "ma250": 12.6622
+    }
 ]
 ```
 
@@ -279,7 +610,10 @@ data = response.json()
 print(data)
 ```
 
-### 历史分时 BOLL
+
+### 历史分时BOLL
+
+> **注**：上游描述文字与 KDJ 复制粘贴，实际接口路径正确为 `boll`，返回 BOLL 数据。
 
 **API 地址**：
 
@@ -287,13 +621,17 @@ print(data)
 https://api.zhituapi.com/hz/history/boll/指数代码(如000001.SH)/分时级别(如d)?token=token证书&st=开始时间&et=结束时间&lt=最新条数
 ```
 
-> **注**:上游描述文字与 KDJ 复制粘贴,实际接口路径正确为 `boll`,返回 BOLL 数据。
+**描述**：根据《指数列表》得到的指数代码和分时级别获取历史KDJ数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。 【重要】1分钟级别技术指标已改为API扩能包专属，请使用 /…/pro/history/{macd|ma|boll|kdj}/…/1/… ；普通本路径的 period=1 已停止开放。其它周期（5/15/30/60/d/w/m/y）不变。
+
+**更新频率**：分钟级别数据盘中更新，分时越小越优先更新，如5分钟级别会每5分钟更新，15分钟级别会每15分钟更新，以此类推，日线及以上级别每日15:35更新
+
+**请求频率限制**：包量版1分钟300次 |体验版、包月版1分钟1000次 | 包年版1分钟3千次 | 至尊版1分钟6千次
 
 **字段说明**：
 
 | 字段名称 | 数据类型 | 字段说明 |
 | --- | --- | --- |
-| t | string | 交易时间,短分时级别格式为 `yyyy-MM-ddHH:mm:ss`,日线级别为 `yyyy-MM-dd` |
+| t | string | 交易时间，短分时级别格式为yyyy-MM-ddHH:mm:ss，日线级别为yyyy-MM-dd |
 | u | number | 上轨 |
 | d | number | 下轨 |
 | m | number | 中轨 |
@@ -301,9 +639,19 @@ https://api.zhituapi.com/hz/history/boll/指数代码(如000001.SH)/分时级别
 **返回示例**：
 
 ```json
-[
-  {"t": "2025-07-18 14:00", "u": 13.11, "d": 12.38, "m": 12.75},
-  {"t": "2025-07-18 15:00", "u": 13.09, "d": 12.38, "m": 12.74}
+[    
+    {
+        "t": "2025-07-18 14:00",
+        "u": 13.11,
+        "d": 12.38,
+        "m": 12.75
+    },
+    {
+        "t": "2025-07-18 15:00",
+        "u": 13.09,
+        "d": 12.38,
+        "m": 12.74
+    }
 ]
 ```
 
@@ -317,7 +665,8 @@ data = response.json()
 print(data)
 ```
 
-### 历史分时 KDJ
+
+### 历史分时KDJ
 
 **API 地址**：
 
@@ -325,21 +674,37 @@ print(data)
 https://api.zhituapi.com/hz/history/kdj/指数代码(如000001.SH)/分时级别(如d)?token=token证书&st=开始时间&et=结束时间&lt=最新条数
 ```
 
+**描述**：根据《指数列表》得到的指数代码和分时级别获取历史KDJ数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。 【重要】1分钟级别技术指标已改为API扩能包专属，请使用 /…/pro/history/{macd|ma|boll|kdj}/…/1/… ；普通本路径的 period=1 已停止开放。其它周期（5/15/30/60/d/w/m/y）不变。
+
+**更新频率**：分钟级别数据盘中更新，分时越小越优先更新，如5分钟级别会每5分钟更新，15分钟级别会每15分钟更新，以此类推，日线及以上级别每日15:35更新
+
+**请求频率限制**：包量版1分钟300次 |体验版、包月版1分钟1000次 | 包年版1分钟3千次 | 至尊版1分钟6千次
+
 **字段说明**：
 
 | 字段名称 | 数据类型 | 字段说明 |
 | --- | --- | --- |
-| t | string | 交易时间,短分时级别格式为 `yyyy-MM-ddHH:mm:ss`,日线级别为 `yyyy-MM-dd` |
-| k | number | K 值 |
-| d | number | D 值 |
-| j | number | J 值 |
+| t | string | 交易时间，短分时级别格式为yyyy-MM-ddHH:mm:ss，日线级别为yyyy-MM-dd |
+| k | number | K值 |
+| d | number | D值 |
+| j | number | J值 |
 
 **返回示例**：
 
 ```json
-[
-  {"t": "2025-07-18 14:00", "k": 57.73, "d": 43.01, "j": 87.16},
-  {"t": "2025-07-18 15:00", "k": 63.88, "d": 49.97, "j": 91.71}
+[   
+    {
+        "t": "2025-07-18 14:00",
+        "k": 57.73,
+        "d": 43.01,
+        "j": 87.16
+    },
+    {
+        "t": "2025-07-18 15:00",
+        "k": 63.88,
+        "d": 49.97,
+        "j": 91.71
+    }
 ]
 ```
 
@@ -352,6 +717,7 @@ response = requests.get(url)
 data = response.json()
 print(data)
 ```
+
 
 ---
 

@@ -1,6 +1,6 @@
 # 07 基础信息
 
-> 抓取时间：2026-06-10
+> 抓取时间：2026-10-08
 > 源站点：<https://www.zhituapi.com/hsstockapi.html>
 
 ## 股票基础信息
@@ -11,7 +11,7 @@
 https://api.zhituapi.com/hs/instrument/股票代码（如000001.SZ）?token=token证书
 ```
 
-**描述**：依据《股票列表》中的股票代码获取股票的基础信息。
+**描述**：依据《股票列表》中的股票代码获取股票的基础信息
 
 **更新频率**：每日1点
 
@@ -42,3 +42,4 @@ response = requests.get(url)
 data = response.json()
 print(data)
 ```
+
