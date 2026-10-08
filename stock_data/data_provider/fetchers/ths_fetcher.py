@@ -1491,7 +1491,9 @@ class ThsFetcher(BaseFetcher):
         """THS 个股新闻 via basic.10jqka.com.cn/fuyao/info/company/v1/news.
 
         返回 dict shape 严格对齐 EastMoneyFetcher.get_stock_news:
-          {title, url, source_domain, publish_date, media_name}.
+          {title, url, source_domain, publish_date, publish_time, media_name}.
+        注意: 该上游 ``date`` 只到日, 故此处 ``publish_time`` 恒等于
+        ``publish_date``(如实透传, 不编造时分秒)。
 
         Soft failures (no market_id, upstream status_code != 0) → return [].
         Hard failures (network / JSON parse) → raise DataFetchError for
@@ -1538,6 +1540,9 @@ class ThsFetcher(BaseFetcher):
                     "url": url,
                     "source_domain": source_domain,
                     "publish_date": str(r.get("date", "")),
+                    # 该上游只给到日 → publish_time 如实等于 publish_date,
+                    # 不用 "00:00:00" 之类的假时间把它伪装成精确时间戳。
+                    "publish_time": str(r.get("date", "")),
                     "media_name": "",
                 }
             )
@@ -2756,8 +2761,10 @@ class ThsFetcher(BaseFetcher):
             pt = r.get("publishTime")
             if isinstance(pt, (int, float)) and pt > 0:
                 dt = datetime.fromtimestamp(pt / 1000, _THS_TZ)
+                # 同日两个字段同源: publish_time 为完整时间戳, publish_date
+                # 是它的日期前缀, 客户端可任取其一。
                 publish_date = dt.strftime("%Y-%m-%d")
-                publish_time = dt.strftime("%H:%M")
+                publish_time = dt.strftime("%Y-%m-%d %H:%M:%S")
             out.append(
                 {
                     "title": title,
@@ -3107,11 +3114,12 @@ class ThsFetcher(BaseFetcher):
         """Convert one iWenCai record to the shared NewsItem dict shape.
 
         归一化到与 EastMoneyFetcher._normalize_news_item / NewsItem schema
-        完全一致的 6 字段: {title, url, source_domain, publish_date,
-        snippet, media_name}。
+        完全一致的 7 字段: {title, url, source_domain, publish_date,
+        publish_time, snippet, media_name}。
 
         - ``url`` 直接用上游原文链接(问财聚合, 指向源站如新浪/百度/10jqka)。
-        - ``publish_date`` 取 ``publish_date`` 的前 10 位 (YYYY-MM-DD)。
+        - ``publish_time`` 保留上游完整 "YYYY-MM-DD HH:MM:SS";
+          ``publish_date`` 取它的前 10 位 (YYYY-MM-DD)。
         - ``source_domain`` 优先用 ``extra.host_name``, 缺失时回退 urlparse(url)。
         - ``media_name`` 用 ``extra.publish_source`` (e.g. 新浪财经)。
 
@@ -3121,15 +3129,17 @@ class ThsFetcher(BaseFetcher):
         url = rec["url"]  # 必填: 缺失视为坏数据 → KeyError → 上层跳过
         title = strip_em_tags(rec["title"])
         extra = rec.get("extra") or {}
-        # publish_date 形如 "2026-06-30 18:28:21"; 截到日。
-        publish_date = (rec.get("publish_date") or "")[:10]
+        # publish_time 形如 "2026-06-30 18:28:21" 保留完整时间戳;
+        # publish_date 取它的日期前缀(两者永不打架)。
+        publish_time = rec.get("publish_date") or ""
         snippet = strip_em_tags(rec.get("summary") or "").replace("　", "").strip()
         source_domain = extra.get("host_name") or source_domain_from_url(url)
         return {
             "title": title,
             "url": url,
             "source_domain": source_domain,
-            "publish_date": publish_date,
+            "publish_date": publish_time[:10],
+            "publish_time": publish_time,
             "snippet": snippet,
             "media_name": extra.get("publish_source") or "",
         }

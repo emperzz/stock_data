@@ -58,6 +58,7 @@ def test_returns_normalized_list():
     assert first["title"] == "茅台酒扫码核验新功能上线试点"
     assert first["url"] == "http://finance.eastmoney.com/a/202607023791611310.html"
     assert first["publish_date"] == "2026-07-02"
+    assert first["publish_time"] == "2026-07-02 10:46:27"
     assert first["source_domain"] == "finance.eastmoney.com"
     assert first["media_name"] == "CMS"
 

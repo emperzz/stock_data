@@ -332,13 +332,16 @@ class BaiduFetcher(BaseFetcher):
         as a skip.
         """
         url = rec["url"]
-        date_str = rec["date"][:10]
+        # 上游 ``date`` 形如 "YYYY-MM-DD HH:MM:SS"; publish_time 保留完整
+        # 时间戳, publish_date 取它的日期前缀(两者永不打架)。
+        date_str = rec["date"]
         domain = source_domain_from_url(url)
         return {
             "title": rec["title"],
             "url": url,
             "source_domain": domain,
-            "publish_date": date_str,
+            "publish_date": date_str[:10],
+            "publish_time": date_str,
             "snippet": rec.get("content", ""),
             "media_name": domain,  # Baidu 没有专门的 mediaName 字段
         }

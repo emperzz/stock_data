@@ -38,11 +38,20 @@ def test_get_stock_news_returns_normalized_items(ths):
     assert isinstance(items, list)
     assert len(items) == 5
     first = items[0]
-    assert set(first.keys()) == {"title", "url", "source_domain", "publish_date", "media_name"}
+    assert set(first.keys()) == {
+        "title",
+        "url",
+        "source_domain",
+        "publish_date",
+        "publish_time",
+        "media_name",
+    }
     assert first["title"] == "行业周报|美容护理指数涨7.03%, 跑赢上证指数6.62%"
     assert first["url"].startswith("http://news.10jqka.com.cn/")
     assert first["source_domain"] == "news.10jqka.com.cn"
     assert first["publish_date"] == "2026-07-03"
+    # 该上游只给到日: publish_time 如实等于 publish_date, 不编造时分秒。
+    assert first["publish_time"] == "2026-07-03"
     assert first["media_name"] == ""
 
 

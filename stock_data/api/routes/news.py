@@ -151,6 +151,7 @@ def get_news_content(
         title=result.title,
         body=result.body,
         publish_date=result.publish_date,
+        publish_time=result.publish_time,
         author=result.author,
         source_domain=result.source_domain,
         extractor=result.extractor,

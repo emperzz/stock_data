@@ -126,6 +126,7 @@ class TestSearchNewsHappyPath:
         assert first["url"] == "https://finance.eastmoney.com/news/maotai-q3.html"
         assert first["source_domain"] == "finance.eastmoney.com"
         assert first["publish_date"] == "2026-05-20"
+        assert first["publish_time"] == "2026-05-20 10:30:00"
         assert first["snippet"] == "贵州茅台发布公告,前三季度营收同比增长..."
         assert first["media_name"] == "finance.eastmoney.com"  # Baidu 没有 mediaName 字段
 

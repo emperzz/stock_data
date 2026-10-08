@@ -17,6 +17,7 @@ class TestNewsSearchEndpoint:
                 "url": "http://finance.eastmoney.com/a/1.html",
                 "source_domain": "finance.eastmoney.com",
                 "publish_date": "2026-06-09",
+                "publish_time": "2026-06-09 16:36:00",
                 "snippet": "s1",
                 "media_name": "证券时报网",
             }
@@ -74,6 +75,7 @@ class TestNewsContentEndpoint:
             title="Test Title",
             body="Body content here for testing.",
             publish_date="2026-06-09",
+            publish_time="2026-06-09 16:36:00",
             author="TestMedia",
             source_domain="finance.eastmoney.com",
             extractor="eastmoney_v1",
@@ -93,6 +95,8 @@ class TestNewsContentEndpoint:
         assert resp.json()["content_status"] == "ok"
         assert resp.json()["canonical_url"] == fake.canonical_url
         assert resp.json()["http_status"] == 200
+        assert resp.json()["publish_date"] == "2026-06-09"
+        assert resp.json()["publish_time"] == "2026-06-09 16:36:00"
 
     def test_content_missing_url_returns_422(self, client):
         resp = client.get("/api/v1/news/content")

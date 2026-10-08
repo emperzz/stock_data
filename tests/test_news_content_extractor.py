@@ -91,7 +91,46 @@ def test_json_ld_graph_metadata_is_extracted():
     result = NewsContentExtractor.extract("https://example.com/graph", html=html)
     assert result.title == "Graph title"
     assert result.publish_date == "2026-07-15"
+    assert result.publish_time == "2026-07-15 09:30:00"
     assert result.author == "Graph Author"
+
+
+def test_article_published_time_meta_yields_full_stamp():
+    html = """
+    <html><head>
+      <meta property="article:published_time" content="2026-07-15T09:30:00+08:00">
+    </head><body>
+      <article><p>This article body is long enough to pass the generic extraction threshold.</p></article>
+    </body></html>
+    """
+    result = NewsContentExtractor.extract("https://example.com/meta-date", html=html)
+    assert result.publish_date == "2026-07-15"
+    assert result.publish_time == "2026-07-15 09:30:00"
+
+
+def test_date_only_meta_degrades_publish_time_to_date():
+    """上游只给到日 → publish_time 如实等于 publish_date, 不编造时分秒。"""
+    html = """
+    <html><head>
+      <meta property="article:published_time" content="2026-07-15">
+    </head><body>
+      <article><p>This article body is long enough to pass the generic extraction threshold.</p></article>
+    </body></html>
+    """
+    result = NewsContentExtractor.extract("https://example.com/date-only", html=html)
+    assert result.publish_date == "2026-07-15"
+    assert result.publish_time == "2026-07-15"
+
+
+def test_no_date_metadata_yields_none_publish_time():
+    html = """
+    <html><body>
+      <article><p>This article body is long enough to pass the generic extraction threshold.</p></article>
+    </body></html>
+    """
+    result = NewsContentExtractor.extract("https://example.com/no-date", html=html)
+    assert result.publish_date is None
+    assert result.publish_time is None
 
 
 def test_oversized_response_returns_fetch_error(monkeypatch):
@@ -270,6 +309,8 @@ class TestDomainDispatch:
         assert result.extractor == "eastmoney_v1"
         assert result.title == "A Test Title"
         assert result.publish_date == "2026-06-15"
+        # topbox 只给到分 → 不补 ":00" 假秒。
+        assert result.publish_time == "2026-06-15 11:32"
         assert result.author == "TestMedia"
         assert "看资讯行情" not in result.body
         assert "责任编辑" not in result.body

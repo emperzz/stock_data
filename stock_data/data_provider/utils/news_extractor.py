@@ -92,6 +92,9 @@ class NewsContent:
     reason: str | None = None
     canonical_url: str | None = None
     http_status: int | None = None
+    # 上游能给出的最精确时间戳; 通常 "YYYY-MM-DD HH:MM:SS", 源无秒时退化
+    # 为 "YYYY-MM-DD HH:MM" 或 "YYYY-MM-DD"。缺失时为 None。
+    publish_time: str | None = None
 
     @classmethod
     def _build(
@@ -99,7 +102,7 @@ class NewsContent:
         url: str,
         title: str | None = None,
         body: str = "",
-        publish_date: str | None = None,
+        published: str | None = None,
         author: str | None = None,
         source_domain: str = "",
         extractor: str = "default",
@@ -108,11 +111,14 @@ class NewsContent:
         canonical_url: str | None = None,
         http_status: int | None = None,
     ) -> "NewsContent":
+        """``published`` 是上游的完整时间戳; ``publish_date`` 由它派生,
+        因此两个字段永远不会互相矛盾。"""
         return cls(
             url=url,
             title=title,
             body=body,
-            publish_date=publish_date,
+            publish_date=published[:10] if published else None,
+            publish_time=published,
             author=author,
             source_domain=source_domain or source_domain_from_url(url),
             extractor=extractor,
@@ -209,11 +215,22 @@ def _clip_metadata(value: str | None) -> str | None:
     return value.strip()[:_MAX_METADATA_CHARS] or None
 
 
-def _normalize_date(value: object) -> str | None:
+def _normalize_datetime(value: object) -> str | None:
+    """Return the most precise timestamp ``value`` offers, or None.
+
+    Upstream metadata is ISO-8601-ish (``2026-07-15T09:30:00+08:00``) but
+    some sites emit a bare date (``2026-07-15``). The timezone offset is
+    dropped — the printed wall-clock time is what the publisher wrote and
+    what a reader expects to see. Seconds are kept when present and simply
+    absent when the source omits them; we never fabricate ``:00``.
+    """
     if not isinstance(value, str):
         return None
-    match = re.search(r"\d{4}-\d{2}-\d{2}", value)
-    return match.group(0) if match else None
+    match = re.search(r"(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}(?::\d{2})?))?", value)
+    if not match:
+        return None
+    date_part, time_part = match.group(1), match.group(2)
+    return f"{date_part} {time_part}" if time_part else date_part
 
 
 def _json_ld_objects(soup: BeautifulSoup) -> list[dict]:
@@ -258,14 +275,14 @@ def _extract_metadata(
     if not title and soup.title:
         title = soup.title.get_text(" ", strip=True) or None
 
-    publish_date = None
+    published_at = None
     published = soup.find("meta", attrs={"property": "article:published_time"})
     if published:
-        publish_date = _normalize_date(published.get("content"))
-    if not publish_date:
+        published_at = _normalize_datetime(published.get("content"))
+    if not published_at:
         for item in json_ld:
-            publish_date = _normalize_date(item.get("datePublished"))
-            if publish_date:
+            published_at = _normalize_datetime(item.get("datePublished"))
+            if published_at:
                 break
 
     author = None
@@ -291,7 +308,7 @@ def _extract_metadata(
         if urlparse(candidate).scheme in ("http", "https"):
             canonical_url = candidate
 
-    return _clip_metadata(title), publish_date, _clip_metadata(author), canonical_url
+    return _clip_metadata(title), published_at, _clip_metadata(author), canonical_url
 
 
 def _normalize_body(text: str) -> str:
@@ -464,7 +481,7 @@ class NewsContentExtractor:
         url: str,
         title: str | None = None,
         body: str = "",
-        publish_date: str | None = None,
+        published: str | None = None,
         author: str | None = None,
         source_domain: str = "",
         extractor: str = "default",
@@ -478,7 +495,7 @@ class NewsContentExtractor:
             url=url,
             title=title,
             body=body,
-            publish_date=publish_date,
+            published=published,
             author=author,
             source_domain=source_domain,
             extractor=extractor,
@@ -603,13 +620,13 @@ class NewsContentExtractor:
 
 def _default_handler(url: str, html: str) -> NewsContent:
     soup = BeautifulSoup(html, "html.parser")
-    title, publish_date, author, canonical_url = _extract_metadata(soup)
+    title, published, author, canonical_url = _extract_metadata(soup)
 
     if _looks_blocked(soup):
         return NewsContent._build(
             url=url,
             title=title,
-            publish_date=publish_date,
+            published=published,
             author=author,
             extractor="generic",
             content_status="blocked",
@@ -624,7 +641,7 @@ def _default_handler(url: str, html: str) -> NewsContent:
                 url=url,
                 title=title,
                 body=noscript_body,
-                publish_date=publish_date,
+                published=published,
                 author=author,
                 extractor="generic_noscript",
                 canonical_url=canonical_url,
@@ -632,7 +649,7 @@ def _default_handler(url: str, html: str) -> NewsContent:
         return NewsContent._build(
             url=url,
             title=title,
-            publish_date=publish_date,
+            published=published,
             author=author,
             extractor="generic",
             content_status="javascript_required",
@@ -650,7 +667,7 @@ def _default_handler(url: str, html: str) -> NewsContent:
         return NewsContent._build(
             url=url,
             title=title,
-            publish_date=publish_date,
+            published=published,
             author=author,
             extractor="generic",
             content_status="unsupported",
@@ -663,7 +680,7 @@ def _default_handler(url: str, html: str) -> NewsContent:
         return NewsContent._build(
             url=url,
             title=title,
-            publish_date=publish_date,
+            published=published,
             author=author,
             extractor="generic",
             content_status="empty",
@@ -682,7 +699,7 @@ def _default_handler(url: str, html: str) -> NewsContent:
         url=url,
         title=title,
         body=body,
-        publish_date=publish_date,
+        published=published,
         author=author,
         extractor=extractor,
         canonical_url=canonical_url,
@@ -702,13 +719,13 @@ _THS_BODY_SELECTORS = (
 def _ths_news_handler(url: str, html: str) -> NewsContent:
     """Extract THS news pages from their article-detail style containers."""
     soup = BeautifulSoup(html, "html.parser")
-    title, publish_date, author, canonical_url = _extract_metadata(soup)
+    title, published, author, canonical_url = _extract_metadata(soup)
 
     if _looks_blocked(soup):
         return NewsContent._build(
             url=url,
             title=title,
-            publish_date=publish_date,
+            published=published,
             author=author,
             extractor="ths_news_v1",
             content_status="blocked",
@@ -723,7 +740,7 @@ def _ths_news_handler(url: str, html: str) -> NewsContent:
                 url=url,
                 title=title,
                 body=noscript_body,
-                publish_date=publish_date,
+                published=published,
                 author=author,
                 extractor="ths_news_v1_noscript",
                 canonical_url=canonical_url,
@@ -731,7 +748,7 @@ def _ths_news_handler(url: str, html: str) -> NewsContent:
         return NewsContent._build(
             url=url,
             title=title,
-            publish_date=publish_date,
+            published=published,
             author=author,
             extractor="ths_news_v1",
             content_status="javascript_required",
@@ -753,7 +770,7 @@ def _ths_news_handler(url: str, html: str) -> NewsContent:
         return NewsContent._build(
             url=url,
             title=title,
-            publish_date=publish_date,
+            published=published,
             author=author,
             extractor="ths_news_v1",
             content_status="unsupported",
@@ -765,7 +782,7 @@ def _ths_news_handler(url: str, html: str) -> NewsContent:
         return NewsContent._build(
             url=url,
             title=title,
-            publish_date=publish_date,
+            published=published,
             author=author,
             extractor="ths_news_v1",
             content_status="empty",
@@ -777,7 +794,7 @@ def _ths_news_handler(url: str, html: str) -> NewsContent:
         url=url,
         title=title,
         body=selected_body,
-        publish_date=publish_date,
+        published=published,
         author=author,
         extractor="ths_news_v1",
         canonical_url=canonical_url,
@@ -790,11 +807,10 @@ def _ths_news_handler(url: str, html: str) -> NewsContent:
 def _eastmoney_handler(url: str, html: str) -> NewsContent:
     """finance.eastmoney.com / stock.eastmoney.com article handler."""
     soup = BeautifulSoup(html, "html.parser")
-    meta_title, meta_date, meta_author, canonical_url = _extract_metadata(soup)
+    meta_title, published, meta_author, canonical_url = _extract_metadata(soup)
 
     topbox = soup.select_one("div.topbox")
     title = meta_title
-    publish_date = meta_date
     author = meta_author
     if topbox:
         lines = [ln.strip() for ln in topbox.get_text("\n").split("\n") if ln.strip()]
@@ -806,8 +822,10 @@ def _eastmoney_handler(url: str, html: str) -> NewsContent:
                 line,
             )
             if match:
-                year, month, day, _hm, source = match.groups()
-                publish_date = f"{year}-{int(month):02d}-{int(day):02d}"
+                year, month, day, hm, source = match.groups()
+                # topbox 只给到分 → 不补 ":00" 假秒; 小时补零对齐其它来源。
+                hour, minute = hm.split(":")
+                published = f"{year}-{int(month):02d}-{int(day):02d} {int(hour):02d}:{minute}"
                 author = source.strip() or None
                 break
 
@@ -838,7 +856,7 @@ def _eastmoney_handler(url: str, html: str) -> NewsContent:
         return NewsContent._build(
             url=url,
             title=title,
-            publish_date=publish_date,
+            published=published,
             author=author,
             extractor="eastmoney_v1",
             content_status="empty",
@@ -850,7 +868,7 @@ def _eastmoney_handler(url: str, html: str) -> NewsContent:
         url=url,
         title=title,
         body=body,
-        publish_date=publish_date,
+        published=published,
         author=author,
         extractor="eastmoney_v1",
         canonical_url=canonical_url,

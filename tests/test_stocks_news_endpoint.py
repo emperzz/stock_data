@@ -32,6 +32,7 @@ def test_endpoint_returns_news(client):
             "title": "T1",
             "url": "http://x",
             "publish_date": "2026-07-02",
+            "publish_time": "2026-07-02 10:46:27",
             "source_domain": "x.com",
             "media_name": "X",
         }
@@ -45,6 +46,7 @@ def test_endpoint_returns_news(client):
     assert body["code"] == "600519"
     assert len(body["data"]) == 1
     assert body["data"][0]["title"] == "T1"
+    assert body["data"][0]["publish_time"] == "2026-07-02 10:46:27"
     assert body["source"] == "EastMoneyFetcher"
     assert body["limit"] == 10
     assert body["total"] == 1

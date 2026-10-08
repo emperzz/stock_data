@@ -341,6 +341,10 @@ quote page); **THS** (P7, news.10jqka timeline API) is the failover.
 Cached 60s. Distinct from `/news/search` (which needs a keyword or
 中文 stock name); this endpoint takes a 6-digit code directly.
 
+> The THS failover leg's upstream only reports a date, so its
+> `publish_time` equals `publish_date` rather than inventing a time.
+> See [publish_date vs publish_time](#publish_date-vs-publish_time).
+
 ```json
 {
   "code": "600519",
@@ -348,8 +352,10 @@ Cached 60s. Distinct from `/news/search` (which needs a keyword or
     {
       "title": "贵州茅台一季度业绩超预期",
       "url": "https://finance.eastmoney.com/news/...",
+      "publish_date": "2026-05-20",
       "publish_time": "2026-05-20 09:31:00",
-      "source_domain": "finance.eastmoney.com"
+      "source_domain": "finance.eastmoney.com",
+      "media_name": "CMS"
     }
   ],
   "total": 20,
@@ -357,6 +363,10 @@ Cached 60s. Distinct from `/news/search` (which needs a keyword or
   "source": "EastMoneyFetcher"
 }
 ```
+
+> Corrected 2026-10-08: this example previously showed only
+> `publish_time` (then a stale field name — the schema declares
+> `publish_date`) and omitted `media_name`.
 
 ---
 
@@ -864,7 +874,7 @@ value → 422. Cursor-paginated (no 14-item cap), items carry a `summary`.
       "title": "煤炭板块异动拉升",
       "url": "https://news.10jqka.com.cn/...",
       "publish_date": "2026-07-20",
-      "publish_time": "09:41",
+      "publish_time": "2026-07-20 09:41:12",
       "summary": "...",
       "source_domain": "news.10jqka.com.cn"
     }
@@ -1457,8 +1467,10 @@ Baidu also honors `BAIDU_NEWS_DOMAINS` overrides.
       "title": "贵州茅台一季度营收...",
       "url": "https://finance.eastmoney.com/news/...",
       "publish_date": "2026-05-15",
+      "publish_time": "2026-05-15 08:00:00",
       "source_domain": "finance.eastmoney.com",
-      "summary": "..."
+      "media_name": "证券时报网",
+      "snippet": "..."
     }
   ],
   "total": 20,
@@ -1467,6 +1479,23 @@ Baidu also honors `BAIDU_NEWS_DOMAINS` overrides.
   "source": "EastMoneyFetcher"
 }
 ```
+
+#### `publish_date` vs `publish_time`
+
+Every news-family item (`/news/search`, `/stocks/{code}/news`,
+`/boards/{code}/news`, `/news/content`) carries **both** fields:
+
+| Field | Meaning |
+|---|---|
+| `publish_date` | Always `YYYY-MM-DD`. This is what the `from`/`to` filters compare against. |
+| `publish_time` | The most precise stamp the upstream offers — normally `YYYY-MM-DD HH:MM:SS`, degrading to `YYYY-MM-DD HH:MM` or `YYYY-MM-DD` when the source omits seconds/clock time. `""` on `/news/search` + `/stocks/{code}/news` (and `null` on `/news/content`) when upstream has no date at all. |
+
+`publish_date` is always the first ten characters of `publish_time`
+whenever the latter is non-empty, so the two can never disagree. We
+never fabricate the missing parts (no synthetic `:00` seconds) — a
+degenerate `publish_time` means the source really is that coarse.
+`/news/flash` carries only `publish_time` (a 7×24 feed is always
+second-resolution), so the pair does not apply there.
 
 ### Flash News (全球财经 7×24 实时推送)
 
@@ -1522,7 +1551,8 @@ points at internal networks (`127.0.0.1`, `10.0.0.0/8`, etc.).
   "url": "https://finance.eastmoney.com/news/...",
   "title": "贵州茅台一季度营收...",
   "body": "...",
-  "publish_date": "2026-05-15T08:00:00",
+  "publish_date": "2026-05-15",
+  "publish_time": "2026-05-15 08:00:00",
   "author": "财经早知道",
   "source_domain": "finance.eastmoney.com",
   "extractor": "default",

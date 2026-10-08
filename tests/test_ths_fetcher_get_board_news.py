@@ -52,7 +52,8 @@ def test_get_board_news_maps_fields():
     assert n["source_domain"] == "news.10jqka.com.cn"
     dt = datetime.fromtimestamp(_ITEM["publishTime"] / 1000, tff._THS_TZ)
     assert n["publish_date"] == dt.strftime("%Y-%m-%d")
-    assert n["publish_time"] == dt.strftime("%H:%M")
+    # publish_time carries the full stamp, not just HH:MM.
+    assert n["publish_time"] == dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def test_get_board_news_limit_clamped_to_1_50():

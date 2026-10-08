@@ -418,9 +418,19 @@ class TestNormalizeNewsItem:
         )
         assert item["snippet"] == "第一段 第二段 第三段"
 
-    def test_publish_date_truncated_to_yyyy_mm_dd(self):
+    def test_publish_time_keeps_full_stamp_and_date_is_its_prefix(self):
         item = EastMoneyFetcher._normalize_news_item(self.BASE_REC)
+        assert item["publish_time"] == "2026-06-09 16:36:00"
         assert item["publish_date"] == "2026-06-09"
+
+    def test_date_only_upstream_stamp_yields_equal_publish_fields(self):
+        """Defensive: if upstream ever returns a date-only stamp (no time
+        component), publish_time degrades to the same value as publish_date
+        rather than inventing a time."""
+        rec = {**self.BASE_REC, "date": "2026-06-09"}
+        item = EastMoneyFetcher._normalize_news_item(rec)
+        assert item["publish_date"] == "2026-06-09"
+        assert item["publish_time"] == "2026-06-09"
 
     def test_source_domain_extracted_from_constructed_url(self):
         item = EastMoneyFetcher._normalize_news_item(self.BASE_REC)

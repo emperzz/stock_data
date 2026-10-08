@@ -33,11 +33,13 @@ def test_board_news_item_full():
         title="t",
         url="http://x",
         publish_date="2026-07-20",
-        publish_time="08:44",
+        publish_time="2026-07-20 08:44:12",
         summary="s",
         source_domain="custom.example",
     )
     assert item.source_domain == "custom.example"
+    # publish_time 是完整时间戳, publish_date 是它的日期前缀。
+    assert item.publish_time.startswith(item.publish_date)
 
 
 def test_board_news_response_construction():

@@ -679,15 +679,24 @@ class TestSearchNewsNormalize:
             "url",
             "source_domain",
             "publish_date",
+            "publish_time",
             "snippet",
             "media_name",
         }
         assert out["title"] == "贵州茅台拟提高每股分红金额"
         assert out["url"] == rec["url"]
         assert out["source_domain"] == "finance.sina.com.cn"
-        assert out["publish_date"] == "2026-06-03"  # 截到日
+        assert out["publish_date"] == "2026-06-03"
+        assert out["publish_time"] == "2026-06-03 16:53:00"  # 完整时分秒
         assert out["media_name"] == "新浪财经"
         assert "晚间发布公告" in out["snippet"]
+
+    def test_normalize_missing_publish_date_yields_empty_publish_fields(self):
+        """上游缺 publish_date 时两个字段都为空, 不编造时间。"""
+        rec = {k: v for k, v in _IWENCAI_FIXTURE["data"][0].items() if k != "publish_date"}
+        out = self.fetcher._normalize_search_item(rec)
+        assert out["publish_date"] == ""
+        assert out["publish_time"] == ""
 
     def test_normalize_strips_em_tags(self):
         rec = _IWENCAI_FIXTURE["data"][1]
@@ -766,6 +775,7 @@ class TestSearchNewsRequest:
                 "url",
                 "source_domain",
                 "publish_date",
+                "publish_time",
                 "snippet",
                 "media_name",
             }

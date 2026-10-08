@@ -259,7 +259,8 @@ class NewsMixin:
         directly and does not need any name lookup.
 
         Returns a list of normalized dicts with fields:
-            title, url, source_domain, publish_date (YYYY-MM-DD), media_name.
+            title, url, source_domain, publish_date (YYYY-MM-DD),
+            publish_time (YYYY-MM-DD HH:MM:SS), media_name.
         Returns [] on invalid code or empty upstream list. Raises
         ``DataFetchError`` on network/HTTP/JSON failure.
         """
@@ -301,12 +302,17 @@ class NewsMixin:
             try:
                 url = rec.get("Art_Url") or rec.get("Art_OriginUrl") or ""
                 source_domain = source_domain_from_url(url)
+                # Upstream Art_ShowTime is "YYYY-MM-DD HH:MM:SS"; keep the
+                # full stamp in publish_time and slice the date out of it so
+                # the two fields can never disagree.
+                publish_time = str(rec.get("Art_ShowTime") or "").strip()
                 out.append(
                     {
                         "title": rec.get("Art_Title", ""),
                         "url": url,
                         "source_domain": source_domain,
-                        "publish_date": (rec.get("Art_ShowTime") or "")[:10],
+                        "publish_date": publish_time[:10],
+                        "publish_time": publish_time,
                         "media_name": rec.get("Np_dst", "") or rec.get("Author", "") or "",
                     }
                 )
@@ -414,7 +420,10 @@ class NewsMixin:
         code = rec.get("code")
         url = f"http://finance.eastmoney.com/a/{code}.html" if code else rec["url"]
 
-        date_str = rec["date"][:10]  # "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DD"
+        # Upstream ``date`` is "YYYY-MM-DD HH:MM:SS"; publish_time keeps the
+        # full stamp, publish_date is its date prefix (so they never disagree).
+        date_str = rec["date"]
+        publish_date = date_str[:10]
 
         # Snippet: akshare strips <em> tags, full-width space (\\u3000), and
         # collapses \\r\\n to a single space.
@@ -425,7 +434,8 @@ class NewsMixin:
             "title": strip_em_tags(rec["title"]),
             "url": url,
             "source_domain": source_domain_from_url(url),
-            "publish_date": date_str,
+            "publish_date": publish_date,
+            "publish_time": date_str,
             "snippet": snippet,
             "media_name": rec.get("mediaName", ""),
         }

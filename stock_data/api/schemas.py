@@ -717,7 +717,11 @@ class BoardNewsItem(BaseModel):
     )
     publish_time: str = Field(
         default="",
-        description="Publish time in 'HH:MM' format (from upstream publishTime epoch; '' when missing)",
+        description=(
+            "Full publish timestamp 'YYYY-MM-DD HH:MM:SS' (derived from the upstream "
+            "publishTime epoch; '' when missing). Carries the same date as "
+            "publish_date, which is its date prefix."
+        ),
     )
     summary: str = Field(
         default="",
@@ -1490,6 +1494,13 @@ class NewsItem(BaseModel):
     url: str = Field(description="新闻详情页 URL")
     source_domain: str = Field(default="", description="URL 的域名")
     publish_date: str = Field(default="", description="发布日期 YYYY-MM-DD")
+    publish_time: str = Field(
+        default="",
+        description=(
+            "发布时间 — 上游能给出的最精确形式, 通常 'YYYY-MM-DD HH:MM:SS'"
+            " (源无秒时退化为 'YYYY-MM-DD HH:MM' 或 'YYYY-MM-DD'); 上游缺失时为 ''"
+        ),
+    )
     snippet: str = Field(default="", description="摘要 (已 strip <em>)")
     media_name: str = Field(default="", description="来源媒体名 (e.g. 证券时报网)")
 
@@ -1524,6 +1535,13 @@ class NewsContentResponse(BaseModel):
     title: str | None = Field(default=None)
     body: str = Field(default="", description="已清洗的正文纯文本")
     publish_date: str | None = Field(default=None)
+    publish_time: str | None = Field(
+        default=None,
+        description=(
+            "发布时间 — 页面元数据能给出的最精确形式, 通常 'YYYY-MM-DD HH:MM:SS'; "
+            "页面只给到日时为 'YYYY-MM-DD'; 无任何日期元数据时为 null"
+        ),
+    )
     author: str | None = Field(default=None)
     source_domain: str = Field(default="")
     extractor: str = Field(default="default", description="使用的 handler 名")
@@ -1539,7 +1557,8 @@ class FlashNewsItem(BaseModel):
 
     字段命名刻意和 ``NewsItem`` 保持风格一致(英文 snake_case),
     区别:
-    - ``publish_time`` (含时分秒) vs ``NewsItem.publish_date`` (只到日)
+    - 只有 ``publish_time`` 没有 ``publish_date``: 快讯天生是时分秒级,
+      日粒度字段对它没有意义(``NewsItem`` / ``StockNewsItem`` 两者都有)
     - ``snippet`` (摘要) vs ``NewsItem.snippet`` (同名)
     - 没有 ``media_name``: 快讯本身不区分发布媒体
     """
@@ -1570,6 +1589,13 @@ class StockNewsItem(BaseModel):
     url: str = Field(default="")
     source_domain: str = Field(default="")
     publish_date: str = Field(default="", description="YYYY-MM-DD")
+    publish_time: str = Field(
+        default="",
+        description=(
+            "发布时间 — 上游能给出的最精确形式, 通常 'YYYY-MM-DD HH:MM:SS'; "
+            "THS 备源上游只到日, 此时等于 publish_date; 上游缺失时为 ''"
+        ),
+    )
     media_name: str = Field(default="")
 
 
