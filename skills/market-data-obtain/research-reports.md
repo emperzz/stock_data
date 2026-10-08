@@ -8,7 +8,7 @@
 
 ### 功能
 
-获取个股券商研报列表，含机构名、评级、当年/次年/后年 EPS 预测。`info_code` 是研报的唯一 ID，**用于下一步 `/reports/{report_id}/pdf` 下载 PDF**。
+获取个股券商研报列表，含机构名、评级（东财口径 + 券商口径两套）、目标价、当年/次年/后年 EPS 预测。`info_code` 是研报的唯一 ID，**用于下一步 `/reports/{report_id}/pdf` 下载 PDF**。
 
 ### 入参
 
@@ -31,6 +31,9 @@
 | `predict_eps_this` | number | 元 | 当年 EPS 预测 |
 | `predict_eps_next` | number | 元 | 次年 EPS 预测 |
 | `predict_eps_next2` | number | 元 | 后年 EPS 预测 |
+| `target_price` | number\|null | 元 | 目标价；研报未给出时为 `null`（约 15-30% 的研报带目标价） |
+| `target_price_low` | number\|null | 元 | 目标价下限；单值目标价时与 `target_price` 相等，区间时为下沿 |
+| `broker_rating` | string | — | 券商评级（`"强烈推荐"` / `"增持"` 等），与 `rating`（东财评级 `"买入"` / `"持有"` 等）是**两套口径**，不可混用 |
 
 ### 示例
 

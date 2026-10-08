@@ -1258,13 +1258,18 @@ GET /api/v1/stocks/{code}/reports/{report_id}/pdf
       "rating": "买入",
       "predict_eps_this": 3.5,
       "predict_eps_next": 5.2,
-      "predict_eps_next2": 7.1
+      "predict_eps_next2": 7.1,
+      "target_price": 100.6,
+      "target_price_low": 100.6,
+      "broker_rating": "强烈推荐"
     }
   ],
   "total": 45,
   "source": "eastmoney"
 }
 ```
+
+`target_price` / `target_price_low`（单位：元）：研报未给出目标价时为 `null`；单值目标价时两字段相等，区间目标价时 `target_price` 为上沿。`broker_rating` 是券商自身评级（如 `强烈推荐`），与 `rating`（东财评级口径，如 `买入`）是两套体系。约 15-30% 的研报带目标价。
 
 ---
 
