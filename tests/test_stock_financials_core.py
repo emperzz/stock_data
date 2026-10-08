@@ -37,8 +37,13 @@ class TestRegistration:
         from stock_data.data_provider.base import CAPABILITY_TO_METHOD, DataCapability
 
         assert CAPABILITY_TO_METHOD[DataCapability.STOCK_FINANCIAL] == "get_financial_snapshot"
-        assert CAPABILITY_TO_METHOD[DataCapability.STOCK_FINANCIAL_SERIES] == "get_financial_history"
-        assert CAPABILITY_TO_METHOD[DataCapability.STOCK_MAIN_BUSINESS] == "get_main_business_composition"
+        assert (
+            CAPABILITY_TO_METHOD[DataCapability.STOCK_FINANCIAL_SERIES] == "get_financial_history"
+        )
+        assert (
+            CAPABILITY_TO_METHOD[DataCapability.STOCK_MAIN_BUSINESS]
+            == "get_main_business_composition"
+        )
 
     def test_capability_labels_registered(self):
         from stock_data.data_provider.base import DataCapability
@@ -58,7 +63,10 @@ class TestRegistration:
         fin = DataCapability.STOCK_FINANCIAL
         ser = DataCapability.STOCK_FINANCIAL_SERIES
         mb = DataCapability.STOCK_MAIN_BUSINESS
-        assert fin in ZzshareFetcher.supported_data_types and ser in ZzshareFetcher.supported_data_types
+        assert (
+            fin in ZzshareFetcher.supported_data_types
+            and ser in ZzshareFetcher.supported_data_types
+        )
         assert fin in ZhituFetcher.supported_data_types and ser in ZhituFetcher.supported_data_types
         assert mb in EastMoneyFetcher.supported_data_types
         # eastmoney must NOT claim the failover-chain caps, zzshare/zhitu not MAIN_BUSINESS
@@ -78,7 +86,6 @@ class TestManagerRouting:
 
     def test_snapshot_failover_order_and_source(self, monkeypatch):
         from stock_data.data_provider.base import DataCapability
-        from stock_data.data_provider.manager import DataFetcherManager
 
         calls = []
 
@@ -87,6 +94,7 @@ class TestManagerRouting:
             priority = 2
             supported_markets = {"csi"}
             supported_data_types = DataCapability.STOCK_FINANCIAL
+
             def get_financial_snapshot(self, code):
                 calls.append("zz")
                 return None  # BJ empty — must fall through
@@ -96,6 +104,7 @@ class TestManagerRouting:
             priority = 5
             supported_markets = {"csi"}
             supported_data_types = DataCapability.STOCK_FINANCIAL
+
             def get_financial_snapshot(self, code):
                 calls.append("zt")
                 return {"eps": 1.0}
@@ -108,14 +117,15 @@ class TestManagerRouting:
 
     def test_snapshot_both_empty_returns_coherent_empty(self, monkeypatch):
         from stock_data.data_provider.base import DataCapability
-        from stock_data.data_provider.manager import DataFetcherManager
 
         class Empty:
             priority = 2
             supported_markets = {"csi"}
             supported_data_types = DataCapability.STOCK_FINANCIAL
+
             def __init__(self, name):
                 self.name = name
+
             def get_financial_snapshot(self, code):
                 return None
 
@@ -126,7 +136,6 @@ class TestManagerRouting:
 
     def test_history_window_args_forwarded(self):
         from stock_data.data_provider.base import DataCapability
-        from stock_data.data_provider.manager import DataFetcherManager
 
         seen = {}
 
@@ -135,28 +144,36 @@ class TestManagerRouting:
             priority = 2
             supported_markets = {"csi"}
             supported_data_types = DataCapability.STOCK_FINANCIAL_SERIES
+
             def get_financial_history(self, code, start_date=None, end_date=None):
                 seen.update(code=code, s=start_date, e=end_date)
                 return [{"report_date": "2026-06-30"}]
 
         m = _mk_manager([H()])
-        recs, source = m.get_financial_history("600519", start_date="2026-01-01", end_date="2026-10-08")
+        recs, source = m.get_financial_history(
+            "600519", start_date="2026-01-01", end_date="2026-10-08"
+        )
         assert seen == {"code": "600519", "s": "2026-01-01", "e": "2026-10-08"}
         assert source == "ZzshareFetcher"
 
     def test_main_business_single_source(self):
         from stock_data.data_provider.base import DataCapability, DataFetchError
-        from stock_data.data_provider.manager import DataFetcherManager
 
         class EM:
             name = "EastMoneyFetcher"
             priority = 6
             supported_markets = {"csi"}
             supported_data_types = DataCapability.STOCK_MAIN_BUSINESS
+
             def get_main_business_composition(self, code, category=None, report_date=None):
                 if code == "boom":
                     raise DataFetchError("down")
-                return {"report_date": "2026-06-30", "records": [], "available_report_dates": [], "requested_report_date_available": None}
+                return {
+                    "report_date": "2026-06-30",
+                    "records": [],
+                    "available_report_dates": [],
+                    "requested_report_date_available": None,
+                }
 
         m = _mk_manager([EM()])
         out, source = m.get_main_business_composition("600519", category="product")
@@ -170,13 +187,13 @@ class TestEmptyOkIsAdditive:
         """empty_ok defaults False: a non-opted cap keeps the old
         all-None → DataFetchError behavior byte-identical."""
         from stock_data.data_provider.base import DataCapability, DataFetchError
-        from stock_data.data_provider.manager import DataFetcherManager
 
         class AllNone:
             name = "ZzshareFetcher"
             priority = 2
             supported_markets = {"csi"}
             supported_data_types = DataCapability.STOCK_FINANCIAL_SERIES
+
             def get_financial_history(self, code, start_date=None, end_date=None):
                 return None
 

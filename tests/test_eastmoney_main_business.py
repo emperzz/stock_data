@@ -118,8 +118,12 @@ class TestHappyPath:
 
     def test_explicit_report_date_selection(self, fetcher):
         rows = [
-            dict(_FIX["zygcfx"][0], REPORT_DATE="2025-12-31 00:00:00",
-                 ITEM_NAME="去年茅台", MAINOP_TYPE="2"),
+            dict(
+                _FIX["zygcfx"][0],
+                REPORT_DATE="2025-12-31 00:00:00",
+                ITEM_NAME="去年茅台",
+                MAINOP_TYPE="2",
+            ),
             *_FIX["zygcfx"],
         ]
         f = _wire(fetcher, FakeResp(_full_payload(rows)))

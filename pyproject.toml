@@ -46,7 +46,7 @@ dev = [
     "httpx>=0.27.0",
     "beautifulsoup4>=4.12.0",
 ]
-zzshare = ["zzshare>=0.4.0,<0.5"]   # PyPI package `zzshare`; the `DataApi` class lives at `zzshare.client.DataApi`
+zzshare = ["zzshare>=0.4.12,<0.5"]   # PyPI package `zzshare`; `DataApi` lives at `zzshare.client.DataApi`; finance_* endpoints require >=0.4.12
 
 [build-system]
 requires = ["hatchling"]

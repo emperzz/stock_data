@@ -166,12 +166,12 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 |---|---|---|---|---|---|
 | `TushareFetcher` | 0 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` | `TUSHARE_TOKEN` | |
 | `BaostockFetcher` | 1 | csi | `STOCK_KLINE` `INDEX_KLINE` `DIVIDEND` | none | |
-| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_REASON` `DRAGON_TIGER` `HOT_TOPICS` | `ZZSHARE_TOKEN` (optional) | Board endpoints: a first-class source (`?source=zzshare`), whose board_code space OVERLAPS THS's (885/886 via plate_type 15, 881 via 14, 801/803/710/883 via 17) so `board_code` alone never identifies the source; it owns the 115k-row membership seed. Its board-list `amount` is converted 元→亿元 at this fetcher's boundary and declared via `amount_unit="yi"`. `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. `STOCK_ZT_POOL` removed 2026-09-03 — Zzshare no longer serves `/zt-pools`; the upstream `review_uplimit_reason` is exposed via dedicated capability `STOCK_ZT_REASON` + `/api/v1/zt-reasons` (only provider). `get_realtime_quotes(csi) via rt_k(ts_code='60*.SH,68*.SH,0*.SZ,3*.SZ,9*.BJ', fields='all')` (single call; rate-limited 20/min). |
+| `ZzshareFetcher` | 2 | csi | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `STOCK_BOARD` `STOCK_ZT_REASON` `DRAGON_TIGER` `HOT_TOPICS` `STOCK_FINANCIAL` `STOCK_FINANCIAL_SERIES` (财务主源, SDK >=0.4.12, BJ 零覆盖) | `ZZSHARE_TOKEN` (optional) | Board endpoints: a first-class source (`?source=zzshare`), whose board_code space OVERLAPS THS's (885/886 via plate_type 15, 881 via 14, 801/803/710/883 via 17) so `board_code` alone never identifies the source; it owns the 115k-row membership seed. Its board-list `amount` is converted 元→亿元 at this fetcher's boundary and declared via `amount_unit="yi"`. `STOCK_INFO` removed 2026-07-14 — zzshare `/v3/open/stock/info` returns null for every A-share. `STOCK_ZT_POOL` removed 2026-09-03 — Zzshare no longer serves `/zt-pools`; the upstream `review_uplimit_reason` is exposed via dedicated capability `STOCK_ZT_REASON` + `/api/v1/zt-reasons` (only provider). `get_realtime_quotes(csi) via rt_k(ts_code='60*.SH,68*.SH,0*.SZ,3*.SZ,9*.BJ', fields='all')` (single call; rate-limited 20/min). |
 | `AkshareFetcher` | 3 | csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `STOCK_LIST` `TRADE_CALENDAR` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` `STOCK_ZT_POOL` | none | `get_realtime_quotes(csi) via ak.stock_zh_a_spot_em()` (single call). |
 | `YfinanceFetcher` | 4 | us, csi, hk | `STOCK_KLINE` `STOCK_REALTIME_QUOTE` `INDEX_KLINE` `INDEX_REALTIME_QUOTE` | none | |
-| `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE` `STOCK_ZT_POOL` `STOCK_INFO` `STOCK_KLINE` (minute fallback) `STOCK_LIST` `STOCK_BOARD` `DIVIDEND` `FUND_FLOW` `HOLDER_NUM` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` | `ZHITU_TOKEN` | Index K-line via `/hz/` prefix |
+| `ZhituFetcher` | 5 | csi | `STOCK_REALTIME_QUOTE` `STOCK_ZT_POOL` `STOCK_INFO` `STOCK_KLINE` (minute fallback) `STOCK_LIST` `STOCK_BOARD` `DIVIDEND` `FUND_FLOW` `HOLDER_NUM` `INDEX_REALTIME_QUOTE` `INDEX_KLINE` `STOCK_FINANCIAL` `STOCK_FINANCIAL_SERIES` (财务备源: `/hs/fin/income` 累计→单季差分推导; fin/* 对 BJ 404) | `ZHITU_TOKEN` | Index K-line via `/hz/` prefix |
 | `TencentFetcher` | 5 | csi, hk | `STOCK_REALTIME_QUOTE` (PE/PB/市值/涨跌停价 增强) | none | |
-| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER` `MARGIN_TRADING` `BLOCK_TRADE` `HOLDER_NUM` `DIVIDEND` `FUND_FLOW` `RESEARCH_REPORT` `NEWS_FLASH` `NEWS_SEARCH` `STOCK_BOARD` `STOCK_NEWS` `ANNOUNCEMENT` | none | |
+| `EastMoneyFetcher` | 6 | csi | `DRAGON_TIGER` `MARGIN_TRADING` `BLOCK_TRADE` `HOLDER_NUM` `DIVIDEND` `FUND_FLOW` `RESEARCH_REPORT` `NEWS_FLASH` `NEWS_SEARCH` `STOCK_BOARD` `STOCK_NEWS` `ANNOUNCEMENT` `STOCK_MAIN_BUSINESS` (主营构成唯一上游: emweb F10 PageAjax, 含 BJ) | none | |
 | `ThsFetcher` | 7 | csi | `HOT_TOPICS` `NORTH_FLOW` `NEWS_FLASH` `NEWS_SEARCH` `STOCK_BOARD` `STOCK_NEWS` `ANNOUNCEMENT` | none | Board K-line d/w/m/1m/5m/15m/30m/60m; `get_board_stocks` supports sort_by + top_n |
 | `BaiduFetcher` | 7 | csi | `NEWS_SEARCH` | `BAIDU_API_KEY` | Backup for EastMoney news |
 | `CninfoFetcher` | 8 | csi | `ANNOUNCEMENT` | none | |
@@ -202,6 +202,9 @@ Every fetcher declares its capabilities via `supported_data_types: DataCapabilit
 | `get_block_trade` | `BLOCK_TRADE` | |
 | `get_holder_num_change` | `HOLDER_NUM` | |
 | `get_dividend` | `DIVIDEND` | |
+| `get_financial_snapshot` | `STOCK_FINANCIAL` | Zzshare P2 → Zhitu P5 (差分推导); 空链返回 `(None,"")` — 该链开了 `empty_ok` (默认关闭的新参数, 见 `manager._with_failover`) |
+| `get_financial_history` | `STOCK_FINANCIAL_SERIES` | 同上链路; 契约 `basis=single_quarter` 两源一致, 备源仅 `roe_pct` null |
+| `get_main_business_composition` | `STOCK_MAIN_BUSINESS` | EastMoney P6 单源 (zhitu/zzshare 无此表); fetcher 不抛参数异常, `report_date` 可用性以标志返回、400 由路由判 |
 | `get_fund_flow_*` | `FUND_FLOW` | |
 | `get_hot_topics` | `HOT_TOPICS` | ZzshareFetcher P2 primary |
 | `get_north_flow` | `NORTH_FLOW` | |
@@ -529,6 +532,7 @@ The non-obvious knobs worth memorizing here:
 - `TRADE_CALENDAR_END_YEAR` — end year for `get_trade_calendar` (zzshare + myquant); defaults to current year.
 - `CACHE_TTL_STOCK_INTRADAY` — minute-line cache TTL in seconds (default: `30`).
 - `CACHE_TTL_STOCK_INFO` — 公司画像 (`StockInfoResponse`) cache TTL in seconds (default: `3600`).
+- `CACHE_TTL_STOCK_FINANCIAL` — 财务快照/历史/主营构成 cache TTL in seconds (default: `86400`; 财报表按季披露, 24h 足够捕捉新披露).
 
 ## Anti-Patterns to Avoid
 

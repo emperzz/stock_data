@@ -12,6 +12,12 @@ Endpoint coverage of THIS module:
 - push2/push2his.eastmoney.com: 资金流 (minute-level + 120-day)
 - reportapi.eastmoney.com: 研报列表
 - pdf.dfcfw.com: 研报 PDF
+- emweb.securities.eastmoney.com: 主营构成 (F10 BusinessAnalysis PageAjax,
+  ``get_main_business_composition`` — 项目内 STOCK_MAIN_BUSINESS 唯一上游,
+  覆盖沪深北)。单请求无分页 delay；``_emweb_query`` 失败必须 raise
+  ``DataFetchError``（刻意不跟 ``_datacenter_query`` 的吞异常返 ``[]`` 先例，
+  否则单源链 503 语义失效）。上游真实字段含笔误
+  ``MAIN_BUSINESS_RPOFIT``/``GROSS_RPOFIT_RATIO``，按字面解析。
 
 See the two mixin modules for the rest.
 """

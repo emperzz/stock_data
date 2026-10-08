@@ -243,3 +243,63 @@ class TestCacheKeyUniqueness:
         assert make_announcements_cache_key("600519", 10) != make_announcements_cache_key(
             "600519", 100
         )
+
+
+class TestFinancialCacheKeys:
+    """Spec 2026-10-08 §5: normalize in keys, all filter params in keys."""
+
+    def test_snapshot_key_normalizes(self):
+        from stock_data.api.cache import make_financial_snapshot_cache_key
+
+        assert make_financial_snapshot_cache_key("SH600519") == "fin:600519"
+        assert make_financial_snapshot_cache_key("600519") == make_financial_snapshot_cache_key(
+            "sh600519"
+        )
+
+    def test_history_key_includes_window(self):
+        from stock_data.api.cache import make_financial_history_cache_key
+
+        assert make_financial_history_cache_key("600519", None, None) == "finhist:600519::"
+        assert (
+            make_financial_history_cache_key("600519", "2026-01-01", "2026-10-08")
+            == "finhist:600519:2026-01-01:2026-10-08"
+        )
+        assert make_financial_history_cache_key(
+            "SH600519", None, None
+        ) == make_financial_history_cache_key("600519", None, None)
+        a = make_financial_history_cache_key("600519", "2026-01-01", None)
+        b = make_financial_history_cache_key("600519", None, "2026-01-01")
+        assert a != b
+
+    def test_composition_key_includes_category_and_date(self):
+        # lesson of filter-stocks' limit: every param forwarded upstream MUST
+        # be part of the key or two different answers share a slot
+        from stock_data.api.cache import make_main_business_cache_key
+
+        assert make_main_business_cache_key("600519", None, None) == "bizcomp:600519:all:latest"
+        assert (
+            make_main_business_cache_key("SH600519", "product", None)
+            == "bizcomp:600519:product:latest"
+        )
+        assert (
+            make_main_business_cache_key("600519", "region", "2025-12-31")
+            == "bizcomp:600519:region:2025-12-31"
+        )
+        assert make_main_business_cache_key(
+            "600519", "product", None
+        ) != make_main_business_cache_key("600519", "region", None)
+
+    def test_cache_slots_distinct_instances(self):
+        from stock_data.api.cache import (
+            get_financial_history_cache,
+            get_financial_snapshot_cache,
+            get_main_business_cache,
+        )
+
+        a, b, c = (
+            get_financial_snapshot_cache(),
+            get_financial_history_cache(),
+            get_main_business_cache(),
+        )
+        assert a is get_financial_snapshot_cache()
+        assert len({id(a), id(b), id(c)}) == 3

@@ -3,6 +3,19 @@ Zhitu fetcher for A-share realtime quote + index K-line (Priority 5).
 
 API: https://api.zhituapi.com/hs/real/ssjy/{stock_code}?token={token}
 Token configured via ZHITU_TOKEN environment variable.
+
+Financial backup chain (spec 2026-10-08): ``get_financial_snapshot`` /
+``get_financial_history`` derive SINGLE-QUARTER records from
+``/hs/fin/income/{code}`` — the only financial endpoint this fetcher uses.
+Upstream emits CUMULATIVE report-period values (H1 含 Q1); the §2.2
+pipeline cleans ``-``/``--`` placeholders, dedups restatement rows by max
+``plrq``, never trusts upstream sort order, differences absolutes, re-derives
+margins/yoy/qoq from the differences, and leaves ``roe_pct`` null (weighted
+ROE is not additive — no fake conversions). Empty answer = ``None`` / ``[]``
+(never ``{}``, which would short-circuit manager failover). Zhitu fin/* is
+404 for 北交所 — BJ coverage exists nowhere in this chain's zhitu leg.
+``/hs/fin/ratios`` and ``/hs/gs/cwzb`` exist but are cumulative-basis /
+``"--"``-riddled and intentionally unused.
 """
 
 import logging
@@ -1204,10 +1217,18 @@ class ZhituFetcher(BaseFetcher):
             yoy_vals = sq_cum.get((y - 1, q), {})
             prev_key = ordered[idx - 1] if idx > 0 else None
             qoq_vals = sq_cum.get(prev_key, {}) if prev_key else {}
-            rec["revenue_yoy_pct"] = _ratio(vals["total_revenue_yi"], yoy_vals.get("total_revenue_yi"))
-            rec["net_profit_yoy_pct"] = _ratio(vals["net_profit_attr_yi"], yoy_vals.get("net_profit_attr_yi"))
-            rec["revenue_qoq_pct"] = _ratio(vals["total_revenue_yi"], qoq_vals.get("total_revenue_yi"))
-            rec["net_profit_qoq_pct"] = _ratio(vals["net_profit_attr_yi"], qoq_vals.get("net_profit_attr_yi"))
+            rec["revenue_yoy_pct"] = _ratio(
+                vals["total_revenue_yi"], yoy_vals.get("total_revenue_yi")
+            )
+            rec["net_profit_yoy_pct"] = _ratio(
+                vals["net_profit_attr_yi"], yoy_vals.get("net_profit_attr_yi")
+            )
+            rec["revenue_qoq_pct"] = _ratio(
+                vals["total_revenue_yi"], qoq_vals.get("total_revenue_yi")
+            )
+            rec["net_profit_qoq_pct"] = _ratio(
+                vals["net_profit_attr_yi"], qoq_vals.get("net_profit_attr_yi")
+            )
             out.append(rec)
         return out
 
@@ -1237,7 +1258,7 @@ class ZhituFetcher(BaseFetcher):
         recs = self._get_financial_series(code)
         if not recs:
             return None
-        snap = {k: v for k, v in recs[-1].items()}
+        snap = dict(recs[-1])
         for k in self._FINANCE_VALUATION_KEYS:
             snap[k] = None
         return snap
@@ -1255,7 +1276,11 @@ class ZhituFetcher(BaseFetcher):
         s = self._fin_date(start_date)
         e = self._fin_date(end_date)
         if s or e:
-            return [r for r in recs if (not s or r["report_date"] >= s) and (not e or r["report_date"] <= e)]
+            return [
+                r
+                for r in recs
+                if (not s or r["report_date"] >= s) and (not e or r["report_date"] <= e)
+            ]
         return recs[-12:] if len(recs) > 12 else recs
 
     def _get_financial_series(self, code: str) -> list[dict]:

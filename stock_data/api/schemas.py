@@ -1189,6 +1189,119 @@ class DividendResponse(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# 财务三端点 (spec docs/superpowers/specs/2026-10-08-stock-financial-data-design.md)
+# 单位契约: *_yi=亿元, *_pct=百分数(89.48 即 89.48%), *_wan_shares=万股,
+# EPS/每股=元, PE/PB/PS/PCF=倍数。null = 该源不提供或上游缺失, 永不 0 填充。
+# 北交所(BJ)股票: financials / financials/history 全字段 null/空 (上游零覆盖);
+# business-composition 覆盖 BJ。
+# ---------------------------------------------------------------------------
+
+
+class FinancialSnapshotResponse(BaseModel):
+    """财务快照 — 最新报告期单季盈利 + 最新交易日估值"""
+
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    # 盈利块 (单季口径)
+    report_date: str | None = Field(default=None, description="盈利数据基准报告期 YYYY-MM-DD")
+    pub_date: str | None = Field(default=None, description="财报披露日 (防未来函数)")
+    eps: float | None = Field(default=None, description="每股收益(元, 单季)")
+    roe_pct: float | None = Field(
+        default=None, description="净资产收益率(%, 单季; zhitu 备源为 null)"
+    )
+    gross_margin_pct: float | None = Field(default=None, description="毛利率(%)")
+    net_margin_pct: float | None = Field(default=None, description="净利率(%)")
+    total_revenue_yi: float | None = Field(default=None, description="营业总收入(亿元, 单季)")
+    net_profit_attr_yi: float | None = Field(default=None, description="归母净利润(亿元, 单季)")
+    deduct_net_profit_attr_yi: float | None = Field(
+        default=None, description="扣非归母净利润(亿元, 单季)"
+    )
+    revenue_yoy_pct: float | None = Field(default=None, description="营收单季同比(%)")
+    net_profit_yoy_pct: float | None = Field(default=None, description="归母净利单季同比(%)")
+    revenue_qoq_pct: float | None = Field(default=None, description="营收单季环比(%)")
+    net_profit_qoq_pct: float | None = Field(default=None, description="归母净利单季环比(%)")
+    # 估值块 (日频快照; zhitu 备源整块 null)
+    trade_date: str | None = Field(default=None, description="估值数据基准交易日 YYYY-MM-DD")
+    pe_ttm: float | None = Field(default=None, description="市盈率 TTM")
+    pe_lyr: float | None = Field(default=None, description="静态市盈率(上年报)")
+    pb: float | None = Field(default=None, description="市净率")
+    ps: float | None = Field(default=None, description="市销率")
+    pcf: float | None = Field(default=None, description="市现率")
+    market_cap_yi: float | None = Field(default=None, description="总市值(亿元)")
+    float_market_cap_yi: float | None = Field(default=None, description="流通市值(亿元)")
+    total_share_wan_shares: float | None = Field(default=None, description="总股本(万股)")
+    float_share_wan_shares: float | None = Field(default=None, description="流通股本(万股)")
+    turnover_ratio_pct: float | None = Field(default=None, description="换手率(%)")
+    source: str = Field(
+        default="",
+        description="数据来源 fetcher 名; '' = 空链(如北交所代码无财务覆盖)",
+    )
+
+
+class FinancialHistoryRecord(BaseModel):
+    """单季财务记录 (basis=single_quarter)"""
+
+    report_date: str = Field(default="", description="报告期 YYYY-MM-DD")
+    pub_date: str | None = Field(default=None, description="财报披露日")
+    total_revenue_yi: float | None = Field(default=None, description="营业总收入(亿元, 单季)")
+    net_profit_yi: float | None = Field(default=None, description="净利润(亿元, 单季, 含少数股东)")
+    net_profit_attr_yi: float | None = Field(default=None, description="归母净利润(亿元, 单季)")
+    operating_profit_yi: float | None = Field(default=None, description="营业利润(亿元, 单季)")
+    deduct_net_profit_attr_yi: float | None = Field(
+        default=None, description="扣非归母净利润(亿元, 单季)"
+    )
+    eps: float | None = Field(default=None, description="每股收益(元, 单季)")
+    roe_pct: float | None = Field(
+        default=None, description="净资产收益率(%, 单季; zhitu 备源为 null)"
+    )
+    gross_margin_pct: float | None = Field(default=None, description="毛利率(%)")
+    net_margin_pct: float | None = Field(default=None, description="净利率(%)")
+    revenue_yoy_pct: float | None = Field(default=None, description="营收单季同比(%)")
+    net_profit_yoy_pct: float | None = Field(default=None, description="归母净利单季同比(%)")
+    revenue_qoq_pct: float | None = Field(default=None, description="营收单季环比(%)")
+    net_profit_qoq_pct: float | None = Field(default=None, description="归母净利单季环比(%)")
+
+
+class FinancialHistoryResponse(BaseModel):
+    """财务历史序列响应 — 报告期升序"""
+
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    basis: str = Field(default="single_quarter", description="口径承诺: 两源均单季值")
+    total: int = Field(default=0, description="记录条数")
+    records: list[FinancialHistoryRecord] = Field(default_factory=list)
+    source: str = Field(default="", description="数据来源 fetcher 名; '' = 空链")
+
+
+class BusinessCompositionRecord(BaseModel):
+    """主营构成单项 (category: product|region|industry)"""
+
+    category: str = Field(description="分类维度: product|region|industry")
+    item: str = Field(default="", description="分项名称")
+    rank: int | None = Field(default=None, description="分项收入排名")
+    revenue_yi: float | None = Field(default=None, description="主营收入(亿元)")
+    revenue_share_pct: float | None = Field(default=None, description="收入占比(%)")
+    cost_yi: float | None = Field(default=None, description="主营成本(亿元)")
+    cost_share_pct: float | None = Field(default=None, description="成本占比(%)")
+    profit_yi: float | None = Field(default=None, description="主营利润(亿元)")
+    profit_share_pct: float | None = Field(default=None, description="利润占比(%)")
+    gross_margin_pct: float | None = Field(default=None, description="毛利率(%)")
+
+
+class BusinessCompositionResponse(BaseModel):
+    """主营构成响应 — EastMoney F10 单源"""
+
+    code: str = Field(description="股票代码")
+    name: str = Field(default="", description="股票名称")
+    report_date: str | None = Field(
+        default=None, description="返回数据所属报告期; null=上游无任何拆分"
+    )
+    total: int = Field(default=0, description="条目数")
+    records: list[BusinessCompositionRecord] = Field(default_factory=list)
+    source: str = Field(default="", description="数据来源 fetcher 名")
+
+
 class FundFlowMinuteRecord(BaseModel):
     """资金流分钟级记录"""
 

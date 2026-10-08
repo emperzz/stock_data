@@ -10,6 +10,20 @@ Most endpoints are anonymous-capable; only uplimit_stocks requires a token.
 The fetcher is_available() returns True as long as the SDK is importable,
 even without a token.
 
+Financial chain (spec 2026-10-08 rev2, primary source):
+``get_financial_snapshot`` = ``finance_latest("indicator")`` +
+``finance_latest("valuation")`` + ``finance_stock("income", limit=1)``;
+``get_financial_history`` joins ``finance_stock("income"/"indicator")`` on
+``statDate`` and re-sorts DESC→ASC. Quarterly tables are SINGLE-QUARTER
+values (digit-for-digit cross-check vs zhitu cumulative differencing,
+docs/zzshare/11-fundamentals.md). NEVER use the base
+``finance_indicator(date, codes=…)`` form — ``codes=`` is silently ignored
+there and returns the full market (5209 rows measured). Finance tables are
+**zero-coverage for 北交所** (BJ histogram 0 measured, token included) →
+methods return ``None``/``[]`` (never ``{}`` — ``_is_meaningful({})`` is True
+and would short-circuit failover). Requires ``zzshare>=0.4.12`` (0.4.8 has
+no ``finance_*``; the pin lives in pyproject extras).
+
 Note: ``STOCK_INFO`` (公司画像) was removed 2026-07-14 because zzshare's
 ``/v3/open/stock/info?info_type=1`` returns ``data: null`` for every A-share
 — see docs/zzshare/03-basic-data.md § 3. The endpoint is reachable (HTTP 200)
@@ -1135,7 +1149,9 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
         val = self._finance_call(
             f"financial valuation {code}", api.finance_latest, "valuation", codes=ts
         )
-        inc = self._finance_call(f"financial income {code}", api.finance_stock, "income", ts, limit=1)
+        inc = self._finance_call(
+            f"financial income {code}", api.finance_stock, "income", ts, limit=1
+        )
         if not ind and not val:
             return None
         irow = ind[0] if ind else {}
@@ -1214,9 +1230,7 @@ class ZzshareFetcher(SDKFetcherMixin, BaseFetcher):
             limit=limit,
         )
         ind_by_date = {
-            d: row
-            for d, row in ((_finance_date(r.get("statDate")), r) for r in ind)
-            if d
+            d: row for d, row in ((_finance_date(r.get("statDate")), r) for r in ind) if d
         }
         by_date: dict[str, dict] = {}
         for row in inc:
