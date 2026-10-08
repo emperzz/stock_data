@@ -32,7 +32,7 @@ def test_get_announcements_returns_normalized_items(ths):
     call = mocked.call_args
     assert call.args[0] == "https://basic.10jqka.com.cn/basicapi/notice/pub"
     assert call.kwargs["params"]["code"] == "300740"
-    assert call.kwargs["params"]["market"] == "33"
+    assert call.kwargs["params"]["market"] == 33
     assert call.kwargs["params"]["classify"] == "all"
     assert call.kwargs["params"]["page"] == 1
     assert call.kwargs["params"]["limit"] == 15
@@ -46,9 +46,9 @@ def test_get_announcements_returns_normalized_items(ths):
 
 
 def test_get_announcements_no_market_id_returns_empty(ths):
-    """Codes not in _THS_MARKET_ID_MAP → []. No HTTP call."""
+    """Codes with no derivable market id → []. No HTTP call."""
     with patch("stock_data.data_provider.fetchers.ths_fetcher.json_get") as mocked:
-        items = ths.get_announcements("400001", page_size=10)
+        items = ths.get_announcements("HK00700", page_size=10)
     assert items == []
     mocked.assert_not_called()
 

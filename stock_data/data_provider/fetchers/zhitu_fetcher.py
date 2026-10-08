@@ -1290,13 +1290,19 @@ class ZhituFetcher(BaseFetcher):
     )
 
     def get_financial_snapshot(self, code: str) -> dict | None:
-        """Zhitu backup snapshot: last derived single-quarter record.
+        """Zhitu backup snapshot: last derived single-quarter record + valuation.
 
-        Profit fields come from the §2.2 differencing pipeline; ``roe_pct``
-        and the whole valuation block are honest ``None`` (zhitu fin/income
-        carries no valuation, no ROE). Returns ``None`` — never ``{}`` —
-        when nothing is derivable (BJ codes 404 upstream,新股无报告期),
+        Profit fields come from the §2.2 differencing pipeline. ``roe_pct``
+        stays an honest ``None`` (weighted ROE is not additive, so the
+        differencing pipeline cannot produce it). Returns ``None`` — never
+        ``{}`` — when nothing is derivable (BJ codes 404 upstream, 新股无报告期),
         keeping the manager's empty-chain semantics intact.
+
+        The valuation block is filled from ``/hs/real/ssjy/`` — the endpoint
+        ``get_realtime_quote`` already calls. It costs one extra request, is
+        best-effort (a dead quote leg leaves the block null and does NOT throw
+        away the profit block), and is amortised by the route's
+        ``CACHE_TTL_STOCK_FINANCIAL``.
         """
         recs = self._get_financial_series(code)
         if not recs:
@@ -1304,7 +1310,55 @@ class ZhituFetcher(BaseFetcher):
         snap = dict(recs[-1])
         for k in self._FINANCE_VALUATION_KEYS:
             snap[k] = None
+        self._apply_realtime_valuation(snap, recs, normalize_stock_code(code))
         return snap
+
+    def _apply_realtime_valuation(self, snap: dict, recs: list[dict], code: str) -> None:
+        """Fill the snapshot's valuation block from the realtime quote.
+
+        ``pe`` from that endpoint is 动态市盈率 (总市值 ÷ 预估全年净利), which
+        is neither TTM nor 静态 — mapping it into ``pe_ttm`` would mislabel it,
+        so it is left unused and ``pe_ttm`` is derived exactly instead:
+        市值 ÷ 最近 4 个单季归母合计, from this leg's own single-quarter series
+        (600519 lands on 19.2775, the zzshare primary's published value).
+
+        ``pe_lyr`` (静态) and ``pcf`` have no zhitu source → null.
+        """
+        try:
+            quote = self._fetch_json(f"/hs/real/ssjy/{code}", op_label=f"quote {code}")
+        except Exception as exc:  # best-effort leg, never fatal
+            logger.warning(f"[ZhituFetcher] 估值腿失败, 置空: {exc}")
+            return
+        if not isinstance(quote, dict) or not quote:
+            return
+
+        stamp = str(quote.get("t") or "")
+        price = safe_float(quote.get("p"))
+        market_cap = safe_float(quote.get("sz"))
+        float_cap = safe_float(quote.get("lt"))
+        snap["pb"] = safe_float(quote.get("sjl"))
+        snap["turnover_ratio_pct"] = safe_float(quote.get("hs"))
+        snap["trade_date"] = stamp[:10] if len(stamp) >= 10 else None
+        if market_cap is not None:
+            snap["market_cap_yi"] = market_cap / 1e8
+        if float_cap is not None:
+            snap["float_market_cap_yi"] = float_cap / 1e8
+        if price:
+            if market_cap is not None:
+                snap["total_share_wan_shares"] = market_cap / price / 1e4
+            if float_cap is not None:
+                snap["float_share_wan_shares"] = float_cap / price / 1e4
+
+        market_cap_yi = snap["market_cap_yi"]
+        if market_cap_yi is None:
+            return
+        for source_key, target_key in (
+            ("net_profit_attr_yi", "pe_ttm"),
+            ("total_revenue_yi", "ps"),
+        ):
+            tail = [r.get(source_key) for r in recs[-4:]]
+            if len(tail) == 4 and all(v is not None for v in tail) and sum(tail):
+                snap[target_key] = market_cap_yi / sum(tail)
 
     def get_financial_history(
         self,

@@ -939,7 +939,7 @@ class TestGetStockBoards:
         assert "basic.10jqka.com.cn" in args[0]
         assert args[0].endswith("/stock_concept_list")
         assert kwargs["params"]["code"] == "300740"
-        assert kwargs["params"]["market_id"] == "33"  # 深市 (3xx prefix)
+        assert kwargs["params"]["market_id"] == 33  # 深市 (3xx prefix)
         # No ``simple`` parameter — full quote envelope must come back.
         assert "simple" not in kwargs["params"]
         assert "Referer" in kwargs["headers"]
@@ -1094,29 +1094,31 @@ class TestGetStockBoards:
         ) as mock_get:
             # 沪市主板 (600xxx)
             self.fetcher.get_stock_boards("600519")
-            assert mock_get.call_args.kwargs["params"]["market_id"] == "17"
+            assert mock_get.call_args.kwargs["params"]["market_id"] == 17
 
-            # 沪市 B 股 (900xxx)
+            # 沪市 B 股 (900xxx) — 18, the marketId the F10 page itself uses
             self.fetcher.get_stock_boards("900901")
-            assert mock_get.call_args.kwargs["params"]["market_id"] == "17"
+            assert mock_get.call_args.kwargs["params"]["market_id"] == 18
 
             # 深市主板 (000xxx)
             self.fetcher.get_stock_boards("000001")
-            assert mock_get.call_args.kwargs["params"]["market_id"] == "33"
+            assert mock_get.call_args.kwargs["params"]["market_id"] == 33
 
             # 深市创业板 (300xxx)
             self.fetcher.get_stock_boards("300750")
-            assert mock_get.call_args.kwargs["params"]["market_id"] == "33"
+            assert mock_get.call_args.kwargs["params"]["market_id"] == 33
 
-    def test_empty_on_unknown_prefix(self):
-        """北交所代码 (4/8 prefix) 无 mapping → 空列表 + 不调上游."""
+    def test_bj_code_resolves_to_market_151(self):
+        """北交所 (4/8/92 prefix) → market_id 151. The old first-char map had
+        no entry for 4/8, so these codes returned [] without asking upstream;
+        92xxxx even went to 17 and pulled another company's concept list."""
         with patch(
             "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+            return_value={"status_code": 0, "data": []},
         ) as mock_get:
-            result = self.fetcher.get_stock_boards("830799")  # 北交所
+            assert self.fetcher.get_stock_boards("830799") == []
 
-        assert result == []
-        mock_get.assert_not_called()
+        assert mock_get.call_args.kwargs["params"]["market_id"] == 151
 
     def test_raises_data_fetch_error_on_http_failure(self):
         """json_get 抛异常 → 包装为 DataFetchError."""

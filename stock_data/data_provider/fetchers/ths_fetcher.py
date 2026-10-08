@@ -3,7 +3,8 @@
 
 Provides: 热点题材(hot-topics), 北向资金(north-flow), 全球财经快讯(news-flash),
           新闻搜索(news-search), 板块 K 线(board-history),
-          个股新闻(stock-news), 个股公告(announcements)
+          个股新闻(stock-news), 个股公告(announcements),
+          个股财务快照/单季历史(financials), 主营构成(main-business)
 
 APIs:
 - 热点: zx.10jqka.com.cn/event/api/getharden/
@@ -15,6 +16,13 @@ APIs:
     - 行业(直查):            q.10jqka.com.cn/thshy/detail/code/{platecode}/  →
                               platecode 与 URL slug 相同 (881xxx)
     - 通用 K 线: d.10jqka.com.cn/v4/line/bk_{platecode}/{freq_segment}/{year}.js
+- 财务 / 主营构成 (2026-10-08, 详见本模块底部 "财务 / 主营构成" 段):
+    - 摘要指标:  basic.10jqka.com.cn/api/stock/finance/{code}_main.json
+    - 利润表全表: basic.10jqka.com.cn/api/stock/finance/{code}_benefit.json
+    - 概览页估值: basic.10jqka.com.cn/{code}/   (GBK 服务端渲染, 唯一估值来源)
+    - 主营构成:   basic.10jqka.com.cn/fuyao/f10_operate/operate/v1/main_business_structure
+  这三个端点也是**北交所个股财务的唯一来源** (zzshare 财务表 BJ 零行, zhitu
+  /hs/fin/* 对 BJ 404), 所以 THS 在 STOCK_FINANCIAL/SERIES 链上排在最后兜底。
 
 Naming note (post-2026-07-14 cleanup): the upstream HTML element
 ``<input id="clid">`` on the concept detail page returns a 6-digit
@@ -41,12 +49,14 @@ upstream 真实支持所有 7 种频率,本 fetcher 现已覆盖。
 10jqka 财经页的站内搜索框本身就是跳转到 iWenCai 的。详见 search_news 文档。
 """
 
+import json
 import logging
 import math
 import os
 import random
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date as _date
 from datetime import datetime, timedelta, timezone
 from importlib import resources, util
@@ -548,15 +558,12 @@ _THS_BOARD_STOCKS_SORT_FIELD_MAP: dict[str, str] = {
 _STOCK_CONCEPT_LIST_URL = (
     "https://basic.10jqka.com.cn/fuyao/f10_stock_index/concept/v1/stock_concept_list"
 )
-# THS market_id: 17=沪市, 33=深市. BJ (4/8 prefix) 暂不映射 (上游 stock_concept_list
-# 端点可能不支持北交所; 留待后续任务). 注意代码首位即可区分:
-#   6/9 → 沪市;  0/3 → 深市;  4/8 → 北交所 (未映射)
-_THS_MARKET_ID_MAP: dict[str, str] = {
-    "6": "17",  # 沪市主板 + 科创板
-    "9": "17",  # 沪市 B 股
-    "0": "33",  # 深市主板 + 中小板
-    "3": "33",  # 深市创业板
-}
+# The numeric ``market`` id (17 沪 / 33 深 / 151 北交所 / 18 沪B / 34 深B) is
+# derived by ``_ths_market_id`` at the bottom of this module, from the FULL
+# code rather than its first character. The first-character map this file used
+# to carry sent 9xxxxx to 17, which silently returned a DIFFERENT company's
+# data for 北交所 codes (920002 -> market 17 -> 中文在线 headlines; measured
+# 2026-10-08), and had no entry at all for 4xxxxx/8xxxxx.
 
 # 板块新闻 timeline — news.10jqka.com.cn/timeline_web/... (probed 2026-07-21).
 # Unauthenticated JSON, cursor-paginated (offset=last publishTime), marketId=48
@@ -829,6 +836,10 @@ class ThsFetcher(BaseFetcher):
         # 新 (2026-07-20 spec): F10 page sections
         | DataCapability.BOARD_NEWS  # 板块热点新闻
         | DataCapability.BOARD_SURGES  # 板块炒作周期
+        # 新 (2026-10-08 spec): 个股财务三端点 — 唯一覆盖北交所的来源
+        | DataCapability.STOCK_FINANCIAL
+        | DataCapability.STOCK_FINANCIAL_SERIES
+        | DataCapability.STOCK_MAIN_BUSINESS
     )
 
     @staticmethod
@@ -1503,9 +1514,9 @@ class ThsFetcher(BaseFetcher):
             list of normalized news items; possibly empty.
         """
         code = normalize_stock_code(stock_code)
-        market_id = _THS_MARKET_ID_MAP.get(code[:1])
+        market_id = _ths_market_id(code)
         if not market_id:
-            logger.warning(f"[ThsFetcher] get_stock_news: no market_id for {code!r}")
+            logger.warning(f"[ThsFetcher] get_stock_news: 无法推导 market id for {code!r}")
             return []
         try:
             n = max(1, min(int(limit), 100))
@@ -1563,7 +1574,7 @@ class ThsFetcher(BaseFetcher):
         Hard failures (network / JSON parse) → raise DataFetchError.
         """
         code = normalize_stock_code(code)
-        market_id = _THS_MARKET_ID_MAP.get(code[:1])
+        market_id = _ths_market_id(code)
         if not market_id:
             logger.warning(f"[ThsFetcher] get_announcements: no market_id for {code!r}")
             return []
@@ -1609,8 +1620,8 @@ class ThsFetcher(BaseFetcher):
     def get_stock_boards(self, stock_code: str, **kwargs) -> list[dict]:
         """THS concept membership via basic.10jqka.com.cn stock_concept_list.
 
-        Returns list[dict] or [] on upstream empty / no market_id mapping
-        (北交所暂不支持).
+        Returns list[dict] or [] on upstream empty / a code with no derivable
+        market id (HK / US / indices — 北交所 IS supported since 2026-10-08).
 
         Each dict carries (added 2026-08-30) the per-concept quote envelope
         upstream exposes when ``simple`` is omitted:
@@ -1649,12 +1660,9 @@ class ThsFetcher(BaseFetcher):
             DataFetchError: HTTP fetch failed.
         """
         code = normalize_stock_code(stock_code)
-        market_id = _THS_MARKET_ID_MAP.get(code[:1])
+        market_id = _ths_market_id(code)
         if not market_id:
-            logger.warning(
-                f"[ThsFetcher] get_stock_boards: no market_id mapping "
-                f"for code={code!r} (北交所暂不支持)"
-            )
+            logger.warning(f"[ThsFetcher] get_stock_boards: 无法推导 market id for code={code!r}")
             return []
         try:
             # NOTE: do NOT pass ``simple=1`` here — the upstream trims the
@@ -3225,6 +3233,161 @@ class ThsFetcher(BaseFetcher):
             out.append(item)
         return out
 
+    # ------------------------------------------------------------------
+    # 财务 / 主营构成 (spec 2026-10-08) — capability methods
+    # ------------------------------------------------------------------
+
+    def _ths_get(self, url: str) -> tuple[int, bytes]:
+        """GET a ``basic.10jqka.com.cn`` resource as ``(status, raw bytes)``.
+
+        The single transport seam for the finance capabilities, and the only
+        thing the unit tests stub. Returns bytes rather than a decoded body
+        because the two resource families disagree on encoding: the finance
+        JSONs are UTF-8, while the overview page is GBK **and its
+        Content-Type carries no charset** — ``requests``' sniffing is not
+        something to bet a parse on, so callers decode explicitly.
+        """
+        response = self._http_get(url, headers=_THS_BASIC_HEADERS, timeout=15)
+        return response.status_code, response.content
+
+    @staticmethod
+    def _decode_ths_json(url: str, body: bytes) -> object:
+        try:
+            return json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            # a non-JSON body means the endpoint changed or was blocked —
+            # an outage, not an authoritative empty answer
+            raise DataFetchError(f"[ThsFetcher] {url} 响应不是 JSON") from exc
+
+    def _ths_fetch_many(
+        self, urls: dict[str, str], tolerate: tuple[str, ...] = ()
+    ) -> dict[str, bytes | None]:
+        """Concurrent GET of independent THS resources.
+
+        The finance URLs are unrelated, so the wall clock is the slowest leg
+        instead of the sum (the route caches the result for
+        ``CACHE_TTL_STOCK_FINANCIAL``, so this is at most a few extra
+        connections per code per day). ``_ths_get`` opens a fresh
+        ``requests`` connection per call and shares no state, so a small
+        thread pool needs no locking.
+
+        Any failure raises — except for the legs named in ``tolerate``, which
+        degrade to ``None``. Transport *exceptions* (``requests.ConnectionError``
+        / ``Timeout``) are caught too, not just non-200: ``_ths_get`` goes
+        through a bare ``requests.get``, so a tolerated best-effort leg must
+        not be able to turn the whole call into a 503.
+        """
+        with ThreadPoolExecutor(max_workers=max(1, len(urls))) as pool:
+            futures = {name: pool.submit(self._ths_get, url) for name, url in urls.items()}
+            bodies: dict[str, bytes | None] = {}
+            for name, future in futures.items():
+                try:
+                    status, body = future.result()
+                except Exception as exc:
+                    if name not in tolerate:
+                        raise
+                    logger.warning(f"[ThsFetcher] {urls[name]} 传输失败, 降级: {exc}")
+                    bodies[name] = None
+                    continue
+                if status != 200:
+                    if name not in tolerate:
+                        raise DataFetchError(f"[ThsFetcher] {urls[name]} HTTP {status}")
+                    logger.warning(f"[ThsFetcher] {urls[name]} HTTP {status}, 降级")
+                    bodies[name] = None
+                    continue
+                bodies[name] = body
+        return bodies
+
+    @staticmethod
+    def _ths_finance_urls(code: str) -> dict[str, str]:
+        """``{"main": …, "benefit": …}`` — the two finance-JSON endpoints."""
+        return {
+            table: _THS_FIN_JSON_URL.format(code=code, table=table) for table in ("main", "benefit")
+        }
+
+    def get_financial_snapshot(self, code: str) -> dict | None:
+        """财务快照: newest single-quarter profit block + valuation.
+
+        Three upstreams in ONE concurrent fan-out: ``_main.json`` (ROE /
+        毛利率 / 净利率), ``_benefit.json`` (营业利润 / 净利润含少数股东 /
+        归母 / 扣非) and the GBK ``/{code}/`` overview page (估值 — the only
+        THS source).
+
+        The two finance legs are co-required and their failure raises for
+        failover; the overview page carries *only* valuation, so it is
+        ``tolerate``d — its failure leaves the block null instead of throwing
+        away a valid profit block (same rule the Zhitu quote leg follows).
+
+        Returns ``None`` — never ``{}`` — when there is no period at all
+        (``_is_meaningful({})`` is True and would short-circuit failover).
+        """
+        code = normalize_stock_code(code)
+        urls = self._ths_finance_urls(code)
+        urls["overview"] = _THS_OVERVIEW_URL.format(code=code)
+        bodies = self._ths_fetch_many(urls, tolerate=("overview",))
+        overview = bodies["overview"]
+        return _build_ths_snapshot(
+            _unwrap_ths_flash(self._decode_ths_json(urls["main"], bodies["main"])),
+            _unwrap_ths_flash(self._decode_ths_json(urls["benefit"], bodies["benefit"])),
+            overview.decode("gbk", errors="replace") if overview else None,
+        )
+
+    def get_financial_history(
+        self,
+        code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """单季财务序列 (report_date ASC) — 与 zzshare 主源同一契约。
+
+        Only the two finance JSONs are needed; the history contract carries
+        no valuation, so the overview page is deliberately not fetched.
+        """
+        code = normalize_stock_code(code)
+        urls = self._ths_finance_urls(code)
+        bodies = self._ths_fetch_many(urls)
+        return _build_ths_history(
+            _unwrap_ths_flash(self._decode_ths_json(urls["main"], bodies["main"])),
+            _unwrap_ths_flash(self._decode_ths_json(urls["benefit"], bodies["benefit"])),
+            start_date,
+            end_date,
+        )
+
+    def get_main_business_composition(
+        self,
+        code: str,
+        category: str | None = None,
+        report_date: str | None = None,
+    ) -> dict:
+        """主营构成 via ``fuyao/f10_operate/operate/v1/main_business_structure``.
+
+        The endpoint needs the exchange's numeric ``market`` id and answers
+        a mismatch with ``status_code: 10001`` + an empty ``data`` — the
+        authoritative "no breakdown for this code", not an outage.
+
+        Never raises on user input (the manager folds fetcher exceptions into
+        a 503); an unknown ``report_date`` is reported through the returned
+        ``requested_report_date_available`` flag and turned into a 400 by the
+        route.
+        """
+        code = normalize_stock_code(code)
+        market_id = _ths_market_id(code)
+        if market_id is None:
+            logger.warning(f"[ThsFetcher] get_main_business_composition: {code!r} 无 market id")
+            return _build_ths_business_composition({}, category, report_date)
+        url = f"{_THS_BIZ_STRUCTURE_URL}?require=all&market={market_id}&code={code}"
+        status, body = self._ths_get(url)
+        if status != 200:
+            raise DataFetchError(f"[ThsFetcher] {url} HTTP {status}")
+        payload = self._decode_ths_json(url, body)
+        if not isinstance(payload, dict) or payload.get("status_code") not in (0, None):
+            logger.warning(
+                f"[ThsFetcher] get_main_business_composition({code}) upstream "
+                f"status_code={payload.get('status_code') if isinstance(payload, dict) else 'N/A'}"
+            )
+            return _build_ths_business_composition({}, category, report_date)
+        return _build_ths_business_composition(payload, category, report_date)
+
 
 # ---------------------------------------------------------------------------
 # Module-level parse helper for ``ThsFetcher._parse_ths_board_stocks_row``.
@@ -3364,3 +3527,564 @@ def _unescape_inner_quotes(txt: str) -> str:
         out.append(ch)
         i += 1
     return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# 财务 / 主营构成 (spec docs/superpowers/specs/2026-10-08-stock-financial-data-design.md)
+# ---------------------------------------------------------------------------
+# Pure parsing + derivation for the three financial capabilities, kept at module
+# level next to the other THS parse helpers (`_parse_free_float`,
+# `_parse_ths_board_stocks_row`, ...).
+#
+# Pure-compute helpers for ThsFetcher's financial capabilities.
+#
+# ThsFetcher itself only performs transport + orchestration; every parsing /
+# derivation rule lives here so it can be unit-tested against real upstream
+# captures without touching the network.
+#
+# Upstream resources (all ``basic.10jqka.com.cn``, no token / cookie; a plain
+# ``requests`` GET with a UA + ``Referer`` is enough — measured 2026-10-08):
+#
+# * ``/api/stock/finance/{code}_main.json`` — 财务摘要指标 (24 行 × 最多 50 期).
+#   This is the JSON feed of the ``/{code}/finance.html`` page, which is
+#   **server-rendered and issues zero XHR of its own** — so the "one page,
+#   one call" intuition is already satisfied for this block.
+# * ``/api/stock/finance/{code}_benefit.json`` — 利润表全表 (43 行). The only
+#   source of 营业利润 and 净利润(含少数股东); the legacy ``/{code}/profit.html``
+#   page is dead (HTTP 200, **0 bytes**).
+# * ``/{code}/`` — the GBK overview page, the ONLY valuation source (the
+#   ``astockpc`` SPA carries none). ``finance.html`` never mentions 市盈率.
+# * ``/fuyao/f10_operate/operate/v1/main_business_structure`` — 主营构成.
+#
+# Both finance JSONs share one envelope: ``{"flashData": "<escaped JSON>",
+# "fieldflashData": "<escaped JSON>"}``. **``fieldflashData`` is a trap** — it
+# uses the identical ``title`` labels but carries a DIFFERENT entity's numbers
+# (600519 净利润 H1 = 445.17亿 in ``flashData`` vs 36.51亿 in ``fieldflashData``,
+# measured). Only ``flashData`` is ever read here.
+#
+# Each JSON unpacks into 8 parallel tables over the same row labels: ``report``
+# (累计报告期), ``simple`` (单季 — the contract's basis), ``year``,
+# ``report_yoy`` / ``simple_yoy`` / ``simple_mom`` / ``year_yoy``.
+#
+# Two cell shapes coexist and are not interchangeable:
+#
+# * ``report`` / ``simple`` / ``year`` — **formatted strings** with 万/亿/%
+#   suffixes (``"3971.21万"``, ``"1.43亿"``, ``"24.46%"``).
+# * ``*_yoy`` / ``*_mom`` — **bare floats** already in percent.
+#
+# Missing is the JSON boolean ``False`` (not ``null``), seen on 少数股东损益 and
+# 两年以上的 ``year_yoy`` cells.
+#
+# ``simple`` is verified genuine single-quarter (300519: Q2 单季 1334.41万 +
+# Q1 累计 2636.80万 = H1 累计 3971.21万), so no cumulative→single-quarter
+# differencing pipeline is needed — unlike the Zhitu backup.
+
+# --- upstream URL templates ------------------------------------------------
+
+_THS_FIN_JSON_URL = "https://basic.10jqka.com.cn/api/stock/finance/{code}_{table}.json"
+_THS_BIZ_STRUCTURE_URL = (
+    "https://basic.10jqka.com.cn/fuyao/f10_operate/operate/v1/main_business_structure"
+)
+_THS_OVERVIEW_URL = "https://basic.10jqka.com.cn/{code}/"
+
+# Cell texts that mean "upstream has no value", ON TOP of the ones
+# ``safe_float`` already rejects ("", "-", "--", "nan", "None").
+_MISSING_TEXTS = frozenset({"---", "null", "亏损", "不适用"})
+
+# "万亿" is defensive: no finance-table cell in the probed corpus (600519 /
+# 601398 / 601288 / 601857, full history) uses it — but a silently-unparsed
+# unit would null a real number, and the entry costs one tuple.
+_UNIT_MULTIPLIERS = (("万亿", 1e12), ("亿", 1e8), ("万", 1e4))
+
+
+def _unwrap_ths_flash(payload: object) -> dict | None:
+    """Unwrap the ``{"flashData": "<escaped JSON>"}`` envelope.
+
+    Returns the decoded inner object, or ``None`` for anything unusable
+    (missing key, empty string, non-JSON, or a JSON array instead of the
+    expected object). Never raises.
+    """
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("flashData")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _parse_ths_amount(value: object) -> float | None:
+    """Parse a 万/亿-suffixed THS amount cell into a raw number.
+
+    ``"3971.21万"`` → ``39712100.0``; bare numbers/strings pass through.
+    The JSON boolean ``False`` is THS's missing marker and must yield
+    ``None`` — ``safe_float(False)`` would otherwise return ``0.0`` because
+    ``bool`` is an ``int`` subclass. A genuine ``0.00`` still returns ``0.0``.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return safe_float(value)
+    text = str(value).strip()
+    if not text or text in _MISSING_TEXTS:
+        return None
+    multiplier = 1.0
+    for suffix, factor in _UNIT_MULTIPLIERS:
+        if text.endswith(suffix):
+            text, multiplier = text[: -len(suffix)], factor
+            break
+    number = safe_float(text)
+    return None if number is None else number * multiplier
+
+
+def _parse_ths_pct(value: object) -> float | None:
+    """Parse a percentage cell into a plain percent number (``24.46`` not ``0.2446``).
+
+    ``*_yoy`` / ``*_mom`` cells are already bare floats in percent; the
+    ``report`` / ``simple`` tables carry ``"24.46%"``. Both shapes land here.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return safe_float(value)
+    text = str(value).strip()
+    if not text or text in _MISSING_TEXTS:
+        return None
+    return safe_float(text[:-1] if text.endswith("%") else text)
+
+
+# --- row labels -------------------------------------------------------------
+# Looked up as EXACT strings. Both finance JSONs repeat near-identical labels
+# under their "报表核心指标" section (`*净利润`, `*归属于母公司所有者的净利润`)
+# and again under "报表全部指标" (`五、净利润`, ...) — the starred rows are
+# distinct strings, so exact matching lands unambiguously on the full-statement
+# rows below.
+
+# 元 → 亿 (÷1e8); the contract's `_yi` convention.
+_AMOUNT_FIELDS = (
+    ("total_revenue_yi", "benefit", "一、营业总收入"),
+    ("net_profit_yi", "benefit", "五、净利润"),
+    ("net_profit_attr_yi", "benefit", "归属于母公司所有者的净利润"),
+    ("operating_profit_yi", "benefit", "三、营业利润"),
+    ("deduct_net_profit_attr_yi", "benefit", "扣除非经常性损益后的净利润"),
+)
+# 元/倍，原样透传。
+_PLAIN_FIELDS = (("eps", "main", "基本每股收益"),)
+# 上游已是百分数。
+_PCT_FIELDS = (
+    ("roe_pct", "main", "净资产收益率"),
+    ("gross_margin_pct", "main", "销售毛利率"),
+    ("net_margin_pct", "main", "销售净利率"),
+)
+# (record key, table, row label). The row label is the VALUE row — e.g.
+# `simple_yoy` row "净利润" is the YoY of the single-quarter amount, whereas
+# row "净利润同比增长率" is the YoY *of that ratio*, which is meaningless as a
+# growth rate.
+_GROWTH_FIELDS = (
+    ("revenue_yoy_pct", "simple_yoy", "营业总收入"),
+    ("net_profit_yoy_pct", "simple_yoy", "净利润"),
+    ("revenue_qoq_pct", "simple_mom", "营业总收入"),
+    ("net_profit_qoq_pct", "simple_mom", "净利润"),
+)
+
+_TAIL_PERIODS = 12
+_YI = 1e8
+
+
+def _labels(table: dict) -> list[str]:
+    """Row labels of a finance JSON. Each ``title`` entry is either the
+    ``"科目\\时间"`` header string or ``[label, unit, ...]``."""
+    title = table.get("title")
+    if not isinstance(title, list):
+        return []
+    out: list[str] = []
+    for entry in title:
+        if isinstance(entry, list) and entry:
+            out.append(str(entry[0]))
+        elif isinstance(entry, str):
+            out.append(entry)
+        else:
+            out.append("")
+    return out
+
+
+def _series(table: dict, labels: list[str], tbl: str, label: str) -> dict[str, object]:
+    """``{report_date: cell}`` for one row of one table; ``{}`` when absent."""
+    rows = table.get(tbl)
+    if not isinstance(rows, list) or len(rows) < 2:
+        return {}
+    try:
+        idx = labels.index(label)
+    except ValueError:
+        return {}
+    if idx >= len(rows) or not isinstance(rows[0], list):
+        return {}
+    cells = rows[idx]
+    if not isinstance(cells, list):
+        return {}
+    return {d: cells[i] for i, d in enumerate(rows[0]) if isinstance(d, str) and i < len(cells)}
+
+
+def _build_ths_history(
+    main: dict | None,
+    benefit: dict | None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """Single-quarter records, report_date ASC — the ``FinancialHistoryRecord``
+    contract.
+
+    Both tables are required: ``营业利润``/``净利润(含少数股东)`` exist only in
+    ``_benefit.json``, ``ROE``/毛利率/净利率 only in ``_main.json``. Periods
+    absent from either side are dropped rather than emitted half-null. Window
+    filters on ``report_date``; no window keeps the last 12 periods.
+    """
+    main = main if isinstance(main, dict) else {}
+    benefit = benefit if isinstance(benefit, dict) else {}
+    if not main or not benefit:
+        return []
+
+    labels = {"main": _labels(main), "benefit": _labels(benefit)}
+    tables = {"main": main, "benefit": benefit}
+    dates = sorted(set(_dates(main, "simple")) & set(_dates(benefit, "simple")))
+
+    cache: dict[tuple[str, str, str], dict[str, object]] = {}
+
+    def series(src: str, tbl: str, label: str) -> dict[str, object]:
+        key = (src, tbl, label)
+        if key not in cache:
+            cache[key] = _series(tables[src], labels[src], tbl, label)
+        return cache[key]
+
+    records: list[dict] = []
+    for report_date in dates:
+        record: dict = {"report_date": report_date, "pub_date": None}
+        for key, src, label in _AMOUNT_FIELDS:
+            value = _parse_ths_amount(series(src, "simple", label).get(report_date))
+            record[key] = None if value is None else value / _YI
+        for key, src, label in _PLAIN_FIELDS:
+            record[key] = _parse_ths_amount(series(src, "simple", label).get(report_date))
+        for key, src, label in _PCT_FIELDS:
+            record[key] = _parse_ths_pct(series(src, "simple", label).get(report_date))
+        for key, tbl, label in _GROWTH_FIELDS:
+            record[key] = _parse_ths_pct(series("main", tbl, label).get(report_date))
+        records.append(record)
+
+    if start_date or end_date:
+        return [
+            r
+            for r in records
+            if (not start_date or r["report_date"] >= start_date)
+            and (not end_date or r["report_date"] <= end_date)
+        ]
+    return records[-_TAIL_PERIODS:] if len(records) > _TAIL_PERIODS else records
+
+
+def _dates(table: dict, tbl: str) -> list[str]:
+    rows = table.get(tbl)
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], list):
+        return []
+    return [d for d in rows[0] if isinstance(d, str)]
+
+
+# --- valuation (overview page) ---------------------------------------------
+
+# The overview page is ``charset=gbk`` and its valuation table emits
+# ``<span ...>标签：</span><span ...>值</span>``. Anchoring on the ``>标签：</span>``
+# text node keeps tooltip prose (which lives in ``content='…'`` attributes and
+# does mention 流通市值/换手率) from being mistaken for a data cell.
+_OVERVIEW_CELL_RE = re.compile(r">([^<>]{1,12}?)：</span>\s*<span[^>]*>(.*?)</span>", re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+# 总股本/流通A股 render as "1.60亿股" — always a 亿/万 share unit.
+_SHARE_RE = re.compile(r"^\s*(-?[\d.]+)\s*(亿|万)股\s*$")
+
+# Mirrors ``ZhituFetcher._FINANCE_VALUATION_KEYS`` key-for-key (the two legs
+# must null/emit the same block). Duplicated on purpose: fetchers are peers and
+# must not import from each other (CLAUDE.md anti-pattern), so there is no
+# shared home for it short of a utils module.
+_THS_VALUATION_KEYS = (
+    "trade_date",
+    "pe_ttm",
+    "pe_lyr",
+    "pb",
+    "ps",
+    "pcf",
+    "market_cap_yi",
+    "float_market_cap_yi",
+    "total_share_wan_shares",
+    "float_share_wan_shares",
+    "turnover_ratio_pct",
+)
+
+_TTM_QUARTERS = 4
+_WAN = 1e4
+
+
+def _share_yi(text: str) -> float | None:
+    """``"1.60亿股"`` → ``1.60`` (亿股). ``None`` when the unit is unexpected."""
+    match = _SHARE_RE.match(text or "")
+    if match is None:
+        return None
+    value = safe_float(match.group(1))
+    if value is None:
+        return None
+    return value if match.group(2) == "亿" else value / _WAN
+
+
+def _parse_ths_overview_valuation(html: str | None) -> dict:
+    """Scrape the four valuation figures off the GBK overview page.
+
+    Returns raw page values in page units: ``pe_lyr`` / ``pb`` (倍数),
+    ``total_share_yi`` / ``float_share_yi`` (亿股). Missing labels — including
+    a loss-making stock whose 静态市盈率 renders as ``--`` — come back ``None``.
+
+    Deliberately NOT scraped: 总市值 (the page rounds it to whole 亿元 —
+    "23亿" for a true 23.76亿). ``_build_ths_snapshot`` reconstructs it exactly
+    from 静态PE × 上年报归母净利 instead.
+    """
+    out: dict = {"pe_lyr": None, "pb": None, "total_share_yi": None, "float_share_yi": None}
+    if not isinstance(html, str) or not html:
+        return out
+    for label, raw in _OVERVIEW_CELL_RE.findall(html):
+        # 总股本 wraps its value in <input id="stockzgb">; strip tags first
+        text = _TAG_RE.sub("", raw).strip()
+        if label == "市盈率(静态)":
+            out["pe_lyr"] = _parse_ths_amount(text)
+        elif label == "市净率":
+            out["pb"] = _parse_ths_amount(text)
+        elif label == "总股本":
+            out["total_share_yi"] = _share_yi(text)
+        elif label == "流通A股":
+            out["float_share_yi"] = _share_yi(text)
+    return out
+
+
+def _yi_series(table: dict, tbl: str, label: str) -> dict[str, float | None]:
+    """``{report_date: 亿元}`` for one row; ``None`` where the cell is missing."""
+    out: dict[str, float | None] = {}
+    for date, cell in _series(table, _labels(table), tbl, label).items():
+        amount = _parse_ths_amount(cell)  # "2.65亿" / "3971.21万" — not a raw float
+        out[date] = None if amount is None else amount / _YI
+    return out
+
+
+def _ttm_total(table: dict, label: str) -> float | None:
+    """Sum of the 4 most recent single quarters, 亿元 — or ``None`` when the
+    series is shorter than 4 periods or any of them is missing."""
+    series = _yi_series(table, "simple", label)
+    dates = sorted(series, reverse=True)[:_TTM_QUARTERS]
+    if len(dates) < _TTM_QUARTERS:
+        return None
+    values = [series[d] for d in dates]
+    if any(v is None for v in values):
+        return None
+    return sum(values)  # type: ignore[arg-type]
+
+
+def _annual_total(table: dict, label: str) -> float | None:
+    """The newest 12-31 value of the CUMULATIVE table, 亿元.
+
+    Must read ``report``, not ``simple``: ``simple``'s 12-31 row is Q4 alone
+    (300519 Q4 归母 887.53万) — the annual figure is the 累计 5421.15万.
+    """
+    series = _yi_series(table, "report", label)
+    for date in sorted(series, reverse=True):
+        if date.endswith("-12-31"):
+            return series[date]
+    return None
+
+
+def _build_ths_snapshot(
+    main: dict | None,
+    benefit: dict | None,
+    overview_html: str | None,
+) -> dict | None:
+    """Newest single-quarter profit block + the valuation block.
+
+    Returns ``None`` — never ``{}`` — when no period is available, so the
+    manager's failover chain keeps falling through (``_is_meaningful({})``
+    is True).
+
+    Valuation coverage: ``pe_lyr`` / ``pb`` / 股本 come straight off the
+    overview page. ``market_cap_yi`` is reconstructed as 静态PE × 上年报归母净利
+    (the exact definition of 静态市盈率) because the page only publishes a
+    whole-亿元 rounding; ``float_market_cap_yi`` follows from that price.
+    ``pe_ttm`` / ``ps`` are exact TTM ratios (市值 ÷ 最近 4 个单季合计).
+    ``trade_date`` stays ``None``: the page carries no timestamp and is
+    measurably a session stale for some names, so dating it "today" would
+    launder that. ``pcf`` / ``turnover_ratio_pct`` stay ``None`` — the
+    overview page carries neither and the repo's rule is null over
+    approximation.
+    """
+    records = _build_ths_history(main, benefit)
+    if not records:
+        return None
+
+    snapshot = dict(records[-1])
+    for key in _THS_VALUATION_KEYS:
+        snapshot[key] = None
+
+    page = _parse_ths_overview_valuation(overview_html)
+    snapshot["pe_lyr"] = page["pe_lyr"]
+    snapshot["pb"] = page["pb"]
+    if page["total_share_yi"] is not None:
+        snapshot["total_share_wan_shares"] = page["total_share_yi"] * _WAN
+    if page["float_share_yi"] is not None:
+        snapshot["float_share_wan_shares"] = page["float_share_yi"] * _WAN
+
+    benefit = benefit if isinstance(benefit, dict) else {}
+    if page["pe_lyr"] is None:
+        return snapshot
+    previous_annual = _annual_total(benefit, "归属于母公司所有者的净利润")
+    if not previous_annual:
+        return snapshot
+
+    market_cap = page["pe_lyr"] * previous_annual
+    snapshot["market_cap_yi"] = market_cap
+    total_share_yi = page["total_share_yi"]
+    if page["float_share_yi"] is not None and total_share_yi:
+        snapshot["float_market_cap_yi"] = page["float_share_yi"] * (market_cap / total_share_yi)
+    ttm_profit = _ttm_total(benefit, "归属于母公司所有者的净利润")
+    if ttm_profit:
+        snapshot["pe_ttm"] = market_cap / ttm_profit
+    ttm_revenue = _ttm_total(benefit, "一、营业总收入")
+    if ttm_revenue:
+        snapshot["ps"] = market_cap / ttm_revenue
+    return snapshot
+
+
+# --- main business composition ---------------------------------------------
+
+# Upstream `classify`: 1 按行业 / 2 按产品 / 3 按地区 (measured across
+# 300519 / 600519 / 920002).
+_BIZ_CATEGORY_OF_CLASSIFY = {"1": "industry", "2": "product", "3": "region"}
+
+
+def _build_ths_business_composition(
+    payload: object,
+    category: str | None = None,
+    report_date: str | None = None,
+) -> dict:
+    """主营构成, mirroring the EastMoney leg's return contract.
+
+    Amounts are 元 → 亿. The ratios are published as PERCENTAGES already
+    (``72.58``), unlike EastMoney's 0..1 fractions. Both sources divide by
+    their own row set, but the row sets differ: this upstream normalises to
+    当期营业总收入 (600519 茅台酒 = 777.24亿 / 922.78亿 = 84.2285%), while
+    EastMoney's rows exclude non-product revenue (777.24亿 / 907.03亿 =
+    85.6909%). Each sums to 100% over its own denominator, so the same
+    ``revenue_share_pct`` is NOT numerically comparable across sources —
+    compare the ``*_yi`` absolutes instead.
+
+    ``report_date`` defaults to the newest period in the sliding window. An
+    unknown ``report_date`` is reported via ``requested_report_date_available
+    = False`` and an empty ``records`` — the fetcher never raises on user
+    input (the manager would fold it into a 503); the route turns that flag
+    into a 400.
+    """
+    empty = {
+        "report_date": None,
+        "records": [],
+        "available_report_dates": [],
+        "requested_report_date_available": None,
+    }
+    raw_rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(raw_rows, list):
+        return empty
+
+    parsed: list[tuple[str, dict]] = []
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            continue
+        end_date = str(row.get("end_date") or "").strip()
+        if len(end_date) == 10:
+            parsed.append((end_date, row))
+    if not parsed:
+        return empty
+
+    available = sorted({end for end, _ in parsed})
+    served = report_date.strip() if isinstance(report_date, str) else None
+    requested_available: bool | None = None
+    if served:
+        requested_available = served in available
+        if not requested_available:
+            return {
+                "report_date": served,
+                "records": [],
+                "available_report_dates": available,
+                "requested_report_date_available": False,
+            }
+    else:
+        served = available[-1]
+
+    records: list[dict] = []
+    for end_date, row in parsed:
+        if end_date != served:
+            continue
+        cat = _BIZ_CATEGORY_OF_CLASSIFY.get(str(row.get("classify") or ""))
+        if cat is None or (category and cat != category):
+            continue
+        records.append(
+            {
+                "category": cat,
+                "item": str(row.get("project_name") or row.get("standard_name") or ""),
+                "rank": None,  # upstream publishes no rank
+                "revenue_yi": _yuan_to_yi(row.get("mb_operating_income")),
+                "revenue_share_pct": safe_float(row.get("mb_operating_income_ratio")),
+                "cost_yi": _yuan_to_yi(row.get("mb_operating_cost")),
+                "cost_share_pct": safe_float(row.get("mb_operating_cost_ratio")),
+                "profit_yi": _yuan_to_yi(row.get("mb_operating_profit")),
+                "profit_share_pct": safe_float(row.get("mb_operating_profit_ratio")),
+                "gross_margin_pct": safe_float(row.get("mb_gross_margin")),
+            }
+        )
+    # No upstream rank to sort by; largest revenue first within a category
+    # keeps the order deterministic and meaningful.
+    records.sort(key=lambda r: (r["category"], -(r["revenue_yi"] or 0.0)))
+    return {
+        "report_date": served,
+        "records": records,
+        "available_report_dates": available,
+        "requested_report_date_available": requested_available,
+    }
+
+
+def _yuan_to_yi(value: object) -> float | None:
+    """Raw 元 → 亿. For upstream payloads that already carry NUMBERS.
+
+    NOT interchangeable with the finance tables, which ship 万/亿-suffixed
+    strings — those go through ``_parse_ths_amount`` (``safe_float`` alone
+    would read ``"2.65亿"`` as unparseable and silently null the value).
+    """
+    amount = safe_float(value)
+    return None if amount is None else amount / _YI
+
+
+def _ths_market_id(code: str) -> int | None:
+    """Derive the ``market`` query param THS's fuyao endpoints require.
+
+    Values read off the ``#marketId`` hidden input of ``basic.10jqka.com.cn/
+    {code}/`` (2026-10-08): 17 沪 (主板+科创板), 33 深, 151 北交所,
+    18 沪B, 34 深B. A wrong value is not an error — the endpoint answers
+    ``status_code: 10001`` with an empty ``data`` — so unmappable codes
+    (HK/US/indices) must return ``None`` and be refused by the caller.
+    """
+    if not code or len(code) != 6 or not code.isdigit():
+        return None
+    if code.startswith("900"):
+        return 18
+    if code.startswith("200"):
+        return 34
+    if code.startswith("92"):
+        return 151
+    head = code[0]
+    if head == "6":
+        return 17
+    if head in ("0", "3"):
+        return 33
+    if head in ("4", "8"):
+        return 151
+    return None

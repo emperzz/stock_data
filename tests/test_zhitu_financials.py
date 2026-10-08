@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from stock_data.data_provider.base import DataFetchError
 from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
 
 # --- real cumulative rows (元) ---------------------------------------------
@@ -304,3 +305,93 @@ class TestReviewP2FollowUps:
         recs = {r["report_date"]: r for r in _sq(rows)}
         assert recs["2026-03-31"]["total_revenue_yi"] is not None  # Q1 identity
         assert recs["2026-03-31"]["revenue_qoq_pct"] is None  # base undeducible
+
+
+# --- valuation block (2026-10-08 follow-up) ---------------------------------
+# Real /hs/real/ssjy/600519 response captured 2026-10-08. The endpoint is the
+# SAME one ``ZhituFetcher.get_realtime_quote`` already calls — the backup
+# snapshot simply used to throw its fields away.
+
+QUOTE_600519 = {
+    "p": 1255.79,
+    "pe": 17.63,
+    "sjl": 6.25,
+    "sz": 1569839973720,
+    "lt": 1569839973720,
+    "hs": 0.2,
+    "t": "2026-10-08 16:29:08",
+    "nm": None,
+}
+
+
+class TestValuationBlock:
+    """⚠️ ``pe`` is 动态市盈率 (总市值 ÷ 预估全年净利) — NOT a TTM ratio, so it
+    is deliberately left unused. ``pe_ttm`` is instead derived exactly from the
+    leg's OWN single-quarter series (市值 ÷ 最近 4 个单季归母合计), which lands
+    on the zzshare primary's published 19.2775 for 600519 — see the assertion
+    below. ``pe_lyr`` (静态) and ``pcf`` have no zhitu source and stay null.
+    """
+
+    def _fetcher(self, monkeypatch, quote=QUOTE_600519):
+        f = ZhituFetcher()
+        monkeypatch.setattr(
+            f,
+            "_fetch_json",
+            lambda path, **kw: quote if "real/ssjy" in path else SERIES,
+            raising=True,
+        )
+        return f
+
+    def test_quote_derived_fields(self, monkeypatch):
+        snap = self._fetcher(monkeypatch).get_financial_snapshot("600519")
+        assert snap["pb"] == pytest.approx(6.25)  # sjl
+        assert snap["market_cap_yi"] == pytest.approx(15698.3997372)
+        assert snap["float_market_cap_yi"] == pytest.approx(15698.3997372)
+        assert snap["turnover_ratio_pct"] == pytest.approx(0.2)
+        assert snap["trade_date"] == "2026-10-08"
+        # 股本 = 市值 ÷ 现价 — lands on zzshare's 125008.1601 万股
+        assert snap["total_share_wan_shares"] == pytest.approx(125008.16, abs=0.01)
+        assert snap["float_share_wan_shares"] == pytest.approx(125008.16, abs=0.01)
+
+    def test_ttm_multiples_match_the_primary(self, monkeypatch):
+        snap = self._fetcher(monkeypatch).get_financial_snapshot("600519")
+        # TTM 归母 = 2025Q3 192.23784 + 2025Q4 176.93320 + 2026Q1 272.42513
+        #            + 2026Q2 172.74368 = 814.33985 亿
+        # pe_ttm = 15698.3997 / 814.33985 = 19.27752 ≈ zzshare 19.2775 ✓
+        assert snap["pe_ttm"] == pytest.approx(19.2775, abs=0.001)
+        # TTM 营收 = 398.10127 + 411.50282 + 547.02912 + 375.75160 = 1732.38481 亿
+        assert snap["ps"] == pytest.approx(9.0617, abs=0.001)
+
+    def test_unavailable_multiples_stay_null(self, monkeypatch):
+        snap = self._fetcher(monkeypatch).get_financial_snapshot("600519")
+        assert snap["pe_lyr"] is None
+        assert snap["pcf"] is None
+
+    def test_profit_block_survives_a_dead_quote_leg(self, monkeypatch):
+        # the quote leg is best-effort: the profit block is the main contract
+        snap = self._fetcher(monkeypatch, quote=None).get_financial_snapshot("600519")
+        assert snap["report_date"] == "2026-06-30"
+        assert snap["net_profit_attr_yi"] == pytest.approx(172.7436753541, abs=1e-6)
+        assert snap["pb"] is None
+        assert snap["market_cap_yi"] is None
+        assert snap["pe_ttm"] is None
+
+    def test_profit_block_survives_a_quote_transport_error(self, monkeypatch):
+        f = ZhituFetcher()
+
+        def boom(path, **kw):
+            if "real/ssjy" in path:
+                raise DataFetchError("quote down")
+            return SERIES
+
+        monkeypatch.setattr(f, "_fetch_json", boom, raising=True)
+        snap = f.get_financial_snapshot("600519")
+        assert snap["total_revenue_yi"] is not None
+        assert snap["pb"] is None
+
+    def test_bj_code_without_financials_still_returns_none(self, monkeypatch):
+        # fin/income 404s for BJ → no profit block → None, so the chain falls
+        # through to the THS leg rather than emitting a valuation-only shell
+        f = ZhituFetcher()
+        monkeypatch.setattr(f, "_fetch_json", lambda path, **kw: None, raising=True)
+        assert f.get_financial_snapshot("920002") is None

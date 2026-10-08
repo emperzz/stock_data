@@ -73,6 +73,32 @@ class TestRegistration:
         assert mb not in ZzshareFetcher.supported_data_types
         assert fin not in EastMoneyFetcher.supported_data_types
 
+    def test_ths_joins_the_chain_as_its_last_leg(self):
+        """THS (2026-10-08 follow-up) is the only source covering 北交所 —
+        zzshare's finance tables return 0 rows for BJ and zhitu's /hs/fin/*
+        404s — so it must sit at the END of the profitability chain and also
+        back up EastMoney's single-source 主营构成."""
+        from stock_data.data_provider.base import DataCapability
+        from stock_data.data_provider.fetchers.eastmoney.fetcher import EastMoneyFetcher
+        from stock_data.data_provider.fetchers.ths_fetcher import ThsFetcher
+        from stock_data.data_provider.fetchers.zhitu_fetcher import ZhituFetcher
+        from stock_data.data_provider.fetchers.zzshare_fetcher import ZzshareFetcher
+
+        fin = DataCapability.STOCK_FINANCIAL
+        ser = DataCapability.STOCK_FINANCIAL_SERIES
+        mb = DataCapability.STOCK_MAIN_BUSINESS
+        assert fin in ThsFetcher.supported_data_types
+        assert ser in ThsFetcher.supported_data_types
+        assert mb in ThsFetcher.supported_data_types
+        # the profitability chain must not grow a second MAIN_BUSINESS leg
+        assert mb not in ZzshareFetcher.supported_data_types
+        assert mb not in ZhituFetcher.supported_data_types
+        assert fin not in EastMoneyFetcher.supported_data_types
+        # Chain ORDER is deliberately not asserted here: `*_PRIORITY` is read
+        # from the environment at import time (the local .env swaps zzshare
+        # and zhitu). `TestManagerRouting::test_bj_snapshot_falls_through_to_ths`
+        # pins the ordering with explicit priorities instead.
+
 
 class TestManagerRouting:
     def _manager(self, primary, backup, single):
@@ -180,6 +206,79 @@ class TestManagerRouting:
         assert source == "EastMoneyFetcher"
         with pytest.raises(DataFetchError):
             m.get_main_business_composition("boom")
+
+    def test_bj_snapshot_falls_through_to_ths(self):
+        """北交所 has no zzshare coverage and zhitu 404s — THS is what keeps
+        the endpoint from degenerating into a permanent empty contract."""
+        from stock_data.data_provider.base import DataCapability
+
+        calls = []
+
+        def _leg(name, priority, result):
+            class _L:
+                supported_markets = {"csi"}
+                supported_data_types = DataCapability.STOCK_FINANCIAL
+
+                def __init__(self):
+                    self.name = name
+                    self.priority = priority
+
+                def get_financial_snapshot(self, code):
+                    calls.append(name)
+                    return result
+
+            return _L()
+
+        m = _mk_manager(
+            [
+                _leg("ZzshareFetcher", 2, None),
+                _leg("ZhituFetcher", 5, None),
+                _leg("ThsFetcher", 7, {"report_date": "2026-06-30", "pb": 4.12}),
+            ]
+        )
+        out, source = m.get_financial_snapshot("920002")
+        assert calls == ["ZzshareFetcher", "ZhituFetcher", "ThsFetcher"]
+        assert out == {"report_date": "2026-06-30", "pb": 4.12}
+        assert source == "ThsFetcher"
+
+    def test_main_business_ths_backs_up_eastmoney(self):
+        from stock_data.data_provider.base import DataCapability, DataFetchError
+
+        def _leg(name, priority, behaviour):
+            class _L:
+                supported_markets = {"csi"}
+                supported_data_types = DataCapability.STOCK_MAIN_BUSINESS
+
+                def __init__(self):
+                    self.name = name
+                    self.priority = priority
+
+                def get_main_business_composition(self, code, category=None, report_date=None):
+                    return behaviour()
+
+            return _L()
+
+        def boom():
+            raise DataFetchError("eastmoney down")
+
+        m = _mk_manager(
+            [
+                _leg("EastMoneyFetcher", 6, boom),
+                _leg(
+                    "ThsFetcher",
+                    7,
+                    lambda: {
+                        "report_date": "2026-06-30",
+                        "records": [{"category": "product", "item": "黄芪生脉饮"}],
+                        "available_report_dates": ["2026-06-30"],
+                        "requested_report_date_available": None,
+                    },
+                ),
+            ]
+        )
+        out, source = m.get_main_business_composition("300519", category="product")
+        assert source == "ThsFetcher"
+        assert out["records"][0]["item"] == "黄芪生脉饮"
 
 
 class TestEmptyOkIsAdditive:

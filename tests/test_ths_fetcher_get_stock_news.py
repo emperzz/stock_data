@@ -33,7 +33,7 @@ def test_get_stock_news_returns_normalized_items(ths):
     call = mocked.call_args
     assert call.args[0] == "https://basic.10jqka.com.cn/fuyao/info/company/v1/news"
     assert call.kwargs["params"]["code"] == "300740"
-    assert call.kwargs["params"]["market"] == "33"
+    assert call.kwargs["params"]["market"] == 33  # int, not the str the old first-char map held
     assert call.kwargs["headers"]["Referer"].startswith("https://basic.10jqka.com.cn")
     assert isinstance(items, list)
     assert len(items) == 5
@@ -56,11 +56,28 @@ def test_get_stock_news_returns_normalized_items(ths):
 
 
 def test_get_stock_news_no_market_id_returns_empty(ths):
-    """Codes not in _THS_MARKET_ID_MAP (北交所 4/8, HK, US) → []. No HTTP call."""
+    """Codes with no derivable market id (HK / US / indices) → []. No HTTP call.
+
+    北交所 codes are NOT in this set any more: the first-char map used to
+    skip them, and sent 9xxxxx to 17 (another company's news). ``_ths_market_id``
+    resolves 4xxxxx / 8xxxxx / 920xxx to 151.
+    """
     with patch("stock_data.data_provider.fetchers.ths_fetcher.json_get") as mocked:
-        items = ths.get_stock_news("400001", limit=10)
-    assert items == []
+        assert ths.get_stock_news("HK00700", limit=10) == []
+        assert ths.get_stock_news("AAPL", limit=10) == []
     mocked.assert_not_called()
+
+
+def test_get_stock_news_bj_uses_market_151(ths):
+    """北交所 must ask market=151 — market=17 answered with a DIFFERENT
+    company's headlines (920002 → 中文在线, measured 2026-10-08)."""
+    payload = _load("ths_basic_news.json")
+    with patch(
+        "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+        return_value=payload,
+    ) as mocked:
+        ths.get_stock_news("920002", limit=5)
+    assert mocked.call_args.kwargs["params"]["market"] == 151
 
 
 def test_get_stock_news_upstream_error_code_returns_empty(ths):

@@ -1150,8 +1150,23 @@ GET /api/v1/stocks/{code}/financials
 契约要点：盈利块为**单季口径**（`report_date`/`pub_date` 标注基准与披露日）；
 估值块为最新交易日快照。单位：`_yi`=亿元、`_pct`=百分数、`_wan_shares`=万股、EPS=元、
 PE/PB 等=倍数。字段 `null` = 该源不提供或上游未披露，**不会出现 0 冒充缺失**。
-北交所（BJ）代码 = 财务上游零覆盖 → 200 + 全 `null` + `source=""`。
 仅支持 A 股（非 csi 代码 / 未收录 / 指数代码 → 400）。
+
+按 `source` 的字段覆盖差异（`source` = 实际服务的 fetcher 名）：
+- `ZzshareFetcher`（主源）：全字段齐备。
+- `ZhituFetcher`：`roe_pct`、`pe_lyr`、`pcf` 为 `null`。
+- `ThsFetcher`：`pub_date`、`pcf`、`turnover_ratio_pct`、`trade_date` 为 `null`；
+  `pe_ttm`/`ps` 由「市值 ÷ 最近 4 个单季合计」精确推导（该源不发布 TTM 值）。
+  `trade_date` 为 null 是**刻意的**：THS 概览页不带任何时间戳，且实测对北交所会滞后
+  一个交易日（920002 页面隐含价 = 昨收 51.94，实时已 49.14，市值因此虚高 5.7%）——
+  标成"今天"会把这份滞后伪装成新鲜数据。北交所另有
+  `float_share_wan_shares`/`float_market_cap_yi` 为 `null`（该页对 92xxxx 渲染的是
+  `流通B股 → 未公布`，没有 `流通A股` 单元格）。
+- 全部来源均无覆盖（如冷门新股的极端情况）→ 200 + 全 `null` + `source=""`。
+
+北交所（BJ）：`ZzshareFetcher` 财务表 BJ **零行**、`ZhituFetcher` `/hs/fin/*` 对
+BJ **404**，故 BJ 实际由 `ThsFetcher` 兜底（**2026-10-08 起 BJ 不再返回空契约**）。
+注意 THS 侧旧 BJ 代码（8xxxxx/4xxxxx）数据已冻结，现行码为 92xxxx。
 
 ---
 
@@ -1195,7 +1210,10 @@ GET /api/v1/stocks/{code}/financials/history?start_date=2024-01-01&end_date=2026
 
 契约要点：`basis` 恒 `"single_quarter"`（单季值，非报告期累计）；records 按
 `report_date` **升序**；`pub_date` 可用于回测防未来函数；`source=""` + `records: []`
-= 无覆盖（如 BJ）。单位/null 语义同「财务快照」。仅 A 股。
+= 无覆盖。单位/null 语义同「财务快照」（含按 `source` 的字段覆盖差异——`ThsFetcher`
+的 `pub_date` 为 `null`，`ZhituFetcher` 的 `roe_pct` 为 `null`）。仅 A 股。
+
+北交所同「财务快照」：由 `ThsFetcher` 兜底，不再返回空数组。
 
 ---
 
@@ -1243,7 +1261,14 @@ GET /api/v1/stocks/{code}/business-composition?category=product&report_date=2026
 
 契约要点：`industry`（行业）拆分行**并非每只股票每期都存在**（如中期报告常缺），
 `category=industry` 返回空 `records` 是合法事实而非错误；覆盖沪深**北**三所。
-收入占比 = 该分项收入 ÷ 当期总营收。单位/null 语义同上。仅 A 股。
+单位/null 语义同上。仅 A 股。
+
+⚠️ **占比分母随 `source` 不同**：`ThsFetcher` 的 `*_share_pct` 以**当期营业总收入**
+为分母；`EastMoneyFetcher` 以**该源自身分项合计**为分母。两者在分项集合 ≠ 营业总收入
+时不等（600519 茅台酒 2026-06-30：同花顺 84.2285% = 777.24亿 ÷ 922.78亿；东财
+85.6909% = 777.24亿 ÷ 907.03亿——东财的产品行不含非产品收入）。两者都满足"各行合计
+= 100%"，只是 100% 对应的总体不同。跨源比较占比前请先确认 `source`；绝对额（`*_yi`）
+口径一致，可直接比。`ThsFetcher` 不发布 `rank`，故其行为 `null`。
 
 ---
 

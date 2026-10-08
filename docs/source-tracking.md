@@ -22,8 +22,8 @@ summary and points here for the per-endpoint matrix.
 | 板块成分股 | 用户传入 `source`; fetcher 名 (fetch 时) | `"persistence"` (缓存命中) |
 | 涨跌停 / 股票列表 / 交易日历 | fetcher 名 (refresh 时) | `"persistence"` (缓存命中) |
 | `/boards/relationships` | n/a (纯 persistence 读取, 从不调 fetcher) | **回显请求的 `source`** (非 `"persistence"`) — 见下方例外说明 |
-| `/stocks/{code}/financials` · `/financials/history` | fetcher 名 (e.g. `ZzshareFetcher`, `ZhituFetcher`)；**空链 (BJ 无财务覆盖) → `""` + null 字段** (非 `"persistence"`) | n/a |
-| `/stocks/{code}/business-composition` | fetcher 名 (e.g. `EastMoneyFetcher`) | n/a |
+| `/stocks/{code}/financials` · `/financials/history` | fetcher 名 (e.g. `ZzshareFetcher`, `ZhituFetcher`, `ThsFetcher`)；**全链为空 → `""` + null 字段** (非 `"persistence"`)。北交所由 `ThsFetcher` 兜底 (zzshare 财务表 BJ 零行、zhitu `/hs/fin/*` 对 BJ 404) | n/a |
+| `/stocks/{code}/business-composition` | fetcher 名 (e.g. `EastMoneyFetcher`, `ThsFetcher` 备源) | n/a |
 | `/agent/correlation/matrix` | 不跟踪 serving fetcher — stock label 恒为 `source: null`;board label 记录*请求的* source (`ths`/`eastmoney`, spec §2.3),非实际服务的 fetcher | n/a (compute-only — no top-level `source` field on `CorrelationMatrixResponse` because the response is a composite of multiple fetchers) |
 
 > 注 (2026-10-08)：本表旧行的示例写小写 slug（`tushare`/`eastmoney`），但 `/stocks/*` 家族
