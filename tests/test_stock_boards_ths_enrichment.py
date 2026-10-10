@@ -169,6 +169,139 @@ def test_ths_source_enriches_change_pct_up_count_down_count(client):
     assert body["cold_sources"] == []
 
 
+def test_placeholder_board_metadata_healed_from_live_enrichment(client):
+    """A membership row whose name/type are placeholders gets healed upstream.
+
+    ``update_cached_board_stocks`` writes ``board_name = board_code`` and
+    ``board_type = ""`` when ``stock_board`` has no metadata for the board at
+    write time. That never self-heals for a THS concept the forward board
+    list (whose ``gnSection`` is a 今日热门 subset) doesn't carry — measured
+    2026-10-10 on 600519: ``886086 西部大开发`` came back as
+    ``{"name": "886086", "type": ""}``.
+
+    The live reverse payload *does* know the name, so the response must use
+    it instead of the placeholder.
+    """
+    _clear_stock_boards_quote_cache()
+
+    cached_entries = [
+        {
+            "board_code": "886086",
+            "name": "886086",  # placeholder: name == code
+            "board_type": "",  # placeholder: empty type
+            "subtype": "",
+            "source": "ths",
+        },
+    ]
+    fetcher_result = [
+        {
+            "board_code": "886086",
+            "name": "西部大开发",
+            "board_type": "concept",
+            "subtype": "同花顺概念",
+            "change_pct": 0.28,
+            "up_count": 416,
+            "down_count": 199,
+            "limit_up_count": 12,
+            "limit_down_count": 1,
+            "explain": None,
+            "relevance": 0,
+        },
+    ]
+    enrichment_by_code = {
+        "886086": {
+            "change_pct": 0.28,
+            "up_count": 416,
+            "down_count": 199,
+            "limit_up_count": 12,
+            "limit_down_count": 1,
+            "explain": None,
+            "relevance": 0,
+        },
+    }
+
+    with (
+        _patch_persistence_with_ths_entries(cached_entries),
+        _patch_enrichment_with(
+            fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+        ),
+    ):
+        r = client.get("/api/v1/stocks/600519/boards?source=ths")
+
+    assert r.status_code == 200
+    item = r.json()["data"][0]
+    assert item["code"] == "886086"
+    # Healed from the live row, NOT the placeholder.
+    assert item["name"] == "西部大开发"
+    assert item["type"] == "concept"
+    assert item["subtype"] == "同花顺概念"
+    # Enrichment still merges.
+    assert item["up_count"] == 416
+    assert item["limit_up_count"] == 12
+
+
+def test_real_board_metadata_is_not_shadowed_by_live_upstream(client):
+    """Persistence stays authoritative for name/type/subtype when it has them.
+
+    The heal must be scoped to placeholders only — a warm-cache row that
+    already carries a real name must NOT be overwritten by whatever the live
+    reverse payload says (it is the same board; disagreement means the board
+    list is stale, and resolving that is the backfill's job, not a read's).
+    """
+    _clear_stock_boards_quote_cache()
+
+    cached_entries = [
+        {
+            "board_code": "885525",
+            "name": "白酒概念",
+            "board_type": "concept",
+            "subtype": "同花顺概念",
+            "source": "ths",
+        },
+    ]
+    fetcher_result = [
+        {
+            "board_code": "885525",
+            "name": "白酒概念(上游改名)",
+            "board_type": "concept",
+            "subtype": "同花顺概念",
+            "change_pct": 0.93,
+            "up_count": 35,
+            "down_count": 11,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "explain": "...",
+            "relevance": 2,
+        },
+    ]
+    enrichment_by_code = {
+        "885525": {
+            "change_pct": 0.93,
+            "up_count": 35,
+            "down_count": 11,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "explain": "...",
+            "relevance": 2,
+        },
+    }
+
+    with (
+        _patch_persistence_with_ths_entries(cached_entries),
+        _patch_enrichment_with(
+            fetcher_result=fetcher_result, enrichment_by_code=enrichment_by_code
+        ),
+    ):
+        r = client.get("/api/v1/stocks/600519/boards?source=ths")
+
+    assert r.status_code == 200
+    item = r.json()["data"][0]
+    assert item["name"] == "白酒概念"
+    assert item["type"] == "concept"
+    # Enrichment lands (it is the enrichment's job, not the metadata's).
+    assert item["up_count"] == 35
+
+
 def test_eastmoney_source_leaves_enrichment_fields_as_none(client):
     """Non-THS source → enrichment never queried, new fields stay None.
 

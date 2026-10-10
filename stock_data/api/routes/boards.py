@@ -964,6 +964,12 @@ def get_stock_boards(
     #    "?source=zhitu" path with their own persistence rows.
     data: list[StockBoardInfo] = []
 
+    # Live fetcher rows indexed by board code. Only used to heal persistence
+    # rows whose name/type are write-time placeholders (name == code,
+    # board_type == "") — see ``merge_live_board_fields`` for why those rows
+    # cannot fix themselves.
+    live_by_code = {r.get("board_code"): r for r in (fetcher_full_result or [])}
+
     if has_ths_warm_cache:
         # Warm-cache path: merge the 7 enrichment fields onto each
         # persistence entry whose source == 'ths'. Non-THS entries
@@ -976,8 +982,12 @@ def get_stock_boards(
                 "subtype": e.get("subtype", ""),
                 "source": e["source"],
             }
-            if e["source"] == "ths" and e["board_code"] in enrichment_by_code:
-                base.update(enrichment_by_code[e["board_code"]])
+            if e["source"] == "ths":
+                base = stock_boards.merge_live_board_fields(
+                    base,
+                    enrichment_by_code.get(e["board_code"]),
+                    live_by_code.get(e["board_code"]),
+                )
             data.append(StockBoardInfo(**base))
     elif ths_in_source_list and fetcher_full_result:
         # Cold-cache fallback for THS (no persistence writeback): the live

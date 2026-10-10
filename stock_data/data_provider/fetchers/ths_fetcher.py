@@ -819,6 +819,32 @@ def _parse_ths_single_kline_response(body: dict, freq_key: str) -> list[dict]:
     return out
 
 
+def _count_or_zero(val: Any) -> int:
+    """Coerce a THS 涨停/跌停家数 field, mapping every unusable spelling to 0.
+
+    THS spells "this board has 0 limit-up stocks today" two different ways in
+    the SAME ``stock_concept_list`` payload: sometimes JSON ``null``, sometimes
+    the string ``"0"`` (and occasionally an empty string / ``"-"``). It is not
+    a per-board or per-field rule — inside one row ``up_down_limit_up_num`` can
+    be null while ``up_down_limit_down_num`` is ``"0"``, and the next row has
+    it the other way round.
+
+    Verified 2026-10-10 by cross-checking every null against ground truth
+    (day's 涨停池 ∩ board constituents, read from the local membership table):
+    all 8 null rows had a true count of 0, exactly like the 10 rows that
+    spelled it ``"0"``. So null == 0 here, and normalizing keeps downstream
+    from reading one fact as two different answers.
+
+    NOTE this is deliberately NOT ``or 0`` on the caller side: ``safe_int``
+    already collapses null / "" / "-" / "--" / "nan" / "None" to ``None``,
+    which is exactly the set that means "no limit-ups".
+
+    Do NOT apply this to ``up_count`` / ``down_count`` — an absent value there
+    is genuinely unknown and must stay ``None``.
+    """
+    return safe_int(val, 0)
+
+
 class ThsFetcher(BaseFetcher):
     """同花顺 HTTP API fetcher for signal data."""
 
@@ -1638,10 +1664,11 @@ class ThsFetcher(BaseFetcher):
           (板块涨跌幅, %).
         - up_count (int | None) ← upstream ``rise_cnt`` (上涨家数).
         - down_count (int | None) ← upstream ``fall_cnt`` (下跌家数).
-        - limit_up_count (int | None) ← upstream ``up_down_limit_up_num``
-          (涨停家数; 上游可能为 null).
-        - limit_down_count (int | None) ← upstream ``up_down_limit_down_num``
-          (跌停家数; 上游可能为 null).
+        - limit_up_count (int) ← upstream ``up_down_limit_up_num``
+          (涨停家数; 上游对 0 这件事有时写 null 有时写 "0"，统一归 0 —
+          见 ``_count_or_zero``).
+        - limit_down_count (int) ← upstream ``up_down_limit_down_num``
+          (跌停家数; 同上，归 0).
         - explain (str | None) ← upstream ``explain`` (概念解析文本, e.g.
           "2022年8月23日公司互动回复：...").
         - relevance (int | None) ← upstream ``weight`` (关联度标签:
@@ -1706,8 +1733,8 @@ class ThsFetcher(BaseFetcher):
                 "change_pct": safe_float(r.get("price_change_ratio_pct")),
                 "up_count": safe_int(r.get("rise_cnt")),
                 "down_count": safe_int(r.get("fall_cnt")),
-                "limit_up_count": safe_int(r.get("up_down_limit_up_num")),
-                "limit_down_count": safe_int(r.get("up_down_limit_down_num")),
+                "limit_up_count": _count_or_zero(r.get("up_down_limit_up_num")),
+                "limit_down_count": _count_or_zero(r.get("up_down_limit_down_num")),
                 "explain": (str(r.get("explain", "")).strip() or None),
                 "relevance": safe_int(r.get("weight")),
             }

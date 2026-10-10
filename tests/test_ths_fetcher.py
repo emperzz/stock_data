@@ -952,14 +952,18 @@ class TestGetStockBoards:
             "board_type": "concept",
             "ths_cid": None,
             "subtype": "同花顺概念",
-            # New fields, all None because the fake_payload only has the
+            # New fields, mostly None because the fake_payload only has the
             # minimal simple=1-style subset; safe_int / safe_float / str
-            # coercion treat missing keys as None.
+            # coercion treat missing keys as None. EXCEPTION: the two
+            # 涨停/跌停家数 counters normalize a missing value to 0 —
+            # upstream reports "0 家涨停" as either JSON null or the string
+            # "0" interchangeably (verified 2026-10-10 against the day's
+            # 涨停池), so both spellings mean the same fact.
             "change_pct": None,
             "up_count": None,
             "down_count": None,
-            "limit_up_count": None,
-            "limit_down_count": None,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
             "explain": None,
             "relevance": None,
         }
@@ -972,13 +976,15 @@ class TestGetStockBoards:
         and ``up_down_limit_down_num`` as null when no stocks hit the
         limit. Verify each new field type:
         - change_pct → float
-        - up_count / down_count / limit_up_count / limit_down_count → int (None on null)
+        - up_count / down_count → int (None on null)
+        - limit_up_count / limit_down_count → int, **0 on null** (upstream
+          spells "0 家" as either null or "0"; both mean 0)
         - explain → str (None when upstream omits)
         - relevance → int
         """
         # Snapshot of the 4-concept payload for stock 300519 (截取自实测).
         # Includes one concept with explicit null on limit_down_count to
-        # verify None propagation.
+        # verify the null → 0 normalization.
         fake_payload = {
             "status_code": 0,
             "data": [
@@ -1018,7 +1024,7 @@ class TestGetStockBoards:
 
         assert len(result) == 2
 
-        # First concept: all numeric fields coerce; null limit_down_count → None.
+        # First concept: all numeric fields coerce; null limit_down_count → 0.
         first = result[0]
         assert first["board_code"] == "885909"
         assert first["name"] == "辅助生殖"
@@ -1029,7 +1035,7 @@ class TestGetStockBoards:
         assert first["up_count"] == 30
         assert first["down_count"] == 43
         assert first["limit_up_count"] == 1
-        assert first["limit_down_count"] is None
+        assert first["limit_down_count"] == 0  # upstream null → 0 (not None)
         assert first["explain"] == (
             "2022年8月23日公司互动回复：公司产品中辅助生殖类的产品有：阳春口服液、男宝胶囊。"
         )
@@ -1044,8 +1050,70 @@ class TestGetStockBoards:
         assert second["limit_down_count"] == 0  # "0" → 0 (not None)
         assert second["relevance"] == 2
 
+    def test_limit_counts_normalize_null_to_zero(self):
+        """涨停/跌停家数：上游 null（或其占位串）一律归 0，其余字段保持 None。
+
+        Verified 2026-10-10 against the day's 涨停池: 8 concept rows where
+        ``up_down_limit_up_num`` was JSON null all had a true limit-up count
+        of 0 (交叉验证：涨停池 ∩ 板块成分股 = 0，且同一个 payload 里另 10 行
+        写的是字符串 "0"，真值同为 0）。上游对同一事实给了两种写法，归一化
+        到 0 让下游不必区分。
+
+        Neighbours (up_count / down_count) are NOT normalized — an absent
+        value there stays ``None`` (spec: 上游无对应数据时为 null).
+        """
+        fake_payload = {
+            "status_code": 0,
+            "data": [
+                {
+                    "quote_code": "885916",
+                    "name": "同花顺漂亮100",
+                    "price_change_ratio_pct": "0.31",
+                    "rise_cnt": "68",
+                    "fall_cnt": "29",
+                    "up_down_limit_up_num": None,  # null → 0
+                    "up_down_limit_down_num": "0",  # "0" → 0
+                    "explain": "",
+                    "weight": 0,
+                },
+                {
+                    "quote_code": "885525",
+                    "name": "白酒概念",
+                    "price_change_ratio_pct": "0.93",
+                    "rise_cnt": "35",  # present → stays a number
+                    "fall_cnt": None,  # absent → stays None (NOT 0)
+                    "up_down_limit_up_num": None,  # → 0
+                    "up_down_limit_down_num": None,  # → 0
+                    "explain": "",
+                    "weight": 0,
+                },
+            ],
+        }
+
+        with patch(
+            "stock_data.data_provider.fetchers.ths_fetcher.json_get",
+            return_value=fake_payload,
+        ):
+            result = self.fetcher.get_stock_boards("600519")
+
+        first, second = result
+        assert first["limit_up_count"] == 0
+        assert first["limit_down_count"] == 0
+        assert isinstance(first["limit_up_count"], int)
+
+        assert second["limit_up_count"] == 0
+        assert second["limit_down_count"] == 0
+        # Neighbours untouched by the normalization.
+        assert second["up_count"] == 35
+        assert second["down_count"] is None
+
     def test_handles_non_numeric_quote_envelope_gracefully(self):
-        """Dirty / malformed upstream fields: safe_int / safe_float return None."""
+        """Dirty / malformed upstream fields: safe_int / safe_float return None.
+
+        Exception: the two limit counters map every unusable spelling
+        ("nan" / "-" / "" / null) to 0 — THS uses all of them to mean
+        "0 家涨停/跌停" (see ``test_limit_counts_normalize_null_to_zero``).
+        """
         fake_payload = {
             "status_code": 0,
             "data": [
@@ -1074,8 +1142,8 @@ class TestGetStockBoards:
         assert e["change_pct"] is None
         assert e["up_count"] is None
         assert e["down_count"] is None
-        assert e["limit_up_count"] is None
-        assert e["limit_down_count"] is None
+        assert e["limit_up_count"] == 0  # "nan" → 0 (unusable = "no limit-ups")
+        assert e["limit_down_count"] == 0  # "-" → 0
         assert e["explain"] is None  # empty string → None
         assert e["relevance"] is None
         # The legacy fields still flow.

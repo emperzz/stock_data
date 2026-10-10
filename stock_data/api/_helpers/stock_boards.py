@@ -16,6 +16,73 @@ from ..cache import (
 
 logger = logging.getLogger(__name__)
 
+# The 7 THS per-board enrichment fields. Module-level so the cache writer
+# (``fetch_stock_boards_quote_enrichment``) and the merge helper
+# (``merge_live_board_fields``) cannot drift apart.
+ENRICHMENT_KEYS: tuple[str, ...] = (
+    "change_pct",
+    "up_count",
+    "down_count",
+    "limit_up_count",
+    "limit_down_count",
+    "explain",
+    "relevance",
+)
+
+
+def merge_live_board_fields(
+    base: dict,
+    enrichment: dict | None = None,
+    live_row: dict | None = None,
+) -> dict:
+    """Merge the live THS envelope onto one public-shape board entry.
+
+    Two responsibilities:
+
+    1. **Copy the 7 enrichment fields** (``ENRICHMENT_KEYS``) out of
+       ``enrichment``. Only keys the dict actually carries are copied, so a
+       partial dict can never blank a value that is already on ``base``.
+    2. **Heal placeholder legacy metadata.** ``base`` is in the *public*
+       response shape (``code`` / ``name`` / ``type`` / ``subtype`` /
+       ``source``) while ``live_row`` is the fetcher's *internal* row shape
+       (``board_code`` / ``board_type`` / ...) — hence the asymmetric key
+       names below.
+
+    Why the heal is needed
+    ----------------------
+    ``persistence.board.update_cached_board_stocks`` writes
+    ``board_name = board_code`` and ``board_type = ""`` whenever
+    ``stock_board`` has no metadata for the board at write time, and
+    ``_read_membership_entries`` falls back to those placeholders when its
+    LEFT JOIN misses. The fallback is documented as self-healing, but for a
+    THS concept that the forward board list doesn't carry (its ``gnSection``
+    is only the 今日热门 subset) it never heals — measured 2026-10-10 on
+    600519, where ``/stocks/600519/boards`` returned ``886086`` as
+    ``{"name": "886086", "type": ""}`` instead of ``西部大开发`` / ``concept``.
+    The live reverse payload knows the answer, so the read uses it.
+
+    Scope
+    -----
+    Only fires when ``base`` carries no real value: ``name`` equal to the
+    code, or an empty ``type`` / ``subtype``. Persistence stays authoritative
+    for every board it actually knows — reconciling a genuine upstream rename
+    (or a delisting) is the backfill's job, not a read's.
+    """
+    out = dict(base)
+    if enrichment:
+        for key in ENRICHMENT_KEYS:
+            if key in enrichment:
+                out[key] = enrichment[key]
+    if not live_row:
+        return out
+    if out.get("name") == out.get("code") and live_row.get("name"):
+        out["name"] = live_row["name"]
+    if not out.get("type") and live_row.get("board_type"):
+        out["type"] = live_row["board_type"]
+    if not out.get("subtype") and live_row.get("subtype"):
+        out["subtype"] = live_row["subtype"]
+    return out
+
 
 def fetch_stock_boards_quote_enrichment(
     stock_code: str, manager
@@ -94,23 +161,16 @@ def fetch_stock_boards_quote_enrichment(
         cached_store(get_stock_boards_quote_cache, cache_key, ([], {}))
         return [], {}
     enrichment: dict[str, dict] = {}
-    enrichment_keys = (
-        "change_pct",
-        "up_count",
-        "down_count",
-        "limit_up_count",
-        "limit_down_count",
-        "explain",
-        "relevance",
-    )
     for entry in result:
         code = entry.get("board_code")
         if not code:
             continue
-        # Keyed by the board's public code (board_code) — the route looks up
-        # `e["board_code"] in enrichment_by_code`. Forward ONLY the 7
-        # enrichment keys — don't shadow code/name/type/subtype/source,
-        # which are owned by the persistence layer's authoritative read.
-        enrichment[code] = {k: entry.get(k) for k in enrichment_keys}
+        # Keyed by the board's public code (board_code). Forward ONLY the 7
+        # enrichment keys — name/type/subtype are NOT carried here, because a
+        # blind dict update would let upstream shadow the persistence layer's
+        # authoritative read. Callers that need the live name (to heal a
+        # placeholder row) read it off ``fetcher_full_result`` via
+        # ``merge_live_board_fields``, which scopes the substitution.
+        enrichment[code] = {k: entry.get(k) for k in ENRICHMENT_KEYS}
     cached_store(get_stock_boards_quote_cache, cache_key, (result, enrichment))
     return result, enrichment

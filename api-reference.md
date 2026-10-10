@@ -672,8 +672,8 @@ startup backfill or returns `cold_sources` on miss).
 | `change_pct` | float \| null | % | **THS only** — 板块涨跌幅 |
 | `up_count` | int \| null | — | **THS only** — 上涨家数 |
 | `down_count` | int \| null | — | **THS only** — 下跌家数 |
-| `limit_up_count` | int \| null | — | **THS only** — 涨停家数; null when upstream reports no limit-up |
-| `limit_down_count` | int \| null | — | **THS only** — 跌停家数; null when upstream reports no limit-down |
+| `limit_up_count` | int \| null | — | **THS only** — 涨停家数; 上游 null 归 0（见下）。仅当该板块不在上游 payload 内时为 null |
+| `limit_down_count` | int \| null | — | **THS only** — 跌停家数; 上游 null 归 0（见下）。仅当该板块不在上游 payload 内时为 null |
 | `explain` | string \| null | — | **THS only** — 概念解析文本 (e.g. `"2022年8月23日公司互动回复：..."`) |
 | `relevance` | int \| null | — | **THS only** — 关联度标签 (`2` = "走势最相关" UI tag, `0` = 普通) |
 
@@ -682,6 +682,22 @@ requested source list (auto-refreshed every 60s; non-THS sources
 leave them as `null`). Field names `change_pct` / `up_count` /
 `down_count` are shared with `/boards/{code}/quote` so a single
 parser handles both surfaces.
+
+**`limit_up_count` / `limit_down_count` — two different `null`s, don't conflate them:**
+
+- Upstream THS spells "this board has **0** limit-up stocks today" two ways in
+  the same payload — JSON `null` and the string `"0"` — sometimes even mixing
+  them within one row (`limit_up_count` null while `limit_down_count` is `"0"`,
+  and the reverse on the next row). Verified 2026-10-10 against ground truth
+  (day's 涨停池 ∩ board constituents): every null row's true count was 0, same
+  as every `"0"` row. The server therefore **normalizes upstream null → `0`**;
+  a `0` here is a fact, not a placeholder.
+- The remaining `null` case is different: the board is **absent from the
+  upstream payload entirely** (e.g. all `881xxx` industry boards — the reverse
+  endpoint `stock_concept_list` is concept-only). Then all 7 enrichment fields
+  are `null`, meaning *no data*, **not** zero. Treating that as `0` loses real
+  limit-ups (measured: `881281 电池` reported all-null while 6 of its members
+  were limit-up).
 
 **Parameters for `GET /boards/{board_code}/history`:**
 | Parameter | Type | Default | Description |

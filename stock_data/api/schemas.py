@@ -819,11 +819,18 @@ class StockBoardInfo(BaseModel):
     )
     limit_up_count: int | None = Field(
         default=None,
-        description="涨停家数. THS 上游字段 up_down_limit_up_num; 上游为 null 时本字段为 null.",
+        description=(
+            "涨停家数. THS 上游字段 up_down_limit_up_num; 上游对 0 有时写 null "
+            '有时写 "0"，本字段统一归 0（null 行真值经当日涨停池交叉验证全为 0）. '
+            "仅当该板块不在上游 payload 内（如行业板块）时才是 null = 无数据."
+        ),
     )
     limit_down_count: int | None = Field(
         default=None,
-        description="跌停家数. THS 上游字段 up_down_limit_down_num; 上游为 null 时本字段为 null.",
+        description=(
+            "跌停家数. THS 上游字段 up_down_limit_down_num; 与 limit_up_count 同理，"
+            "上游 null 归 0；不在 payload 内时才是 null = 无数据."
+        ),
     )
     explain: str | None = Field(
         default=None,

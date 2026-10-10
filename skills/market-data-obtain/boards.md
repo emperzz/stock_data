@@ -323,8 +323,8 @@ curl 'http://localhost:8888/api/v1/boards/885595/surges'
 | `change_pct` | number | % | **板块涨跌幅（THS 才有）** |
 | `up_count` | number | — | **上涨家数（THS 才有）** |
 | `down_count` | number | — | **下跌家数（THS 才有）** |
-| `limit_up_count` | number | — | **涨停家数（THS 才有；上游无涨停时为 `null`）** |
-| `limit_down_count` | number | — | **跌停家数（THS 才有；上游无跌停时为 `null`）** |
+| `limit_up_count` | number | — | **涨停家数（THS 才有；0 是事实，不是占位）** |
+| `limit_down_count` | number | — | **跌停家数（THS 才有；0 是事实，不是占位）** |
 | `explain` | string | — | **概念解析文本（THS 才有；如 `"2022年8月23日公司互动回复：..."`）** |
 | `relevance` | number | — | **关联度标签（THS 才有；`2` = UI 的"走势最相关"标签，`0` = 普通）** |
 | `cold_sources`（顶层） | array | — | **顶层字段**，不在 `data[]` 内：拉取失败的 source 列表 |
@@ -333,7 +333,10 @@ curl 'http://localhost:8888/api/v1/boards/885595/surges'
 
 - **仅 `source='ths'` 的行才填充**。其他 source 行这 7 个字段一律为 `null`
 - `change_pct` / `up_count` / `down_count` 字段名与 `/boards/{code}/quote` 一致，可复用客户端解析代码
-- 字段类型：`change_pct` 为 `float`；`up_count` / `down_count` / `limit_up_count` / `limit_down_count` / `relevance` 为 `int`；`limit_up_count` / `limit_down_count` 上游无对应数据时为 `null`（不是 `0`）；`explain` 为 `str` 或 `null`
+- 字段类型：`change_pct` 为 `float`；`up_count` / `down_count` / `limit_up_count` / `limit_down_count` / `relevance` 为 `int`；`explain` 为 `str` 或 `null`
+- **`limit_up_count` / `limit_down_count` 的 `0` 与 `null` 是两件事，别合并**：
+  - `0` = 该板块**确实没有**涨停/跌停股（上游对同一事实有时写 `null` 有时写 `"0"`，服务端统一归 `0`；已用当日涨停池 ∩ 成分股验证 null 行真值全为 0）
+  - `null` = **该板块没有这份数据**（例如行业板块，上游反向接口只覆盖概念板块）。此时 7 个字段**全部**为 `null`。把这种 `null` 当 `0` 会漏掉真实涨停股（实测 `881281 电池` 全 `null` 但实际有 6 只涨停）
 
 ### 示例
 

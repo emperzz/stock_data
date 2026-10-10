@@ -206,11 +206,19 @@ def build_stock_profile(
             return out
 
         if ths_cached:
+            # Live rows indexed by board code — heals persistence rows whose
+            # name/type are write-time placeholders (see
+            # ``merge_live_board_fields``). Same merge as /stocks/{code}/boards.
+            live_by_code = {r.get("board_code"): r for r in (fetcher_full_result or [])}
             merged = []
             for e in ths_cached:
-                base = _public(e)
-                base.update(enrichment_by_code.get(e["board_code"], {}))
-                merged.append(base)
+                merged.append(
+                    _stock_boards_helper.merge_live_board_fields(
+                        _public(e),
+                        enrichment_by_code.get(e["board_code"]),
+                        live_by_code.get(e["board_code"]),
+                    )
+                )
             profile.boards = {"source": "persistence", "data": merged}
         elif fetcher_full_result:
             profile.boards = {"source": "ths", "data": [_public(r) for r in fetcher_full_result]}
